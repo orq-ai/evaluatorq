@@ -24,10 +24,13 @@ from evaluatorq.common.jury import (
     resolve_panel,
     run_jury,
 )
+from evaluatorq.common.tracing import current_otel_context, record_token_usage, set_span_attrs, with_span
 from evaluatorq.contracts import TokenUsage  # noqa: TC001  # runtime-needed: pydantic field type on PairwiseComparison
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
+
+    from opentelemetry.trace import Span
 
     from evaluatorq.contracts import JuryVote
 
@@ -243,11 +246,17 @@ async def run_pairwise(
     comparison (judges x orderings x repetitions, replacements included). Pass
     an existing ``asyncio.Semaphore`` to share one budget across several
     comparisons. ``None`` (default) keeps the fan-out unbounded.
+
+    Tracing: the whole comparison is ONE ``llm.jury`` span (RES-985). The inner
+    ``run_jury`` calls run with ``emit_span=False`` so the orderings don't each
+    mint a jury span whose aggregates describe half a comparison; every judge
+    span hangs off this one, tagged ``judge.label_swapped``.
     """
     # Normalized once so both orderings (and the replacement pass) draw from
     # the same budget rather than each minting their own.
     semaphore = as_semaphore(max_concurrency)
     resolved_panel = resolve_panel(panel)
+    jury_ctx: object | None = None
 
     async def _ordering(models: Sequence[str], *, swapped: bool) -> tuple[dict[str, JuryVote], TokenUsage | None]:
         async def _fn(model: str) -> Prediction:
@@ -266,6 +275,9 @@ async def run_pairwise(
             min_successful_judges=1,
             propagate_errors=propagate_errors,
             max_concurrency=semaphore,
+            emit_span=False,
+            label_swapped=swapped,
+            parent_context=jury_ctx,
         )
         return {v.model: v for v in deliberation.jury.votes}, deliberation.token_usage
 
@@ -279,59 +291,118 @@ async def run_pairwise(
         )
         return first_votes, second_votes, [u for u in (first_usage, second_usage) if u]
 
-    first_votes, second_votes, usages = await _both(resolved_panel)
+    async with with_span('llm.jury') as jury_span:
+        # Captured before any judge runs so every judge span (both orderings,
+        # replacements included) parents to this one comparison-level span.
+        jury_ctx = current_otel_context()
+        first_votes, second_votes, usages = await _both(resolved_panel)
 
-    def _failed(model: str) -> bool:
-        first = first_votes.get(model)
-        if first is None or not first.success:
-            return True
-        if swap:
-            second = second_votes.get(model)
-            return second is None or not second.success
-        return False
+        def _failed(model: str) -> bool:
+            first = first_votes.get(model)
+            if first is None or not first.success:
+                return True
+            if swap:
+                second = second_votes.get(model)
+                return second is None or not second.success
+            return False
 
-    num_failed = sum(1 for model in resolved_panel if _failed(model))
-    seen = set(resolved_panel)
-    stand_ins: list[str] = []
-    for candidate in replacement_judges or []:
-        if candidate and candidate not in seen:
-            stand_ins.append(candidate)
-            seen.add(candidate)
-    stand_ins = stand_ins[:num_failed]
+        num_failed = sum(1 for model in resolved_panel if _failed(model))
+        seen = set(resolved_panel)
+        stand_ins: list[str] = []
+        for candidate in replacement_judges or []:
+            if candidate and candidate not in seen:
+                stand_ins.append(candidate)
+                seen.add(candidate)
+        stand_ins = stand_ins[:num_failed]
 
-    stand_in_set = set(stand_ins)
-    if stand_ins:
-        rep_first, rep_second, rep_usages = await _both(stand_ins)
-        first_votes.update(rep_first)
-        second_votes.update(rep_second)
-        usages.extend(rep_usages)
+        stand_in_set = set(stand_ins)
+        if stand_ins:
+            rep_first, rep_second, rep_usages = await _both(stand_ins)
+            first_votes.update(rep_first)
+            second_votes.update(rep_second)
+            usages.extend(rep_usages)
 
-    votes: list[PairwiseVote] = []
-    for model in (*resolved_panel, *stand_ins):
-        first_vote = first_votes.get(model)
-        second_vote = second_votes.get(model)
-        first_value = _decisive_value(first_vote) if first_vote else None
-        if swap:
-            second_value = _unswap(_decisive_value(second_vote)) if second_vote else None
-            vote, flipped = reconcile_pair(first_value, second_value)
-            completed = first_value is not None and second_value is not None
-        else:
-            vote, flipped, completed = first_value, False, False
-        votes.append(
-            PairwiseVote(
-                model=model,
-                vote=_as_str(vote),
-                flipped=flipped,
-                completed=completed,
-                replacement=model in stand_in_set,
-                explanation=_reconciled_explanation(vote, first_vote, second_vote),
+        votes: list[PairwiseVote] = []
+        for model in (*resolved_panel, *stand_ins):
+            first_vote = first_votes.get(model)
+            second_vote = second_votes.get(model)
+            first_value = _decisive_value(first_vote) if first_vote else None
+            if swap:
+                second_value = _unswap(_decisive_value(second_vote)) if second_vote else None
+                vote, flipped = reconcile_pair(first_value, second_value)
+                completed = first_value is not None and second_value is not None
+            else:
+                vote, flipped, completed = first_value, False, False
+            votes.append(
+                PairwiseVote(
+                    model=model,
+                    vote=_as_str(vote),
+                    flipped=flipped,
+                    completed=completed,
+                    replacement=model in stand_in_set,
+                    explanation=_reconciled_explanation(vote, first_vote, second_vote),
+                )
             )
-        )
 
-    decisive = [v.vote for v in votes if v.vote is not None]
-    winner = 'inconclusive' if len(decisive) < max(1, min_successful_judges) else pairwise_consensus(decisive)
-    return PairwiseComparison(winner=winner, votes=votes, token_usage=_sum_usage(usages))
+        decisive = [v.vote for v in votes if v.vote is not None]
+        winner = 'inconclusive' if len(decisive) < max(1, min_successful_judges) else pairwise_consensus(decisive)
+        comparison = PairwiseComparison(winner=winner, votes=votes, token_usage=_sum_usage(usages))
+        _record_pairwise_span(
+            jury_span,
+            comparison,
+            panel_size=len(resolved_panel),
+            min_successful_judges=min_successful_judges,
+            swap=swap,
+        )
+    return comparison
 
 
 def _as_str(value: VerdictValue | None) -> str | None:
     return None if value is None else str(value)
+
+
+def _record_pairwise_span(
+    span: Span | None,
+    comparison: PairwiseComparison,
+    *,
+    panel_size: int,
+    min_successful_judges: int,
+    swap: bool,
+) -> None:
+    """Stamp the comparison-level attributes on the pairwise ``llm.jury`` span.
+
+    Deliberately reuses the ``jury.*`` namespace so one dashboard reads both
+    modes: ``jury.verdict`` is the winner, ``judges_succeeded`` counts judges
+    that cast a reconciled vote. ``jury.flipped`` is comparative-only — judges
+    that contradicted themselves across the two orderings, i.e. position bias.
+    """
+    decisive = [v.vote for v in comparison.votes if v.vote is not None]
+    set_span_attrs(
+        span,
+        {
+            'jury.verdict': comparison.winner,
+            'jury.aggregator': 'pairwise_plurality',
+            'jury.min_successful_judges': min_successful_judges,
+            'jury.raw_agreement': _agreement_rate(decisive),
+            'jury.judges_configured': panel_size,
+            'jury.judges_succeeded': len(decisive),
+            'jury.judges_failed': sum(1 for v in comparison.votes if not v.replacement and v.vote is None),
+            'jury.replacements_used': sum(1 for v in comparison.votes if v.replacement),
+            'jury.inconclusive': comparison.winner == 'inconclusive',
+            'jury.flipped': sum(1 for v in comparison.votes if v.flipped),
+            'jury.swap': swap,
+        },
+    )
+    usage = comparison.token_usage
+    if usage is not None:
+        record_token_usage(
+            span,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            total_tokens=usage.total_tokens or None,
+            calls=usage.calls,
+            cached_tokens=usage.cached_tokens or None,
+            reasoning_tokens=usage.reasoning_tokens or None,
+        )
+        if usage.cost_usd is not None:
+            set_span_attrs(span, {'jury.cost': usage.cost_usd})

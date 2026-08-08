@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import re
 import time
 from collections import Counter
@@ -275,6 +276,7 @@ async def _judge_vote(
     propagate_errors: bool = False,
     semaphore: asyncio.Semaphore | None = None,
     parent_context: object | None = None,
+    label_swapped: bool | None = None,
 ) -> tuple[JuryVote, list[TokenUsage]]:
     """Run one judge (its repetitions) inside a per-judge span, then stamp the
     resolved ``JuryVote`` onto the span (RES-985). The span is a no-op when
@@ -283,7 +285,16 @@ async def _judge_vote(
     async with with_span('llm.judge', parent_context=parent_context) as span:
         # Identity up front so a propagate_errors=True abort still leaves a span
         # that says which judge died.
-        set_span_attrs(span, {'judge.name': model, 'judge.model': model, 'judge.replacement': replacement})
+        set_span_attrs(
+            span,
+            {
+                'judge.name': model,
+                'judge.model': model,
+                'judge.replacement': replacement,
+                # Only set in comparative mode, where the same judge votes twice.
+                'judge.label_swapped': label_swapped,
+            },
+        )
         vote, usages = await _compute_judge_vote(
             model=model,
             judge_fn=judge_fn,
@@ -447,6 +458,9 @@ async def run_jury(
     tie_break_label: str | None = None,
     propagate_errors: bool = False,
     max_concurrency: int | asyncio.Semaphore | None = None,
+    emit_span: bool = True,
+    label_swapped: bool | None = None,
+    parent_context: object | None = None,
 ) -> JuryDeliberation:
     """Run a generic panel of judges and aggregate their verdicts.
 
@@ -468,40 +482,101 @@ async def run_jury(
     across several jury runs. ``None`` (default) keeps the fan-out unbounded.
 
     The deliberation runs inside an ``llm.jury`` span with the panel's
-    aggregate attributes; each judge opens a child ``llm.judge`` span (RES-985).
+    aggregate attributes; each judge opens a child ``llm.judge`` span, and the
+    judge's own LLM calls nest under that (RES-985). The full hierarchy is
+    ``orq.evaluation`` -> ``llm.jury`` -> ``llm.judge`` -> ``chat {model}``.
+
+    ``emit_span=False`` skips the ``llm.jury`` span and parents the judges to
+    ``parent_context`` (or the current span). Comparative mode uses this to own
+    a single jury span across both label orderings instead of one per ordering;
+    see :func:`evaluatorq.pairwise.run_pairwise`. ``label_swapped`` is stamped
+    on each judge span in that mode and left unset otherwise.
     """
-    async with with_span('llm.jury') as jury_span:
+    core = functools.partial(
+        _run_jury_core,
+        judge_fn=judge_fn,
+        panel=panel,
+        repetitions=repetitions,
+        replacement_judges=replacement_judges,
+        min_successful_judges=min_successful_judges,
+        verdict_kind=verdict_kind,
+        tie_break=tie_break,
+        aggregator=aggregator,
+        tie_break_label=tie_break_label,
+        propagate_errors=propagate_errors,
+        max_concurrency=max_concurrency,
+        label_swapped=label_swapped,
+    )
+    if not emit_span:
+        return await core(parent_context=parent_context)
+
+    async with with_span('llm.jury', parent_context=parent_context) as jury_span:
         # Captured once and threaded into each judge so per-judge spans parent
         # to this jury span deterministically, regardless of gather scheduling.
-        jury_ctx = current_otel_context()
-        deliberation = await _run_jury_core(
-            judge_fn=judge_fn,
-            panel=panel,
-            repetitions=repetitions,
-            replacement_judges=replacement_judges,
-            min_successful_judges=min_successful_judges,
-            verdict_kind=verdict_kind,
-            tie_break=tie_break,
-            aggregator=aggregator,
-            tie_break_label=tie_break_label,
-            propagate_errors=propagate_errors,
-            max_concurrency=max_concurrency,
-            parent_context=jury_ctx,
-        )
-        j = deliberation.jury
-        set_span_attrs(
+        deliberation = await core(parent_context=current_otel_context())
+        record_jury_span(
             jury_span,
-            {
-                'jury.raw_agreement': j.raw_agreement,
-                'jury.judges_succeeded': j.judges_succeeded,
-                'jury.judges_configured': j.judges_configured,
-                'jury.judges_failed': j.judges_failed,
-                'jury.replacements_used': j.replacements_used,
-                'jury.tie': j.tie,
-                'jury.inconclusive': j.inconclusive,
-            },
+            deliberation,
+            aggregator=aggregator,
+            verdict_kind=verdict_kind,
+            min_successful_judges=min_successful_judges,
         )
     return deliberation
+
+
+def _aggregator_name(aggregator: AggregatorSpec | None, verdict_kind: VerdictKind) -> str:
+    """Display name for the consensus rule — the same defaulting _run_jury_core
+    applies, with custom callables collapsed to ``'custom'``."""
+    if isinstance(aggregator, str):
+        return aggregator
+    if callable(aggregator):
+        return 'custom'
+    return 'mean_std' if verdict_kind is VerdictKind.NUMERIC else 'mode'
+
+
+def record_jury_span(
+    span: Span | None,
+    deliberation: JuryDeliberation,
+    *,
+    aggregator: AggregatorSpec | None,
+    verdict_kind: VerdictKind,
+    min_successful_judges: int,
+) -> None:
+    """Stamp panel-level attributes on a jury span (RES-985).
+
+    Shared with comparative mode, which opens its own ``llm.jury`` span around
+    both label orderings. ``jury.verdict`` is stringified so bool / float / str
+    verdicts share one attribute type, matching ``judge.verdict``.
+    """
+    j = deliberation.jury
+    set_span_attrs(
+        span,
+        {
+            'jury.verdict': None if deliberation.verdict is None else str(deliberation.verdict),
+            'jury.aggregator': _aggregator_name(aggregator, verdict_kind),
+            'jury.min_successful_judges': min_successful_judges,
+            'jury.raw_agreement': j.raw_agreement,
+            'jury.judges_succeeded': j.judges_succeeded,
+            'jury.judges_configured': j.judges_configured,
+            'jury.judges_failed': j.judges_failed,
+            'jury.replacements_used': j.replacements_used,
+            'jury.tie': j.tie,
+            'jury.inconclusive': j.inconclusive,
+        },
+    )
+    usage = deliberation.token_usage
+    if usage is not None:
+        record_token_usage(
+            span,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            total_tokens=usage.total_tokens or None,
+            calls=usage.calls,
+            cached_tokens=usage.cached_tokens or None,
+            reasoning_tokens=usage.reasoning_tokens or None,
+        )
+        if usage.cost_usd is not None:
+            set_span_attrs(span, {'jury.cost': usage.cost_usd})
 
 
 async def _run_jury_core(
@@ -518,6 +593,7 @@ async def _run_jury_core(
     propagate_errors: bool = False,
     max_concurrency: int | asyncio.Semaphore | None = None,
     parent_context: object | None = None,
+    label_swapped: bool | None = None,
 ) -> JuryDeliberation:
     """Panel deliberation + aggregation (see :func:`run_jury` for semantics).
 
@@ -556,6 +632,7 @@ async def _run_jury_core(
             propagate_errors=propagate_errors,
             semaphore=semaphore,
             parent_context=parent_context,
+            label_swapped=label_swapped,
         )
         for model in resolved_panel
     ])
@@ -580,6 +657,7 @@ async def _run_jury_core(
                 numeric_how=numeric_how,
                 semaphore=semaphore,
                 parent_context=parent_context,
+                label_swapped=label_swapped,
             )
             for model in stand_ins
         ])

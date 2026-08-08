@@ -16,7 +16,11 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, Sp
 from opentelemetry.trace import StatusCode
 
 from evaluatorq.common.jury import Prediction, VerdictKind, run_jury
+from evaluatorq.common.tracing import with_span
 from evaluatorq.contracts import TokenUsage
+from evaluatorq.pairwise import run_pairwise
+from evaluatorq.processings import process_evaluator
+from evaluatorq.types import DataPoint, EvaluationResult
 
 
 class _Exporter(SpanExporter):
@@ -37,8 +41,12 @@ def span_collector():
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     tracer = provider.get_tracer('test')
-    # run_jury opens spans via evaluatorq.common.tracing.get_tracer.
-    with patch('evaluatorq.common.tracing.get_tracer', return_value=tracer):
+    # run_jury opens spans via evaluatorq.common.tracing.get_tracer; the core
+    # runner's evaluation span comes from evaluatorq.tracing.spans.get_tracer.
+    with (
+        patch('evaluatorq.common.tracing.get_tracer', return_value=tracer),
+        patch('evaluatorq.tracing.spans.get_tracer', return_value=tracer),
+    ):
         yield exporter
     provider.shutdown()
 
@@ -50,6 +58,10 @@ def _attrs(span: ReadableSpan) -> dict[str, Any]:
 def _span_id(span: ReadableSpan) -> int:
     assert span.context is not None
     return span.context.span_id
+
+
+def _parent_id(span: ReadableSpan) -> int | None:
+    return span.parent.span_id if span.parent else None
 
 
 def _by_name(exporter: _Exporter, name: str) -> list[ReadableSpan]:
@@ -232,6 +244,110 @@ async def test_jury_span_records_failure_aggregates(span_collector) -> None:
     jury = _attrs(_by_name(exporter, 'llm.jury')[0])
     assert jury['jury.judges_failed'] == 1
     assert jury['jury.replacements_used'] == 1
+
+
+@pytest.mark.asyncio
+async def test_jury_span_records_outcome(span_collector) -> None:
+    exporter = span_collector
+    judge_fn = _make_judge_fn({'gpt-a': 'yes', 'gpt-b': 'yes'})
+
+    await run_jury(judge_fn=judge_fn, panel=['gpt-a', 'gpt-b'], aggregator='majority', min_successful_judges=2)
+
+    jury = _attrs(_by_name(exporter, 'llm.jury')[0])
+    assert jury['jury.verdict'] == 'yes'
+    assert jury['jury.aggregator'] == 'majority'
+    assert jury['jury.min_successful_judges'] == 2
+    # Panel usage rolls up onto the jury span (2 judges x 3 in + 2 out).
+    assert jury['total_tokens'] == 10
+
+
+@pytest.mark.asyncio
+async def test_pairwise_emits_one_jury_span_for_both_orderings(span_collector) -> None:
+    """A comparison runs each judge twice (A/B then B/A). Those orderings must
+    NOT each open their own llm.jury span — one span per comparison, with the
+    ordering recorded on the judge spans instead."""
+    exporter = span_collector
+
+    async def judge_fn(first: str, second: str, model: str) -> Prediction:
+        # Consistent preference for the response that reads 'better'.
+        winner = 'A' if first == 'better' else 'B'
+        return Prediction(value=winner, token_usage=TokenUsage(input_tokens=1, output_tokens=1))
+
+    comparison = await run_pairwise(
+        judge_fn=judge_fn, panel=['gpt-a', 'gpt-b'], response_a='better', response_b='worse'
+    )
+    assert comparison.winner == 'A'
+
+    assert len(_by_name(exporter, 'llm.jury')) == 1
+    judge_spans = _by_name(exporter, 'llm.judge')
+    assert len(judge_spans) == 4  # 2 judges x 2 orderings
+
+    jury_span_id = _span_id(_by_name(exporter, 'llm.jury')[0])
+    for js in judge_spans:
+        assert js.parent is not None
+        assert js.parent.span_id == jury_span_id
+
+    swapped = [_attrs(s)['judge.label_swapped'] for s in judge_spans]
+    assert sorted(swapped) == [False, False, True, True]
+
+    jury = _attrs(_by_name(exporter, 'llm.jury')[0])
+    assert jury['jury.verdict'] == 'A'
+    assert jury['jury.judges_configured'] == 2
+    assert jury['jury.judges_succeeded'] == 2
+    assert jury['jury.flipped'] == 0
+    assert jury['jury.swap'] is True
+
+
+@pytest.mark.asyncio
+async def test_pairwise_span_records_position_bias(span_collector) -> None:
+    exporter = span_collector
+
+    async def judge_fn(first: str, second: str, model: str) -> Prediction:
+        # Always picks the first slot — pure position bias, so it self-contradicts.
+        return Prediction(value='A')
+
+    comparison = await run_pairwise(judge_fn=judge_fn, panel=['gpt-a'], response_a='x', response_b='y')
+    assert comparison.winner == 'inconclusive'
+
+    jury = _attrs(_by_name(exporter, 'llm.jury')[0])
+    assert jury['jury.flipped'] == 1
+    assert jury['jury.inconclusive'] is True
+
+
+@pytest.mark.asyncio
+async def test_full_hierarchy_evaluation_jury_judge_llm(span_collector) -> None:
+    """The shipped tree is orq.evaluation -> llm.jury -> llm.judge -> chat {model}.
+
+    The evaluation span comes from process_evaluator, so this pins the seam
+    between the core runner's span and the jury's — nothing threads a parent
+    context across it, it rides the ambient OTel context.
+    """
+    exporter = span_collector
+
+    async def judge_fn(model: str) -> Prediction:
+        # Stands in for the real judge's with_llm_span(...) call.
+        async with with_span(f'chat {model}'):
+            return Prediction(value='yes', token_usage=TokenUsage(input_tokens=1, output_tokens=1))
+
+    async def scorer(_params) -> EvaluationResult:
+        deliberation = await run_jury(judge_fn=judge_fn, panel=['gpt-a'])
+        return EvaluationResult(value=str(deliberation.verdict))
+
+    score = await process_evaluator(
+        {'name': 'jury-eval', 'scorer': scorer},
+        DataPoint(inputs={}, expected_output=None),
+        'some output',
+    )
+    assert score.error is None
+
+    evaluation = next(s for s in exporter.spans if s.name.startswith('orq.evaluation'))
+    jury = _by_name(exporter, 'llm.jury')[0]
+    judge = _by_name(exporter, 'llm.judge')[0]
+    chat = _by_name(exporter, 'chat gpt-a')[0]
+
+    assert _parent_id(jury) == _span_id(evaluation)
+    assert _parent_id(judge) == _span_id(jury)
+    assert _parent_id(chat) == _span_id(judge)
 
 
 @pytest.mark.asyncio
