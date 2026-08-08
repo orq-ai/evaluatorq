@@ -242,11 +242,9 @@ async def test_record_token_usage_preserves_zero_prompt_tokens(
     from evaluatorq.simulation.tracing import with_llm_span
 
     class _Usage:
-        prompt_tokens = 0
-        completion_tokens = 5
+        input_tokens = 0  # fully-cached request: zero input tokens is a real value
+        output_tokens = 5
         total_tokens = 5
-        input_tokens = 99  # would be selected if `prompt_tokens or input_tokens`
-        output_tokens = 99
         prompt_tokens_details = None
 
     class _Resp:

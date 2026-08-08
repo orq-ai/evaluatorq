@@ -174,6 +174,36 @@ def test_record_token_usage_zero_prompt_preserved() -> None:
     assert set_attrs['gen_ai.usage.output_tokens'] == 5
 
 
+def test_record_token_usage_explicit_calls_zero_wins_over_usage_calls() -> None:
+    """An explicit calls=0 must not be clobbered by usage.calls (sentinel, not falsy check)."""
+    from unittest.mock import MagicMock
+
+    from evaluatorq.common.tracing import record_token_usage
+    from evaluatorq.contracts import Usage
+
+    span = MagicMock()
+    usage = Usage(input_tokens=1, output_tokens=1, total_tokens=2, calls=3)
+    record_token_usage(span, usage=usage, calls=0)
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert 'gen_ai.usage.calls' not in set_attrs
+    assert 'calls' not in set_attrs
+
+
+def test_record_token_usage_falls_back_to_usage_calls_when_unset() -> None:
+    """When calls is left unset (the caller's default), usage.calls is used."""
+    from unittest.mock import MagicMock
+
+    from evaluatorq.common.tracing import record_token_usage
+    from evaluatorq.contracts import Usage
+
+    span = MagicMock()
+    usage = Usage(input_tokens=1, output_tokens=1, total_tokens=2, calls=3)
+    record_token_usage(span, usage=usage)
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert set_attrs['gen_ai.usage.calls'] == 3
+    assert set_attrs['calls'] == 3
+
+
 # ---------------------------------------------------------------------------
 # record_llm_response — superset: chat-completions shape
 # ---------------------------------------------------------------------------
@@ -258,6 +288,56 @@ def test_record_llm_response_reasoning_tokens_attr() -> None:
     record_llm_response(span, _Resp())
     set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
     assert set_attrs['gen_ai.usage.completion_tokens_details.reasoning_tokens'] == 42
+
+
+def test_record_llm_response_does_not_introduce_calls_attr() -> None:
+    """record_llm_response's internal Usage.extract(..., calls=1) must not leak
+    a gen_ai.usage.calls attribute onto the span — it never set one before."""
+    from unittest.mock import MagicMock
+
+    from evaluatorq.common.tracing import record_llm_response
+
+    class _Usage:
+        prompt_tokens = 5
+        completion_tokens = 3
+        total_tokens = 8
+        prompt_tokens_details = None
+        completion_tokens_details = None
+
+    class _Resp:
+        id = 'r'
+        model = 'gpt-5'
+        usage = _Usage()
+        choices = []
+
+    span = MagicMock()
+    record_llm_response(span, _Resp())
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert 'gen_ai.usage.calls' not in set_attrs
+    assert 'calls' not in set_attrs
+
+
+def test_record_llm_response_empty_usage_still_records_zero_tokens() -> None:
+    """A usage payload Usage.extract can't parse (present but empty) must still
+    record zero token attributes, like the old hand-rolled parser did, rather
+    than emitting no gen_ai.usage.* attributes at all."""
+    from unittest.mock import MagicMock
+
+    from evaluatorq.common.tracing import record_llm_response
+
+    class _Resp:
+        id = 'r'
+        model = 'gpt-5'
+        usage = {}  # present but empty/unparseable -> Usage.extract returns None
+        choices = []
+
+    span = MagicMock()
+    record_llm_response(span, _Resp())
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert set_attrs['gen_ai.usage.input_tokens'] == 0
+    assert set_attrs['gen_ai.usage.output_tokens'] == 0
+    assert set_attrs['gen_ai.usage.total_tokens'] == 0
+    assert 'gen_ai.usage.calls' not in set_attrs
 
 
 # ---------------------------------------------------------------------------

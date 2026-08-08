@@ -322,10 +322,11 @@ class TestORQAgentTargetSendPromptWithUsage:
         # Partial usage from the first call must have been recorded before the exception propagated
         mock_record.assert_called_once()
         _, kwargs_called = mock_record.call_args
-        assert kwargs_called["prompt_tokens"] == 15
-        assert kwargs_called["completion_tokens"] == 5
-        assert kwargs_called["total_tokens"] == 20
-        assert kwargs_called["calls"] == 1
+        recorded_usage = kwargs_called["usage"]
+        assert recorded_usage.input_tokens == 15
+        assert recorded_usage.output_tokens == 5
+        assert recorded_usage.total_tokens == 20
+        assert recorded_usage.calls == 1
 
     @pytest.mark.asyncio
     async def test_orq_total_zero_falls_back_to_sum(self) -> None:

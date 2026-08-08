@@ -369,13 +369,7 @@ class ORQAgentTarget(AgentTarget):
                 raise
             finally:
                 if accumulated_usage.calls > 0:
-                    record_token_usage(
-                        span,
-                        prompt_tokens=accumulated_usage.input_tokens,
-                        completion_tokens=accumulated_usage.output_tokens,
-                        total_tokens=accumulated_usage.total_tokens,
-                        calls=accumulated_usage.calls,
-                    )
+                    record_token_usage(span, usage=accumulated_usage)
 
     def new(self) -> ORQAgentTarget:
         """Return a fresh target instance with isolated state.
