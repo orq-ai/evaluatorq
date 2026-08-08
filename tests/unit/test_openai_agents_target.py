@@ -12,7 +12,7 @@ pytest.importorskip("agents")
 from evaluatorq.contracts import FunctionCall, Message, StrategyToolCall, ToolCallOutputItem  # noqa: E402
 from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget  # noqa: E402
 from evaluatorq.integrations.openai_agents_integration.target import (  # noqa: E402
-    _message_to_responses_input_items,
+    message_to_responses_input_items,
 )
 from evaluatorq.redteam.contracts import AgentResponse, TokenUsage  # noqa: E402
 
@@ -115,7 +115,7 @@ class TestOpenAIAgentTarget:
         """When StrategyToolCall.item_id is set, the rendered function_call item
         echoes both ``id`` (fc_*) and ``call_id`` (call_*) so the Responses API can
         match the call to its prior turn instead of treating it as a fresh call."""
-        items = _message_to_responses_input_items(
+        items = message_to_responses_input_items(
             Message(
                 role="assistant",
                 content=None,
@@ -133,7 +133,7 @@ class TestOpenAIAgentTarget:
     def test_responses_input_items_omit_id_when_item_id_missing(self) -> None:
         """A tool call without item_id (e.g. originating from chat-completions) must
         not emit a stub ``id`` field; the Responses API rejects empty ids."""
-        items = _message_to_responses_input_items(
+        items = message_to_responses_input_items(
             Message(
                 role="assistant",
                 content=None,
@@ -151,14 +151,14 @@ class TestOpenAIAgentTarget:
         """Inverse mapper output is consumable by _build_response, and the
         function_call/function_call_output pair shares one call_id (the SDK
         requirement for pairing a call with its result on replay)."""
-        items = _message_to_responses_input_items(
+        items = message_to_responses_input_items(
             Message(
                 role="assistant",
                 content=None,
                 tool_calls=[StrategyToolCall(id="call_1", function=FunctionCall(name="lookup", arguments='{"q":"x"}'))],
             )
         )
-        items += _message_to_responses_input_items(Message(role="tool", tool_call_id="call_1", content="found"))
+        items += message_to_responses_input_items(Message(role="tool", tool_call_id="call_1", content="found"))
 
         fc = next(i for i in items if i["type"] == "function_call")
         fco = next(i for i in items if i["type"] == "function_call_output")
@@ -398,7 +398,7 @@ class TestToolCallOutputRoundTrip:
         assert tool_msg.tool_call_id == "call_xyz"
         assert tool_msg.content == "found"
 
-        items = _message_to_responses_input_items(tool_msg)
+        items = message_to_responses_input_items(tool_msg)
         assert items == [{"type": "function_call_output", "call_id": "call_xyz", "output": "found"}]
 
     @pytest.mark.asyncio

@@ -30,7 +30,7 @@ uv run ruff check src
 # Format
 uv run ruff format src
 
-# Type check
+# Type check — the whole repo. Never scope it to a path (see "Before pushing").
 uv run basedpyright
 
 # Build
@@ -58,6 +58,42 @@ ORQ_API_KEY=... EVALUATORQ_AGENT_KEY=... \
 This runs 3 personas × 3 scenarios for agent simulation and a small hybrid red-team
 check, then validates the root spans and run metadata. Use `orq traces list` to
 inspect the resulting traces.
+
+## Opening a PR
+
+**Assign the PR to its author.** `gh pr create` leaves the assignee empty, so
+open one with `--assignee @me` — an unassigned PR has no one the board can point
+at when it stalls.
+
+Reviewers need no flag: `.github/CODEOWNERS` requests them on every PR and skips
+the author. Change that file, not the `gh` invocation, to change who reviews.
+
+## Before pushing to a PR
+
+Run the same checks CI runs, **verbatim**, before every push:
+
+```bash
+uv run ruff check src
+uv run ruff format --check src
+uv run basedpyright                 # whole repo — NOT a path
+uv run pytest -m 'not integration'
+```
+
+**Do not scope `basedpyright` to a path.** CI runs it bare, which covers `tests/`
+as well as `src/`. Running `uv run basedpyright src/` passes clean while CI fails
+on type errors in test files — parametrized args annotated `str` where the
+signature wants a `Literal`, raw dicts passed where a pydantic model is expected.
+That exact mistake left PR #119 red across all four Python versions for three
+commits without any local signal.
+
+Note the asymmetry: **ruff** is scoped to `src` (tests are deliberately not
+ruff-formatted, so `ruff format --check tests/` reports the whole tree as
+unformatted — don't "fix" that). **basedpyright** is not scoped. Match CI, not
+intuition.
+
+CI does not run integration tests. Real-API coverage runs weekly via
+`.github/workflows/examples-weekly.yml`, which opens an issue on failure rather
+than blocking a PR.
 
 ## Package Structure
 

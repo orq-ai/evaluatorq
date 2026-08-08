@@ -21,7 +21,8 @@ testpaths = [ "tests" ]
 python_files = [ "test_*.py", "*_test.py" ]
 norecursedirs = [ ".venv", "dist", "*.egg-info" ]
 markers = [
-  "integration: marks tests as integration tests (require ORQ_API_KEY in .env)"
+  "integration: marks tests as integration tests (require ORQ_API_KEY in .env)",
+  "allow_network: test may open real outbound connections (exempt from the conftest network guard)"
 ]
 timeout = 120
 

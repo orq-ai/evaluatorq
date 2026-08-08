@@ -14,7 +14,7 @@ import os
 
 import pytest
 
-from evaluatorq.contracts import AgentResponse, LLMCallConfig, Message
+from evaluatorq.contracts import AgentResponse, FunctionCall, LLMCallConfig, Message, StrategyToolCall
 from evaluatorq.openresponses.convert_models import InputImageContent, InputTextContent
 from evaluatorq.openresponses.target import OrqResponsesTarget
 
@@ -125,3 +125,80 @@ class TestOrqResponsesTargetIntegration:
         )
         assert isinstance(r, AgentResponse)
         assert "green" in r.text.lower()
+
+    @pytest.mark.asyncio
+    async def test_tool_turn_replay_reaches_the_model(self):
+        """RES-1231: a transcript containing a tool turn survives replay.
+
+        This is the exact shape that produced the original
+        ``400 Invalid value: 'tool'`` — the transcript was serialized in
+        chat-completions form (``role: "tool"`` plus a message-level
+        ``tool_calls`` key) and posted as Responses ``input``.
+
+        Asserts the model repeats the fact carried by the tool result, not
+        merely that the call returned 200: the second defect was that assistant
+        tool calls were silently ignored, which a status check would not catch.
+        """
+        if not os.environ.get("ORQ_API_KEY"):
+            pytest.skip("ORQ_API_KEY not set")
+
+        config = LLMCallConfig(model="openai/gpt-4o-mini")
+        target = OrqResponsesTarget(config, instructions="Answer using the tool result. Reply tersely.")
+
+        r = await target.respond(
+            [
+                Message(role="user", content="What is the price of item X? Use the tool."),
+                Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        StrategyToolCall(
+                            id="call_price_1",
+                            type="function",
+                            function=FunctionCall(name="get_price", arguments='{"item": "X"}'),
+                        )
+                    ],
+                ),
+                Message(role="tool", tool_call_id="call_price_1", content="1234 euro"),
+            ]
+        )
+        assert isinstance(r, AgentResponse)
+        assert "1234" in r.text
+
+    @pytest.mark.asyncio
+    async def test_tool_result_multipart_output_reaches_the_model(self):
+        """``function_call_output.output`` also accepts a content-parts list.
+
+        Flattening those parts to text would silently drop an image or file a
+        tool returned, so the converter passes them through. Verifies the API
+        accepts that form and the model reads it.
+        """
+        if not os.environ.get("ORQ_API_KEY"):
+            pytest.skip("ORQ_API_KEY not set")
+
+        config = LLMCallConfig(model="openai/gpt-4o-mini")
+        target = OrqResponsesTarget(config, instructions="Answer using the tool result. Reply tersely.")
+
+        r = await target.respond(
+            [
+                Message(role="user", content="What is the price of item X? Use the tool."),
+                Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        StrategyToolCall(
+                            id="call_price_2",
+                            type="function",
+                            function=FunctionCall(name="get_price", arguments='{"item": "X"}'),
+                        )
+                    ],
+                ),
+                Message(
+                    role="tool",
+                    tool_call_id="call_price_2",
+                    content=[InputTextContent(type="input_text", text="4321 euro")],
+                ),
+            ]
+        )
+        assert isinstance(r, AgentResponse)
+        assert "4321" in r.text

@@ -801,13 +801,18 @@ async def test_hybrid_agent_target_static_leg_traces_attack_and_target_call(
     assert report.results[0].thread_id == 'hybrid-static-run:Target:0'
 
     monkeypatch.setenv('ORQ_WORKSPACE_SLUG', 'orq-research')
+    # Pin the host rather than asserting the built-in default: a developer with
+    # ORQ_BASE_URL set to staging would otherwise fail this test. A non-default
+    # value here also proves the link builder reads the env var.
+    monkeypatch.setenv('ORQ_BASE_URL', 'https://staging.orq.ai')
+    monkeypatch.delenv('ORQ_UI_BASE_URL', raising=False)
     from evaluatorq.dashboard.trace_links import run_trace_url, thread_trace_url
 
     assert thread_trace_url(report.results[0].thread_id) == (
-        'https://my.orq.ai/orq-research/traces?query=thread_id%3Ais%3Ahybrid-static-run%3ATarget%3A0'
+        'https://staging.orq.ai/orq-research/traces?query=thread_id%3Ais%3Ahybrid-static-run%3ATarget%3A0'
     )
     assert run_trace_url(report.run_id) == (
-        'https://my.orq.ai/orq-research/traces?query=thread_id%3Acontains%3Ahybrid-static-run'
+        'https://staging.orq.ai/orq-research/traces?query=thread_id%3Acontains%3Ahybrid-static-run'
     )
 
 
