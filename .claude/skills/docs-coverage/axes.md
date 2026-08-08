@@ -53,6 +53,12 @@ Marked `N/A` in the matrix, never reported as a gap.
 | dashboard × evaluator kind | renders scores, does not choose evaluators |
 | `wrap_simulation_agent()` × data source | wraps a target for reuse; does not consume a dataset |
 | `generate_and_simulate()` × data source `ORQ dataset id` | generation *is* the data source |
+| Python-only entry points × surface `CLI` | `build_report()`, `wrap_simulation_agent()`, `deployment()` / `invoke()` have no `eq` command |
+| `evaluatorq()` × target kind | it scores rows you already have; the target is your own task function |
+| dashboard × target kind | it reads saved artifacts; no target is invoked |
+| dashboard × entry points that write no artifacts | nothing lands in the run store, so there is nothing to browse |
+| `red_team()` × target kind `Vercel` | Vercel AI SDK agents are a simulation target kind only |
+| `red_team()` × data source `inline DataPoint`s | `dataset` takes a `Path` or specifier string; there is no inline-datapoint parameter |
 | `static` mode × generated data source | static mode consumes a fixed dataset by definition |
 | CLI × custom `AgentTarget` | custom targets are constructed in Python; the CLI resolves string identifiers |
 
