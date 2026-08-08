@@ -111,6 +111,7 @@ plugins:
           - custom-evaluators-and-frameworks.md: Define custom evaluators and frameworks.
           - llm-as-a-jury.md: Multi-judge panel (jury) evaluation.
           - pairwise-judging.md: Pairwise comparison judging.
+          - evaluator-template-variables.md: Reference for pointwise and pairwise jury template variables.
           - dashboard.md: Browse red team and simulation reports in a local web dashboard.
         Setup:
           - configuration.md: Configuration and environment variables.
@@ -215,6 +216,7 @@ nav:
           - Custom Evaluators & Frameworks: custom-evaluators-and-frameworks.md
       - LLM as a Jury: llm-as-a-jury.md
       - Pairwise Judging: pairwise-judging.md
+      - Evaluator Template Variables: evaluator-template-variables.md
   - Examples: examples/
   - API Reference:
       - Introduction: api-reference.md

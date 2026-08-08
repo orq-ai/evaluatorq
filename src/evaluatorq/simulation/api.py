@@ -1532,6 +1532,7 @@ async def _resolve_or_generate_datapoints(
 
     from evaluatorq.openresponses.client import build_simulation_client
     from evaluatorq.simulation.generators import FirstMessageGenerator
+    from evaluatorq.simulation.tracing import with_simulation_span
 
     gen_client, gen_owned = build_simulation_client(generation_client)
     try:
@@ -1540,24 +1541,54 @@ async def _resolve_or_generate_datapoints(
 
         generated: list[SimulationDatapoint] = []
         batch_size = 5
-        for i in range(0, len(pairs), batch_size):
-            batch = pairs[i : i + batch_size]
-            batch_results = await asyncio.gather(
-                *[_generate_single_datapoint(first_msg_gen, p, s) for p, s in batch],
-                return_exceptions=True,
-            )
-            for (p, s), outcome in zip(batch, batch_results, strict=True):
-                if isinstance(outcome, BaseException):
-                    logger.warning(
-                        'first-message generation failed for persona=%r scenario=%r: %r — skipping',
-                        p.name,
-                        s.name,
-                        outcome,
-                    )
-                    continue
-                generated.append(outcome)
-        if not generated:
-            raise RuntimeError('first-message generation produced no datapoints - every persona x scenario pair failed')
+        # One span for the whole generation phase; the per-pair LLM calls nest
+        # under it as the client's own spans.
+        async with with_simulation_span(
+            'orq.simulation.first_message_generation',
+            {
+                'orq.simulation.model': model,
+                'orq.simulation.pair_count': len(pairs),
+                'orq.simulation.persona_count': len(personas),
+                'orq.simulation.scenario_count': len(scenarios),
+            },
+        ) as gen_span:
+            for i in range(0, len(pairs), batch_size):
+                batch = pairs[i : i + batch_size]
+                batch_results = await asyncio.gather(
+                    *[_generate_single_datapoint(first_msg_gen, p, s) for p, s in batch],
+                    return_exceptions=True,
+                )
+                for (p, s), outcome in zip(batch, batch_results, strict=True):
+                    if isinstance(outcome, BaseException):
+                        logger.warning(
+                            'first-message generation failed for persona=%r scenario=%r: %r — skipping',
+                            p.name,
+                            s.name,
+                            outcome,
+                        )
+                        # The per-pair span is gone, so the phase span carries
+                        # the failure identity instead — otherwise a partial
+                        # failure is only visible in the logs.
+                        if gen_span is not None:
+                            gen_span.add_event(
+                                'orq.simulation.first_message_generation_failed',
+                                {
+                                    'orq.simulation.persona': p.name,
+                                    'orq.simulation.scenario': s.name,
+                                    'error.type': type(outcome).__name__,
+                                    'error.message': str(outcome),
+                                },
+                            )
+                        continue
+                    generated.append(outcome)
+            if gen_span is not None:
+                gen_span.set_attribute('orq.simulation.generated_count', len(generated))
+                gen_span.set_attribute('orq.simulation.failed_count', len(pairs) - len(generated))
+            # Raise inside the span so a total failure marks it ERROR.
+            if not generated:
+                raise RuntimeError(
+                    'first-message generation produced no datapoints - every persona x scenario pair failed'
+                )
         return generated
     finally:
         if gen_owned:
@@ -1591,18 +1622,11 @@ async def _fetch_simulation_datapoints_from_orq(api_key: str, dataset_id: str) -
 async def _generate_single_datapoint(
     gen: FirstMessageGenerator, persona: Persona, scenario: Scenario
 ) -> SimulationDatapoint:
-    from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.simulation.utils.prompt_builders import generate_datapoint
 
-    async with with_simulation_span(
-        'orq.simulation.first_message_generation',
-        {
-            'orq.simulation.persona': persona.name,
-            'orq.simulation.scenario': scenario.name,
-            'orq.simulation.model': getattr(gen, '_model', None),
-        },
-    ):
-        first_message = await gen.generate(persona, scenario)
+    # ponytail: no per-pair span — the caller wraps the whole generation phase
+    # in a single orq.simulation.first_message_generation span.
+    first_message = await gen.generate(persona, scenario)
     return generate_datapoint(persona, scenario, first_message)
 
 

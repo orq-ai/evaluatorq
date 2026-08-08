@@ -18,7 +18,7 @@ async def test_comparator_reconciles_a_consistent_judge(monkeypatch: pytest.Monk
     """A judge that prefers the same actual response in both orderings makes that response win."""
 
     async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
-        first = kwargs['replacements']['response_a']
+        first = kwargs['replacements']['response_a']['output']['response']
         value = 'A' if first == 'GOOD' else 'B'
         return JudgeOutcome(payload=EvaluatorResponsePayload(value=value, explanation='x'))
 
@@ -37,7 +37,7 @@ async def test_comparator_runs_both_orderings(monkeypatch: pytest.MonkeyPatch) -
     seen_first: list[str] = []
 
     async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
-        seen_first.append(kwargs['replacements']['response_a'])
+        seen_first.append(kwargs['replacements']['response_a']['output']['response'])
         return JudgeOutcome(payload=EvaluatorResponsePayload(value='A', explanation='first slot'))
 
     monkeypatch.setattr(llm_jury_module, 'run_judge', fake_run_judge)

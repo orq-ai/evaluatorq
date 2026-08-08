@@ -16,10 +16,11 @@ $ uv add evaluatorq
 Successfully installed evaluatorq
 ```
 
-Run your code with `uv run my_eval.py` and the CLI with `uv run eq`, so the
-environment you installed into is the one that executes. Using pip instead,
-call it as `python -m pip install evaluatorq` to pin it to the same interpreter
-you run with.
+`uv add` installs into the current project — run `uv init` first if you don't
+have one. Then run your code with `uv run my_eval.py` and the CLI with
+`uv run eq`, so the environment you installed into is the one that executes.
+Using pip instead, call it as `python -m pip install evaluatorq` to pin it to
+the same interpreter you run with.
 
 !!! tip "Optional extras"
     `uv add "evaluatorq[redteam]"` adds adversarial red teaming ·
