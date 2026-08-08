@@ -55,7 +55,8 @@ def _redteam_payload(
 def _legacy_redteam_payload(name: str, *, created: str, resistance: float, results: list[dict]) -> dict:
     """A red-team report predating summary.evaluated_attacks / vulnerabilities_found.
 
-    Only resistance_rate is stored; the real counts live in the results list.
+    Only resistance_rate is stored; the real counts, severities and token usage
+    all live in the results list.
     """
     return {
         'pipeline': {'mode': 'adaptive'},
@@ -67,13 +68,26 @@ def _legacy_redteam_payload(name: str, *, created: str, resistance: float, resul
     }
 
 
-def _legacy_result(*, vulnerable: bool, error: str | None = None) -> dict:
-    return {
-        'attack': {'severity': 'low', 'strategy_name': 'roleplay'},
-        'agent': {'display_name': 'Refund agent', 'model': 'gpt-5.4'},
-        'vulnerable': vulnerable,
-        'error': error,
-    }
+def _legacy_result(
+    *,
+    vulnerable: bool = False,
+    error: str | None = None,
+    severity: str = 'low',
+    evaluation: dict | None = None,
+    tokens: int = 0,
+) -> dict:
+    """One legacy result row.
+
+    Omitting *evaluation* reproduces the oldest reports, which carry only the
+    ``vulnerable`` flag; passing one exercises the authoritative
+    ``evaluation.passed`` classification.
+    """
+    res: dict = {'attack': {'severity': severity}, 'vulnerable': vulnerable, 'error': error}
+    if evaluation is not None:
+        res['evaluation'] = evaluation
+    if tokens:
+        res['execution'] = {'token_usage': {'total_tokens': tokens, 'cost_usd': tokens * 0.001}}
+    return res
 
 
 def _sim_payload(name: str, *, created: str, averages: dict[str, float], n: int, tok_each: int) -> dict:
@@ -191,6 +205,59 @@ class TestMetrics:
         assert data.resistant == 0
         assert data.vulnerable == 0
         assert data.resistance_rate is None
+
+    def test_landing_legacy_severity_and_tokens_are_derived(self, tmp_path: Path) -> None:
+        # A legacy run must weigh in on the severity bars and the cost totals
+        # too, not just the donut — otherwise it is counted as a run whose
+        # attacks and spend are invisible everywhere else on the page.
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        (rt / 'legacy_20260101_000000.json').write_text(
+            json.dumps(
+                _legacy_redteam_payload(
+                    'Legacy probe',
+                    created='2026-01-01T00:00:00',
+                    resistance=0.5,
+                    results=[
+                        _legacy_result(vulnerable=True, severity='critical', tokens=100),
+                        _legacy_result(vulnerable=True, severity='low', tokens=100),
+                        _legacy_result(vulnerable=False, tokens=200),
+                    ],
+                )
+            )
+        )
+        data = metrics.landing([rt])
+        assert dict(data.severity) == {'critical': 1, 'low': 1}
+        assert dict(data.tokens_by_kind)['Red team'] == 400
+        assert data.total_tokens == 400
+        assert dict(data.cost_by_kind)['Red team'] == pytest.approx(0.4)
+
+    def test_landing_evaluation_failure_is_not_counted_as_resistant(self, tmp_path: Path) -> None:
+        # error carries the *target* error only. A result whose generation
+        # succeeded but whose evaluation never produced a boolean was not
+        # evaluated, and must not pad the resistant bucket.
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        (rt / 'legacy_20260101_000000.json').write_text(
+            json.dumps(
+                _legacy_redteam_payload(
+                    'Judge crashed',
+                    created='2026-01-01T00:00:00',
+                    resistance=1.0,
+                    results=[
+                        _legacy_result(evaluation={'passed': True}),
+                        _legacy_result(evaluation={'passed': False}, severity='high'),
+                        # Judge never returned a verdict: evaluation present but
+                        # passed is None, and no target-side error to go on.
+                        _legacy_result(evaluation={'passed': None}),
+                    ],
+                )
+            )
+        )
+        data = metrics.landing([rt])
+        assert data.resistant == 1
+        assert data.vulnerable == 1
+        assert data.resistance_rate == pytest.approx(0.5)
 
     def test_landing_empty(self, tmp_path: Path) -> None:
         empty = [tmp_path / 'runs', tmp_path / 'sim-runs']

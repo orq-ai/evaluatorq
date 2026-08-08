@@ -674,9 +674,7 @@ def test_filtered_view_rolls_up_once(saved: tuple[Path, Path], monkeypatch: pyte
     assert body
 
 
-def test_long_run_name_stays_within_the_filename_limit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_long_run_name_stays_within_the_filename_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A long name must not push the filename past the filesystem's limit.
 
     ``save()`` runs after the judging is already paid for, so a name that fails

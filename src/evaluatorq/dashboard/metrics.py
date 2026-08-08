@@ -18,7 +18,9 @@ token usage) instead.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
+
+from loguru import logger
 
 from evaluatorq.dashboard import library
 
@@ -254,30 +256,35 @@ def landing(roots: list[Path] | None = None) -> Landing:
             continue
         if card.surface == 'redteam':
             summary = data.get('summary')
-            if isinstance(summary, dict):
-                if 'evaluated_attacks' in summary:
-                    resistant += _as_int(summary.get('evaluated_attacks')) - _as_int(
-                        summary.get('vulnerabilities_found')
-                    )
-                    vulnerable += _as_int(summary.get('vulnerabilities_found'))
-                else:
-                    # Legacy summary predating evaluated_attacks: derive the real
-                    # counts from the results list instead of silently adding zero
-                    # to the donut while the run's own row still shows a rate.
-                    ev, vu = _redteam_result_counts(data)
-                    resistant += ev - vu
-                    vulnerable += vu
+            summary = summary if isinstance(summary, dict) else {}
+            if summary.get('evaluated_attacks') is None:
+                # Legacy report: its summary predates ``evaluated_attacks``, and
+                # with it ``by_severity`` and ``token_usage_total``. Every
+                # aggregate below is therefore derived from the results list —
+                # otherwise the run adds zero to the donut, the severity bars and
+                # the cost totals while its own row still shows a rate (RES-1202).
+                counts = _redteam_counts(data)
+                logger.debug(
+                    'landing: derived legacy red-team counts for {} — evaluated={} vulnerable={} tokens={}',
+                    card.id,
+                    counts.evaluated,
+                    counts.vulnerable,
+                    counts.tokens,
+                )
+                resistant += counts.evaluated - counts.vulnerable
+                vulnerable += counts.vulnerable
+                tok, cost, by_sev = counts.tokens, counts.cost, counts.by_severity
+            else:
+                resistant += _as_int(summary.get('evaluated_attacks')) - _as_int(summary.get('vulnerabilities_found'))
+                vulnerable += _as_int(summary.get('vulnerabilities_found'))
                 tok = _tokens_total(summary.get('token_usage_total'))
-                rt_tokens += tok
-                total_tokens += tok
-                rt_cost += _cost_usd(summary.get('token_usage_total'))
-                by_sev = summary.get('by_severity')
-                if isinstance(by_sev, dict):
-                    for sev, entry in by_sev.items():
-                        if isinstance(entry, dict):
-                            n = _as_int(entry.get('vulnerabilities_found') or entry.get('count'))
-                            if n:
-                                severity_counts[sev] = severity_counts.get(sev, 0) + n
+                cost = _cost_usd(summary.get('token_usage_total'))
+                by_sev = _summary_severity(summary)
+            rt_tokens += tok
+            total_tokens += tok
+            rt_cost += cost
+            for sev, n in by_sev.items():
+                severity_counts[sev] = severity_counts.get(sev, 0) + n
         elif card.surface == 'sim':
             tok = sum(_as_int(_result_tokens(res)) for res in _results(data))
             sim_tokens += tok
@@ -324,25 +331,97 @@ def landing(roots: list[Path] | None = None) -> Landing:
     )
 
 
-def _redteam_result_counts(data: dict[str, object]) -> tuple[int, int]:
-    """``(evaluated, vulnerable)`` derived by walking the ``results`` list.
+class _RedteamCounts(NamedTuple):
+    """Per-report red-team tallies derived by walking the ``results`` list."""
 
-    Fallback for legacy red-team reports whose summary predates
-    ``evaluated_attacks`` / ``vulnerabilities_found``. Uses the same per-result
-    classification as the red-team overview loop: an errored result was never
-    evaluated, everything else splits on the ``vulnerable`` flag. A legacy
-    report with no results contributes ``(0, 0)`` — there is genuinely nothing
-    to weight in an attack-weighted aggregate.
+    attacks: int
+    evaluated: int
+    vulnerable: int
+    errors: int
+    tokens: int
+    cost: float
+    by_severity: dict[str, int]
+
+
+def _result_outcome(res: dict[str, object]) -> bool | None:
+    """``True`` resisted, ``False`` vulnerable, ``None`` never evaluated.
+
+    Mirrors ``_is_evaluated`` / ``_is_vulnerable`` in
+    ``redteam.reports.converters``: only a boolean ``evaluation.passed`` counts
+    as an evaluation. The top-level ``error`` field carries the *target*
+    error only, so a result whose generation succeeded but whose evaluation
+    crashed or was skipped has ``error=None, vulnerable=False`` and must not be
+    booked as resistant — that would bias a security metric optimistic.
+    Reports too old to serialize ``evaluation`` at all fall back to the flags
+    they do carry.
     """
-    evaluated = 0
-    vulnerable = 0
+    evaluation = res.get('evaluation')
+    if isinstance(evaluation, dict):
+        passed = evaluation.get('passed')
+        return passed if isinstance(passed, bool) else None
+    if 'evaluation' in res or res.get('error'):
+        return None
+    return not res.get('vulnerable')
+
+
+def _result_usage(res: dict[str, object]) -> tuple[int, float]:
+    """``(tokens, cost)`` for one result, over both the target and judge calls.
+
+    Same two holders ``converters._aggregate_token_usage`` walks.
+    """
+    tokens = 0
+    cost = 0.0
+    for holder in ('execution', 'evaluation'):
+        parent = res.get(holder)
+        usage = parent.get('token_usage') if isinstance(parent, dict) else None
+        tokens += _tokens_total(usage)
+        cost += _cost_usd(usage)
+    return tokens, cost
+
+
+def _redteam_counts(data: dict[str, object]) -> _RedteamCounts:
+    """Tally a red-team report straight from its ``results`` list.
+
+    The single classifier behind both the red-team overview and the landing
+    aggregate's legacy fallback, so the two can never drift apart. A report
+    with no results tallies to zeros — there is genuinely nothing to weight in
+    an attack-weighted aggregate.
+    """
+    attacks = evaluated = vulnerable = errors = tokens = 0
+    cost = 0.0
+    by_severity: dict[str, int] = {}
     for res in _results(data):
+        attacks += 1
         if res.get('error'):
+            errors += 1
+        tok, c = _result_usage(res)
+        tokens += tok
+        cost += c
+        outcome = _result_outcome(res)
+        if outcome is None:
             continue
         evaluated += 1
-        if res.get('vulnerable'):
+        if not outcome:
             vulnerable += 1
-    return evaluated, vulnerable
+            attack = res.get('attack')
+            attack = attack if isinstance(attack, dict) else {}
+            severity = str(attack.get('severity') or 'low').lower()
+            by_severity[severity] = by_severity.get(severity, 0) + 1
+    return _RedteamCounts(attacks, evaluated, vulnerable, errors, tokens, cost, by_severity)
+
+
+def _summary_severity(summary: dict[str, object]) -> dict[str, int]:
+    """Vulnerability count per severity as stored in a modern ``by_severity``."""
+    by_sev = summary.get('by_severity')
+    if not isinstance(by_sev, dict):
+        return {}
+    out: dict[str, int] = {}
+    for sev, entry in by_sev.items():
+        if isinstance(entry, dict):
+            n = _as_int(entry.get('vulnerabilities_found') or entry.get('count'))
+            if n:
+                out[sev] = out.get(sev, 0) + n
+    return out
 
 
 def _entries(data: dict[str, object]) -> list[dict[str, object]]:
@@ -671,31 +750,15 @@ def redteam_overview(roots: list[Path] | None = None, *, page: int = 1, per_page
             cost_total += run_cost
             has_cost = True
 
-        run_vuln = 0
-        run_attacks = 0
-        run_errors = 0
-        for res in _results(data):
-            total_attacks += 1
-            run_attacks += 1
-            attack = res.get('attack')
-            attack = attack if isinstance(attack, dict) else {}
-            is_error = bool(res.get('error'))
-            is_vuln = bool(res.get('vulnerable'))
-            severity = str(attack.get('severity', 'low')).lower()
-            if is_error:
-                run_errors += 1
-            else:
-                evaluated += 1
-                if is_vuln:
-                    vulnerable += 1
-                    run_vuln += 1
-                    if severity == 'critical':
-                        critical += 1
-                else:
-                    resistant += 1
+        counts = _redteam_counts(data)
+        total_attacks += counts.attacks
+        evaluated += counts.evaluated
+        vulnerable += counts.vulnerable
+        resistant += counts.evaluated - counts.vulnerable
+        critical += counts.by_severity.get('critical', 0)
 
         resistance = _as_float(summary.get('resistance_rate')) if 'resistance_rate' in summary else None
-        cases = _as_int(summary.get('total_attacks')) or run_attacks
+        cases = _as_int(summary.get('total_attacks')) or counts.attacks
         runs.append(
             RedTeamRunRow(
                 rid=card.id,
@@ -703,7 +766,7 @@ def redteam_overview(roots: list[Path] | None = None, *, page: int = 1, per_page
                 when=card.created_at,
                 targets=_redteam_targets(data),
                 status=_lifecycle_status(
-                    broken=bool(card.error), all_errored=(run_attacks > 0 and run_errors == run_attacks)
+                    broken=bool(card.error), all_errored=(counts.attacks > 0 and counts.errors == counts.attacks)
                 ),
                 score=resistance,
                 cases=cases,
