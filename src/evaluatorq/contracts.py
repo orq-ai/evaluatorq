@@ -404,9 +404,7 @@ class Usage(BaseModel):
     )
     total_tokens: int = Field(default=0, ge=0, description='Total tokens as reported by the provider')
     cached_tokens: int = Field(default=0, ge=0, description='Cached input tokens (subset of input_tokens)')
-    cache_creation_tokens: int = Field(
-        default=0, ge=0, description='Cache-write input tokens (subset of input_tokens)'
-    )
+    cache_creation_tokens: int = Field(default=0, ge=0, description='Cache-write input tokens (subset of input_tokens)')
     reasoning_tokens: int = Field(default=0, ge=0, description='Reasoning output tokens (subset of output_tokens)')
     input_cost: float | None = Field(
         default=None, ge=0, description='Input cost in USD when the provider reports it, else None'
