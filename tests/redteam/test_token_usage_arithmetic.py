@@ -339,3 +339,152 @@ class TestBackCompatSerialization:
         d = TokenUsage(input_tokens=9, output_tokens=3, total_tokens=12).model_dump(mode='json')
         assert d['input_tokens'] == 9 and d['output_tokens'] == 3
         assert d['prompt_tokens'] == 9 and d['completion_tokens'] == 3
+
+
+class TestCostBreakdownExtract:
+    """RES-1194-adjacent: Orq Responses v3 per-component cost + cache-write tokens."""
+
+    def test_extract_reads_component_costs(self) -> None:
+        u = TokenUsage.extract({'input_tokens': 100, 'output_tokens': 40, 'input_cost': 0.01, 'output_cost': 0.02})
+        assert u is not None
+        assert u.input_cost == pytest.approx(0.01)
+        assert u.output_cost == pytest.approx(0.02)
+        # total_cost absent from payload -> synthesized as the sum of the components.
+        assert u.total_cost == pytest.approx(0.03)
+
+    def test_extract_reads_legacy_component_cost_aliases(self) -> None:
+        u = TokenUsage.extract({'input_tokens': 1, 'output_tokens': 1, 'prompt_cost': 0.1, 'completion_cost': 0.2})
+        assert u is not None
+        assert u.input_cost == pytest.approx(0.1)
+        assert u.output_cost == pytest.approx(0.2)
+        assert u.total_cost == pytest.approx(0.3)
+
+    def test_extract_prefers_explicit_total_cost_over_component_sum(self) -> None:
+        """A provider-reported total_cost is trusted as-is, even if it does not
+        equal input_cost + output_cost (e.g. it includes a surcharge)."""
+        u = TokenUsage.extract(
+            {'input_tokens': 1, 'output_tokens': 1, 'input_cost': 0.01, 'output_cost': 0.02, 'total_cost': 0.5}
+        )
+        assert u is not None
+        assert u.total_cost == pytest.approx(0.5)
+
+    def test_extract_total_cost_alias_chain(self) -> None:
+        by_total_cost = TokenUsage.extract({'input_tokens': 1, 'total_cost': 0.4})
+        by_cost_usd = TokenUsage.extract({'input_tokens': 1, 'cost_usd': 0.5})
+        by_cost = TokenUsage.extract({'input_tokens': 1, 'cost': 0.6})
+        assert by_total_cost is not None and by_total_cost.total_cost == pytest.approx(0.4)
+        assert by_cost_usd is not None and by_cost_usd.total_cost == pytest.approx(0.5)
+        assert by_cost is not None and by_cost.total_cost == pytest.approx(0.6)
+
+    def test_extract_clamps_each_negative_cost_component_independently(self) -> None:
+        u = TokenUsage.extract(
+            {
+                'input_tokens': 5,
+                'output_tokens': 3,
+                'input_cost': -0.01,
+                'output_cost': -0.02,
+                'total_cost': -0.03,
+            }
+        )
+        assert u is not None
+        assert u.input_cost == 0.0
+        assert u.output_cost == 0.0
+        assert u.total_cost == 0.0
+
+    def test_extract_cache_creation_tokens_from_v3_details_shape(self) -> None:
+        u = TokenUsage.extract(
+            {
+                'input_tokens': 100,
+                'output_tokens': 40,
+                'input_tokens_details': {'cache_creation_tokens': 25},
+            }
+        )
+        assert u is not None
+        assert u.cache_creation_tokens == 25
+
+    def test_extract_cache_creation_tokens_falls_back_to_anthropic_top_level_shape(self) -> None:
+        u = TokenUsage.extract(
+            {
+                'input_tokens': 100,
+                'output_tokens': 40,
+                'cache_creation_input_tokens': 17,
+            }
+        )
+        assert u is not None
+        assert u.cache_creation_tokens == 17
+
+    def test_extract_cache_creation_tokens_defaults_to_zero(self) -> None:
+        u = TokenUsage.extract({'input_tokens': 10, 'output_tokens': 5})
+        assert u is not None
+        assert u.cache_creation_tokens == 0
+
+    def test_multi_component_extract_round_trip(self) -> None:
+        """Full Orq Responses v3 usage payload survives extract -> dump -> reload."""
+        payload = {
+            'input_tokens': 200,
+            'output_tokens': 80,
+            'total_tokens': 280,
+            'input_tokens_details': {'cached_tokens': 30, 'cache_creation_tokens': 12},
+            'output_tokens_details': {'reasoning_tokens': 5},
+            'input_cost': 0.002,
+            'output_cost': 0.004,
+            'total_cost': 0.006,
+        }
+        u = TokenUsage.extract(payload)
+        assert u is not None
+        dumped = u.model_dump(mode='json')
+        restored = TokenUsage.model_validate(dumped)
+        assert restored == u
+        assert restored.cache_creation_tokens == 12
+        assert restored.input_cost == pytest.approx(0.002)
+        assert restored.output_cost == pytest.approx(0.004)
+        assert restored.total_cost == pytest.approx(0.006)
+        assert restored.cost_usd == pytest.approx(0.006)
+
+
+class TestCostBreakdownArithmetic:
+    def test_add_sums_cache_creation_tokens_and_component_costs(self) -> None:
+        a = TokenUsage(
+            input_tokens=10,
+            output_tokens=5,
+            cache_creation_tokens=3,
+            input_cost=0.01,
+            output_cost=0.02,
+            total_cost=0.03,
+        )
+        b = TokenUsage(
+            input_tokens=20,
+            output_tokens=8,
+            cache_creation_tokens=4,
+            input_cost=0.05,
+            output_cost=0.06,
+            total_cost=0.11,
+        )
+        c = a + b
+        assert c.cache_creation_tokens == 7
+        assert c.input_cost == pytest.approx(0.06)
+        assert c.output_cost == pytest.approx(0.08)
+        assert c.total_cost == pytest.approx(0.14)
+
+    def test_add_component_cost_none_aware(self) -> None:
+        a = TokenUsage(input_tokens=1, output_tokens=1)  # all costs None
+        b = TokenUsage(input_tokens=1, output_tokens=1, input_cost=0.5, output_cost=0.25)
+        assert (a + a).input_cost is None
+        assert (a + a).output_cost is None
+        assert (a + b).input_cost == pytest.approx(0.5)
+        assert (a + b).output_cost == pytest.approx(0.25)
+
+    def test_sub_clamps_cache_creation_tokens_and_costs(self) -> None:
+        after = TokenUsage(
+            input_tokens=30, cache_creation_tokens=10, input_cost=0.5, output_cost=0.3, total_cost=0.8
+        )
+        before = TokenUsage(
+            input_tokens=10, cache_creation_tokens=4, input_cost=0.1, output_cost=0.1, total_cost=0.2
+        )
+        d = after - before
+        assert d.cache_creation_tokens == 6
+        assert d.input_cost == pytest.approx(0.4)
+        assert d.output_cost == pytest.approx(0.2)
+        assert d.total_cost == pytest.approx(0.6)
+        # subtracting a larger cache_creation_tokens value never goes negative
+        assert (before - after).cache_creation_tokens == 0

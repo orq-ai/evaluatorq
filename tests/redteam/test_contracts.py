@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from evaluatorq.contracts import (
     AgentResponse,
@@ -195,6 +196,46 @@ class TestTokenUsage:
     def test_from_dict(self) -> None:
         usage = TokenUsage.model_validate({'prompt_tokens': 100, 'completion_tokens': 50, 'total_tokens': 150})
         assert usage.prompt_tokens == 100
+
+    def test_defaults_include_cost_breakdown_fields(self) -> None:
+        usage = TokenUsage()
+        assert usage.cache_creation_tokens == 0
+        assert usage.input_cost is None
+        assert usage.output_cost is None
+        assert usage.total_cost is None
+        assert usage.cost_usd is None
+
+    def test_cost_breakdown_round_trip(self) -> None:
+        usage = TokenUsage(
+            input_tokens=100,
+            output_tokens=50,
+            total_tokens=150,
+            cache_creation_tokens=10,
+            input_cost=0.01,
+            output_cost=0.02,
+            total_cost=0.03,
+        )
+        dumped = usage.model_dump(mode='json')
+        assert dumped['cache_creation_tokens'] == 10
+        assert dumped['input_cost'] == pytest.approx(0.01)
+        assert dumped['output_cost'] == pytest.approx(0.02)
+        assert dumped['total_cost'] == pytest.approx(0.03)
+        # Legacy key still present for un-migrated consumers (dashboard membership test).
+        assert dumped['cost_usd'] == pytest.approx(0.03)
+
+        restored = TokenUsage.model_validate(dumped)
+        assert restored == usage
+
+    def test_total_cost_accepts_legacy_aliases(self) -> None:
+        assert TokenUsage(cost_usd=0.5).total_cost == pytest.approx(0.5)
+        assert TokenUsage.model_validate({'cost': 0.75}).total_cost == pytest.approx(0.75)
+        assert TokenUsage.model_validate({'total_cost': 1.25}).total_cost == pytest.approx(1.25)
+
+    def test_cost_usd_is_read_only_alias_for_total_cost(self) -> None:
+        usage = TokenUsage(total_cost=0.42)
+        assert usage.cost_usd == pytest.approx(0.42)
+        with pytest.raises(ValidationError):
+            usage.cost_usd = 1.0  # type: ignore[misc]
 
 
 class TestAgentContext:
