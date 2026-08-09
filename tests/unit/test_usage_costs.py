@@ -262,17 +262,15 @@ def test_extract_captures_cache_ttl_tier_tokens():
     Orq folds both into the flat `input_cost`, so this is attribution only — the
     money is already right either way.
     """
-    u = Usage.extract(
-        {
-            'input_tokens': 1000,
-            'output_tokens': 10,
-            'input_tokens_details': {
-                'cache_creation_tokens': 800,
-                'cache_creation_1h_tokens': 500,
-                'cache_creation_5m_tokens': 300,
-            },
-        }
-    )
+    u = Usage.extract({
+        'input_tokens': 1000,
+        'output_tokens': 10,
+        'input_tokens_details': {
+            'cache_creation_tokens': 800,
+            'cache_creation_1h_tokens': 500,
+            'cache_creation_5m_tokens': 300,
+        },
+    })
 
     assert u is not None
     assert u.cache_creation_tokens == 800
@@ -296,19 +294,44 @@ def test_orq_sdk_input_tokens_details_declares_the_tier_names_we_read():
     assert {'cache_creation_tokens', 'cache_creation_1h_tokens', 'cache_creation_5m_tokens'} <= declared
 
 
-def test_anthropic_cache_tiers_roll_up_into_the_total():
-    """Anthropic reports only the tier split, under its own `cache_creation` key.
+def test_real_anthropic_usage_model_extracts_every_cache_field():
+    """Built from the installed SDK's own model, not a hand-guessed dict.
 
-    Without a roll-up, cache-write tokens vanish from every total that reads
-    `cache_creation_tokens`.
+    `anthropic.types.Usage` keeps cache reads and cache writes as flat top-level
+    fields and nests only the TTL split under `cache_creation`. Constructing the
+    real model means this test fails if that schema ever moves.
     """
+    from anthropic.types import Usage as AnthropicUsage
+    from anthropic.types.cache_creation import CacheCreation
+
     u = Usage.extract(
-        {
-            'input_tokens': 1000,
-            'output_tokens': 10,
-            'cache_creation': {'ephemeral_1h_input_tokens': 500, 'ephemeral_5m_input_tokens': 300},
-        }
+        AnthropicUsage(
+            input_tokens=1000,
+            output_tokens=10,
+            cache_creation_input_tokens=800,
+            cache_read_input_tokens=2000,
+            cache_creation=CacheCreation(ephemeral_1h_input_tokens=500, ephemeral_5m_input_tokens=300),
+        )
     )
+
+    assert u is not None
+    assert u.cached_tokens == 2000
+    assert u.cache_creation_tokens == 800
+    assert u.cache_creation_1h_tokens == 500
+    assert u.cache_creation_5m_tokens == 300
+
+
+def test_cache_tiers_roll_up_when_no_total_is_reported():
+    """Fallback only: a payload carrying the TTL split with no pre-summed total.
+
+    Both Anthropic and Orq v3 do send a total, so this path is defensive — but
+    without it those cache-write tokens would vanish from `cache_creation_tokens`.
+    """
+    u = Usage.extract({
+        'input_tokens': 1000,
+        'output_tokens': 10,
+        'cache_creation': {'ephemeral_1h_input_tokens': 500, 'ephemeral_5m_input_tokens': 300},
+    })
 
     assert u is not None
     assert u.cache_creation_1h_tokens == 500
@@ -318,17 +341,15 @@ def test_anthropic_cache_tiers_roll_up_into_the_total():
 
 def test_reported_cache_creation_total_wins_over_the_tier_sum():
     """Orq v3 pre-sums the total; trust it rather than recomputing from tiers."""
-    u = Usage.extract(
-        {
-            'input_tokens': 1000,
-            'output_tokens': 10,
-            'input_tokens_details': {
-                'cache_creation_tokens': 900,
-                'cache_creation_1h_tokens': 500,
-                'cache_creation_5m_tokens': 300,
-            },
-        }
-    )
+    u = Usage.extract({
+        'input_tokens': 1000,
+        'output_tokens': 10,
+        'input_tokens_details': {
+            'cache_creation_tokens': 900,
+            'cache_creation_1h_tokens': 500,
+            'cache_creation_5m_tokens': 300,
+        },
+    })
 
     assert u is not None
     assert u.cache_creation_tokens == 900

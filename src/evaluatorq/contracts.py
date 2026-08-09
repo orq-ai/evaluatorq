@@ -547,15 +547,18 @@ class Usage(BaseModel):
         # Provider total is trusted only when > 0; otherwise fall back to input+output.
         reported_total = _usage_first_int(usage, ('total_tokens', 'totalTokens', 'total'))
         total = reported_total if reported_total > 0 else inp + out
+        # Anthropic reports cache reads as a flat top-level `cache_read_input_tokens`
+        # (anthropic.types.Usage), not nested in a details object like Orq/OpenAI.
         cached = _usage_detail_int(
             usage,
             ('input_tokens_details', 'prompt_tokens_details', 'input_token_details'),
             ('cached_tokens', 'cache_read'),
-        )
+        ) or _usage_first_int(usage, ('cache_read_input_tokens',))
         # Anthropic prices a 1h cache write above a 5m one, so the tier split is
         # billing-relevant even though Orq folds both into the flat input_cost.
         # Orq nests the tiers under input_tokens_details; Anthropic puts them in a
-        # `cache_creation` object under its own `ephemeral_*` names.
+        # `cache_creation` object under its own `ephemeral_*` names
+        # (anthropic.types.CacheCreation).
         cache_creation_1h = _usage_detail_int(
             usage,
             ('input_tokens_details', 'prompt_tokens_details', 'input_token_details', 'cache_creation'),
@@ -566,9 +569,9 @@ class Usage(BaseModel):
             ('input_tokens_details', 'prompt_tokens_details', 'input_token_details', 'cache_creation'),
             ('cache_creation_5m_tokens', 'ephemeral_5m_input_tokens'),
         ) or _usage_first_int(usage, ('cache_creation_5m_tokens',))
-        # Roll the tiers up when the provider reports only the split (Anthropic)
-        # rather than a pre-summed total (Orq v3) — otherwise cache-write tokens
-        # vanish from every total that reads cache_creation_tokens.
+        # Both Anthropic and Orq v3 do report a pre-summed total, so the tier sum is
+        # only a last-resort fallback for a payload that carries the split alone —
+        # without it those cache-write tokens would vanish from cache_creation_tokens.
         cache_creation = (
             _usage_detail_int(
                 usage,
