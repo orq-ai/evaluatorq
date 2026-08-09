@@ -552,23 +552,32 @@ class Usage(BaseModel):
             ('input_tokens_details', 'prompt_tokens_details', 'input_token_details'),
             ('cached_tokens', 'cache_read'),
         )
-        cache_creation = _usage_detail_int(
-            usage,
-            ('input_tokens_details', 'prompt_tokens_details', 'input_token_details'),
-            ('cache_creation_tokens', 'cache_creation_input_tokens'),
-        ) or _usage_first_int(usage, ('cache_creation_input_tokens',))
         # Anthropic prices a 1h cache write above a 5m one, so the tier split is
         # billing-relevant even though Orq folds both into the flat input_cost.
+        # Orq nests the tiers under input_tokens_details; Anthropic puts them in a
+        # `cache_creation` object under its own `ephemeral_*` names.
         cache_creation_1h = _usage_detail_int(
             usage,
-            ('input_tokens_details', 'prompt_tokens_details', 'input_token_details'),
-            ('cache_creation_1h_tokens',),
+            ('input_tokens_details', 'prompt_tokens_details', 'input_token_details', 'cache_creation'),
+            ('cache_creation_1h_tokens', 'ephemeral_1h_input_tokens'),
         ) or _usage_first_int(usage, ('cache_creation_1h_tokens',))
         cache_creation_5m = _usage_detail_int(
             usage,
-            ('input_tokens_details', 'prompt_tokens_details', 'input_token_details'),
-            ('cache_creation_5m_tokens',),
+            ('input_tokens_details', 'prompt_tokens_details', 'input_token_details', 'cache_creation'),
+            ('cache_creation_5m_tokens', 'ephemeral_5m_input_tokens'),
         ) or _usage_first_int(usage, ('cache_creation_5m_tokens',))
+        # Roll the tiers up when the provider reports only the split (Anthropic)
+        # rather than a pre-summed total (Orq v3) — otherwise cache-write tokens
+        # vanish from every total that reads cache_creation_tokens.
+        cache_creation = (
+            _usage_detail_int(
+                usage,
+                ('input_tokens_details', 'prompt_tokens_details', 'input_token_details'),
+                ('cache_creation_tokens', 'cache_creation_input_tokens'),
+            )
+            or _usage_first_int(usage, ('cache_creation_input_tokens',))
+            or cache_creation_1h + cache_creation_5m
+        )
         reasoning = _usage_detail_int(
             usage,
             ('output_tokens_details', 'completion_tokens_details', 'output_token_details'),

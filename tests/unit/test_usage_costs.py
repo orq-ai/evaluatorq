@@ -294,3 +294,41 @@ def test_orq_sdk_input_tokens_details_declares_the_tier_names_we_read():
 
     declared = set(details.InputTokensDetails.model_fields)
     assert {'cache_creation_tokens', 'cache_creation_1h_tokens', 'cache_creation_5m_tokens'} <= declared
+
+
+def test_anthropic_cache_tiers_roll_up_into_the_total():
+    """Anthropic reports only the tier split, under its own `cache_creation` key.
+
+    Without a roll-up, cache-write tokens vanish from every total that reads
+    `cache_creation_tokens`.
+    """
+    u = Usage.extract(
+        {
+            'input_tokens': 1000,
+            'output_tokens': 10,
+            'cache_creation': {'ephemeral_1h_input_tokens': 500, 'ephemeral_5m_input_tokens': 300},
+        }
+    )
+
+    assert u is not None
+    assert u.cache_creation_1h_tokens == 500
+    assert u.cache_creation_5m_tokens == 300
+    assert u.cache_creation_tokens == 800
+
+
+def test_reported_cache_creation_total_wins_over_the_tier_sum():
+    """Orq v3 pre-sums the total; trust it rather than recomputing from tiers."""
+    u = Usage.extract(
+        {
+            'input_tokens': 1000,
+            'output_tokens': 10,
+            'input_tokens_details': {
+                'cache_creation_tokens': 900,
+                'cache_creation_1h_tokens': 500,
+                'cache_creation_5m_tokens': 300,
+            },
+        }
+    )
+
+    assert u is not None
+    assert u.cache_creation_tokens == 900
