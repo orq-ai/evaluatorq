@@ -1003,7 +1003,7 @@ class MultiTurnOrchestrator:
                         # Targets report their own call count (orq sums tool-continuation
                         # rounds); fall back to 1 only when a usage-bearing turn forgot to.
                         if turn_usage.calls == 0:
-                            turn_usage = turn_usage.model_copy(update={'calls': 1})
+                            turn_usage = turn_usage.with_calls(1)
                         target_usage_acc = target_usage_acc + turn_usage
 
                     # Record the completed turn (target succeeded)

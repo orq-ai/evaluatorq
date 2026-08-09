@@ -37,7 +37,7 @@ from typing import Any
 
 from loguru import logger
 
-from evaluatorq.contracts import ReportSection
+from evaluatorq.contracts import ReportSection, TokenUsage
 from evaluatorq.redteam.contracts import OWASP_CATEGORY_NAMES, SEVERITY_DEFINITIONS, RedTeamReport, RedTeamResult
 from evaluatorq.redteam.reports._utils import extract_prompt, extract_response
 from evaluatorq.redteam.reports.guidance import REMEDIATION_GUIDANCE
@@ -769,27 +769,37 @@ def _build_token_usage_section(report: RedTeamReport) -> ReportSection | None:
             'total_tokens': overall.total_tokens,
             'prompt_tokens': overall.prompt_tokens,
             'completion_tokens': overall.completion_tokens,
+            'cache_creation_tokens': overall.cache_creation_tokens,
             'calls': overall.calls,
+            'priced_calls': overall.priced_calls,
+            'input_cost': overall.input_cost,
+            'output_cost': overall.output_cost,
+            'total_cost': overall.total_cost,
         }
 
-    agent_totals: dict[str, dict[str, int]] = defaultdict(
-        lambda: {'total_tokens': 0, 'prompt_tokens': 0, 'completion_tokens': 0, 'calls': 0}
-    )
+    agent_usage: dict[str, TokenUsage] = defaultdict(TokenUsage)
     for result in report.results:
         if result.execution is None or result.execution.token_usage is None:
             continue
         agent_key = result.agent.key or result.agent.display_name or 'unknown'
-        tu = result.execution.token_usage
-        agent_totals[agent_key]['total_tokens'] += tu.total_tokens
-        agent_totals[agent_key]['prompt_tokens'] += tu.prompt_tokens
-        agent_totals[agent_key]['completion_tokens'] += tu.completion_tokens
-        agent_totals[agent_key]['calls'] += tu.calls
+        agent_usage[agent_key] = agent_usage[agent_key] + result.execution.token_usage
 
     per_agent = [
-        {'agent': agent_key, **totals}
-        for agent_key, totals in sorted(
-            agent_totals.items(),
-            key=lambda kv: kv[1]['total_tokens'],
+        {
+            'agent': agent_key,
+            'total_tokens': tu.total_tokens,
+            'prompt_tokens': tu.prompt_tokens,
+            'completion_tokens': tu.completion_tokens,
+            'cache_creation_tokens': tu.cache_creation_tokens,
+            'calls': tu.calls,
+            'priced_calls': tu.priced_calls,
+            'input_cost': tu.input_cost,
+            'output_cost': tu.output_cost,
+            'total_cost': tu.total_cost,
+        }
+        for agent_key, tu in sorted(
+            agent_usage.items(),
+            key=lambda kv: kv[1].total_tokens,
             reverse=True,
         )
     ]

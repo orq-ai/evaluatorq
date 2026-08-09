@@ -67,14 +67,25 @@ def _make_orq_response(
     prompt_tokens: int = 20,
     completion_tokens: int = 10,
     total_tokens: int = 30,
+    input_cost: float | None = None,
+    output_cost: float | None = None,
+    total_cost: float | None = None,
     pending_tool_calls: list[Any] | None = None,
     model: str | None = None,
 ) -> MagicMock:
-    """Build a minimal fake ORQ agent response."""
+    """Build a minimal fake ORQ agent response.
+
+    Cost fields default to ``None`` — a bare ``MagicMock`` attribute is not a
+    number, so ``Usage.extract`` reads it as "not reported", matching an ORQ
+    payload without cost. Pass them explicitly to exercise the costed path.
+    """
     usage = MagicMock()
     usage.prompt_tokens = prompt_tokens
     usage.completion_tokens = completion_tokens
     usage.total_tokens = total_tokens
+    usage.input_cost = input_cost
+    usage.output_cost = output_cost
+    usage.total_cost = total_cost
 
     part = MagicMock()
     part.kind = "text"
@@ -183,6 +194,63 @@ class TestORQAgentTargetSendPromptWithUsage:
         assert result.usage.completion_tokens == 10
         assert result.usage.total_tokens == 30
         assert result.usage.calls == 1
+        # ORQ did not report cost — must stay unknown, never fabricated as 0.0.
+        assert result.usage.input_cost is None
+        assert result.usage.output_cost is None
+        assert result.usage.total_cost is None
+
+    @pytest.mark.asyncio
+    async def test_orq_reported_cost_reaches_send_result(self) -> None:
+        """Cost on the ORQ usage payload survives extraction onto SendResult.
+
+        This is the path the branch exists for: if ORQ stops sending cost, or
+        the field names drift, this test fails rather than the dashboard
+        quietly showing "no cost data".
+        """
+        target, _ = self._make_target()
+        response = _make_orq_response(input_cost=0.0004, output_cost=0.002, total_cost=0.0024)
+
+        with (
+            patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread,
+            patch("evaluatorq.redteam.tracing.get_tracer", return_value=None),
+        ):
+            mock_to_thread.return_value = response
+            result = await target.respond([Message(role="user", content="hello")])
+
+        assert result.usage is not None
+        assert result.usage.input_cost == pytest.approx(0.0004)
+        assert result.usage.output_cost == pytest.approx(0.002)
+        assert result.usage.total_cost == pytest.approx(0.0024)
+
+    @pytest.mark.asyncio
+    async def test_tool_continuation_accumulates_cost(self) -> None:
+        """Cost sums across the initial call and its tool continuation."""
+        target, _ = self._make_target()
+
+        pending_call = MagicMock()
+        pending_call.id = "tool-call-001"
+
+        first = _make_orq_response(
+            text="", pending_tool_calls=[pending_call], input_cost=0.001, output_cost=0.002, total_cost=0.003
+        )
+        second = _make_orq_response(
+            text="done", pending_tool_calls=[], input_cost=0.004, output_cost=0.005, total_cost=0.009
+        )
+        responses = iter([first, second])
+
+        async def fake_to_thread(fn: Any, **kwargs: Any) -> Any:
+            return next(responses)
+
+        with (
+            patch("asyncio.to_thread", side_effect=fake_to_thread),
+            patch("evaluatorq.redteam.tracing.get_tracer", return_value=None),
+        ):
+            result = await target.respond([Message(role="user", content="prompt")])
+
+        assert result.usage is not None
+        assert result.usage.input_cost == pytest.approx(0.005)
+        assert result.usage.output_cost == pytest.approx(0.007)
+        assert result.usage.total_cost == pytest.approx(0.012)
 
     @pytest.mark.asyncio
     async def test_tool_continuation_accumulates_usage(self) -> None:
@@ -322,10 +390,11 @@ class TestORQAgentTargetSendPromptWithUsage:
         # Partial usage from the first call must have been recorded before the exception propagated
         mock_record.assert_called_once()
         _, kwargs_called = mock_record.call_args
-        assert kwargs_called["prompt_tokens"] == 15
-        assert kwargs_called["completion_tokens"] == 5
-        assert kwargs_called["total_tokens"] == 20
-        assert kwargs_called["calls"] == 1
+        recorded_usage = kwargs_called["usage"]
+        assert recorded_usage.input_tokens == 15
+        assert recorded_usage.output_tokens == 5
+        assert recorded_usage.total_tokens == 20
+        assert recorded_usage.calls == 1
 
     @pytest.mark.asyncio
     async def test_orq_total_zero_falls_back_to_sum(self) -> None:

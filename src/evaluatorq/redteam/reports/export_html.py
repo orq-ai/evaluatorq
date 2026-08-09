@@ -15,7 +15,9 @@ from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.reports import COLORS as _COLORS
 from evaluatorq.common.reports import STATUS_COLORS as _STATUS_COLORS_BASE
+from evaluatorq.common.reports import cost_coverage as _cost_coverage
 from evaluatorq.common.reports import esc as _esc
+from evaluatorq.common.reports import fmt_cost as _fmt_cost
 from evaluatorq.common.reports import format_date as _format_date
 from evaluatorq.common.reports import html_table as _html_table
 from evaluatorq.common.reports import load_css as _load_css_common
@@ -991,24 +993,70 @@ def _render_token_usage_html(section: ReportSection) -> str:
         )
         parts.append(cards)
 
+        cache_creation_tokens = overall.get('cache_creation_tokens', 0)
+        if cache_creation_tokens:
+            parts.append(
+                '<div class="kpi-row">'
+                '<div class="kpi-card">'
+                f'<div class="kpi-value">{_esc(str(cache_creation_tokens))}</div>'
+                '<div class="kpi-label">Cache-Write Tokens</div>'
+                '</div>'
+                '</div>'
+            )
+
+        input_cost = overall.get('input_cost')
+        output_cost = overall.get('output_cost')
+        total_cost = overall.get('total_cost')
+        if input_cost is not None or output_cost is not None or total_cost is not None:
+            cost_cards = ['<div class="kpi-row">']
+            if input_cost is not None:
+                cost_cards.append(
+                    '<div class="kpi-card">'
+                    f'<div class="kpi-value">{_esc(_fmt_cost(input_cost))}</div>'
+                    '<div class="kpi-label">Input Cost</div>'
+                    '</div>'
+                )
+            if output_cost is not None:
+                cost_cards.append(
+                    '<div class="kpi-card">'
+                    f'<div class="kpi-value">{_esc(_fmt_cost(output_cost))}</div>'
+                    '<div class="kpi-label">Output Cost</div>'
+                    '</div>'
+                )
+            if total_cost is not None:
+                # Flag a lower-bound total: some calls in this run reported no cost.
+                coverage = _cost_coverage(overall.get('priced_calls', 0), overall.get('calls', 0))
+                cost_cards.append(
+                    '<div class="kpi-card">'
+                    f'<div class="kpi-value">{_esc(_fmt_cost(total_cost))}</div>'
+                    f'<div class="kpi-label">Total Cost{_esc(coverage)}</div>'
+                    '</div>'
+                )
+            cost_cards.append('</div>')
+            parts.append(''.join(cost_cards))
+
     if per_agent:
         chart = _render_token_per_agent_bar_chart(per_agent)
         if chart:
             parts.append(chart)
-        table_rows = [
-            [
+        any_cost = any(r.get('total_cost') is not None for r in per_agent)
+        headers = ['Agent', 'Total Tokens', 'Prompt Tokens', 'Completion Tokens', 'API Calls']
+        if any_cost:
+            headers.append('Total Cost')
+        table_rows = []
+        for r in per_agent:
+            row = [
                 _esc(r.get('agent', '?')),
                 _esc(str(r.get('total_tokens', 0))),
                 _esc(str(r.get('prompt_tokens', 0))),
                 _esc(str(r.get('completion_tokens', 0))),
                 _esc(str(r.get('calls', 0))),
             ]
-            for r in per_agent
-        ]
-        table = _html_table(
-            ['Agent', 'Total Tokens', 'Prompt Tokens', 'Completion Tokens', 'API Calls'],
-            table_rows,
-        )
+            if any_cost:
+                agent_total_cost = r.get('total_cost')
+                row.append(_esc(_fmt_cost(agent_total_cost)) if agent_total_cost is not None else '—')
+            table_rows.append(row)
+        table = _html_table(headers, table_rows)
         parts.extend(('<h3>Per-Agent Breakdown</h3>', table))
 
     return '\n'.join(parts)
