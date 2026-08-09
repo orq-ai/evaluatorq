@@ -280,7 +280,9 @@ def landing_body(data: Landing) -> str:
         spend_sub = f'in {_fmt_cost(data.total_input_cost)} / out {_fmt_cost(data.total_output_cost)}'
     # A spend total only some calls contributed to is a lower bound — say so,
     # matching the "(N of M calls)" qualifier the markdown/HTML reports render.
-    coverage = _cost_coverage(data.priced_calls, data.cost_calls)
+    # Only qualifies a figure that exists — an em dash "no cost recorded" tile
+    # with "(1 of 2 calls)" under it would label a total that was never shown.
+    coverage = _cost_coverage(data.priced_calls, data.cost_calls) if data.total_cost is not None else ''
     if coverage:
         spend_sub = f'{spend_sub} ·{coverage}' if spend_sub else coverage.strip()
     band = (
@@ -617,7 +619,8 @@ def redteam_overview_body(data: RedTeamOverview) -> str:
     spend_value = _fmt_cost(data.total_cost)
     if data.total_input_cost is not None or data.total_output_cost is not None:
         spend_value += f' (in {_fmt_cost(data.total_input_cost)} / out {_fmt_cost(data.total_output_cost)})'
-    spend_value += _cost_coverage(data.priced_calls, data.cost_calls)
+    if data.total_cost is not None:
+        spend_value += _cost_coverage(data.priced_calls, data.cost_calls)
     band = kpi_cards([
         {'label': 'Attacks run', 'value': str(data.attacks_run)},
         {'label': 'ASR', 'value': asr, 'status': asr_status},

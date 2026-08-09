@@ -358,3 +358,23 @@ def test_reported_cache_creation_total_wins_over_the_tier_sum():
 
     assert u is not None
     assert u.cache_creation_tokens == 900
+
+
+def test_unusable_token_value_falls_through_to_next_alias():
+    """An unusable preferred alias must not shadow a valid fallback.
+
+    Clamping in place would read 0 here and discard the perfectly good
+    prompt_tokens sitting next to it.
+    """
+    extracted = Usage.extract({'input_tokens': -1, 'prompt_tokens': 10, 'output_tokens': 2})
+    assert extracted is not None
+    assert extracted.input_tokens == 10
+
+
+def test_non_finite_cost_is_ignored_rather_than_raising():
+    """NaN slips past the negative-cost clamp (`nan < 0` is False) but fails the
+    ge=0 field constraint, so it must be dropped at read time."""
+    extracted = Usage.extract({'input_tokens': 1, 'output_tokens': 1, 'total_cost': float('nan')})
+    assert extracted is not None
+    assert extracted.total_cost is None
+    assert extracted.priced_calls == 0

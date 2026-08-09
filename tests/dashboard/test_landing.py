@@ -631,3 +631,38 @@ class TestDashboardCostCoverage:
         ov = metrics.sim_overview([rt, sim])
         assert (ov.priced_calls, ov.cost_calls) == (1, 2)
         assert '(1 of 2 calls)' in view.sim_overview_body(ov)
+
+    def test_legacy_report_does_not_inflate_the_coverage_denominator(self, tmp_path: Path) -> None:
+        """A report predating priced_calls has *unknown* coverage, not zero coverage.
+
+        Counting its calls in the denominator only would report "1 of 11 calls"
+        for one new priced call beside ten legacy ones that may all have been
+        priced — a fabricated warning, the mirror of the fabricated $0.00 this
+        whole feature exists to avoid.
+        """
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        legacy = self._redteam_payload('L', created='2026-06-29T10:00:00', priced=0, calls=10)
+        del legacy['summary']['token_usage_total']['priced_calls']
+        (rt / 'legacy.json').write_text(json.dumps(legacy))
+        (rt / 'new.json').write_text(
+            json.dumps(self._redteam_payload('N', created='2026-06-29T11:00:00', priced=1, calls=1))
+        )
+
+        data = metrics.landing([rt, sim])
+        assert (data.priced_calls, data.cost_calls) == (1, 1)
+        assert 'calls)' not in view.landing_body(data)
+
+    def test_no_coverage_label_when_cost_is_unknown(self, tmp_path: Path) -> None:
+        """Coverage qualifies a figure that exists — an em dash "no cost" tile with
+        "(1 of 2 calls)" under it labels a total that was never shown."""
+        payload = self._redteam_payload('P', created='2026-06-29T10:00:00', priced=1, calls=2)
+        payload['summary']['token_usage_total']['cost_usd'] = None
+        rt, sim = self._roots(tmp_path, payload)
+
+        data = metrics.landing([rt, sim])
+        assert data.total_cost is None
+        assert '(1 of 2 calls)' not in view.landing_body(data)
+        assert '(1 of 2 calls)' not in view.redteam_overview_body(metrics.redteam_overview([rt, sim]))

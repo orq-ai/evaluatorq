@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -318,16 +319,22 @@ def _usage_first_int(usage: Any, keys: tuple[str, ...]) -> int:
 
     Only genuine ``int``/``float`` values count; ``None`` and non-numeric stand-ins
     (e.g. a bare ``MagicMock`` attribute) are skipped so the next alias is tried.
+
+    Unusable numbers — negative, NaN, ±inf — are skipped the same way rather than
+    raising. ``Usage.extract`` runs from ``record_llm_response`` on the *success*
+    path of every LLM call, so a hostile payload must degrade to 0, never turn a
+    good response into a failure: ``int(nan)`` raises ValueError, ``int(-inf)``
+    raises OverflowError, and a negative would trip the ``ge=0`` field constraint.
+    Skipping (rather than clamping in place) also lets a valid later alias win, so
+    ``{'input_tokens': -1, 'prompt_tokens': 10}`` still reads 10.
     """
     for key in keys:
         val = _usage_get(usage, key)
         if isinstance(val, (int, float)) and not isinstance(val, bool):
-            # Clamp at 0: a provider (or proxy) reporting a negative count would
-            # otherwise trip the ge=0 field constraint and raise out of
-            # ``Usage.extract`` — which ``record_llm_response`` calls on the
-            # success path of every LLM call, turning telemetry into a failure.
-            # Mirrors the same clamp on cost in ``_clamped_cost``.
-            return max(int(val), 0)
+            if not math.isfinite(val) or val < 0:
+                logger.warning('Usage.extract: ignoring unusable {} value {!r}', key, val)
+                continue
+            return int(val)
     return 0
 
 
@@ -349,10 +356,18 @@ def _usage_detail_int(usage: Any, containers: tuple[str, ...], keys: tuple[str, 
 
 
 def _usage_first_float(usage: Any, keys: tuple[str, ...]) -> float | None:
-    """First numeric value across ``keys`` coerced to float, or None if absent."""
+    """First numeric value across ``keys`` coerced to float, or None if absent.
+
+    Non-finite values are skipped: NaN fails the ``ge=0`` cost constraint (``nan >= 0``
+    is False) and ``_clamped_cost`` cannot catch it (``nan < 0`` is False either), so
+    it would raise out of the telemetry path. See ``_usage_first_int``.
+    """
     for key in keys:
         val = _usage_get(usage, key)
         if isinstance(val, (int, float)) and not isinstance(val, bool):
+            if not math.isfinite(val):
+                logger.warning('Usage.extract: ignoring non-finite {} value {!r}', key, val)
+                continue
             return float(val)
     return None
 

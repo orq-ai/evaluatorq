@@ -140,10 +140,15 @@ def _cost_calls(usage: object) -> tuple[int, int]:
     A cost summed over calls where only some reported one is a *lower bound*,
     not a total. Reports render "(N of M calls)" next to such a figure via
     ``cost_coverage``; the dashboard reads the same two fields so both surfaces
-    agree. Reports written before ``priced_calls`` existed return ``(0, ...)``,
-    which ``cost_coverage`` treats as "not tracked" and leaves unannotated.
+    agree.
+
+    Reports written before ``priced_calls`` existed contribute ``(0, 0)`` — not
+    ``(0, calls)``. Their coverage is *unknown*, not "nothing was priced", and the
+    dashboard sums across reports: counting a legacy run's calls in the denominator
+    only would report "1 of 11 calls" for one new call beside ten legacy ones whose
+    prices may all have been known.
     """
-    if not isinstance(usage, dict):
+    if not isinstance(usage, dict) or usage.get('priced_calls') is None:
         return (0, 0)
     return (_as_int(usage.get('priced_calls')), _as_int(usage.get('calls')))
 

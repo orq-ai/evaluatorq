@@ -815,22 +815,24 @@ async def test_openresponses_llm_span_emits_neutral_and_legacy_purpose() -> None
         provider.shutdown()
 
 
-def test_record_llm_response_survives_negative_token_counts() -> None:
+@pytest.mark.parametrize('bad', [-1, float('nan'), float('-inf'), float('inf')])
+def test_record_llm_response_survives_unusable_token_counts(bad: float) -> None:
     """Tracing must never raise on a hostile usage payload.
 
     ``record_llm_response`` runs on the *success* path of every LLM call, and
-    now routes through ``Usage.extract``, whose token fields are ``ge=0``. A
-    provider or proxy reporting a negative count would raise a ValidationError
-    out of an otherwise-successful call, so counts are clamped like costs are.
+    now routes through ``Usage.extract``, whose token fields are ``ge=0``. Each
+    of these raises a *different* exception if passed through: a negative trips
+    the field constraint, ``int(nan)`` raises ValueError, ``int(±inf)`` raises
+    OverflowError. All must degrade to 0 instead.
     """
     from unittest.mock import MagicMock
 
     from evaluatorq.common.tracing import record_llm_response
 
     class _Usage:
-        prompt_tokens = -1
+        prompt_tokens = bad
         completion_tokens = 2
-        total_tokens = -5
+        total_tokens = bad
 
     class _Resp:
         id = 'r'
