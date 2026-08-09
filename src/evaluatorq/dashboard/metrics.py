@@ -10,9 +10,10 @@ name, score, derived status — used by the landing's recent-runs list and the
 per-kind run-list screens.  ``landing(roots)`` rolls those up into the stat
 band + panel data for the Dashboard screen.
 
-Per the design decision: neither schema tracks dollar cost, so the design's
-spend panels are rendered from native metrics (resistance rate, severity,
-token usage) instead.
+Dollar cost is optional in both schemas: a report only carries cost when the
+provider reported it.  The spend panels therefore distinguish "no cost data"
+from "$0.00" — see ``_cost_usd`` — and fall back to native metrics (resistance
+rate, severity, token usage) when nothing in a store reported cost.
 """
 
 from __future__ import annotations

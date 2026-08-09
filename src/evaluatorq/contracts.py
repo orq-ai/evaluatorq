@@ -404,13 +404,29 @@ class Usage(BaseModel):
     )
     total_tokens: int = Field(default=0, ge=0, description='Total tokens as reported by the provider')
     cached_tokens: int = Field(default=0, ge=0, description='Cached input tokens (subset of input_tokens)')
-    cache_creation_tokens: int = Field(default=0, ge=0, description='Cache-write input tokens (subset of input_tokens)')
+    cache_creation_tokens: int = Field(
+        default=0,
+        ge=0,
+        description='Cache-write input tokens (subset of input_tokens for OpenAI-shaped payloads; reported separately by Anthropic)',
+    )
+    cache_creation_1h_tokens: int = Field(
+        default=0, ge=0, description='Cache-write tokens at the 1h TTL tier (subset of cache_creation_tokens)'
+    )
+    cache_creation_5m_tokens: int = Field(
+        default=0, ge=0, description='Cache-write tokens at the 5m TTL tier (subset of cache_creation_tokens)'
+    )
     reasoning_tokens: int = Field(default=0, ge=0, description='Reasoning output tokens (subset of output_tokens)')
     input_cost: float | None = Field(
-        default=None, ge=0, description='Input cost in USD when the provider reports it, else None'
+        default=None,
+        ge=0,
+        validation_alias=AliasChoices('input_cost', 'prompt_cost'),
+        description='Input cost in USD when the provider reports it, else None',
     )
     output_cost: float | None = Field(
-        default=None, ge=0, description='Output cost in USD when the provider reports it, else None'
+        default=None,
+        ge=0,
+        validation_alias=AliasChoices('output_cost', 'completion_cost'),
+        description='Output cost in USD when the provider reports it, else None',
     )
     total_cost: float | None = Field(
         default=None,
@@ -419,6 +435,11 @@ class Usage(BaseModel):
         description='Total cost in USD when the provider reports it, else None',
     )
     calls: int = Field(default=0, ge=0, description='Number of LLM API calls')
+    priced_calls: int = Field(
+        default=0,
+        ge=0,
+        description='How many of `calls` reported a cost. Below `calls` means the cost fields are a lower bound.',
+    )
 
     if TYPE_CHECKING:
         # The legacy ``prompt_tokens``/``completion_tokens`` names are accepted at
@@ -435,12 +456,17 @@ class Usage(BaseModel):
             total_tokens: int = ...,
             cached_tokens: int = ...,
             cache_creation_tokens: int = ...,
+            cache_creation_1h_tokens: int = ...,
+            cache_creation_5m_tokens: int = ...,
             reasoning_tokens: int = ...,
             input_cost: float | None = ...,
+            prompt_cost: float | None = ...,
             output_cost: float | None = ...,
+            completion_cost: float | None = ...,
             total_cost: float | None = ...,
             cost_usd: float | None = ...,
             calls: int = ...,
+            priced_calls: int = ...,
         ) -> None: ...
 
     @property
@@ -457,6 +483,32 @@ class Usage(BaseModel):
     def cost_usd(self) -> float | None:
         """Deprecated alias for :attr:`total_cost`."""
         return self.total_cost
+
+    @property
+    def cost_is_partial(self) -> bool:
+        """True when a cost is known but some calls in this aggregate had none.
+
+        The cost fields are then a *lower bound*, not a total — ``_combine_cost``
+        adds a known cost to an unknown one by treating the unknown as 0.0, so the
+        result looks authoritative but under-counts. Render "from N of M calls"
+        next to any cost when this is set.
+
+        ``priced_calls == 0`` alongside a known cost cannot happen for a freshly
+        built aggregate (``extract`` prices all-or-nothing, ``__add__`` sums), so it
+        only occurs in reports saved before this field existed — treated as "not
+        tracked" rather than "nothing was priced", so old reports stay unannotated.
+        """
+        return self.total_cost is not None and 0 < self.priced_calls < self.calls
+
+    def with_calls(self, calls: int) -> Usage:
+        """Stamp the call count, keeping :attr:`priced_calls` consistent.
+
+        ``from_openresponses`` parses with ``calls=0`` and leaves the real count to
+        the caller that knows the call was billed. A bare
+        ``model_copy(update={'calls': 1})`` would leave ``priced_calls`` at 0, which
+        :attr:`cost_is_partial` reads as legacy untracked data — use this instead.
+        """
+        return self.model_copy(update={'calls': calls, 'priced_calls': calls if self.total_cost is not None else 0})
 
     @model_serializer(mode='wrap')
     def _serialize(self, handler: Any) -> dict[str, Any]:
@@ -505,6 +557,18 @@ class Usage(BaseModel):
             ('input_tokens_details', 'prompt_tokens_details', 'input_token_details'),
             ('cache_creation_tokens', 'cache_creation_input_tokens'),
         ) or _usage_first_int(usage, ('cache_creation_input_tokens',))
+        # Anthropic prices a 1h cache write above a 5m one, so the tier split is
+        # billing-relevant even though Orq folds both into the flat input_cost.
+        cache_creation_1h = _usage_detail_int(
+            usage,
+            ('input_tokens_details', 'prompt_tokens_details', 'input_token_details'),
+            ('cache_creation_1h_tokens',),
+        ) or _usage_first_int(usage, ('cache_creation_1h_tokens',))
+        cache_creation_5m = _usage_detail_int(
+            usage,
+            ('input_tokens_details', 'prompt_tokens_details', 'input_token_details'),
+            ('cache_creation_5m_tokens',),
+        ) or _usage_first_int(usage, ('cache_creation_5m_tokens',))
         reasoning = _usage_detail_int(
             usage,
             ('output_tokens_details', 'completion_tokens_details', 'output_token_details'),
@@ -526,17 +590,28 @@ class Usage(BaseModel):
         resolved_calls = (
             int(raw_calls) if isinstance(raw_calls, (int, float)) and not isinstance(raw_calls, bool) else calls
         )
+        # Same deal for priced_calls: an aggregated dump carries its own count,
+        # a raw provider payload prices all-or-nothing on whether cost showed up.
+        raw_priced = _usage_get(usage, 'priced_calls')
+        resolved_priced = (
+            int(raw_priced)
+            if isinstance(raw_priced, (int, float)) and not isinstance(raw_priced, bool)
+            else (resolved_calls if cost is not None else 0)
+        )
         return cls(
             input_tokens=inp,
             output_tokens=out,
             total_tokens=total,
             cached_tokens=cached,
             cache_creation_tokens=cache_creation,
+            cache_creation_1h_tokens=cache_creation_1h,
+            cache_creation_5m_tokens=cache_creation_5m,
             reasoning_tokens=reasoning,
             input_cost=input_cost,
             output_cost=output_cost,
             total_cost=cost,
             calls=resolved_calls,
+            priced_calls=min(resolved_priced, resolved_calls),
         )
 
     @classmethod
@@ -563,11 +638,14 @@ class Usage(BaseModel):
             total_tokens=self.total_tokens + other.total_tokens,
             cached_tokens=self.cached_tokens + other.cached_tokens,
             cache_creation_tokens=self.cache_creation_tokens + other.cache_creation_tokens,
+            cache_creation_1h_tokens=self.cache_creation_1h_tokens + other.cache_creation_1h_tokens,
+            cache_creation_5m_tokens=self.cache_creation_5m_tokens + other.cache_creation_5m_tokens,
             reasoning_tokens=self.reasoning_tokens + other.reasoning_tokens,
             input_cost=self._combine_cost(self.input_cost, other.input_cost),
             output_cost=self._combine_cost(self.output_cost, other.output_cost),
             total_cost=self._combine_cost(self.total_cost, other.total_cost),
             calls=self.calls + other.calls,
+            priced_calls=self.priced_calls + other.priced_calls,
         )
 
     def __radd__(self, other: object) -> Usage:
@@ -588,11 +666,14 @@ class Usage(BaseModel):
             total_tokens=max(self.total_tokens - other.total_tokens, 0),
             cached_tokens=max(self.cached_tokens - other.cached_tokens, 0),
             cache_creation_tokens=max(self.cache_creation_tokens - other.cache_creation_tokens, 0),
+            cache_creation_1h_tokens=max(self.cache_creation_1h_tokens - other.cache_creation_1h_tokens, 0),
+            cache_creation_5m_tokens=max(self.cache_creation_5m_tokens - other.cache_creation_5m_tokens, 0),
             reasoning_tokens=max(self.reasoning_tokens - other.reasoning_tokens, 0),
             input_cost=self._combine_cost(self.input_cost, other.input_cost, sign=-1),
             output_cost=self._combine_cost(self.output_cost, other.output_cost, sign=-1),
             total_cost=self._combine_cost(self.total_cost, other.total_cost, sign=-1),
             calls=max(self.calls - other.calls, 0),
+            priced_calls=max(self.priced_calls - other.priced_calls, 0),
         )
 
 

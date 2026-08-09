@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 from fasthtml.common import Script
 
 from evaluatorq.common.reports import esc
+from evaluatorq.common.reports import fmt_cost as _fmt_cost
 from evaluatorq.simulation.metrics import TURN_METRICS
 
 if TYPE_CHECKING:
@@ -264,7 +265,7 @@ def landing_body(data: Landing) -> str:
     # the breakdown — old reports carry only the aggregate cost_usd.
     spend_sub = ''
     if data.total_input_cost is not None or data.total_output_cost is not None:
-        spend_sub = f'in {_fmt_cost(data.total_input_cost)} · out {_fmt_cost(data.total_output_cost)}'
+        spend_sub = f'in {_fmt_cost(data.total_input_cost)} / out {_fmt_cost(data.total_output_cost)}'
     band = (
         '<div class="stat-band">'
         + _stat_tile('Jobs run', str(data.total_runs))
@@ -325,28 +326,6 @@ _LIFECYCLE_PILL: dict[str, tuple[str, str]] = {
     'running': ('Running', 'warn'),
     'cancelled': ('Cancelled', 'neutral'),
 }
-
-
-def _fmt_cost(v: float | None) -> str:
-    """Format a dollar amount: cents-precision for readable sums, more digits
-    for the sub-cent per-item costs typical of a single sim/attack.
-
-    ``None`` means the cost was never recorded (unknown) — distinct from a
-    real ``0.0`` — and renders as an em dash, matching the report exporters'
-    "not reported" convention. This intentionally does NOT reuse
-    ``evaluatorq.common.reports.md_helpers.fmt_cost``: that formatter is fixed
-    at 4dp for markdown tables and never called with ``None`` (callers there
-    must omit the cell entirely), whereas the dashboard mixes large rollups
-    (stat tiles, KPI cards) with sub-cent per-item costs in the same views, so
-    it needs both the adaptive precision and the None-handling here.
-    """
-    if v is None:
-        return '—'
-    if v >= 1:
-        return f'${v:,.2f}'
-    if v > 0:
-        return f'${v:.4f}'
-    return '$0.00'
 
 
 # Inline target-kind glyphs (lucide: bot / cpu / rocket), sized to the pill.

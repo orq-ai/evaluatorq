@@ -141,3 +141,20 @@ def test_build_token_usage_rows_omits_cost_when_explicitly_null():
     joined = ' '.join(f'{k}:{v}' for k, v in rows)
     assert 'Cost' not in joined
     assert '$' not in joined
+
+
+def test_total_cost_row_flags_partial_coverage():
+    """A cost only some calls contributed to is labelled, not shown as a total."""
+    rows = build_token_usage_rows({'total_cost': 0.5, 'calls': 10, 'priced_calls': 3})
+    assert ['Total Cost', '$0.5000 (3 of 10 calls)'] in rows
+
+
+def test_total_cost_row_unlabelled_when_every_call_priced():
+    rows = build_token_usage_rows({'total_cost': 0.5, 'calls': 10, 'priced_calls': 10})
+    assert ['Total Cost', '$0.5000'] in rows
+
+
+def test_total_cost_row_unlabelled_for_pre_coverage_reports():
+    """Saved reports predating priced_calls must not be labelled "0 of N"."""
+    rows = build_token_usage_rows({'total_cost': 0.5, 'calls': 10})
+    assert ['Total Cost', '$0.5000'] in rows

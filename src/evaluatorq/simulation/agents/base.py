@@ -430,7 +430,7 @@ class BaseAgent(ABC):
 
                 # Accumulate token usage (from_openresponses leaves calls=0, add 1)
                 if usage is not None:
-                    self._usage = self._usage + usage.model_copy(update={'calls': 1})
+                    self._usage = self._usage + usage.with_calls(1)
 
                 # Separate text from tool-call items; isinstance guards prevent
                 # ReasoningOutputItem.text leaking into response content.

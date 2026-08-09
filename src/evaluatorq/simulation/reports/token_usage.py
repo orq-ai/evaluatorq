@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
     from typing import Any
 
-from evaluatorq.common.reports import fmt_cost
+from evaluatorq.common.reports import cost_coverage, fmt_cost
 from evaluatorq.simulation.token_usage import token_value
 
 
@@ -50,5 +50,8 @@ def build_token_usage_rows(data: Mapping[str, Any]) -> list[list[str]]:
         rows.append(['Output Cost', fmt_cost(output_cost)])
     total_cost = data.get('total_cost')
     if total_cost is not None and isinstance(total_cost, int | float) and not isinstance(total_cost, bool):
-        rows.append(['Total Cost', fmt_cost(total_cost)])
+        # A cost summed across calls where only some reported one is a lower
+        # bound, not a total — say so rather than let it read as authoritative.
+        coverage = cost_coverage(int(token_value(data, 'priced_calls')), int(token_value(data, 'calls')))
+        rows.append(['Total Cost', f'{fmt_cost(total_cost)}{coverage}'])
     return rows

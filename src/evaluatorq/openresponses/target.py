@@ -242,7 +242,7 @@ class OrqResponsesTarget(AgentTarget):
             if span_id:
                 updates['span_id'] = span_id
             if agent_response.usage is not None:
-                updates['usage'] = agent_response.usage.model_copy(update={'calls': 1})
+                updates['usage'] = agent_response.usage.with_calls(1)
             return agent_response.model_copy(update=updates)
 
         try:

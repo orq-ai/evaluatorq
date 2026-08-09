@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 from evaluatorq.common.reports import bar as _bar
 from evaluatorq.common.reports import bold_bar as _bold_bar
 from evaluatorq.common.reports import center_table as _center_table
+from evaluatorq.common.reports import cost_coverage as _cost_coverage
 from evaluatorq.common.reports import details_block as _details_block
 from evaluatorq.common.reports import fmt_cost as _fmt_cost
 from evaluatorq.common.reports import md_table as _md_table
@@ -620,7 +621,9 @@ def _render_token_usage_section(section: ReportSection) -> str:
         if output_cost is not None:
             metric_rows.append(['Output Cost', _fmt_cost(output_cost)])
         if total_cost is not None:
-            metric_rows.append(['Total Cost', _fmt_cost(total_cost)])
+            # Flag a lower-bound total: some calls in this run reported no cost.
+            coverage = _cost_coverage(overall.get('priced_calls', 0), overall.get('calls', 0))
+            metric_rows.append(['Total Cost', f'{_fmt_cost(total_cost)}{coverage}'])
         lines.extend((
             _md_table(['Metric', 'Value'], metric_rows, right_align={1}),
             '',

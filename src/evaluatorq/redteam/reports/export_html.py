@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.reports import COLORS as _COLORS
 from evaluatorq.common.reports import STATUS_COLORS as _STATUS_COLORS_BASE
+from evaluatorq.common.reports import cost_coverage as _cost_coverage
 from evaluatorq.common.reports import esc as _esc
 from evaluatorq.common.reports import fmt_cost as _fmt_cost
 from evaluatorq.common.reports import format_date as _format_date
@@ -1023,10 +1024,12 @@ def _render_token_usage_html(section: ReportSection) -> str:
                     '</div>'
                 )
             if total_cost is not None:
+                # Flag a lower-bound total: some calls in this run reported no cost.
+                coverage = _cost_coverage(overall.get('priced_calls', 0), overall.get('calls', 0))
                 cost_cards.append(
                     '<div class="kpi-card">'
                     f'<div class="kpi-value">{_esc(_fmt_cost(total_cost))}</div>'
-                    '<div class="kpi-label">Total Cost</div>'
+                    f'<div class="kpi-label">Total Cost{_esc(coverage)}</div>'
                     '</div>'
                 )
             cost_cards.append('</div>')

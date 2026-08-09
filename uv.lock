@@ -1082,6 +1082,7 @@ dependencies = [
     { name = "httpx" },
     { name = "loguru" },
     { name = "openai" },
+    { name = "orq-ai-sdk" },
     { name = "pydantic" },
     { name = "rich" },
     { name = "typer" },
@@ -1221,9 +1222,10 @@ requires-dist = [
     { name = "opentelemetry-sdk", marker = "extra == 'otel'", specifier = ">=1.20.0" },
     { name = "opentelemetry-semantic-conventions", marker = "extra == 'all'", specifier = ">=0.41b0" },
     { name = "opentelemetry-semantic-conventions", marker = "extra == 'otel'", specifier = ">=0.41b0" },
-    { name = "orq-ai-sdk", marker = "extra == 'all'", specifier = ">=4.4.7" },
-    { name = "orq-ai-sdk", marker = "extra == 'orq'", specifier = ">=4.4.7" },
-    { name = "orq-ai-sdk", marker = "extra == 'simulation'", specifier = ">=4.4.7" },
+    { name = "orq-ai-sdk", specifier = ">=4.12" },
+    { name = "orq-ai-sdk", marker = "extra == 'all'", specifier = ">=4.12" },
+    { name = "orq-ai-sdk", marker = "extra == 'orq'", specifier = ">=4.12" },
+    { name = "orq-ai-sdk", marker = "extra == 'simulation'", specifier = ">=4.12" },
     { name = "plotly", marker = "extra == 'all'", specifier = ">=5.18.0" },
     { name = "plotly", marker = "extra == 'redteam'", specifier = ">=5.18.0" },
     { name = "plotly", marker = "extra == 'simulation'", specifier = ">=5.18.0" },
@@ -1260,7 +1262,7 @@ dev = [
     { name = "opentelemetry-api", specifier = ">=1.20.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.20.0" },
     { name = "opentelemetry-sdk", specifier = ">=1.20.0" },
-    { name = "orq-ai-sdk", specifier = ">=4.4.7" },
+    { name = "orq-ai-sdk", specifier = ">=4.12" },
     { name = "pytest", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", specifier = ">=1.2.0" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
@@ -3561,7 +3563,7 @@ wheels = [
 
 [[package]]
 name = "orq-ai-sdk"
-version = "4.4.7"
+version = "4.12.22"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpcore" },
@@ -3569,9 +3571,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e1/14/28422e81beeb846453e297eb86fac2e932dc8e5c145bd366e3eda1507ed5/orq_ai_sdk-4.4.7.tar.gz", hash = "sha256:78cd38e78fa253699c6b9c4109ad39010a75253da7ae94bf26dadd0bb6e45e03", size = 629447, upload-time = "2026-02-26T13:01:25.02Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f7/4c/6118630afd87569dcc45e10275d68dc3c1ae6b2f3ee581fea314ac18b456/orq_ai_sdk-4.12.22.tar.gz", hash = "sha256:bc64bef4c18a96de15270fd1ebc754de0acfff9e68c858c539bce69f382afa26", size = 1854729, upload-time = "2026-08-06T08:36:22.916Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/be/ce/0d77fc9500cd3fb45f7895e0606e60fceeb0ab63a3d6c200a84e9fefcd99/orq_ai_sdk-4.4.7-py3-none-any.whl", hash = "sha256:43aa5ad7d90a18ed22693cd8c814acc1f7286b42cb6ae7f27be3fcbc8120faaa", size = 786852, upload-time = "2026-02-26T13:01:26.911Z" },
+    { url = "https://files.pythonhosted.org/packages/a8/0a/be397fe5b871f8bccd8dc3a9943b12ebfa58cc0388b1c56bf531780db47a/orq_ai_sdk-4.12.22-py3-none-any.whl", hash = "sha256:9b7223bfd778f2d5f62c8dde0f4e8153a45bd892f9f23e97290032e07198365c", size = 2336334, upload-time = "2026-08-06T08:36:20.672Z" },
 ]
 
 [[package]]
@@ -4906,7 +4908,7 @@ wheels = [
 
 [[package]]
 name = "requests"
-version = "2.32.4"
+version = "2.34.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "certifi" },
@@ -4914,9 +4916,9 @@ dependencies = [
     { name = "idna" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e1/0a/929373653770d8a0d7ea76c37de6e41f11eb07559b103b1c02cafb3f7cf8/requests-2.32.4.tar.gz", hash = "sha256:27d0316682c8a29834d3264820024b62a36942083d52caf2f14c0591336d3422", size = 135258, upload-time = "2025-06-09T16:43:07.34Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ac/c3/e2a2b89f2d3e2179abd6d00ebd70bff6273f37fb3e0cc209f48b39d00cbf/requests-2.34.2.tar.gz", hash = "sha256:f288924cae4e29463698d6d60bc6a4da69c89185ad1e0bcc4104f584e960b9ed", size = 142856, upload-time = "2026-05-14T19:25:27.735Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7c/e4/56027c4a6b4ae70ca9de302488c5ca95ad4a39e190093d6c1a8ace08341b/requests-2.32.4-py3-none-any.whl", hash = "sha256:27babd3cda2a6d50b30443204ee89830707d396671944c998b5975b031ac2b2c", size = 64847, upload-time = "2025-06-09T16:43:05.728Z" },
+    { url = "https://files.pythonhosted.org/packages/a0/f4/c67b0b3f1b9245e8d266f0f112c500d50e5b4e83cb6f3b71b6528104182a/requests-2.34.2-py3-none-any.whl", hash = "sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0", size = 73075, upload-time = "2026-05-14T19:25:26.443Z" },
 ]
 
 [[package]]
