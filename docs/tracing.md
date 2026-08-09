@@ -270,7 +270,7 @@ hierarchy:
 
 ```
 orq.evaluation {evaluator}         # from the core runner, when a jury backs an evaluator
-  └── orq.jury                     # one per deliberation (or one per comparison, in pairwise mode)
+  └── orq.jury                     # one per deliberation (orq.pairwise_jury in comparative mode)
         └── orq.judge              # one per judge (x2 in comparative mode — see below)
               └── chat {model}     # the judge's own LLM call(s), tagged orq.llm.purpose="judge"
 ```
@@ -338,15 +338,17 @@ one `mode` would name it after a function it does not call.
 bias, runs every judge in **both** label orderings. This changes the span
 shape from the plain jury case:
 
-- **One `orq.jury` span covers the whole comparison** — both orderings drive
-  the same span rather than each minting its own; `run_pairwise` calls the
+- **One `orq.pairwise_jury` span covers the whole comparison** — both orderings
+  drive the same span rather than each minting its own; `run_pairwise` calls the
   internal `_run_jury_core` directly (not `run_jury`) so it doesn't open a
   second jury span per ordering.
-- **Each judge appears twice** under that one `orq.jury` span — one
+- **Each judge appears twice** under that one `orq.pairwise_jury` span — one
   `orq.judge` span per ordering, distinguished by `judge.label_swapped`
   (`False` for the A/B ordering, `True` for the swapped B/A ordering).
-- The `orq.jury` span carries extra attributes only present in comparative
-  mode:
+- **The span is named `orq.pairwise_jury`, not `orq.jury`** — it aggregates
+  reconciled *pair* votes rather than raw per-judge votes, so it gets its own
+  name rather than masquerading as a plain jury. Its attributes stay in the
+  `jury.*` namespace, plus these comparative-only extras:
 
 | Attribute | Value |
 |---|---|
@@ -362,7 +364,7 @@ the opposite, a perfectly consistent judge. A judge that really does just follow
 slot order produces the same raw pair. The distinction lives on the parent:
 `reconcile_pair` un-swaps the second ordering after both have finished, and by
 then the judge spans are closed, so the canonical-frame result is only ever on
-`orq.jury` (`jury.flipped_judges` names the biased judges).
+`orq.pairwise_jury` (`jury.flipped_judges` names the biased judges).
 
 `jury.flipped` counts judges that answered in both orderings but disagreed
 with themselves — that is position bias, not a failure, so a flipped judge is
@@ -371,7 +373,7 @@ judges with no reconciled vote *and* no flip (i.e. one or both orderings
 raised an error). A judge can be flipped, failed, or a normal decisive vote,
 but never counted under more than one of those buckets.
 
-`orq.evaluation`, `orq.jury`, `orq.judge`, and the nested `chat {model}` LLM
+`orq.evaluation`, `orq.jury` / `orq.pairwise_jury`, `orq.judge`, and the nested `chat {model}` LLM
 spans follow the ambient OTel context — nothing threads an explicit parent
 across the `orq.evaluation` → `orq.jury` seam, so a jury backing a custom
 evaluator's scorer nests correctly without extra plumbing.

@@ -1,7 +1,8 @@
 """RES-985: per-judge OTEL spans + jury aggregate attributes for run_jury().
 
 Asserts the span *shape* (one ``orq.judge`` child per judge, all parented to a
-single ``orq.jury`` span) and the attribute keys/values the ticket enumerates.
+single ``orq.jury`` / ``orq.pairwise_jury`` span) and the attribute keys/values
+the ticket enumerates.
 """
 
 from __future__ import annotations
@@ -280,11 +281,14 @@ async def test_pairwise_emits_one_jury_span_for_both_orderings(span_collector) -
     )
     assert comparison.winner == 'A'
 
-    assert len(_by_name(exporter, 'orq.jury')) == 1
+    assert len(_by_name(exporter, 'orq.pairwise_jury')) == 1
+    # A comparison is its own span name: it aggregates reconciled pair votes,
+    # not raw per-judge votes, so it must not masquerade as a plain orq.jury.
+    assert _by_name(exporter, 'orq.jury') == []
     judge_spans = _by_name(exporter, 'orq.judge')
     assert len(judge_spans) == 4  # 2 judges x 2 orderings
 
-    jury_span_id = _span_id(_by_name(exporter, 'orq.jury')[0])
+    jury_span_id = _span_id(_by_name(exporter, 'orq.pairwise_jury')[0])
     for js in judge_spans:
         assert js.parent is not None
         assert js.parent.span_id == jury_span_id
@@ -302,7 +306,7 @@ async def test_pairwise_emits_one_jury_span_for_both_orderings(span_collector) -
     assert per_ordering[True]['judge.verdict_raw'] == 'B'
     assert all(_attrs(s)['judge.verdict_frame'] == 'slot' for s in judge_spans)
 
-    jury = _attrs(_by_name(exporter, 'orq.jury')[0])
+    jury = _attrs(_by_name(exporter, 'orq.pairwise_jury')[0])
     assert jury['jury.verdict'] == 'A'
     assert jury['jury.judges_configured'] == 2
     assert jury['jury.judges_succeeded'] == 2
@@ -321,7 +325,7 @@ async def test_pairwise_span_records_position_bias(span_collector) -> None:
     comparison = await run_pairwise(judge_fn=judge_fn, panel=['gpt-a'], response_a='x', response_b='y')
     assert comparison.winner == 'inconclusive'
 
-    jury = _attrs(_by_name(exporter, 'orq.jury')[0])
+    jury = _attrs(_by_name(exporter, 'orq.pairwise_jury')[0])
     assert jury['jury.flipped'] == 1
     assert jury['jury.flipped_judges'] == 'gpt-a'
     assert jury['jury.inconclusive'] is True
@@ -351,8 +355,8 @@ async def test_pairwise_span_separates_failure_from_flip(span_collector) -> None
     )
     assert comparison.winner == 'A'
 
-    assert len(_by_name(exporter, 'orq.jury')) == 1
-    jury = _attrs(_by_name(exporter, 'orq.jury')[0])
+    assert len(_by_name(exporter, 'orq.pairwise_jury')) == 1
+    jury = _attrs(_by_name(exporter, 'orq.pairwise_jury')[0])
     assert jury['jury.judges_failed'] == 1  # 'dead' only
     assert jury['jury.flipped'] == 1
     assert jury['jury.flipped_judges'] == 'flipper'
@@ -362,7 +366,7 @@ async def test_pairwise_span_separates_failure_from_flip(span_collector) -> None
     # The stand-in ran in both orderings and parents to the same jury span.
     stand_in_spans = [s for s in _by_name(exporter, 'orq.judge') if _attrs(s)['judge.model'] == 'stand-in']
     assert len(stand_in_spans) == 2
-    jury_span_id = _span_id(_by_name(exporter, 'orq.jury')[0])
+    jury_span_id = _span_id(_by_name(exporter, 'orq.pairwise_jury')[0])
     for s in stand_in_spans:
         assert _parent_id(s) == jury_span_id
         assert _attrs(s)['judge.replacement'] is True
@@ -378,7 +382,7 @@ async def test_pairwise_propagates_errors_and_marks_the_jury_span(span_collector
     with pytest.raises(RuntimeError):
         await run_pairwise(judge_fn=judge_fn, panel=['gpt-a'], response_a='x', response_b='y', propagate_errors=True)
 
-    jury_spans = _by_name(exporter, 'orq.jury')
+    jury_spans = _by_name(exporter, 'orq.pairwise_jury')
     assert len(jury_spans) == 1
     assert jury_spans[0].status.status_code is StatusCode.ERROR
     # The judge span still names who died.

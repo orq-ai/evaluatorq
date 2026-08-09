@@ -250,7 +250,7 @@ async def run_pairwise(
     an existing ``asyncio.Semaphore`` to share one budget across several
     comparisons. ``None`` (default) keeps the fan-out unbounded.
 
-    Tracing: the whole comparison is ONE ``orq.jury`` span (RES-985). Each
+    Tracing: the whole comparison is ONE ``orq.pairwise_jury`` span (RES-985). Each
     ordering drives ``_run_jury_core`` rather than ``run_jury`` so it doesn't
     mint a second jury span whose aggregates describe half a comparison; every
     judge span hangs off this one, tagged ``judge.label_swapped``.
@@ -269,7 +269,7 @@ async def run_pairwise(
                 judge_fn(response_b, response_a, model) if swapped else judge_fn(response_a, response_b, model)
             )
 
-        # _run_jury_core, not run_jury: this comparison owns ONE orq.jury span
+        # _run_jury_core, not run_jury: this comparison owns ONE orq.pairwise_jury span
         # across both orderings, and run_jury would open a second one per
         # ordering. Everything below the span (fan-out, per-judge spans,
         # repetition collapse) is identical.
@@ -304,7 +304,7 @@ async def run_pairwise(
         )
         return first_votes, second_votes, [u for u in (first_usage, second_usage) if u]
 
-    async with with_span('orq.jury') as jury_span:
+    async with with_span('orq.pairwise_jury') as jury_span:
         # Captured before any judge runs so every judge span (both orderings,
         # replacements included) parents to this one comparison-level span.
         jury_ctx = current_otel_context()
@@ -382,7 +382,7 @@ def _record_pairwise_span(
     min_successful_judges: int,
     swap: bool,
 ) -> None:
-    """Stamp the comparison-level attributes on the pairwise ``orq.jury`` span.
+    """Stamp the comparison-level attributes on the ``orq.pairwise_jury`` span.
 
     Deliberately reuses the ``jury.*`` namespace so one dashboard reads both
     modes: ``jury.verdict`` is the winner, ``judges_succeeded`` counts judges
