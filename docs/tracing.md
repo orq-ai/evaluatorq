@@ -105,7 +105,37 @@ orq.job                          # one per DataPoint — root when no ambient tr
 
 All `orq.job` spans from a single `evaluatorq()` call share the same `orq.run_id`
 attribute, which ties them together as a logical run without requiring a common
-parent span.
+parent span. Because there is no common parent, though, an N-row run arrives as
+**N separate traces** — one rooted at each `orq.job`.
+
+#### One trace per run: `single_trace=True`
+
+Pass `single_trace=True` to bracket the whole run in one `evaluatorq.run` span,
+so every row lands in a single trace:
+
+```python
+await evaluatorq("my-eval", data=rows, jobs=[my_job], single_trace=True)
+```
+
+```
+evaluatorq.run                   # one per evaluatorq() call — the root
+  └── orq.job                    # one per DataPoint, now a child rather than a root
+      └── orq.evaluation
+```
+
+It defaults to `False` so existing traces keep their shape. Red teaming and
+simulation do not need the flag — they already open their own root spans
+(`Evaluatorq - Red Teaming` / `Evaluatorq - Agent Simulation`), and `orq.job`
+nests under those.
+
+Span attributes on `evaluatorq.run`:
+
+| Attribute | Value |
+|---|---|
+| `orq.trace_type` | `"evaluatorq"` |
+| `orq.run_id` | UUID for this evaluation run — the same one every `orq.job` carries |
+| `orq.run_name` | The `name` passed to `evaluatorq()` |
+| `orq.evaluatorq_run_id` | Same UUID again, under the key every evaluatorq root span uses, so one query finds a run's root whatever the surface |
 
 Span attributes on `orq.job`:
 
