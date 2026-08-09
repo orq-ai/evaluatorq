@@ -813,3 +813,34 @@ async def test_openresponses_llm_span_emits_neutral_and_legacy_purpose() -> None
         assert attrs['orq.simulation.llm_purpose'] == 'target'
     finally:
         provider.shutdown()
+
+
+def test_record_llm_response_survives_negative_token_counts() -> None:
+    """Tracing must never raise on a hostile usage payload.
+
+    ``record_llm_response`` runs on the *success* path of every LLM call, and
+    now routes through ``Usage.extract``, whose token fields are ``ge=0``. A
+    provider or proxy reporting a negative count would raise a ValidationError
+    out of an otherwise-successful call, so counts are clamped like costs are.
+    """
+    from unittest.mock import MagicMock
+
+    from evaluatorq.common.tracing import record_llm_response
+
+    class _Usage:
+        prompt_tokens = -1
+        completion_tokens = 2
+        total_tokens = -5
+
+    class _Resp:
+        id = 'r'
+        model = 'm'
+        usage = _Usage()
+        choices = []
+
+    span = MagicMock()
+    record_llm_response(span, _Resp())  # must not raise
+
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert set_attrs['gen_ai.usage.input_tokens'] == 0
+    assert set_attrs['gen_ai.usage.output_tokens'] == 2

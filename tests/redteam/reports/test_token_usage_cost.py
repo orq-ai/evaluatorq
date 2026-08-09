@@ -211,3 +211,39 @@ def test_export_markdown_omits_cost_rows_when_unknown():
     assert 'Output Cost' not in md
     assert 'Total Cost' not in md
     assert '$0.00' not in md
+
+
+def test_export_marks_partial_coverage_on_per_agent_costs():
+    """Per-agent cost columns are lower bounds when only some calls were priced.
+
+    The overall Total Cost row already carried the "(N of M calls)" qualifier;
+    the per-agent breakdown rendered a bare figure from the same partial data.
+    agent-b is fully priced so the overall label reads "2 of 3" — "1 of 2" can
+    only come from agent-a's row.
+    """
+    results = [
+        _make_result(
+            agent_key='agent-a',
+            token_usage=TokenUsage(
+                prompt_tokens=10, completion_tokens=5, total_tokens=15, total_cost=0.5, calls=1, priced_calls=1
+            ),
+        ),
+        _make_result(
+            agent_key='agent-a',
+            token_usage=TokenUsage(prompt_tokens=20, completion_tokens=10, total_tokens=30, calls=1),
+        ),
+        _make_result(
+            agent_key='agent-b',
+            token_usage=TokenUsage(
+                prompt_tokens=4, completion_tokens=2, total_tokens=6, total_cost=0.25, calls=1, priced_calls=1
+            ),
+        ),
+    ]
+    report = _make_report(results)
+    md, html = export_markdown(report), export_html(report)
+    for rendered in (md, html):
+        assert '$0.5000 (1 of 2 calls)' in rendered  # agent-a row, partial
+        assert '$0.2500 (' not in rendered  # agent-b fully priced: no qualifier
+    # Overall total: markdown puts the qualifier on the value, HTML on the label.
+    assert '$0.7500 (2 of 3 calls)' in md
+    assert 'Total Cost (2 of 3 calls)' in html

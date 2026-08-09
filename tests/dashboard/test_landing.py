@@ -533,3 +533,101 @@ class TestZeroAttackScore:
         assert len(rows) == 1
         # 0 attacks evaluated: 1.00 would read as a perfect score.
         assert rows[0].score is None
+
+
+class TestDashboardCostCoverage:
+    """Spend figures the dashboard shows must carry the same lower-bound label
+    the markdown/HTML reports render. A total summed over calls where only some
+    reported a cost is a lower bound; showing it bare reads as authoritative."""
+
+    def _redteam_payload(self, name: str, *, created: str, priced: int, calls: int) -> dict:
+        return {
+            'pipeline': {'mode': 'adaptive'},
+            'created_at': created,
+            'run_name': name,
+            'total_results': 1,
+            'results': [
+                {
+                    'attack': {'severity': 'low', 'strategy_name': 'roleplay'},
+                    'agent': {'display_name': 'Refund agent', 'model': 'gpt-5.4'},
+                    'vulnerable': False,
+                    'error': None,
+                }
+            ],
+            'summary': {
+                'resistance_rate': 1.0,
+                'vulnerabilities_found': 0,
+                'evaluated_attacks': 1,
+                'token_usage_total': {
+                    'total_tokens': 500,
+                    'cost_usd': 0.5,
+                    'calls': calls,
+                    'priced_calls': priced,
+                },
+                'by_severity': {},
+            },
+        }
+
+    def _roots(self, tmp_path: Path, payload: dict) -> tuple[Path, Path]:
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        (rt / 'p.json').write_text(json.dumps(payload))
+        return rt, sim
+
+    def test_partial_coverage_labelled_on_landing_and_redteam(self, tmp_path: Path) -> None:
+        rt, sim = self._roots(tmp_path, self._redteam_payload('P', created='2026-06-29T10:00:00', priced=3, calls=10))
+
+        data = metrics.landing([rt, sim])
+        assert (data.priced_calls, data.cost_calls) == (3, 10)
+        assert '(3 of 10 calls)' in view.landing_body(data)
+
+        ov = metrics.redteam_overview([rt, sim])
+        assert (ov.priced_calls, ov.cost_calls) == (3, 10)
+        assert '(3 of 10 calls)' in view.redteam_overview_body(ov)
+
+    def test_no_label_when_every_call_priced(self, tmp_path: Path) -> None:
+        rt, sim = self._roots(tmp_path, self._redteam_payload('P', created='2026-06-29T10:00:00', priced=10, calls=10))
+
+        assert 'of 10 calls' not in view.landing_body(metrics.landing([rt, sim]))
+        assert 'of 10 calls' not in view.redteam_overview_body(metrics.redteam_overview([rt, sim]))
+
+    def test_no_label_for_pre_coverage_reports(self, tmp_path: Path) -> None:
+        """Reports saved before priced_calls existed must not be labelled "0 of N"."""
+        payload = self._redteam_payload('P', created='2026-06-29T10:00:00', priced=0, calls=10)
+        rt, sim = self._roots(tmp_path, payload)
+
+        assert 'calls)' not in view.landing_body(metrics.landing([rt, sim]))
+        assert 'calls)' not in view.redteam_overview_body(metrics.redteam_overview([rt, sim]))
+
+    def test_sim_overview_labels_partial_coverage(self, tmp_path: Path) -> None:
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        (sim / 's.json').write_text(
+            json.dumps({
+                'mode': 'run',
+                'created_at': '2026-06-30T10:00:00',
+                'run_name': 'S',
+                'total_results': 2,
+                'scorer_averages': {},
+                'results': [
+                    {
+                        'token_usage': {'total_tokens': 100, 'cost_usd': 0.5, 'calls': 1, 'priced_calls': 1},
+                        'goal_achieved': True,
+                        'turn_count': 1,
+                    },
+                    {
+                        'token_usage': {'total_tokens': 100, 'cost_usd': None, 'calls': 1, 'priced_calls': 0},
+                        'goal_achieved': True,
+                        'turn_count': 1,
+                    },
+                ],
+            })
+        )
+
+        ov = metrics.sim_overview([rt, sim])
+        assert (ov.priced_calls, ov.cost_calls) == (1, 2)
+        assert '(1 of 2 calls)' in view.sim_overview_body(ov)

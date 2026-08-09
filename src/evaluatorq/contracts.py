@@ -322,7 +322,12 @@ def _usage_first_int(usage: Any, keys: tuple[str, ...]) -> int:
     for key in keys:
         val = _usage_get(usage, key)
         if isinstance(val, (int, float)) and not isinstance(val, bool):
-            return int(val)
+            # Clamp at 0: a provider (or proxy) reporting a negative count would
+            # otherwise trip the ge=0 field constraint and raise out of
+            # ``Usage.extract`` — which ``record_llm_response`` calls on the
+            # success path of every LLM call, turning telemetry into a failure.
+            # Mirrors the same clamp on cost in ``_clamped_cost``.
+            return max(int(val), 0)
     return 0
 
 

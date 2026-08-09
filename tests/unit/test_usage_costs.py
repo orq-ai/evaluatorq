@@ -181,14 +181,19 @@ def test_v3_responses_cost_survives_openai_sdk_parsing():
     """
     response_usage = pytest.importorskip('openai.types.responses.response_usage')
 
-    usage = response_usage.ResponseUsage.construct(
-        input_tokens=10,
-        output_tokens=5,
-        total_tokens=15,
-        input_cost=0.001,
-        output_cost=0.002,
-        total_cost=0.003,
-    )
+    # model_validate, not construct: construct skips validation entirely, so it
+    # would keep the extra keys even under extra='ignore' — i.e. it would pass
+    # for the exact regression this test exists to catch.
+    usage = response_usage.ResponseUsage.model_validate({
+        'input_tokens': 10,
+        'output_tokens': 5,
+        'total_tokens': 15,
+        'input_tokens_details': {'cached_tokens': 0},
+        'output_tokens_details': {'reasoning_tokens': 0},
+        'input_cost': 0.001,
+        'output_cost': 0.002,
+        'total_cost': 0.003,
+    })
     extracted = Usage.extract(usage, calls=1)
 
     assert extracted is not None

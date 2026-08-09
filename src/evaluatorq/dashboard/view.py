@@ -25,11 +25,14 @@ from typing import TYPE_CHECKING, Any
 
 from fasthtml.common import Script
 
+from evaluatorq.common.reports import cost_coverage as _cost_coverage
 from evaluatorq.common.reports import esc
 from evaluatorq.common.reports import fmt_cost as _fmt_cost
 from evaluatorq.simulation.metrics import TURN_METRICS
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from evaluatorq.dashboard.library import ReportCard
     from evaluatorq.dashboard.metrics import Landing, RedTeamOverview, RunRow, SimOverview
 
@@ -197,7 +200,16 @@ def _panel(title: str, sub: str, inner: str, *, cls: str = '') -> str:
     )
 
 
-def _bars(rows: list[tuple[str, float]], colors: list[str], *, total_label: str = 'Total', fmt: str = '{}') -> str:
+def _bars(
+    rows: list[tuple[str, float]],
+    colors: list[str],
+    *,
+    total_label: str = 'Total',
+    fmt: str | Callable[[float], str] = '{}',
+) -> str:
+    # A callable lets cost bars reuse fmt_cost instead of a parallel '${:.4f}'
+    # format string that drifted from it (no thousands separator).
+    render = fmt if callable(fmt) else fmt.format
     total = sum(v for _, v in rows) or 1
     parts: list[str] = ['<div class="bars">']
     for i, (name, val) in enumerate(rows):
@@ -220,12 +232,12 @@ def _bars(rows: list[tuple[str, float]], colors: list[str], *, total_label: str 
         parts.append(
             f'<div class="bar-row"><div class="bar-head">'
             f'<span class="bar-name">{esc(name)}</span>'
-            f'<span class="bar-val">{esc(fmt.format(val))} <span class="bar-pct">· {esc(pct_label)}</span></span>'
+            f'<span class="bar-val">{esc(render(val))} <span class="bar-pct">· {esc(pct_label)}</span></span>'
             f'</div><div class="bar-track"><div class="bar-fill" style="width:{width}%;background:{color}"></div></div></div>'
         )
     parts.append(
         f'<div class="bars-total"><span class="t-label">{esc(total_label)}</span>'
-        f'<span class="t-val">{esc(fmt.format(sum(v for _, v in rows)))}</span></div></div>'
+        f'<span class="t-val">{esc(render(sum(v for _, v in rows)))}</span></div></div>'
     )
     return ''.join(parts)
 
@@ -266,6 +278,11 @@ def landing_body(data: Landing) -> str:
     spend_sub = ''
     if data.total_input_cost is not None or data.total_output_cost is not None:
         spend_sub = f'in {_fmt_cost(data.total_input_cost)} / out {_fmt_cost(data.total_output_cost)}'
+    # A spend total only some calls contributed to is a lower bound — say so,
+    # matching the "(N of M calls)" qualifier the markdown/HTML reports render.
+    coverage = _cost_coverage(data.priced_calls, data.cost_calls)
+    if coverage:
+        spend_sub = f'{spend_sub} ·{coverage}' if spend_sub else coverage.strip()
     band = (
         '<div class="stat-band">'
         + _stat_tile('Jobs run', str(data.total_runs))
@@ -287,7 +304,7 @@ def landing_body(data: Landing) -> str:
     severity_panel = _panel('Findings by severity', 'Vulnerabilities found', sev_inner)
     # Spend by job type — real dollars (cost_usd recorded upstream).
     spend_inner = (
-        _bars(data.cost_by_kind, _kind_colors(data.cost_by_kind), fmt='${:.4f}')
+        _bars(data.cost_by_kind, _kind_colors(data.cost_by_kind), fmt=_fmt_cost)
         if data.cost_by_kind
         else '<p class="rt-panel-loading">No cost recorded.</p>'
     )
@@ -543,6 +560,7 @@ def sim_overview_body(data: SimOverview, compare_choices: list[tuple[str, str]] 
         cost_label, cost_value = 'Avg cost/sim', _fmt_cost(data.avg_cost)
         if data.avg_input_cost is not None or data.avg_output_cost is not None:
             cost_value += f' (in {_fmt_cost(data.avg_input_cost)} / out {_fmt_cost(data.avg_output_cost)})'
+        cost_value += _cost_coverage(data.priced_calls, data.cost_calls)
     else:
         cost_label = 'Avg tokens/sim'
         cost_value = '—' if data.avg_tokens is None else f'{data.avg_tokens:,.0f}'
@@ -599,6 +617,7 @@ def redteam_overview_body(data: RedTeamOverview) -> str:
     spend_value = _fmt_cost(data.total_cost)
     if data.total_input_cost is not None or data.total_output_cost is not None:
         spend_value += f' (in {_fmt_cost(data.total_input_cost)} / out {_fmt_cost(data.total_output_cost)})'
+    spend_value += _cost_coverage(data.priced_calls, data.cost_calls)
     band = kpi_cards([
         {'label': 'Attacks run', 'value': str(data.attacks_run)},
         {'label': 'ASR', 'value': asr, 'status': asr_status},
