@@ -16,7 +16,7 @@ from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
 from opentelemetry.trace import StatusCode
 
-from evaluatorq.common.jury import Prediction, VerdictKind, run_jury
+from evaluatorq.common.jury import Prediction, VerdictKind, VerdictValue, run_jury
 from evaluatorq.common.tracing import with_span
 from evaluatorq.contracts import TokenUsage
 from evaluatorq.pairwise import run_pairwise
@@ -69,7 +69,7 @@ def _by_name(exporter: _Exporter, name: str) -> list[ReadableSpan]:
     return [s for s in exporter.spans if s.name == name]
 
 
-def _make_judge_fn(verdicts: dict[str, str | None], *, fail: set[str] | None = None):
+def _make_judge_fn(verdicts: dict[str, VerdictValue | None], *, fail: set[str] | None = None):
     """Judge that returns a fixed verdict per model, abstains on None, or fails."""
     fail = fail or set()
 
