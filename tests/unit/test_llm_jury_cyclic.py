@@ -34,6 +34,20 @@ def _fake_run_judge(calls: list[str], value: str = "yes"):
     return fake
 
 
+def _fake_run_judge_failing(calls: list[str], fail_model: str, value: str = "yes"):
+    async def fake(**kwargs):
+        calls.append(kwargs["model"])
+        if kwargs["model"] == fail_model:
+            raise RuntimeError("boom")
+        return JudgeOutcome(
+            payload=EvaluatorResponsePayload(value=value, explanation="ok"),
+            token_usage=None,
+            raw_content="{}",
+        )
+
+    return fake
+
+
 def _datapoint() -> DataPoint:
     return DataPoint(inputs={"q": "?"}, expected_output="x")
 
@@ -126,6 +140,90 @@ async def test_cyclic_rotates_deduplicated_panel():
     assert calls == ["m1", "m2", "m1", "m2"]
 
 
+@pytest.mark.asyncio
+async def test_cyclic_failed_item_degrades_to_inconclusive():
+    # A judge that fails mechanically must not raise out of the scorer; with no
+    # replacements configured, only that judge's item comes back inconclusive.
+    ev = llm_jury(
+        name="x",
+        criteria="c",
+        judges=["m1", "m2", "m3"],
+        assignment="cyclic",
+        labels=["yes", "no"],
+        passing_labels=["yes"],
+        client=MagicMock(),
+    )
+    calls: list[str] = []
+    outcomes = []
+    with patch.object(llm_jury_mod, "run_judge", side_effect=_fake_run_judge_failing(calls, "m2")):
+        for _ in range(3):
+            result = await ev["scorer"]({"data": _datapoint(), "output": "x"})
+            assert not isinstance(result, dict)
+            outcomes.append((result.value, result.pass_))
+    assert outcomes == [("yes", True), ("inconclusive", None), ("yes", True)]
+    assert calls == ["m1", "m2", "m3"]
+
+
+@pytest.mark.asyncio
+async def test_cyclic_failed_judge_promotes_replacement():
+    # A configured replacement stands in for the failed judge and casts a real
+    # vote, so the item stays conclusive.
+    ev = llm_jury(
+        name="x",
+        criteria="c",
+        judges=["m1", "m2", "m3"],
+        assignment="cyclic",
+        replacement_judges=["r1"],
+        labels=["yes", "no"],
+        passing_labels=["yes"],
+        client=MagicMock(),
+    )
+    calls: list[str] = []
+    outcomes = []
+    with patch.object(llm_jury_mod, "run_judge", side_effect=_fake_run_judge_failing(calls, "m2")):
+        for _ in range(3):
+            result = await ev["scorer"]({"data": _datapoint(), "output": "x"})
+            assert not isinstance(result, dict)
+            outcomes.append((result.value, result.pass_))
+    assert outcomes == [("yes", True), ("yes", True), ("yes", True)]
+    assert calls == ["m1", "m2", "r1", "m3"]
+
+
+@pytest.mark.asyncio
+async def test_cyclic_item_reports_no_agreement_stats():
+    # One vote has no cross-judge agreement: the summary must say n/a instead
+    # of rendering a fake 100% indistinguishable from a unanimous panel.
+    ev = llm_jury(
+        name="x",
+        criteria="c",
+        judges=["m1", "m2", "m3"],
+        assignment="cyclic",
+        labels=["yes", "no"],
+        passing_labels=["yes"],
+        client=MagicMock(),
+    )
+    with patch.object(llm_jury_mod, "run_judge", side_effect=_fake_run_judge([])):
+        result = await ev["scorer"]({"data": _datapoint(), "output": "x"})
+    assert not isinstance(result, dict)
+    assert result.explanation is not None
+    assert "raw agreement n/a" in result.explanation
+
+    # assignment='all' keeps reporting the real cross-judge rate.
+    ev_all = llm_jury(
+        name="x",
+        criteria="c",
+        judges=["m1", "m2", "m3"],
+        labels=["yes", "no"],
+        passing_labels=["yes"],
+        client=MagicMock(),
+    )
+    with patch.object(llm_jury_mod, "run_judge", side_effect=_fake_run_judge([])):
+        result_all = await ev_all["scorer"]({"data": _datapoint(), "output": "x"})
+    assert not isinstance(result_all, dict)
+    assert result_all.explanation is not None
+    assert "raw agreement 100%" in result_all.explanation
+
+
 # ---------------------------------------------------------------------------
 # Pairwise jury
 # ---------------------------------------------------------------------------
@@ -142,7 +240,7 @@ async def test_pairwise_cyclic_one_judge_per_pair_with_swap():
         # A position-consistent judge: prefers response 'x' whichever slot it
         # is in, so the swapped ordering reconciles instead of cancelling.
         calls.append(kwargs["model"])
-        value = "A" if kwargs["replacements"]["response_a"] == "x" else "B"
+        value = "A" if kwargs["replacements"]["response_a"]["output"]["response"] == "x" else "B"
         return JudgeOutcome(
             payload=EvaluatorResponsePayload(value=value, explanation="ok"),
             token_usage=None,

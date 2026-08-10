@@ -122,8 +122,9 @@ of `labels`; omit it and the verdict is still recorded but `passed` is `None`.
 assignment. Datapoint 0 goes to judge 0, datapoint 1 to judge 1, and so on,
 wrapping around the panel. Every judge covers an equal share of the run, so
 systematic judge bias cancels in expectation across the dataset while each
-datapoint costs exactly one judge call. The paper shows this beats both
-all-judges and random-single-judge at any fixed budget.
+datapoint costs exactly one judge (`repetitions` still multiplies calls to
+that one judge). The paper shows this beats both all-judges and
+random-single-judge at any fixed budget.
 
 ```python
 jury = llm_jury(
@@ -136,8 +137,22 @@ jury = llm_jury(
 
 Use it when you care about the run-level score (a benchmark mean, a pass
 rate), not when every individual verdict must be trustworthy on its own: each
-per-item verdict is a single judge's opinion. Two practical notes:
+per-item verdict is a single judge's opinion. Practical notes:
 
+- Per-item `stats` and `raw_agreement` come back `None`. A single vote has no
+  cross-judge agreement, and reporting `1.0` / `std=0.0` would be
+  indistinguishable from a genuinely unanimous panel.
+- The rotation cursor lives on the evaluator object. A freshly built jury
+  sends datapoint 0 to judge 0; reusing one `llm_jury(...)` across two runs
+  (or a framework retry of a datapoint) continues the rotation where it left
+  off, so exact balance holds per fresh evaluator, not per run. Build a new
+  jury per run if you need the judge-0 start.
+- Rotation runs over the deduplicated panel: `judges=["a", "a", "b"]` gives
+  `a` two votes per item under `"all"`, but an equal share under `"cyclic"` —
+  duplicate entries do not up-weight a judge in cyclic mode.
+- `repetitions` still applies to the single assigned judge: `repetitions=3`
+  means three calls to one judge (smoothing that judge's call noise), never
+  three judges.
 - Shuffle your dataset first if its order is meaningful, so the rotation
   cannot line up with a latent grouping (for example a dataset sorted by
   category).
