@@ -4,7 +4,7 @@
 
 | Name                                                                     |    Stmts |     Miss |   Cover |   Missing |
 |------------------------------------------------------------------------- | -------: | -------: | ------: | --------: |
-| src/evaluatorq/\_\_init\_\_.py                                           |       18 |        0 |    100% |           |
+| src/evaluatorq/\_\_init\_\_.py                                           |       19 |        0 |    100% |           |
 | src/evaluatorq/\_\_main\_\_.py                                           |        3 |        3 |      0% |       1-4 |
 | src/evaluatorq/cli.py                                                    |       50 |        2 |     96% |  117, 178 |
 | src/evaluatorq/common/\_\_init\_\_.py                                    |        0 |        0 |    100% |           |
@@ -64,7 +64,7 @@
 | src/evaluatorq/dashboard/sim\_compare.py                                 |      257 |       11 |     96% |156, 300, 308, 322, 335, 410, 518, 521, 587, 593, 600 |
 | src/evaluatorq/dashboard/sim\_views.py                                   |      217 |       10 |     95% |67, 70-72, 96, 255, 257, 259, 572-573 |
 | src/evaluatorq/dashboard/styles.py                                       |       12 |        0 |    100% |           |
-| src/evaluatorq/dashboard/surfaces.py                                     |       65 |        0 |    100% |           |
+| src/evaluatorq/dashboard/surfaces.py                                     |       66 |        0 |    100% |           |
 | src/evaluatorq/dashboard/theme.py                                        |        2 |        0 |    100% |           |
 | src/evaluatorq/dashboard/trace\_links.py                                 |       38 |        0 |    100% |           |
 | src/evaluatorq/dashboard/view.py                                         |      413 |       32 |     92% |106-107, 280, 484, 491, 566, 622, 817, 858-859, 889-890, 1238-1278 |
@@ -99,13 +99,14 @@
 | src/evaluatorq/openresponses/target.py                                   |      118 |        3 |     97% |134, 231, 254 |
 | src/evaluatorq/openresponses/tracing.py                                  |       74 |       18 |     76% |40, 67-73, 85, 87, 99-103, 117, 138-145 |
 | src/evaluatorq/openresponses/types.py                                    |       91 |        0 |    100% |           |
-| src/evaluatorq/pairwise.py                                               |      130 |        3 |     98% |   213-215 |
+| src/evaluatorq/pairwise.py                                               |      213 |        7 |     97% |304, 307-308, 428-430, 565 |
 | src/evaluatorq/pairwise\_reports/\_\_init\_\_.py                         |        3 |        0 |    100% |           |
-| src/evaluatorq/pairwise\_reports/export\_html.py                         |      100 |        0 |    100% |           |
-| src/evaluatorq/pairwise\_reports/sections.py                             |       55 |        0 |    100% |           |
-| src/evaluatorq/pairwise\_run.py                                          |       65 |        4 |     94% |131-135, 138 |
+| src/evaluatorq/pairwise\_reports/export\_html.py                         |      114 |        6 |     95% |93-98, 135, 146 |
+| src/evaluatorq/pairwise\_reports/sections.py                             |       56 |        0 |    100% |           |
+| src/evaluatorq/pairwise\_run.py                                          |       85 |        4 |     95% |145-149, 152 |
 | src/evaluatorq/processings.py                                            |       64 |        5 |     92% |51, 87-89, 270-272 |
 | src/evaluatorq/progress.py                                               |      101 |       53 |     48% |55-95, 99-104, 137, 141-148, 152-157, 166-180, 213-231 |
+| src/evaluatorq/ranking.py                                                |      195 |        0 |    100% |           |
 | src/evaluatorq/redteam/\_\_init\_\_.py                                   |       33 |        5 |     85% |   249-258 |
 | src/evaluatorq/redteam/adaptive/\_\_init\_\_.py                          |        7 |        0 |    100% |           |
 | src/evaluatorq/redteam/adaptive/agent\_context.py                        |       12 |       12 |      0% |      3-42 |
@@ -218,7 +219,7 @@
 | src/evaluatorq/tracing/setup.py                                          |      136 |       39 |     71% |103-113, 134-137, 142, 171, 177-183, 191-201, 235-243, 292-293, 314 |
 | src/evaluatorq/tracing/spans.py                                          |      101 |       24 |     76% |76-107, 154-161, 272 |
 | src/evaluatorq/types.py                                                  |       83 |        2 |     98% |   32, 219 |
-| **TOTAL**                                                                | **23909** | **4532** | **81%** |           |
+| **TOTAL**                                                                | **24224** | **4542** | **81%** |           |
 
 
 ## Setup coverage badge
