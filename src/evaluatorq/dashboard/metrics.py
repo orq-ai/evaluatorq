@@ -556,6 +556,11 @@ def _redteam_counts(data: dict[str, object]) -> _RedteamCounts:
             attack = res.get('attack')
             attack = attack if isinstance(attack, dict) else {}
             severity = str(attack.get('severity') or UNKNOWN_SEVERITY).lower()
+            # An off-scale value ('sev1', 'medium-high') would otherwise create a
+            # bucket the display comprehension silently drops, leaving the bars
+            # summing to less than the donut — same failure as the missing field.
+            if severity not in SEVERITY_ORDER:
+                severity = UNKNOWN_SEVERITY
             by_severity[severity] = by_severity.get(severity, 0) + 1
     if attacks and not tokens:
         # Distinguishes "shape we couldn't read" from a genuinely costless run —
@@ -565,7 +570,11 @@ def _redteam_counts(data: dict[str, object]) -> _RedteamCounts:
 
 
 def _summary_severity(summary: dict[str, object]) -> dict[str, int]:
-    """Vulnerability count per severity as stored in a modern ``by_severity``."""
+    """Vulnerability count per severity as stored in a modern ``by_severity``.
+
+    Keys off the report's severity scale fold into ``unknown`` so their counts
+    stay visible in the bars rather than vanishing at display time.
+    """
     by_sev = summary.get('by_severity')
     if not isinstance(by_sev, dict):
         return {}
@@ -574,7 +583,10 @@ def _summary_severity(summary: dict[str, object]) -> dict[str, int]:
         if isinstance(entry, dict):
             n = _as_int(entry.get('vulnerabilities_found') or entry.get('count'))
             if n:
-                out[sev] = out.get(sev, 0) + n
+                key = str(sev).lower()
+                if key not in SEVERITY_ORDER:
+                    key = UNKNOWN_SEVERITY
+                out[key] = out.get(key, 0) + n
     return out
 
 

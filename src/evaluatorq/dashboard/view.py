@@ -93,7 +93,7 @@ def _score_title(row: RunRow) -> str:
         # that produced a verdict. Naming both stops the two reading as one.
         parts.append(f'{row.evaluated} of {row.attacks} attacks evaluated')
     if row.stored_score is not None:
-        parts.append(f'recalculated by the dashboard — the report for this run records {row.stored_score:.2f}')
+        parts.append(f'recalculated by the dashboard; the report for this run records {row.stored_score:.2f}')
     return f' title="{esc(" · ".join(parts))}"' if parts else ''
 
 

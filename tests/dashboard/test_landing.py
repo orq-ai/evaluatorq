@@ -861,3 +861,16 @@ class TestUnknownSeverity:
         html = view.landing_body(data)
         assert 'var(--green-600)' in html
         assert 'var(--red-600)' not in html
+
+    def test_off_scale_severity_folds_into_unknown(self, tmp_path: Path) -> None:
+        # A present-but-unrecognised value ('sev1') must not create a bucket the
+        # display comprehension silently drops. Same failure as the missing
+        # field, one step over.
+        data = metrics.landing(self._roots(tmp_path, 'sev1'))
+        assert dict(data.severity) == {metrics.UNKNOWN_SEVERITY: 1}
+        assert sum(n for _, n in data.severity) == data.vulnerable == 1
+
+    def test_off_scale_summary_severity_folds_into_unknown(self) -> None:
+        # The stored-summary path has the same display comprehension behind it.
+        out = metrics._summary_severity({'by_severity': {'Sev1': {'vulnerabilities_found': 2}, 'HIGH': {'count': 1}}})
+        assert out == {metrics.UNKNOWN_SEVERITY: 2, 'high': 1}
