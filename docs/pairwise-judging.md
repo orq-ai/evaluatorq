@@ -148,6 +148,65 @@ for judge in report.per_judge:
     decisive vote, since one lone voter always "agrees" with itself and would
     otherwise flatter a degraded panel.
 
+## Reliability-weighted aggregation (BT-sigma)
+
+The default consensus treats every judge's vote equally. When your panel mixes
+judges of different quality (say a frontier model next to a small open-weight
+one), uniform plurality lets the noisy judges outvote the sharp one. BT-sigma
+(from "Who can we trust? LLM-as-a-jury for Comparative Assessment",
+[arXiv:2602.16610](https://arxiv.org/abs/2602.16610)) fixes this without any
+labels: it fits a Bradley-Terry model with a per-judge discriminator over the
+run's own reconciled votes, learning which judges are internally consistent and
+down-weighting the rest.
+
+```python
+from evaluatorq import build_report
+
+report = build_report(comparisons, aggregation="bt-sigma")
+
+report.bt_sigma.p_a_beats_b     # fitted global probability that A beats B
+report.bt_sigma.judge_sigmas    # per-judge discriminator, smaller = more reliable
+report.bt_sigma.winners         # reliability-weighted winner per comparison
+report.bt_sigma.a_win_rate      # weighted rollup, next to the plurality one
+```
+
+The headline plurality rates in the report are unchanged, so the two
+aggregations stay directly comparable, and each `JudgeStats` entry gains its
+fitted `sigma`. The fit is a regularized, unsupervised maximum-likelihood fit on
+the votes the run already collected: no extra LLM calls or training data.
+Identical votes are collapsed into weighted counts before the fit (at most
+three distinct judgements per judge in the A/B setting), so the cost stays flat
+no matter how many comparisons the run holds. The report exposes fit warnings
+and falls back to uniform plurality when the optimizer does not converge; do
+not treat a capped fit as a reliability estimate.
+
+Notes worth knowing:
+
+- Reconciliation already symmetrises position bias (every judge votes in both
+  orderings), which is a requirement of the model, so votes feed the fit as-is.
+- With a single judge the discriminator is unidentifiable; the fit falls back
+  to plain Bradley-Terry and says so in `fit_warnings`.
+- A perfectly split panel stays inconclusive rather than letting numerical
+  noise crown one judge reliable.
+- A judge whose decisive votes are unanimous (always A, or always B) is
+  excluded from the weighting. With only two items such a judge's sigma
+  measures one-sidedness, not reliability, and `1/sigma` would hand the most
+  degenerate judge on the panel an unbounded weight - the exact shape a
+  position- or verbosity-biased judge takes. It votes with a neutral weight
+  instead, and `fit_warnings` names it.
+- Check `bt_sigma.converged` (and `fit_warnings`) before trusting sigmas: a
+  fit that stopped at the iteration cap still produces numbers.
+- Like all unsupervised aggregation, BT-sigma rewards internal consistency. A
+  majority of judges sharing the same systematic bias will still carry the
+  vote; it protects against noisy judges, not coordinated ones.
+
+For ranking more than two candidates (leaderboard-style), the underlying
+`evaluatorq.ranking.fit_bt()` accepts arbitrary item pairs from any number of
+judges and returns skills, a ranking, and per-judge reliability; `cycle_rate()`
+gives the matching consistency diagnostic. `cycle_rate` is deliberately not
+part of the two-item aggregation above: with two fixed items there are no
+3-cycles to rate, so it only means something on the multi-item ranking path.
+
 ## Saving a run and viewing it in the dashboard
 
 `build_report()` gives you the numbers in memory. To keep a run and read it in
