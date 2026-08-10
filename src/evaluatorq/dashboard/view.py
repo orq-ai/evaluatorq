@@ -287,7 +287,15 @@ def landing_body(data: Landing) -> str:
         + '</div>'
     )
 
-    severity_colors = ['var(--red-600)', 'var(--orange-500)', 'var(--amber-600)', 'var(--green-600)']
+    # Keyed by severity, not by position: zero-count buckets are dropped from the
+    # rows, so a positional palette would paint whatever survives first red.
+    # Anything off the scale (see metrics.UNKNOWN_SEVERITY) stays neutral.
+    severity_palette = {
+        'critical': 'var(--red-600)',
+        'high': 'var(--orange-500)',
+        'medium': 'var(--amber-600)',
+        'low': 'var(--green-600)',
+    }
 
     # Derived from the kinds actually present, so the subtitle cannot claim a
     # surface the panel is not showing (or omit one it is).
@@ -295,7 +303,8 @@ def landing_body(data: Landing) -> str:
     by_kind_panel = _panel('Runs by type', by_kind_sub, _bars(data.by_kind, _kind_colors(data.by_kind)))
 
     sev_rows = [(s.title(), n) for s, n in data.severity]
-    sev_inner = _bars(sev_rows, severity_colors) if sev_rows else '<p class="rt-panel-loading">No findings.</p>'
+    sev_colors = [severity_palette.get(s, 'var(--text-faint)') for s, _ in data.severity]
+    sev_inner = _bars(sev_rows, sev_colors) if sev_rows else '<p class="rt-panel-loading">No findings.</p>'
     severity_panel = _panel('Findings by severity', 'Vulnerabilities found', sev_inner)
     # Spend by job type — real dollars (cost_usd recorded upstream).
     spend_inner = (

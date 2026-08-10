@@ -808,3 +808,56 @@ class TestScoreTooltip:
         title = view._score_title(self._row(surface='sim', evaluated=0, attacks=0))
         assert 'Mean scorer average' in title
         assert 'evaluated' not in title
+
+
+class TestUnknownSeverity:
+    """A vulnerability with no recorded severity gets its own bucket (RES-1202)."""
+
+    def _roots(self, tmp_path: Path, severity: str | None) -> list[Path]:
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        res = _legacy_result(vulnerable=True)
+        if severity is None:
+            del res['attack']['severity']
+        else:
+            res['attack']['severity'] = severity
+        (rt / 'legacy_20260101_000000.json').write_text(
+            json.dumps(
+                _legacy_redteam_payload('No severity', created='2026-01-01T00:00:00', resistance=0.0, results=[res])
+            )
+        )
+        return [rt]
+
+    def test_missing_severity_is_not_silently_booked_as_low(self, tmp_path: Path) -> None:
+        data = metrics.landing(self._roots(tmp_path, None))
+        assert dict(data.severity) == {metrics.UNKNOWN_SEVERITY: 1}
+
+    def test_the_bars_still_sum_to_the_donut(self, tmp_path: Path) -> None:
+        # Dropping the bucket instead would leave the severity panel quietly
+        # short of the vulnerability count next to it.
+        data = metrics.landing(self._roots(tmp_path, None))
+        assert sum(n for _, n in data.severity) == data.vulnerable == 1
+
+    def test_unknown_sorts_after_the_real_scale(self, tmp_path: Path) -> None:
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        no_sev = _legacy_result(vulnerable=True)
+        del no_sev['attack']['severity']
+        (rt / 'legacy_20260101_000000.json').write_text(
+            json.dumps(
+                _legacy_redteam_payload(
+                    'Mixed',
+                    created='2026-01-01T00:00:00',
+                    resistance=0.0,
+                    results=[_legacy_result(vulnerable=True, severity='critical'), no_sev],
+                )
+            )
+        )
+        assert [s for s, _ in metrics.landing([rt]).severity] == ['critical', metrics.UNKNOWN_SEVERITY]
+
+    def test_severity_colors_track_the_bucket_not_the_position(self, tmp_path: Path) -> None:
+        # Only 'low' survives, so a positional palette would paint it red.
+        data = metrics.landing(self._roots(tmp_path, 'low'))
+        html = view.landing_body(data)
+        assert 'var(--green-600)' in html
+        assert 'var(--red-600)' not in html

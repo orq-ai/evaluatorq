@@ -32,6 +32,13 @@ if TYPE_CHECKING:
 # Severity buckets in display order (matches the report severity scale).
 SEVERITY_ORDER = ('critical', 'high', 'medium', 'low')
 
+# Bucket for a vulnerability whose report does not record a severity. ``severity``
+# is a required field, so this only shows up in a truncated or hand-edited
+# report — but defaulting those into ``low`` would understate real findings, and
+# dropping them would leave the severity bars summing to less than the donut.
+# Named and rendered last instead.
+UNKNOWN_SEVERITY = 'unknown'
+
 
 @dataclass(frozen=True)
 class RunRow:
@@ -429,7 +436,8 @@ def landing(roots: list[Path] | None = None) -> Landing:
                 output_cost_total += sum(outputs)
                 has_output_cost = True
 
-    severity = [(sev, severity_counts[sev]) for sev in SEVERITY_ORDER if severity_counts.get(sev)]
+    # Unknown sorts last, after the real scale, and only appears when non-zero.
+    severity = [(sev, severity_counts[sev]) for sev in (*SEVERITY_ORDER, UNKNOWN_SEVERITY) if severity_counts.get(sev)]
     # Zero-count kinds are dropped, matching tokens_by_kind / cost_by_kind: a
     # workspace with no pairwise runs should not carry an empty 'Pairwise' bar.
     by_kind = [
@@ -547,7 +555,7 @@ def _redteam_counts(data: dict[str, object]) -> _RedteamCounts:
             vulnerable += 1
             attack = res.get('attack')
             attack = attack if isinstance(attack, dict) else {}
-            severity = str(attack.get('severity') or 'low').lower()
+            severity = str(attack.get('severity') or UNKNOWN_SEVERITY).lower()
             by_severity[severity] = by_severity.get(severity, 0) + 1
     if attacks and not tokens:
         # Distinguishes "shape we couldn't read" from a genuinely costless run —
