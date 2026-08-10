@@ -53,6 +53,7 @@ class TestCreateAsyncLlmClientPriority:
         mock_cls.assert_called_once_with(
             api_key='orq-key',
             base_url='https://my.orq.ai/v3/router',
+            max_retries=2,
         )
 
     @patch.dict(
@@ -65,7 +66,7 @@ class TestCreateAsyncLlmClientPriority:
         from evaluatorq.redteam.backends.registry import create_async_llm_client
 
         create_async_llm_client()
-        mock_cls.assert_called_once_with(api_key='sk-openai', base_url='http://local:8000')
+        mock_cls.assert_called_once_with(api_key='sk-openai', base_url='http://local:8000', max_retries=2)
 
     @patch.dict(
         'os.environ',
@@ -80,6 +81,7 @@ class TestCreateAsyncLlmClientPriority:
         mock_cls.assert_called_once_with(
             api_key='orq-key',
             base_url='https://my.orq.ai/v3/router',
+            max_retries=2,
         )
 
     @patch.dict('os.environ', {}, clear=True)

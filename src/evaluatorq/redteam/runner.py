@@ -987,7 +987,9 @@ async def red_team(
                 try:
                     rec_client = llm_client or config.evaluator.client
                     if rec_client is None:
-                        rec_client = create_async_llm_client(role_config=config.evaluator.as_call_config())
+                        rec_client = create_async_llm_client(
+                            role_config=config.evaluator.as_call_config(), max_retries=config.retry_count
+                        )
 
                     async with with_redteam_span(
                         'orq.redteam.recommendations',
@@ -1018,7 +1020,9 @@ async def red_team(
                 try:
                     es_client = llm_client or config.evaluator.client
                     if es_client is None:
-                        es_client = create_async_llm_client(role_config=config.evaluator.as_call_config())
+                        es_client = create_async_llm_client(
+                            role_config=config.evaluator.as_call_config(), max_retries=config.retry_count
+                        )
                     async with with_redteam_span(
                         'orq.redteam.executive_summary',
                         {'orq.redteam.model': evaluator_model},
@@ -1304,7 +1308,10 @@ def _resolve_attacker_llm_client(
     if pipeline_config is not None and pipeline_config.attacker.client is not None:
         return pipeline_config.attacker.client
     if create_if_missing:
-        return create_async_llm_client(role_config=pipeline_config.attacker if pipeline_config is not None else None)
+        return create_async_llm_client(
+            role_config=pipeline_config.attacker if pipeline_config is not None else None,
+            max_retries=pipeline_config.retry_count if pipeline_config is not None else None,
+        )
     return None
 
 
@@ -1888,7 +1895,9 @@ async def _run_dynamic_or_hybrid(
             cap_llm_client = pipeline_config.attacker.client
         if cap_llm_client is None:
             try:
-                cap_llm_client = create_async_llm_client()
+                cap_llm_client = create_async_llm_client(
+                    max_retries=pipeline_config.retry_count if pipeline_config is not None else None,
+                )
             except Exception as exc:
                 logger.debug(f'No LLM client available for capability classification: {exc}')
                 cap_llm_client = None
