@@ -93,8 +93,10 @@ def esc(text: str) -> str:
     return html.escape(str(text))
 
 
-def pct(rate: float) -> str:
-    """Format a float rate as a percentage string."""
+def pct(rate: float | None) -> str:
+    """Format a float rate as a percentage string; 'n/a' when the rate is unknown."""
+    if rate is None:
+        return 'n/a'
     return f'{rate:.0%}'
 
 

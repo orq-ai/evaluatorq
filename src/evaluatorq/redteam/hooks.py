@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Protocol, TypedDict, runtime_checkable
 from loguru import logger
 
 from evaluatorq.common.async_utils import combine_confirm, fan_out
+from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.redteam.contracts import AgentCapability, PipelineStage
 from evaluatorq.redteam.reports.display import print_report_summary
 
@@ -257,11 +258,18 @@ class DefaultHooks:
             logger.warning(f'[redteam] PIPELINE WARNING: {warning}')
 
         summary = report.summary
-        logger.info(
-            f'[redteam] Run complete — resistance_rate={summary.resistance_rate:.0%} '
-            f'vulnerabilities={summary.vulnerabilities_found} '
-            f'attacks={summary.total_attacks}'
-        )
+        if summary.no_verdict:
+            logger.error(
+                f'[redteam] Run complete — NO VERDICT: 0/{summary.total_attacks} attacks could be '
+                f'evaluated. The target was not tested.'
+            )
+        else:
+            logger.info(
+                f'[redteam] Run complete — resistance_rate={pct(summary.resistance_rate)} '
+                f'({summary.evaluated_attacks}/{summary.total_attacks} evaluated) '
+                f'vulnerabilities={summary.vulnerabilities_found} '
+                f'attacks={summary.total_attacks}'
+            )
         if output_dir:
             dashboard_dir = output_dir
         elif auto_save_path:

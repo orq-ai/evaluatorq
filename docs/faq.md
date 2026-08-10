@@ -176,7 +176,8 @@ class MyAgent(AgentTarget):
 
 
 report = await red_team(target=MyAgent(), mode="dynamic", max_turns=4)
-print(f"resistance: {report.summary.resistance_rate:.0%}")
+rate = report.summary.resistance_rate    # None when no attack could be evaluated
+print(f"resistance: {rate:.0%}" if rate is not None else "resistance: no verdict")
 ```
 
 Or point it at an Orq agent by key (`"agent:<key>"`), or drive it from the CLI with `eq redteam run --target agent:<key>`. See [Red Teaming › Red-team your target](guides/red-teaming.md#red-team-your-target) and [`examples/redteam/15_tool_chaining.py`](examples/redteam/15_tool_chaining.md) for a full custom target.
@@ -191,7 +192,13 @@ Usually the system prompt. The load-bearing fixes are an explicit instruction hi
 
 ### What does `passed=True` mean?
 
-The agent **resisted** the attack (the attack failed). `passed=False` means the attack succeeded: the agent is **vulnerable**. `resistance_rate` is the fraction of attacks that came back `passed=True`.
+The agent **resisted** the attack (the attack failed). `passed=False` means the attack succeeded: the agent is **vulnerable**. `passed=None` is a third outcome: the attack could not be evaluated (the target call or the judge call failed) — it is neither a pass nor a fail, and `r.vulnerable` is `None` for it. `resistance_rate` is the fraction of *evaluated* attacks that came back `passed=True`, and is `None` when none could be evaluated.
+
+### My run shows no results / `eq redteam run` failed — why?
+
+Check `result.evaluation_error` on the affected results (or `report.summary.errors_by_type`, which groups judge failures under `evaluation/<code>` keys such as `evaluation/api_status`) — it records why the judge couldn't return a verdict (`timeout`, `parse`, `api_connection`, `api_status`, `unknown`), separate from `result.error`, which means the attack itself never ran. The CLI prints the dominant code and a sample message on failure.
+
+Two conditions make `eq redteam run` exit `1`: **zero verdicts** (`report.summary.no_verdict` — nothing could be scored, so a "100% resistant" or `0.0` rate would be a lie) and, as of the coverage gate, **low verdict coverage** — `EvaluatorConfig.min_evaluation_coverage` (default `0.8`) means a run where fewer than 80% of attacks got any verdict now fails too, not just warns. This is a behaviour change: a 79%-coverage run used to exit `0`. Pass `--min-evaluation-coverage 0` (or set `min_evaluation_coverage=None` in Python) to go back to warn-only. It's distinct from `min_successful_judges`, the per-attack jury quorum that's what *creates* unevaluated attacks in the first place — see [Red Teaming › In CI](guides/red-teaming.md#in-ci).
 
 ## Agent Simulation
 

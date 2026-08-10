@@ -80,7 +80,9 @@ def _redteam_adapter() -> SurfaceAdapter:
                 'Turn Type': r.attack.turn_type.value if r.attack.turn_type else '-',
                 'Domain': domain_val,
                 'Severity': r.attack.severity.value,
-                'Result': 'VULNERABLE' if r.vulnerable else 'RESISTANT',
+                # Three-way, not two-way: r.vulnerable is None means unevaluated
+                # (target/judge failure) and must not export as RESISTANT.
+                'Result': 'VULNERABLE' if r.vulnerable else ('NOT EVALUATED' if r.vulnerable is None else 'RESISTANT'),
                 'Source': r.attack.source,
             })
         return rows
