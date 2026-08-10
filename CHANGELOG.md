@@ -14,6 +14,7 @@ All notable changes to `evaluatorq` are documented here.
 
 ### Breaking Changes
 
+- `orq-ai-sdk` is **no longer a base dependency** — it moved to the `orq`, `simulation` and `dev` extras. Every import of it is `TYPE_CHECKING`-guarded, `try`-guarded or function-local, so nothing breaks at import time, but code paths that talk to the ORQ platform (`deployment()`, `fetch_data()`, ORQ red-team/simulation targets) now raise a "not installed" error under a bare `pip install evaluatorq`. Install `evaluatorq[orq]` (or `[simulation]`, or `[all]`) to restore them.
 - `red_team()` parameter renamed: `config=` → `llm_config=`. The old `config=` keyword still works in 1.3.0 but emits a `DeprecationWarning` and **will be removed in 1.4.0**.
 - `LLMConfig` flat fields removed: `attack_model`, `evaluator_model`, `adversarial_temperature`, `adversarial_max_tokens`, `llm_call_timeout_ms`, `llm_kwargs` — replaced by role-based `attacker` / `evaluator` sub-configs (`LLMCallConfig`)
 - `wrap_simulation_agent()` no longer accepts the `evaluators=` kwarg. Evaluators are wired through `evaluatorq()` directly (the framework that consumes the job); callers passing `evaluators=[...]` will now get a `TypeError` and should move the list onto their `evaluatorq(..., evaluators=...)` call instead (RES-594).

@@ -348,7 +348,9 @@ def _usage_first_int(usage: Any, keys: tuple[str, ...]) -> int:
         val = _usage_get(usage, key)
         if isinstance(val, (int, float)) and not isinstance(val, bool):
             if not math.isfinite(val) or val < 0:
-                logger.warning('Usage.extract: ignoring unusable {} value {!r}', key, val)
+                # debug, not warning: a provider that reports something unusable does so on
+                # every call, and one line per LLM call drowns the log it belongs to.
+                logger.debug('Usage.extract: ignoring unusable {} value {!r}', key, val)
                 continue
             return int(val)
     return 0
@@ -382,7 +384,7 @@ def _usage_first_float(usage: Any, keys: tuple[str, ...]) -> float | None:
         val = _usage_get(usage, key)
         if isinstance(val, (int, float)) and not isinstance(val, bool):
             if not math.isfinite(val):
-                logger.warning('Usage.extract: ignoring non-finite {} value {!r}', key, val)
+                logger.debug('Usage.extract: ignoring non-finite {} value {!r}', key, val)
                 continue
             return float(val)
     return None
@@ -398,7 +400,7 @@ def _clamped_cost(usage: Any, keys: tuple[str, ...]) -> float | None:
     """
     raw = _usage_first_float(usage, keys)
     if raw is not None and raw < 0:
-        logger.warning('Usage.extract: provider reported negative cost {!r} for {}; clamping to 0.0', raw, keys[0])
+        logger.debug('Usage.extract: provider reported negative cost {!r} for {}; clamping to 0.0', raw, keys[0])
         return 0.0
     return raw
 

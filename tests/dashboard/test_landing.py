@@ -896,8 +896,49 @@ class TestDashboardCostCoverage:
         )
 
         data = metrics.landing([rt, sim])
-        assert (data.priced_calls, data.cost_calls) == (1, 1)
-        assert 'calls)' not in view.landing_body(data)
+        assert (data.priced_calls, data.cost_calls, data.unknown_calls) == (1, 1, 10)
+        body = view.landing_body(data)
+        assert '1 of 11 calls' not in body
+        # ...but the combined $10.50 must not read as authoritative either: 10 of
+        # the 11 calls behind it have coverage nobody recorded.
+        assert '10 calls of unknown coverage' in body
+
+    def test_legacy_only_totals_are_labelled_unknown_not_complete(self, tmp_path: Path) -> None:
+        """With no new report beside it, a legacy total still has unknown coverage.
+
+        An empty label here would claim every call was priced, which the report
+        never said.
+        """
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        legacy = self._redteam_payload('L', created='2026-06-29T10:00:00', priced=0, calls=10)
+        del legacy['summary']['token_usage_total']['priced_calls']
+        (rt / 'legacy.json').write_text(json.dumps(legacy))
+
+        data = metrics.landing([rt, sim])
+        assert (data.priced_calls, data.cost_calls, data.unknown_calls) == (0, 0, 10)
+        assert '10 calls of unknown coverage' in view.landing_body(data)
+
+    def test_a_legacy_report_with_no_cost_contributes_no_unknown_coverage(self, tmp_path: Path) -> None:
+        """Unknown coverage is about cost that was summed. A costless legacy report
+        adds nothing to the total, so it has no coverage to be unknown about."""
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        legacy = self._redteam_payload('L', created='2026-06-29T10:00:00', priced=0, calls=10)
+        del legacy['summary']['token_usage_total']['priced_calls']
+        legacy['summary']['token_usage_total']['cost_usd'] = None
+        (rt / 'legacy.json').write_text(json.dumps(legacy))
+        (rt / 'new.json').write_text(
+            json.dumps(self._redteam_payload('N', created='2026-06-29T11:00:00', priced=1, calls=1))
+        )
+
+        data = metrics.landing([rt, sim])
+        assert (data.priced_calls, data.cost_calls, data.unknown_calls) == (1, 1, 0)
+        assert 'unknown coverage' not in view.landing_body(data)
 
     def test_no_coverage_label_when_cost_is_unknown(self, tmp_path: Path) -> None:
         """Coverage qualifies a figure that exists — an em dash "no cost" tile with
