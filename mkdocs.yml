@@ -106,6 +106,9 @@ plugins:
           - faq.md: Common questions about red teaming agents and how evaluatorq answers them.
           - guides/getting-started.md: Run your first evaluation end to end.
         Guides:
+          - evaluation-reference.md: Every evaluatorq() parameter, jobs, data sources, built-in evaluators, and CI gating.
+          - structured-results.md: Multi-dimensional evaluator scores with EvaluationResultCell.
+          - framework-integrations.md: Evaluate LangChain and LangGraph agents.
           - guides/agent-simulation.md: Multi-turn, persona-driven conversation testing with an LLM judge.
           - guides/red-teaming.md: Adaptive OWASP-mapped adversarial security testing for agents.
           - custom-evaluators-and-frameworks.md: Define custom evaluators and frameworks.
@@ -210,6 +213,9 @@ nav:
       - Orq Deployment: orq-deployment.md
   - Guides:
       - Get Started: guides/getting-started.md
+      - Evaluation Reference: evaluation-reference.md
+      - Structured Results: structured-results.md
+      - Framework Integrations: framework-integrations.md
       - Agent Simulation: guides/agent-simulation.md
       - Red Teaming:
           - Overview: guides/red-teaming.md
