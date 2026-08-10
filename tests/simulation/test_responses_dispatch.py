@@ -252,6 +252,30 @@ class TestCallLlmDispatch:
         assert "reasoning" not in client.responses.create.await_args.kwargs
 
     @pytest.mark.asyncio
+    async def test_responses_reasoning_rejection_is_memoized(self, monkeypatch):
+        """After one model rejects reasoning, later calls strip it up front —
+        no repeat 400. The conftest fixture resets the memo between tests."""
+        monkeypatch.setattr("evaluatorq.simulation.agents.base.DEFAULT_REASONING_EFFORT", "low")
+        client = _make_client()
+        ok = MagicMock()
+        ok.output = []
+        ok.usage = None
+        # First call: 400 then retry ok. Second call: single ok (reasoning pre-stripped).
+        client.responses.create = AsyncMock(
+            side_effect=[_bad_request("Unsupported parameter: reasoning"), ok, ok]
+        )
+
+        config = LLMCallConfig(model="gpt-4o", api="responses", client=client)
+        agent = _ConcreteAgent(config)
+
+        await agent._call_llm(_make_messages())  # 2 awaits (400 + retry)
+        await agent._call_llm(_make_messages())  # 1 await, no 400
+
+        assert client.responses.create.await_count == 3
+        # Second call never carried reasoning.
+        assert "reasoning" not in client.responses.create.await_args_list[-1].kwargs
+
+    @pytest.mark.asyncio
     async def test_responses_reraises_unrelated_400(self, monkeypatch):
         monkeypatch.setattr("evaluatorq.simulation.agents.base.DEFAULT_REASONING_EFFORT", "low")
         client = _make_client()

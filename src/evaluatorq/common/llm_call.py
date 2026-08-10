@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Any
 
 from openai import BadRequestError
 
-from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.thread_context import pipeline_metadata
 from evaluatorq.common.tracing import (
     get_trace_context_headers,
@@ -41,10 +40,16 @@ logger = logging.getLogger(__name__)
 # ponytail: process-lifetime set, fine for a CLI run; not persisted across processes.
 _REASONING_EFFORT_REJECTORS: set[tuple[str, bool]] = set()
 
+# Same idea for the Responses API, where the reasoning param is the nested
+# `reasoning={'effort': ...}` block rather than the flat `reasoning_effort`.
+# Kept as a separate memo so the two param shapes never cross-strip.
+_RESPONSES_REASONING_REJECTORS: set[tuple[str, bool]] = set()
+
 
 def reset_reasoning_rejectors() -> None:
-    """Clear the process-lifetime rejection memo; exists for test isolation."""
+    """Clear the process-lifetime rejection memos; exists for test isolation."""
     _REASONING_EFFORT_REJECTORS.clear()
+    _RESPONSES_REASONING_REJECTORS.clear()
 
 
 def _reasoning_key(model: str, params: dict[str, Any]) -> tuple[str, bool]:
@@ -64,15 +69,44 @@ def _is_reasoning_effort_rejection(params: dict[str, Any], exc: BadRequestError)
     return 'reasoning_effort' in params and 'reasoning' in err_body
 
 
-def _apply_pipeline_metadata(client: AsyncOpenAI, params: dict[str, Any]) -> None:
-    """Tag the invocation with the active run surface via the ``metadata`` property.
+def strip_known_rejected_responses_reasoning(model: str, params: dict[str, Any]) -> None:
+    """Drop the Responses `reasoning` block up front if this model already rejected it.
 
-    So the call's Orq trace is filterable to a red-team / agent-simulation run.
-    No-op off-Orq (a plain OpenAI endpoint rejects unknown fields) or when no run
-    is bound. Caller-supplied metadata (via ``extra_kwargs``) wins on key conflict.
+    Mirrors ``_strip_known_rejected_reasoning`` for the Responses API so a
+    non-reasoning model (e.g. gpt-4o-mini) pays the 400 + retry once per process
+    instead of on every judge / user-simulator call.
     """
-    if not client_routes_through_orq(client):
-        return
+    if _reasoning_key(model, params) in _RESPONSES_REASONING_REJECTORS:
+        params.pop('reasoning', None)
+
+
+def is_responses_reasoning_rejection(params: dict[str, Any], exc: BadRequestError) -> bool:
+    """True if ``exc`` is the reasoning-unsupported 400 for this Responses call."""
+    err_body = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
+    return 'reasoning' in params and 'reasoning' in err_body
+
+
+def remember_responses_reasoning_rejection(model: str, params: dict[str, Any]) -> None:
+    """Memoize that ``model`` (with this tool shape) rejects the Responses reasoning block."""
+    _RESPONSES_REASONING_REJECTORS.add(_reasoning_key(model, params))
+
+
+def apply_pipeline_metadata(params: dict[str, Any]) -> None:
+    """Tag the invocation with the active run surface + run id via ``metadata``.
+
+    Mutates ``params`` in place; no-op when no run is bound. Caller-supplied
+    metadata (via ``extra_kwargs``) wins on key conflict. Public: direct
+    ``create()`` sites that build their own kwargs dict (structured output,
+    first-message generation) call this instead of routing through
+    :func:`execute_chat_completion`.
+
+    Sent regardless of endpoint. ``metadata`` is a first-class field on OpenAI's
+    own Chat Completions / Responses APIs, so it is safe off-Orq — unlike the
+    router-only ``thread`` body param, which callers still gate on
+    ``client_routes_through_orq``. Only set when non-empty: an explicit
+    ``metadata=None`` would serialize as ``"metadata": null`` rather than being
+    stripped from the body.
+    """
     md = pipeline_metadata()
     if md:
         params['metadata'] = {**md, **(params.get('metadata') or {})}
@@ -114,7 +148,7 @@ async def execute_chat_completion(
         params.update(extra_kwargs)
 
     _strip_known_rejected_reasoning(model, params)
-    _apply_pipeline_metadata(client, params)
+    apply_pipeline_metadata(params)
 
     record_llm_input(span, messages)
 
@@ -173,7 +207,7 @@ async def execute_chat_parse(
         params.update(extra_kwargs)
 
     _strip_known_rejected_reasoning(model, params)
-    _apply_pipeline_metadata(client, params)
+    apply_pipeline_metadata(params)
 
     record_llm_input(span, messages)
 

@@ -26,6 +26,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from opentelemetry.trace import Span
+
 _thread_id: ContextVar[str | None] = ContextVar('orq_thread_id', default=None)
 
 # The evaluatorq surface driving the current run ('agent_simulation' /
@@ -33,6 +35,11 @@ _thread_id: ContextVar[str | None] = ContextVar('orq_thread_id', default=None)
 # pipeline that produced them. Carried via a ContextVar for the same reason as
 # the thread id: targets are stateless and shared across concurrent runs.
 _pipeline: ContextVar[str | None] = ContextVar('evaluatorq_pipeline', default=None)
+
+# Per-run identifier ('run_id') for the active red-team / agent-simulation run.
+# Carried on the same ContextVar rail as the pipeline label so it reaches the
+# stateless, shared target/judge/generator instances that read pipeline_metadata().
+_run_id: ContextVar[str | None] = ContextVar('evaluatorq_run_id', default=None)
 
 # Separator joining the run id and the per-conversation discriminators into a
 # thread id. Kept out of the OQL query grammar's way: the run id is uuid hex and
@@ -84,25 +91,32 @@ def thread_body_param() -> dict[str, dict[str, str]]:
 
 
 def pipeline_metadata() -> dict[str, str]:
-    """Return ``{'evaluatorq_pipeline': ...}`` for the active run, or ``{}``.
+    """Return run-identifying invocation metadata for the active run, or ``{}``.
 
-    The value for the documented ``metadata`` request property — pass it straight
-    to the native ``metadata=`` kwarg on ``chat.completions.create`` /
-    ``responses.create`` so the invocation's Orq trace is filterable by run type.
+    Emits ``evaluatorq_pipeline`` (run surface) and ``evaluatorq_run_id`` (this run's
+    id) when each is bound. Pass straight to the native ``metadata=`` kwarg on
+    ``chat.completions.create`` / ``responses.create`` so the invocation's Orq trace
+    is filterable by run type and by run.
     """
+    md: dict[str, str] = {}
     label = _pipeline.get()
-    return {'evaluatorq_pipeline': label} if label else {}
+    if label:
+        md['evaluatorq_pipeline'] = label
+    run_id = _run_id.get()
+    if run_id:
+        md['evaluatorq_run_id'] = run_id
+    return md
 
 
 def pipeline_metadata_param() -> dict[str, dict[str, str]]:
-    """Return ``{'metadata': {'evaluatorq_pipeline': ...}}`` for the active run, or ``{}``.
+    """``extra_body``-ready ``{'metadata': {...}}`` form of :func:`pipeline_metadata`.
 
-    ``extra_body``-ready form of :func:`pipeline_metadata` for call sites that
-    already build an ``extra_body`` dict (the SDK merges it into the request body,
-    yielding the same top-level ``metadata`` property).
+    Wraps :func:`pipeline_metadata` (single source of truth) so the two forms stay
+    in sync. The SDK merges ``extra_body`` into the request body, yielding the same
+    top-level ``metadata`` property.
     """
-    label = _pipeline.get()
-    return {'metadata': {'evaluatorq_pipeline': label}} if label else {}
+    md = pipeline_metadata()
+    return {'metadata': md} if md else {}
 
 
 @contextmanager
@@ -119,6 +133,37 @@ def evaluatorq_pipeline(label: str) -> Iterator[str]:
         yield label
     finally:
         _pipeline.reset(token)
+
+
+@contextmanager
+def evaluatorq_run_id(run_id: str) -> Iterator[str]:
+    """Bind the run id for a red-team / agent-simulation run.
+
+    Restores the previous value on exit so nested/sequential runs don't bleed
+    (mirrors :func:`evaluatorq_pipeline`).
+
+    Yields:
+        The bound run id.
+    """
+    token = _run_id.set(run_id)
+    try:
+        yield run_id
+    finally:
+        _run_id.reset(token)
+
+
+@contextmanager
+def _evaluatorq_run_scope(run_id: str, span: Span | None = None) -> Iterator[str]:
+    """Stamp a root span and bind its run id for nested work.
+
+    Yields:
+        The bound run id.
+    """
+    from evaluatorq.common.tracing import set_span_attrs
+
+    set_span_attrs(span, {'orq.evaluatorq_run_id': run_id})
+    with evaluatorq_run_id(run_id):
+        yield run_id
 
 
 @contextmanager
@@ -145,6 +190,7 @@ __all__ = [
     'conversation_thread',
     'current_thread_id',
     'evaluatorq_pipeline',
+    'evaluatorq_run_id',
     'pipeline_metadata',
     'pipeline_metadata_param',
     'thread_body_param',

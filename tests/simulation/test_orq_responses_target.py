@@ -10,10 +10,13 @@ After RES-877 Task 9 the target is fully stateless:
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+from openai import AsyncOpenAI
 
 from evaluatorq.contracts import AgentResponse, LLMCallConfig, Message
 from evaluatorq.openresponses.target import OrqResponsesTarget
@@ -27,13 +30,19 @@ def _make_client() -> MagicMock:
     """Return a mock AsyncOpenAI client with a stub responses.create.
 
     ``base_url`` points at the Orq router so router-only request extras
-    (``thread``/``memory``/pipeline ``metadata``) are emitted — gated on
-    :func:`client_routes_through_orq`.
+    (``thread``/``memory``) are emitted only when the client routes through
+    Orq; native pipeline ``metadata`` is sent on both compatible endpoints.
     """
     client = MagicMock()
     client.base_url = "https://my.orq.ai/v3/router"
     client.responses = MagicMock()
     client.responses.create = AsyncMock()
+    return client
+
+
+def _make_direct_client() -> MagicMock:
+    client = _make_client()
+    client.base_url = "https://api.openai.com/v1"
     return client
 
 
@@ -89,7 +98,7 @@ def _make_dict_response(
 
 
 def _make_target(
-    client: MagicMock | None = None,
+    client: Any | None = None,
     instructions: str | None = None,
     timeout_ms: int = 30_000,
 ) -> OrqResponsesTarget:
@@ -98,6 +107,48 @@ def _make_target(
         client = _make_client()
     config = LLMCallConfig(model="gpt-4o", timeout_ms=timeout_ms)
     return OrqResponsesTarget(config, instructions=instructions, client=client)
+
+
+def _responses_http_response(
+    *,
+    status_code: int = 200,
+    text: str = "from headers",
+    headers: dict[str, str] | None = None,
+) -> httpx.Response:
+    payload: dict[str, Any] = {
+        "id": "resp-header",
+        "object": "response",
+        "created_at": 0,
+        "model": "gpt-4o",
+        "status": "completed",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg-header",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": text, "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+    if status_code != 200:
+        payload = {"error": {"message": "rate limited", "type": "rate_limit_error"}}
+    return httpx.Response(
+        status_code,
+        headers=headers,
+        json=payload,
+        request=httpx.Request("POST", "https://my.orq.ai/v3/router/responses"),
+    )
+
+
+def _make_sdk_client(handler: Any) -> AsyncOpenAI:
+    return AsyncOpenAI(
+        api_key="test-key",
+        base_url="https://my.orq.ai/v3/router",
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
 
 
 def _make_messages(content: str = "hi") -> list[Message]:
@@ -132,6 +183,26 @@ class TestOrqResponsesTargetRespond:
         result = await target.respond(_make_messages())
 
         assert result.trace_id == "trace-abc123"
+
+    @pytest.mark.asyncio
+    async def test_respond_captures_trace_ids_from_orq_headers(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return _responses_http_response(
+                headers={
+                    "x-orq-trace-id": "header-trace-123",
+                    "x-orq-trace-span-id": "header-span-456",
+                }
+            )
+
+        client = _make_sdk_client(handler)
+        try:
+            result = await _make_target(client=client).respond(_make_messages())
+        finally:
+            await client.close()
+
+        assert result.text == "from headers"
+        assert result.trace_id == "header-trace-123"
+        assert result.span_id == "header-span-456"
 
     @pytest.mark.asyncio
     async def test_respond_sends_thread_param_when_conversation_active(self):
@@ -178,12 +249,14 @@ class TestOrqResponsesTargetRespond:
         ]
 
     @pytest.mark.asyncio
-    async def test_respond_serializes_tool_calls_and_assistant_null_content(self):
-        """_messages_to_input must preserve tool-call structure and assistant content=None.
+    async def test_respond_serializes_tool_turns_as_responses_items(self):
+        """Tool turns must serialize as Responses items, not chat-completions rows.
 
-        Assistant messages with tool_calls require content: null per OpenAI's
-        spec; tool messages carry tool_call_id + name. respond passes the whole
-        transcript, so these must survive into the SDK `input` payload.
+        The Responses API rejects `role: "tool"` outright ("Invalid value: 'tool'")
+        and ignores a message-level `tool_calls` key, which silently drops the
+        assistant's tool calls. respond passes the whole transcript, so an
+        assistant tool call must become a `function_call` item and a tool result a
+        `function_call_output` keyed by the same call_id.
         """
         from evaluatorq.contracts import FunctionCall, StrategyToolCall
 
@@ -201,17 +274,40 @@ class TestOrqResponsesTargetRespond:
         )
 
         sent = client.responses.create.call_args.kwargs["input"]
-        assert sent[0] == {"role": "user", "content": "hi"}
-        # Assistant with tool_calls keeps content=None (not coerced to "").
-        assert sent[1]["role"] == "assistant"
-        assert sent[1]["content"] is None
-        assert sent[1]["tool_calls"][0]["function"] == {"name": "f", "arguments": "{}"}
-        # Tool message carries tool_call_id + name.
+        assert sent == [
+            {"role": "user", "content": "hi"},
+            {"type": "function_call", "call_id": "c1", "name": "f", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "c1", "output": "result"},
+        ]
+        # No chat-completions leakage: these keys are invalid on Responses input.
+        assert not any("tool_calls" in item or item.get("role") == "tool" for item in sent)
+
+    @pytest.mark.asyncio
+    async def test_respond_keeps_assistant_narration_before_tool_calls(self):
+        """An assistant turn with both text and tool calls emits both, in order."""
+        from evaluatorq.contracts import FunctionCall, StrategyToolCall
+
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = _make_target(client=client)
+
+        tool_call = StrategyToolCall(id="c1", function=FunctionCall(name="f", arguments="{}"), item_id="fc_1")
+        await target.respond(
+            [
+                Message(role="user", content="hi"),
+                Message(role="assistant", content="let me check", tool_calls=[tool_call]),
+            ]
+        )
+
+        sent = client.responses.create.call_args.kwargs["input"]
+        assert sent[1] == {"role": "assistant", "content": "let me check"}
+        # item_id round-trips as the function_call item id when present.
         assert sent[2] == {
-            "role": "tool",
-            "content": "result",
-            "tool_call_id": "c1",
+            "type": "function_call",
+            "call_id": "c1",
             "name": "f",
+            "arguments": "{}",
+            "id": "fc_1",
         }
 
     @pytest.mark.asyncio
@@ -392,6 +488,18 @@ class TestOrqResponsesTargetNew:
 
 class TestOrqResponsesTargetMemory:
     @pytest.mark.asyncio
+    async def test_memory_entity_id_is_omitted_for_direct_client(self):
+        client = _make_direct_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o"), memory_entity_id="ent-42", client=client
+        )
+
+        await target.respond(_make_messages())
+
+        assert "extra_body" not in client.responses.create.call_args.kwargs
+
+    @pytest.mark.asyncio
     async def test_memory_entity_id_lands_in_extra_body(self):
         client = _make_client()
         client.responses.create = AsyncMock(return_value=_make_response())
@@ -420,7 +528,9 @@ class TestOrqResponsesTargetMemory:
         extra_body = client.responses.create.call_args.kwargs["extra_body"]
         assert extra_body["memory"] == {"entity_id": "ent-42"}
         assert extra_body["thread"] == {"id": "thread-xyz"}
-        assert extra_body["metadata"] == {"evaluatorq_pipeline": "agent_simulation"}
+        assert client.responses.create.call_args.kwargs["metadata"] == {
+            "evaluatorq_pipeline": "agent_simulation"
+        }
 
     @pytest.mark.asyncio
     async def test_no_memory_key_sent_when_unset(self):
@@ -529,6 +639,26 @@ class TestOrqResponsesTargetTimeout:
         with pytest.raises(RuntimeError, match="timed out"):
             await target.respond(_make_messages())
 
+    @pytest.mark.asyncio
+    async def test_raw_response_path_timeout_is_enforced(self):
+        class SlowTransport(httpx.AsyncBaseTransport):
+            async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+                await asyncio.sleep(0.05)
+                return _responses_http_response()
+
+        client = AsyncOpenAI(
+            api_key="test-key",
+            base_url="https://my.orq.ai/v3/router",
+            max_retries=0,
+            http_client=httpx.AsyncClient(transport=SlowTransport()),
+        )
+        target = _make_target(client=client, timeout_ms=5)
+        try:
+            with pytest.raises(RuntimeError, match="timed out"):
+                await target.respond(_make_messages())
+        finally:
+            await client.close()
+
 
 # ---------------------------------------------------------------------------
 # retry
@@ -581,6 +711,35 @@ class TestOrqResponsesTargetRetry:
 
         assert client.responses.create.await_count == 1
         assert sleep_mock.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_retries_raw_response_path_on_rate_limit(self, monkeypatch):
+        monkeypatch.setattr(
+            "evaluatorq.common.retry.asyncio.sleep",
+            AsyncMock(return_value=None),
+        )
+        calls = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return _responses_http_response(status_code=429)
+            return _responses_http_response()
+
+        client = _make_sdk_client(handler)
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o", timeout_ms=30_000),
+            client=client,
+            retry_attempts=2,
+        )
+        try:
+            result = await target.respond(_make_messages())
+        finally:
+            await client.close()
+
+        assert calls == 2
+        assert result.trace_id is None
 
 
 # ---------------------------------------------------------------------------

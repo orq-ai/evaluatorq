@@ -68,3 +68,6 @@ docs/superpowers/
 
 # Generated sim/redteam datapoint scratch output at repo root
 /datapoints.jsonl
+
+# Agent scratch space — docs-drift / docs-coverage reports land here
+.context/

@@ -174,6 +174,36 @@ def test_record_token_usage_zero_prompt_preserved() -> None:
     assert set_attrs['gen_ai.usage.output_tokens'] == 5
 
 
+def test_record_token_usage_explicit_calls_zero_wins_over_usage_calls() -> None:
+    """An explicit calls=0 must not be clobbered by usage.calls (sentinel, not falsy check)."""
+    from unittest.mock import MagicMock
+
+    from evaluatorq.common.tracing import record_token_usage
+    from evaluatorq.contracts import Usage
+
+    span = MagicMock()
+    usage = Usage(input_tokens=1, output_tokens=1, total_tokens=2, calls=3)
+    record_token_usage(span, usage=usage, calls=0)
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert 'gen_ai.usage.calls' not in set_attrs
+    assert 'calls' not in set_attrs
+
+
+def test_record_token_usage_falls_back_to_usage_calls_when_unset() -> None:
+    """When calls is left unset (the caller's default), usage.calls is used."""
+    from unittest.mock import MagicMock
+
+    from evaluatorq.common.tracing import record_token_usage
+    from evaluatorq.contracts import Usage
+
+    span = MagicMock()
+    usage = Usage(input_tokens=1, output_tokens=1, total_tokens=2, calls=3)
+    record_token_usage(span, usage=usage)
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert set_attrs['gen_ai.usage.calls'] == 3
+    assert set_attrs['calls'] == 3
+
+
 # ---------------------------------------------------------------------------
 # record_llm_response — superset: chat-completions shape
 # ---------------------------------------------------------------------------
@@ -258,6 +288,56 @@ def test_record_llm_response_reasoning_tokens_attr() -> None:
     record_llm_response(span, _Resp())
     set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
     assert set_attrs['gen_ai.usage.completion_tokens_details.reasoning_tokens'] == 42
+
+
+def test_record_llm_response_does_not_introduce_calls_attr() -> None:
+    """record_llm_response's internal Usage.extract(..., calls=1) must not leak
+    a gen_ai.usage.calls attribute onto the span — it never set one before."""
+    from unittest.mock import MagicMock
+
+    from evaluatorq.common.tracing import record_llm_response
+
+    class _Usage:
+        prompt_tokens = 5
+        completion_tokens = 3
+        total_tokens = 8
+        prompt_tokens_details = None
+        completion_tokens_details = None
+
+    class _Resp:
+        id = 'r'
+        model = 'gpt-5'
+        usage = _Usage()
+        choices = []
+
+    span = MagicMock()
+    record_llm_response(span, _Resp())
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert 'gen_ai.usage.calls' not in set_attrs
+    assert 'calls' not in set_attrs
+
+
+def test_record_llm_response_empty_usage_still_records_zero_tokens() -> None:
+    """A usage payload Usage.extract can't parse (present but empty) must still
+    record zero token attributes, like the old hand-rolled parser did, rather
+    than emitting no gen_ai.usage.* attributes at all."""
+    from unittest.mock import MagicMock
+
+    from evaluatorq.common.tracing import record_llm_response
+
+    class _Resp:
+        id = 'r'
+        model = 'gpt-5'
+        usage = {}  # present but empty/unparseable -> Usage.extract returns None
+        choices = []
+
+    span = MagicMock()
+    record_llm_response(span, _Resp())
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert set_attrs['gen_ai.usage.input_tokens'] == 0
+    assert set_attrs['gen_ai.usage.output_tokens'] == 0
+    assert set_attrs['gen_ai.usage.total_tokens'] == 0
+    assert 'gen_ai.usage.calls' not in set_attrs
 
 
 # ---------------------------------------------------------------------------
@@ -397,6 +477,86 @@ def test_set_span_attrs_noop_on_none_span() -> None:
     from evaluatorq.common.tracing import set_span_attrs
 
     set_span_attrs(None, {'key': 'val'})  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# set_evaluation_attributes — evaluator-span emission is opt-in
+# ---------------------------------------------------------------------------
+
+
+def test_set_evaluation_attributes_legacy_only_without_type() -> None:
+    from unittest.mock import MagicMock
+    from evaluatorq.tracing.spans import set_evaluation_attributes
+
+    span = MagicMock()
+    set_evaluation_attributes(span, 1.0, explanation='why', pass_=True, evaluator_name='goal_achieved')
+    keys = {c.args[0] for c in span.set_attribute.call_args_list}
+    # Legacy attributes present; new evaluator-span attributes withheld (no evaluator_type).
+    assert {'orq.score', 'orq.explanation', 'orq.pass'} <= keys
+    assert not any(k.startswith('gen_ai.evaluation') or k == 'orq.span_type' for k in keys)
+
+
+def test_set_evaluation_attributes_emits_evaluator_span_when_typed() -> None:
+    from unittest.mock import MagicMock
+    from evaluatorq.tracing.spans import set_evaluation_attributes
+
+    span = MagicMock()
+    set_evaluation_attributes(
+        span,
+        1.0,
+        explanation='why',
+        pass_=True,
+        evaluator_name='goal_achieved',
+        evaluator_type='python_eval',
+    )
+    attrs = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
+    assert attrs['orq.span_type'] == 'span.evaluator'
+    assert attrs['gen_ai.evaluation.name'] == 'goal_achieved'
+    assert attrs['gen_ai.evaluation.score.value'] == 1.0
+    assert attrs['gen_ai.evaluation.score.label'] == 'pass'
+    assert attrs['gen_ai.evaluation.explanation'] == 'why'
+    assert attrs['gen_ai.evaluation.passed'] is True
+    assert attrs['orq.evaluator.key'] == 'goal_achieved'
+    assert attrs['orq.evaluator.type'] == 'python_eval'
+    assert attrs['orq.evaluator.output_type'] == 'number'
+    assert attrs['orq.evaluator.score.label'] == 'pass'
+    # Verdict payload — what the evaluator span's Output panel renders.
+    assert json.loads(attrs['orq.evaluation.output']) == {
+        'passed': True,
+        'value': 1.0,
+        'type': 'python_eval',
+        'reason': 'why',
+    }
+
+
+def test_set_evaluation_attributes_output_type_boolean() -> None:
+    """A bool score must report output_type 'boolean', not 'number' — bool is an
+    int subclass, so the numeric branch would otherwise swallow it."""
+    from unittest.mock import MagicMock
+    from evaluatorq.tracing.spans import set_evaluation_attributes
+
+    span = MagicMock()
+    set_evaluation_attributes(span, True, pass_=True, evaluator_name='e', evaluator_type='python_eval')
+    attrs = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
+    assert attrs['orq.evaluator.output_type'] == 'boolean'
+    assert attrs['gen_ai.evaluation.score.value'] == 1.0
+
+
+def test_set_evaluation_attributes_caps_long_explanation() -> None:
+    """Explanations over 512 chars must be capped on the span — Orq's ingestion
+    drops (not truncates) dynamic string attributes longer than that. The
+    orq.evaluation.output payload is blob-stored, so it keeps the full text."""
+    from unittest.mock import MagicMock
+    from evaluatorq.tracing.spans import set_evaluation_attributes
+
+    long = 'x' * 600
+    span = MagicMock()
+    set_evaluation_attributes(span, 0.5, explanation=long, evaluator_name='e', evaluator_type='python_eval')
+    attrs = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
+    for key in ('orq.explanation', 'gen_ai.evaluation.explanation'):
+        assert len(attrs[key]) <= 512, key
+        assert attrs[key].endswith('…')
+    assert json.loads(attrs['orq.evaluation.output'])['reason'] == long
 
 
 # ---------------------------------------------------------------------------

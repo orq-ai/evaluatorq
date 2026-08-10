@@ -1,12 +1,17 @@
 """Unit tests for evaluatorq.simulation.cli."""
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+from typing import IO
+
 import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from click.testing import Result
+from typer import Typer
 from typer.testing import CliRunner
 
 from evaluatorq.simulation.cli import (
@@ -23,7 +28,42 @@ from evaluatorq.simulation.cli import (
 )
 from evaluatorq.simulation.utils.run_store import build_simulation_run as _build_simulation_run
 
-runner = CliRunner()
+class _OfflineCliRunner(CliRunner):
+    """CliRunner that keeps these tests off the network by default.
+
+    ``eq sim run`` / ``simulate`` default to generating an executive summary,
+    and that step resolves its own LLM client and calls a real model. Every
+    test here would otherwise have to remember ``--no-executive-summary``;
+    forgetting it is invisible locally and only surfaces as a leaked live
+    request. Appending it once here means new tests are offline by default. A
+    test that wants the summary can pass ``--executive-summary`` explicitly.
+    """
+
+    _OFFLINE_FLAG = '--no-executive-summary'
+    _SUMMARY_COMMANDS = frozenset({'run', 'simulate'})
+
+    def invoke(  # noqa: PLR0913 — mirrors click's CliRunner.invoke signature exactly
+        self,
+        app: Typer,
+        args: str | Sequence[str] | None = None,
+        input: bytes | str | IO[Any] | None = None,  # noqa: A002 — shadowing is typer's name
+        env: Mapping[str, str | None] | None = None,
+        catch_exceptions: bool = True,
+        color: bool = False,
+        **extra: Any,
+    ) -> Result:
+        if (
+            isinstance(args, list)
+            and args
+            and args[0] in self._SUMMARY_COMMANDS
+            and self._OFFLINE_FLAG not in args
+            and '--executive-summary' not in args
+        ):
+            args = [*args, self._OFFLINE_FLAG]
+        return super().invoke(app, args, input, env, catch_exceptions, color, **extra)
+
+
+runner = _OfflineCliRunner()
 
 
 @pytest.mark.parametrize('command', ['simulate', 'run', 'generate', 'upload-dataset'])
@@ -735,7 +775,6 @@ def test_simulate_saved_run_suggests_dashboard_directory(tmp_path: Path) -> None
                 "--input", str(dp_file),
                 "--openai-model", "gpt-4o",
                 "--yes",
-                "--no-executive-summary",
             ],
             env={"ORQ_API_KEY": "", "OPENAI_API_KEY": "test-key"},
         )
@@ -767,7 +806,6 @@ def test_run_saved_run_suggests_dashboard_directory(tmp_path: Path) -> None:
                 "--agent-description", "A helpful bot",
                 "--openai-model", "gpt-4o",
                 "--yes",
-                "--no-executive-summary",
             ],
             env={"ORQ_API_KEY": "", "OPENAI_API_KEY": "test-key"},
         )
@@ -2126,13 +2164,13 @@ def test_run_recommendations_flag_attaches_to_saved_run(
     with (
         patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
         patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
-        patch("evaluatorq.simulation.cli._maybe_generate_recommendations") as mock_recs,
     ):
         mock_target.return_value = MagicMock()
-        mock_impl.return_value = _stub_run([_make_result()], mode="run")
         from evaluatorq.simulation.types import SimulationRecommendation
 
-        mock_recs.return_value = [SimulationRecommendation.model_validate(r) for r in fake_recs]
+        stub_run = _stub_run([_make_result()], mode="run")
+        stub_run.recommendations = [SimulationRecommendation.model_validate(r) for r in fake_recs]
+        mock_impl.return_value = stub_run
 
         result = runner.invoke(
             app,
@@ -2148,7 +2186,9 @@ def test_run_recommendations_flag_attaches_to_saved_run(
         )
 
     assert result.exit_code == 0, result.output
-    mock_recs.assert_called_once()
+    await_args = mock_impl.await_args
+    assert await_args is not None
+    assert await_args.kwargs['recommendations'] is True
     saved = json.loads(report.read_text())
     assert saved["recommendations"][0]["suggestions"] == ["Fix x."]
 
@@ -2161,16 +2201,20 @@ def test_run_without_recommendations_flag_skips_generation(
     with (
         patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
         patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
-        patch("evaluatorq.simulation.cli._maybe_generate_recommendations") as mock_recs,
     ):
         mock_target.return_value = MagicMock()
         mock_impl.return_value = _stub_run([_make_result()], mode="run")
 
         result = runner.invoke(
             app,
-            ["run", "--agent-description", "bot", "--openai-model", "gpt-4o", "--no-save"],
+            [
+                "run", "--agent-description", "bot", "--openai-model", "gpt-4o",
+                "--no-save",
+            ],
             env={"OPENAI_API_KEY": "test-key"},
         )
 
     assert result.exit_code == 0, result.output
-    mock_recs.assert_not_called()
+    await_args = mock_impl.await_args
+    assert await_args is not None
+    assert await_args.kwargs['recommendations'] is False

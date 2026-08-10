@@ -3,10 +3,12 @@ from __future__ import annotations
 import pytest
 
 from evaluatorq.common.judge import JudgeOutcome, EvaluatorResponsePayload, JudgeError
+from evaluatorq.common.template_engine import render_template
 from evaluatorq.llm_jury import (
+    DEFAULT_PAIRWISE_TEMPLATE,
+    DEFAULT_TEMPLATE,
     _build_replacements,
     _default_system_prompt,
-    _default_template,
     _outcome_to_prediction,
     _to_evaluation_result,
 )
@@ -22,23 +24,23 @@ from evaluatorq.contracts import JuryVote
 def test_build_replacements_stringifies():
     dp = DataPoint(inputs={"question": "2+2?"}, expected_output="4")
     r = _build_replacements(dp, output="4", criteria="correct?")
-    assert "2+2" in r["input"]
-    assert r["output"] == "4"
-    assert r["expected_output"] == "4"
+    assert "2+2" in render_template("{{input.all_messages}}", r)
+    assert render_template("{{output.response}}", r) == "4"
+    assert render_template("{{input.expected_output}}", r) == "4"
     assert r["criteria"] == "correct?"
 
 
 def test_build_replacements_messages_key():
     dp = DataPoint(inputs={"messages": [{"role": "user", "content": "hello"}]}, expected_output=None)
     r = _build_replacements(dp, output="hi", criteria="polite?")
-    assert "hello" in r["input"]
-    assert r["expected_output"] == ""
+    assert "hello" in render_template("{{input.all_messages}}", r)
+    assert render_template("{{input.expected_output}}", r) == ""
 
 
 def test_build_replacements_input_key():
     dp = DataPoint(inputs={"input": "plain text"}, expected_output=None)
     r = _build_replacements(dp, output="reply", criteria="any")
-    assert r["input"] == "plain text"
+    assert "plain text" in render_template("{{input.all_messages}}", r)
 
 
 # ---------------------------------------------------------------------------
@@ -63,15 +65,23 @@ def test_default_system_prompt_categorical():
 
 
 # ---------------------------------------------------------------------------
-# _default_template
+# default templates
 # ---------------------------------------------------------------------------
 
 def test_default_template_contains_placeholders():
-    tmpl = _default_template("Is the answer correct?")
-    assert "Is the answer correct?" in tmpl
-    assert "{{input}}" in tmpl
-    assert "{{output}}" in tmpl
-    assert "{{expected_output}}" in tmpl
+    assert "{{criteria}}" in DEFAULT_TEMPLATE
+    assert "{{input.all_messages}}" in DEFAULT_TEMPLATE
+    assert "{{output.response}}" in DEFAULT_TEMPLATE
+    assert "{{input.expected_output}}" in DEFAULT_TEMPLATE
+
+
+def test_pairwise_template_substitutes_criteria_like_pointwise():
+    # Both juries reach `criteria` the same way, so a `prompt=` override behaves
+    # identically on either side.
+    assert "{{criteria}}" in DEFAULT_PAIRWISE_TEMPLATE
+    assert "{{question}}" in DEFAULT_PAIRWISE_TEMPLATE
+    assert "{{response_a.output.response}}" in DEFAULT_PAIRWISE_TEMPLATE
+    assert "{{response_b.output.response}}" in DEFAULT_PAIRWISE_TEMPLATE
 
 
 # ---------------------------------------------------------------------------

@@ -25,9 +25,10 @@ from evaluatorq.common.content_filter import (
     is_content_filter_error,
     regenerate_on_content_filter,
 )
+from evaluatorq.common.llm_call import execute_chat_completion
 from evaluatorq.common.sanitize import xml_escape
 from evaluatorq.common.target_call import call_target_with_retry, default_map_error
-from evaluatorq.common.tracing import record_llm_response, set_span_attrs, truncate_for_span
+from evaluatorq.common.tracing import set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentResponse, AgentResponseError, AgentTarget, Message, TextOutputItem
 from evaluatorq.redteam.adaptive.tool_chaining import (
     ToolChainingPlanner,
@@ -420,7 +421,7 @@ class MultiTurnOrchestrator:
             attacker_instructions=self.attacker_instructions,
         )
 
-        llm_messages: list[ChatCompletionMessageParam] = [
+        llm_messages: list[dict[str, Any]] = [
             {'role': 'system', 'content': system_prompt},
             {'role': 'user', 'content': 'Generate a single attack prompt to achieve the objective in one message.'},
         ]
@@ -441,25 +442,24 @@ class MultiTurnOrchestrator:
             ) as llm_span,
         ):
             llm_timeout_s = self._cfg.attacker.timeout_ms / 1000.0
-            response = await asyncio.wait_for(
-                self.llm_client.chat.completions.create(
-                    model=self.model,
-                    messages=llm_messages,
-                    temperature=self._cfg.attacker.temperature,
-                    max_completion_tokens=self._cfg.attacker.max_tokens,
-                    extra_body=self._cfg.retry_extra_body(self.llm_client),
+            response, usage = await execute_chat_completion(
+                client=self.llm_client,
+                model=self.model,
+                messages=llm_messages,
+                span=llm_span,
+                timeout_s=llm_timeout_s,
+                temperature=self._cfg.attacker.temperature,
+                max_completion_tokens=self._cfg.attacker.max_tokens,
+                extra_kwargs={
+                    'extra_body': self._cfg.retry_extra_body(self.llm_client),
                     **self._cfg.attacker.extra_kwargs,
-                ),
-                timeout=llm_timeout_s,
+                },
             )
 
-            usage = TokenUsage.from_completion(response)
             prompt = response.choices[0].message.content or ''
             # Strip any leading objective-achieved marker (shouldn't appear in
             # single-turn generation, but guard so it never leaks to the target).
             _, _, prompt = _parse_objective_marker(prompt)
-
-            record_llm_response(llm_span, response, output_content=prompt)
 
         logger.debug(f'Generated dynamic single-turn prompt for {strategy.name}: {prompt[:100]}...')
         return prompt, usage, system_prompt
@@ -681,18 +681,19 @@ class MultiTurnOrchestrator:
                         ):
                             if attempt > 0:
                                 set_span_attrs(adv_span, {'orq.redteam.adversarial_retry': attempt})
-                            response = await asyncio.wait_for(
-                                self.llm_client.chat.completions.create(
-                                    model=self.model,
-                                    messages=_messages,
-                                    temperature=self._cfg.attacker.temperature,
-                                    max_completion_tokens=self._cfg.attacker.max_tokens,
-                                    extra_body=self._cfg.retry_extra_body(self.llm_client),
+                            response, usage = await execute_chat_completion(
+                                client=self.llm_client,
+                                model=self.model,
+                                messages=_messages,
+                                span=adv_span,
+                                timeout_s=_timeout,
+                                temperature=self._cfg.attacker.temperature,
+                                max_completion_tokens=self._cfg.attacker.max_tokens,
+                                extra_kwargs={
+                                    'extra_body': self._cfg.retry_extra_body(self.llm_client),
                                     **self._cfg.attacker.extra_kwargs,
-                                ),
-                                timeout=_timeout,
+                                },
                             )
-                            usage = TokenUsage.from_completion(response)
                             if usage is not None:
                                 # Fold usage when present (carries cached/reasoning/cost
                                 # via __add__); every attempt is a real billed call.
@@ -702,7 +703,6 @@ class MultiTurnOrchestrator:
                                 # bare call so content-filtered retries aren't undercounted.
                                 adversarial_usage_acc = adversarial_usage_acc + TokenUsage(calls=1)
                             attack_prompt = response.choices[0].message.content or ''
-                            record_llm_response(adv_span, response, output_content=attack_prompt)
                             return response
 
                     try:
@@ -1003,7 +1003,7 @@ class MultiTurnOrchestrator:
                         # Targets report their own call count (orq sums tool-continuation
                         # rounds); fall back to 1 only when a usage-bearing turn forgot to.
                         if turn_usage.calls == 0:
-                            turn_usage = turn_usage.model_copy(update={'calls': 1})
+                            turn_usage = turn_usage.with_calls(1)
                         target_usage_acc = target_usage_acc + turn_usage
 
                     # Record the completed turn (target succeeded)

@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from evaluatorq.common.thread_context import evaluatorq_pipeline, evaluatorq_run_id
 from evaluatorq.contracts import Message, TokenUsage
 from evaluatorq.simulation.reports import export_html, export_markdown
 from evaluatorq.simulation.reports.recommendations import (
@@ -157,6 +158,43 @@ async def test_broken_rule_produces_targeted_recommendation():
     assert 'leaked internal data' in user_prompt
     # Reasoning models reject non-default temperatures; omit unless asked for.
     assert 'temperature' not in call_kwargs
+
+
+@pytest.mark.asyncio
+async def test_recommendation_call_inherits_run_metadata():
+    client = _mock_client({'suggestions': ['Fix it']})
+    result = _make_result(goal_achieved=False, rules_broken=['leaked data'])
+
+    with evaluatorq_pipeline('agent_simulation'), evaluatorq_run_id('sim-run-1'):
+        await generate_recommendations([result], client, 'test-model')
+
+    assert client.chat.completions.create.await_args.kwargs['metadata'] == {
+        'evaluatorq_pipeline': 'agent_simulation',
+        'evaluatorq_run_id': 'sim-run-1',
+    }
+
+
+@pytest.mark.asyncio
+async def test_recommendation_call_injects_active_trace_headers(monkeypatch: pytest.MonkeyPatch):
+    client = _mock_client({'suggestions': ['Fix it']})
+    result = _make_result(goal_achieved=False, rules_broken=['leaked data'])
+    monkeypatch.setattr(
+        'evaluatorq.simulation.reports.recommendations.get_trace_context_headers',
+        AsyncMock(return_value={'traceparent': 'active-trace', 'tracestate': 'active-state'}),
+    )
+
+    await generate_recommendations(
+        [result],
+        client,
+        'test-model',
+        llm_kwargs={'extra_headers': {'x-caller': 'preserved', 'traceparent': 'caller-trace'}},
+    )
+
+    assert client.chat.completions.create.await_args.kwargs['extra_headers'] == {
+        'x-caller': 'preserved',
+        'traceparent': 'active-trace',
+        'tracestate': 'active-state',
+    }
 
 
 @pytest.mark.asyncio

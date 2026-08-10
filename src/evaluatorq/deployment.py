@@ -11,6 +11,8 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from evaluatorq.contracts import TokenUsage
+
 __all__ = [
     'DeploymentResponse',
     'MessageDict',
@@ -53,6 +55,9 @@ class DeploymentResponse:
     raw: object
     """The raw response from the API"""
 
+    usage: TokenUsage | None = None
+    """Token usage extracted from the response, when available"""
+
 
 def _get_or_create_client() -> Orq:
     """
@@ -83,12 +88,8 @@ def _get_or_create_client() -> Orq:
         return _cached_client
     except ModuleNotFoundError as e:
         raise ImportError(
-            'The orq_ai_sdk package is not installed. To use deployment features, please install it:\n'
-            '  pip install orq-ai-sdk\n'
-            '  # or\n'
-            '  uv add orq-ai-sdk\n'
-            '  # or\n'
-            '  poetry add orq-ai-sdk'
+            'The orq_ai_sdk package is not installed. To use deployment features, install it with: '
+            'uv add orq-ai-sdk (or: python -m pip install orq-ai-sdk)'
         ) from e
     except Exception as e:
         raise RuntimeError(f'Failed to setup ORQ client: {e}') from e
@@ -160,8 +161,9 @@ async def deployment(
 
     # Extract content from the response
     content = _extract_content_from_response(completion)
+    usage = TokenUsage.extract(getattr(completion, 'usage', None), calls=1)
 
-    return DeploymentResponse(content=content, raw=completion)
+    return DeploymentResponse(content=content, raw=completion, usage=usage)
 
 
 def _extract_content_from_response(completion: object) -> str:

@@ -694,6 +694,27 @@ def test_rt_exec_summary_zero_vuln_fallback(rt_report_clean):
     assert 'vulnerabilit' not in html.lower() or 'resisted all' in html.lower()
 
 
+def test_rt_kpi_band_zero_evaluated_shows_na_not_perfect(rt_report_clean):
+    """A zero-evaluated run's detail view must not render the schema-default
+    resistance as a perfect 100% — same no-score rule as the landing rows."""
+    from evaluatorq.dashboard.report_tabs import redteam_report_tabs
+
+    report = rt_report_clean.model_copy(
+        update={
+            'summary': rt_report_clean.summary.model_copy(
+                update={'evaluated_attacks': 0, 'resistance_rate': 1.0}
+            )
+        }
+    )
+    html = redteam_report_tabs('rid', report)
+    # kpi cards render value before label, so the card's value sits just
+    # before the 'Resistance rate' text.
+    idx = html.index('Resistance rate')
+    card = html[max(idx - 200, 0) : idx]
+    assert 'n/a' in card
+    assert '100%' not in card
+
+
 def test_rt_tabs_seven_labels(rt_report_multi):
     from evaluatorq.dashboard.report_tabs import redteam_report_tabs
 

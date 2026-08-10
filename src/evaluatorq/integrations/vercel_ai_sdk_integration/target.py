@@ -212,10 +212,16 @@ def _message_to_ai_sdk_message(m: Message, *, version: AISdkMessageFormat = 'v5'
             'toolCallId': m.tool_call_id or '',
             'toolName': m.name or '',
         }
+        # content_to_text, not the raw content: every other branch below goes
+        # through it, and a parts list assigned here would reach httpx as
+        # Pydantic models and die in json.dumps. The v5 shape is typed
+        # ``{type: 'text'}`` anyway, so text is all this can carry — better to
+        # raise NotImplementedError naming the part than to fail in the encoder.
+        result_text = content_to_text(m.content)
         if version == 'v4':
-            result_part['result'] = m.content or ''
+            result_part['result'] = result_text
         else:
-            result_part['output'] = {'type': 'text', 'value': m.content or ''}
+            result_part['output'] = {'type': 'text', 'value': result_text}
         return {'role': 'tool', 'content': [result_part]}
     if m.role == 'assistant' and m.tool_calls:
         parts: list[dict[str, Any]] = []

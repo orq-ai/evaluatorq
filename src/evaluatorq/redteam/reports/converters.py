@@ -9,6 +9,7 @@ from loguru import logger as _converters_logger
 from pydantic import ValidationError
 
 from evaluatorq.common.target_call import classify_error_type
+from evaluatorq.contracts import AgentResponse, Message
 from evaluatorq.redteam.contracts import (
     JURY_RAW_OUTPUT_KEY,
     OWASP_CATEGORY_NAMES,
@@ -162,6 +163,19 @@ def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
         return JobOutputPayload.model_validate(_normalize_output_dict(raw_output))
     if raw_output is None:
         return JobOutputPayload()
+    if isinstance(raw_output, AgentResponse):
+        # AgentResponse.output is a list[OutputMessage], which does not validate against
+        # JobOutputPayload.output: str | None — map the fields explicitly instead of
+        # letting model_validate fail and fall through to an empty payload.
+        return JobOutputPayload(
+            final_response=raw_output.text,
+            response=raw_output.text,
+            token_usage=raw_output.usage,
+            error=raw_output.error.message if raw_output.error else None,
+            # ponytail: the assistant turn only. An AgentResponse carries no request
+            # side, so there is no fuller conversation to reconstruct here.
+            conversation=[Message(role='assistant', content=raw_output.text)] if raw_output.text else [],
+        )
 
     model_dump = getattr(raw_output, 'model_dump', None)
     if callable(model_dump):
@@ -210,6 +224,8 @@ def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
 
 def _coerce_job_output_text(raw_output: Any) -> str:
     """Extract best-effort response text from evaluatorq output."""
+    if isinstance(raw_output, AgentResponse):
+        return raw_output.text
     payload = _coerce_job_output_payload(raw_output)
     if payload.final_response is not None:
         return payload.final_response

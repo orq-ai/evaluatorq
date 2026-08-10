@@ -369,13 +369,7 @@ class ORQAgentTarget(AgentTarget):
                 raise
             finally:
                 if accumulated_usage.calls > 0:
-                    record_token_usage(
-                        span,
-                        prompt_tokens=accumulated_usage.input_tokens,
-                        completion_tokens=accumulated_usage.output_tokens,
-                        total_tokens=accumulated_usage.total_tokens,
-                        calls=accumulated_usage.calls,
-                    )
+                    record_token_usage(span, usage=accumulated_usage)
 
     def new(self) -> ORQAgentTarget:
         """Return a fresh target instance with isolated state.
@@ -571,7 +565,8 @@ class ORQBackend(Backend):
         else:
             if _orq_cls is None:
                 raise ImportError(
-                    'ORQ backend requires the orq-ai-sdk package. Install with: pip install evaluatorq[orq]'
+                    'ORQ backend requires the orq-ai-sdk package. '
+                    'Install with: uv add "evaluatorq[orq]" (or: python -m pip install "evaluatorq[orq]")'
                 )
             self._orq_client = _orq_cls(
                 api_key=_get_orq_api_key(),

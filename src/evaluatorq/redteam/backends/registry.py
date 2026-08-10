@@ -50,7 +50,10 @@ def create_async_llm_client(role_config: LLMCallConfig | None = None) -> AsyncOp
             honor_openai_base_url=True,
         ).client
     except ImportError as exc:
-        msg = 'openai package is required for LLM-based attack generation. Install it with: pip install openai'
+        msg = (
+            'openai package is required for LLM-based attack generation. '
+            'Install it with: uv add openai (or: python -m pip install openai)'
+        )
         raise BackendError(msg) from exc
     except MissingLLMCredentialsError as exc:
         raise CredentialError(str(exc)) from exc
@@ -82,12 +85,18 @@ def resolve_backend(
 def _create_openai_backend(
     llm_client: AsyncOpenAI | None = None,
     target_config: TargetConfig | None = None,
+    pipeline_config: LLMConfig | None = None,
     **_: object,
 ) -> Backend:
     from evaluatorq.redteam.backends.openai import OpenAIBackend
 
     system_prompt = target_config.system_prompt if target_config else None
-    return OpenAIBackend(client=llm_client, system_prompt=system_prompt)
+    # Forward the pipeline timeout like the orq/openresponses factories do —
+    # without it the backend's timeout_ms plumbing is never fed from config.
+    # max_tokens stays unfed on purpose: LLMConfig has no target-level token
+    # cap field to source it from.
+    timeout_ms = pipeline_config.target_agent_timeout_ms if pipeline_config else None
+    return OpenAIBackend(client=llm_client, system_prompt=system_prompt, timeout_ms=timeout_ms)
 
 
 def _create_orq_backend(

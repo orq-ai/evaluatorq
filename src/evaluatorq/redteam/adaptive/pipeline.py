@@ -55,7 +55,7 @@ from evaluatorq.redteam.contracts import (
     TurnType,
     Vulnerability,
 )
-from evaluatorq.redteam.tracing import with_redteam_span
+from evaluatorq.redteam.tracing import annotate_current_span, set_jury_span_attrs, with_redteam_span
 from evaluatorq.redteam.vulnerability_registry import (
     get_primary_category,
     resolve_category_safe,
@@ -703,8 +703,7 @@ def create_dynamic_evaluator(
             except ValueError:
                 resolved_vuln = resolve_category_safe(vulnerability)
 
-        async with with_redteam_span(
-            'orq.redteam.security_evaluation',
+        async with annotate_current_span(
             {
                 'orq.redteam.category': category,
                 'orq.redteam.vulnerability': vulnerability,
@@ -723,16 +722,15 @@ def create_dynamic_evaluator(
                     messages=input_messages,
                     output_messages=output_messages,
                 )
-            span_attrs: dict[str, Any] = {
-                'orq.redteam.passed': eval_result.passed,
-                'input': output.final_response or '',
-                'output': eval_result.explanation or '',
-            }
-            if eval_result.jury is not None:
-                span_attrs['orq.redteam.jury.raw_agreement'] = eval_result.jury.raw_agreement
-                span_attrs['orq.redteam.jury.tie'] = eval_result.jury.tie
-                span_attrs['orq.redteam.jury.judges_succeeded'] = eval_result.jury.judges_succeeded
-            set_span_attrs(eval_span, span_attrs)
+            set_span_attrs(
+                eval_span,
+                {
+                    'orq.redteam.passed': eval_result.passed,
+                    'input': output.final_response or '',
+                    'output': eval_result.explanation or '',
+                },
+            )
+            set_jury_span_attrs(eval_span, eval_result.jury)
 
         # ``passed`` is the judge's boolean verdict (RESISTANT/VULNERABLE); surface it
         # as the score value, or 'inconclusive' when the judge errored.
@@ -763,7 +761,9 @@ def create_dynamic_evaluator(
             'raw_output': scored_raw_output,
         })
 
-    return {'name': 'owasp-dynamic-security', 'scorer': scorer}
+    # evaluator_type marks these LLM-judge scorers so the tracing layer emits the
+    # gen_ai.evaluation.* evaluator-span attributes (opt-in; see set_evaluation_attributes).
+    return {'name': 'owasp-dynamic-security', 'scorer': scorer, 'evaluator_type': 'llm_eval'}
 
 
 async def cleanup_memory_entities(

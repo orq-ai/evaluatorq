@@ -16,10 +16,7 @@ import pytest
 
 from evaluatorq import DataPoint, EvaluationResult
 from evaluatorq.contracts import JURY_RAW_OUTPUT_KEY, TextOutputItem, ToolCallOutputItem
-from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import (
-    _adapt_static_output,
-    _adapt_tool_call,
-)
+from evaluatorq.common.output_adapters import _adapt_static_output, _adapt_tool_call
 
 # ---------------------------------------------------------------------------
 # Helpers

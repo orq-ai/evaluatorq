@@ -239,17 +239,19 @@ class TestSimTranscriptRoute:
         r = client.get(f'/r/{rid}/sim/transcript?idx=0')
         assert 'text/html' in r.headers.get('content-type', '')
 
-    def test_transcript_contains_persona(self, client: TestClient, roots: list[Path]) -> None:
+    def test_transcript_contains_persona(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
         # Persona/scenario now live on the collapsed conversation card (row-list),
         # not in the transcript fragment — the fragment no longer repeats them.
         rid = report_id(_sim_path(roots))
-        r = client.get(f'/r/{rid}/sim/row-list')
-        assert 'alice' in r.text
+        r = client.get(f"/r/{rid}/sim/row-list")
+        assert "alice" in r.text
 
     def test_transcript_contains_scenario(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
-        r = client.get(f'/r/{rid}/sim/row-list')
-        assert 'billing' in r.text.lower()
+        r = client.get(f"/r/{rid}/sim/row-list")
+        assert "billing" in r.text.lower()
 
     def test_transcript_contains_message_markup(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
@@ -269,7 +271,9 @@ class TestSimTranscriptRoute:
         assert 'sim-transcript-grid' in r.text
         assert 'sim-criteria' in r.text
 
-    def test_transcript_summary_shows_persona_scenario_and_turns(self, client: TestClient, roots: list[Path]) -> None:
+    def test_transcript_summary_shows_persona_scenario_and_turns(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
         rid = report_id(_sim_path(roots))
         r = client.get(f'/r/{rid}/sim/transcript?idx=0')
         # Conversation summary header recaps persona + scenario and a turn chip.
@@ -278,7 +282,9 @@ class TestSimTranscriptRoute:
         assert '3 turns' in r.text  # fixture idx0 has turn_count=3
         assert 'sim-conv-index' in r.text  # teal #index badge, top-left
 
-    def test_transcript_persona_scenario_are_clickthrough(self, client: TestClient, roots: list[Path]) -> None:
+    def test_transcript_persona_scenario_are_clickthrough(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
         rid = report_id(_sim_path(roots))
         r = client.get(f'/r/{rid}/sim/transcript?idx=0')
         # Persona/scenario values are cohort-card triggers, ids matching the
@@ -287,7 +293,9 @@ class TestSimTranscriptRoute:
         assert 'data-sim-entity-trigger data-entity-kind="scenario" data-entity-id="scenario-0"' in r.text
         assert 'sim-conv-value--link' in r.text
 
-    def test_transcript_judge_folded_into_criteria(self, client: TestClient, roots: list[Path]) -> None:
+    def test_transcript_judge_folded_into_criteria(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
         rid = report_id(_sim_path(roots))
         r = client.get(f'/r/{rid}/sim/transcript?idx=0')
         # Judge rationale lives inside the criteria block, not a standalone callout.
@@ -295,7 +303,9 @@ class TestSimTranscriptRoute:
         crit = r.text.index('sim-criteria')
         assert crit < r.text.index('sim-judge') < r.text.index('sim-transcript-bubbles')
 
-    def test_transcript_criteria_precedes_conversation(self, client: TestClient, roots: list[Path]) -> None:
+    def test_transcript_criteria_precedes_conversation(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
         rid = report_id(_sim_path(roots))
         r = client.get(f'/r/{rid}/sim/transcript?idx=0')
         # Criteria block must render before the chat bubbles inside the grid.
@@ -313,7 +323,7 @@ class TestSimTranscriptRoute:
         assert r.status_code == 200
         # Second conversation is bob's — identify it by his unique refund content
         # (the fragment no longer embeds the persona label).
-        assert 'refund' in r.text.lower()
+        assert "refund" in r.text.lower()
 
     def test_transcript_out_of_range_idx_no_500(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
@@ -367,8 +377,8 @@ class TestSimRowListOnReportPage:
 
     def test_sim_report_page_has_clickable_conversation_rows(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
-        r = client.get(f'/r/{rid}')
-        assert 'sim-conv-row' in r.text
+        r = client.get(f"/r/{rid}")
+        assert "sim-conv-row" in r.text
         assert 'data-entity-kind="conversation"' in r.text
 
     def test_sim_report_page_has_transcript_drawer_urls(self, client: TestClient, roots: list[Path]) -> None:
@@ -405,7 +415,7 @@ class TestSimFilterAwareness:
         assert r.status_code == 200
         # Identify the conversation by its (unique) message content — the fragment
         # no longer embeds the persona label (that lives on the card).
-        assert 'Order 12345' in r.text
+        assert "Order 12345" in r.text
 
     def test_transcript_filter_drops_non_matching_persona(self, client: TestClient, roots: list[Path]) -> None:
         """When filtering to persona=alice, bob should not appear in idx=0."""
@@ -413,7 +423,7 @@ class TestSimFilterAwareness:
         r = client.get(f'/r/{rid}/sim/transcript?idx=0&persona=alice')
         assert r.status_code == 200
         # Full-run idx=0 is Alice, so Bob's unique refund content cannot appear.
-        assert 'refund' not in r.text.lower()
+        assert "refund" not in r.text.lower()
 
     def test_transcript_out_of_range_after_filter_is_graceful(self, client: TestClient, roots: list[Path]) -> None:
         """An optional filter parameter does not make transcript lookup raise."""
@@ -745,12 +755,12 @@ class TestTranscriptFragmentRewrite:
         from evaluatorq.dashboard.sim_views import render_transcript_fragment
 
         html = render_transcript_fragment(sim_entry_with_safety_criterion)
-        assert '⛔' not in html  # three-state ⛔ icon gone
-        assert '&#x26D4;' not in html
+        assert "⛔" not in html  # three-state ⛔ icon gone
+        assert "&#x26D4;" not in html
         # Polarity chip sits beside the result icon; must_not_happen reads red.
-        assert 'Prohibited' in html
-        assert 'sim-ctype-unsafe' in html
-        assert 'sim-judge' in html  # judge callout present when reason set
+        assert "Prohibited" in html
+        assert "sim-ctype-unsafe" in html
+        assert "sim-judge" in html  # judge callout present when reason set
 
     def test_transcript_fragment_criteria_two_state_icons(self, sim_entry_with_safety_criterion) -> None:
         from evaluatorq.dashboard.sim_views import render_transcript_fragment
@@ -802,10 +812,13 @@ class TestTranscriptFragmentRewrite:
             '}'
         ) in DASHBOARD_CSS
         assert (
-            '.sim-report .sim-conv-row {\n    border: 0; background: transparent; transition: background 150ms ease;\n}'
+            '.sim-report .sim-conv-row {\n'
+            '    border: 0; background: transparent; transition: background 150ms ease;\n'
+            '}'
         ) in DASHBOARD_CSS
         assert (
-            '.sim-report table.sim-conv-table tbody tr.sim-conv-row:hover { background: var(--surface-sunken); }'
+            '.sim-report table.sim-conv-table tbody tr.sim-conv-row:hover '
+            '{ background: var(--surface-sunken); }'
         ) in DASHBOARD_CSS
         assert 'sim-tint-missed' not in DASHBOARD_CSS
 
@@ -823,14 +836,8 @@ class TestTranscriptFragmentRewrite:
         # leave the opposite margin at `auto` and center the bubble.
         # Margin shorthand carries the side-swap (auto) AND the vertical gap in the
         # bottom slot — a `margin: 0 X 0 auto` form would zero out margin-bottom.
-        assert (
-            '.sim-report .sim-msg-user, .sim-report .sim-msg-system { margin: 0 0 16px auto; flex-direction: row-reverse; }'
-            in DASHBOARD_CSS
-        )
-        assert (
-            '.sim-report .sim-msg-assistant, .sim-report .sim-msg-tool { margin: 0 auto 16px 0; flex-direction: row; }'
-            in DASHBOARD_CSS
-        )
+        assert '.sim-report .sim-msg-user, .sim-report .sim-msg-system { margin: 0 0 16px auto; flex-direction: row-reverse; }' in DASHBOARD_CSS
+        assert '.sim-report .sim-msg-assistant, .sim-report .sim-msg-tool { margin: 0 auto 16px 0; flex-direction: row; }' in DASHBOARD_CSS
 
     def test_backdrop_close_waits_for_drawer_exit_animation(self) -> None:
         source = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
@@ -839,10 +846,7 @@ class TestTranscriptFragmentRewrite:
         assert 'function closeDrawer()' in source
         assert "dialog.addEventListener('animationend', finishClose, { once: true });" in source
         assert 'sim-entity-dialog--closing' in source
-        assert (
-            '.sim-report .sim-entity-dialog--closing { animation: sim-drawer-out 160ms ease-in forwards; }'
-            in DASHBOARD_CSS
-        )
+        assert '.sim-report .sim-entity-dialog--closing { animation: sim-drawer-out 160ms ease-in forwards; }' in DASHBOARD_CSS
 
     def test_drawer_drill_pushes_browser_history(self) -> None:
         """Each persona/scenario/conversation drill is a real history entry so the
@@ -978,7 +982,9 @@ class TestFilteredConversationDrawerIndex:
         r = client.get(drawer_url)
         assert r.status_code == 200
         assert 'BOB-ONE' in r.text, (
-            f"Expected bob's conversation from the filtered drawer URL ({drawer_url!r}), got: {r.text!r}"
+            f"Expected bob's conversation from the filtered drawer URL "
+            f'({drawer_url!r}), got: '
+            f'{r.text!r}'
         )
         assert 'ALICE-ONE' not in r.text
         assert 'ALICE-TWO' not in r.text

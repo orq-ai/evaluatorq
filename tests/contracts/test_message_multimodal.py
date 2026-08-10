@@ -77,14 +77,14 @@ def test_to_chat_completion_renders_file_part() -> None:
 def test_orq_responses_target_passes_multipart_through(text_and_image: list[ContentPart]) -> None:
     """The Responses target serializes multi-part content to input content parts.
 
-    Note: this exercises the private ``_messages_to_input`` directly to assert the
-    serialized wire shape without a live call; it is coupled to that implementation
-    detail by design.
+    Note: this exercises the shared converter the target calls, asserting the
+    serialized wire shape without a live call; it is coupled to that
+    implementation detail by design.
     """
-    from evaluatorq.openresponses.target import OrqResponsesTarget
+    from evaluatorq.openresponses.input_items import messages_to_responses_input
 
     m = Message(role="user", content=text_and_image)
-    items = OrqResponsesTarget._messages_to_input([m])
+    items = messages_to_responses_input([m])
     assert items[0]["role"] == "user"
     parts = items[0]["content"]
     assert isinstance(parts, list)
