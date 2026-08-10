@@ -167,9 +167,16 @@ def _redteam_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
     errors = _as_int(summary.get('total_errors')) if summary else 0
     total = _as_int(summary.get('total_attacks')) if summary else 0
     # A run that evaluated nothing has no resistance to report (see
-    # zero_evaluated_attacks); legacy reports without the field keep their rate.
+    # zero_evaluated_attacks).
     if zero_evaluated_attacks(summary):
         resistance = None
+    if summary.get('evaluated_attacks') is None:
+        # Legacy summary: its stored rate may have been computed over a
+        # different denominator than the evaluated-only one the landing donut
+        # derives. Use the same classifier, so the row and the donut above it
+        # cannot show two different numbers for one run.
+        counts = _redteam_counts(data)
+        resistance = (counts.evaluated - counts.vulnerable) / counts.evaluated if counts.evaluated else None
     return RunRow(
         id=card.id,
         surface='redteam',
@@ -467,7 +474,12 @@ def _result_outcome(res: dict[str, object]) -> bool | None:
         return passed if isinstance(passed, bool) else None
     if 'evaluation' in res or res.get('error'):
         return None
-    return not res.get('vulnerable')
+    # Oldest schema: no evaluation object at all. A present `vulnerable` flag is
+    # the verdict; an absent one means "never evaluated", not "resisted" — the
+    # same optimistic bias guarded against above, one schema generation older.
+    if 'vulnerable' in res:
+        return not res.get('vulnerable')
+    return None
 
 
 def _result_usage(res: dict[str, object]) -> tuple[int, float]:
@@ -515,6 +527,10 @@ def _redteam_counts(data: dict[str, object]) -> _RedteamCounts:
             attack = attack if isinstance(attack, dict) else {}
             severity = str(attack.get('severity') or 'low').lower()
             by_severity[severity] = by_severity.get(severity, 0) + 1
+    if attacks and not tokens:
+        # Distinguishes "shape we couldn't read" from a genuinely costless run —
+        # _result_usage returns zeros for any unrecognised usage schema.
+        logger.debug('redteam counts: {} results but zero derivable token usage — unrecognised usage shape?', attacks)
     return _RedteamCounts(attacks, evaluated, vulnerable, errors, tokens, cost, by_severity)
 
 

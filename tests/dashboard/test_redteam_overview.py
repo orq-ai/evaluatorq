@@ -328,3 +328,47 @@ class TestZeroEvaluatedNoScore:
         # The score cell renders the no-score em dash, never the poisoned 1.00.
         assert '1.00' not in r.text
         assert '>\u2014<' in r.text
+
+
+class TestOutcomeClassification:
+    """The evaluation.passed rule on the overview page (declared change, RES-1202).
+
+    The pre-RES-1202 overview loop booked a result whose generation succeeded
+    but whose evaluation crashed (error=None, no boolean passed) as resistant.
+    The shared classifier drops it from the counts instead, matching
+    converters._is_evaluated. These tests pin the overview-page numbers under
+    the new rule.
+    """
+
+    def test_evaluation_crash_is_dropped_from_overview_counts(self, tmp_path: Path) -> None:
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        results = [
+            {**_attack(severity='low', vulnerable=False), 'evaluation': {'passed': True}},
+            {**_attack(severity='critical', vulnerable=True), 'evaluation': {'passed': False}},
+            # Judge crashed: no boolean verdict, no target error. Previously
+            # counted resistant; now excluded from evaluated entirely.
+            {**_attack(severity='high', vulnerable=False), 'evaluation': {'passed': None}},
+        ]
+        (rt / 'crash_20260101_000000.json').write_text(
+            json.dumps(_rt_payload('Judge crash', created='2026-01-01T00:00:00', results=results, cost=0.001))
+        )
+        ov = metrics.redteam_overview([rt])
+        assert ov.attacks_run == 3
+        assert ov.break_rate == pytest.approx(1 / 2)
+        assert ov.avg_robustness == pytest.approx(1 / 2)
+        assert ov.critical_findings == 1
+
+    def test_result_outcome_rules(self) -> None:
+        outcome = metrics._result_outcome
+        assert outcome({'evaluation': {'passed': True}}) is True
+        assert outcome({'evaluation': {'passed': False}}) is False
+        assert outcome({'evaluation': {'passed': None}}) is None
+        assert outcome({'evaluation': None, 'vulnerable': False}) is None
+        assert outcome({'error': 'boom', 'vulnerable': False}) is None
+        # Oldest schema: the vulnerable flag is the verdict when present...
+        assert outcome({'vulnerable': True}) is False
+        assert outcome({'vulnerable': False}) is True
+        # ...and its absence means unknown, not resisted.
+        assert outcome({}) is None
+        assert outcome({'attack': {'severity': 'low'}}) is None
