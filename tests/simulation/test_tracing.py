@@ -162,7 +162,7 @@ async def test_llm_span_responses_operation(span_collector: _CollectingExporter)
 
 
 @pytest.mark.asyncio
-async def test_record_token_usage_sets_genai_and_aliases(
+async def test_record_token_usage_sets_genai_attrs(
     span_collector: _CollectingExporter,
 ):
     from evaluatorq.common.tracing import record_token_usage
@@ -175,10 +175,6 @@ async def test_record_token_usage_sets_genai_and_aliases(
     assert a['gen_ai.usage.input_tokens'] == 10
     assert a['gen_ai.usage.output_tokens'] == 20
     assert a['gen_ai.usage.total_tokens'] == 30
-    # Platform aliases
-    assert a['prompt_tokens'] == 10
-    assert a['completion_tokens'] == 20
-    assert a['total_tokens'] == 30
 
 
 @pytest.mark.asyncio
@@ -1237,7 +1233,7 @@ async def test_target_agent_usage_aggregated_into_run_result(
     assert target_attrs['gen_ai.usage.total_tokens'] == 20
     assert target_attrs['gen_ai.usage.calls'] == 1
     assert target_attrs['gen_ai.usage.cache_read.input_tokens'] == 2
-    assert target_attrs['gen_ai.usage.completion_tokens_details.reasoning_tokens'] == 3
+    assert target_attrs['gen_ai.usage.reasoning.output_tokens'] == 3
 
 
 @pytest.mark.asyncio

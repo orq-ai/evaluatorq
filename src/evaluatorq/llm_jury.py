@@ -183,6 +183,9 @@ async def _run_single_judge(
         response_model=verdict_model,
         structured_output=structured_output,
         temperature=temperature,
+        # Cross-domain purpose tag (same key redteam/simulation use) so the
+        # platform can query every judge call in a run, not just walk the tree.
+        span_attributes={'orq.llm.purpose': 'judge'},
     )
     return _outcome_to_prediction(outcome=outcome)
 
