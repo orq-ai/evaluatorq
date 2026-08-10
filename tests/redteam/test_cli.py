@@ -505,15 +505,17 @@ class TestZeroEvaluationCoverageExits:
 
         assert result.exit_code == 0, result.output
 
-    def test_exits_0_when_partial_coverage(self):
-        """A partial evaluation failure still yields a verdict, so it is not a hard stop.
+    def test_exits_0_when_partial_coverage_and_no_floor_configured(self):
+        """Partial coverage with no recorded floor is a verdict, not a hard stop.
 
-        Whether a *partial* failure should also fail CI is an open policy question —
-        see the >50% pipeline warning in runner.py. This pins today's behaviour so a
-        future change to it is deliberate rather than incidental.
+        The floor is what decides this, and a report that never recorded one (a
+        legacy artifact, or ``min_evaluation_coverage=None``) has opted out of the
+        gate — see ``ReportSummary.coverage_below_minimum``. A run that *does* carry
+        a floor fails here instead; ``TestCoverageBelowMinimumExits`` covers that.
         """
         report = _make_mock_report()
         report.summary = ReportSummary(total_attacks=5, evaluated_attacks=1, unevaluated_attacks=4, resistance_rate=1.0)
+        assert report.summary.min_evaluation_coverage is None
 
         result, _ = _run_with_mocked_red_team(["run", "--target", "agent:test-agent", "--yes"], report=report)
 

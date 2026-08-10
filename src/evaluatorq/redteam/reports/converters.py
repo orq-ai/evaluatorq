@@ -104,9 +104,9 @@ def _extract_evaluation_error(raw_output: Any) -> RunError | None:
 def _scorer_error_to_run_error(scorer_error: str | None, *, vulnerable: bool | None) -> RunError | None:
     """Fallback for a judge failure that never reached ``raw_output``.
 
-    ``run_evaluations`` turns any exception out of the scorer into a bare
-    ``EvaluatorScore.error`` string with an empty score, so there is no structured
-    payload to lift — only this message. Restricted to unevaluated results: a
+    ``evaluatorq.processings.process_evaluator`` turns any exception out of the
+    scorer into a bare ``EvaluatorScore.error`` string with an empty score, so there
+    is no structured payload to lift — only this message. Restricted to unevaluated results: a
     scored attack whose evaluator also logged something is not an evaluation
     failure and must not be counted as one.
     """
@@ -406,6 +406,20 @@ def static_sample_to_result(
     # None (not False) when the attack was never evaluated — see RedTeamResult.vulnerable.
     vulnerable = None if evaluation is None or evaluation.passed is None else evaluation.passed is False
 
+    # ``vulnerable=None`` must always say why. A sample with no evaluation block at all
+    # carries no raw_output to lift a cause from, so name the absence itself — unless
+    # ``row.error`` already explains it, in which case the attack never ran and
+    # ``error`` is the right field; duplicating it into ``evaluation_error`` would
+    # claim the judge failed on a transcript that does not exist.
+    evaluation_error = _extract_evaluation_error(eval_dict.get('raw_output')) if evaluation else None
+    if evaluation_error is None and vulnerable is None and not row.error:
+        evaluation_error = RunError(
+            message='The datapoint produced no evaluation result.',
+            error_type='no_evaluation',
+            stage=PipelineStage.EVALUATION,
+            code='no_evaluation',
+        )
+
     agent = AgentInfo(key=agent_key, model=agent_model)
 
     # Target-generation cost (one inference) lives on execution, kept separate from
@@ -420,7 +434,7 @@ def static_sample_to_result(
         response=row.response,
         evaluation=evaluation,
         vulnerable=vulnerable,
-        evaluation_error=_extract_evaluation_error(eval_dict.get('raw_output')) if evaluation else None,
+        evaluation_error=evaluation_error,
         execution=ExecutionDetails(turns=1, max_turns=1, token_usage=execution_usage),
         error=row.error,
         error_type=_classify_error(row.error, existing_type=row.error_type),
@@ -522,9 +536,9 @@ def dynamic_evaluatorq_results_to_report(
                 # result, and these two are optional metadata that other scorers omit.
                 evaluation_usage = _normalize_token_usage(getattr(score, 'token_usage', None))
                 evaluation_raw = getattr(score, 'raw_output', None)
-                # An exception escaping the scorer is caught by run_evaluations into
-                # EvaluatorScore.error with an empty score and no raw_output, so this
-                # is the only place that cause survives. Without it a judge crash
+                # An exception escaping the scorer is caught by process_evaluator
+                # (evaluatorq/processings.py) into EvaluatorScore.error with an empty
+                # score and no raw_output, so this is the only place that cause survives. Without it a judge crash
                 # reaches the report as an unexplained inconclusive verdict.
                 scorer_error = getattr(evaluator_scores[0], 'error', None)
 
@@ -942,6 +956,7 @@ def compute_report_summary(
             vulnerability_name=get_vulnerability_name(vuln_enum),
             domain=vdef.domain.value if vdef else '',
             total_attacks=len(v_results),
+            evaluated_attacks=v_eval_total,
             vulnerabilities_found=v_vulns,
             resistance_rate=_verdict_rate(v_resistant, v_eval_total),
             strategies_used=list({r.attack.strategy_name for r in v_results if r.attack.strategy_name}),

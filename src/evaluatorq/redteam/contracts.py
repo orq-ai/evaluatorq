@@ -1430,6 +1430,11 @@ class VulnerabilitySummary(BaseModel):
     vulnerability_name: str
     domain: str
     total_attacks: int
+    evaluated_attacks: int = Field(
+        default=0,
+        description='Attacks that produced a verdict. Without this, a "passed" count can only be '
+        'derived as total - found, which reports every unevaluated attack as resisted.',
+    )
     vulnerabilities_found: int
     resistance_rate: float | None = Field(default=None, ge=0.0, le=1.0, description=_RATE_NONE_DOC)
     strategies_used: list[str] = Field(default_factory=list)

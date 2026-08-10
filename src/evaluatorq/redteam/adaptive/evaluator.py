@@ -317,9 +317,9 @@ class OWASPEvaluator:
         """Map a single JudgeOutcome to a result — every failure kind is structured.
 
         Infrastructure errors (API connection/status) used to re-raise on a
-        fail-loud policy, but nothing upstream honoured it: ``run_evaluations``
-        catches every exception into ``EvaluatorScore.error``, so the run kept
-        going *and* the cause was discarded. Returning a structured inconclusive
+        fail-loud policy, but nothing upstream honoured it:
+        ``evaluatorq.processings.process_evaluator`` catches every exception into
+        ``EvaluatorScore.error``, so the run kept going *and* the cause was discarded. Returning a structured inconclusive
         result instead keeps the diagnosis attached to the attack, and the
         run-level coverage gate (``min_evaluation_coverage``) is what now makes
         a judge outage fail the run.

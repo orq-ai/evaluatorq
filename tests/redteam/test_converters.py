@@ -20,6 +20,7 @@ from evaluatorq.redteam.contracts import (
     Framework,
     JobOutputPayload,
     Pipeline,
+    PipelineStage,
     RedTeamReport,
     RedTeamResult,
     ReportSummary,
@@ -989,6 +990,38 @@ class TestStaticSampleToResult:
         result = static_sample_to_result(sample, agent_key='my-agent')
         assert result.error == 'connection refused'
         assert result.error_type == 'network_error'
+
+    def test_missing_evaluation_gets_an_explicit_cause(self):
+        """``vulnerable=None`` must always say why — the field's docstring promises it.
+
+        A sample with no evaluation block carries no raw_output to lift a cause from,
+        so the absence itself is the diagnosis. Without this the row reaches the
+        report as an unexplained inconclusive verdict, which is the reading failure
+        this whole tri-state exists to prevent.
+        """
+        sample = self._base_sample()
+        del sample['evaluation_result']
+        result = static_sample_to_result(sample, agent_key='my-agent')
+
+        assert result.vulnerable is None
+        assert result.evaluation_error is not None
+        assert result.evaluation_error.code == 'no_evaluation'
+        assert result.evaluation_error.stage == PipelineStage.EVALUATION
+
+    def test_execution_error_is_not_reported_as_an_evaluation_failure(self):
+        """An attack that never ran reports through ``error``, not ``evaluation_error``.
+
+        Duplicating it would claim the judge failed on a transcript that does not
+        exist, and the two need different responses from whoever reads the report.
+        """
+        sample = self._base_sample()
+        del sample['evaluation_result']
+        sample['error'] = 'connection refused'
+        result = static_sample_to_result(sample, agent_key='my-agent')
+
+        assert result.vulnerable is None
+        assert result.error == 'connection refused'
+        assert result.evaluation_error is None
 
     def test_false_value_marks_vulnerable(self):
         sample = self._base_sample()

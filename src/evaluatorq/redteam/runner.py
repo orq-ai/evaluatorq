@@ -312,6 +312,46 @@ def _datapoint_breakdown(datapoints: list[Any]) -> dict[str, int]:
     }
 
 
+def _apply_coverage_policy(report: RedTeamReport, pipeline_config: LLMConfig | None) -> None:
+    """Stamp the coverage floor onto the report and warn when it is not met.
+
+    Every pipeline must go through here, not just the dynamic one. The floor is
+    what ``ReportSummary.coverage_below_minimum`` compares against, and that
+    property returns False when the floor is None — so a leg that forgets to
+    stamp does not merely lose a warning, it silently disables the CLI exit gate
+    for its whole mode. Static ran that way until this was extracted.
+
+    Stamping also records on the saved run *what it was judged against*, so a
+    report re-read months later still knows the policy, and every consumer (exit
+    code, warnings, dashboards) reads one value instead of each holding its own
+    idea of "enough".
+    """
+    summary = report.summary
+    summary.min_evaluation_coverage = pipeline_config.evaluator.min_evaluation_coverage if pipeline_config else None
+
+    total_attacks = summary.total_attacks
+    if summary.no_verdict:
+        report.pipeline_warnings.append(
+            f'NO VERDICT: 0/{total_attacks} attacks could be evaluated — the target was not tested. '
+            'Check evaluator model configuration, credentials, and any gateway guardrails rejecting '
+            'judge or target calls.'
+        )
+        logger.error(f'No verdict: 0/{total_attacks} attacks could be evaluated — the target was not tested.')
+    elif summary.coverage_below_minimum:
+        floor = summary.min_evaluation_coverage
+        report.pipeline_warnings.append(
+            f'Evaluation coverage below the configured minimum: '
+            f'{summary.evaluated_attacks}/{total_attacks} attacks scored '
+            f'({pct(summary.evaluation_coverage)} < {pct(floor)}). The rates below are '
+            'computed over that subset only. Check evaluator model configuration and credentials.'
+        )
+        logger.warning(
+            f'Evaluation coverage {pct(summary.evaluation_coverage)} is below the configured '
+            f'minimum {pct(floor)}: {summary.unevaluated_attacks}/{total_attacks} attacks returned '
+            'inconclusive results.'
+        )
+
+
 def _cap_datapoints_balanced(datapoints: list[Any], cap: int) -> list[Any]:
     """Cap datapoints using round-robin across vulnerabilities for balanced coverage.
 
@@ -2738,34 +2778,7 @@ async def _run_dynamic_or_hybrid(
                         f'Category {cat_key!r}: zero strategies selected — no applicable strategies found for this agent.'
                     )
 
-    # Stamp the coverage policy onto the report so the saved run records what it was
-    # judged against, and so every consumer (CLI exit code, warnings, dashboards) reads
-    # one value rather than each holding its own idea of "enough".
-    merged.summary.min_evaluation_coverage = (
-        pipeline_config.evaluator.min_evaluation_coverage if pipeline_config else None
-    )
-
-    total_attacks = merged.summary.total_attacks
-    unevaluated_attacks = merged.summary.unevaluated_attacks
-    if merged.summary.no_verdict:
-        merged.pipeline_warnings.append(
-            f'NO VERDICT: 0/{total_attacks} attacks could be evaluated — the target was not tested. '
-            'Check evaluator model configuration, credentials, and any gateway guardrails rejecting '
-            'judge or target calls.'
-        )
-        logger.error(f'No verdict: 0/{total_attacks} attacks could be evaluated — the target was not tested.')
-    elif merged.summary.coverage_below_minimum:
-        floor = merged.summary.min_evaluation_coverage
-        merged.pipeline_warnings.append(
-            f'Evaluation coverage below the configured minimum: '
-            f'{merged.summary.evaluated_attacks}/{total_attacks} attacks scored '
-            f'({pct(merged.summary.evaluation_coverage)} < {pct(floor)}). The rates below are '
-            'computed over that subset only. Check evaluator model configuration and credentials.'
-        )
-        logger.warning(
-            f'Evaluation coverage {pct(merged.summary.evaluation_coverage)} is below the configured '
-            f'minimum {pct(floor)}: {unevaluated_attacks}/{total_attacks} attacks returned inconclusive results.'
-        )
+    _apply_coverage_policy(merged, pipeline_config)
 
     await await_maybe(
         resolved_hooks.on_stage_end(
@@ -3133,6 +3146,8 @@ async def _run_static(
     merged.run_id = run_id
     if agent_contexts:
         merged.agent_contexts = agent_contexts
+    # Before the report is persisted below, so the saved JSON records the policy too.
+    _apply_coverage_policy(merged, pipeline_config)
     await await_maybe(
         resolved_hooks.on_stage_end(
             PipelineStage.REPORT_GENERATION,

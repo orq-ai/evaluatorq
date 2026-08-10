@@ -124,20 +124,29 @@ def print_report_summary(report: RedTeamReport, *, console: Console | None = Non
         vuln_table = Table(show_header=True, header_style='bold', box=box.ROUNDED)
         vuln_table.add_column('Vulnerability', style='white', min_width=35)
         vuln_table.add_column('Domain', style='white', min_width=18)
-        vuln_table.add_column('Tested', justify='right', width=8)
+        vuln_table.add_column('Tested', justify='right', width=12)
         vuln_table.add_column('Passed', justify='right', width=8)
         vuln_table.add_column('ASR', justify='right', width=11)
 
         for vuln_summary in sorted_vulns:
-            passed_count = vuln_summary.total_attacks - vuln_summary.vulnerabilities_found
+            # Passed is counted over *evaluated* attacks, never over tested ones: an
+            # attack with no verdict did not resist, and "total - found" would print
+            # a fully unevaluated vulnerability as having passed everything, in green.
+            evaluated = vuln_summary.evaluated_attacks
+            passed_count = evaluated - vuln_summary.vulnerabilities_found
             asr = None if vuln_summary.resistance_rate is None else 1 - vuln_summary.resistance_rate
+            tested_label = (
+                str(vuln_summary.total_attacks)
+                if evaluated == vuln_summary.total_attacks
+                else f'{evaluated} of {vuln_summary.total_attacks}'
+            )
             vuln_table.add_row(
                 _format_vulnerability_label(vuln_summary.vulnerability),
                 Text(vuln_summary.domain.replace('_', ' ').title(), style='white'),
-                Text(str(vuln_summary.total_attacks), style='cyan'),
+                Text(tested_label, style='cyan' if evaluated == vuln_summary.total_attacks else 'yellow'),
                 Text(
                     str(passed_count),
-                    style='green' if passed_count == vuln_summary.total_attacks else 'yellow',
+                    style='green' if evaluated and passed_count == vuln_summary.total_attacks else 'yellow',
                 ),
                 Text(
                     pct(asr),
