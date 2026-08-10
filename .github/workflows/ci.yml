@@ -33,6 +33,10 @@ jobs:
     name: Typecheck + test
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Only the 3.13 leg publishes coverage (see the two conditional steps below).
+    permissions:
+      contents: write
+      pull-requests: write
     strategy:
       fail-fast: false
       matrix:
@@ -55,7 +59,25 @@ jobs:
         run: uv run basedpyright
 
       - name: Test (unit only)
+        if: matrix.python-version != '3.13'
         run: uv run pytest -m 'not integration'
+
+      # Coverage instrumentation costs wall-clock, so only the canonical leg pays
+      # for it. The other legs run the same suite bare, above.
+      - name: Test (unit only, with coverage)
+        if: matrix.python-version == '3.13'
+        run: uv run pytest -m 'not integration' --cov --cov-report=term
+
+      # Posts a coverage comment on PRs and, on push to main, writes badge +
+      # report data to the `python-coverage-comment-action-data` branch. Uses the
+      # built-in GITHUB_TOKEN — no secret to configure. Fork PRs get a read-only
+      # token, so the comment is skipped there; the badge still updates on main.
+      - name: Coverage badge + PR comment
+        if: matrix.python-version == '3.13'
+        uses: py-cov-action/python-coverage-comment-action@v3
+        continue-on-error: true
+        with:
+          GITHUB_TOKEN: ${{ github.token }}
 
   examples:
     name: Examples (static)

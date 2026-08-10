@@ -89,6 +89,17 @@ jobs:
         with:
           password: ${{ secrets.PYPI_TOKEN }}
 
+      # Sync the released commits to Linear (scans commits for issue IDs and
+      # creates/updates the release there). Cosmetic like the notes below — never
+      # fail a run whose package already published.
+      - name: Sync release to Linear
+        if: steps.ver.outputs.released == 'true'
+        continue-on-error: true
+        uses: linear/linear-release-action@v0
+        with:
+          access_key: ${{ secrets.LINEAR_ACCESS_KEY }}
+          version: ${{ steps.ver.outputs.tag }}
+
       # Release notes are cosmetic — create them LAST and never let a notes hiccup
       # fail a run whose package already published (that half-release bit us before).
       - name: Create GitHub Release

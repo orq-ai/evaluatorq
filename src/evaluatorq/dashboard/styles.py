@@ -486,6 +486,8 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .run-score.good { color: var(--teal-600); }
 .run-score.warn { color: var(--orange-700); }
 .run-score.none { color: var(--text-faint); }
+/* Marks a score the dashboard re-derived; the Score tooltip names the recorded value. */
+.score-recalc { color: var(--text-faint); font-size: 11px; vertical-align: super; margin-left: 1px; }
 
 /* per-kind run-list screen: card-wrapped table with a header strip */
 .runs-screen { max-width: 1100px; }

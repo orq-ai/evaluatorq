@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
+from evaluatorq.dashboard import metrics
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.library import report_id, scan, sniff_kind
 from evaluatorq.dashboard.surfaces import ADAPTERS
@@ -605,9 +606,16 @@ def test_score_column_names_its_metric_per_surface(client: tuple[TestClient, str
     from evaluatorq.dashboard.view import _score_title
 
     c, _ = client
-    assert 'Decided rate' in _score_title('pairwise')
-    assert 'Resistance rate' in _score_title('redteam')
-    assert _score_title('unknown') == ''
+
+    def _row(surface: str) -> metrics.RunRow:
+        return metrics.RunRow(
+            id='r', surface=surface, name='n', when='2026-01-01 00:00', headline='', score=0.5,
+            status='finished', error=False,
+        )
+
+    assert 'Decided rate' in _score_title(_row('pairwise'))
+    assert 'Resistance rate' in _score_title(_row('redteam'))
+    assert _score_title(_row('unknown')) == ''
     assert 'Decided rate' in c.get('/?surface=pairwise').text
 
 
