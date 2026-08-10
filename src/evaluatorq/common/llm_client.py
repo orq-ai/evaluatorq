@@ -128,9 +128,14 @@ def resolve_llm_client(
             ``OPENAI_API_KEY`` left in the env must never silently capture them.
         max_retries: Client-side retry budget (number of *retries*, not attempts)
             for clients built here. The OpenAI SDK retries 408/409/429/5xx and
-            connection errors with ``Retry-After`` support — this is the single
-            client-side retry layer; callers must not add their own wrapper on
-            top. ``None`` keeps the SDK default (2). Ignored for an injected
+            connection errors with ``Retry-After`` support. A caller that passes
+            an explicit ``max_retries`` makes this the single client-side retry
+            layer and must not add its own wrapper on top; a caller that owns
+            retry itself must pass ``0`` so the layers cannot stack (see
+            ``OrqResponsesTarget``, which wraps its calls in ``with_retry``).
+            Legacy simulation paths that still wrap ``with_retry`` around an
+            SDK-default client predate this rule and are tracked to migrate.
+            ``None`` keeps the SDK default (2). Ignored for an injected
             ``config_client``, which is used exactly as the caller built it.
 
     Raises:

@@ -43,32 +43,6 @@ def _get_orq_server_url() -> str:
     return url.rstrip('/').removesuffix('/v3/router')
 
 
-def _orq_retry_config(retry_count: int, retry_on_codes: list[int] | None = None) -> Any:
-    """Client-level retry for the Orq SDK: 429/5xx + connection errors, Retry-After honored.
-
-    The Speakeasy-generated SDK bounds retries by elapsed time, not attempt
-    count, so ``retry_count`` gates on/off (0 disables) and the window is sized
-    to cover roughly that many backoff rounds (0.5s initial, doubling, 10s cap).
-    Returns None when disabled or the SDK is unavailable.
-    """
-    if retry_count <= 0 or _orq_cls is None:
-        return None
-    from orq_ai_sdk.utils.retries import BackoffStrategy, RetryConfig
-
-    backoff_window_ms = int(sum(min(500 * 2**i, 10_000) for i in range(retry_count)))
-    return RetryConfig(
-        strategy='backoff',
-        backoff=BackoffStrategy(
-            initial_interval=500,
-            max_interval=10_000,
-            exponent=2,
-            max_elapsed_time=backoff_window_ms,
-        ),
-        retry_connection_errors=True,
-        status_codes_override=[str(code) for code in retry_on_codes] if retry_on_codes else None,
-    )
-
-
 from evaluatorq.common.thread_context import pipeline_metadata_param, thread_body_param
 from evaluatorq.common.tracing import record_token_usage, set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentTarget, Message, content_to_text
@@ -87,6 +61,47 @@ from evaluatorq.redteam.contracts import (
     ToolInfo,
 )
 from evaluatorq.redteam.tracing import with_redteam_span
+
+
+def _orq_retry_config(
+    retry_count: int,
+    retry_on_codes: list[int] | None = None,
+    *,
+    timeout_ms: int | None = None,
+) -> Any:
+    """Client-level retry for the Orq SDK: the configured ``retry_on_codes``
+    (default 429/500/502/503/504, matching the SDK's own per-operation default)
+    plus connection errors, with ``Retry-After`` honored.
+
+    The Speakeasy-generated SDK bounds retries by *total wall clock from before
+    the first attempt* (``max_elapsed_time``), not by attempt count — request
+    duration counts against the window. So the window must budget for the
+    attempts themselves, not just the backoff sleeps: ``retry_count`` failed
+    attempts of up to ``timeout_ms`` each, plus the backoff rounds between them
+    (0.5s initial, doubling, 10s cap). A backoff-only window would let a single
+    slow failure (a 503 behind a slow upstream, a TCP timeout) exhaust the
+    budget on the first attempt and retry nothing.
+
+    ``retry_count=0`` disables. Returns None when disabled or the SDK is
+    unavailable.
+    """
+    if retry_count <= 0 or _orq_cls is None:
+        return None
+    from orq_ai_sdk.utils.retries import BackoffStrategy, RetryConfig
+
+    backoff_window_ms = int(sum(min(500 * 2**i, 10_000) for i in range(retry_count)))
+    attempt_budget_ms = retry_count * (timeout_ms or PIPELINE_CONFIG.target_agent_timeout_ms)
+    return RetryConfig(
+        strategy='backoff',
+        backoff=BackoffStrategy(
+            initial_interval=500,
+            max_interval=10_000,
+            exponent=2,
+            max_elapsed_time=backoff_window_ms + attempt_budget_ms,
+        ),
+        retry_connection_errors=True,
+        status_codes_override=[str(code) for code in retry_on_codes] if retry_on_codes else None,
+    )
 
 
 async def _orq_cleanup_memory(orq_client: Any, ctx: AgentContext, entity_ids: list[str]) -> None:
@@ -608,7 +623,7 @@ class ORQBackend(Backend):
                 api_key=_get_orq_api_key(),
                 server_url=_get_orq_server_url(),
                 timeout_ms=self._timeout_ms,
-                retry_config=_orq_retry_config(retry_count, retry_on_codes),
+                retry_config=_orq_retry_config(retry_count, retry_on_codes, timeout_ms=self._timeout_ms),
             )
 
     def create_target(self, agent_key: str) -> ORQAgentTarget:
@@ -639,6 +654,8 @@ def create_orq_agent_target(
             api_key=_get_orq_api_key(),
             server_url=_get_orq_server_url(),
             timeout_ms=timeout_ms,
-            retry_config=_orq_retry_config(PIPELINE_CONFIG.retry_count, PIPELINE_CONFIG.retry_on_codes),
+            retry_config=_orq_retry_config(
+                PIPELINE_CONFIG.retry_count, PIPELINE_CONFIG.retry_on_codes, timeout_ms=timeout_ms
+            ),
         )
     return ORQAgentTarget(agent_key=agent_key, orq_client=orq_client, timeout_ms=timeout_ms)

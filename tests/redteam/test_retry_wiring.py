@@ -71,12 +71,27 @@ def test_orq_sdk_retry_config_derived_from_pipeline_config() -> None:
     pytest.importorskip("orq_ai_sdk")
     from evaluatorq.redteam.backends.orq import _orq_retry_config
 
-    cfg = _orq_retry_config(3, [429, 500, 502, 503, 504])
+    cfg = _orq_retry_config(3, [429, 500, 502, 503, 504], timeout_ms=240_000)
     assert cfg is not None
     assert cfg.strategy == "backoff"
     assert cfg.retry_connection_errors is True
     assert cfg.status_codes_override == ["429", "500", "502", "503", "504"]
-    assert cfg.backoff.max_elapsed_time == 500 + 1000 + 2000
+    # Backoff rounds (0.5/1/2s) plus the attempt budget: Speakeasy's
+    # max_elapsed_time is total wall clock from before the first attempt, so
+    # the window must cover retry_count failed attempts of up to timeout_ms.
+    assert cfg.backoff.max_elapsed_time == (500 + 1000 + 2000) + 3 * 240_000
+
+
+def test_orq_retry_window_survives_a_slow_first_failure() -> None:
+    """A single failed attempt taking the full per-call timeout must leave the
+    elapsed-time budget with room to retry, or the config is inert for exactly
+    the slow-failure cases retry exists for."""
+    pytest.importorskip("orq_ai_sdk")
+    from evaluatorq.redteam.backends.orq import _orq_retry_config
+
+    timeout_ms = 240_000
+    cfg = _orq_retry_config(3, [429], timeout_ms=timeout_ms)
+    assert cfg.backoff.max_elapsed_time > timeout_ms
 
 
 def test_orq_sdk_retry_config_disabled_at_zero() -> None:
@@ -84,3 +99,20 @@ def test_orq_sdk_retry_config_disabled_at_zero() -> None:
     from evaluatorq.redteam.backends.orq import _orq_retry_config
 
     assert _orq_retry_config(0, [429]) is None
+
+
+def test_orq_responses_target_client_carries_no_sdk_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The target owns retry via with_retry, so its self-built client must have
+    max_retries=0 — otherwise the two layers stack to retry_attempts x SDK
+    attempts HTTP requests per call (the defect RES-832 removed)."""
+    monkeypatch.setenv("ORQ_API_KEY", "test-key")
+    from evaluatorq.openresponses.target import LLMCallConfig, OrqResponsesTarget
+
+    target = OrqResponsesTarget(LLMCallConfig(model="gpt-4o"))
+    assert target._client.max_retries == 0
+
+    # An injected client stays exactly as the caller built it.
+    from openai import AsyncOpenAI
+
+    injected = AsyncOpenAI(api_key="user-key", max_retries=5)
+    assert OrqResponsesTarget(LLMCallConfig(model="gpt-4o"), client=injected)._client.max_retries == 5
