@@ -208,6 +208,7 @@ dependencies = [
   "loguru>=0.6.0",
   "typer>=0.12.0",
   "openai>=1.92.0,<3.0.0",
+  "orq-ai-sdk>=4.12",
 ]
 
   [project.license]
