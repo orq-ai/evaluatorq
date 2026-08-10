@@ -54,22 +54,29 @@ import asyncio
 from evaluatorq import DataPoint, evaluatorq, job, string_contains_evaluator
 
 
-@job("uppercase-converter")
-async def uppercase_job(data: DataPoint, _row: int) -> str:
-    return str(data.inputs.get("text", "")).upper()
+async def support_agent(question: str) -> str:
+    """Your agent. Swap the body for a model call, a framework agent, an HTTP request."""
+    if "refund" in question.lower():
+        return "Sure — you can request a refund within 30 days of delivery."
+    return "Our support team is happy to help with that."
+
+
+@job("support-agent")
+async def support_job(data: DataPoint, _row: int) -> str:
+    return await support_agent(str(data.inputs["question"]))
 
 
 async def main():
     data = [
-        DataPoint(inputs={"text": "hello world"}, expected_output="HELLO"),
-        DataPoint(inputs={"text": "python is great"}, expected_output="PYTHON"),
+        DataPoint(inputs={"question": "How do I get a refund?"}, expected_output="30 days"),
+        DataPoint(inputs={"question": "When will my order ship?"}, expected_output="2 business days"),
     ]
     await evaluatorq(
-        "simple-local-eval",
+        "support-agent-eval",
         data=data,
-        jobs=[uppercase_job],
+        jobs=[support_job],
         evaluators=[string_contains_evaluator()],
-        parallelism=3,
+        parallelism=2,
     )
 
 
@@ -80,10 +87,11 @@ asyncio.run(main())
 uv run my_eval.py
 ```
 
-<img src="docs/assets/readme-eval-terminal.svg" alt="Terminal output: summary table and per-evaluator scores" width="720">
+<img src="docs/assets/readme-eval-terminal.svg" alt="Terminal output: summary table and a string-contains score of 0.50 for the support-agent job" width="720">
 
-Swap `uppercase_job` for your own agent call and you have a real evaluation.
-When an evaluator returns `pass_=False` the process exits non-zero, so the same
+The agent answers the refund question and misses the shipping one — hence
+`0.50`. Point `support_agent` at your real agent and the loop is unchanged. Any
+evaluator that returns `pass_=False` exits the process non-zero, so the same
 script gates CI.
 
 → [Getting Started](https://orq-ai.github.io/evaluatorq/guides/getting-started/) ·

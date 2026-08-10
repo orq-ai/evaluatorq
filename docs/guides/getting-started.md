@@ -46,21 +46,28 @@ import asyncio
 from evaluatorq import DataPoint, evaluatorq, job, string_contains_evaluator
 
 
-@job("uppercase-converter")
-async def uppercase_job(data: DataPoint, _row: int) -> str:
-    return str(data.inputs.get("text", "")).upper()
+async def support_agent(question: str) -> str:
+    """Stand-in for your agent — replace the body with a model call."""
+    if "refund" in question.lower():
+        return "Sure — you can request a refund within 30 days of delivery."
+    return "Our support team is happy to help with that."
+
+
+@job("support-agent")
+async def support_job(data: DataPoint, _row: int) -> str:
+    return await support_agent(str(data.inputs["question"]))
 
 
 async def run():
     data = [
-        DataPoint(inputs={"text": "hello world"}, expected_output="HELLO"),
-        DataPoint(inputs={"text": "python is great"}, expected_output="PYTHON"),
-        DataPoint(inputs={"text": "evaluatorq rocks"}, expected_output="EVALUATORQ"),
+        DataPoint(inputs={"question": "How do I get a refund?"}, expected_output="30 days"),
+        DataPoint(inputs={"question": "When will my order ship?"}, expected_output="2 business days"),
+        DataPoint(inputs={"question": "Is my warranty still valid?"}, expected_output="12 months"),
     ]
     return await evaluatorq(
-        "simple-local-eval",
+        "support-agent-eval",
         data=data,
-        jobs=[uppercase_job],
+        jobs=[support_job],
         evaluators=[string_contains_evaluator()],
         parallelism=3,
         print_results=True,
@@ -74,13 +81,15 @@ if __name__ == "__main__":
 Run it:
 
 ```bash
-uv run simple_local_eval.py
+uv run support_agent_eval.py
 ```
 
-`print_results=True` renders a pass/fail table in the terminal. In this
-example, `string_contains_evaluator()` checks whether the job output contains
-the `expected_output`, so `HELLO WORLD` satisfies an expected output of `HELLO`.
-Wire that pass/fail signal into CI to gate on quality regressions.
+`print_results=True` renders a pass/fail table in the terminal.
+`string_contains_evaluator()` checks whether the job output contains the
+`expected_output`, so the refund answer scores and the other two do not — the
+stand-in agent only knows about refunds. Replace `support_agent` with your own
+model or agent call and wire that pass/fail signal into CI to gate on quality
+regressions.
 
 ## Where to next
 
