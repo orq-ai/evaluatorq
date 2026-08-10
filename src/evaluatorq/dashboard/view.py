@@ -85,9 +85,21 @@ _SCORE_TITLES: dict[str, str] = {
 }
 
 
-def _score_title(surface: str) -> str:
-    title = _SCORE_TITLES.get(surface)
-    return f' title="{esc(title)}"' if title else ''
+def _score_title(row: RunRow) -> str:
+    """Tooltip for the Score cell: what the metric is, then what it was measured over."""
+    parts = [t] if (t := _SCORE_TITLES.get(row.surface)) else []
+    if row.surface == 'redteam' and row.attacks:
+        # The headline counts every attack attempted; the rate is over the ones
+        # that produced a verdict. Naming both stops the two reading as one.
+        parts.append(f'{row.evaluated} of {row.attacks} attacks evaluated')
+    if row.stored_score is not None:
+        parts.append(f'recalculated by the dashboard; the report for this run records {row.stored_score:.2f}')
+    return f' title="{esc(" · ".join(parts))}"' if parts else ''
+
+
+def _score_marker(row: RunRow) -> str:
+    """Marks a score the dashboard re-derived rather than read from the report."""
+    return '<span class="score-recalc" aria-hidden="true">*</span>' if row.stored_score is not None else ''
 
 
 def _kind_badge(surface: str) -> str:
@@ -120,7 +132,7 @@ def _run_row(row: RunRow, *, show_badge: bool = True) -> str:
         f'<span class="run-name-line"><span class="run-name">{esc(row.name)}</span>{badge}{err}</span>'
         f'<span class="run-meta">{esc(row.headline)} · {esc(row.when)}</span>'
         f'</span>'
-        f'<span class="run-score {_score_cls(row.score)}"{_score_title(row.surface)}>{_fmt_score(row.score)}</span>'
+        f'<span class="run-score {_score_cls(row.score)}"{_score_title(row)}>{_fmt_score(row.score)}{_score_marker(row)}</span>'
         f'{_status_badge(row.status)}'
         f'</a>'
     )
@@ -173,7 +185,7 @@ def _recent_runs_table(rows: list[RunRow]) -> str:
             f'<span class="rr-job">{esc(r.name)}{err}</span>'
             f'<span class="rr-meta">{esc(r.headline)}</span>'
             f'<span class="rr-meta">{esc(r.when)}</span>'
-            f'<span class="run-score {_score_cls(r.score)}"{_score_title(r.surface)}>{_fmt_score(r.score)}</span>'
+            f'<span class="run-score {_score_cls(r.score)}"{_score_title(r)}>{_fmt_score(r.score)}{_score_marker(r)}</span>'
             f'{status_badge(label, status)}'
             f'</a>'
         )
@@ -275,7 +287,15 @@ def landing_body(data: Landing) -> str:
         + '</div>'
     )
 
-    severity_colors = ['var(--red-600)', 'var(--orange-500)', 'var(--amber-600)', 'var(--green-600)']
+    # Keyed by severity, not by position: zero-count buckets are dropped from the
+    # rows, so a positional palette would paint whatever survives first red.
+    # Anything off the scale (see metrics.UNKNOWN_SEVERITY) stays neutral.
+    severity_palette = {
+        'critical': 'var(--red-600)',
+        'high': 'var(--orange-500)',
+        'medium': 'var(--amber-600)',
+        'low': 'var(--green-600)',
+    }
 
     # Derived from the kinds actually present, so the subtitle cannot claim a
     # surface the panel is not showing (or omit one it is).
@@ -283,7 +303,8 @@ def landing_body(data: Landing) -> str:
     by_kind_panel = _panel('Runs by type', by_kind_sub, _bars(data.by_kind, _kind_colors(data.by_kind)))
 
     sev_rows = [(s.title(), n) for s, n in data.severity]
-    sev_inner = _bars(sev_rows, severity_colors) if sev_rows else '<p class="rt-panel-loading">No findings.</p>'
+    sev_colors = [severity_palette.get(s, 'var(--text-faint)') for s, _ in data.severity]
+    sev_inner = _bars(sev_rows, sev_colors) if sev_rows else '<p class="rt-panel-loading">No findings.</p>'
     severity_panel = _panel('Findings by severity', 'Vulnerabilities found', sev_inner)
     # Spend by job type — real dollars (cost_usd recorded upstream).
     spend_inner = (
