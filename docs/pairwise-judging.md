@@ -200,6 +200,17 @@ calls itself, so you can drive the swap-and-reconcile logic with your own judge.
 Most callers want `llm_jury_pairwise()`; reach for `run_pairwise()` when you are
 plugging in a non-LLM judge or testing the reconciliation directly.
 
+All three live in `evaluatorq.pairwise` — not `evaluatorq.pairwise_run`, which
+holds the run-persistence helpers used above:
+
+```python
+from evaluatorq.pairwise import pairwise_consensus, reconcile_pair, run_pairwise
+```
+
+`run_pairwise()` is also re-exported at the top level as `evaluatorq.run_pairwise`;
+`reconcile_pair()` and `pairwise_consensus()` are not. `run_jury()` is internal to
+`evaluatorq.common.jury` and is not part of the public top-level API.
+
 Both `run_pairwise()` and the shared `run_jury()` accept `max_concurrency` as an
 int or an existing `asyncio.Semaphore`; pass the same semaphore to several runs
 to bound their combined fan-out with one budget.

@@ -92,6 +92,22 @@ def content_to_text(content: str | list[ContentPart] | None) -> str:
     return ''.join(out)
 
 
+def tool_result_to_text(result: object) -> str:
+    """Render a tool's return value for ``ToolCallOutputItem.result``.
+
+    Tools routinely return structured data (``{"temp": 12}``), and ``result``
+    has to be text because it ends up as a tool ``Message.content``. ``str()``
+    would give the Python repr — single-quoted, ``None``/``True`` instead of
+    ``null``/``true`` — which no downstream reader can parse back, so the data
+    is there but unusable. JSON keeps it readable by both a model and a parser.
+    """
+    if isinstance(result, str):
+        return result
+    # default=str: a value JSON cannot encode degrades to its repr rather than
+    # failing the whole response over one odd tool return.
+    return json.dumps(result, default=str)
+
+
 if sys.version_info >= (3, 11):
     from enum import StrEnum
 else:
@@ -352,7 +368,22 @@ def _usage_first_float(usage: Any, keys: tuple[str, ...]) -> float | None:
     return None
 
 
-class TokenUsage(BaseModel):
+def _clamped_cost(usage: Any, keys: tuple[str, ...]) -> float | None:
+    """First cost value across ``keys``, clamped at 0.
+
+    A provider may report a negative cost (credit/adjustment), which would
+    otherwise trip the ge=0 field constraint and crash the whole extraction path
+    for an otherwise-valid billed call. Log it so a genuine provider/accounting
+    bug is not silently rewritten to $0.
+    """
+    raw = _usage_first_float(usage, keys)
+    if raw is not None and raw < 0:
+        logger.warning('Usage.extract: provider reported negative cost {!r} for {}; clamping to 0.0', raw, keys[0])
+        return 0.0
+    return raw
+
+
+class Usage(BaseModel):
     """Token usage and cost for an LLM call or aggregation of calls.
 
     Field naming follows the OpenTelemetry GenAI semconv / OpenResponses standard
@@ -363,9 +394,14 @@ class TokenUsage(BaseModel):
     reasoning ≤ output). ``total_tokens`` is stored as provided by the upstream
     provider and never overridden.
 
-    Back-compat: the legacy ``prompt_tokens``/``completion_tokens`` names are
-    accepted on construction and exposed as read-only properties so call sites
-    that have not migrated keep working.
+    Cost fields mirror the Orq Responses v3 usage shape (``input_cost``/
+    ``output_cost``/``total_cost``, USD). ``None`` means the provider did not
+    report that component — never fabricated as 0.
+
+    Back-compat: the legacy ``prompt_tokens``/``completion_tokens``/``cost_usd``
+    names are accepted on construction and exposed as read-only properties so
+    call sites that have not migrated keep working. ``TokenUsage`` remains as a
+    deprecated alias for this class.
     """
 
     model_config = ConfigDict(frozen=True, populate_by_name=True)
@@ -384,11 +420,42 @@ class TokenUsage(BaseModel):
     )
     total_tokens: int = Field(default=0, ge=0, description='Total tokens as reported by the provider')
     cached_tokens: int = Field(default=0, ge=0, description='Cached input tokens (subset of input_tokens)')
+    cache_creation_tokens: int = Field(
+        default=0,
+        ge=0,
+        description='Cache-write input tokens (subset of input_tokens for OpenAI-shaped payloads; reported separately by Anthropic)',
+    )
+    cache_creation_1h_tokens: int = Field(
+        default=0, ge=0, description='Cache-write tokens at the 1h TTL tier (subset of cache_creation_tokens)'
+    )
+    cache_creation_5m_tokens: int = Field(
+        default=0, ge=0, description='Cache-write tokens at the 5m TTL tier (subset of cache_creation_tokens)'
+    )
     reasoning_tokens: int = Field(default=0, ge=0, description='Reasoning output tokens (subset of output_tokens)')
-    cost_usd: float | None = Field(
-        default=None, ge=0, description='Cost in USD when the provider reports it, else None'
+    input_cost: float | None = Field(
+        default=None,
+        ge=0,
+        validation_alias=AliasChoices('input_cost', 'prompt_cost'),
+        description='Input cost in USD when the provider reports it, else None',
+    )
+    output_cost: float | None = Field(
+        default=None,
+        ge=0,
+        validation_alias=AliasChoices('output_cost', 'completion_cost'),
+        description='Output cost in USD when the provider reports it, else None',
+    )
+    total_cost: float | None = Field(
+        default=None,
+        ge=0,
+        validation_alias=AliasChoices('total_cost', 'cost_usd', 'cost'),
+        description='Total cost in USD when the provider reports it, else None',
     )
     calls: int = Field(default=0, ge=0, description='Number of LLM API calls')
+    priced_calls: int = Field(
+        default=0,
+        ge=0,
+        description='How many of `calls` reported a cost. Below `calls` means the cost fields are a lower bound.',
+    )
 
     if TYPE_CHECKING:
         # The legacy ``prompt_tokens``/``completion_tokens`` names are accepted at
@@ -404,9 +471,18 @@ class TokenUsage(BaseModel):
             completion_tokens: int = ...,
             total_tokens: int = ...,
             cached_tokens: int = ...,
+            cache_creation_tokens: int = ...,
+            cache_creation_1h_tokens: int = ...,
+            cache_creation_5m_tokens: int = ...,
             reasoning_tokens: int = ...,
+            input_cost: float | None = ...,
+            prompt_cost: float | None = ...,
+            output_cost: float | None = ...,
+            completion_cost: float | None = ...,
+            total_cost: float | None = ...,
             cost_usd: float | None = ...,
             calls: int = ...,
+            priced_calls: int = ...,
         ) -> None: ...
 
     @property
@@ -419,10 +495,42 @@ class TokenUsage(BaseModel):
         """Deprecated alias for :attr:`output_tokens`."""
         return self.output_tokens
 
+    @property
+    def cost_usd(self) -> float | None:
+        """Deprecated alias for :attr:`total_cost`."""
+        return self.total_cost
+
+    @property
+    def cost_is_partial(self) -> bool:
+        """True when a cost is known but some calls in this aggregate had none.
+
+        The cost fields are then a *lower bound*, not a total — ``_combine_cost``
+        adds a known cost to an unknown one by treating the unknown as 0.0, so the
+        result looks authoritative but under-counts. Render "from N of M calls"
+        next to any cost when this is set.
+
+        ``priced_calls == 0`` alongside a known cost cannot happen for a freshly
+        built aggregate (``extract`` prices all-or-nothing, ``__add__`` sums), so it
+        only occurs in reports saved before this field existed — treated as "not
+        tracked" rather than "nothing was priced", so old reports stay unannotated.
+        """
+        return self.total_cost is not None and 0 < self.priced_calls < self.calls
+
+    def with_calls(self, calls: int) -> Usage:
+        """Stamp the call count, keeping :attr:`priced_calls` consistent.
+
+        ``from_openresponses`` parses with ``calls=0`` and leaves the real count to
+        the caller that knows the call was billed. A bare
+        ``model_copy(update={'calls': 1})`` would leave ``priced_calls`` at 0, which
+        :attr:`cost_is_partial` reads as legacy untracked data — use this instead.
+        """
+        return self.model_copy(update={'calls': calls, 'priced_calls': calls if self.total_cost is not None else 0})
+
     @model_serializer(mode='wrap')
     def _serialize(self, handler: Any) -> dict[str, Any]:
-        """Emit the legacy ``prompt_tokens``/``completion_tokens`` keys alongside the
-        standard names so dict/JSON consumers that have not migrated keep working.
+        """Emit the legacy ``prompt_tokens``/``completion_tokens``/``cost_usd`` keys
+        alongside the standard names so dict/JSON consumers that have not migrated
+        keep working.
 
         Note: the legacy aliases are injected unconditionally, so ``model_dump`` with
         ``include=``/``exclude=`` does not filter them out — field-level filtering is
@@ -430,11 +538,12 @@ class TokenUsage(BaseModel):
         data = handler(self)
         data['prompt_tokens'] = self.input_tokens
         data['completion_tokens'] = self.output_tokens
+        data['cost_usd'] = self.total_cost
         return data
 
     @classmethod
-    def extract(cls, usage: Any, *, calls: int = 1) -> TokenUsage | None:
-        """Map any provider usage shape (object or dict) into a TokenUsage.
+    def extract(cls, usage: Any, *, calls: int = 1) -> Usage | None:
+        """Map any provider usage shape (object or dict) into a Usage.
 
         Handles chat-completions (``prompt``/``completion_tokens`` + ``*_details``),
         responses (``input``/``output_tokens`` + ``*_tokens_details``), vercel
@@ -454,95 +563,150 @@ class TokenUsage(BaseModel):
         # Provider total is trusted only when > 0; otherwise fall back to input+output.
         reported_total = _usage_first_int(usage, ('total_tokens', 'totalTokens', 'total'))
         total = reported_total if reported_total > 0 else inp + out
+        # Anthropic reports cache reads as a flat top-level `cache_read_input_tokens`
+        # (anthropic.types.Usage), not nested in a details object like Orq/OpenAI.
         cached = _usage_detail_int(
             usage,
             ('input_tokens_details', 'prompt_tokens_details', 'input_token_details'),
             ('cached_tokens', 'cache_read'),
+        ) or _usage_first_int(usage, ('cache_read_input_tokens',))
+        # Anthropic prices a 1h cache write above a 5m one, so the tier split is
+        # billing-relevant even though Orq folds both into the flat input_cost.
+        # Orq nests the tiers under input_tokens_details; Anthropic puts them in a
+        # `cache_creation` object under its own `ephemeral_*` names
+        # (anthropic.types.CacheCreation).
+        cache_creation_1h = _usage_detail_int(
+            usage,
+            ('input_tokens_details', 'prompt_tokens_details', 'input_token_details', 'cache_creation'),
+            ('cache_creation_1h_tokens', 'ephemeral_1h_input_tokens'),
+        ) or _usage_first_int(usage, ('cache_creation_1h_tokens',))
+        cache_creation_5m = _usage_detail_int(
+            usage,
+            ('input_tokens_details', 'prompt_tokens_details', 'input_token_details', 'cache_creation'),
+            ('cache_creation_5m_tokens', 'ephemeral_5m_input_tokens'),
+        ) or _usage_first_int(usage, ('cache_creation_5m_tokens',))
+        # Both Anthropic and Orq v3 do report a pre-summed total, so the tier sum is
+        # only a last-resort fallback for a payload that carries the split alone —
+        # without it those cache-write tokens would vanish from cache_creation_tokens.
+        cache_creation = (
+            _usage_detail_int(
+                usage,
+                ('input_tokens_details', 'prompt_tokens_details', 'input_token_details'),
+                ('cache_creation_tokens', 'cache_creation_input_tokens'),
+            )
+            or _usage_first_int(usage, ('cache_creation_input_tokens',))
+            or cache_creation_1h + cache_creation_5m
         )
         reasoning = _usage_detail_int(
             usage,
             ('output_tokens_details', 'completion_tokens_details', 'output_token_details'),
             ('reasoning_tokens', 'reasoning'),
         )
-        # Clamp at 0: a provider may report a negative cost (credit/adjustment),
-        # which would otherwise trip the cost_usd ge=0 constraint and crash the
-        # whole extraction path for an otherwise-valid billed call. Log it so a
-        # genuine provider/accounting bug is not silently rewritten to $0.
-        cost_raw = _usage_first_float(usage, ('cost_usd', 'cost', 'total_cost'))
-        if cost_raw is not None and cost_raw < 0:
-            logger.warning('TokenUsage.extract: provider reported negative cost {!r}; clamping to 0.0', cost_raw)
-        cost = max(cost_raw, 0.0) if cost_raw is not None else None
+        input_cost = _clamped_cost(usage, ('input_cost', 'prompt_cost'))
+        output_cost = _clamped_cost(usage, ('output_cost', 'completion_cost'))
+        cost = _clamped_cost(usage, ('total_cost', 'cost_usd', 'cost'))
+        if cost is None and (input_cost is not None or output_cost is not None):
+            cost = (input_cost or 0.0) + (output_cost or 0.0)
         # A present-but-empty/unparseable payload yields no signal: don't fabricate a
         # billed-zero record. A genuine zero-token call is kept only if it carries
         # some signal — cached tokens or a cost (e.g. a cached-only / minimum charge).
         if total <= 0 and cached <= 0 and cost is None:
             return None
         # Honour a calls count already carried by the payload (e.g. an aggregated
-        # TokenUsage dump); fall back to the per-call default otherwise.
+        # Usage dump); fall back to the per-call default otherwise.
         raw_calls = _usage_get(usage, 'calls')
         resolved_calls = (
             int(raw_calls) if isinstance(raw_calls, (int, float)) and not isinstance(raw_calls, bool) else calls
+        )
+        # Same deal for priced_calls: an aggregated dump carries its own count,
+        # a raw provider payload prices all-or-nothing on whether cost showed up.
+        raw_priced = _usage_get(usage, 'priced_calls')
+        resolved_priced = (
+            int(raw_priced)
+            if isinstance(raw_priced, (int, float)) and not isinstance(raw_priced, bool)
+            else (resolved_calls if cost is not None else 0)
         )
         return cls(
             input_tokens=inp,
             output_tokens=out,
             total_tokens=total,
             cached_tokens=cached,
+            cache_creation_tokens=cache_creation,
+            cache_creation_1h_tokens=cache_creation_1h,
+            cache_creation_5m_tokens=cache_creation_5m,
             reasoning_tokens=reasoning,
-            cost_usd=cost,
+            input_cost=input_cost,
+            output_cost=output_cost,
+            total_cost=cost,
             calls=resolved_calls,
+            priced_calls=min(resolved_priced, resolved_calls),
         )
 
     @classmethod
-    def from_completion(cls, response: Any) -> TokenUsage | None:
+    def from_completion(cls, response: Any) -> Usage | None:
         """Extract token usage from an OpenAI-compatible completion response."""
         return cls.extract(getattr(response, 'usage', None), calls=1)
 
-    def __add__(self, other: TokenUsage | None) -> TokenUsage:
+    @staticmethod
+    def _combine_cost(a: float | None, b: float | None, *, sign: int = 1) -> float | None:
+        """Cost stays "unknown" (None) only when BOTH sides are unknown; if either
+        side carries a known cost, treat the missing side as 0.0 rather than
+        poisoning the result to None (which would discard a real known cost on the
+        first turn a cost-bearing provider appears)."""
+        if a is None and b is None:
+            return None
+        return max((a or 0.0) + sign * (b or 0.0), 0.0)
+
+    def __add__(self, other: Usage | None) -> Usage:
         if other is None:
             return self.model_copy()
-        cost = self.cost_usd if other.cost_usd is None else (self.cost_usd or 0.0) + other.cost_usd
-        return TokenUsage(
+        return Usage(
             input_tokens=self.input_tokens + other.input_tokens,
             output_tokens=self.output_tokens + other.output_tokens,
             total_tokens=self.total_tokens + other.total_tokens,
             cached_tokens=self.cached_tokens + other.cached_tokens,
+            cache_creation_tokens=self.cache_creation_tokens + other.cache_creation_tokens,
+            cache_creation_1h_tokens=self.cache_creation_1h_tokens + other.cache_creation_1h_tokens,
+            cache_creation_5m_tokens=self.cache_creation_5m_tokens + other.cache_creation_5m_tokens,
             reasoning_tokens=self.reasoning_tokens + other.reasoning_tokens,
-            cost_usd=cost,
+            input_cost=self._combine_cost(self.input_cost, other.input_cost),
+            output_cost=self._combine_cost(self.output_cost, other.output_cost),
+            total_cost=self._combine_cost(self.total_cost, other.total_cost),
             calls=self.calls + other.calls,
+            priced_calls=self.priced_calls + other.priced_calls,
         )
 
-    def __radd__(self, other: object) -> TokenUsage:
+    def __radd__(self, other: object) -> Usage:
         """Support sum() which starts with integer 0, and reflected addition."""
         if isinstance(other, int) and other == 0:
             return self.model_copy()
-        if isinstance(other, TokenUsage):
+        if isinstance(other, Usage):
             return other.__add__(self)
         return NotImplemented
 
-    def __sub__(self, other: TokenUsage | None) -> TokenUsage:
+    def __sub__(self, other: Usage | None) -> Usage:
         """Component-wise difference, clamped at 0 — used for per-turn deltas."""
         if other is None:
             return self.model_copy()
-        # Cost stays "unknown" (None) only when BOTH sides are unknown; if either
-        # side carries a known cost, treat the missing side as 0.0 rather than
-        # poisoning the delta to None (which would discard a real known cost on the
-        # first turn a cost-bearing provider appears). Mirrors __add__'s asymmetric
-        # "known + None = known" handling.
-        cost = (
-            None
-            if self.cost_usd is None and other.cost_usd is None
-            else max((self.cost_usd or 0.0) - (other.cost_usd or 0.0), 0.0)
-        )
-        return TokenUsage(
+        return Usage(
             input_tokens=max(self.input_tokens - other.input_tokens, 0),
             output_tokens=max(self.output_tokens - other.output_tokens, 0),
             total_tokens=max(self.total_tokens - other.total_tokens, 0),
             cached_tokens=max(self.cached_tokens - other.cached_tokens, 0),
+            cache_creation_tokens=max(self.cache_creation_tokens - other.cache_creation_tokens, 0),
+            cache_creation_1h_tokens=max(self.cache_creation_1h_tokens - other.cache_creation_1h_tokens, 0),
+            cache_creation_5m_tokens=max(self.cache_creation_5m_tokens - other.cache_creation_5m_tokens, 0),
             reasoning_tokens=max(self.reasoning_tokens - other.reasoning_tokens, 0),
-            cost_usd=cost,
+            input_cost=self._combine_cost(self.input_cost, other.input_cost, sign=-1),
+            output_cost=self._combine_cost(self.output_cost, other.output_cost, sign=-1),
+            total_cost=self._combine_cost(self.total_cost, other.total_cost, sign=-1),
             calls=max(self.calls - other.calls, 0),
+            priced_calls=max(self.priced_calls - other.priced_calls, 0),
         )
+
+
+# Deprecated alias — the class gained cost fields, so the name widened to Usage.
+TokenUsage = Usage
 
 
 # ---------------------------------------------------------------------------
@@ -806,16 +970,21 @@ class AgentResponse(BaseModel):
         for item in _gf(response, 'output') or []:
             item_type = _gf(item, 'type')
             if item_type == 'message':
-                items.extend(
-                    TextOutputItem(
-                        type='output_text',
-                        text=_gf(part, 'text'),
-                        annotations=[],
-                        logprobs=[],
-                    )
-                    for part in _gf(item, 'content') or []
-                    if _gf(part, 'type') == 'output_text' and _gf(part, 'text')
-                )
+                for part in _gf(item, 'content') or []:
+                    part_type = _gf(part, 'type')
+                    # A message part is 'output_text' or 'refusal'. Keeping only
+                    # the former loses the refusal entirely, and an item with
+                    # nothing but a refusal then parses to empty output — which
+                    # callers report as a failed call. A refusal is a real
+                    # answer (and for red teaming, the *resistant* outcome), so
+                    # it is carried as text rather than discarded.
+                    text = _gf(part, 'text') if part_type == 'output_text' else _gf(part, 'refusal')
+                    if part_type in ('output_text', 'refusal') and text:
+                        items.append(TextOutputItem(type='output_text', text=text, annotations=[], logprobs=[]))
+                    elif part_type not in ('output_text', 'refusal'):
+                        logger.warning(
+                            'AgentResponse.from_openresponses: skipping unknown message part type={!r}', part_type
+                        )
             # 'function_call' is the standard Responses shape; the Orq router
             # instead types agent tool calls as 'orq:<tool_name>' (e.g.
             # 'orq:query_knowledge_base'). Treat both as tool calls so the
@@ -833,7 +1002,7 @@ class AgentResponse(BaseModel):
                         name=str(name),
                         call_id=str(call_id),
                         arguments=raw_args if isinstance(raw_args, str) else json.dumps(raw_args),
-                        result=str(result) if result is not None else None,
+                        result=tool_result_to_text(result) if result is not None else None,
                     )
                 )
             elif item_type == 'reasoning':
@@ -1341,5 +1510,7 @@ __all__ = [
     'TokenUsage',
     'ToolCallOutputItem',
     'ToolInfo',
+    'Usage',
     'content_to_text',
+    'tool_result_to_text',
 ]

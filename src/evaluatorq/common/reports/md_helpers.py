@@ -16,6 +16,35 @@ def pct(rate: float) -> str:
     return f'{rate:.0%}'
 
 
+def fmt_cost(cost: float | None) -> str:
+    """Format a USD cost value, e.g. ``0.0032`` -> ``'$0.0032'``.
+
+    The single cost formatter for every surface — reports and dashboard alike —
+    so the same value never renders as ``$0.0032`` in one place and ``$0.00`` in
+    another. Fixed at 4dp because per-call costs are routinely sub-cent, and
+    rounding those to cents rounds them to nothing.
+
+    ``None`` means the provider did not report a cost — distinct from a real
+    ``0.0`` — and renders as an em dash. Callers that would rather omit the row
+    entirely should check for ``None`` themselves rather than render the dash.
+    """
+    if cost is None:
+        return '—'
+    return f'${cost:,.4f}'
+
+
+def cost_coverage(priced_calls: int, calls: int) -> str:
+    """Label a cost total that only some calls contributed to, e.g. ``' (3 of 10 calls)'``.
+
+    Returns ``''`` when every call was priced, or when ``priced_calls`` is 0 —
+    reports written before this was tracked have no coverage data, and claiming
+    "0 of N" for them would be a lie in the other direction.
+    """
+    if 0 < priced_calls < calls:
+        return f' ({priced_calls:,} of {calls:,} calls)'
+    return ''
+
+
 def bar(rate: float, width: int = 10) -> str:
     """Render a Unicode block-character progress bar with a numeric percentage.
 

@@ -142,7 +142,7 @@ def test_record_llm_response_sets_canonical_token_attrs():
 @pytest.mark.parametrize(
     "raw_total, expected_total",
     [
-        (0, 0),         # total=0 → reported as-is (common impl does not special-case zero)
+        (0, 150),       # total=0 → not trusted; fallback to prompt + completion (Usage.extract rule)
         (None, 150),    # total=None → fallback to prompt + completion
         (200, 200),     # total>0 → use provider-reported value (override branch)
     ],

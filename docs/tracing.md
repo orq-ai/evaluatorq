@@ -191,7 +191,7 @@ LLM spans (`chat ...`) carry standard GenAI attributes:
 | `gen_ai.usage.output_tokens` | Completion token count |
 | `gen_ai.usage.total_tokens` | Total token count |
 | `gen_ai.usage.calls` | Number of LLM calls rolled into this span (omitted when zero) |
-| `gen_ai.usage.cost_usd` | Cost in USD, only when the provider reported one |
+| `gen_ai.usage.cost` | Total cost in USD, only when the provider reported one (also emitted as `gen_ai.usage.total_cost`; `gen_ai.usage.input_cost` / `gen_ai.usage.output_cost` when the provider breaks it down) |
 | `gen_ai.input.messages` | JSON serialised input messages (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
 | `gen_ai.output.messages` | JSON serialised output messages (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
 | `orq.llm.purpose` | Cross-domain purpose tag (e.g. `"adversarial"`, `"evaluation"`, `"target"`) |

@@ -309,6 +309,10 @@ async def test_simulate_uses_generation_client_for_default_user_and_judge(monkey
             target=lambda messages: "target reply",
             generation_client=injected,
             upload_results=False,
+            # Off because it is incidental here: the summary step resolves its
+            # own client rather than using the injected one, so leaving it on
+            # makes this test reach the live router.
+            executive_summary=False,
         )
 
     assert results[0].goal_achieved

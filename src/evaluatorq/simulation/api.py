@@ -1948,20 +1948,13 @@ async def _simulate_via_evaluatorq(
             raise SimulationDroppedError(msg, partial_results=results)
         logger.warning(msg)
 
-    # Aggregate token usage onto the pipeline span.
-    total_prompt = sum((r.token_usage.prompt_tokens or 0) for r in results)
-    total_completion = sum((r.token_usage.completion_tokens or 0) for r in results)
-    total_total = sum((r.token_usage.total_tokens or 0) for r in results)
-    total_cached = sum((r.token_usage.cached_tokens or 0) for r in results)
-    total_reasoning = sum((r.token_usage.reasoning_tokens or 0) for r in results)
-    record_token_usage(
-        pipeline_span,
-        prompt_tokens=total_prompt,
-        completion_tokens=total_completion,
-        total_tokens=total_total,
-        cached_tokens=total_cached,
-        reasoning_tokens=total_reasoning,
-    )
+    # Aggregate token usage (including cost breakdown) onto the pipeline span.
+    # This also sets `gen_ai.usage.calls` to the summed per-datapoint call count —
+    # intended: a call count on this pipeline-level aggregate span is genuine
+    # observability richness, not an accidental leak.
+    from evaluatorq.contracts import Usage
+
+    record_token_usage(pipeline_span, usage=sum((r.token_usage for r in results), Usage()))
     set_span_attrs(
         pipeline_span,
         {

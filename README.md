@@ -861,7 +861,7 @@ No personas yet? `generate_and_simulate(agent_description=...)` invents personas
 
 ## 📚 API Reference
 
-### `evaluatorq(name, params?, *, data?, jobs?, evaluators?, parallelism?, print_results?, description?) -> EvaluatorqResult`
+### `evaluatorq(name, params?, *, data?, jobs?, evaluators?, parallelism?, print_results?, description?, path?) -> EvaluatorqResult`
 
 Main async function to run evaluations.
 
@@ -878,6 +878,7 @@ async def evaluatorq(
     parallelism: int = 1,
     print_results: bool = True,
     description: str | None = None,
+    path: str | None = None,
 ) -> EvaluatorqResult
 ```
 
@@ -913,7 +914,7 @@ class DataPoint(BaseModel):
     inputs: dict[str, Any]
     expected_output: Output | None = None
 
-EvaluationResultCellValue = str | float | dict[str, "str | float | dict[str, str | float]"]
+EvaluationResultCellValue = str | int | float | dict[str, "str | float | dict[str, str | float]"]
 
 class EvaluationResultCell(BaseModel):
     """Structured evaluation result with multi-dimensional metrics."""
@@ -922,7 +923,7 @@ class EvaluationResultCell(BaseModel):
 
 class EvaluationResult(BaseModel):
     """Result from an evaluator."""
-    value: str | float | bool | EvaluationResultCell
+    value: str | int | float | bool | EvaluationResultCell | dict[str, Any]
     explanation: str | None = None
     pass_: bool | None = None  # Optional pass/fail indicator for CI/CD integration
 

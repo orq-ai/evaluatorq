@@ -249,12 +249,14 @@ class TestOrqResponsesTargetRespond:
         ]
 
     @pytest.mark.asyncio
-    async def test_respond_serializes_tool_calls_and_assistant_null_content(self):
-        """_messages_to_input must preserve tool-call structure and assistant content=None.
+    async def test_respond_serializes_tool_turns_as_responses_items(self):
+        """Tool turns must serialize as Responses items, not chat-completions rows.
 
-        Assistant messages with tool_calls require content: null per OpenAI's
-        spec; tool messages carry tool_call_id + name. respond passes the whole
-        transcript, so these must survive into the SDK `input` payload.
+        The Responses API rejects `role: "tool"` outright ("Invalid value: 'tool'")
+        and ignores a message-level `tool_calls` key, which silently drops the
+        assistant's tool calls. respond passes the whole transcript, so an
+        assistant tool call must become a `function_call` item and a tool result a
+        `function_call_output` keyed by the same call_id.
         """
         from evaluatorq.contracts import FunctionCall, StrategyToolCall
 
@@ -272,17 +274,40 @@ class TestOrqResponsesTargetRespond:
         )
 
         sent = client.responses.create.call_args.kwargs["input"]
-        assert sent[0] == {"role": "user", "content": "hi"}
-        # Assistant with tool_calls keeps content=None (not coerced to "").
-        assert sent[1]["role"] == "assistant"
-        assert sent[1]["content"] is None
-        assert sent[1]["tool_calls"][0]["function"] == {"name": "f", "arguments": "{}"}
-        # Tool message carries tool_call_id + name.
+        assert sent == [
+            {"role": "user", "content": "hi"},
+            {"type": "function_call", "call_id": "c1", "name": "f", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "c1", "output": "result"},
+        ]
+        # No chat-completions leakage: these keys are invalid on Responses input.
+        assert not any("tool_calls" in item or item.get("role") == "tool" for item in sent)
+
+    @pytest.mark.asyncio
+    async def test_respond_keeps_assistant_narration_before_tool_calls(self):
+        """An assistant turn with both text and tool calls emits both, in order."""
+        from evaluatorq.contracts import FunctionCall, StrategyToolCall
+
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = _make_target(client=client)
+
+        tool_call = StrategyToolCall(id="c1", function=FunctionCall(name="f", arguments="{}"), item_id="fc_1")
+        await target.respond(
+            [
+                Message(role="user", content="hi"),
+                Message(role="assistant", content="let me check", tool_calls=[tool_call]),
+            ]
+        )
+
+        sent = client.responses.create.call_args.kwargs["input"]
+        assert sent[1] == {"role": "assistant", "content": "let me check"}
+        # item_id round-trips as the function_call item id when present.
         assert sent[2] == {
-            "role": "tool",
-            "content": "result",
-            "tool_call_id": "c1",
+            "type": "function_call",
+            "call_id": "c1",
             "name": "f",
+            "arguments": "{}",
+            "id": "fc_1",
         }
 
     @pytest.mark.asyncio

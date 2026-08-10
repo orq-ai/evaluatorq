@@ -284,11 +284,197 @@ class TestAvgCost:
             tokens_by_kind=[],
             resistant=0,
             vulnerable=0,
-            total_cost=0.0,
+            total_cost=None,
             costed_runs=0,
             cost_by_kind=[],
         )
-        assert 'n/a' in view.landing_body(data)
+        html = view.landing_body(data)
+        # Unknown cost renders as the "not reported" em dash, never $0.00 —
+        # a zero-cost run would be indistinguishable from an unrecorded one.
+        assert '—' in html
+        assert '$0.00' not in html
+
+
+class TestUnknownCostNeverRendersAsZero:
+    """Regression coverage for the None-vs-0.0 conflation bug found in Task 3's
+    review: ``contracts.Usage``'s ``@model_serializer`` always emits the
+    ``cost_usd`` key (even when the underlying ``total_cost`` is ``None``), so
+    a bare ``'cost_usd' in usage`` membership check can no longer distinguish
+    "cost recorded" from "cost unknown". An unknown cost must not be counted
+    as costed, must not contribute to any spend total, and must render as the
+    em dash — never ``$0.00``."""
+
+    def _redteam_payload_null_cost(self, name: str, *, created: str) -> dict:
+        return {
+            'pipeline': {'mode': 'adaptive'},
+            'created_at': created,
+            'run_name': name,
+            'total_results': 1,
+            'results': [
+                {
+                    'attack': {'severity': 'low', 'strategy_name': 'roleplay'},
+                    'agent': {'display_name': 'Refund agent', 'model': 'gpt-5.4'},
+                    'vulnerable': False,
+                    'error': None,
+                }
+            ],
+            'summary': {
+                'resistance_rate': 1.0,
+                'vulnerabilities_found': 0,
+                'evaluated_attacks': 1,
+                # The serializer always emits 'cost_usd', but a provider that
+                # never reported cost leaves it null — not absent.
+                'token_usage_total': {'total_tokens': 500, 'cost_usd': None},
+                'by_severity': {},
+            },
+        }
+
+    def test_landing_does_not_count_null_cost_as_costed(self, tmp_path: Path) -> None:
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        (rt / 'p.json').write_text(json.dumps(self._redteam_payload_null_cost('P', created='2026-06-29T10:00:00')))
+
+        data = metrics.landing([rt, sim])
+        assert data.costed_runs == 0
+        assert data.total_cost is None
+
+        html = view.landing_body(data)
+        assert '$0.00' not in html
+        assert '—' in html
+
+    def test_redteam_overview_does_not_count_null_cost(self, tmp_path: Path) -> None:
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        (rt / 'p.json').write_text(json.dumps(self._redteam_payload_null_cost('P', created='2026-06-29T10:00:00')))
+
+        ov = metrics.redteam_overview([rt, sim])
+        assert ov.total_cost is None
+        assert ov.recent[0].cost is None
+
+        html = view.redteam_overview_body(ov)
+        assert '$0.00' not in html
+
+    def test_sim_overview_does_not_count_null_cost(self, tmp_path: Path) -> None:
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        (sim / 's.json').write_text(
+            json.dumps({
+                'mode': 'run',
+                'created_at': '2026-06-30T10:00:00',
+                'run_name': 'S',
+                'total_results': 1,
+                'scorer_averages': {},
+                'results': [
+                    # Serializer-emitted null cost, not a missing key.
+                    {'token_usage': {'total_tokens': 100, 'cost_usd': None}, 'goal_achieved': True, 'turn_count': 1}
+                ],
+            })
+        )
+
+        ov = metrics.sim_overview([rt, sim])
+        assert ov.avg_cost is None
+        assert ov.recent[0].cost is None
+
+        html = view.sim_overview_body(ov)
+        assert '$0.00' not in html
+
+
+class TestPreBreakdownReportDegradesGracefully:
+    """Reports saved before the cost-breakdown fields existed carry only the
+    legacy ``cost_usd`` key (no ``input_cost`` / ``output_cost``), or predate
+    cost entirely. Both shapes must render — the known total (if any) shown
+    plainly, with no fabricated breakdown and no crash."""
+
+    def test_legacy_cost_usd_only_still_totals_and_shows_no_breakdown(self, tmp_path: Path) -> None:
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        (rt / 'p.json').write_text(
+            json.dumps({
+                'pipeline': {'mode': 'adaptive'},
+                'created_at': '2026-06-29T10:00:00',
+                'run_name': 'Legacy report',
+                'total_results': 1,
+                'results': [
+                    {
+                        'attack': {'severity': 'low', 'strategy_name': 'roleplay'},
+                        'agent': {'display_name': 'Refund agent', 'model': 'gpt-5.4'},
+                        'vulnerable': False,
+                        'error': None,
+                    }
+                ],
+                'summary': {
+                    'resistance_rate': 1.0,
+                    'vulnerabilities_found': 0,
+                    'evaluated_attacks': 1,
+                    # Pre-breakdown shape: only the legacy aggregate key.
+                    'token_usage_total': {'total_tokens': 500, 'cost_usd': 0.0025},
+                    'by_severity': {},
+                },
+            })
+        )
+
+        data = metrics.landing([rt, sim])
+        assert data.total_cost == pytest.approx(0.0025)
+        assert data.costed_runs == 1
+        # No breakdown was ever recorded, so it must not be fabricated.
+        assert data.total_input_cost is None
+        assert data.total_output_cost is None
+
+        html = view.landing_body(data)
+        assert '$0.0025' in html
+        assert 'in —' not in html  # no dangling breakdown sub-line at all
+
+        ov = metrics.redteam_overview([rt, sim])
+        assert ov.total_cost == pytest.approx(0.0025)
+        assert ov.total_input_cost is None
+        assert ov.total_output_cost is None
+        rt_html = view.redteam_overview_body(ov)
+        assert '(in' not in rt_html
+
+    def test_pre_cost_report_has_no_cost_key_at_all(self, tmp_path: Path) -> None:
+        """Reports predating cost tracking entirely — no ``cost_usd`` key."""
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        (rt / 'p.json').write_text(
+            json.dumps({
+                'pipeline': {'mode': 'adaptive'},
+                'created_at': '2026-06-29T10:00:00',
+                'run_name': 'Ancient report',
+                'total_results': 1,
+                'results': [
+                    {
+                        'attack': {'severity': 'low', 'strategy_name': 'roleplay'},
+                        'agent': {'display_name': 'Refund agent', 'model': 'gpt-5.4'},
+                        'vulnerable': False,
+                        'error': None,
+                    }
+                ],
+                'summary': {
+                    'resistance_rate': 1.0,
+                    'vulnerabilities_found': 0,
+                    'evaluated_attacks': 1,
+                    'token_usage_total': {'total_tokens': 500},
+                    'by_severity': {},
+                },
+            })
+        )
+
+        data = metrics.landing([rt, sim])
+        assert data.costed_runs == 0
+        assert data.total_cost is None
+        html = view.landing_body(data)
+        assert '$0.00' not in html
+        assert '—' in html
 
 
 class TestBarsRounding:
