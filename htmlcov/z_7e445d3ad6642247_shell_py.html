@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title>Coverage for src/evaluatorq/dashboard/shell.py: 92%</title>
+    <link rel="icon" sizes="32x32" href="favicon_32_cb_c827f16f.png">
+    <link rel="stylesheet" href="style_cb_4667309f.css" type="text/css">
+    <script src="coverage_html_cb_dd2e7eb5.js" defer></script>
+</head>
+<body class="pyfile">
+<header>
+    <div class="content">
+        <h1>
+            <span class="text">Coverage for </span><b>src<span class="sep">/</span>evaluatorq<span class="sep">/</span>dashboard<span class="sep">/</span>shell.py</b>:
+            <span class="pc_cov">92%</span>
+        </h1>
+        <aside id="help_panel_wrapper">
+            <input id="help_panel_state" type="checkbox">
+            <label for="help_panel_state">
+                <img id="keyboard_icon" src="keybd_closed_cb_900cfef5.png" alt="Show/hide keyboard shortcuts">
+            </label>
+            <div id="help_panel">
+                <p class="legend">Shortcuts on this page</p>
+                <div class="keyhelp">
+                    <p>
+                        <kbd>r</kbd>
+                        <kbd>m</kbd>
+                        <kbd>x</kbd>
+                        &nbsp; toggle line displays
+                    </p>
+                    <p>
+                        <kbd>j</kbd>
+                        <kbd>k</kbd>
+                        &nbsp; next/prev highlighted chunk
+                    </p>
+                    <p>
+                        <kbd>0</kbd> &nbsp; (zero) top of page
+                    </p>
+                    <p>
+                        <kbd>1</kbd> &nbsp; (one) first highlighted chunk
+                    </p>
+                    <p>
+                        <kbd>[</kbd>
+                        <kbd>]</kbd>
+                        &nbsp; prev/next file
+                    </p>
+                    <p>
+                        <kbd>u</kbd> &nbsp; up to the index
+                    </p>
+                    <p>
+                        <kbd>?</kbd> &nbsp; show/hide this help
+                    </p>
+                </div>
+            </div>
+        </aside>
+        <h2>
+            <span class="text">52 statements &nbsp;</span>
+            <button type="button" class="run button_toggle_run" value="run" data-shortcut="r" title="Toggle lines run">48<span class="text"> run</span></button>
+            <button type="button" class="mis show_mis button_toggle_mis" value="mis" data-shortcut="m" title="Toggle lines missing">4<span class="text"> missing</span></button>
+            <button type="button" class="exc show_exc button_toggle_exc" value="exc" data-shortcut="x" title="Toggle lines excluded">0<span class="text"> excluded</span></button>
+        </h2>
+        <p class="text">
+            <a id="prevFileLink" class="nav" href="z_7e445d3ad6642247_report_tabs_py.html">&#xab; prev</a> &nbsp; &nbsp;
+            <a id="indexLink" class="nav" href="index.html">&Hat; index</a> &nbsp; &nbsp;
+            <a id="nextFileLink" class="nav" href="z_7e445d3ad6642247_sim_compare_py.html">&#xbb; next</a>
+            &nbsp; &nbsp; &nbsp;
+            <a class="nav" href="https://coverage.readthedocs.io/en/7.15.4">coverage.py v7.15.4</a>,
+            created at 2026-08-10 08:55 +0000
+        </p>
+        <aside class="hidden">
+            <button type="button" class="button_next_chunk" data-shortcut="j"></button>
+            <button type="button" class="button_prev_chunk" data-shortcut="k"></button>
+            <button type="button" class="button_top_of_page" data-shortcut="0"></button>
+            <button type="button" class="button_first_chunk" data-shortcut="1"></button>
+            <button type="button" class="button_prev_file" data-shortcut="["></button>
+            <button type="button" class="button_next_file" data-shortcut="]"></button>
+            <button type="button" class="button_to_index" data-shortcut="u"></button>
+            <button type="button" class="button_show_hide_help" data-shortcut="?"></button>
+        </aside>
+    </div>
+</header>
+<main id="source">
+    <p class="pln"><span class="n"><a id="t1" href="#t1">1</a></span><span class="t"><span class="str">&quot;&quot;&quot;Dashboard HTML shell: ORQ-branded sidebar layout.</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t2" href="#t2">2</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t3" href="#t3">3</a></span><span class="t"><span class="str">``page(title, body_html, *, active_surface, active_nav, actions_html)`` wraps</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t4" href="#t4">4</a></span><span class="t"><span class="str">rendered body content in the shared dashboard chrome &#8212; a left sidebar (brand +</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t5" href="#t5">5</a></span><span class="t"><span class="str">nav) and a main column (topbar + content), matching the v1 design&#x27;s</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t6" href="#t6">6</a></span><span class="t"><span class="str">``Shell.jsx``.</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t7" href="#t7">7</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t8" href="#t8">8</a></span><span class="t"><span class="str">The CSS layers, in cascade order, are:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t9" href="#t9">9</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t10" href="#t10">10</a></span><span class="t"><span class="str">1. ``load_css()`` (``common.reports``) &#8212; brand tokens + report-body styles, so</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t11" href="#t11">11</a></span><span class="t"><span class="str">   embedded report fragments look identical to their standalone exports.</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t12" href="#t12">12</a></span><span class="t"><span class="str">2. ``EDITORIAL_CSS`` (``theme``) &#8212; the v1 editorial skin tokens for the chrome.</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t13" href="#t13">13</a></span><span class="t"><span class="str">3. ``DASHBOARD_CSS`` (``styles``) &#8212; the shell / landing / run-list rules that</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t14" href="#t14">14</a></span><span class="t"><span class="str">   consume those tokens.</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t15" href="#t15">15</a></span><span class="t"><span class="str">&quot;&quot;&quot;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t16" href="#t16">16</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t17" href="#t17">17</a></span><span class="t"><span class="key">from</span> <span class="nam">__future__</span> <span class="key">import</span> <span class="nam">annotations</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t18" href="#t18">18</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t19" href="#t19">19</a></span><span class="t"><span class="key">import</span> <span class="nam">base64</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t20" href="#t20">20</a></span><span class="t"><span class="key">from</span> <span class="nam">pathlib</span> <span class="key">import</span> <span class="nam">Path</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t21" href="#t21">21</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t22" href="#t22">22</a></span><span class="t"><span class="key">from</span> <span class="nam">evaluatorq</span><span class="op">.</span><span class="nam">common</span><span class="op">.</span><span class="nam">reports</span> <span class="key">import</span> <span class="nam">esc</span><span class="op">,</span> <span class="nam">load_css</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t23" href="#t23">23</a></span><span class="t"><span class="key">from</span> <span class="nam">evaluatorq</span><span class="op">.</span><span class="nam">dashboard</span><span class="op">.</span><span class="nam">styles</span> <span class="key">import</span> <span class="nam">DASHBOARD_CSS</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t24" href="#t24">24</a></span><span class="t"><span class="key">from</span> <span class="nam">evaluatorq</span><span class="op">.</span><span class="nam">dashboard</span><span class="op">.</span><span class="nam">theme</span> <span class="key">import</span> <span class="nam">EDITORIAL_CSS</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t25" href="#t25">25</a></span><span class="t"><span class="key">from</span> <span class="nam">evaluatorq</span><span class="op">.</span><span class="nam">dashboard</span><span class="op">.</span><span class="nam">view</span> <span class="key">import</span> <span class="nam">PAIRWISE_ICON_PATH</span><span class="op">,</span> <span class="nam">SURFACE_LABELS</span><span class="op">,</span> <span class="nam">head_assets</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t26" href="#t26">26</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t27" href="#t27">27</a></span><span class="t"><span class="com"># Sidebar collapse: runs at body-top so the class lands on &lt;html&gt; before the</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t28" href="#t28">28</a></span><span class="t"><span class="com"># sidebar paints (no flash). State persists in localStorage across the full-page</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t29" href="#t29">29</a></span><span class="t"><span class="com"># navigations between reports. ponytail: inline over a /static file so it works</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t30" href="#t30">30</a></span><span class="t"><span class="com"># in tests and static exports too.</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t31" href="#t31">31</a></span><span class="t"><span class="nam">_SIDEBAR_TOGGLE_SCRIPT</span> <span class="op">=</span> <span class="op">(</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t32" href="#t32">32</a></span><span class="t">    <span class="str">&#x27;&lt;script&gt;&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t33" href="#t33">33</a></span><span class="t">    <span class="str">&quot;(function(){try{if(localStorage.getItem(&#x27;eq-sidebar-collapsed&#x27;)===&#x27;1&#x27;)&quot;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t34" href="#t34">34</a></span><span class="t">    <span class="str">&quot;document.documentElement.classList.add(&#x27;sidebar-collapsed&#x27;);}catch(e){}})();&quot;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t35" href="#t35">35</a></span><span class="t">    <span class="str">&#x27;function eqToggleSidebar(){&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t36" href="#t36">36</a></span><span class="t">    <span class="str">&quot;var c=document.documentElement.classList.toggle(&#x27;sidebar-collapsed&#x27;);&quot;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t37" href="#t37">37</a></span><span class="t">    <span class="str">&quot;try{localStorage.setItem(&#x27;eq-sidebar-collapsed&#x27;,c?&#x27;1&#x27;:&#x27;0&#x27;);}catch(e){}}&quot;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t38" href="#t38">38</a></span><span class="t">    <span class="str">&quot;document.addEventListener(&#x27;keydown&#x27;,function(e){&quot;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t39" href="#t39">39</a></span><span class="t">    <span class="str">&quot;if((e.metaKey||e.ctrlKey)&amp;&amp;!e.shiftKey&amp;&amp;!e.altKey&amp;&amp;e.key.toLowerCase()===&#x27;b&#x27;)&quot;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t40" href="#t40">40</a></span><span class="t">    <span class="str">&#x27;{e.preventDefault();eqToggleSidebar();}});&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t41" href="#t41">41</a></span><span class="t">    <span class="com"># Non-Mac shows &quot;Ctrl B&quot; instead of the &#8984;B glyph on the hotkey hint.</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t42" href="#t42">42</a></span><span class="t">    <span class="str">&#x27;if(!/Mac|iPhone|iPad/.test(navigator.platform)){&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t43" href="#t43">43</a></span><span class="t">    <span class="str">&quot;document.addEventListener(&#x27;DOMContentLoaded&#x27;,function(){&quot;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t44" href="#t44">44</a></span><span class="t">    <span class="str">&quot;document.querySelectorAll(&#x27;.sidebar-toggle-kbd&#x27;).forEach(&quot;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t45" href="#t45">45</a></span><span class="t">    <span class="str">&quot;function(k){k.textContent=&#x27;Ctrl B&#x27;;});});}&quot;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t46" href="#t46">46</a></span><span class="t">    <span class="str">&#x27;&lt;/script&gt;\n&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t47" href="#t47">47</a></span><span class="t"><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t48" href="#t48">48</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t49" href="#t49">49</a></span><span class="t"><span class="com"># The v1 brand mark (orq ink-nodes logomark), vendored from the design system.</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t50" href="#t50">50</a></span><span class="t"><span class="com"># Inlined rather than served via /static/ so it renders in tests and exports too.</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t51" href="#t51">51</a></span><span class="t"><span class="nam">_MARK_PATH</span> <span class="op">=</span> <span class="nam">Path</span><span class="op">(</span><span class="nam">__file__</span><span class="op">)</span><span class="op">.</span><span class="nam">parent</span> <span class="op">/</span> <span class="str">&#x27;static&#x27;</span> <span class="op">/</span> <span class="str">&#x27;orq-mark.svg&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t52" href="#t52">52</a></span><span class="t"><span class="nam">_mark_cache</span><span class="op">:</span> <span class="nam">str</span> <span class="op">|</span> <span class="key">None</span> <span class="op">=</span> <span class="key">None</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t53" href="#t53">53</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t54" href="#t54">54</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t55" href="#t55">55</a></span><span class="t"><span class="key">def</span> <span class="nam">_load_mark</span><span class="op">(</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="nam">str</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t56" href="#t56">56</a></span><span class="t">    <span class="key">global</span> <span class="nam">_mark_cache</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t57" href="#t57">57</a></span><span class="t">    <span class="key">if</span> <span class="nam">_mark_cache</span> <span class="key">is</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t58" href="#t58">58</a></span><span class="t">        <span class="key">try</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t59" href="#t59">59</a></span><span class="t">            <span class="nam">_mark_cache</span> <span class="op">=</span> <span class="nam">_MARK_PATH</span><span class="op">.</span><span class="nam">read_text</span><span class="op">(</span><span class="nam">encoding</span><span class="op">=</span><span class="str">&#x27;utf-8&#x27;</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="mis show_mis"><span class="n"><a id="t60" href="#t60">60</a></span><span class="t">        <span class="key">except</span> <span class="nam">OSError</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="mis show_mis"><span class="n"><a id="t61" href="#t61">61</a></span><span class="t">            <span class="nam">_mark_cache</span> <span class="op">=</span> <span class="str">&#x27;&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t62" href="#t62">62</a></span><span class="t">    <span class="key">return</span> <span class="nam">_mark_cache</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t63" href="#t63">63</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t64" href="#t64">64</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t65" href="#t65">65</a></span><span class="t"><span class="com"># Green orq favicon, inlined as a base64 data-URI &lt;link&gt; so it works live, in</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t66" href="#t66">66</a></span><span class="t"><span class="com"># tests, and in static exports without depending on the /static/ route.</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t67" href="#t67">67</a></span><span class="t"><span class="nam">_FAVICON_PATH</span> <span class="op">=</span> <span class="nam">Path</span><span class="op">(</span><span class="nam">__file__</span><span class="op">)</span><span class="op">.</span><span class="nam">parent</span> <span class="op">/</span> <span class="str">&#x27;static&#x27;</span> <span class="op">/</span> <span class="str">&#x27;orq-favicon.svg&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t68" href="#t68">68</a></span><span class="t"><span class="nam">_favicon_cache</span><span class="op">:</span> <span class="nam">str</span> <span class="op">|</span> <span class="key">None</span> <span class="op">=</span> <span class="key">None</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t69" href="#t69">69</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t70" href="#t70">70</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t71" href="#t71">71</a></span><span class="t"><span class="key">def</span> <span class="nam">_favicon_link</span><span class="op">(</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="nam">str</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t72" href="#t72">72</a></span><span class="t">    <span class="key">global</span> <span class="nam">_favicon_cache</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t73" href="#t73">73</a></span><span class="t">    <span class="key">if</span> <span class="nam">_favicon_cache</span> <span class="key">is</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t74" href="#t74">74</a></span><span class="t">        <span class="key">try</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t75" href="#t75">75</a></span><span class="t">            <span class="nam">svg</span> <span class="op">=</span> <span class="nam">_FAVICON_PATH</span><span class="op">.</span><span class="nam">read_bytes</span><span class="op">(</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t76" href="#t76">76</a></span><span class="t">            <span class="nam">b64</span> <span class="op">=</span> <span class="nam">base64</span><span class="op">.</span><span class="nam">b64encode</span><span class="op">(</span><span class="nam">svg</span><span class="op">)</span><span class="op">.</span><span class="nam">decode</span><span class="op">(</span><span class="str">&#x27;ascii&#x27;</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t77" href="#t77">77</a></span><span class="t">            <span class="nam">_favicon_cache</span> <span class="op">=</span> <span class="fst">f&#x27;</span><span class="fst">&lt;link rel=&quot;icon&quot; type=&quot;image/svg+xml&quot; href=&quot;data:image/svg+xml;base64,</span><span class="op">{</span><span class="nam">b64</span><span class="op">}</span><span class="fst">&quot;&gt;\n</span><span class="fst">&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="mis show_mis"><span class="n"><a id="t78" href="#t78">78</a></span><span class="t">        <span class="key">except</span> <span class="nam">OSError</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="mis show_mis"><span class="n"><a id="t79" href="#t79">79</a></span><span class="t">            <span class="nam">_favicon_cache</span> <span class="op">=</span> <span class="str">&#x27;&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t80" href="#t80">80</a></span><span class="t">    <span class="key">return</span> <span class="nam">_favicon_cache</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t81" href="#t81">81</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t82" href="#t82">82</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t83" href="#t83">83</a></span><span class="t"><span class="com"># Sidebar nav: (key, label, href, inline-SVG icon path data).  Keys match the</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t84" href="#t84">84</a></span><span class="t"><span class="com"># ``active_nav`` resolution below; hrefs reuse the existing index routes so the</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t85" href="#t85">85</a></span><span class="t"><span class="com"># run lists stay at ``/?surface=&#8230;``.</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t86" href="#t86">86</a></span><span class="t"><span class="nam">_NAV</span><span class="op">:</span> <span class="nam">list</span><span class="op">[</span><span class="nam">tuple</span><span class="op">[</span><span class="nam">str</span><span class="op">,</span> <span class="nam">str</span><span class="op">,</span> <span class="nam">str</span><span class="op">,</span> <span class="nam">str</span><span class="op">]</span><span class="op">]</span> <span class="op">=</span> <span class="op">[</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t87" href="#t87">87</a></span><span class="t">    <span class="op">(</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t88" href="#t88">88</a></span><span class="t">        <span class="str">&#x27;dashboard&#x27;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t89" href="#t89">89</a></span><span class="t">        <span class="str">&#x27;Dashboard&#x27;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t90" href="#t90">90</a></span><span class="t">        <span class="str">&#x27;/&#x27;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t91" href="#t91">91</a></span><span class="t">        <span class="op">(</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t92" href="#t92">92</a></span><span class="t">            <span class="str">&#x27;&lt;rect x=&quot;3&quot; y=&quot;3&quot; width=&quot;7&quot; height=&quot;9&quot; rx=&quot;1&quot;/&gt;&lt;rect x=&quot;14&quot; y=&quot;3&quot; width=&quot;7&quot; height=&quot;5&quot; rx=&quot;1&quot;/&gt;&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t93" href="#t93">93</a></span><span class="t">            <span class="str">&#x27;&lt;rect x=&quot;14&quot; y=&quot;12&quot; width=&quot;7&quot; height=&quot;9&quot; rx=&quot;1&quot;/&gt;&lt;rect x=&quot;3&quot; y=&quot;16&quot; width=&quot;7&quot; height=&quot;5&quot; rx=&quot;1&quot;/&gt;&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t94" href="#t94">94</a></span><span class="t">        <span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t95" href="#t95">95</a></span><span class="t">    <span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t96" href="#t96">96</a></span><span class="t">    <span class="op">(</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t97" href="#t97">97</a></span><span class="t">        <span class="str">&#x27;redteam&#x27;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t98" href="#t98">98</a></span><span class="t">        <span class="nam">SURFACE_LABELS</span><span class="op">[</span><span class="str">&#x27;redteam&#x27;</span><span class="op">]</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t99" href="#t99">99</a></span><span class="t">        <span class="str">&#x27;/?surface=redteam&#x27;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t100" href="#t100">100</a></span><span class="t">        <span class="str">&#x27;&lt;path d=&quot;M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z&quot;/&gt;&lt;path d=&quot;M12 8v4&quot;/&gt;&lt;path d=&quot;M12 16h.01&quot;/&gt;&#x27;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t101" href="#t101">101</a></span><span class="t">    <span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t102" href="#t102">102</a></span><span class="t">    <span class="op">(</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t103" href="#t103">103</a></span><span class="t">        <span class="str">&#x27;sim&#x27;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t104" href="#t104">104</a></span><span class="t">        <span class="nam">SURFACE_LABELS</span><span class="op">[</span><span class="str">&#x27;sim&#x27;</span><span class="op">]</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t105" href="#t105">105</a></span><span class="t">        <span class="str">&#x27;/?surface=sim&#x27;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t106" href="#t106">106</a></span><span class="t">        <span class="str">&#x27;&lt;path d=&quot;M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z&quot;/&gt;&#x27;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t107" href="#t107">107</a></span><span class="t">    <span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t108" href="#t108">108</a></span><span class="t">    <span class="op">(</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t109" href="#t109">109</a></span><span class="t">        <span class="str">&#x27;pairwise&#x27;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t110" href="#t110">110</a></span><span class="t">        <span class="nam">SURFACE_LABELS</span><span class="op">[</span><span class="str">&#x27;pairwise&#x27;</span><span class="op">]</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t111" href="#t111">111</a></span><span class="t">        <span class="str">&#x27;/?surface=pairwise&#x27;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t112" href="#t112">112</a></span><span class="t">        <span class="nam">PAIRWISE_ICON_PATH</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t113" href="#t113">113</a></span><span class="t">    <span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t114" href="#t114">114</a></span><span class="t">    <span class="op">(</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t115" href="#t115">115</a></span><span class="t">        <span class="str">&#x27;settings&#x27;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t116" href="#t116">116</a></span><span class="t">        <span class="str">&#x27;Settings&#x27;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t117" href="#t117">117</a></span><span class="t">        <span class="str">&#x27;/settings&#x27;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t118" href="#t118">118</a></span><span class="t">        <span class="str">&#x27;&lt;circle cx=&quot;12&quot; cy=&quot;12&quot; r=&quot;3&quot;/&gt;&lt;path d=&quot;M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z&quot;/&gt;&#x27;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t119" href="#t119">119</a></span><span class="t">    <span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t120" href="#t120">120</a></span><span class="t"><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t121" href="#t121">121</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t122" href="#t122">122</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t123" href="#t123">123</a></span><span class="t"><span class="key">def</span> <span class="nam">_icon</span><span class="op">(</span><span class="nam">path_data</span><span class="op">:</span> <span class="nam">str</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="nam">str</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t124" href="#t124">124</a></span><span class="t">    <span class="key">return</span> <span class="op">(</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t125" href="#t125">125</a></span><span class="t">        <span class="str">&#x27;&lt;svg class=&quot;nav-icon&quot; width=&quot;16&quot; height=&quot;16&quot; viewBox=&quot;0 0 24 24&quot; fill=&quot;none&quot; &#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t126" href="#t126">126</a></span><span class="t">        <span class="str">&#x27;stroke=&quot;currentColor&quot; stroke-width=&quot;2&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot;&gt;&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t127" href="#t127">127</a></span><span class="t">        <span class="fst">f&#x27;</span><span class="op">{</span><span class="nam">path_data</span><span class="op">}</span><span class="fst">&lt;/svg&gt;</span><span class="fst">&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t128" href="#t128">128</a></span><span class="t">    <span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t129" href="#t129">129</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t130" href="#t130">130</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t131" href="#t131">131</a></span><span class="t"><span class="key">def</span> <span class="nam">_sidebar_html</span><span class="op">(</span><span class="nam">active_nav</span><span class="op">:</span> <span class="nam">str</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="nam">str</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t132" href="#t132">132</a></span><span class="t">    <span class="com"># The v1 brand lockup is the orq mark (not the full wordmark) + the</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t133" href="#t133">133</a></span><span class="t">    <span class="com"># &quot;evaluatorq&quot; wordmark with an orange &quot;q&quot;.</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t134" href="#t134">134</a></span><span class="t">    <span class="nam">mark</span> <span class="op">=</span> <span class="nam">_load_mark</span><span class="op">(</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t135" href="#t135">135</a></span><span class="t">    <span class="nam">logo_html</span> <span class="op">=</span> <span class="fst">f&#x27;</span><span class="fst">&lt;span class=&quot;nav-mark&quot;&gt;</span><span class="op">{</span><span class="nam">mark</span><span class="op">}</span><span class="fst">&lt;/span&gt;</span><span class="fst">&#x27;</span> <span class="key">if</span> <span class="nam">mark</span> <span class="key">else</span> <span class="str">&#x27;&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t136" href="#t136">136</a></span><span class="t">    <span class="nam">items</span><span class="op">:</span> <span class="nam">list</span><span class="op">[</span><span class="nam">str</span><span class="op">]</span> <span class="op">=</span> <span class="op">[</span><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t137" href="#t137">137</a></span><span class="t">    <span class="key">for</span> <span class="nam">key</span><span class="op">,</span> <span class="nam">label</span><span class="op">,</span> <span class="nam">href</span><span class="op">,</span> <span class="nam">icon</span> <span class="key">in</span> <span class="nam">_NAV</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t138" href="#t138">138</a></span><span class="t">        <span class="nam">active</span> <span class="op">=</span> <span class="str">&#x27; active&#x27;</span> <span class="key">if</span> <span class="nam">key</span> <span class="op">==</span> <span class="nam">active_nav</span> <span class="key">else</span> <span class="str">&#x27;&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t139" href="#t139">139</a></span><span class="t">        <span class="nam">items</span><span class="op">.</span><span class="nam">append</span><span class="op">(</span><span class="fst">f&#x27;</span><span class="fst">&lt;a class=&quot;nav-item</span><span class="op">{</span><span class="nam">active</span><span class="op">}</span><span class="fst">&quot; href=&quot;</span><span class="op">{</span><span class="nam">href</span><span class="op">}</span><span class="fst">&quot;&gt;</span><span class="op">{</span><span class="nam">_icon</span><span class="op">(</span><span class="nam">icon</span><span class="op">)</span><span class="op">}</span><span class="fst">&lt;span&gt;</span><span class="op">{</span><span class="nam">esc</span><span class="op">(</span><span class="nam">label</span><span class="op">)</span><span class="op">}</span><span class="fst">&lt;/span&gt;&lt;/a&gt;</span><span class="fst">&#x27;</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t140" href="#t140">140</a></span><span class="t">    <span class="key">return</span> <span class="op">(</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t141" href="#t141">141</a></span><span class="t">        <span class="str">&#x27;&lt;aside class=&quot;app-sidebar&quot;&gt;&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t142" href="#t142">142</a></span><span class="t">        <span class="fst">f&#x27;</span><span class="fst">&lt;a class=&quot;app-brand&quot; href=&quot;/&quot;&gt;</span><span class="op">{</span><span class="nam">logo_html</span><span class="op">}</span><span class="fst">&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t143" href="#t143">143</a></span><span class="t">        <span class="str">&#x27;&lt;span class=&quot;brand-name&quot;&gt;evaluator&lt;span class=&quot;brand-q&quot;&gt;q&lt;/span&gt;&lt;/span&gt;&lt;/a&gt;&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t144" href="#t144">144</a></span><span class="t">        <span class="fst">f&#x27;</span><span class="fst">&lt;nav class=&quot;app-nav&quot; aria-label=&quot;Primary&quot;&gt;</span><span class="op">{</span><span class="str">&quot;&quot;</span><span class="op">.</span><span class="nam">join</span><span class="op">(</span><span class="nam">items</span><span class="op">)</span><span class="op">}</span><span class="fst">&lt;/nav&gt;</span><span class="fst">&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t145" href="#t145">145</a></span><span class="t">        <span class="str">&#x27;&lt;button class=&quot;sidebar-toggle&quot; type=&quot;button&quot; aria-label=&quot;Toggle sidebar&quot;&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t146" href="#t146">146</a></span><span class="t">        <span class="str">&#x27; onclick=&quot;eqToggleSidebar()&quot;&gt;&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t147" href="#t147">147</a></span><span class="t">        <span class="str">&#x27;&lt;svg class=&quot;nav-icon&quot; width=&quot;16&quot; height=&quot;16&quot; viewBox=&quot;0 0 24 24&quot; fill=&quot;none&quot;&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t148" href="#t148">148</a></span><span class="t">        <span class="str">&#x27; stroke=&quot;currentColor&quot; stroke-width=&quot;2&quot; stroke-linecap=&quot;round&quot;&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t149" href="#t149">149</a></span><span class="t">        <span class="str">&#x27; stroke-linejoin=&quot;round&quot;&gt;&lt;polyline points=&quot;15 18 9 12 15 6&quot;/&gt;&lt;/svg&gt;&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t150" href="#t150">150</a></span><span class="t">        <span class="str">&#x27;&lt;span&gt;Collapse&lt;/span&gt;&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t151" href="#t151">151</a></span><span class="t">        <span class="str">&#x27;&lt;kbd class=&quot;sidebar-toggle-kbd&quot;&gt;&#8984; B&lt;/kbd&gt;&lt;/button&gt;&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t152" href="#t152">152</a></span><span class="t">        <span class="str">&#x27;&lt;/aside&gt;&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t153" href="#t153">153</a></span><span class="t">    <span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t154" href="#t154">154</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t155" href="#t155">155</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t156" href="#t156">156</a></span><span class="t"><span class="key">def</span> <span class="nam">_resolve_nav</span><span class="op">(</span><span class="nam">active_surface</span><span class="op">:</span> <span class="nam">str</span> <span class="op">|</span> <span class="key">None</span><span class="op">,</span> <span class="nam">active_nav</span><span class="op">:</span> <span class="nam">str</span> <span class="op">|</span> <span class="key">None</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="nam">str</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t157" href="#t157">157</a></span><span class="t">    <span class="key">if</span> <span class="nam">active_nav</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t158" href="#t158">158</a></span><span class="t">        <span class="key">return</span> <span class="nam">active_nav</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t159" href="#t159">159</a></span><span class="t">    <span class="key">if</span> <span class="nam">active_surface</span> <span class="key">in</span> <span class="op">(</span><span class="str">&#x27;redteam&#x27;</span><span class="op">,</span> <span class="str">&#x27;sim&#x27;</span><span class="op">,</span> <span class="str">&#x27;pairwise&#x27;</span><span class="op">)</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t160" href="#t160">160</a></span><span class="t">        <span class="key">return</span> <span class="nam">active_surface</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t161" href="#t161">161</a></span><span class="t">    <span class="key">return</span> <span class="str">&#x27;dashboard&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t162" href="#t162">162</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t163" href="#t163">163</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t164" href="#t164">164</a></span><span class="t"><span class="key">def</span> <span class="nam">page</span><span class="op">(</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t165" href="#t165">165</a></span><span class="t">    <span class="nam">title</span><span class="op">:</span> <span class="nam">str</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t166" href="#t166">166</a></span><span class="t">    <span class="nam">body_html</span><span class="op">:</span> <span class="nam">str</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t167" href="#t167">167</a></span><span class="t">    <span class="op">*</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t168" href="#t168">168</a></span><span class="t">    <span class="nam">active_surface</span><span class="op">:</span> <span class="nam">str</span> <span class="op">|</span> <span class="key">None</span> <span class="op">=</span> <span class="key">None</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t169" href="#t169">169</a></span><span class="t">    <span class="nam">active_nav</span><span class="op">:</span> <span class="nam">str</span> <span class="op">|</span> <span class="key">None</span> <span class="op">=</span> <span class="key">None</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t170" href="#t170">170</a></span><span class="t">    <span class="nam">actions_html</span><span class="op">:</span> <span class="nam">str</span> <span class="op">=</span> <span class="str">&#x27;&#x27;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t171" href="#t171">171</a></span><span class="t">    <span class="nam">back_html</span><span class="op">:</span> <span class="nam">str</span> <span class="op">=</span> <span class="str">&#x27;&#x27;</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t172" href="#t172">172</a></span><span class="t"><span class="op">)</span> <span class="op">-&gt;</span> <span class="nam">str</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t173" href="#t173">173</a></span><span class="t">    <span class="str">&quot;&quot;&quot;Render a complete HTML page in the dashboard sidebar shell.</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t174" href="#t174">174</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t175" href="#t175">175</a></span><span class="t"><span class="str">    Args:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t176" href="#t176">176</a></span><span class="t"><span class="str">        title: ``&lt;title&gt;`` text and the topbar heading.</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t177" href="#t177">177</a></span><span class="t"><span class="str">        body_html: Pre-rendered HTML fragment for the ``&lt;main&gt;`` body.</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t178" href="#t178">178</a></span><span class="t"><span class="str">        active_surface: Surface key (``&#x27;redteam&#x27;`` | ``&#x27;sim&#x27;`` | ``&#x27;pairwise&#x27;``)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t179" href="#t179">179</a></span><span class="t"><span class="str">            for the report view, used to highlight the matching nav item.</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t180" href="#t180">180</a></span><span class="t"><span class="str">        active_nav: Explicit nav key (``&#x27;dashboard&#x27;`` | ``&#x27;redteam&#x27;`` | ``&#x27;sim&#x27;``</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t181" href="#t181">181</a></span><span class="t"><span class="str">            | ``&#x27;pairwise&#x27;`` | ``&#x27;settings&#x27;``) overriding the surface-derived</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t182" href="#t182">182</a></span><span class="t"><span class="str">            default.</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t183" href="#t183">183</a></span><span class="t"><span class="str">        actions_html: Optional pre-rendered HTML for the topbar action area</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t184" href="#t184">184</a></span><span class="t"><span class="str">            (e.g. export buttons on a report view).</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t185" href="#t185">185</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t186" href="#t186">186</a></span><span class="t"><span class="str">    Returns:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t187" href="#t187">187</a></span><span class="t"><span class="str">        A complete HTML document string starting with ``&lt;!DOCTYPE html&gt;``.</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t188" href="#t188">188</a></span><span class="t"><span class="str">    &quot;&quot;&quot;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t189" href="#t189">189</a></span><span class="t">    <span class="nam">css</span> <span class="op">=</span> <span class="nam">load_css</span><span class="op">(</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t190" href="#t190">190</a></span><span class="t">    <span class="nam">nav_key</span> <span class="op">=</span> <span class="nam">_resolve_nav</span><span class="op">(</span><span class="nam">active_surface</span><span class="op">,</span> <span class="nam">active_nav</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t191" href="#t191">191</a></span><span class="t">    <span class="nam">sidebar</span> <span class="op">=</span> <span class="nam">_sidebar_html</span><span class="op">(</span><span class="nam">nav_key</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t192" href="#t192">192</a></span><span class="t">    <span class="nam">scripts</span> <span class="op">=</span> <span class="str">&#x27;&#x27;</span><span class="op">.</span><span class="nam">join</span><span class="op">(</span><span class="nam">str</span><span class="op">(</span><span class="nam">a</span><span class="op">)</span> <span class="key">for</span> <span class="nam">a</span> <span class="key">in</span> <span class="nam">head_assets</span><span class="op">(</span><span class="op">)</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t193" href="#t193">193</a></span><span class="t">    <span class="com"># On report pages the run name is the hero H1, so the topbar carries the</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t194" href="#t194">194</a></span><span class="t">    <span class="com"># back link instead of repeating the title.</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t195" href="#t195">195</a></span><span class="t">    <span class="nam">topbar_lead</span> <span class="op">=</span> <span class="nam">back_html</span> <span class="key">or</span> <span class="fst">f&#x27;</span><span class="fst">&lt;h1 class=&quot;app-title&quot;&gt;</span><span class="op">{</span><span class="nam">esc</span><span class="op">(</span><span class="nam">title</span><span class="op">)</span><span class="op">}</span><span class="fst">&lt;/h1&gt;</span><span class="fst">&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t196" href="#t196">196</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t197" href="#t197">197</a></span><span class="t">    <span class="key">return</span> <span class="op">(</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t198" href="#t198">198</a></span><span class="t">        <span class="str">&#x27;&lt;!DOCTYPE html&gt;\n&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t199" href="#t199">199</a></span><span class="t">        <span class="str">&#x27;&lt;html lang=&quot;en&quot;&gt;\n&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t200" href="#t200">200</a></span><span class="t">        <span class="str">&#x27;&lt;head&gt;\n&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t201" href="#t201">201</a></span><span class="t">        <span class="str">&#x27;&lt;meta charset=&quot;utf-8&quot;&gt;\n&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t202" href="#t202">202</a></span><span class="t">        <span class="str">&#x27;&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;\n&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t203" href="#t203">203</a></span><span class="t">        <span class="fst">f&#x27;</span><span class="op">{</span><span class="nam">_favicon_link</span><span class="op">(</span><span class="op">)</span><span class="op">}</span><span class="fst">&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t204" href="#t204">204</a></span><span class="t">        <span class="fst">f&#x27;</span><span class="fst">&lt;title&gt;</span><span class="op">{</span><span class="nam">esc</span><span class="op">(</span><span class="nam">title</span><span class="op">)</span><span class="op">}</span><span class="fst"> &#8212; evaluatorq&lt;/title&gt;\n</span><span class="fst">&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t205" href="#t205">205</a></span><span class="t">        <span class="fst">f&#x27;</span><span class="fst">&lt;style&gt;\n</span><span class="op">{</span><span class="nam">css</span><span class="op">}</span><span class="fst">\n&lt;/style&gt;\n</span><span class="fst">&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t206" href="#t206">206</a></span><span class="t">        <span class="fst">f&#x27;</span><span class="fst">&lt;style&gt;\n</span><span class="op">{</span><span class="nam">EDITORIAL_CSS</span><span class="op">}</span><span class="fst">\n&lt;/style&gt;\n</span><span class="fst">&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t207" href="#t207">207</a></span><span class="t">        <span class="fst">f&#x27;</span><span class="fst">&lt;style&gt;\n</span><span class="op">{</span><span class="nam">DASHBOARD_CSS</span><span class="op">}</span><span class="fst">\n&lt;/style&gt;\n</span><span class="fst">&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t208" href="#t208">208</a></span><span class="t">        <span class="fst">f&#x27;</span><span class="op">{</span><span class="nam">scripts</span><span class="op">}</span><span class="fst">\n</span><span class="fst">&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t209" href="#t209">209</a></span><span class="t">        <span class="str">&#x27;&lt;/head&gt;\n&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t210" href="#t210">210</a></span><span class="t">        <span class="str">&#x27;&lt;body class=&quot;eq-dashboard&quot;&gt;\n&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t211" href="#t211">211</a></span><span class="t">        <span class="fst">f&#x27;</span><span class="op">{</span><span class="nam">_SIDEBAR_TOGGLE_SCRIPT</span><span class="op">}</span><span class="fst">&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t212" href="#t212">212</a></span><span class="t">        <span class="str">&#x27;&lt;div class=&quot;app-shell&quot;&gt;\n&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t213" href="#t213">213</a></span><span class="t">        <span class="fst">f&#x27;</span><span class="op">{</span><span class="nam">sidebar</span><span class="op">}</span><span class="fst">\n</span><span class="fst">&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t214" href="#t214">214</a></span><span class="t">        <span class="str">&#x27;&lt;div class=&quot;app-main&quot;&gt;\n&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t215" href="#t215">215</a></span><span class="t">        <span class="str">&#x27;&lt;header class=&quot;app-topbar&quot;&gt;\n&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t216" href="#t216">216</a></span><span class="t">        <span class="fst">f&#x27;</span><span class="op">{</span><span class="nam">topbar_lead</span><span class="op">}</span><span class="fst">\n</span><span class="fst">&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t217" href="#t217">217</a></span><span class="t">        <span class="fst">f&#x27;</span><span class="fst">&lt;div class=&quot;app-actions&quot;&gt;</span><span class="op">{</span><span class="nam">actions_html</span><span class="op">}</span><span class="fst">&lt;/div&gt;\n</span><span class="fst">&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t218" href="#t218">218</a></span><span class="t">        <span class="str">&#x27;&lt;/header&gt;\n&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t219" href="#t219">219</a></span><span class="t">        <span class="str">&#x27;&lt;main class=&quot;app-content&quot;&gt;\n&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t220" href="#t220">220</a></span><span class="t">        <span class="fst">f&#x27;</span><span class="op">{</span><span class="nam">body_html</span><span class="op">}</span><span class="fst">\n</span><span class="fst">&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t221" href="#t221">221</a></span><span class="t">        <span class="str">&#x27;&lt;/main&gt;\n&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t222" href="#t222">222</a></span><span class="t">        <span class="str">&#x27;&lt;/div&gt;\n&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t223" href="#t223">223</a></span><span class="t">        <span class="str">&#x27;&lt;/div&gt;\n&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t224" href="#t224">224</a></span><span class="t">        <span class="str">&#x27;&lt;/body&gt;\n&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t225" href="#t225">225</a></span><span class="t">        <span class="str">&#x27;&lt;/html&gt;\n&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t226" href="#t226">226</a></span><span class="t">    <span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+</main>
+<footer>
+    <div class="content">
+        <p>
+            <a class="nav" href="z_7e445d3ad6642247_report_tabs_py.html">&#xab; prev</a> &nbsp; &nbsp;
+            <a class="nav" href="index.html">&Hat; index</a> &nbsp; &nbsp;
+            <a class="nav" href="z_7e445d3ad6642247_sim_compare_py.html">&#xbb; next</a>
+            &nbsp; &nbsp; &nbsp;
+            <a class="nav" href="https://coverage.readthedocs.io/en/7.15.4">coverage.py v7.15.4</a>,
+            created at 2026-08-10 08:55 +0000
+        </p>
+    </div>
+</footer>
+</body>
+</html>
