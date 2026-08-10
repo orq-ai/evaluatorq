@@ -9,15 +9,15 @@ never carries noise suggestions.
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
+from pydantic import BaseModel, Field
 
-from evaluatorq.common.llm_call import apply_pipeline_metadata
+from evaluatorq.common.extract_json import extract_json_from_response
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.sanitize import xml_escape
-from evaluatorq.common.tracing import get_trace_context_headers, record_llm_input, record_llm_response
+from evaluatorq.common.structured_output import generate_structured
 from evaluatorq.simulation.reports.sections import (
     _criteria_rows,
     _is_errored,
@@ -30,6 +30,17 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
     from evaluatorq.simulation.types import SimulationResult
+
+
+class _SuggestionsLLMResponse(BaseModel):
+    """Schema the LLM fills with remediation suggestions for one result (RES-822).
+
+    Structured-output-first via ``generate_structured``, with a fence-tolerant
+    ``json_object`` fallback for models that reject structured output.
+    """
+
+    suggestions: list[str] = Field(default_factory=list)
+
 
 # Metric thresholds on the judge's 0-1 scales. A conversation-average beyond
 # these marks the result as remediable.
@@ -152,33 +163,26 @@ async def generate_recommendations(
 
     recommendations: list[SimulationRecommendation] = []
     for idx, result, triggers in triggered:
-        extra: Any = dict(llm_kwargs or {})
-        if temperature is not None:
-            extra['temperature'] = temperature
-        apply_pipeline_metadata(extra)
         messages = [
             {'role': 'system', 'content': _SYSTEM_PROMPT.format(max_suggestions=_MAX_SUGGESTIONS)},
             {'role': 'user', 'content': _build_user_prompt(result, triggers)},
         ]
         try:
-            from evaluatorq.simulation.tracing import with_llm_span
-
-            async with with_llm_span(model=model, max_tokens=800, purpose='recommendations') as span:
-                record_llm_input(span, messages)
-                trace_headers = await get_trace_context_headers()
-                if trace_headers:
-                    extra['extra_headers'] = {**(extra.get('extra_headers') or {}), **trace_headers}
-                response = await llm_client.chat.completions.create(  # pyright: ignore[reportCallIssue, reportArgumentType]
-                    model=model,
-                    messages=messages,  # pyright: ignore[reportArgumentType]
-                    max_completion_tokens=800,
-                    response_format={'type': 'json_object'},  # pyright: ignore[reportArgumentType]
-                    **extra,
-                )
-                record_llm_response(span, response)
-            content = response.choices[0].message.content or '{}'
-            raw = json.loads(content).get('suggestions', [])
-            suggestions = [str(s) for s in raw if s][:_MAX_SUGGESTIONS] if isinstance(raw, list) else []
+            parsed, raw = await generate_structured(
+                client=llm_client,
+                model=model,
+                messages=messages,
+                response_format=_SuggestionsLLMResponse,
+                temperature=temperature,
+                max_tokens=800,
+                label='recommendations',
+                extra_kwargs=dict(llm_kwargs or {}),
+            )
+            if parsed is None:
+                # Fallback path: parse the json_object payload, tolerating a
+                # ```json fenced body from providers that ignore response_format.
+                parsed = _SuggestionsLLMResponse.model_validate_json(extract_json_from_response(raw))
+            suggestions = [str(s) for s in parsed.suggestions if s][:_MAX_SUGGESTIONS]
             if not suggestions:
                 continue
 
