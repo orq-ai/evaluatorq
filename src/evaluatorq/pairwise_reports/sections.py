@@ -69,6 +69,7 @@ def _build_consensus_section(run: PairwiseRun) -> ReportSection:
     # inconclusive_rate would make the caption depend on that float arithmetic
     # round-tripping. Counting is exact by construction.
     decided = sum(1 for e in run.entries if e.comparison.winner in ('A', 'B'))
+    weighted = report.bt_sigma
     return ReportSection(
         kind='pairwise_consensus',
         title='Consensus',
@@ -82,6 +83,16 @@ def _build_consensus_section(run: PairwiseRun) -> ReportSection:
             'mean_agreement': report.mean_agreement,
             'comparisons': total,
             'decided': decided,
+            'bt_sigma': (
+                {
+                    'a_win_rate': weighted.a_win_rate,
+                    'b_win_rate': weighted.b_win_rate,
+                    'inconclusive_rate': weighted.inconclusive_rate,
+                    'fit_warnings': list(weighted.fit_warnings),
+                }
+                if weighted is not None
+                else None
+            ),
         },
     )
 
@@ -122,6 +133,7 @@ def _build_judges_section(run: PairwiseRun) -> ReportSection:
             # already False — and consulting it would let a mis-set flag decide
             # what the votes have already settled.
             'position_bias': stat.position_bias if measured[stat.model] else None,
+            'sigma': stat.sigma,
             'biased': measured[stat.model] and stat.position_bias >= POSITION_BIAS_WARN,
             # Carried so the renderer can tell the unmeasurable cases apart:
             # the run never swapped, or it swapped but this judge never landed
@@ -139,6 +151,7 @@ def _build_judges_section(run: PairwiseRun) -> ReportSection:
             'label_b': run.label_b,
             'swap': run.swap,
             'observed_swap': any(measured.values()),
+            'bt_sigma': report.bt_sigma is not None,
             'rows': rows,
         },
     )
