@@ -180,6 +180,16 @@ report = await red_team(
     OpenAI target, so the guard passes silently (the healthy case). It would
     raise only if you added an in-family judge such as `"openai/gpt-4o-mini"`.
 
+!!! warning "`min_successful_judges` vs. `min_evaluation_coverage` — two different levels"
+    `min_successful_judges` above is a **per-attack** quorum: it decides whether
+    *this one* jury panel produced enough decisive votes to reach a verdict for
+    *this one* attack. `EvaluatorConfig` also has `min_evaluation_coverage`
+    (default `0.8`), which is a separate, **run-level** floor: the fraction of
+    *all* attacks in the run that must get any verdict at all. A `min_successful_judges`
+    miss on one attack is exactly what produces one of the unevaluated attacks
+    that `min_evaluation_coverage` counts against. Missing the run-level floor
+    makes `eq redteam run` exit `1` — see [Red Teaming › In CI](guides/red-teaming.md#in-ci).
+
 `EvaluatorConfig` adds `strict_panel` (turn panel-composition warnings into hard
 errors) and surfaces a per-attack `jury` breakdown plus a run-level reliability
 statistic:

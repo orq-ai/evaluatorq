@@ -20,8 +20,12 @@ from evaluatorq.common.reports import cost_coverage as _cost_coverage
 from evaluatorq.common.reports import details_block as _details_block
 from evaluatorq.common.reports import fmt_cost as _fmt_cost
 from evaluatorq.common.reports import md_table as _md_table
-from evaluatorq.common.reports import pct as _pct
 from evaluatorq.common.reports import truncate as _truncate
+
+# `evaluatorq.common.reports.pct` re-exports whichever of html_helpers/md_helpers
+# was imported last in that package's __init__, currently md_helpers's
+# float-only variant — import the None-safe html_helpers one directly instead.
+from evaluatorq.common.reports.html_helpers import pct as _pct
 from evaluatorq.redteam.reports.sections import build_report_sections
 
 if TYPE_CHECKING:
@@ -31,6 +35,13 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # Red-team-specific helpers
 # ---------------------------------------------------------------------------
+
+
+def _verdict_label(*, vulnerable: bool | None) -> str:
+    """Three-way verdict label — ``None`` is unevaluated, never "RESISTANT"."""
+    if vulnerable is None:
+        return 'NOT EVALUATED'
+    return 'VULNERABLE' if vulnerable else 'RESISTANT'
 
 
 def _severity_label(risk_score: float) -> str:
@@ -71,14 +82,18 @@ def _render_header(data: dict[str, Any]) -> str:
 def _render_summary_section(section: ReportSection) -> str:
     """Render the executive summary with a risk verdict callout and KPI strip."""
     data = section.data
-    asr = data.get('vulnerability_rate', 0.0)
+    asr = data.get('vulnerability_rate')
     total_attacks = data.get('total_attacks', 0)
     vulnerabilities_found = data.get('vulnerabilities_found', 0)
     evaluated_attacks = data.get('evaluated_attacks', 0)
     evaluation_coverage = data.get('evaluation_coverage', 0.0)
     total_errors = data.get('total_errors', 0)
 
-    if asr >= 0.50:
+    if asr is None:
+        # Nothing was evaluated — neutral callout, not "LOW risk" (which
+        # implies attacks were tried and resisted).
+        callout_type, risk_label = 'NOTE', 'RISK: NOT EVALUATED'
+    elif asr >= 0.50:
         callout_type, risk_label = 'CAUTION', 'RISK: CRITICAL'
     elif asr >= 0.25:
         callout_type, risk_label = 'CAUTION', 'RISK: HIGH'
@@ -292,7 +307,7 @@ def _render_agent_disagreements_section(section: ReportSection) -> str:
         severity = d.get('severity', '')
         per_agent: list[dict[str, Any]] = d.get('per_agent', [])
 
-        verdicts = [f'{pa["agent"]}: **{"VULNERABLE" if pa["vulnerable"] else "RESISTANT"}**' for pa in per_agent]
+        verdicts = [f'{pa["agent"]}: **{_verdict_label(vulnerable=pa["vulnerable"])}**' for pa in per_agent]
 
         body_lines = [
             f'- **Vulnerability:** {vulnerability}',
@@ -302,7 +317,7 @@ def _render_agent_disagreements_section(section: ReportSection) -> str:
             '',
         ]
         for pa in per_agent:
-            verdict = 'VULNERABLE' if pa['vulnerable'] else 'RESISTANT'
+            verdict = _verdict_label(vulnerable=pa['vulnerable'])
             explanation = pa.get('explanation', '')
             snippet = pa.get('response_snippet', '')
             body_lines.append(f'**{pa["agent"]}** ({verdict}):')
@@ -333,7 +348,8 @@ def _render_vulnerability_breakdown_section(section: ReportSection) -> str:
             r.get('domain', ''),
             str(r['total_attacks']),
             str(r['vulnerabilities_found']),
-            _bold_bar(r['vulnerability_rate']),
+            # bold_bar() has no None case; unevaluated rows render as 'n/a'.
+            _pct(None) if r['vulnerability_rate'] is None else _bold_bar(r['vulnerability_rate']),
         ]
         for r in rows
     ]
@@ -356,7 +372,7 @@ def _render_category_breakdown_section(section: ReportSection) -> str:
             f'{r["category"]} — {r["category_name"]}',
             str(r['total_attacks']),
             str(r['vulnerabilities_found']),
-            _bold_bar(r['vulnerability_rate']),
+            _pct(None) if r['vulnerability_rate'] is None else _bold_bar(r['vulnerability_rate']),
         ]
         for r in rows
     ]
@@ -389,10 +405,13 @@ def _render_attack_heatmap_section(section: ReportSection) -> str:
         row: list[str] = [vuln]
         for tech in techniques:
             cell = cell_map.get((vuln, tech))
+            asr = cell.get('vulnerability_rate') if cell else None
             if cell is None or cell.get('total_attacks', 0) == 0:
                 row.append('-')
+            elif asr is None:
+                # Attacks exist for this cell but none were evaluated.
+                row.append(_pct(None))
             else:
-                asr = cell.get('vulnerability_rate', 0.0)
                 pct_str = f'{asr:.0%}'
                 row.append(f'**{pct_str}**' if asr >= 0.40 else pct_str)
         table_rows.append(row)
@@ -413,7 +432,7 @@ def _render_technique_breakdown_section(section: ReportSection) -> str:
             r['technique'],
             str(r['total_attacks']),
             str(r['vulnerabilities_found']),
-            _bold_bar(r['vulnerability_rate']),
+            _pct(None) if r['vulnerability_rate'] is None else _bold_bar(r['vulnerability_rate']),
         ]
         for r in rows
     ]
@@ -436,7 +455,7 @@ def _render_delivery_breakdown_section(section: ReportSection) -> str:
             r['delivery_method'],
             str(r['total_attacks']),
             str(r['vulnerabilities_found']),
-            _bold_bar(r['vulnerability_rate']),
+            _pct(None) if r['vulnerability_rate'] is None else _bold_bar(r['vulnerability_rate']),
         ]
         for r in rows
     ]
@@ -462,7 +481,7 @@ def _render_turn_scope_breakdown_section(section: ReportSection) -> str:
                 name,
                 str(stats.get('total_attacks', 0)),
                 str(stats.get('vulnerabilities_found', 0)),
-                _bold_bar(stats.get('vulnerability_rate', 0.0)),
+                _pct(None) if stats.get('vulnerability_rate') is None else _bold_bar(stats['vulnerability_rate']),
             ]
             for name, stats in mapping.items()
         ]
@@ -492,7 +511,7 @@ def _render_turn_depth_analysis_section(section: ReportSection) -> str:
             str(r['turn_count']),
             str(r['total_attacks']),
             str(r['vulnerabilities_found']),
-            _bold_bar(r['vulnerability_rate']),
+            _pct(None) if r['vulnerability_rate'] is None else _bold_bar(r['vulnerability_rate']),
         ]
         for r in rows
     ]
@@ -568,7 +587,7 @@ def _render_framework_breakdown_section(section: ReportSection) -> str:
             r['framework'],
             str(r['total_attacks']),
             str(r['vulnerabilities_found']),
-            _bold_bar(r['vulnerability_rate']),
+            _pct(None) if r['vulnerability_rate'] is None else _bold_bar(r['vulnerability_rate']),
         ]
         for r in rows
     ]

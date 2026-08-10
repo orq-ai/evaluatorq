@@ -3,6 +3,7 @@ import contextlib
 import os
 import sys
 from collections.abc import Awaitable, Sequence
+from contextlib import AsyncExitStack
 from datetime import datetime, timezone
 from itertools import starmap
 from typing import Any, cast
@@ -19,7 +20,7 @@ from .processings import process_data_point
 from .progress import Phase, ProgressService, with_progress
 from .send_results import send_results_to_orq
 from .table_display import display_results_table
-from .tracing import tracing_session
+from .tracing import capture_parent_context, tracing_session
 from .types import (
     DataPoint,
     DataPointInput,
@@ -108,6 +109,7 @@ async def evaluatorq(
     description: str | None = None,
     path: str | None = None,
     inference: bool = True,
+    single_trace: bool = False,
     _exit_on_failure: bool = True,
     _send_results: bool = True,
     _base_url: str | None = None,
@@ -144,6 +146,9 @@ async def evaluatorq(
         inference: When True (default) jobs run to generate responses. When False,
               generation is skipped and evaluators score the pre-recorded response in
               each row's ``messages`` column; ``jobs`` is then optional and ignored.
+        single_trace: Group every row under one ``evaluatorq.run`` span so the whole
+              evaluation is a single trace. Defaults to False, which leaves each row's
+              ``orq.job`` as its own root — an N-row run is then N separate traces.
 
     Returns:
         List of DataPointResult objects
@@ -167,6 +172,7 @@ async def evaluatorq(
             description=description,
             path=path,
             inference=inference,
+            single_trace=single_trace,
         )
     else:
         raise ValueError(
@@ -192,8 +198,28 @@ async def evaluatorq(
     print_results = validated.print_results
     description = validated.description
     path = validated.path
+    single_trace = validated.single_trace
 
-    async with tracing_session(name, trace_type=_trace_type) as tracing_context:
+    async with tracing_session(name, trace_type=_trace_type) as tracing_context, AsyncExitStack() as span_stack:
+        if single_trace:
+            from .tracing.spans import RunSpanOptions, with_run_span
+
+            run_span = await span_stack.enter_async_context(
+                with_run_span(
+                    RunSpanOptions(
+                        run_id=tracing_context.run_id,
+                        run_name=name,
+                        parent_context=tracing_context.parent_context,
+                        trace_type=_trace_type,
+                    )
+                )
+            )
+            # Re-point the context the per-row job spans parent to. tracing_session
+            # captured the ambient context *before* this span existed, and jobs pass
+            # parent_context explicitly rather than reading the ambient one.
+            if run_span is not None:
+                tracing_context.parent_context = await capture_parent_context()
+
         orq_api_key = os.environ.get('ORQ_API_KEY')
 
         start_time = datetime.now(timezone.utc)

@@ -741,6 +741,12 @@ TokenUsage = Usage
 # result models. Shared so writers/readers cannot drift.
 JURY_RAW_OUTPUT_KEY = 'jury'
 
+# Same mechanism for the judge's own failure. A judge that could not return a verdict
+# records why here, and converters lift it onto the typed result as ``evaluation_error``
+# — so a blocked or unparseable judge shows up in the run's error rollup instead of
+# being buried in one attack's explanation string.
+EVAL_ERROR_RAW_OUTPUT_KEY = 'evaluation_error'
+
 
 class JuryVote(BaseModel):
     """A single judge's aggregate vote within a jury.
@@ -1440,8 +1446,9 @@ class RunSummary(TypedDict, total=False):
     # Red-team extras
     pipeline: str
     total_attacks: int
-    vulnerability_rate: float
-    resistance_rate: float
+    # Both None when no attack could be evaluated — see ReportSummary._RATE_NONE_DOC.
+    vulnerability_rate: float | None
+    resistance_rate: float | None
     tested_agents: list[str]
     # Sim extras
     mode: str

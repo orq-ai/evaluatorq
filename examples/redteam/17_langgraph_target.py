@@ -55,7 +55,8 @@ async def main() -> None:
         max_turns=2,
     )
     s = report.summary
-    print(f"Resistance rate:       {s.resistance_rate:.0%}")
+    rate = s.resistance_rate
+    print(f"Resistance rate:       {rate:.0%}" if rate is not None else "Resistance rate:       no verdict")
     print(f"Attacks:               {s.total_attacks}")
     print(f"Vulnerabilities found: {s.vulnerabilities_found}")
 

@@ -44,7 +44,8 @@ async def main() -> None:
 
     print(f"Pipeline: {report.pipeline}")
     print(f"Total attacks: {report.total_results}")
-    print(f"Resistance rate: {report.summary.resistance_rate:.0%}")
+    rate = report.summary.resistance_rate
+    print(f"Resistance rate: {rate:.0%}" if rate is not None else "Resistance rate: no verdict")
 
     # List vulnerable results
     for result in report.results:

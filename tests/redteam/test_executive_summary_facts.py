@@ -80,6 +80,52 @@ def test_build_facts_includes_counts_categories_and_finding():
     assert 'multi' in facts.lower()
 
 
+def test_build_facts_no_verdict_emits_unknown_line_and_coverage_and_does_not_crash():
+    """When nothing could be evaluated, resistance_rate is None. build_redteam_facts
+    must not crash formatting it, must emit the explicit "unknown" line instructing
+    against calling the target resistant, and must still report evaluation coverage.
+    """
+    results = [
+        RedTeamResult(
+            attack=AttackInfo(
+                id='ASI01-timeout',
+                category='ASI01',
+                framework=Framework.OWASP_AGENTIC,
+                attack_technique=AttackTechnique.DIRECT_INJECTION,
+                delivery_methods=[],
+                turn_type=TurnType.SINGLE,
+                severity=Severity.MEDIUM,
+                source='test',
+                vulnerability='excessive_agency',
+            ),
+            agent=AgentInfo(key='agent:test'),
+            messages=[Message(role='user', content='hi')],
+            response=None,
+            evaluation=None,
+            vulnerable=None,
+            execution=ExecutionDetails(turns=1, max_turns=1),
+            error='guardrail check failed',
+            error_type='api_status',
+        )
+    ]
+    report = RedTeamReport(
+        created_at=datetime.now(tz=timezone.utc),
+        pipeline=Pipeline.DYNAMIC,
+        categories_tested=['ASI01'],
+        tested_agents=['agent:test'],
+        total_results=len(results),
+        results=results,
+        summary=compute_report_summary(results),
+    )
+    assert report.summary.resistance_rate is None
+
+    facts = build_redteam_facts(report)
+    assert 'unknown — no attack could be evaluated' in facts
+    assert 'not' in facts.lower()
+    assert 'resistant' in facts.lower()
+    assert 'Evaluation coverage: 0/1 attacks scored' in facts
+
+
 def test_build_facts_empty_report_is_blank():
     empty = RedTeamReport(
         created_at=datetime.now(tz=timezone.utc),

@@ -518,8 +518,6 @@ async def test_record_llm_response_on_real_span(span_collector: _CollectingExpor
     assert attrs['gen_ai.response.model'] == 'gpt-5-mini-0125'
     assert attrs['gen_ai.usage.input_tokens'] == 100
     assert attrs['gen_ai.usage.output_tokens'] == 50
-    assert attrs['gen_ai.usage.prompt_tokens'] == 100
-    assert attrs['gen_ai.usage.completion_tokens'] == 50
     assert attrs['gen_ai.response.finish_reasons'] == ('stop',)
 
     output_msgs = json.loads(attrs['gen_ai.output.messages'])

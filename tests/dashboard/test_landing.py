@@ -778,6 +778,32 @@ class TestZeroAttackScore:
         # 0 attacks evaluated: 1.00 would read as a perfect score.
         assert rows[0].score is None
 
+    def test_null_recorded_rate_has_no_score(self, tmp_path: Path) -> None:
+        """An explicitly null rate stays null, even for a run with zero attacks.
+
+        ``zero_evaluated_attacks`` deliberately says False for a run that attempted
+        nothing (empty, not unscored), so the null has to survive on its own — the
+        legacy 1.0 default applies only when the field is *absent*.
+        """
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        payload = _redteam_payload(
+            'no attacks',
+            created='2026-07-31T13:00:00Z',
+            resistance=1.0,
+            vulns=0,
+            evaluated=0,
+            tokens=0,
+            severity={},
+        )
+        payload['summary']['resistance_rate'] = None
+        payload['summary']['total_attacks'] = 0
+        (rt / 'noattacks_20260731_130000.json').write_text(json.dumps(payload))
+
+        rows = metrics.run_rows([rt])
+        assert len(rows) == 1
+        assert rows[0].score is None
+
 
 class TestDashboardCostCoverage:
     """Spend figures the dashboard shows must carry the same lower-bound label

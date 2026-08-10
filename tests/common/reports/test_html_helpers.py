@@ -409,3 +409,38 @@ def test_status_badge_classes():
     assert 'status-badge--pass' in h.status_badge('ACHIEVED', 'pass')
     assert 'status-badge--fail' in h.status_badge('NOT ACHIEVED', 'fail')
     assert 'NOT ACHIEVED' in h.status_badge('NOT ACHIEVED', 'fail')
+
+
+# ---------------------------------------------------------------------------
+# pct() / md_helpers.bar() / md_helpers.bold_bar() — None-safe formatting
+# ---------------------------------------------------------------------------
+
+
+def test_pct_none_is_not_available():
+    assert h.pct(None) == 'n/a'
+
+
+def test_pct_float_formats_as_percentage():
+    assert h.pct(0.7) == '70%'
+
+
+def test_md_helpers_pct_is_the_same_object_as_html_helpers_pct():
+    from evaluatorq.common.reports import md_helpers
+
+    assert md_helpers.pct is h.pct
+
+
+def test_md_helpers_bar_none_does_not_crash_and_reports_na():
+    from evaluatorq.common.reports import md_helpers
+
+    out = md_helpers.bar(None)
+    assert 'n/a' in out
+    assert '█' not in out
+
+
+def test_md_helpers_bold_bar_none_does_not_crash_and_is_not_bolded():
+    from evaluatorq.common.reports import md_helpers
+
+    out = md_helpers.bold_bar(None)
+    assert 'n/a' in out
+    assert '**' not in out

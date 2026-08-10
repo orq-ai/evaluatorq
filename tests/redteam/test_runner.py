@@ -676,3 +676,108 @@ class TestHuggingFacePreflight:
         ) as mock_dyn:
             await red_team('agent:test', mode='dynamic', categories=['ASI01'])
         mock_dyn.assert_awaited_once()
+
+
+class TestApplyCoveragePolicy:
+    """The coverage floor must reach the report on every pipeline, not just dynamic.
+
+    ``coverage_below_minimum`` returns False whenever the floor is None, so a leg
+    that never stamps does not merely lose a warning — it silently disables the CLI
+    exit gate for its entire mode. Static ran that way: it accepted
+    ``--min-evaluation-coverage 0.8`` and exited 0 at 50% coverage.
+    """
+
+    def test_stamps_the_floor_from_pipeline_config(self):
+        from evaluatorq.redteam.contracts import EvaluatorConfig, LLMConfig
+        from evaluatorq.redteam.runner import _apply_coverage_policy
+
+        report = _make_report(summary=ReportSummary(total_attacks=4, evaluated_attacks=4, evaluation_coverage=1.0))
+        _apply_coverage_policy(report, LLMConfig(evaluator=EvaluatorConfig(min_evaluation_coverage=0.8)))
+
+        assert report.summary.min_evaluation_coverage == 0.8
+        assert report.summary.coverage_below_minimum is False
+        assert report.pipeline_warnings == []
+
+    def test_no_config_leaves_the_floor_unset(self):
+        from evaluatorq.redteam.runner import _apply_coverage_policy
+
+        report = _make_report(summary=ReportSummary(total_attacks=4, evaluated_attacks=2, evaluation_coverage=0.5))
+        _apply_coverage_policy(report, None)
+
+        assert report.summary.min_evaluation_coverage is None
+        assert report.summary.coverage_below_minimum is False
+
+    def test_partial_coverage_trips_the_gate_and_warns(self):
+        from evaluatorq.redteam.contracts import EvaluatorConfig, LLMConfig
+        from evaluatorq.redteam.runner import _apply_coverage_policy
+
+        report = _make_report(
+            summary=ReportSummary(
+                total_attacks=4, evaluated_attacks=2, unevaluated_attacks=2, evaluation_coverage=0.5
+            )
+        )
+        _apply_coverage_policy(report, LLMConfig(evaluator=EvaluatorConfig(min_evaluation_coverage=0.8)))
+
+        assert report.summary.coverage_below_minimum is True
+        assert any('below the configured minimum' in w for w in report.pipeline_warnings)
+
+    def test_total_blackout_warns_no_verdict_instead(self):
+        from evaluatorq.redteam.contracts import EvaluatorConfig, LLMConfig
+        from evaluatorq.redteam.runner import _apply_coverage_policy
+
+        report = _make_report(
+            summary=ReportSummary(
+                total_attacks=3, evaluated_attacks=0, unevaluated_attacks=3, evaluation_coverage=0.0
+            )
+        )
+        _apply_coverage_policy(report, LLMConfig(evaluator=EvaluatorConfig(min_evaluation_coverage=0.8)))
+
+        assert report.summary.no_verdict is True
+        assert any('NO VERDICT' in w for w in report.pipeline_warnings)
+        # The blackout message replaces the coverage one rather than stacking with it.
+        assert not any('below the configured minimum' in w for w in report.pipeline_warnings)
+
+    def test_floor_of_zero_is_recorded_not_treated_as_absent(self):
+        """0.0 means "warn, never fail" — it must not collapse into None."""
+        from evaluatorq.redteam.contracts import EvaluatorConfig, LLMConfig
+        from evaluatorq.redteam.runner import _apply_coverage_policy
+
+        report = _make_report(summary=ReportSummary(total_attacks=4, evaluated_attacks=1, evaluation_coverage=0.25))
+        _apply_coverage_policy(report, LLMConfig(evaluator=EvaluatorConfig(min_evaluation_coverage=0.0)))
+
+        assert report.summary.min_evaluation_coverage == 0.0
+        assert report.summary.coverage_below_minimum is False
+
+    @pytest.mark.asyncio
+    async def test_static_leg_stamps_the_floor(self):
+        """The regression itself: a static run must record the policy it was judged against."""
+        from unittest.mock import AsyncMock, patch
+
+        from evaluatorq.redteam.contracts import EvaluatorConfig, LLMConfig
+
+        captured: dict[str, object] = {}
+
+        async def _fake_static(**kwargs):
+            from evaluatorq.redteam.runner import _apply_coverage_policy
+
+            report = _make_report(
+                pipeline=Pipeline.STATIC,
+                summary=ReportSummary(total_attacks=4, evaluated_attacks=2, evaluation_coverage=0.5),
+            )
+            _apply_coverage_policy(report, kwargs.get('pipeline_config'))
+            captured['report'] = report
+            return _run_result(report)
+
+        with patch('evaluatorq.redteam.runner._run_static', new=AsyncMock(side_effect=_fake_static)):
+            await red_team(
+                'agent:test',
+                mode='static',
+                dataset='/tmp/local.json',
+                llm_config=LLMConfig(evaluator=EvaluatorConfig(min_evaluation_coverage=0.8)),
+                generate_executive_summary=False,  # keeps the test off the network
+            )
+
+        report = captured['report']
+        assert isinstance(report, RedTeamReport)
+        assert report.summary.min_evaluation_coverage == 0.8
+        assert report.summary.coverage_below_minimum is True

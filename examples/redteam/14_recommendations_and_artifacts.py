@@ -47,7 +47,8 @@ async def main() -> None:
     )
 
     # Print summary
-    print(f"Resistance rate: {report.summary.resistance_rate:.0%}")
+    rate = report.summary.resistance_rate
+    print(f"Resistance rate: {rate:.0%}" if rate is not None else "Resistance rate: no verdict")
 
     # Print recommendations (if generated)
     if report.focus_area_recommendations:

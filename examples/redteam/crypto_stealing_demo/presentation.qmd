@@ -641,7 +641,8 @@ report = await red_team(
     max_turns=4,
 )
 
-print(f"Resistance: {report.summary.resistance_rate:.0%}")
+rate = report.summary.resistance_rate
+print(f"Resistance: {rate:.0%}" if rate is not None else "Resistance: no verdict")
 ```
 
 Any Python callable with `send_prompt` + `reset_conversation` works.

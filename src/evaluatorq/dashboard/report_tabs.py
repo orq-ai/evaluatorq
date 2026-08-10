@@ -1477,7 +1477,11 @@ def _rt_agent_stats(report: RedTeamReport) -> dict[str, dict[str, Any]]:
 
     ``display_name``/``model`` are taken from the **first** result matching
     each key (not ``results[0]`` globally, which would attach one agent's
-    model to every card). ``asr = vulns / attacks`` guards ``attacks == 0``.
+    model to every card). ``asr = vulns / evaluated`` guards ``evaluated == 0``
+    — ``r.vulnerable is None`` means the attack couldn't be judged and must
+    count in neither ``vulns`` nor the resistant remainder, so an all-
+    unevaluated agent reports ``asr``/``resistance`` as ``None`` rather than
+    a false 0% ASR / 100% resistance.
     """
     stats: dict[str, dict[str, Any]] = {}
     for r in report.results:
@@ -1488,35 +1492,50 @@ def _rt_agent_stats(report: RedTeamReport) -> dict[str, dict[str, Any]]:
                 'display_name': r.agent.display_name or key,
                 'model': r.agent.model or '',
                 'attacks': 0,
+                'evaluated': 0,
                 'vulns': 0,
                 'critical': 0,
                 'errors': 0,
             },
         )
         entry['attacks'] += 1
-        if r.vulnerable:
-            entry['vulns'] += 1
-            if r.attack.severity == 'critical':
-                entry['critical'] += 1
+        if r.vulnerable is not None:
+            entry['evaluated'] += 1
+            if r.vulnerable:
+                entry['vulns'] += 1
+                if r.attack.severity == 'critical':
+                    entry['critical'] += 1
         if r.error is not None:
             entry['errors'] += 1
     for entry in stats.values():
-        attacks = entry['attacks']
+        evaluated = entry['evaluated']
         vulns = entry['vulns']
-        entry['asr'] = vulns / attacks if attacks else 0.0
-        entry['resistance'] = 1.0 - entry['asr']
+        entry['asr'] = vulns / evaluated if evaluated else None
+        entry['resistance'] = (1.0 - entry['asr']) if entry['asr'] is not None else None
     return stats
 
 
 def _rt_exec_summary(summary_data: dict[str, Any], by_kind: dict[str, Any]) -> str:
     """Templated exec-summary sentence + fallbacks (spec §Overview.1).
-    Empty-run guard: ``total_attacks`` falsy -> ``''``, nothing below runs."""
+    Empty-run guard: ``total_attacks`` falsy -> ``''``, nothing below runs.
+    Zero-evaluated guard: nothing could be judged -> a distinct no-verdict
+    sentence, never "the agent resisted all of them" (same rule as
+    ``_rt_kpi_band``'s resistance card — an untested run must not read as a
+    clean pass)."""
     from evaluatorq.common.reports.html_helpers import pct
+    from evaluatorq.dashboard.metrics import zero_evaluated_attacks
     from evaluatorq.dashboard.report_kit import callout
 
     total = summary_data.get('total_attacks', 0)
     if not total:
         return ''
+
+    if zero_evaluated_attacks(summary_data):
+        sentence = (
+            f'Across <strong>{total}</strong> adversarial attacks, none could be evaluated '
+            '(target or judge errors) — no verdict is available for this run.'
+        )
+        return callout(sentence, confidence=summary_data.get('confidence'))
 
     category_section = by_kind.get('category_breakdown')
     rows = category_section.data.get('rows', []) if category_section is not None else []
@@ -1524,7 +1543,7 @@ def _rt_exec_summary(summary_data: dict[str, Any], by_kind: dict[str, Any]) -> s
 
     vulns = summary_data.get('vulnerabilities_found', 0)
     critical = summary_data.get('critical_exposure', 0)
-    resistance_rate = summary_data.get('resistance_rate', 0.0)
+    resistance_rate = summary_data.get('resistance_rate')
 
     if vulns:
         critical_clause = f', including <strong>{critical} critical</strong>' if critical else ''
@@ -1539,25 +1558,27 @@ def _rt_exec_summary(summary_data: dict[str, Any], by_kind: dict[str, Any]) -> s
             f'categor{"y" if k == 1 else "ies"}, the agent resisted all of them.'
         )
 
-    if rows and rows[0].get('vulnerability_rate', 0.0) > 0:
+    top_rate = rows[0].get('vulnerability_rate') if rows else None
+    if top_rate is not None and top_rate > 0:
         top = rows[0]
         sentence += (
             f' <strong>{esc(top.get("category_name", ""))}</strong> is the weakest area '
-            f'({pct(top.get("vulnerability_rate", 0.0))} attack success rate).'
+            f'({pct(top_rate)} attack success rate).'
         )
 
     turn_section = by_kind.get('turn_depth_analysis')
     if turn_section is not None:
         turn_rows = turn_section.data.get('rows', [])
-        if len(turn_rows) >= 2 and turn_rows[-1].get('vulnerability_rate', 0.0) > turn_rows[0].get(
-            'vulnerability_rate', 0.0
-        ):
+        if len(turn_rows) >= 2:
             first, last = turn_rows[0], turn_rows[-1]
-            sentence += (
-                f' Attack success climbs with conversation depth — from '
-                f'{pct(first.get("vulnerability_rate", 0.0))} at {first.get("turn_count")} turns to '
-                f'{pct(last.get("vulnerability_rate", 0.0))} at {last.get("turn_count")} turns.'
-            )
+            first_rate = first.get('vulnerability_rate')
+            last_rate = last.get('vulnerability_rate')
+            if first_rate is not None and last_rate is not None and last_rate > first_rate:
+                sentence += (
+                    f' Attack success climbs with conversation depth — from '
+                    f'{pct(first_rate)} at {first.get("turn_count")} turns to '
+                    f'{pct(last_rate)} at {last.get("turn_count")} turns.'
+                )
 
     total_errors = summary_data.get('total_errors', 0)
     if total_errors:
@@ -1576,24 +1597,27 @@ def _rt_kpi_band(s: dict[str, Any]) -> str:
     resistance = s.get('resistance_rate', 0.0)
     vulns = s.get('vulnerabilities_found', 0)
     critical = s.get('critical_exposure', 0)
-    if zero_evaluated_attacks(s):
-        # Zero evaluated attacks: the rate is only its schema default — same
-        # no-score rule as the landing rows and the red-team overview.
+    if zero_evaluated_attacks(s) or resistance is None or asr is None:
+        # No verdict to show: either nothing was evaluated (the rate is only its
+        # schema default — same no-score rule as the landing rows and the red-team
+        # overview) or the rate is explicitly null. Both rate cards share the guard.
         resistance_card = {'label': 'Resistance rate', 'value': 'n/a', 'status': 'neutral'}
+        asr_card = {'label': 'Attack success rate', 'value': 'n/a', 'status': 'neutral'}
     else:
         resistance_card = {
             'label': 'Resistance rate',
             'value': pct(resistance),
             'status': 'pass' if resistance >= 0.8 else 'warn',
         }
-    return kpi_cards([
-        {'label': 'Attacks run', 'value': str(s.get('total_attacks', 0)), 'status': 'neutral'},
-        {'label': 'Vulnerabilities', 'value': str(vulns), 'status': 'fail' if vulns else 'pass'},
-        {
+        asr_card = {
             'label': 'Attack success rate',
             'value': pct(asr),
             'status': 'fail' if asr >= 0.25 else ('warn' if asr > 0 else 'pass'),
-        },
+        }
+    return kpi_cards([
+        {'label': 'Attacks run', 'value': str(s.get('total_attacks', 0)), 'status': 'neutral'},
+        {'label': 'Vulnerabilities', 'value': str(vulns), 'status': 'fail' if vulns else 'pass'},
+        asr_card,
         resistance_card,
         {'label': 'Critical findings', 'value': str(critical), 'status': 'fail' if critical else 'pass'},
     ])
@@ -1607,10 +1631,11 @@ def _rt_agent_row(stats: dict[str, Any]) -> str:
     critical = stats.get('critical', 0)
     vulns = stats.get('vulns', 0)
     dot_cls = 'rt-hero-dot--critical' if critical else ('rt-hero-dot--vuln' if vulns else 'rt-hero-dot--clean')
-    asr = stats.get('asr', 0.0)
-    bar_pct = max(0.0, min(1.0, asr)) * 100
+    asr = stats.get('asr')
+    # None (no evaluated attacks for this agent): empty track, neutral color, pct() renders 'n/a'.
+    bar_pct = max(0.0, min(1.0, asr)) * 100 if asr is not None else 0.0
     bar_color = 'var(--red-600)' if critical else 'var(--orange-500)'
-    asr_color = 'var(--orange-600)' if vulns else 'var(--green-600)'
+    asr_color = 'var(--gray-500)' if asr is None else ('var(--orange-600)' if vulns else 'var(--green-600)')
     model = stats.get('model', '')
     model_html = f'<div class="rt-agent-row-model">{esc(model)}</div>' if model else ''
     return (
@@ -1633,7 +1658,11 @@ def _rt_agents_under_test(report: RedTeamReport) -> str:
     stats = _rt_agent_stats(report)
     if not stats:
         return ''
-    ranked = sorted(stats.values(), key=lambda st: st.get('asr', 0.0), reverse=True)
+    # None (no evaluated attacks) sorts last, not as a false 0.0 tied with resistant agents.
+    ranked = sorted(
+        stats.values(),
+        key=lambda st: (st.get('asr') is None, -(st.get('asr') or 0.0)),
+    )
     rows_html = ''.join(_rt_agent_row(st) for st in ranked)
     return panel(
         'Agents under test',
@@ -1954,7 +1983,17 @@ def _rt_attack_row(r: RedTeamResult, rid: str, idx: int) -> str:
     atk = r.attack
     # Raw text either way — esc() is applied once at the interpolation site below.
     title_name = fmt_vulnerability(atk.vulnerability) if atk.vulnerability else atk.category
-    outcome = 'error' if r.error else ('vulnerable' if r.vulnerable else 'resistant')
+    # Three-way, not two-way: r.vulnerable is None means the attack couldn't be judged
+    # (target/judge failure) and must render as its own neutral state, never 'resistant'
+    # (outcome_pill() falls back to a neutral tone for any status it doesn't recognize).
+    if r.error:
+        outcome = 'error'
+    elif r.vulnerable is None:
+        outcome = 'Not evaluated'
+    elif r.vulnerable:
+        outcome = 'vulnerable'
+    else:
+        outcome = 'resistant'
     safe_rid = esc(rid)
 
     summary_html = (
@@ -2145,12 +2184,15 @@ def _rt_breakdowns_depth_leadin(rows: list[dict[str, Any]]) -> str:
     if len(rows) < 2:
         return ''
     first, last = rows[0], rows[-1]
-    if last.get('vulnerability_rate', 0.0) <= first.get('vulnerability_rate', 0.0):
+    first_rate = first.get('vulnerability_rate')
+    last_rate = last.get('vulnerability_rate')
+    # Either endpoint unevaluated (no verdict for that depth) -> nothing to compare, skip the lead-in.
+    if first_rate is None or last_rate is None or last_rate <= first_rate:
         return ''
     return (
         '<p class="rt-breakdowns-leadin">Attack success climbs from '
-        f'<strong>{pct(first.get("vulnerability_rate", 0.0))}</strong> at {first.get("turn_count")} turns to '
-        f'<strong>{pct(last.get("vulnerability_rate", 0.0))}</strong> at {last.get("turn_count")} turns — '
+        f'<strong>{pct(first_rate)}</strong> at {first.get("turn_count")} turns to '
+        f'<strong>{pct(last_rate)}</strong> at {last.get("turn_count")} turns — '
         'single-turn defenses are not enough.</p>'
     )
 
@@ -2168,16 +2210,22 @@ def _rt_breakdowns_depth_section(by_kind: dict[str, Any]) -> str:
     rows = section.data.get('rows', [])
     if not rows:
         return ''
-    max_rate = max((r.get('vulnerability_rate', 0.0) for r in rows), default=0.0) or 1.0
-    bars = bar_rows(
-        [(f'{r.get("turn_count")} turns', r.get('vulnerability_rate', 0.0)) for r in rows],
-        width=520,
-        label_w=70,
-        color='var(--orange-500)',
-        fmt=pct,
-        max_value=max_rate,
-    )
-    leadin = _rt_breakdowns_depth_leadin(rows)
+    # bar_rows() takes float, not float | None — unevaluated depths (no verdict
+    # at that turn count) are excluded from the bars rather than drawn as a
+    # misleading 0% bar; the footnote below still lists every depth's raw counts.
+    evaluated_rows = [r for r in rows if r.get('vulnerability_rate') is not None]
+    bars = ''
+    if evaluated_rows:
+        max_rate = max((r['vulnerability_rate'] for r in evaluated_rows), default=0.0) or 1.0
+        bars = bar_rows(
+            [(f'{r.get("turn_count")} turns', r['vulnerability_rate']) for r in evaluated_rows],
+            width=520,
+            label_w=70,
+            color='var(--orange-500)',
+            fmt=pct,
+            max_value=max_rate,
+        )
+    leadin = _rt_breakdowns_depth_leadin(evaluated_rows)
     footnote = _rt_breakdowns_depth_footnote(rows)
     return panel(
         'Attack success by conversation depth',
@@ -2204,7 +2252,14 @@ def _rt_breakdowns_turn_scope_grid(by_kind: dict[str, Any]) -> str:
     def _grid_panel(title: str, entries: dict[str, dict[str, Any]]) -> str:
         if not entries:
             return ''
-        rows = [(name.replace('_', ' '), stats.get('vulnerability_rate', 0.0)) for name, stats in entries.items()]
+        # bar_rows() takes float, not float | None — unevaluated slices are omitted.
+        rows = [
+            (name.replace('_', ' '), stats['vulnerability_rate'])
+            for name, stats in entries.items()
+            if stats.get('vulnerability_rate') is not None
+        ]
+        if not rows:
+            return ''
         bars = bar_rows(rows, width=420, label_w=110, color_scale=SCALE_HEAT_RT, fmt=pct, max_value=1.0)
         return panel(title, bars)
 
@@ -2237,10 +2292,14 @@ def _rt_breakdowns(by_kind: dict[str, Any]) -> str:
     heatmap_html = ''
     if heatmap_section is not None and heatmap_section.data.get('cells'):
         data = heatmap_section.data
+        # heatmap() does `rate <= 0.55` on the cell value — an unevaluated (vulnerability_rate
+        # is None) cell must not reach it; dropping it falls through to the existing
+        # "missing cell" sunken "—" rendering, which already reads as "no data".
+        cells = [c for c in data.get('cells', []) if c.get('vulnerability_rate') is not None]
         table_html = heatmap(
             data.get('vulnerabilities', []),
             data.get('techniques', []),
-            data.get('cells', []),
+            cells,
             row_key='vulnerability',
             col_key='technique',
             value_key='vulnerability_rate',
@@ -2261,8 +2320,14 @@ def _rt_breakdowns(by_kind: dict[str, Any]) -> str:
         rows = section.data.get('rows', [])
         if not rows:
             return ''
+        # bar_rows() takes float, not float | None — unevaluated rows are omitted.
+        bar_data = [
+            (str(r.get(row_key, '')), r['vulnerability_rate']) for r in rows if r.get('vulnerability_rate') is not None
+        ]
+        if not bar_data:
+            return ''
         bars = bar_rows(
-            [(str(r.get(row_key, '')), r.get('vulnerability_rate', 0.0)) for r in rows],
+            bar_data,
             width=420,
             label_w=150,
             color_scale=SCALE_HEAT_RT,

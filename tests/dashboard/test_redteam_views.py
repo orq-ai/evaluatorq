@@ -342,6 +342,7 @@ class TestBreakdownView:
 
         static_summary = compute_report_summary(results)
         static_asr_rate = static_summary.by_category['ASI01'].vulnerability_rate  # 0-1
+        assert static_asr_rate is not None, 'ASI01 had evaluated attacks, so a rate must exist'
         static_asr_pct = round(static_asr_rate * 100, 1)
         # Sanity-check: 2 vulns / 3 evaluated = 0.6667 → 66.7%
         assert static_asr_pct == pytest.approx(66.7, abs=0.1), (
