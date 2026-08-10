@@ -10,6 +10,7 @@ from rich.table import Table
 from rich.text import Text
 
 from evaluatorq.common.reports import rate_style
+from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.redteam.contracts import OWASP_CATEGORY_NAMES, RedTeamReport
 from evaluatorq.redteam.vulnerability_registry import VULNERABILITY_DEFS, Vulnerability
 
@@ -69,10 +70,10 @@ def print_report_summary(report: RedTeamReport, *, console: Console | None = Non
         'Vulnerabilities',
         Text(str(summary.vulnerabilities_found), style='red' if summary.vulnerabilities_found else 'green'),
     )
-    stats.add_row(
-        'ASR',
-        Text(f'{summary.vulnerability_rate:.0%}', style=rate_style(summary.vulnerability_rate, higher_is_better=False)),
+    asr_style = (
+        'dim' if summary.vulnerability_rate is None else rate_style(summary.vulnerability_rate, higher_is_better=False)
     )
+    stats.add_row('ASR', Text(pct(summary.vulnerability_rate), style=asr_style))
     stats.add_row(
         'Eval Coverage',
         Text(f'{summary.evaluation_coverage:.0%}', style=rate_style(summary.evaluation_coverage)),
@@ -113,10 +114,11 @@ def print_report_summary(report: RedTeamReport, *, console: Console | None = Non
 
     # ── Per-vulnerability breakdown (primary) ─────────────────────────
     if summary.by_vulnerability:
-        # Show worst-first (lowest resistance first, most attacks as tiebreaker)
+        # Show worst-first (lowest resistance first, most attacks as tiebreaker).
+        # None (unevaluated) sorts last — it's neither best nor worst.
         sorted_vulns = sorted(
             summary.by_vulnerability.values(),
-            key=lambda v: (v.resistance_rate, -v.total_attacks),
+            key=lambda v: (v.resistance_rate is None, v.resistance_rate or 0.0, -v.total_attacks),
         )
 
         vuln_table = Table(show_header=True, header_style='bold', box=box.ROUNDED)
@@ -128,7 +130,7 @@ def print_report_summary(report: RedTeamReport, *, console: Console | None = Non
 
         for vuln_summary in sorted_vulns:
             passed_count = vuln_summary.total_attacks - vuln_summary.vulnerabilities_found
-            asr = 1 - vuln_summary.resistance_rate
+            asr = None if vuln_summary.resistance_rate is None else 1 - vuln_summary.resistance_rate
             vuln_table.add_row(
                 _format_vulnerability_label(vuln_summary.vulnerability),
                 Text(vuln_summary.domain.replace('_', ' ').title(), style='white'),
@@ -138,8 +140,8 @@ def print_report_summary(report: RedTeamReport, *, console: Console | None = Non
                     style='green' if passed_count == vuln_summary.total_attacks else 'yellow',
                 ),
                 Text(
-                    f'{asr:.0%}',
-                    style=rate_style(asr, higher_is_better=False),
+                    pct(asr),
+                    style='dim' if asr is None else rate_style(asr, higher_is_better=False),
                 ),
             )
 
@@ -149,10 +151,11 @@ def print_report_summary(report: RedTeamReport, *, console: Console | None = Non
 
     # ── Per-category breakdown (secondary) ────────────────────────────
     if summary.by_category:
-        # Show worst-first (lowest resistance first, most attacks as tiebreaker)
+        # Show worst-first (lowest resistance first, most attacks as tiebreaker).
+        # None (unevaluated) sorts last — it's neither best nor worst.
         sorted_cats = sorted(
             summary.by_category.values(),
-            key=lambda c: (c.resistance_rate, -c.total_attacks),
+            key=lambda c: (c.resistance_rate is None, c.resistance_rate or 0.0, -c.total_attacks),
         )
 
         cat_table = Table(show_header=True, header_style='bold', box=box.ROUNDED)
@@ -162,7 +165,7 @@ def print_report_summary(report: RedTeamReport, *, console: Console | None = Non
         cat_table.add_column('ASR', justify='right', width=11)
 
         for cat_summary in sorted_cats:
-            asr = 1 - cat_summary.resistance_rate
+            asr = None if cat_summary.resistance_rate is None else 1 - cat_summary.resistance_rate
             cat_table.add_row(
                 _format_category_label(cat_summary.category),
                 Text(str(cat_summary.total_attacks), style='cyan'),
@@ -171,8 +174,8 @@ def print_report_summary(report: RedTeamReport, *, console: Console | None = Non
                     style='red' if cat_summary.vulnerabilities_found else 'green',
                 ),
                 Text(
-                    f'{asr:.0%}',
-                    style=rate_style(asr, higher_is_better=False),
+                    pct(asr),
+                    style='dim' if asr is None else rate_style(asr, higher_is_better=False),
                 ),
             )
 

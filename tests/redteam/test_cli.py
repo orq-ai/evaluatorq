@@ -10,6 +10,7 @@ Covers:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,6 +18,19 @@ from click.testing import Result as CliResult
 from typer.testing import CliRunner
 
 from evaluatorq.redteam.cli import app
+from evaluatorq.redteam.contracts import (
+    AgentInfo,
+    AttackInfo,
+    AttackTechnique,
+    Framework,
+    Pipeline,
+    RedTeamReport,
+    RedTeamResult,
+    ReportSummary,
+    RunError,
+    Severity,
+    TurnType,
+)
 
 runner = CliRunner()
 
@@ -54,10 +68,51 @@ def test_runs_suggests_dashboard_directory(tmp_path: Path) -> None:
 
 
 def _make_mock_report() -> MagicMock:
-    """Return a minimal mock RedTeamReport that satisfies the CLI's post-run logic."""
+    """Return a minimal mock RedTeamReport that satisfies the CLI's post-run logic.
+
+    ``summary`` is a real ReportSummary, not a MagicMock: the CLI branches on the
+    derived ``no_verdict`` property, and a MagicMock attribute is truthy, which would
+    make every CLI test look like a zero-coverage run.
+    """
     report = MagicMock()
     report.model_dump.return_value = {}
+    report.summary = ReportSummary(total_attacks=5, evaluated_attacks=5, resistance_rate=0.8)
     return report
+
+
+def _report_with_evaluation_errors(errors: list[RunError | None]) -> RedTeamReport:
+    """A report whose results carry the given per-attack evaluation errors.
+
+    Real models rather than stand-ins: the hint reads typed fields, and a duck-typed
+    stub would keep passing if those fields were renamed out from under it.
+    """
+    results = [
+        RedTeamResult(
+            attack=AttackInfo(
+                id=f'a-{i}',
+                category='ASI01',
+                framework=Framework.OWASP_ASI,
+                attack_technique=AttackTechnique.DIRECT_INJECTION,
+                delivery_methods=[],
+                turn_type=TurnType.SINGLE,
+                severity=Severity.HIGH,
+                source='test',
+            ),
+            agent=AgentInfo(key='agent-a'),
+            messages=[],
+            vulnerable=None if err is not None else True,
+            evaluation_error=err,
+        )
+        for i, err in enumerate(errors)
+    ]
+    return RedTeamReport(
+        created_at=datetime.now(tz=timezone.utc),
+        pipeline=Pipeline.DYNAMIC,
+        categories_tested=['ASI01'],
+        total_results=len(results),
+        results=results,
+        summary=ReportSummary(total_attacks=len(results)),
+    )
 
 
 def _run_with_mocked_red_team(args: list[str], report: MagicMock | None = None) -> tuple[CliResult, MagicMock]:
@@ -428,3 +483,114 @@ class TestStrategyAndDeliveryMethodCombined:
         kwargs = mock_rt.call_args.kwargs
         assert kwargs["strategies"] == ["crescendo_injection"]
         assert kwargs["delivery_methods"] == [DeliveryMethod.CRESCENDO]
+
+
+class TestZeroEvaluationCoverageExits:
+    """A run where nothing could be scored must not exit 0 (RES: guardrail-blocked run)."""
+
+    def test_exits_1_when_no_attack_could_be_evaluated(self):
+        report = _make_mock_report()
+        report.summary = ReportSummary(total_attacks=5, evaluated_attacks=0, unevaluated_attacks=5)
+
+        result, _ = _run_with_mocked_red_team(["run", "--target", "agent:test-agent", "--yes"], report=report)
+
+        assert result.exit_code == 1, result.output
+        assert "0/5 attacks could be evaluated" in result.output
+
+    def test_exits_0_when_a_verdict_exists(self):
+        report = _make_mock_report()
+        report.summary = ReportSummary(total_attacks=5, evaluated_attacks=5, resistance_rate=0.8)
+
+        result, _ = _run_with_mocked_red_team(["run", "--target", "agent:test-agent", "--yes"], report=report)
+
+        assert result.exit_code == 0, result.output
+
+    def test_exits_0_when_partial_coverage(self):
+        """A partial evaluation failure still yields a verdict, so it is not a hard stop.
+
+        Whether a *partial* failure should also fail CI is an open policy question —
+        see the >50% pipeline warning in runner.py. This pins today's behaviour so a
+        future change to it is deliberate rather than incidental.
+        """
+        report = _make_mock_report()
+        report.summary = ReportSummary(total_attacks=5, evaluated_attacks=1, unevaluated_attacks=4, resistance_rate=1.0)
+
+        result, _ = _run_with_mocked_red_team(["run", "--target", "agent:test-agent", "--yes"], report=report)
+
+        assert result.exit_code == 0, result.output
+
+    def test_exits_0_when_no_attacks_were_run(self):
+        """Zero attacks is not a failed evaluation — nothing was attempted."""
+        report = _make_mock_report()
+        report.summary = ReportSummary(total_attacks=0, evaluated_attacks=0)
+
+        result, _ = _run_with_mocked_red_team(["run", "--target", "agent:test-agent", "--yes"], report=report)
+
+        assert result.exit_code == 0, result.output
+
+
+class TestCoverageBelowMinimumExits:
+    """A run that does produce a verdict but on too small a sample must still fail
+    CI — distinct from TestZeroEvaluationCoverageExits, which covers no verdict at all.
+    """
+
+    def test_exits_1_when_coverage_below_minimum(self):
+        report = _make_mock_report()
+        report.summary = ReportSummary(
+            total_attacks=10,
+            evaluated_attacks=5,
+            unevaluated_attacks=5,
+            evaluation_coverage=0.5,
+            min_evaluation_coverage=0.8,
+            resistance_rate=1.0,
+        )
+
+        result, _ = _run_with_mocked_red_team(["run", "--target", "agent:test-agent", "--yes"], report=report)
+
+        assert result.exit_code == 1, result.output
+        assert "5/10 attacks could be" in result.output
+        assert "50%" in result.output
+        assert "80%" in result.output
+
+    def test_exits_0_when_coverage_meets_the_floor(self):
+        report = _make_mock_report()
+        report.summary = ReportSummary(
+            total_attacks=10,
+            evaluated_attacks=9,
+            unevaluated_attacks=1,
+            evaluation_coverage=0.9,
+            min_evaluation_coverage=0.8,
+            resistance_rate=1.0,
+        )
+
+        result, _ = _run_with_mocked_red_team(["run", "--target", "agent:test-agent", "--yes"], report=report)
+
+        assert result.exit_code == 0, result.output
+
+
+class TestEvaluationErrorHint:
+    """_evaluation_error_hint names the dominant judge-failure cause, falling back
+    to generic advice only when no result actually recorded one.
+    """
+
+    def test_names_dominant_code_and_count_with_sample_message(self):
+        from evaluatorq.redteam.cli import _evaluation_error_hint
+        from evaluatorq.redteam.contracts import RunError
+
+        report = _report_with_evaluation_errors([
+            RunError(
+                message='blocked by content policy', error_type='api_status', stage='evaluation', code='api_status'
+            ),
+            RunError(message='blocked again', error_type='api_status', stage='evaluation', code='api_status'),
+            None,
+        ])
+        hint = _evaluation_error_hint(report)
+        assert 'api_status' in hint
+        assert '2/2' in hint
+        assert 'blocked by content policy' in hint
+
+    def test_falls_back_to_generic_hint_when_no_errors_recorded(self):
+        from evaluatorq.redteam.cli import _GENERIC_EVAL_HINT, _evaluation_error_hint
+
+        report = _report_with_evaluation_errors([None])
+        assert _evaluation_error_hint(report) == _GENERIC_EVAL_HINT

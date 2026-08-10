@@ -72,7 +72,7 @@ Vulnerability.MY_CUSTOM_VULN: VulnerabilityDef(
 
 ## Adding a custom evaluator
 
-Evaluators are LLM-as-judge prompts that determine whether an agent response is **RESISTANT** (passed=True) or **VULNERABLE** (passed=False).
+Evaluators are LLM-as-judge prompts that determine whether an agent response is **RESISTANT** (passed=True) or **VULNERABLE** (passed=False). A custom evaluator can also legitimately return `passed=None` when it cannot render a verdict (the judge call itself failed, or the response is out of scope for the rubric) — this is a distinct "not evaluated" outcome, not a pass.
 
 ### Step 1: Create the evaluator function
 

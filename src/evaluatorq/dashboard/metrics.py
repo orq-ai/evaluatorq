@@ -107,8 +107,18 @@ def zero_evaluated_attacks(summary: dict[str, object]) -> bool:
     The schema default ``resistance_rate`` (1.0) then carries no signal and
     must never render as a perfect score. An absent field (legacy reports
     predating it) is False — those keep their recorded rate.
+
+    Mirrors :attr:`ReportSummary.no_verdict`, including its ``total_attacks > 0``
+    guard: a report that ran nothing is empty, not unscored, and the two must not
+    disagree just because one side reads a dict and the other a model. The guard
+    only applies when ``total_attacks`` is actually recorded — an absent field
+    (again, legacy reports) must not silently switch the check off.
     """
-    return summary.get('evaluated_attacks') is not None and _as_int(summary.get('evaluated_attacks')) == 0
+    if summary.get('evaluated_attacks') is None:
+        return False
+    if summary.get('total_attacks') is not None and _as_int(summary.get('total_attacks')) == 0:
+        return False
+    return _as_int(summary.get('evaluated_attacks')) == 0
 
 
 def _lifecycle_status(*, broken: bool, all_errored: bool = False) -> str:

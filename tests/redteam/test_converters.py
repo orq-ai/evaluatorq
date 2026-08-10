@@ -23,6 +23,7 @@ from evaluatorq.redteam.contracts import (
     RedTeamReport,
     RedTeamResult,
     ReportSummary,
+    RunError,
     VulnerabilityDomain,
     Severity,
     TokenUsage,
@@ -53,6 +54,8 @@ def _make_result(
     execution: ExecutionDetails | None = None,
     error: str | None = None,
     error_type: str | None = None,
+    error_code: str | None = None,
+    evaluation_error: RunError | None = None,
 ) -> RedTeamResult:
     """Helper to create a minimal RedTeamResult."""
     return RedTeamResult(
@@ -69,11 +72,14 @@ def _make_result(
         ),
         agent=AgentInfo(key=agent_key),
         messages=[],
-        vulnerable=passed is False,
+        # Mirrors the production converters: unevaluated stays None, never False.
+        vulnerable=None if passed is None else passed is False,
         evaluation=UnifiedEvaluationResult(passed=passed, explanation='test') if passed is not None else None,
         execution=execution,
         error=error,
         error_type=error_type,
+        error_code=error_code,
+        evaluation_error=evaluation_error,
     )
 
 
@@ -171,8 +177,14 @@ class TestComputeReportSummary:
     def test_empty_results(self):
         summary = compute_report_summary([])
         assert summary.total_attacks == 0
-        assert summary.vulnerability_rate == 0.0
+        # No attacks means no verdict — not a 0% vulnerability rate, which would read
+        # as "fully safe". Counts stay 0; rates stay unknown.
+        assert summary.vulnerability_rate is None
+        assert summary.resistance_rate is None
         assert summary.average_turns_per_attack == 0.0
+        # ...but a run with zero attacks did not *fail to evaluate* anything, so it is
+        # not a no-verdict run and must not trip the CLI's non-zero exit.
+        assert summary.no_verdict is False
 
     def test_vulnerability_rate(self):
         results = [
@@ -288,6 +300,47 @@ class TestComputeReportSummary:
         assert cat.total_errors == 1
         assert cat.vulnerability_rate == 0.5
 
+    def test_resistance_rate_is_none_when_nothing_was_evaluated(self):
+        """Every judge call failed: there is no verdict, and 0.0 would read as fully compromised."""
+        results = [
+            _make_result(passed=None, error='guardrail check failed', error_type='api_status') for _ in range(5)
+        ]
+        summary = compute_report_summary(results)
+        assert summary.total_attacks == 5
+        assert summary.evaluated_attacks == 0
+        assert summary.resistance_rate is None
+        assert summary.vulnerabilities_found == 0
+
+    def test_resistance_rate_ignores_unevaluated_attacks(self):
+        results = [
+            _make_result(passed=True),
+            _make_result(passed=False),
+            _make_result(passed=None, error='guardrail check failed', error_type='api_status'),
+        ]
+        summary = compute_report_summary(results)
+        # 1 resistant of 2 evaluated — the errored attack is not counted as resisted.
+        assert summary.resistance_rate == 0.5
+
+    def test_per_category_none_when_slice_fully_unevaluated(self):
+        """Partial-failure case: one category's judge calls all errored while another
+        category got real verdicts. The unevaluated slice's rates must be None, not
+        0.0 — 0.0 would misreport it as fully compromised.
+        """
+        results = [
+            _make_result(category='ASI01', passed=None, error='guardrail check failed', error_type='api_status'),
+            _make_result(category='ASI01', passed=None, error='guardrail check failed', error_type='api_status'),
+            _make_result(category='ASI02', passed=True),
+            _make_result(category='ASI02', passed=False),
+        ]
+        summary = compute_report_summary(results)
+        unevaluated_cat = summary.by_category['ASI01']
+        assert unevaluated_cat.resistance_rate is None
+        assert unevaluated_cat.vulnerability_rate is None
+
+        evaluated_cat = summary.by_category['ASI02']
+        assert evaluated_cat.resistance_rate == 0.5
+        assert evaluated_cat.vulnerability_rate == 0.5
+
     def test_token_usage_total_aggregation(self):
         results = [
             _make_result(
@@ -314,6 +367,67 @@ class TestComputeReportSummary:
         results = [_make_result(), _make_result()]
         summary = compute_report_summary(results)
         assert summary.token_usage_total is None
+
+    def test_min_evaluation_coverage_recorded_when_passed(self):
+        """The floor travels onto the summary so a saved run remembers the policy it
+        was judged against — compute_report_summary does not apply it, only records it.
+        """
+        summary = compute_report_summary([_make_result(passed=True)], min_evaluation_coverage=0.8)
+        assert summary.min_evaluation_coverage == 0.8
+
+    def test_min_evaluation_coverage_none_when_not_passed(self):
+        summary = compute_report_summary([_make_result(passed=True)])
+        assert summary.min_evaluation_coverage is None
+
+    def test_min_evaluation_coverage_recorded_on_empty_results(self):
+        """The early-return path for zero results must still stamp the policy."""
+        summary = compute_report_summary([], min_evaluation_coverage=0.8)
+        assert summary.min_evaluation_coverage == 0.8
+        assert compute_report_summary([]).min_evaluation_coverage is None
+
+    def test_errors_by_type_separates_execution_and_evaluation_errors(self):
+        """A judge failure and an execution failure must land under distinct keys —
+        conflating them would make 'the judge is blocked' invisible next to unrelated
+        target outages.
+        """
+        results = [
+            _make_result(passed=None, error='connection refused', error_type='api_connection', error_code='api_connection'),
+            _make_result(
+                passed=None,
+                evaluation_error=RunError(
+                    message='judge blocked by guardrail',
+                    error_type='api_status',
+                    stage='evaluation',
+                    code='api_status',
+                ),
+            ),
+        ]
+        summary = compute_report_summary(results)
+        assert summary.total_errors == 2
+        assert summary.errors_by_type['api_connection'] == 1
+        assert summary.errors_by_type['evaluation/api_status'] == 1
+
+    def test_vulnerable_none_with_evaluation_error_is_not_counted_as_resistant(self):
+        """The whole design rests on this: an unscored attack (judge failed) must never
+        read as a passing/resistant result, and it must not be conflated with an
+        execution failure — the attack itself ran fine.
+        """
+        results = [
+            _make_result(passed=True),
+            _make_result(
+                passed=None,
+                evaluation_error=RunError(message='timed out', error_type='timeout', stage='evaluation', code='timeout'),
+            ),
+        ]
+        summary = compute_report_summary(results)
+        assert summary.evaluated_attacks == 1
+        # If the unevaluated result were miscounted as resistant this would be 0.5.
+        assert summary.resistance_rate == 1.0
+
+        unevaluated = results[1]
+        assert unevaluated.vulnerable is None
+        assert unevaluated.error is None
+        assert unevaluated.evaluation_error is not None
 
 
 # ---------------------------------------------------------------------------

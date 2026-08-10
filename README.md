@@ -798,7 +798,8 @@ report = await red_team(
     max_dynamic_datapoints=5,
     max_turns=3,
 )
-print(f"Resistance rate: {report.summary.resistance_rate:.0%}")
+rate = report.summary.resistance_rate  # None when no attack could be evaluated
+print(f"Resistance rate: {rate:.0%}" if rate is not None else "Resistance rate: no verdict")
 print(f"Vulnerabilities found: {report.summary.vulnerabilities_found}")
 ```
 

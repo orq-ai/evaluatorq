@@ -59,15 +59,25 @@ SEVERITY_WEIGHTS: dict[str, int] = {
 # ---------------------------------------------------------------------------
 
 
-def _compute_risk_score(vulnerability_rate: float, results: list[RedTeamResult]) -> float:
+def _worst_first(field: str = 'vulnerability_rate'):
+    """Sort key ordering rows worst-first, with unevaluated rows always last.
+
+    One definition rather than one per breakdown: an unevaluated slice sorted as
+    ``0.0`` would sit next to the *safest* rows and read as a clean result, which
+    is the exact confusion the nullable rates exist to prevent.
+    """
+    return lambda row: (row[field] is None, -(row[field] or 0.0))
+
+
+def _compute_risk_score(vulnerability_rate: float | None, results: list[RedTeamResult]) -> float:
     """Compute ``risk_score = vulnerability_rate * average_severity_weight``.
 
     The severity weight is averaged over *vulnerable* results to reflect the
     actual impact of confirmed vulnerabilities.  If there are no vulnerable
-    results the score is 0.
+    results, or the rate is unevaluated (``None``), the score is 0.
     """
     vulnerable = [r for r in results if r.vulnerable]
-    if not vulnerable:
+    if not vulnerable or vulnerability_rate is None:
         return 0.0
     avg_weight = sum(SEVERITY_WEIGHTS.get(r.attack.severity.value, 1) for r in vulnerable) / len(vulnerable)
     return vulnerability_rate * avg_weight
@@ -199,7 +209,7 @@ def _build_vulnerability_breakdown_section(report: RedTeamReport) -> ReportSecti
     for vuln_id, vuln_summary in report.summary.by_vulnerability.items():
         total = vuln_summary.total_attacks
         found = vuln_summary.vulnerabilities_found
-        vulnerability_rate = 1.0 - vuln_summary.resistance_rate
+        vulnerability_rate = None if vuln_summary.resistance_rate is None else 1.0 - vuln_summary.resistance_rate
         rows.append({
             'vulnerability': vuln_id,
             'vulnerability_name': vuln_summary.vulnerability_name,
@@ -209,8 +219,8 @@ def _build_vulnerability_breakdown_section(report: RedTeamReport) -> ReportSecti
             'vulnerability_rate': vulnerability_rate,
             'resistance_rate': vuln_summary.resistance_rate,
         })
-    # Worst first (highest vulnerability rate)
-    rows.sort(key=operator.itemgetter('vulnerability_rate'), reverse=True)
+    # Worst first (highest vulnerability rate); unevaluated (None) rows sort last.
+    rows.sort(key=_worst_first())
     return ReportSection(
         kind='vulnerability_breakdown',
         title='Per-Vulnerability Breakdown',
@@ -230,8 +240,8 @@ def _build_category_breakdown_section(report: RedTeamReport) -> ReportSection:
             'vulnerability_rate': cat_summary.vulnerability_rate,
             'resistance_rate': cat_summary.resistance_rate,
         })
-    # Worst first (highest vulnerability rate)
-    rows.sort(key=operator.itemgetter('vulnerability_rate'), reverse=True)
+    # Worst first (highest vulnerability rate); unevaluated (None) rows sort last.
+    rows.sort(key=_worst_first())
     return ReportSection(
         kind='category_breakdown',
         title='Per-Category Breakdown',
@@ -250,7 +260,8 @@ def _build_technique_breakdown_section(report: RedTeamReport) -> ReportSection:
             'vulnerability_rate': tech_summary.vulnerability_rate,
             'resistance_rate': tech_summary.resistance_rate,
         })
-    rows.sort(key=operator.itemgetter('vulnerability_rate'), reverse=True)
+    # Unevaluated (None) rows sort last — not worst.
+    rows.sort(key=_worst_first())
     return ReportSection(
         kind='technique_breakdown',
         title='Per-Technique Breakdown',
@@ -299,7 +310,8 @@ def _build_delivery_breakdown_section(report: RedTeamReport) -> ReportSection:
             'vulnerability_rate': dm_summary.vulnerability_rate,
             'resistance_rate': dm_summary.resistance_rate,
         })
-    rows.sort(key=operator.itemgetter('vulnerability_rate'), reverse=True)
+    # Unevaluated (None) rows sort last — not worst.
+    rows.sort(key=_worst_first())
     return ReportSection(
         kind='delivery_breakdown',
         title='ASR by Delivery Method',
@@ -362,9 +374,9 @@ def _build_error_analysis_section(report: RedTeamReport) -> ReportSection:
 
 def _build_attack_heatmap_section(report: RedTeamReport) -> ReportSection:
     """Build vulnerability × technique attack success rate data for heatmap rendering."""  # noqa: RUF002
-    # Accumulate counts: vulnerability -> technique -> {vuln, total}
+    # Accumulate counts: vulnerability -> technique -> {vuln, evaluated, total}
     matrix: dict[str, dict[str, dict[str, int]]] = defaultdict(
-        lambda: defaultdict(lambda: {'vulnerable': 0, 'total': 0})
+        lambda: defaultdict(lambda: {'vulnerable': 0, 'evaluated': 0, 'total': 0})
     )
     vulnerabilities: set[str] = set()
     techniques: set[str] = set()
@@ -375,8 +387,10 @@ def _build_attack_heatmap_section(report: RedTeamReport) -> ReportSection:
         vulnerabilities.add(vuln)
         techniques.add(tech)
         matrix[vuln][tech]['total'] += 1
-        if result.vulnerable:
-            matrix[vuln][tech]['vulnerable'] += 1
+        if result.vulnerable is not None:
+            matrix[vuln][tech]['evaluated'] += 1
+            if result.vulnerable:
+                matrix[vuln][tech]['vulnerable'] += 1
 
     # Build flat rows for the heatmap
     cells: list[dict[str, Any]] = []
@@ -384,8 +398,10 @@ def _build_attack_heatmap_section(report: RedTeamReport) -> ReportSection:
         for tech in sorted(techniques):
             cell = matrix[vuln].get(tech, {})
             total = cell.get('total', 0)
+            evaluated = cell.get('evaluated', 0)
             found = cell.get('vulnerable', 0)
-            asr = found / total if total > 0 else 0.0
+            # None means this cell has no evaluated verdicts — not "0% ASR".
+            asr = found / evaluated if evaluated > 0 else None
             cells.append({
                 'vulnerability': vuln,
                 'technique': tech,
@@ -444,8 +460,10 @@ def _build_agent_comparison_section(report: RedTeamReport) -> ReportSection:
     for agent_name in agents:
         ar = agent_results[agent_name]
         total = len(ar)
+        evaluated = sum(1 for r in ar if r.vulnerable is not None)
         vulns = sum(1 for r in ar if r.vulnerable)
-        asr = vulns / total if total > 0 else 0.0
+        # None means no verdicts to compute an ASR from — not "0% ASR".
+        asr = vulns / evaluated if evaluated > 0 else None
         agent_metrics.append({
             'agent': agent_name,
             'total_attacks': total,
@@ -454,28 +472,36 @@ def _build_agent_comparison_section(report: RedTeamReport) -> ReportSection:
         })
 
     # Per-vulnerability × agent ASR pivot  # noqa: RUF003
-    # pivot[vuln][agent] = {"total": int, "vuln": int}
-    pivot: dict[str, dict[str, dict[str, int]]] = defaultdict(lambda: {a: {'total': 0, 'vuln': 0} for a in agents})
+    # pivot[vuln][agent] = {"total": int, "evaluated": int, "vuln": int}
+    pivot: dict[str, dict[str, dict[str, int]]] = defaultdict(
+        lambda: {a: {'total': 0, 'evaluated': 0, 'vuln': 0} for a in agents}
+    )
     for agent_name in agents:
         for r in agent_results[agent_name]:
             vuln = r.attack.vulnerability or r.attack.category or 'unknown'
             pivot[vuln][agent_name]['total'] += 1
-            if r.vulnerable:
-                pivot[vuln][agent_name]['vuln'] += 1
+            if r.vulnerable is not None:
+                pivot[vuln][agent_name]['evaluated'] += 1
+                if r.vulnerable:
+                    pivot[vuln][agent_name]['vuln'] += 1
 
-    # Build flat rows sorted by average ASR descending
+    # Build flat rows sorted by average ASR descending. None (no evaluated
+    # verdicts for that agent/vuln pair) is excluded from the average, not
+    # treated as 0% ASR.
     vuln_asr_rows: list[dict[str, Any]] = []
     for vuln, agent_counts in pivot.items():
         per_agent: dict[str, dict[str, Any]] = {}
-        total_asr = 0.0
+        asr_values: list[float] = []
         for agent_name in agents:
-            counts = agent_counts.get(agent_name, {'total': 0, 'vuln': 0})
-            asr = counts['vuln'] / counts['total'] if counts['total'] > 0 else 0.0
+            counts = agent_counts.get(agent_name, {'total': 0, 'evaluated': 0, 'vuln': 0})
+            asr = counts['vuln'] / counts['evaluated'] if counts['evaluated'] > 0 else None
             per_agent[agent_name] = {'asr': asr, 'total': counts['total']}
-            total_asr += asr
-        avg_asr = total_asr / len(agents) if agents else 0.0
+            if asr is not None:
+                asr_values.append(asr)
+        avg_asr = sum(asr_values) / len(asr_values) if asr_values else None
         vuln_asr_rows.append({'vulnerability': vuln, 'agents': per_agent, 'avg_asr': avg_asr})
-    vuln_asr_rows.sort(key=operator.itemgetter('avg_asr'), reverse=True)
+    # Unevaluated (None) rows sort last — not worst.
+    vuln_asr_rows.sort(key=_worst_first('avg_asr'))
 
     # Build heatmap matrix (row=vulnerability, col=agent)
     sorted_vulns = [r['vulnerability'] for r in vuln_asr_rows]
@@ -485,7 +511,12 @@ def _build_agent_comparison_section(report: RedTeamReport) -> ReportSection:
         z_row: list[float] = []
         t_row: list[str] = []
         for agent_name in agents:
-            agent_data = row['agents'].get(agent_name, {'asr': 0.0, 'total': 0})
+            agent_data = row['agents'].get(agent_name, {'asr': None, 'total': 0})
+            if agent_data['asr'] is None:
+                # render_heatmap() treats <= 0 as its neutral "absent" sentinel.
+                z_row.append(0.0)
+                t_row.append(f'n/a (n={agent_data["total"]})')
+                continue
             asr_pct = agent_data['asr'] * 100
             z_row.append(round(asr_pct, 1))
             t_row.append(f'{asr_pct:.0f}% (n={agent_data["total"]})')
@@ -599,7 +630,8 @@ def _build_framework_breakdown_section(report: RedTeamReport) -> ReportSection:
             'vulnerability_rate': fw_summary.vulnerability_rate,
             'resistance_rate': fw_summary.resistance_rate,
         })
-    rows.sort(key=operator.itemgetter('vulnerability_rate'), reverse=True)
+    # Unevaluated (None) rows sort last — not worst.
+    rows.sort(key=_worst_first())
     return ReportSection(
         kind='framework_breakdown',
         title='Framework Breakdown',
@@ -690,8 +722,9 @@ def _build_turn_domain_breakdown_section(report: RedTeamReport) -> ReportSection
         return {
             'total_attacks': getattr(obj, 'total_attacks', 0),
             'vulnerabilities_found': getattr(obj, 'vulnerabilities_found', 0),
-            'vulnerability_rate': getattr(obj, 'vulnerability_rate', 0.0),
-            'resistance_rate': getattr(obj, 'resistance_rate', 1.0),
+            # None means unevaluated — must not default to "fully resistant".
+            'vulnerability_rate': getattr(obj, 'vulnerability_rate', None),
+            'resistance_rate': getattr(obj, 'resistance_rate', None),
         }
 
     by_turn_type = {k: _obj_to_dict(v) for k, v in s.by_turn_type.items()}
@@ -716,7 +749,7 @@ def _build_turn_depth_analysis_section(report: RedTeamReport) -> ReportSection |
     Only includes results where ``result.execution.turns > 1``.
     Returns ``None`` when there are no multi-turn results.
     """
-    depth_counts: dict[int, dict[str, int]] = defaultdict(lambda: {'total': 0, 'vulnerable': 0})
+    depth_counts: dict[int, dict[str, int]] = defaultdict(lambda: {'total': 0, 'evaluated': 0, 'vulnerable': 0})
 
     for result in report.results:
         if result.execution is None:
@@ -725,8 +758,10 @@ def _build_turn_depth_analysis_section(report: RedTeamReport) -> ReportSection |
         if turns <= 1:
             continue
         depth_counts[turns]['total'] += 1
-        if result.vulnerable:
-            depth_counts[turns]['vulnerable'] += 1
+        if result.vulnerable is not None:
+            depth_counts[turns]['evaluated'] += 1
+            if result.vulnerable:
+                depth_counts[turns]['vulnerable'] += 1
 
     if not depth_counts:
         return None
@@ -735,12 +770,14 @@ def _build_turn_depth_analysis_section(report: RedTeamReport) -> ReportSection |
     for turn_count in sorted(depth_counts):
         entry = depth_counts[turn_count]
         total = entry['total']
+        evaluated = entry['evaluated']
         found = entry['vulnerable']
         rows.append({
             'turn_count': turn_count,
             'total_attacks': total,
             'vulnerabilities_found': found,
-            'vulnerability_rate': found / total if total > 0 else 0.0,
+            # None means no evaluated verdicts at this depth — not "0% ASR".
+            'vulnerability_rate': found / evaluated if evaluated > 0 else None,
         })
 
     return ReportSection(

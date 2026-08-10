@@ -194,6 +194,101 @@ class TestModelSerialization:
         assert restored.pipeline == 'dynamic'
         assert restored.tested_agents == []
 
+    def test_legacy_report_json_without_evaluated_attacks_key_still_validates(self):
+        """A report JSON written before ``evaluated_attacks``/no-verdict existed —
+        ``vulnerable`` is a plain bool, per-slice rates are plain floats, and the
+        ``evaluated_attacks`` key is absent entirely from summary and by_category —
+        must still validate and keep its recorded values.
+        """
+        legacy_json = {
+            'version': '1.0.0',
+            'created_at': '2024-01-01T00:00:00+00:00',
+            'pipeline': 'dynamic',
+            'categories_tested': ['ASI01'],
+            'tested_agents': ['agent:legacy'],
+            'total_results': 1,
+            'results': [
+                {
+                    'attack': {
+                        'id': 'ASI01-legacy-001',
+                        'category': 'ASI01',
+                        'framework': 'OWASP-ASI',
+                        'attack_technique': 'indirect-injection',
+                        'delivery_methods': ['direct-request'],
+                        'turn_type': 'single',
+                        'severity': 'medium',
+                        'source': 'template_dynamic',
+                    },
+                    'agent': {'key': 'agent:legacy'},
+                    'messages': [],
+                    'vulnerable': False,
+                }
+            ],
+            'summary': {
+                'total_attacks': 4,
+                'vulnerabilities_found': 0,
+                'resistance_rate': 1.0,
+                'vulnerability_rate': 0.0,
+                'by_category': {
+                    'ASI01': {
+                        'category': 'ASI01',
+                        'category_name': 'Agent Goal Hijacking',
+                        'total_attacks': 4,
+                        'vulnerabilities_found': 0,
+                        'resistance_rate': 1.0,
+                        'vulnerability_rate': 0.0,
+                    }
+                },
+            },
+        }
+        restored = RedTeamReport.model_validate(legacy_json)
+        assert restored.results[0].vulnerable is False
+        assert restored.summary.resistance_rate == 1.0
+        assert restored.summary.vulnerability_rate == 0.0
+        # evaluated_attacks was absent from the legacy payload; the field default
+        # kicks in rather than failing validation.
+        assert restored.summary.evaluated_attacks == 0
+        cat = restored.summary.by_category['ASI01']
+        assert cat.resistance_rate == 1.0
+        assert cat.evaluated_attacks == 0
+
+
+class TestReportSummaryNoVerdict:
+    """Truth table for ReportSummary.no_verdict — the single condition CLI exit
+    code, hooks logging, and the runner warning all branch on.
+    """
+
+    def test_zero_total_zero_evaluated_is_not_no_verdict(self):
+        assert ReportSummary(total_attacks=0, evaluated_attacks=0).no_verdict is False
+
+    def test_attacks_run_but_none_evaluated_is_no_verdict(self):
+        assert ReportSummary(total_attacks=5, evaluated_attacks=0).no_verdict is True
+
+    def test_at_least_one_evaluated_is_not_no_verdict(self):
+        assert ReportSummary(total_attacks=5, evaluated_attacks=1).no_verdict is False
+
+
+class TestReportSummaryCoverageBelowMinimum:
+    """Truth table for ReportSummary.coverage_below_minimum — distinct from
+    no_verdict: here a verdict exists, but the sample it rests on may be too small.
+    """
+
+    def test_floor_none_disables_gate(self):
+        assert ReportSummary(total_attacks=10, evaluation_coverage=0.1, min_evaluation_coverage=None).coverage_below_minimum is False
+
+    def test_zero_total_attacks_is_not_below_minimum(self):
+        assert ReportSummary(total_attacks=0, evaluation_coverage=0.0, min_evaluation_coverage=0.8).coverage_below_minimum is False
+
+    def test_coverage_below_floor_is_true(self):
+        assert ReportSummary(total_attacks=10, evaluation_coverage=0.5, min_evaluation_coverage=0.8).coverage_below_minimum is True
+
+    def test_coverage_above_floor_is_false(self):
+        assert ReportSummary(total_attacks=10, evaluation_coverage=0.9, min_evaluation_coverage=0.8).coverage_below_minimum is False
+
+    def test_coverage_equal_floor_is_false(self):
+        """Boundary: the comparison is strict `<`, so meeting the floor exactly passes."""
+        assert ReportSummary(total_attacks=10, evaluation_coverage=0.8, min_evaluation_coverage=0.8).coverage_below_minimum is False
+
 
 # ---------------------------------------------------------------------------
 # Tests: Static pipeline conversion
@@ -241,7 +336,8 @@ class TestStaticConversion:
         sample = _make_static_sample(with_evaluation=False)
         result = static_sample_to_result(sample)
         assert result.evaluation is None
-        assert result.vulnerable is False
+        # Unevaluated is not "resistant" — it must stay None so no consumer counts it as a pass.
+        assert result.vulnerable is None
 
     def test_with_error(self):
         sample = _make_static_sample(with_error=True, with_evaluation=False)

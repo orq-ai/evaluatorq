@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from evaluatorq.common.reports.executive_summary import truncate_text
+from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.redteam.contracts import OWASP_CATEGORY_NAMES
 from evaluatorq.redteam.reports._utils import extract_prompt, extract_response
 
@@ -37,7 +38,11 @@ def build_redteam_facts(report: RedTeamReport) -> str:
         f'Total attacks: {s.total_attacks}',
         f'Categories tested: {len(report.categories_tested)}'
         + (f' ({", ".join(report.categories_tested)})' if report.categories_tested else ''),
-        f'Resistance rate: {s.resistance_rate:.0%}',
+        f'Evaluation coverage: {s.evaluated_attacks}/{s.total_attacks} attacks scored',
+        f'Resistance rate: {pct(s.resistance_rate)}'
+        if s.resistance_rate is not None
+        else 'Resistance rate: unknown — no attack could be evaluated. Do not describe the target '
+        'as resistant or safe; state that it was not tested.',
         f'Vulnerabilities found: {s.vulnerabilities_found}',
     ]
 
@@ -81,7 +86,7 @@ def build_redteam_facts(report: RedTeamReport) -> str:
         if tt is not None and tt.total_attacks:
             lines.append(
                 f'{turn_key.capitalize()}-turn attacks: {tt.total_attacks}, '
-                f'vulnerability rate {tt.vulnerability_rate:.0%}'
+                f'vulnerability rate {pct(tt.vulnerability_rate)}'
             )
 
     return '\n'.join(lines)

@@ -101,7 +101,7 @@ def _rt_options_from_results(results: list[Any]) -> dict[str, list[str]]:
     max_turns = max((r.execution.turns if r.execution else 1 for r in results), default=1)
 
     return {
-        'result': ['Vulnerable', 'Resistant', 'Error'],
+        'result': ['Vulnerable', 'Resistant', 'Not evaluated', 'Error'],
         'agent': all_agents,
         'category': all_categories,
         'severity': all_severities,
@@ -121,13 +121,19 @@ def _rt_apply(report: Any, selections: dict[str, list[str]]) -> list[Any]:
     results: list[Any] = list(report.results)
     full_opts = _rt_full_options(report)
 
-    # result (3-value multiselect: empty or all-3 => no filter)
+    # result (4-value multiselect: empty or all-4 => no filter)
     result_sel = selections.get('result', [])
-    all_result = {'Vulnerable', 'Resistant', 'Error'}
+    all_result = {'Vulnerable', 'Resistant', 'Not evaluated', 'Error'}
     if result_sel and set(result_sel) != all_result:
 
         def _cls(r):
-            return 'Error' if r.error else 'Vulnerable' if r.vulnerable else 'Resistant'
+            # Three-way, not two-way: r.vulnerable is None means unevaluated (target/judge
+            # failure without a recorded r.error) and must file separately from 'Resistant'.
+            if r.error:
+                return 'Error'
+            if r.vulnerable is None:
+                return 'Not evaluated'
+            return 'Vulnerable' if r.vulnerable else 'Resistant'
 
         chosen = set(result_sel)
         results = [r for r in results if _cls(r) in chosen]

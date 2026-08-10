@@ -146,6 +146,42 @@ class TestDefaultHooks:
             all_calls = ' '.join(str(c) for c in mock_logger.info.call_args_list)
             assert 'evaluatorq' in all_calls.lower() or 'redteam' in all_calls.lower() or 'ui' in all_calls.lower()
 
+    def test_default_on_complete_no_verdict_logs_error_and_does_not_raise(self):
+        """When nothing could be evaluated, on_complete must log the NO VERDICT
+        error (not crash trying to format None as a percentage) and must not raise.
+        """
+        from evaluatorq.redteam.contracts import ReportSummary
+        from evaluatorq.redteam.hooks import DefaultHooks
+
+        hooks = DefaultHooks()
+        report = _make_report(
+            summary=ReportSummary(total_attacks=10, evaluated_attacks=0, vulnerabilities_found=0, resistance_rate=None)
+        )
+        assert report.summary.no_verdict is True
+        with patch('evaluatorq.redteam.hooks.logger') as mock_logger:
+            asyncio.run(hooks.on_complete(report))
+            mock_logger.error.assert_called_once()
+            error_message = str(mock_logger.error.call_args[0][0])
+            assert 'NO VERDICT' in error_message
+
+    def test_default_on_complete_with_verdicts_logs_resistance_rate(self):
+        """Normal branch: a real resistance rate is formatted as a percentage, and
+        no NO VERDICT error is logged.
+        """
+        from evaluatorq.redteam.contracts import ReportSummary
+        from evaluatorq.redteam.hooks import DefaultHooks
+
+        hooks = DefaultHooks()
+        report = _make_report(
+            summary=ReportSummary(total_attacks=10, evaluated_attacks=10, vulnerabilities_found=3, resistance_rate=0.7)
+        )
+        assert report.summary.no_verdict is False
+        with patch('evaluatorq.redteam.hooks.logger') as mock_logger:
+            asyncio.run(hooks.on_complete(report))
+            mock_logger.error.assert_not_called()
+            all_calls = ' '.join(str(c) for c in mock_logger.info.call_args_list)
+            assert '70%' in all_calls
+
 
 # ---------------------------------------------------------------------------
 # RichHooks tests

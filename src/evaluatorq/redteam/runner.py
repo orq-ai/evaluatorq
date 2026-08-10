@@ -24,6 +24,7 @@ from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.replay import REPLAY_VERSION, REPLAY_VERSION_KEY
+from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.common.target_call import call_target_with_retry, default_map_error
 from evaluatorq.common.thread_context import (
@@ -802,8 +803,8 @@ async def red_team(
     # registered automated evaluator can be *attacked* but not *scored* by prompt-based
     # red teaming. Without this gate the dynamic leg would burn attacker and target
     # tokens generating attacks that always return inconclusive, and the summary could
-    # not distinguish "unmeasured" from "resisted" (resistance_rate defaults to 0.0 at
-    # zero evaluation coverage, which reads as fully vulnerable). Such vulnerabilities
+    # not distinguish "unmeasured" from "resisted" (every rate is None at zero evaluation
+    # coverage, so the report reads "no verdict" rather than a score). Such vulnerabilities
     # are pruned up front; if NONE of the requested ones are scorable, we raise.
     #
     # As of this writing every vulnerability in the registry HAS an evaluator (all ten
@@ -2737,15 +2738,33 @@ async def _run_dynamic_or_hybrid(
                         f'Category {cat_key!r}: zero strategies selected — no applicable strategies found for this agent.'
                     )
 
+    # Stamp the coverage policy onto the report so the saved run records what it was
+    # judged against, and so every consumer (CLI exit code, warnings, dashboards) reads
+    # one value rather than each holding its own idea of "enough".
+    merged.summary.min_evaluation_coverage = (
+        pipeline_config.evaluator.min_evaluation_coverage if pipeline_config else None
+    )
+
     total_attacks = merged.summary.total_attacks
     unevaluated_attacks = merged.summary.unevaluated_attacks
-    if total_attacks > 0 and unevaluated_attacks / total_attacks > 0.5:
+    if merged.summary.no_verdict:
         merged.pipeline_warnings.append(
-            f'High evaluation failure rate: {unevaluated_attacks}/{total_attacks} attacks could not be evaluated. '
-            'Check evaluator model configuration and credentials.'
+            f'NO VERDICT: 0/{total_attacks} attacks could be evaluated — the target was not tested. '
+            'Check evaluator model configuration, credentials, and any gateway guardrails rejecting '
+            'judge or target calls.'
+        )
+        logger.error(f'No verdict: 0/{total_attacks} attacks could be evaluated — the target was not tested.')
+    elif merged.summary.coverage_below_minimum:
+        floor = merged.summary.min_evaluation_coverage
+        merged.pipeline_warnings.append(
+            f'Evaluation coverage below the configured minimum: '
+            f'{merged.summary.evaluated_attacks}/{total_attacks} attacks scored '
+            f'({pct(merged.summary.evaluation_coverage)} < {pct(floor)}). The rates below are '
+            'computed over that subset only. Check evaluator model configuration and credentials.'
         )
         logger.warning(
-            f'High evaluation failure rate: {unevaluated_attacks}/{total_attacks} attacks returned inconclusive results.'
+            f'Evaluation coverage {pct(merged.summary.evaluation_coverage)} is below the configured '
+            f'minimum {pct(floor)}: {unevaluated_attacks}/{total_attacks} attacks returned inconclusive results.'
         )
 
     await await_maybe(
