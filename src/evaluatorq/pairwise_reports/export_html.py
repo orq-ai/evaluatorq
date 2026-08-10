@@ -87,9 +87,21 @@ def _render_consensus_html(section: ReportSection) -> str:
         },
         {'label': 'Mean agreement', 'value': _num(d.get('mean_agreement')), 'status': 'neutral'},
     ])
+    weighted = d.get('bt_sigma')
+    weighted_html = ''
+    if weighted is not None:
+        weighted_bars = _side_bar(d['label_a'], weighted.get('a_win_rate'), _A_COLOR) + _side_bar(
+            d['label_b'], weighted.get('b_win_rate'), _B_COLOR
+        )
+        warnings = ''.join(f'<li>{_esc(warning)}</li>' for warning in weighted.get('fit_warnings', []))
+        warning_html = f'<ul class="pw-caption">{warnings}</ul>' if warnings else ''
+        weighted_html = (
+            '<h3>Reliability-weighted consensus (BT-sigma)</h3>'
+            f'<div class="pw-sides">{weighted_bars}</div>{warning_html}'
+        )
     return (
         f'<section id="{section.kind}"><h2>{_esc(section.title)}</h2>'
-        f'<div class="pw-sides">{bars}</div>{caption}{stats}</section>'
+        f'<div class="pw-sides">{bars}</div>{caption}{stats}{weighted_html}</section>'
     )
 
 
@@ -119,16 +131,20 @@ def _render_judges_html(section: ReportSection) -> str:
     d = section.data
     observed = bool(d.get('observed_swap'))
     headers = ['Judge', f'{d["label_a"]} rate', f'{d["label_b"]} rate', 'Tie rate', 'Position bias']
-    rows = [
-        [
+    if d.get('bt_sigma'):
+        headers.append('Sigma')
+    rows: list[list[str]] = []
+    for r in d.get('rows', []):
+        row = [
             _esc(r['model']) + (' <span class="pw-tag">stand-in</span>' if r.get('replacement') else ''),
             _rate(r.get('a_rate')),
             _rate(r.get('b_rate')),
             _rate(r.get('tie_rate')),
             _bias_cell(r, observed_swap=observed),
         ]
-        for r in d.get('rows', [])
-    ]
+        if d.get('bt_sigma'):
+            row.append(_num(r.get('sigma')))
+        rows.append(row)
     if not rows:
         return ''
     # The caption keys off what ran, not what was configured: a run saved with

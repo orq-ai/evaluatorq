@@ -10,15 +10,18 @@ name, score, derived status — used by the landing's recent-runs list and the
 per-kind run-list screens.  ``landing(roots)`` rolls those up into the stat
 band + panel data for the Dashboard screen.
 
-Per the design decision: neither schema tracks dollar cost, so the design's
-spend panels are rendered from native metrics (resistance rate, severity,
-token usage) instead.
+Dollar cost is optional in both schemas: a report only carries cost when the
+provider reported it.  The spend panels therefore distinguish "no cost data"
+from "$0.00" — see ``_cost_usd`` — and fall back to native metrics (resistance
+rate, severity, token usage) when nothing in a store reported cost.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
+
+from loguru import logger
 
 from evaluatorq.dashboard import library
 
@@ -28,6 +31,13 @@ if TYPE_CHECKING:
 
 # Severity buckets in display order (matches the report severity scale).
 SEVERITY_ORDER = ('critical', 'high', 'medium', 'low')
+
+# Bucket for a vulnerability whose report does not record a severity. ``severity``
+# is a required field, so this only shows up in a truncated or hand-edited
+# report — but defaulting those into ``low`` would understate real findings, and
+# dropping them would leave the severity bars summing to less than the donut.
+# Named and rendered last instead.
+UNKNOWN_SEVERITY = 'unknown'
 
 
 @dataclass(frozen=True)
@@ -42,6 +52,12 @@ class RunRow:
     score: float | None  # 0..1; redteam resistance, sim mean scorer avg
     status: str  # 'passed' | 'warning' | 'failed'
     error: bool
+    evaluated: int = 0  # attacks that produced a verdict (red team only)
+    attacks: int = 0  # attacks attempted, verdict or not (red team only)
+    # The rate recorded in the report itself, set only when ``score`` was
+    # re-derived and lands somewhere else. Drives the "recalculated" marker: the
+    # dashboard shows its own number but never silently overwrites the record.
+    stored_score: float | None = None
 
 
 @dataclass(frozen=True)
@@ -58,9 +74,11 @@ class Landing:
     tokens_by_kind: list[tuple[str, int]]  # [('Red team', n), ('Agent sim', n), ('Pairwise', n)]
     resistant: int  # attacks resisted (for the donut)
     vulnerable: int  # attacks that succeeded (for the donut)
-    total_cost: float = 0.0  # summed cost_usd across all stores
+    total_cost: float | None = None  # summed cost_usd across all stores; None when nothing records a cost
     costed_runs: int = 0  # runs that actually record a cost — avg cost divides by this
     cost_by_kind: list[tuple[str, float]] = field(default_factory=list)  # non-zero only
+    total_input_cost: float | None = None  # summed input_cost across all stores; None when unrecorded
+    total_output_cost: float | None = None  # summed output_cost across all stores; None when unrecorded
     recent: list[RunRow] = field(default_factory=list)
 
 
@@ -69,6 +87,19 @@ def _as_float(v: object, default: float = 0.0) -> float:
         return float(v)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return default
+
+
+def _as_float_or_none(v: object) -> float | None:
+    """Like ``_as_float`` but preserves "unknown" as ``None`` instead of
+    collapsing it to a default. Used for cost fields, where ``None`` (not
+    recorded) and ``0.0`` (recorded as free) are semantically different and
+    must never be conflated."""
+    if v is None:
+        return None
+    try:
+        return float(v)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
 
 
 def _as_int(v: object, default: int = 0) -> int:
@@ -89,16 +120,39 @@ def _tokens_total(usage: object) -> int:
     return _as_int(usage.get('prompt_tokens')) + _as_int(usage.get('completion_tokens'))
 
 
-def _cost_usd(usage: object) -> float:
+def _cost_usd(usage: object) -> float | None:
     """Pull the real dollar cost from a TokenUsage-shaped dict.
 
     Both surfaces already record ``cost_usd`` upstream (sim per-result
     ``token_usage``; red team ``summary.token_usage_total``), so no price model
     is needed — the dashboard just surfaces it.
+
+    Returns ``None`` when the cost is not recorded (missing key, or the key
+    present but ``null`` — the ``@model_serializer`` in ``contracts.Usage``
+    always emits the ``cost_usd`` key, even when ``total_cost`` is ``None``, so
+    a bare ``'cost_usd' in usage`` membership check is NOT sufficient to detect
+    "known cost"). Callers must not treat ``None`` as ``0.0``: an unknown cost
+    must not be summed into a spend total or counted as a "costed" run.
     """
     if not isinstance(usage, dict):
-        return 0.0
-    return _as_float(usage.get('cost_usd'))
+        return None
+    return _as_float_or_none(usage.get('cost_usd'))
+
+
+def _input_cost(usage: object) -> float | None:
+    """Sibling reader for the ``input_cost`` component. Same ``None`` semantics
+    as :func:`_cost_usd`."""
+    if not isinstance(usage, dict):
+        return None
+    return _as_float_or_none(usage.get('input_cost'))
+
+
+def _output_cost(usage: object) -> float | None:
+    """Sibling reader for the ``output_cost`` component. Same ``None`` semantics
+    as :func:`_cost_usd`."""
+    if not isinstance(usage, dict):
+        return None
+    return _as_float_or_none(usage.get('output_cost'))
 
 
 def zero_evaluated_attacks(summary: dict[str, object]) -> bool:
@@ -131,14 +185,40 @@ def _lifecycle_status(*, broken: bool, all_errored: bool = False) -> str:
 def _redteam_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
     summary = data.get('summary')
     summary = summary if isinstance(summary, dict) else {}
-    resistance = _as_float(summary.get('resistance_rate'), default=1.0) if summary else None
+    # An explicit null rate means "no verdict" and must stay None; only an *absent*
+    # field (legacy reports predating the nullable rates) takes the 1.0 default.
+    # An explicit null rate means "no verdict" and must stay None; only an *absent*
+    # field (legacy reports predating the nullable rates) takes the 1.0 default.
+    resistance = (
+        _as_float_or_none(summary['resistance_rate']) if 'resistance_rate' in summary else (1.0 if summary else None)
+    )
     evaluated = _as_int(summary.get('evaluated_attacks')) if summary else 0
     errors = _as_int(summary.get('total_errors')) if summary else 0
     total = _as_int(summary.get('total_attacks')) if summary else 0
     # A run that evaluated nothing has no resistance to report (see
-    # zero_evaluated_attacks); legacy reports without the field keep their rate.
+    # zero_evaluated_attacks).
     if zero_evaluated_attacks(summary):
         resistance = None
+    stored_score: float | None = None
+    attacks = total
+    if summary.get('evaluated_attacks') is None:
+        # Legacy summary: its stored rate may have been computed over a
+        # different denominator than the evaluated-only one the landing donut
+        # derives. Use the same classifier, so the row and the donut above it
+        # cannot show two different numbers for one run.
+        counts = _redteam_counts(data)
+        evaluated, attacks = counts.evaluated, counts.attacks
+        if counts.evaluated:
+            derived = (counts.evaluated - counts.vulnerable) / counts.evaluated
+            # Keep the recorded rate visible whenever the derivation moves it,
+            # so the row can be reconciled against the run's own exported
+            # report instead of quietly contradicting it.
+            if resistance is None or abs(derived - resistance) > 0.005:
+                stored_score = resistance
+            resistance = derived
+        # No derivable verdicts: keep whatever rate the report recorded rather
+        # than blanking a run that has one. Deriving nothing is not the same as
+        # measuring zero.
     return RunRow(
         id=card.id,
         surface='redteam',
@@ -150,6 +230,9 @@ def _redteam_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
             broken=bool(card.error), all_errored=(total > 0 and evaluated == 0 and errors >= total)
         ),
         error=bool(card.error),
+        evaluated=evaluated,
+        attacks=attacks,
+        stored_score=stored_score,
     )
 
 
@@ -268,6 +351,10 @@ def landing(roots: list[Path] | None = None) -> Landing:
     costed_runs = 0
     pw_tokens = 0
     pw_cost = 0.0
+    input_cost_total = 0.0
+    output_cost_total = 0.0
+    has_input_cost = False
+    has_output_cost = False
     resistant = 0
     vulnerable = 0
     for card in library.scan(roots):
@@ -280,42 +367,93 @@ def landing(roots: list[Path] | None = None) -> Landing:
             continue
         if card.surface == 'redteam':
             summary = data.get('summary')
-            if isinstance(summary, dict):
+            summary = summary if isinstance(summary, dict) else {}
+            if summary.get('evaluated_attacks') is None:
+                # Legacy report: its summary predates ``evaluated_attacks``, and
+                # with it ``by_severity`` and ``token_usage_total``. Every
+                # aggregate below is therefore derived from the results list —
+                # otherwise the run adds zero to the donut, the severity bars and
+                # the cost totals while its own row still shows a rate (RES-1202).
+                counts = _redteam_counts(data)
+                logger.debug(
+                    'landing: derived legacy red-team counts for {} — evaluated={} vulnerable={} tokens={}',
+                    card.id,
+                    counts.evaluated,
+                    counts.vulnerable,
+                    counts.tokens,
+                )
+                resistant += counts.evaluated - counts.vulnerable
+                vulnerable += counts.vulnerable
+                rt_tokens += counts.tokens
+                total_tokens += counts.tokens
+                # Derived cost is a known-$0-or-more sum, but a run whose results
+                # carried no readable cost must not count as "costed" — mirror
+                # the None semantics of _cost_usd for stored summaries.
+                if counts.cost:
+                    rt_cost += counts.cost
+                    costed_runs += 1
+                # The input/output split is not recoverable from legacy results.
+                by_sev = counts.by_severity
+            else:
                 resistant += _as_int(summary.get('evaluated_attacks')) - _as_int(summary.get('vulnerabilities_found'))
                 vulnerable += _as_int(summary.get('vulnerabilities_found'))
-                tok = _tokens_total(summary.get('token_usage_total'))
+                usage = summary.get('token_usage_total')
+                tok = _tokens_total(usage)
                 rt_tokens += tok
                 total_tokens += tok
-                run_cost = _cost_usd(summary.get('token_usage_total'))
-                rt_cost += run_cost
-                if run_cost > 0:
+                run_cost = _cost_usd(usage)
+                if run_cost is not None:
+                    rt_cost += run_cost
                     costed_runs += 1
-                by_sev = summary.get('by_severity')
-                if isinstance(by_sev, dict):
-                    for sev, entry in by_sev.items():
-                        if isinstance(entry, dict):
-                            n = _as_int(entry.get('vulnerabilities_found') or entry.get('count'))
-                            if n:
-                                severity_counts[sev] = severity_counts.get(sev, 0) + n
+                run_input = _input_cost(usage)
+                if run_input is not None:
+                    input_cost_total += run_input
+                    has_input_cost = True
+                run_output = _output_cost(usage)
+                if run_output is not None:
+                    output_cost_total += run_output
+                    has_output_cost = True
+                by_sev = _summary_severity(summary)
+            for sev, n in by_sev.items():
+                severity_counts[sev] = severity_counts.get(sev, 0) + n
         elif card.surface == 'sim':
-            tok = sum(_as_int(_result_tokens(res)) for res in _results(data))
+            results = _results(data)
+            tok = sum(_as_int(_result_tokens(res)) for res in results)
             sim_tokens += tok
             total_tokens += tok
-            run_cost = sum(_cost_usd(res.get('token_usage')) for res in _results(data))
-            sim_cost += run_cost
-            if run_cost > 0:
+            usages = [res.get('token_usage') for res in results]
+            costs = [c for c in (_cost_usd(u) for u in usages) if c is not None]
+            if costs:
+                sim_cost += sum(costs)
                 costed_runs += 1
+            inputs = [c for c in (_input_cost(u) for u in usages) if c is not None]
+            if inputs:
+                input_cost_total += sum(inputs)
+                has_input_cost = True
+            outputs = [c for c in (_output_cost(u) for u in usages) if c is not None]
+            if outputs:
+                output_cost_total += sum(outputs)
+                has_output_cost = True
         elif card.surface == 'pairwise':
             usages = [_comparison_usage(entry) for entry in _entries(data)]
             tok = sum(_tokens_total(u) for u in usages)
             pw_tokens += tok
             total_tokens += tok
-            run_cost = sum(_cost_usd(u) for u in usages)
-            pw_cost += run_cost
-            if run_cost > 0:
+            costs = [c for c in (_cost_usd(u) for u in usages) if c is not None]
+            if costs:
+                pw_cost += sum(costs)
                 costed_runs += 1
+            inputs = [c for c in (_input_cost(u) for u in usages) if c is not None]
+            if inputs:
+                input_cost_total += sum(inputs)
+                has_input_cost = True
+            outputs = [c for c in (_output_cost(u) for u in usages) if c is not None]
+            if outputs:
+                output_cost_total += sum(outputs)
+                has_output_cost = True
 
-    severity = [(sev, severity_counts[sev]) for sev in SEVERITY_ORDER if severity_counts.get(sev)]
+    # Unknown sorts last, after the real scale, and only appears when non-zero.
+    severity = [(sev, severity_counts[sev]) for sev in (*SEVERITY_ORDER, UNKNOWN_SEVERITY) if severity_counts.get(sev)]
     # Zero-count kinds are dropped, matching tokens_by_kind / cost_by_kind: a
     # workspace with no pairwise runs should not carry an empty 'Pairwise' bar.
     by_kind = [
@@ -343,11 +481,129 @@ def landing(roots: list[Path] | None = None) -> Landing:
         tokens_by_kind=tokens_by_kind,
         resistant=max(resistant, 0),
         vulnerable=max(vulnerable, 0),
-        total_cost=rt_cost + sim_cost + pw_cost,
+        total_cost=(rt_cost + sim_cost + pw_cost) if costed_runs else None,
         costed_runs=costed_runs,
         cost_by_kind=cost_by_kind,
+        total_input_cost=input_cost_total if has_input_cost else None,
+        total_output_cost=output_cost_total if has_output_cost else None,
         recent=rows[:5],
     )
+
+
+class _RedteamCounts(NamedTuple):
+    """Per-report red-team tallies derived by walking the ``results`` list."""
+
+    attacks: int
+    evaluated: int
+    vulnerable: int
+    errors: int
+    tokens: int
+    cost: float
+    by_severity: dict[str, int]
+
+
+def _result_outcome(res: dict[str, object]) -> bool | None:
+    """``True`` resisted, ``False`` vulnerable, ``None`` never evaluated.
+
+    Mirrors ``_is_evaluated`` / ``_is_vulnerable`` in
+    ``redteam.reports.converters``: only a boolean ``evaluation.passed`` counts
+    as an evaluation. The top-level ``error`` field carries the *target*
+    error only, so a result whose generation succeeded but whose evaluation
+    crashed or was skipped has ``error=None, vulnerable=False`` and must not be
+    booked as resistant — that would bias a security metric optimistic.
+    Reports too old to serialize ``evaluation`` at all fall back to the flags
+    they do carry.
+    """
+    evaluation = res.get('evaluation')
+    if isinstance(evaluation, dict):
+        passed = evaluation.get('passed')
+        return passed if isinstance(passed, bool) else None
+    if 'evaluation' in res or res.get('error'):
+        return None
+    # Oldest schema: no evaluation object at all. A present `vulnerable` flag is
+    # the verdict; an absent one means "never evaluated", not "resisted" — the
+    # same optimistic bias guarded against above, one schema generation older.
+    if 'vulnerable' in res:
+        return not res.get('vulnerable')
+    return None
+
+
+def _result_usage(res: dict[str, object]) -> tuple[int, float]:
+    """``(tokens, cost)`` for one result, over both the target and judge calls.
+
+    Same two holders ``converters._aggregate_token_usage`` walks.
+    """
+    tokens = 0
+    cost = 0.0
+    for holder in ('execution', 'evaluation'):
+        parent = res.get(holder)
+        usage = parent.get('token_usage') if isinstance(parent, dict) else None
+        tokens += _tokens_total(usage)
+        holder_cost = _cost_usd(usage)
+        if holder_cost is not None:
+            cost += holder_cost
+    return tokens, cost
+
+
+def _redteam_counts(data: dict[str, object]) -> _RedteamCounts:
+    """Tally a red-team report straight from its ``results`` list.
+
+    The single classifier behind both the red-team overview and the landing
+    aggregate's legacy fallback, so the two can never drift apart. A report
+    with no results tallies to zeros — there is genuinely nothing to weight in
+    an attack-weighted aggregate.
+    """
+    attacks = evaluated = vulnerable = errors = tokens = 0
+    cost = 0.0
+    by_severity: dict[str, int] = {}
+    for res in _results(data):
+        attacks += 1
+        if res.get('error'):
+            errors += 1
+        tok, c = _result_usage(res)
+        tokens += tok
+        cost += c
+        outcome = _result_outcome(res)
+        if outcome is None:
+            continue
+        evaluated += 1
+        if not outcome:
+            vulnerable += 1
+            attack = res.get('attack')
+            attack = attack if isinstance(attack, dict) else {}
+            severity = str(attack.get('severity') or UNKNOWN_SEVERITY).lower()
+            # An off-scale value ('sev1', 'medium-high') would otherwise create a
+            # bucket the display comprehension silently drops, leaving the bars
+            # summing to less than the donut — same failure as the missing field.
+            if severity not in SEVERITY_ORDER:
+                severity = UNKNOWN_SEVERITY
+            by_severity[severity] = by_severity.get(severity, 0) + 1
+    if attacks and not tokens:
+        # Distinguishes "shape we couldn't read" from a genuinely costless run —
+        # _result_usage returns zeros for any unrecognised usage schema.
+        logger.debug('redteam counts: {} results but zero derivable token usage — unrecognised usage shape?', attacks)
+    return _RedteamCounts(attacks, evaluated, vulnerable, errors, tokens, cost, by_severity)
+
+
+def _summary_severity(summary: dict[str, object]) -> dict[str, int]:
+    """Vulnerability count per severity as stored in a modern ``by_severity``.
+
+    Keys off the report's severity scale fold into ``unknown`` so their counts
+    stay visible in the bars rather than vanishing at display time.
+    """
+    by_sev = summary.get('by_severity')
+    if not isinstance(by_sev, dict):
+        return {}
+    out: dict[str, int] = {}
+    for sev, entry in by_sev.items():
+        if isinstance(entry, dict):
+            n = _as_int(entry.get('vulnerabilities_found') or entry.get('count'))
+            if n:
+                key = str(sev).lower()
+                if key not in SEVERITY_ORDER:
+                    key = UNKNOWN_SEVERITY
+                out[key] = out.get(key, 0) + n
+    return out
 
 
 def _entries(data: dict[str, object]) -> list[dict[str, object]]:
@@ -458,7 +714,7 @@ class SimRunRow:
     status: str  # 'passed' | 'warning' | 'failed'
     score: float | None  # run score (mean of scorer_averages), 0..1
     cases: int  # number of simulations in the run
-    cost: float  # summed cost_usd across the run's simulations
+    cost: float | None  # summed cost_usd across the run's simulations; None if none recorded
     error: bool
 
 
@@ -470,6 +726,8 @@ class SimOverview:
     that carry a ``token_usage.cost_usd`` (recorded upstream) — a missing cost is
     "unknown", not $0, so cost-less sims don't dilute the mean. ``None`` when no
     sim has cost data, in which case the view falls back to avg tokens/sim.
+    ``avg_input_cost`` / ``avg_output_cost`` are the same averaging rule applied
+    to the ``input_cost`` / ``output_cost`` components.
     """
 
     simulations_run: int
@@ -477,6 +735,8 @@ class SimOverview:
     avg_turns: float | None
     avg_tokens: float | None
     avg_cost: float | None  # mean cost_usd per sim
+    avg_input_cost: float | None  # mean input_cost per sim, averaged over costed sims only
+    avg_output_cost: float | None  # mean output_cost per sim, averaged over costed sims only
     achieved: int  # outcomes donut segments
     not_achieved: int
     errors: int
@@ -503,7 +763,11 @@ def sim_overview(roots: list[Path] | None = None, *, page: int = 1, per_page: in
     turns_total = 0
     tokens_total = 0
     cost_total = 0.0
-    costed = 0  # sims that actually carry a cost_usd — avg_cost divides by this, not total
+    costed = 0  # sims that actually carry a known cost_usd — avg_cost divides by this, not total
+    input_cost_total = 0.0
+    input_costed = 0
+    output_cost_total = 0.0
+    output_costed = 0
     achieved = not_achieved = errors = 0
     total = 0
 
@@ -515,7 +779,7 @@ def sim_overview(roots: list[Path] | None = None, *, page: int = 1, per_page: in
         except (OSError, ValueError):
             continue
 
-        run_cost = 0.0
+        run_costs: list[float] = []
         run_cases = 0
         run_errors = 0
         for res in _results(data):
@@ -526,9 +790,18 @@ def sim_overview(roots: list[Path] | None = None, *, page: int = 1, per_page: in
             turns_total += _as_int(res.get('turn_count'))
             tokens_total += _result_tokens(res)
             usage = res.get('token_usage')
-            if isinstance(usage, dict) and 'cost_usd' in usage:
-                run_cost += _cost_usd(usage)
+            cost = _cost_usd(usage)
+            if cost is not None:
+                run_costs.append(cost)
                 costed += 1
+            input_cost = _input_cost(usage)
+            if input_cost is not None:
+                input_cost_total += input_cost
+                input_costed += 1
+            output_cost = _output_cost(usage)
+            if output_cost is not None:
+                output_cost_total += output_cost
+                output_costed += 1
             # Mirror the donut segments (goal_achieved / error) exactly.
             if is_error:
                 errors += 1
@@ -537,7 +810,9 @@ def sim_overview(roots: list[Path] | None = None, *, page: int = 1, per_page: in
                 achieved += 1
             else:
                 not_achieved += 1
-        cost_total += run_cost
+        run_cost = sum(run_costs) if run_costs else None
+        if run_cost is not None:
+            cost_total += run_cost
 
         score = _sim_run_score(data)
         runs.append(
@@ -563,6 +838,8 @@ def sim_overview(roots: list[Path] | None = None, *, page: int = 1, per_page: in
         avg_turns=(turns_total / total) if total else None,
         avg_tokens=(tokens_total / total) if total else None,
         avg_cost=(cost_total / costed) if costed else None,
+        avg_input_cost=(input_cost_total / input_costed) if input_costed else None,
+        avg_output_cost=(output_cost_total / output_costed) if output_costed else None,
         achieved=achieved,
         not_achieved=not_achieved,
         errors=errors,
@@ -589,7 +866,7 @@ class RedTeamRunRow:
     status: str  # 'passed' (resisted) | 'warning' | 'failed'
     score: float | None  # resistance rate, 0..1
     cases: int  # number of attacks in the run
-    cost: float  # summed cost_usd for the run
+    cost: float | None  # summed cost_usd for the run; None when not recorded
     error: bool
 
 
@@ -602,6 +879,8 @@ class RedTeamOverview:
     critical_findings: int
     avg_robustness: float | None  # attack-weighted resistance, 0..1
     total_cost: float | None  # summed cost_usd across red team runs
+    total_input_cost: float | None = None  # summed input_cost across red team runs
+    total_output_cost: float | None = None  # summed output_cost across red team runs
     recent: list[RedTeamRunRow] = field(default_factory=list)  # newest run first, current page
     total_runs: int = 0  # total runs before paging (for the pager)
     page: int = 1
@@ -657,6 +936,10 @@ def redteam_overview(roots: list[Path] | None = None, *, page: int = 1, per_page
     resistant = 0
     cost_total = 0.0
     has_cost = False
+    input_cost_total = 0.0
+    has_input_cost = False
+    output_cost_total = 0.0
+    has_output_cost = False
     total_attacks = 0
 
     for card in library.scan(roots):
@@ -669,42 +952,33 @@ def redteam_overview(roots: list[Path] | None = None, *, page: int = 1, per_page
 
         summary = data.get('summary')
         summary = summary if isinstance(summary, dict) else {}
-        run_cost = 0.0
         usage = summary.get('token_usage_total')
-        if isinstance(usage, dict) and 'cost_usd' in usage:
-            run_cost = _cost_usd(usage)
+        run_cost = _cost_usd(usage)
+        if run_cost is not None:
             cost_total += run_cost
             has_cost = True
+        run_input = _input_cost(usage)
+        if run_input is not None:
+            input_cost_total += run_input
+            has_input_cost = True
+        run_output = _output_cost(usage)
+        if run_output is not None:
+            output_cost_total += run_output
+            has_output_cost = True
 
-        run_vuln = 0
-        run_attacks = 0
-        run_errors = 0
-        for res in _results(data):
-            total_attacks += 1
-            run_attacks += 1
-            attack = res.get('attack')
-            attack = attack if isinstance(attack, dict) else {}
-            is_error = bool(res.get('error'))
-            is_vuln = bool(res.get('vulnerable'))
-            severity = str(attack.get('severity', 'low')).lower()
-            if is_error:
-                run_errors += 1
-            else:
-                evaluated += 1
-                if is_vuln:
-                    vulnerable += 1
-                    run_vuln += 1
-                    if severity == 'critical':
-                        critical += 1
-                else:
-                    resistant += 1
+        counts = _redteam_counts(data)
+        total_attacks += counts.attacks
+        evaluated += counts.evaluated
+        vulnerable += counts.vulnerable
+        resistant += counts.evaluated - counts.vulnerable
+        critical += counts.by_severity.get('critical', 0)
 
         resistance = _as_float(summary.get('resistance_rate')) if 'resistance_rate' in summary else None
         if zero_evaluated_attacks(summary):
             # Same no-score rule as the landing rows: zero evaluated attacks
             # means the rate is only the schema default, never a real score.
             resistance = None
-        cases = _as_int(summary.get('total_attacks')) or run_attacks
+        cases = _as_int(summary.get('total_attacks')) or counts.attacks
         runs.append(
             RedTeamRunRow(
                 rid=card.id,
@@ -712,7 +986,7 @@ def redteam_overview(roots: list[Path] | None = None, *, page: int = 1, per_page
                 when=card.created_at,
                 targets=_redteam_targets(data),
                 status=_lifecycle_status(
-                    broken=bool(card.error), all_errored=(run_attacks > 0 and run_errors == run_attacks)
+                    broken=bool(card.error), all_errored=(counts.attacks > 0 and counts.errors == counts.attacks)
                 ),
                 score=resistance,
                 cases=cases,
@@ -728,6 +1002,8 @@ def redteam_overview(roots: list[Path] | None = None, *, page: int = 1, per_page
         critical_findings=critical,
         avg_robustness=(resistant / evaluated) if evaluated else None,
         total_cost=cost_total if has_cost else None,
+        total_input_cost=input_cost_total if has_input_cost else None,
+        total_output_cost=output_cost_total if has_output_cost else None,
         recent=runs[(page - 1) * per_page : page * per_page],
         total_runs=len(runs),
         page=page,

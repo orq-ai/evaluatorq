@@ -31,11 +31,13 @@ eq redteam run --target agent:<key> [OPTIONS]
 | `--max-static-datapoints` | `int \| None` / `None` | Cap static (dataset) datapoints. |
 | `--no-cleanup-memory` | `bool` / `False` | Skip memory entity cleanup after dynamic runs. |
 | `--dataset` | `str \| None` / `None` | Dataset source: local path, `hf:org/repo`, or `hf:org/repo/file.json`. |
+| `--from-run` | `str \| None` / `None` | Replay a previous run instead of generating data: pass its file name, run id, path, or `latest`. Re-runs the exact same attacks, so only the target and models may differ. Cannot be combined with `--mode`, `--dataset`, `--category`, `--vulnerability`, `--strategy`, `--delivery-method`, or the `--max-*-datapoints` caps. |
 | `--artifacts-dir` | `Path \| None` / `None` | Directory for saved JSON files. Required when `--save detail`. (`--output-dir` was removed; use `--artifacts-dir`.) |
 | `--save` | `none \| final \| detail` / `final` | What to persist: `none` (no files), `final` (summary only), or `detail` (all stage artifacts). |
 | `--report` | `Path \| None` / `None` | Path to write the report JSON. |
 | `--report-md` | `Path \| None` / `None` | Directory for an auto-named Markdown report. |
 | `--report-html` | `Path \| None` / `None` | Directory for an auto-named HTML report. |
+| `--executive-summary` / `--no-executive-summary` | `bool` / `--executive-summary` | Generate an LLM narrative executive summary at the top of the report (needs LLM credentials). Pass `--no-executive-summary` to skip the extra LLM call. |
 | `--system-prompt` | `str \| None` / `None` | System prompt for the target model/agent. |
 | `--yes` / `-y` | `bool` / `False` | Skip confirmation prompt. |
 | `--verbose` / `-v` | count / `0` | Increase verbosity. `-v` per-attack progress + info logs; `-vv` debug logs. |
@@ -110,10 +112,11 @@ eq redteam validate-dataset [DATASET]
 List previously saved red team runs.
 
 ```bash
-eq redteam runs [PATH] [--limit N]
+eq redteam runs [PATH] [--limit N] [--json]
 ```
 
 | Flag / Argument | Type / Default | Description |
 |---|---|---|
 | `PATH` | `Path \| None` / `None` | Directory containing run reports. Defaults to `.evaluatorq/runs/`. |
 | `--limit` / `-n` | `int` / `20` | Maximum number of runs to show. |
+| `--json` | `bool` / `False` | Emit runs as a JSON array on stdout (machine-readable). |

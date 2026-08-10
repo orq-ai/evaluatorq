@@ -21,9 +21,23 @@ testpaths = [ "tests" ]
 python_files = [ "test_*.py", "*_test.py" ]
 norecursedirs = [ ".venv", "dist", "*.egg-info" ]
 markers = [
-  "integration: marks tests as integration tests (require ORQ_API_KEY in .env)"
+  "integration: marks tests as integration tests (require ORQ_API_KEY in .env)",
+  "allow_network: test may open real outbound connections (exempt from the conftest network guard)"
 ]
 timeout = 120
+
+[tool.coverage.run]
+source = [ "src/evaluatorq" ]
+# relative_files is required by python-coverage-comment-action — the CI job runs
+# coverage in a different absolute path than the action reads it back from.
+relative_files = true
+
+[tool.coverage.report]
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+  "@overload",
+]
 
 [tool.ruff]
 line-length = 120
@@ -193,14 +207,15 @@ dependencies = [
   "rich>=14.2.0",
   "loguru>=0.6.0",
   "typer>=0.12.0",
-  "openai>=1.92.0,<3.0.0"
+  "openai>=1.92.0,<3.0.0",
+  "orq-ai-sdk>=4.12",
 ]
 
   [project.license]
   text = "MIT"
 
   [project.optional-dependencies]
-  orq = [ "orq-ai-sdk>=4.4.7" ]
+  orq = [ "orq-ai-sdk>=4.12" ]
   otel = [
   "opentelemetry-api>=1.20.0",
   "opentelemetry-sdk>=1.20.0",
@@ -220,7 +235,7 @@ dependencies = [
   "vl-convert-python>=1.6.0"
 ]
   simulation = [
-  "orq-ai-sdk>=4.4.7",
+  "orq-ai-sdk>=4.12",
   "streamlit>=1.30.0",
   "plotly>=5.18.0",
   "watchdog>=4.0.0",
@@ -295,7 +310,7 @@ dev = [
   "pytest-timeout>=2.3.0",
   "basedpyright>=1.21.0",
   "ruff>=0.14.3",
-  "orq-ai-sdk>=4.4.7",
+  "orq-ai-sdk>=4.12",
   "anthropic>=0.75.0",
   "opentelemetry-api>=1.20.0",
   "opentelemetry-sdk>=1.20.0",

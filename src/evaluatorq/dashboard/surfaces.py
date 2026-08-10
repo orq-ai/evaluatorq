@@ -216,10 +216,10 @@ def _pairwise_adapter() -> SurfaceAdapter:
         called by the header and by two section builders, so leaving the field
         empty rolls the same entries up three times per render.
         """
-        from evaluatorq.pairwise import build_report
-
-        rolled = build_report([e.comparison for e in filtered])
-        return run.model_copy(update={'entries': list(filtered), 'report': rolled})
+        aggregation = 'bt-sigma' if run.report is not None and run.report.bt_sigma is not None else 'plurality'
+        filtered_run = run.model_copy(update={'entries': list(filtered), 'report': None})
+        rolled = filtered_run.rollup(aggregation=aggregation)
+        return filtered_run.model_copy(update={'report': rolled})
 
     return SurfaceAdapter(
         load=_pw_load,

@@ -14,6 +14,7 @@ from evaluatorq.common.thread_context import pipeline_metadata, thread_body_para
 from evaluatorq.common.tracing import get_trace_context_headers
 from evaluatorq.contracts import AgentContext, AgentResponse, AgentTarget, LLMCallConfig, Message
 from evaluatorq.openresponses.client import build_simulation_client
+from evaluatorq.openresponses.input_items import messages_to_responses_input
 from evaluatorq.openresponses.tracing import (
     record_openresponses_request,
     record_openresponses_response,
@@ -96,7 +97,7 @@ class OrqResponsesTarget(AgentTarget):
     async def respond(self, messages: list[Message]) -> AgentResponse:
         """Stateless: send the full message list, return the response."""
         return await self._call_responses_api(
-            responses_input=self._messages_to_input(messages),
+            responses_input=messages_to_responses_input(messages),
         )
 
     def new(self) -> OrqResponsesTarget:
@@ -242,7 +243,7 @@ class OrqResponsesTarget(AgentTarget):
             if span_id:
                 updates['span_id'] = span_id
             if agent_response.usage is not None:
-                updates['usage'] = agent_response.usage.model_copy(update={'calls': 1})
+                updates['usage'] = agent_response.usage.with_calls(1)
             return agent_response.model_copy(update=updates)
 
         try:
@@ -258,31 +259,6 @@ class OrqResponsesTarget(AgentTarget):
             )
         except asyncio.TimeoutError as e:
             raise RuntimeError(f'OrqResponsesTarget timed out after {timeout_s}s (model={self.config.model})') from e
-
-    @staticmethod
-    def _messages_to_input(messages: list[Message]) -> list[dict[str, Any]]:
-        result: list[dict[str, Any]] = []
-        for m in messages:
-            # Multi-part content (text + image/file) passes straight through to
-            # the Responses API as input content parts.
-            if isinstance(m.content, list):
-                content: Any = [p.model_dump(mode='json') for p in m.content]
-            # Assistant messages with tool_calls require content: null per
-            # OpenAI's spec; collapsing None to "" produces an invalid payload.
-            # For other roles, the API expects a string, so coerce None -> "".
-            elif m.role == 'assistant':
-                content = m.content
-            else:
-                content = m.content or ''
-            d: dict[str, Any] = {'role': m.role, 'content': content}
-            if m.tool_calls is not None:
-                d['tool_calls'] = [tc.model_dump() for tc in m.tool_calls]
-            if m.tool_call_id is not None:
-                d['tool_call_id'] = m.tool_call_id
-            if m.name is not None:
-                d['name'] = m.name
-            result.append(d)
-        return result
 
 
 __all__ = ['OrqResponsesTarget']

@@ -18,6 +18,7 @@ from evaluatorq.contracts import (
     TokenUsage,
     ToolCallOutputItem,
     content_to_text,
+    tool_result_to_text,
 )
 
 if TYPE_CHECKING:
@@ -218,8 +219,7 @@ def _build_output(result: Any) -> list[OutputMessage]:
                 idx = tool_index.get(call_id)
                 if idx is not None and isinstance(items[idx], ToolCallOutputItem):
                     out = getattr(part, 'content', '')
-                    out_str = out if isinstance(out, str) else str(out)
-                    items[idx] = items[idx].model_copy(update={'result': out_str})
+                    items[idx] = items[idx].model_copy(update={'result': tool_result_to_text(out)})
     return items
 
 

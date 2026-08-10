@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from loguru import logger
 
 from evaluatorq.common.messages import coerce_content_text
-from evaluatorq.contracts import ReportSection
+from evaluatorq.contracts import ReportSection, Usage
 from evaluatorq.simulation.metrics import TURN_METRICS
 from evaluatorq.simulation.types import CriteriaRow, SimulationEntry, TranscriptMessage
 
@@ -393,11 +393,15 @@ def _build_evaluator_scores_section(results: list[SimulationResult]) -> ReportSe
 
 
 def _build_token_usage_section(results: list[SimulationResult]) -> ReportSection:
-    input_tokens = sum(r.token_usage.input_tokens for r in results)
-    output_tokens = sum(r.token_usage.output_tokens for r in results)
-    total = sum(r.token_usage.total_tokens for r in results)
-    cached = sum(r.token_usage.cached_tokens for r in results)
-    reasoning = sum(r.token_usage.reasoning_tokens for r in results)
+    # Usage.__add__ aggregates cost alongside tokens, keeping None ("provider
+    # did not report cost") distinct from 0.0 ("provider reported free").
+    usage_total: Usage = sum((r.token_usage for r in results), Usage())
+    input_tokens = usage_total.input_tokens
+    output_tokens = usage_total.output_tokens
+    total = usage_total.total_tokens
+    cached = usage_total.cached_tokens
+    cache_creation = usage_total.cache_creation_tokens
+    reasoning = usage_total.reasoning_tokens
     n = len(results) or 1
     return ReportSection(
         kind='token_usage',
@@ -410,12 +414,16 @@ def _build_token_usage_section(results: list[SimulationResult]) -> ReportSection
             'output_tokens': output_tokens,
             'total_tokens': total,
             'cached_tokens': cached,
+            'cache_creation_tokens': cache_creation,
             'reasoning_tokens': reasoning,
             'avg_total_per_conversation': total / n,
             'avg_input_per_conversation': input_tokens / n,
             'avg_output_per_conversation': output_tokens / n,
             'avg_prompt_per_conversation': input_tokens / n,
             'avg_completion_per_conversation': output_tokens / n,
+            'input_cost': usage_total.input_cost,
+            'output_cost': usage_total.output_cost,
+            'total_cost': usage_total.total_cost,
         },
     )
 

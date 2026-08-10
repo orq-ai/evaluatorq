@@ -52,6 +52,44 @@ def _redteam_payload(
     }
 
 
+def _legacy_redteam_payload(name: str, *, created: str, resistance: float, results: list[dict]) -> dict:
+    """A red-team report predating summary.evaluated_attacks / vulnerabilities_found.
+
+    Only resistance_rate is stored; the real counts, severities and token usage
+    all live in the results list.
+    """
+    return {
+        'pipeline': {'mode': 'adaptive'},
+        'created_at': created,
+        'run_name': name,
+        'total_results': len(results),
+        'results': results,
+        'summary': {'resistance_rate': resistance},
+    }
+
+
+def _legacy_result(
+    *,
+    vulnerable: bool = False,
+    error: str | None = None,
+    severity: str = 'low',
+    evaluation: dict | None = None,
+    tokens: int = 0,
+) -> dict:
+    """One legacy result row.
+
+    Omitting *evaluation* reproduces the oldest reports, which carry only the
+    ``vulnerable`` flag; passing one exercises the authoritative
+    ``evaluation.passed`` classification.
+    """
+    res: dict = {'attack': {'severity': severity}, 'vulnerable': vulnerable, 'error': error}
+    if evaluation is not None:
+        res['evaluation'] = evaluation
+    if tokens:
+        res['execution'] = {'token_usage': {'total_tokens': tokens, 'cost_usd': tokens * 0.001}}
+    return res
+
+
 def _sim_payload(name: str, *, created: str, averages: dict[str, float], n: int, tok_each: int) -> dict:
     return {
         'mode': 'run',
@@ -126,6 +164,212 @@ class TestMetrics:
         assert dict(data.tokens_by_kind)['Red team'] == 412000
         assert dict(data.tokens_by_kind)['Agent sim'] == 40 * 1550
         assert len(data.recent) == 2
+
+    def test_landing_includes_legacy_redteam_counts(self, roots: list[Path], tmp_path: Path) -> None:
+        # A legacy report (no evaluated_attacks in summary) must contribute its
+        # real counts, derived from results, to the landing aggregate (RES-1202).
+        rt = roots[0]
+        (rt / 'legacy_20260101_000000.json').write_text(
+            json.dumps(
+                _legacy_redteam_payload(
+                    'Legacy probe',
+                    created='2026-01-01T00:00:00',
+                    resistance=2 / 3,
+                    results=[
+                        _legacy_result(vulnerable=False),
+                        _legacy_result(vulnerable=False),
+                        _legacy_result(vulnerable=True),
+                        # Errored result was never evaluated; must not be counted.
+                        _legacy_result(vulnerable=False, error='timeout'),
+                    ],
+                )
+            )
+        )
+        data = metrics.landing(roots)
+        # Modern report: resistant 110, vulnerable 18. Legacy adds 2 and 1.
+        assert data.resistant == 112
+        assert data.vulnerable == 19
+        assert data.resistance_rate == pytest.approx(112 / 131)
+
+    def test_landing_legacy_without_results_is_not_counted(self, tmp_path: Path) -> None:
+        # A rate without an attack count has no weight in the attack-weighted
+        # aggregate: it stays out, and the aggregate stays consistent (None
+        # rather than a fabricated number).
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        (rt / 'legacy_20260101_000000.json').write_text(
+            json.dumps(_legacy_redteam_payload('Rate only', created='2026-01-01T00:00:00', resistance=0.5, results=[]))
+        )
+        data = metrics.landing([rt])
+        assert data.redteam_runs == 1  # the run itself is still listed
+        assert data.resistant == 0
+        assert data.vulnerable == 0
+        assert data.resistance_rate is None
+
+    def test_legacy_row_keeps_its_recorded_rate_when_nothing_is_derivable(self, tmp_path: Path) -> None:
+        # Deriving nothing is not the same as measuring zero: a run with a
+        # recorded rate but no per-attack results to re-derive from must keep
+        # showing that rate rather than blanking its score.
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        (rt / 'legacy_20260101_000000.json').write_text(
+            json.dumps(_legacy_redteam_payload('Rate only', created='2026-01-01T00:00:00', resistance=0.5, results=[]))
+        )
+        row = metrics.run_rows([rt])[0]
+        assert row.score == pytest.approx(0.5)
+        assert row.stored_score is None  # not re-derived, so nothing to reconcile
+
+    def test_legacy_row_marks_a_rate_it_recalculated(self, tmp_path: Path) -> None:
+        # The recorded rate was computed over every attack (1/2); the dashboard
+        # counts evaluated-only (1/1). Both numbers stay visible.
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        (rt / 'legacy_20260101_000000.json').write_text(
+            json.dumps(
+                _legacy_redteam_payload(
+                    'Judge crashed',
+                    created='2026-01-01T00:00:00',
+                    resistance=0.5,
+                    results=[
+                        _legacy_result(evaluation={'passed': True}),
+                        _legacy_result(evaluation={'passed': None}),
+                    ],
+                )
+            )
+        )
+        row = metrics.run_rows([rt])[0]
+        assert row.score == pytest.approx(1.0)
+        assert row.stored_score == pytest.approx(0.5)
+        assert (row.evaluated, row.attacks) == (1, 2)
+
+    def test_legacy_row_is_unmarked_when_the_derivation_agrees(self, tmp_path: Path) -> None:
+        # An indicator on every legacy run would be noise. Only a rate that
+        # actually moved is worth flagging.
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        (rt / 'legacy_20260101_000000.json').write_text(
+            json.dumps(
+                _legacy_redteam_payload(
+                    'Agrees',
+                    created='2026-01-01T00:00:00',
+                    resistance=0.5,
+                    results=[
+                        _legacy_result(evaluation={'passed': True}),
+                        _legacy_result(evaluation={'passed': False}),
+                    ],
+                )
+            )
+        )
+        row = metrics.run_rows([rt])[0]
+        assert row.score == pytest.approx(0.5)
+        assert row.stored_score is None
+
+    def test_landing_legacy_severity_and_tokens_are_derived(self, tmp_path: Path) -> None:
+        # A legacy run must weigh in on the severity bars and the cost totals
+        # too, not just the donut — otherwise it is counted as a run whose
+        # attacks and spend are invisible everywhere else on the page.
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        (rt / 'legacy_20260101_000000.json').write_text(
+            json.dumps(
+                _legacy_redteam_payload(
+                    'Legacy probe',
+                    created='2026-01-01T00:00:00',
+                    resistance=0.5,
+                    results=[
+                        _legacy_result(vulnerable=True, severity='critical', tokens=100),
+                        _legacy_result(vulnerable=True, severity='low', tokens=100),
+                        _legacy_result(vulnerable=False, tokens=200),
+                    ],
+                )
+            )
+        )
+        data = metrics.landing([rt])
+        assert dict(data.severity) == {'critical': 1, 'low': 1}
+        assert dict(data.tokens_by_kind)['Red team'] == 400
+        assert data.total_tokens == 400
+        assert dict(data.cost_by_kind)['Red team'] == pytest.approx(0.4)
+
+    def test_landing_evaluation_failure_is_not_counted_as_resistant(self, tmp_path: Path) -> None:
+        # error carries the *target* error only. A result whose generation
+        # succeeded but whose evaluation never produced a boolean was not
+        # evaluated, and must not pad the resistant bucket.
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        (rt / 'legacy_20260101_000000.json').write_text(
+            json.dumps(
+                _legacy_redteam_payload(
+                    'Judge crashed',
+                    created='2026-01-01T00:00:00',
+                    resistance=1.0,
+                    results=[
+                        _legacy_result(evaluation={'passed': True}),
+                        _legacy_result(evaluation={'passed': False}, severity='high'),
+                        # Judge never returned a verdict: evaluation present but
+                        # passed is None, and no target-side error to go on.
+                        _legacy_result(evaluation={'passed': None}),
+                    ],
+                )
+            )
+        )
+        data = metrics.landing([rt])
+        assert data.resistant == 1
+        assert data.vulnerable == 1
+        assert data.resistance_rate == pytest.approx(0.5)
+
+    def test_landing_legacy_row_score_matches_derived_donut(self, tmp_path: Path) -> None:
+        # A legacy stored resistance_rate may use a different denominator than
+        # the evaluated-only one the donut derives. The run's row must go
+        # through the same classifier, so one run cannot show two different
+        # numbers on the same screen.
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        (rt / 'legacy_20260101_000000.json').write_text(
+            json.dumps(
+                _legacy_redteam_payload(
+                    'Total-denominator rate',
+                    created='2026-01-01T00:00:00',
+                    # Stored rate computed over all 4 results (2/4); the honest
+                    # evaluated-only rate is 2/3.
+                    resistance=0.5,
+                    results=[
+                        _legacy_result(vulnerable=False),
+                        _legacy_result(vulnerable=False),
+                        _legacy_result(vulnerable=True),
+                        _legacy_result(vulnerable=False, error='timeout'),
+                    ],
+                )
+            )
+        )
+        data = metrics.landing([rt])
+        row = next(r for r in data.recent if r.surface == 'redteam')
+        assert row.score == pytest.approx(2 / 3)
+        assert data.resistance_rate == pytest.approx(2 / 3)
+
+    def test_landing_legacy_result_without_vulnerable_key_is_unknown(self, tmp_path: Path) -> None:
+        # Oldest schema, truncated record: no evaluation, no error, and no
+        # vulnerable key either. "We don't know" must not land in the resistant
+        # bucket — that is the optimistic-bias failure mode, one schema
+        # generation older than the evaluation.passed one.
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        (rt / 'legacy_20260101_000000.json').write_text(
+            json.dumps(
+                _legacy_redteam_payload(
+                    'Truncated record',
+                    created='2026-01-01T00:00:00',
+                    resistance=1.0,
+                    results=[
+                        {'attack': {'severity': 'low'}},
+                        _legacy_result(vulnerable=True, severity='high'),
+                    ],
+                )
+            )
+        )
+        data = metrics.landing([rt])
+        assert data.resistant == 0
+        assert data.vulnerable == 1
+        assert data.resistance_rate == pytest.approx(0.0)
 
     def test_landing_empty(self, tmp_path: Path) -> None:
         empty = [tmp_path / 'runs', tmp_path / 'sim-runs']
@@ -284,11 +528,197 @@ class TestAvgCost:
             tokens_by_kind=[],
             resistant=0,
             vulnerable=0,
-            total_cost=0.0,
+            total_cost=None,
             costed_runs=0,
             cost_by_kind=[],
         )
-        assert 'n/a' in view.landing_body(data)
+        html = view.landing_body(data)
+        # Unknown cost renders as the "not reported" em dash, never $0.00 —
+        # a zero-cost run would be indistinguishable from an unrecorded one.
+        assert '—' in html
+        assert '$0.00' not in html
+
+
+class TestUnknownCostNeverRendersAsZero:
+    """Regression coverage for the None-vs-0.0 conflation bug found in Task 3's
+    review: ``contracts.Usage``'s ``@model_serializer`` always emits the
+    ``cost_usd`` key (even when the underlying ``total_cost`` is ``None``), so
+    a bare ``'cost_usd' in usage`` membership check can no longer distinguish
+    "cost recorded" from "cost unknown". An unknown cost must not be counted
+    as costed, must not contribute to any spend total, and must render as the
+    em dash — never ``$0.00``."""
+
+    def _redteam_payload_null_cost(self, name: str, *, created: str) -> dict:
+        return {
+            'pipeline': {'mode': 'adaptive'},
+            'created_at': created,
+            'run_name': name,
+            'total_results': 1,
+            'results': [
+                {
+                    'attack': {'severity': 'low', 'strategy_name': 'roleplay'},
+                    'agent': {'display_name': 'Refund agent', 'model': 'gpt-5.4'},
+                    'vulnerable': False,
+                    'error': None,
+                }
+            ],
+            'summary': {
+                'resistance_rate': 1.0,
+                'vulnerabilities_found': 0,
+                'evaluated_attacks': 1,
+                # The serializer always emits 'cost_usd', but a provider that
+                # never reported cost leaves it null — not absent.
+                'token_usage_total': {'total_tokens': 500, 'cost_usd': None},
+                'by_severity': {},
+            },
+        }
+
+    def test_landing_does_not_count_null_cost_as_costed(self, tmp_path: Path) -> None:
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        (rt / 'p.json').write_text(json.dumps(self._redteam_payload_null_cost('P', created='2026-06-29T10:00:00')))
+
+        data = metrics.landing([rt, sim])
+        assert data.costed_runs == 0
+        assert data.total_cost is None
+
+        html = view.landing_body(data)
+        assert '$0.00' not in html
+        assert '—' in html
+
+    def test_redteam_overview_does_not_count_null_cost(self, tmp_path: Path) -> None:
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        (rt / 'p.json').write_text(json.dumps(self._redteam_payload_null_cost('P', created='2026-06-29T10:00:00')))
+
+        ov = metrics.redteam_overview([rt, sim])
+        assert ov.total_cost is None
+        assert ov.recent[0].cost is None
+
+        html = view.redteam_overview_body(ov)
+        assert '$0.00' not in html
+
+    def test_sim_overview_does_not_count_null_cost(self, tmp_path: Path) -> None:
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        (sim / 's.json').write_text(
+            json.dumps({
+                'mode': 'run',
+                'created_at': '2026-06-30T10:00:00',
+                'run_name': 'S',
+                'total_results': 1,
+                'scorer_averages': {},
+                'results': [
+                    # Serializer-emitted null cost, not a missing key.
+                    {'token_usage': {'total_tokens': 100, 'cost_usd': None}, 'goal_achieved': True, 'turn_count': 1}
+                ],
+            })
+        )
+
+        ov = metrics.sim_overview([rt, sim])
+        assert ov.avg_cost is None
+        assert ov.recent[0].cost is None
+
+        html = view.sim_overview_body(ov)
+        assert '$0.00' not in html
+
+
+class TestPreBreakdownReportDegradesGracefully:
+    """Reports saved before the cost-breakdown fields existed carry only the
+    legacy ``cost_usd`` key (no ``input_cost`` / ``output_cost``), or predate
+    cost entirely. Both shapes must render — the known total (if any) shown
+    plainly, with no fabricated breakdown and no crash."""
+
+    def test_legacy_cost_usd_only_still_totals_and_shows_no_breakdown(self, tmp_path: Path) -> None:
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        (rt / 'p.json').write_text(
+            json.dumps({
+                'pipeline': {'mode': 'adaptive'},
+                'created_at': '2026-06-29T10:00:00',
+                'run_name': 'Legacy report',
+                'total_results': 1,
+                'results': [
+                    {
+                        'attack': {'severity': 'low', 'strategy_name': 'roleplay'},
+                        'agent': {'display_name': 'Refund agent', 'model': 'gpt-5.4'},
+                        'vulnerable': False,
+                        'error': None,
+                    }
+                ],
+                'summary': {
+                    'resistance_rate': 1.0,
+                    'vulnerabilities_found': 0,
+                    'evaluated_attacks': 1,
+                    # Pre-breakdown shape: only the legacy aggregate key.
+                    'token_usage_total': {'total_tokens': 500, 'cost_usd': 0.0025},
+                    'by_severity': {},
+                },
+            })
+        )
+
+        data = metrics.landing([rt, sim])
+        assert data.total_cost == pytest.approx(0.0025)
+        assert data.costed_runs == 1
+        # No breakdown was ever recorded, so it must not be fabricated.
+        assert data.total_input_cost is None
+        assert data.total_output_cost is None
+
+        html = view.landing_body(data)
+        assert '$0.0025' in html
+        assert 'in —' not in html  # no dangling breakdown sub-line at all
+
+        ov = metrics.redteam_overview([rt, sim])
+        assert ov.total_cost == pytest.approx(0.0025)
+        assert ov.total_input_cost is None
+        assert ov.total_output_cost is None
+        rt_html = view.redteam_overview_body(ov)
+        assert '(in' not in rt_html
+
+    def test_pre_cost_report_has_no_cost_key_at_all(self, tmp_path: Path) -> None:
+        """Reports predating cost tracking entirely — no ``cost_usd`` key."""
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        (rt / 'p.json').write_text(
+            json.dumps({
+                'pipeline': {'mode': 'adaptive'},
+                'created_at': '2026-06-29T10:00:00',
+                'run_name': 'Ancient report',
+                'total_results': 1,
+                'results': [
+                    {
+                        'attack': {'severity': 'low', 'strategy_name': 'roleplay'},
+                        'agent': {'display_name': 'Refund agent', 'model': 'gpt-5.4'},
+                        'vulnerable': False,
+                        'error': None,
+                    }
+                ],
+                'summary': {
+                    'resistance_rate': 1.0,
+                    'vulnerabilities_found': 0,
+                    'evaluated_attacks': 1,
+                    'token_usage_total': {'total_tokens': 500},
+                    'by_severity': {},
+                },
+            })
+        )
+
+        data = metrics.landing([rt, sim])
+        assert data.costed_runs == 0
+        assert data.total_cost is None
+        html = view.landing_body(data)
+        assert '$0.00' not in html
+        assert '—' in html
 
 
 class TestBarsRounding:
@@ -347,3 +777,126 @@ class TestZeroAttackScore:
         assert len(rows) == 1
         # 0 attacks evaluated: 1.00 would read as a perfect score.
         assert rows[0].score is None
+
+    def test_null_recorded_rate_has_no_score(self, tmp_path: Path) -> None:
+        """An explicitly null rate stays null, even for a run with zero attacks.
+
+        ``zero_evaluated_attacks`` deliberately says False for a run that attempted
+        nothing (empty, not unscored), so the null has to survive on its own — the
+        legacy 1.0 default applies only when the field is *absent*.
+        """
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        payload = _redteam_payload(
+            'no attacks',
+            created='2026-07-31T13:00:00Z',
+            resistance=1.0,
+            vulns=0,
+            evaluated=0,
+            tokens=0,
+            severity={},
+        )
+        payload['summary']['resistance_rate'] = None
+        payload['summary']['total_attacks'] = 0
+        (rt / 'noattacks_20260731_130000.json').write_text(json.dumps(payload))
+
+        rows = metrics.run_rows([rt])
+        assert len(rows) == 1
+        assert rows[0].score is None
+
+
+class TestScoreTooltip:
+    """The Score cell must name what the rate was measured over (RES-1202)."""
+
+    def _row(self, **kw: object) -> metrics.RunRow:
+        base: dict = dict(
+            id='r', surface='redteam', name='n', when='2026-01-01 00:00', headline='100 attacks',
+            score=0.95, status='finished', error=False,
+        )
+        base.update(kw)
+        return metrics.RunRow(**base)
+
+    def test_tooltip_names_the_evaluated_denominator(self) -> None:
+        title = view._score_title(self._row(evaluated=60, attacks=100))
+        assert 'Resistance rate' in title
+        assert '60 of 100 attacks evaluated' in title
+
+    def test_tooltip_and_marker_surface_the_recorded_rate(self) -> None:
+        row = self._row(evaluated=60, attacks=100, stored_score=0.71)
+        assert '0.71' in view._score_title(row)
+        assert 'recalculated' in view._score_title(row)
+        assert view._score_marker(row) != ''
+
+    def test_unrecalculated_rows_carry_no_marker(self) -> None:
+        assert view._score_marker(self._row(evaluated=100, attacks=100)) == ''
+
+    def test_non_redteam_rows_get_no_denominator(self) -> None:
+        title = view._score_title(self._row(surface='sim', evaluated=0, attacks=0))
+        assert 'Mean scorer average' in title
+        assert 'evaluated' not in title
+
+
+class TestUnknownSeverity:
+    """A vulnerability with no recorded severity gets its own bucket (RES-1202)."""
+
+    def _roots(self, tmp_path: Path, severity: str | None) -> list[Path]:
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        res = _legacy_result(vulnerable=True)
+        if severity is None:
+            del res['attack']['severity']
+        else:
+            res['attack']['severity'] = severity
+        (rt / 'legacy_20260101_000000.json').write_text(
+            json.dumps(
+                _legacy_redteam_payload('No severity', created='2026-01-01T00:00:00', resistance=0.0, results=[res])
+            )
+        )
+        return [rt]
+
+    def test_missing_severity_is_not_silently_booked_as_low(self, tmp_path: Path) -> None:
+        data = metrics.landing(self._roots(tmp_path, None))
+        assert dict(data.severity) == {metrics.UNKNOWN_SEVERITY: 1}
+
+    def test_the_bars_still_sum_to_the_donut(self, tmp_path: Path) -> None:
+        # Dropping the bucket instead would leave the severity panel quietly
+        # short of the vulnerability count next to it.
+        data = metrics.landing(self._roots(tmp_path, None))
+        assert sum(n for _, n in data.severity) == data.vulnerable == 1
+
+    def test_unknown_sorts_after_the_real_scale(self, tmp_path: Path) -> None:
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        no_sev = _legacy_result(vulnerable=True)
+        del no_sev['attack']['severity']
+        (rt / 'legacy_20260101_000000.json').write_text(
+            json.dumps(
+                _legacy_redteam_payload(
+                    'Mixed',
+                    created='2026-01-01T00:00:00',
+                    resistance=0.0,
+                    results=[_legacy_result(vulnerable=True, severity='critical'), no_sev],
+                )
+            )
+        )
+        assert [s for s, _ in metrics.landing([rt]).severity] == ['critical', metrics.UNKNOWN_SEVERITY]
+
+    def test_severity_colors_track_the_bucket_not_the_position(self, tmp_path: Path) -> None:
+        # Only 'low' survives, so a positional palette would paint it red.
+        data = metrics.landing(self._roots(tmp_path, 'low'))
+        html = view.landing_body(data)
+        assert 'var(--green-600)' in html
+        assert 'var(--red-600)' not in html
+
+    def test_off_scale_severity_folds_into_unknown(self, tmp_path: Path) -> None:
+        # A present-but-unrecognised value ('sev1') must not create a bucket the
+        # display comprehension silently drops. Same failure as the missing
+        # field, one step over.
+        data = metrics.landing(self._roots(tmp_path, 'sev1'))
+        assert dict(data.severity) == {metrics.UNKNOWN_SEVERITY: 1}
+        assert sum(n for _, n in data.severity) == data.vulnerable == 1
+
+    def test_off_scale_summary_severity_folds_into_unknown(self) -> None:
+        # The stored-summary path has the same display comprehension behind it.
+        out = metrics._summary_severity({'by_severity': {'Sev1': {'vulnerabilities_found': 2}, 'HIGH': {'count': 1}}})
+        assert out == {metrics.UNKNOWN_SEVERITY: 2, 'high': 1}

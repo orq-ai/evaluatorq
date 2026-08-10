@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 from fasthtml.common import Script
 
 from evaluatorq.common.reports import esc
+from evaluatorq.common.reports import fmt_cost as _fmt_cost
 from evaluatorq.simulation.metrics import TURN_METRICS
 
 if TYPE_CHECKING:
@@ -84,9 +85,21 @@ _SCORE_TITLES: dict[str, str] = {
 }
 
 
-def _score_title(surface: str) -> str:
-    title = _SCORE_TITLES.get(surface)
-    return f' title="{esc(title)}"' if title else ''
+def _score_title(row: RunRow) -> str:
+    """Tooltip for the Score cell: what the metric is, then what it was measured over."""
+    parts = [t] if (t := _SCORE_TITLES.get(row.surface)) else []
+    if row.surface == 'redteam' and row.attacks:
+        # The headline counts every attack attempted; the rate is over the ones
+        # that produced a verdict. Naming both stops the two reading as one.
+        parts.append(f'{row.evaluated} of {row.attacks} attacks evaluated')
+    if row.stored_score is not None:
+        parts.append(f'recalculated by the dashboard; the report for this run records {row.stored_score:.2f}')
+    return f' title="{esc(" · ".join(parts))}"' if parts else ''
+
+
+def _score_marker(row: RunRow) -> str:
+    """Marks a score the dashboard re-derived rather than read from the report."""
+    return '<span class="score-recalc" aria-hidden="true">*</span>' if row.stored_score is not None else ''
 
 
 def _kind_badge(surface: str) -> str:
@@ -119,7 +132,7 @@ def _run_row(row: RunRow, *, show_badge: bool = True) -> str:
         f'<span class="run-name-line"><span class="run-name">{esc(row.name)}</span>{badge}{err}</span>'
         f'<span class="run-meta">{esc(row.headline)} · {esc(row.when)}</span>'
         f'</span>'
-        f'<span class="run-score {_score_cls(row.score)}"{_score_title(row.surface)}>{_fmt_score(row.score)}</span>'
+        f'<span class="run-score {_score_cls(row.score)}"{_score_title(row)}>{_fmt_score(row.score)}{_score_marker(row)}</span>'
         f'{_status_badge(row.status)}'
         f'</a>'
     )
@@ -172,18 +185,19 @@ def _recent_runs_table(rows: list[RunRow]) -> str:
             f'<span class="rr-job">{esc(r.name)}{err}</span>'
             f'<span class="rr-meta">{esc(r.headline)}</span>'
             f'<span class="rr-meta">{esc(r.when)}</span>'
-            f'<span class="run-score {_score_cls(r.score)}"{_score_title(r.surface)}>{_fmt_score(r.score)}</span>'
+            f'<span class="run-score {_score_cls(r.score)}"{_score_title(r)}>{_fmt_score(r.score)}{_score_marker(r)}</span>'
             f'{status_badge(label, status)}'
             f'</a>'
         )
     return f'<div class="recent-runs">{"".join(row_html)}</div>'
 
 
-def _stat_tile(label: str, value: str, unit: str = '') -> str:
+def _stat_tile(label: str, value: str, unit: str = '', sub: str = '') -> str:
     unit_html = f'<span class="stat-unit">{esc(unit)}</span>' if unit else ''
+    sub_html = f'<div class="stat-sub">{esc(sub)}</div>' if sub else ''
     return (
         f'<div class="stat-tile"><div class="stat-label">{esc(label)}</div>'
-        f'<div class="stat-value">{esc(value)}{unit_html}</div></div>'
+        f'<div class="stat-value">{esc(value)}{unit_html}</div>{sub_html}</div>'
     )
 
 
@@ -258,17 +272,30 @@ def landing_body(data: Landing) -> str:
     total_tokens = sum(n for _, n in data.tokens_by_kind)
     # Average over runs that record a cost — dividing by all runs makes one
     # costed run among many uncosted ones read as "everything is nearly free".
-    avg_cost = data.total_cost / data.costed_runs if data.costed_runs else None
+    avg_cost = data.total_cost / data.costed_runs if data.total_cost is not None and data.costed_runs else None
+    # Input/output split under Total spend, only when at least one run recorded
+    # the breakdown — old reports carry only the aggregate cost_usd.
+    spend_sub = ''
+    if data.total_input_cost is not None or data.total_output_cost is not None:
+        spend_sub = f'in {_fmt_cost(data.total_input_cost)} / out {_fmt_cost(data.total_output_cost)}'
     band = (
         '<div class="stat-band">'
         + _stat_tile('Jobs run', str(data.total_runs))
-        + _stat_tile('Avg cost / job', _fmt_cost(avg_cost) if avg_cost is not None else 'n/a')
-        + _stat_tile('Total spend', _fmt_cost(data.total_cost))
+        + _stat_tile('Avg cost / job', _fmt_cost(avg_cost))
+        + _stat_tile('Total spend', _fmt_cost(data.total_cost), sub=spend_sub)
         + _stat_tile('Total tokens', _fmt_compact(total_tokens))
         + '</div>'
     )
 
-    severity_colors = ['var(--red-600)', 'var(--orange-500)', 'var(--amber-600)', 'var(--green-600)']
+    # Keyed by severity, not by position: zero-count buckets are dropped from the
+    # rows, so a positional palette would paint whatever survives first red.
+    # Anything off the scale (see metrics.UNKNOWN_SEVERITY) stays neutral.
+    severity_palette = {
+        'critical': 'var(--red-600)',
+        'high': 'var(--orange-500)',
+        'medium': 'var(--amber-600)',
+        'low': 'var(--green-600)',
+    }
 
     # Derived from the kinds actually present, so the subtitle cannot claim a
     # surface the panel is not showing (or omit one it is).
@@ -276,7 +303,8 @@ def landing_body(data: Landing) -> str:
     by_kind_panel = _panel('Runs by type', by_kind_sub, _bars(data.by_kind, _kind_colors(data.by_kind)))
 
     sev_rows = [(s.title(), n) for s, n in data.severity]
-    sev_inner = _bars(sev_rows, severity_colors) if sev_rows else '<p class="rt-panel-loading">No findings.</p>'
+    sev_colors = [severity_palette.get(s, 'var(--text-faint)') for s, _ in data.severity]
+    sev_inner = _bars(sev_rows, sev_colors) if sev_rows else '<p class="rt-panel-loading">No findings.</p>'
     severity_panel = _panel('Findings by severity', 'Vulnerabilities found', sev_inner)
     # Spend by job type — real dollars (cost_usd recorded upstream).
     spend_inner = (
@@ -319,16 +347,6 @@ _LIFECYCLE_PILL: dict[str, tuple[str, str]] = {
     'running': ('Running', 'warn'),
     'cancelled': ('Cancelled', 'neutral'),
 }
-
-
-def _fmt_cost(v: float) -> str:
-    """Format a dollar amount: cents-precision for readable sums, more digits
-    for the sub-cent per-item costs typical of a single sim/attack."""
-    if v >= 1:
-        return f'${v:,.2f}'
-    if v > 0:
-        return f'${v:.4f}'
-    return '$0.00'
 
 
 # Inline target-kind glyphs (lucide: bot / cpu / rocket), sized to the pill.
@@ -544,6 +562,8 @@ def sim_overview_body(data: SimOverview, compare_choices: list[tuple[str, str]] 
     # avg tokens/sim only when no cost data is present.
     if data.avg_cost is not None:
         cost_label, cost_value = 'Avg cost/sim', _fmt_cost(data.avg_cost)
+        if data.avg_input_cost is not None or data.avg_output_cost is not None:
+            cost_value += f' (in {_fmt_cost(data.avg_input_cost)} / out {_fmt_cost(data.avg_output_cost)})'
     else:
         cost_label = 'Avg tokens/sim'
         cost_value = '—' if data.avg_tokens is None else f'{data.avg_tokens:,.0f}'
@@ -597,6 +617,9 @@ def redteam_overview_body(data: RedTeamOverview) -> str:
         if data.break_rate is None
         else ('fail' if data.break_rate >= 0.25 else 'warn' if data.break_rate > 0 else 'pass')
     )
+    spend_value = _fmt_cost(data.total_cost)
+    if data.total_input_cost is not None or data.total_output_cost is not None:
+        spend_value += f' (in {_fmt_cost(data.total_input_cost)} / out {_fmt_cost(data.total_output_cost)})'
     band = kpi_cards([
         {'label': 'Attacks run', 'value': str(data.attacks_run)},
         {'label': 'ASR', 'value': asr, 'status': asr_status},
@@ -605,7 +628,7 @@ def redteam_overview_body(data: RedTeamOverview) -> str:
             'value': str(data.critical_findings),
             'status': 'fail' if data.critical_findings else 'pass',
         },
-        {'label': 'Total spend', 'value': _fmt_cost(data.total_cost)},
+        {'label': 'Total spend', 'value': spend_value},
     ])
 
     panel = _panel(

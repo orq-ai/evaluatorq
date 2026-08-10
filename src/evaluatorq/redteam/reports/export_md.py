@@ -16,7 +16,9 @@ from typing import TYPE_CHECKING, Any
 from evaluatorq.common.reports import bar as _bar
 from evaluatorq.common.reports import bold_bar as _bold_bar
 from evaluatorq.common.reports import center_table as _center_table
+from evaluatorq.common.reports import cost_coverage as _cost_coverage
 from evaluatorq.common.reports import details_block as _details_block
+from evaluatorq.common.reports import fmt_cost as _fmt_cost
 from evaluatorq.common.reports import md_table as _md_table
 from evaluatorq.common.reports import truncate as _truncate
 
@@ -621,34 +623,54 @@ def _render_token_usage_section(section: ReportSection) -> str:
     lines = [f'## {section.title}', '']
 
     if overall:
+        metric_rows = [
+            ['Total Tokens', f'{overall.get("total_tokens", 0):,}'],
+            ['Prompt Tokens', f'{overall.get("prompt_tokens", 0):,}'],
+            ['Completion Tokens', f'{overall.get("completion_tokens", 0):,}'],
+            ['API Calls', f'{overall.get("calls", 0):,}'],
+        ]
+        cache_creation_tokens = overall.get('cache_creation_tokens', 0)
+        if cache_creation_tokens:
+            metric_rows.append(['Cache-Write Tokens', f'{cache_creation_tokens:,}'])
+        input_cost = overall.get('input_cost')
+        output_cost = overall.get('output_cost')
+        total_cost = overall.get('total_cost')
+        if input_cost is not None:
+            metric_rows.append(['Input Cost', _fmt_cost(input_cost)])
+        if output_cost is not None:
+            metric_rows.append(['Output Cost', _fmt_cost(output_cost)])
+        if total_cost is not None:
+            # Flag a lower-bound total: some calls in this run reported no cost.
+            coverage = _cost_coverage(overall.get('priced_calls', 0), overall.get('calls', 0))
+            metric_rows.append(['Total Cost', f'{_fmt_cost(total_cost)}{coverage}'])
         lines.extend((
-            _md_table(
-                ['Metric', 'Value'],
-                [
-                    ['Total Tokens', f'{overall.get("total_tokens", 0):,}'],
-                    ['Prompt Tokens', f'{overall.get("prompt_tokens", 0):,}'],
-                    ['Completion Tokens', f'{overall.get("completion_tokens", 0):,}'],
-                    ['API Calls', f'{overall.get("calls", 0):,}'],
-                ],
-                right_align={1},
-            ),
+            _md_table(['Metric', 'Value'], metric_rows, right_align={1}),
             '',
         ))
 
     if per_agent:
         lines.extend(('### Per Agent', ''))
-        agent_rows = [
-            [
+        any_cost = any(a.get('total_cost') is not None for a in per_agent)
+        headers = ['Agent', 'Total', 'Prompt', 'Completion', 'Calls']
+        right_align = {1, 2, 3, 4}
+        if any_cost:
+            headers.append('Total Cost')
+            right_align.add(5)
+        agent_rows = []
+        for a in per_agent:
+            row = [
                 a['agent'],
                 f'{a["total_tokens"]:,}',
                 f'{a["prompt_tokens"]:,}',
                 f'{a["completion_tokens"]:,}',
                 f'{a["calls"]:,}',
             ]
-            for a in per_agent
-        ]
+            if any_cost:
+                agent_total_cost = a.get('total_cost')
+                row.append(_fmt_cost(agent_total_cost) if agent_total_cost is not None else '—')
+            agent_rows.append(row)
         lines.extend((
-            _md_table(['Agent', 'Total', 'Prompt', 'Completion', 'Calls'], agent_rows, right_align={1, 2, 3, 4}),
+            _md_table(headers, agent_rows, right_align=right_align),
             '',
         ))
 
