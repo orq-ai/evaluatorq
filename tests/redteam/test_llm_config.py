@@ -130,3 +130,92 @@ async def test_red_team_accepts_legacy_config_keyword(monkeypatch):
 
     with pytest.deprecated_call(match='config= is deprecated'), pytest.raises(CredentialError):
         await red_team('agent:test', config=LLMConfig())
+
+
+# ---------------------------------------------------------------------------
+# completion_params: extra_kwargs must merge, never collide
+# ---------------------------------------------------------------------------
+
+
+def test_completion_params_defaults_and_site_params():
+    from evaluatorq.contracts import LLMCallConfig
+
+    cfg = LLMCallConfig(temperature=0.7, max_tokens=1234)
+    params = cfg.completion_params(model='m', messages=[{'role': 'user', 'content': 'q'}])
+    assert params['temperature'] == 0.7
+    assert params['max_completion_tokens'] == 1234
+    assert params['model'] == 'm'
+
+
+def test_completion_params_extra_kwargs_override_instead_of_typeerror():
+    # Regression: splatting extra_kwargs next to explicit temperature=/
+    # max_completion_tokens= keywords raised TypeError ('got multiple values')
+    # the moment a user routed those keys through extra_kwargs, turning every
+    # evaluation inconclusive. Merged params must let the user keys win.
+    from evaluatorq.contracts import LLMCallConfig
+
+    cfg = LLMCallConfig(temperature=0.7, extra_kwargs={'temperature': 1.0, 'max_completion_tokens': 99})
+    params = cfg.completion_params(model='m', messages=[])
+    assert params['temperature'] == 1.0
+    assert params['max_completion_tokens'] == 99
+
+
+def test_completion_params_site_params_override_field_defaults():
+    from evaluatorq.contracts import LLMCallConfig
+
+    cfg = LLMCallConfig(max_tokens=1000)
+    params = cfg.completion_params(max_completion_tokens=1500)
+    assert params['max_completion_tokens'] == 1500
+
+
+def test_no_call_site_splats_extra_kwargs_next_to_explicit_sampling_kwargs():
+    """Grep-level guard: the collision pattern must not come back.
+
+    A call carrying explicit temperature=/max_completion_tokens= keywords AND a
+    **...extra_kwargs splat raises TypeError on a duplicate key. All call sites
+    must go through LLMCallConfig.completion_params (or an equivalent dict
+    merge) instead.
+    """
+    import re
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[2] / 'src' / 'evaluatorq'
+    offenders = []
+    for path in src.rglob('*.py'):
+        text = path.read_text()
+        for m in re.finditer(r'\.(?:create|parse)\(\n(?:[^()]*?\n)*?[^()]*?\*\*[\w.]*extra_kwargs', text):
+            window = m.group(0)
+            if 'temperature=' in window or 'max_completion_tokens=' in window:
+                offenders.append(str(path.relative_to(src)))
+    assert offenders == [], f'explicit sampling kwargs next to **extra_kwargs in: {offenders}'
+
+
+def test_openai_backend_factory_forwards_pipeline_timeout():
+    from unittest.mock import MagicMock
+
+    from evaluatorq.redteam.backends.openai import OpenAIBackend
+    from evaluatorq.redteam.backends.registry import _create_openai_backend
+
+    cfg = LLMConfig(target_agent_timeout_ms=123_456)
+    backend = _create_openai_backend(llm_client=MagicMock(), target_config=None, pipeline_config=cfg)
+    assert isinstance(backend, OpenAIBackend)
+    assert backend._timeout_ms == 123_456
+
+
+def test_completion_params_rejects_structural_extra_kwargs():
+    """extra_kwargs tunes sampling/provider options; silently replacing
+    model/messages/response_format/extra_body would break the call it rides
+    on (e.g. dropping a required JSON response format)."""
+    from evaluatorq.contracts import LLMCallConfig
+
+    cfg = LLMCallConfig(model='m', extra_kwargs={'response_format': None, 'temperature': 1})
+    with pytest.raises(ValueError, match='structural'):
+        cfg.completion_params(model='m', messages=[])
+
+
+def test_completion_params_sampling_extra_kwargs_still_pass():
+    from evaluatorq.contracts import LLMCallConfig
+
+    cfg = LLMCallConfig(model='m', extra_kwargs={'top_p': 0.9})
+    params = cfg.completion_params(model='m', messages=[])
+    assert params['top_p'] == 0.9

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from evaluatorq.common.output_adapters import output_to_text
+
 if TYPE_CHECKING:
     from .types import Evaluator, ScorerParameter
 
@@ -43,10 +45,8 @@ def string_contains_evaluator(
         data = params['data']
         output = params['output']
 
-        # Convert to strings for comparison - this is intentional to allow flexible
-        # matching of various output types (dicts, objects, etc.) as their string repr
-        expected = str(data.expected_output) if data.expected_output is not None else ''
-        actual = str(output) if output is not None else ''
+        expected = output_to_text(data.expected_output)
+        actual = output_to_text(output)
 
         if not expected:
             return {
@@ -110,10 +110,8 @@ def exact_match_evaluator(
         data = params['data']
         output = params['output']
 
-        # Convert to strings for comparison - this is intentional to allow flexible
-        # matching of various output types (dicts, objects, etc.) as their string repr
-        expected = str(data.expected_output) if data.expected_output is not None else ''
-        actual = str(output) if output is not None else ''
+        expected = output_to_text(data.expected_output)
+        actual = output_to_text(output)
 
         if not expected:
             return {

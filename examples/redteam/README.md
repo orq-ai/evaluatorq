@@ -5,8 +5,10 @@ Python examples for automated security testing of LLMs and AI agents against OWA
 ## Prerequisites
 
 ```bash
-pip install evaluatorq[redteam]
+uv add "evaluatorq[redteam]"
 ```
+
+Not using uv? `python -m pip install "evaluatorq[redteam]"` installs into the interpreter you just named.
 
 ## Quick Start
 
@@ -15,11 +17,11 @@ Most examples work with just an API key:
 ```bash
 # With OpenAI directly (examples use OpenAIModelTarget in Python)
 export OPENAI_API_KEY="sk-..."
-python 08_quick_smoke_test.py
+uv run 08_quick_smoke_test.py
 
 # With ORQ routing for attack/evaluator LLM calls
 export ORQ_API_KEY="orq-..."
-python 08_quick_smoke_test.py
+uv run 08_quick_smoke_test.py
 ```
 
 If your application is an ORQ platform agent:
@@ -27,7 +29,7 @@ If your application is an ORQ platform agent:
 ```bash
 export ORQ_API_KEY="orq-..."
 # Edit 10_orq_agent.py and replace YOUR_AGENT_KEY
-python 10_orq_agent.py
+uv run 10_orq_agent.py
 ```
 
 ## Credential Routing

@@ -22,16 +22,14 @@ The dashboard is an optional extra (it pulls in `python-fasthtml` and
 `uvicorn`):
 
 ```bash
-pip install "evaluatorq[dashboard]"
-# or — if you already have the redteam / simulation extras:
-pip install "evaluatorq[redteam,dashboard]"
-```
-
-With `uv`:
-
-```bash
 uv add "evaluatorq[dashboard]"
+# or — if you already have the redteam / simulation extras:
+uv add "evaluatorq[redteam,dashboard]"
 ```
+
+Prefer pip? Use `python -m pip install "evaluatorq[dashboard]"`, which installs
+into the interpreter you just named rather than whichever `pip` happens to be
+first on your `PATH`.
 
 ## Launch
 

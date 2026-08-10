@@ -5,7 +5,8 @@ name: Release
 # PyPI (token auth via the PYPI_TOKEN secret), and create a GitHub Release with PR-based
 # notes. Only a TAG is pushed — the Protect-main branch ruleset does not govern
 # tags, so a plain GITHUB_TOKEN suffices (no deploy key, no bypass, no commit to
-# main). An accidental major bump is refused unless explicitly forced.
+# main). An accidental major bump is refused unless explicitly forced — and the
+# refusal FAILS the run, so a blocked release is visible instead of green.
 on:
   push:
     branches:
@@ -63,9 +64,12 @@ jobs:
           fi
           cur_major="${CUR#v}"; cur_major="${cur_major%%.*}"
           next_major="${NEXT#v}"; next_major="${next_major%%.*}"
+          # Fail loudly, unlike the no-op path above. A refused release is a
+          # stuck pipeline needing a human; exiting 0 here made 24 days of
+          # blocked releases look identical to a docs-only push (all green).
           if [ "$next_major" -gt "$cur_major" ] && [ -z "$FORCE" ]; then
-            echo "::warning::Refusing automatic major bump $CUR -> $NEXT. Re-run via workflow_dispatch with force_level=major to confirm."
-            echo "released=false" >> "$GITHUB_OUTPUT"; exit 0
+            echo "::error::Refusing automatic major bump $CUR -> $NEXT. Releases are BLOCKED until a human acts: re-run via workflow_dispatch with force_level=major to confirm the major, or force_level=minor/patch to ship the breaking changes at a lower level."
+            echo "released=false" >> "$GITHUB_OUTPUT"; exit 1
           fi
           git tag "$NEXT"
           git push origin "$NEXT"

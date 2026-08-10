@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
     from openai.types.chat import ChatCompletionMessageParam
 
+from evaluatorq.common.llm_call import apply_pipeline_metadata
 from evaluatorq.common.retry import with_retry
 from evaluatorq.common.tracing import get_trace_context_headers, record_llm_input, record_llm_response
 from evaluatorq.simulation.tracing import with_llm_span
@@ -132,6 +133,7 @@ Keep it natural - this is how they would actually open a conversation."""
                 )
                 trace_headers = await get_trace_context_headers()
                 extra: dict[str, Any] = {'extra_headers': trace_headers} if trace_headers else {}
+                apply_pipeline_metadata(extra)
                 for attempt in range(2):
                     response = await with_retry(
                         lambda: self._client.chat.completions.create(  # pyright: ignore[reportUnknownLambdaType]

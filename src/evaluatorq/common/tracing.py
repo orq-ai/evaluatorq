@@ -24,8 +24,12 @@ if TYPE_CHECKING:
 
     from opentelemetry.trace import Span
 
+    from evaluatorq.contracts import Usage
+
 AttrValue = str | int | float | bool
 AttrMap = dict[str, AttrValue | None]
+
+_UNSET_CALLS: Any = object()
 
 _TRUNCATION_MARKER = '... [truncated]'
 # Canonical/recommended cap when truncation is opted into. NOT the default —
@@ -225,22 +229,51 @@ def set_span_attrs(span: Span | None, attrs: AttrMap) -> None:
 def record_token_usage(
     span: Span | None,
     *,
+    usage: Usage | None = None,
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
     total_tokens: int | None = None,
-    calls: int = 0,
+    calls: int | None = _UNSET_CALLS,
     cached_tokens: int | None = None,
     reasoning_tokens: int | None = None,
     cache_read_input_tokens: int | None = None,
     cache_creation_input_tokens: int | None = None,
+    input_cost: float | None = None,
+    output_cost: float | None = None,
+    total_cost: float | None = None,
 ) -> None:
     """Record token usage on a span. Safe no-op when span is None.
 
     Superset of both former redteam and simulation impls: sets OTel GenAI
-    attribute names, their aliases, bare keys, call count, and cache details.
+    attribute names, their aliases, bare keys, call count, cache details, and
+    the provider-reported cost breakdown (Orq Responses v3).
+
+    ``usage`` accepts a :class:`evaluatorq.contracts.Usage` and expands it into
+    the individual parameters; explicitly-passed parameters win over it.
     """
     if span is None:
         return
+    if usage is not None:
+        prompt_tokens = prompt_tokens if prompt_tokens is not None else usage.input_tokens
+        completion_tokens = completion_tokens if completion_tokens is not None else usage.output_tokens
+        total_tokens = total_tokens if total_tokens is not None else usage.total_tokens
+        # An explicitly-passed `calls` (including 0) wins over usage.calls;
+        # only fall back to usage.calls when the caller left it unset. A
+        # falsy check here (`calls or usage.calls`) would let usage.calls
+        # (which Usage.extract defaults to 1) clobber an explicit calls=0.
+        if calls is _UNSET_CALLS:
+            calls = usage.calls
+        # Zero-valued details are treated as absent so spans don't grow
+        # cache/reasoning attributes for providers that never report them.
+        cached_tokens = cached_tokens if cached_tokens is not None else (usage.cached_tokens or None)
+        reasoning_tokens = reasoning_tokens if reasoning_tokens is not None else (usage.reasoning_tokens or None)
+        if cache_creation_input_tokens is None and usage.cache_creation_tokens:
+            cache_creation_input_tokens = usage.cache_creation_tokens
+        input_cost = input_cost if input_cost is not None else usage.input_cost
+        output_cost = output_cost if output_cost is not None else usage.output_cost
+        total_cost = total_cost if total_cost is not None else usage.total_cost
+    if calls is _UNSET_CALLS:
+        calls = 0
     prompt = prompt_tokens if prompt_tokens is not None else 0
     completion = completion_tokens if completion_tokens is not None else 0
     total = total_tokens if total_tokens is not None else prompt + completion
@@ -266,6 +299,15 @@ def record_token_usage(
         span.set_attribute('gen_ai.usage.completion_tokens_details.reasoning_tokens', reasoning_tokens)
     if cache_creation_input_tokens is not None:
         span.set_attribute('gen_ai.usage.cache_creation.input_tokens', cache_creation_input_tokens)
+    # Provider-reported cost breakdown (USD). Only set when reported — a $0
+    # attribute on a span whose cost is unknown would read as "free".
+    if input_cost is not None:
+        span.set_attribute('gen_ai.usage.input_cost', input_cost)
+    if output_cost is not None:
+        span.set_attribute('gen_ai.usage.output_cost', output_cost)
+    if total_cost is not None:
+        span.set_attribute('gen_ai.usage.total_cost', total_cost)
+        span.set_attribute('gen_ai.usage.cost', total_cost)
 
 
 def record_llm_response(
@@ -293,36 +335,18 @@ def record_llm_response(
 
     usage = _field(response, 'usage')
     if usage is not None:
-        prompt = _field(usage, 'prompt_tokens')
-        if prompt is None:
-            prompt = _field(usage, 'input_tokens')
-        completion = _field(usage, 'completion_tokens')
-        if completion is None:
-            completion = _field(usage, 'output_tokens')
-        total = _field(usage, 'total_tokens')
-        details = _field(usage, 'prompt_tokens_details')
-        if details is None:
-            details = _field(usage, 'input_tokens_details')
-        cache_read = _field(details, 'cached_tokens') if details else None
-        cache_creation = _field(usage, 'cache_creation_input_tokens')
-        record_token_usage(
-            span,
-            prompt_tokens=prompt,
-            completion_tokens=completion,
-            total_tokens=total,
-            cache_read_input_tokens=cache_read,
-            cache_creation_input_tokens=cache_creation,
-        )
-        completion_details = _field(usage, 'completion_tokens_details')
-        if completion_details is None:
-            completion_details = _field(usage, 'output_tokens_details')
-        if completion_details is not None:
-            reasoning = _field(completion_details, 'reasoning_tokens')
-            if reasoning is not None:
-                span.set_attribute(
-                    'gen_ai.usage.completion_tokens_details.reasoning_tokens',
-                    int(reasoning),
-                )
+        # Lazy import: contracts transitively imports openresponses, which this
+        # module must not pull in at import time.
+        from evaluatorq.contracts import Usage
+
+        parsed = Usage.extract(usage, calls=1)
+        if parsed is not None:
+            record_token_usage(span, usage=parsed, calls=0)
+        else:
+            # Usage was present but empty/unparseable (Usage.extract returned
+            # None). Still record the zero token attributes the hand-rolled
+            # parser used to set, rather than emitting nothing.
+            record_token_usage(span, calls=0)
 
     if _capture_message_content():
         if output_content is not None:

@@ -1,8 +1,82 @@
 import logging
+import socket
 
 import pytest
 
 from evaluatorq.common.llm_call import reset_reasoning_rejectors
+
+
+class LeakedNetworkCall(AssertionError):
+    """A unit test tried to open a connection to a real host."""
+
+
+def _is_loopback(address: object) -> bool:
+    """True for localhost targets, which tests legitimately use for fake servers."""
+    if not isinstance(address, tuple) or not address:
+        return False
+    host = str(address[0])
+    return host in {"127.0.0.1", "::1", "localhost", "0.0.0.0"}
+
+
+@pytest.fixture(autouse=True)
+def _hide_ambient_credentials(request, monkeypatch):
+    """Unset real API keys so unit tests cannot reach a live service.
+
+    Several code paths gate purely on "is a key set" — ``evaluate()`` uploads its
+    results whenever ``ORQ_API_KEY`` exists, for instance — so on a developer
+    machine with a real key exported, plain unit tests were POSTing to the
+    platform. Tests that need a key set one explicitly via ``monkeypatch.setenv``,
+    which still wins because this runs first.
+    """
+    if request.node.get_closest_marker("integration"):
+        yield
+        return
+    for var in ("ORQ_API_KEY", "OPENAI_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _block_outbound_network(request, monkeypatch):
+    """Fail any non-integration test that opens a connection to a real host.
+
+    Unit tests were reaching the live Orq router with whatever ORQ_API_KEY the
+    developer had exported — 127 requests per suite run, showing up as real
+    (billed, 404-ing) traces in the workspace. Mocks are the fix; this fixture
+    is what stops a new one from slipping in silently.
+
+    Loopback is allowed so tests may still spin up a local fake server. Mark a
+    test ``@pytest.mark.allow_network`` to opt out.
+    """
+    if request.node.get_closest_marker("allow_network") or request.node.get_closest_marker("integration"):
+        yield
+        return
+
+    real_connect = socket.socket.connect
+    leaked: list[str] = []
+
+    def guarded_connect(self, address, *args, **kwargs):
+        if _is_loopback(address):
+            return real_connect(self, address, *args, **kwargs)
+        # Recorded as well as raised: the calling code is usually wrapped in a
+        # broad ``except Exception``, which swallows this and lets the test pass
+        # green while the connection attempt really happened. The teardown
+        # assertion below is what actually surfaces it.
+        leaked.append(str(address))
+        raise LeakedNetworkCall(
+            f"Test opened a network connection to {address!r}. Unit tests must not "
+            f"call real services — mock the client. Use @pytest.mark.allow_network "
+            f"only if the connection is genuinely required."
+        )
+
+    monkeypatch.setattr(socket.socket, "connect", guarded_connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", guarded_connect)
+    yield
+    if leaked:
+        raise LeakedNetworkCall(
+            f"Test attempted {len(leaked)} outbound connection(s) to real hosts: "
+            f"{sorted(set(leaked))}. Mock the client so the suite never touches a live service."
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -33,6 +107,7 @@ def _disable_real_span_export(monkeypatch):
     in by deleting this var.
     """
     monkeypatch.setenv("ORQ_DISABLE_TRACING", "1")
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
     yield
 
 

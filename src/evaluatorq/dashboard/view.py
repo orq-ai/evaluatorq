@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 from fasthtml.common import Script
 
 from evaluatorq.common.reports import esc
+from evaluatorq.common.reports import fmt_cost as _fmt_cost
 from evaluatorq.simulation.metrics import TURN_METRICS
 
 if TYPE_CHECKING:
@@ -179,11 +180,12 @@ def _recent_runs_table(rows: list[RunRow]) -> str:
     return f'<div class="recent-runs">{"".join(row_html)}</div>'
 
 
-def _stat_tile(label: str, value: str, unit: str = '') -> str:
+def _stat_tile(label: str, value: str, unit: str = '', sub: str = '') -> str:
     unit_html = f'<span class="stat-unit">{esc(unit)}</span>' if unit else ''
+    sub_html = f'<div class="stat-sub">{esc(sub)}</div>' if sub else ''
     return (
         f'<div class="stat-tile"><div class="stat-label">{esc(label)}</div>'
-        f'<div class="stat-value">{esc(value)}{unit_html}</div></div>'
+        f'<div class="stat-value">{esc(value)}{unit_html}</div>{sub_html}</div>'
     )
 
 
@@ -199,13 +201,27 @@ def _bars(rows: list[tuple[str, float]], colors: list[str], *, total_label: str 
     total = sum(v for _, v in rows) or 1
     parts: list[str] = ['<div class="bars">']
     for i, (name, val) in enumerate(rows):
-        pct = round(val / total * 100)
+        raw = val / total * 100
+        pct = round(raw)
+        # Rounding must not erase a real value ("1 run · 0%") or overstate a
+        # partial one ("328 of 329 · 100%"); clamp the label and keep a visible
+        # sliver of bar for any nonzero row.
+        if val and pct == 0:
+            pct_label = '<1%'
+        elif val < total and pct == 100:
+            pct_label = '>99%'
+        else:
+            pct_label = f'{pct}%'
+        # Width uses the unrounded share so a dominant partial bar (328/329)
+        # stays visually partial next to its '>99%' label instead of drawing
+        # full-width; the 1% floor keeps any nonzero row visible.
+        width = f'{max(raw, 1.0):.4g}' if val else '0'
         color = colors[i % len(colors)]
         parts.append(
             f'<div class="bar-row"><div class="bar-head">'
             f'<span class="bar-name">{esc(name)}</span>'
-            f'<span class="bar-val">{esc(fmt.format(val))} <span class="bar-pct">· {pct}%</span></span>'
-            f'</div><div class="bar-track"><div class="bar-fill" style="width:{pct}%;background:{color}"></div></div></div>'
+            f'<span class="bar-val">{esc(fmt.format(val))} <span class="bar-pct">· {esc(pct_label)}</span></span>'
+            f'</div><div class="bar-track"><div class="bar-fill" style="width:{width}%;background:{color}"></div></div></div>'
         )
     parts.append(
         f'<div class="bars-total"><span class="t-label">{esc(total_label)}</span>'
@@ -242,12 +258,19 @@ def landing_body(data: Landing) -> str:
         )
 
     total_tokens = sum(n for _, n in data.tokens_by_kind)
-    avg_cost = data.total_cost / data.total_runs if data.total_runs else 0.0
+    # Average over runs that record a cost — dividing by all runs makes one
+    # costed run among many uncosted ones read as "everything is nearly free".
+    avg_cost = data.total_cost / data.costed_runs if data.total_cost is not None and data.costed_runs else None
+    # Input/output split under Total spend, only when at least one run recorded
+    # the breakdown — old reports carry only the aggregate cost_usd.
+    spend_sub = ''
+    if data.total_input_cost is not None or data.total_output_cost is not None:
+        spend_sub = f'in {_fmt_cost(data.total_input_cost)} / out {_fmt_cost(data.total_output_cost)}'
     band = (
         '<div class="stat-band">'
         + _stat_tile('Jobs run', str(data.total_runs))
         + _stat_tile('Avg cost / job', _fmt_cost(avg_cost))
-        + _stat_tile('Total spend', _fmt_cost(data.total_cost))
+        + _stat_tile('Total spend', _fmt_cost(data.total_cost), sub=spend_sub)
         + _stat_tile('Total tokens', _fmt_compact(total_tokens))
         + '</div>'
     )
@@ -303,16 +326,6 @@ _LIFECYCLE_PILL: dict[str, tuple[str, str]] = {
     'running': ('Running', 'warn'),
     'cancelled': ('Cancelled', 'neutral'),
 }
-
-
-def _fmt_cost(v: float) -> str:
-    """Format a dollar amount: cents-precision for readable sums, more digits
-    for the sub-cent per-item costs typical of a single sim/attack."""
-    if v >= 1:
-        return f'${v:,.2f}'
-    if v > 0:
-        return f'${v:.4f}'
-    return '$0.00'
 
 
 # Inline target-kind glyphs (lucide: bot / cpu / rocket), sized to the pill.
@@ -528,6 +541,8 @@ def sim_overview_body(data: SimOverview, compare_choices: list[tuple[str, str]] 
     # avg tokens/sim only when no cost data is present.
     if data.avg_cost is not None:
         cost_label, cost_value = 'Avg cost/sim', _fmt_cost(data.avg_cost)
+        if data.avg_input_cost is not None or data.avg_output_cost is not None:
+            cost_value += f' (in {_fmt_cost(data.avg_input_cost)} / out {_fmt_cost(data.avg_output_cost)})'
     else:
         cost_label = 'Avg tokens/sim'
         cost_value = '—' if data.avg_tokens is None else f'{data.avg_tokens:,.0f}'
@@ -581,6 +596,9 @@ def redteam_overview_body(data: RedTeamOverview) -> str:
         if data.break_rate is None
         else ('fail' if data.break_rate >= 0.25 else 'warn' if data.break_rate > 0 else 'pass')
     )
+    spend_value = _fmt_cost(data.total_cost)
+    if data.total_input_cost is not None or data.total_output_cost is not None:
+        spend_value += f' (in {_fmt_cost(data.total_input_cost)} / out {_fmt_cost(data.total_output_cost)})'
     band = kpi_cards([
         {'label': 'Attacks run', 'value': str(data.attacks_run)},
         {'label': 'ASR', 'value': asr, 'status': asr_status},
@@ -589,7 +607,7 @@ def redteam_overview_body(data: RedTeamOverview) -> str:
             'value': str(data.critical_findings),
             'status': 'fail' if data.critical_findings else 'pass',
         },
-        {'label': 'Total spend', 'value': _fmt_cost(data.total_cost)},
+        {'label': 'Total spend', 'value': spend_value},
     ])
 
     panel = _panel(

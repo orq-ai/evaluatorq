@@ -379,6 +379,12 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
     color: var(--text-muted);
     margin-left: 3px;
 }
+.stat-tile .stat-sub {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-faint);
+    margin-top: 4px;
+}
 .dash-row2 { display: grid; grid-template-columns: 1.5fr 1fr; gap: 16px; }
 .dash-row-eq { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 

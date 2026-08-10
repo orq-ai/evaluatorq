@@ -12,18 +12,26 @@ transcripts by hand. Three LLMs are in play:
     Requires the simulation extra and an `ORQ_API_KEY`:
 
     ```bash
-    pip install "evaluatorq[simulation]"
+    uv add "evaluatorq[simulation]"
     export ORQ_API_KEY=...
     ```
+
+    Prefer pip? Use `python -m pip install "evaluatorq[simulation]"`, which
+    installs into the interpreter you just named rather than whichever `pip`
+    happens to be first on your `PATH`.
 
 === "OpenAI"
 
     Requires the simulation extra, the `openai` package, and an `OPENAI_API_KEY`:
 
     ```bash
-    pip install "evaluatorq[simulation]" openai
+    uv add "evaluatorq[simulation]" openai
     export OPENAI_API_KEY=sk-...
     ```
+
+    Prefer pip? Use `python -m pip install "evaluatorq[simulation]" openai`,
+    which installs into the interpreter you just named rather than whichever
+    `pip` happens to be first on your `PATH`.
 
 ```mermaid
 sequenceDiagram
@@ -385,15 +393,42 @@ results = await simulate(
 )
 ```
 
-`dataset_id`, `datapoints`, and `personas` + `scenarios` are mutually exclusive:
-pass exactly one source per run.
+`simulate()` takes five mutually exclusive sources — `datapoints`, `dataset_id`,
+`experiment_id`, `previous_run`, and `personas` + `scenarios`. Pass exactly one
+per run.
 
 ### Ground new cases in real traces
 
 Replay reruns what you already have. The other move is to generate *new* cases
 that are shaped by what really happened. Production traces show you the user
-archetypes and situations your agent actually meets, and those become the seeds
-for generation. Pull the recurring patterns out of your traces (the impatient
+archetypes and situations your agent actually meets.
+
+The direct route is `eq sim from-traces`, which pulls recent traces from the Orq
+traces API and writes one datapoint per conversation — persona and scenario
+inferred from the transcript, first message taken from the real user verbatim:
+
+```bash
+eq sim from-traces --output traces_datapoints.jsonl --limit 50 --lookback-hours 24
+eq sim simulate --input traces_datapoints.jsonl --target agent:my-agent
+```
+
+Add `--extend N` to also generate N new datapoints matching the traffic
+distribution of the fetched traces, so you get cases *around* real traffic rather
+than only the recorded ones. The same thing is available from Python as
+`datapoints_from_traces()` and `extend_from_traces()`:
+
+```python
+from evaluatorq.simulation import datapoints_from_traces
+
+datapoints = await datapoints_from_traces(limit=50, lookback_hours=24)
+```
+
+Full flag list: [`eq sim from-traces`](../cli-reference/simulation.md).
+
+#### Hand-picked seeds
+
+When you want curated archetypes rather than a straight pull from traffic, seed
+generation yourself. Pull the recurring patterns out of your traces (the impatient
 buyer disputing a charge, the confused first-time user, the edge case that broke
 last week), then hand them to `generate_personas()` / `generate_scenarios()` as
 short seed phrases:
@@ -434,11 +469,11 @@ space around the pattern rather than replaying one recorded conversation. Persis
 the generated cases (`eq sim generate --datapoints`, or `eq sim run
 --datapoints`) and they become a replayable bank for the section above.
 
-!!! note "Reading the archetypes out of traces is manual today"
-    Turning raw traces into seed phrases is a step you do yourself, by reading the
-    conversations or grouping them however you already triage production. There is
-    no built-in trace-to-persona extractor yet; the seed list is the hand-off point
-    between your trace history and the generators.
+!!! note "Seeds are a deliberate choice, not the only route"
+    Writing seed phrases by hand means you decide which archetypes matter, rather
+    than inheriting whatever your recent traffic happened to contain. When you'd
+    rather start from real traffic, use `eq sim from-traces` above — it infers the
+    personas and scenarios for you.
 
 --8<-- "docs/_snippets/dashboard-tip.md"
 

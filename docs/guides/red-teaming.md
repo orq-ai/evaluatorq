@@ -43,9 +43,13 @@ report = await red_team(target, mode="static", dataset="hf:my-org/my-attacks")
     platform — no model wiring on your side.
 
     ```bash
-    pip install "evaluatorq[redteam]"
+    uv add "evaluatorq[redteam]"
     export ORQ_API_KEY=...   # targets your Orq agent + routes the attacker LLM
     ```
+
+    Prefer pip? Use `python -m pip install "evaluatorq[redteam]"`, which installs
+    into the interpreter you just named rather than whichever `pip` happens to be
+    first on your `PATH`.
 
     ```python
     import asyncio
@@ -78,9 +82,13 @@ report = await red_team(target, mode="static", dataset="hf:my-org/my-attacks")
     OpenAI using `OPENAI_API_KEY`.
 
     ```bash
-    pip install "evaluatorq[redteam]"
+    uv add "evaluatorq[redteam]"
     export OPENAI_API_KEY=sk-...   # the target model + the attacker LLM
     ```
+
+    Prefer pip? Use `python -m pip install "evaluatorq[redteam]"`, which installs
+    into the interpreter you just named rather than whichever `pip` happens to be
+    first on your `PATH`.
 
     ```python
     import asyncio

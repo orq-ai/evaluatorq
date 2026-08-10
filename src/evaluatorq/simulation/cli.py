@@ -241,30 +241,41 @@ def _clean_cli_error_types() -> tuple[type[Exception], ...]:
 # ---------------------------------------------------------------------------
 
 
-def _maybe_generate_recommendations(results: list[Any], model: str) -> list[Any] | None:
-    """Generate LLM remediation suggestions for flagged failures.
-
-    Failures here must not fail the run — the simulation results already
-    exist; suggestions are best-effort garnish. Warn and return ``None``.
-    """
+async def _generate_recommendations_async(results: list[Any], model: str) -> list[Any] | None:
+    """Generate best-effort recommendations inside the active run context."""
     from evaluatorq.common.llm_client import resolve_llm_client
     from evaluatorq.simulation.reports.recommendations import generate_recommendations
 
-    async def _gen() -> list[Any]:
-        resolved = resolve_llm_client()
-        try:
-            return await generate_recommendations(results, resolved.client, model)
-        finally:
-            if resolved.owned:
-                await resolved.client.close()
-
     try:
-        recs = asyncio.run(_gen())
+        resolved = resolve_llm_client()
     except Exception as exc:
         typer.echo(f'Warning: remediation suggestion generation failed ({exc}); continuing without.', err=True)
         return None
+
+    try:
+        recs = await generate_recommendations(results, resolved.client, model)
+    except Exception as exc:
+        typer.echo(f'Warning: remediation suggestion generation failed ({exc}); continuing without.', err=True)
+        return None
+    finally:
+        if resolved.owned:
+            await resolved.client.close()
     typer.echo(f'Generated remediation suggestions for {len(recs)} conversation(s).', err=True)
     return recs or None
+
+
+def _maybe_generate_recommendations(results: list[Any], model: str) -> list[Any] | None:
+    """Generate recommendations from a synchronous CLI command such as export."""
+    return asyncio.run(_generate_recommendations_async(results, model))
+
+
+def _recommendation_postprocessor(model: str) -> Any:
+    """Build a post-run hook that attaches recommendations under the root span."""
+
+    async def _attach(run: Any) -> None:
+        run.recommendations = await _generate_recommendations_async(run.results, model)
+
+    return _attach
 
 
 # ---------------------------------------------------------------------------
@@ -757,6 +768,7 @@ def simulate(
                 evaluator_names=evaluator_names,
                 evaluation_name=name,
                 hooks=hooks,
+                recommendations=recommendations,
             )
         )
     except KeyboardInterrupt:
@@ -781,9 +793,6 @@ def simulate(
     _maybe_generate_executive_summary(run, enabled=executive_summary, model=sim_model)
     if hooks is not None and executive_summary:
         hooks.print_summary(results, executive_summary=run.executive_summary, experiment_url=run.experiment_url)
-
-    if recommendations:
-        run.recommendations = _maybe_generate_recommendations(results, sim_model)
 
     if report_md is not None:
         _export_report(run, report_md, fmt='md')
@@ -817,6 +826,7 @@ async def _simulate_impl(
     evaluator_names: list[str] | None,
     evaluation_name: str,
     hooks: Any = None,
+    recommendations: bool = False,
 ) -> SimulationRun:
     from evaluatorq.simulation.api import _simulate_run
     from evaluatorq.simulation.utils.dataset_export import load_datapoints_from_jsonl
@@ -842,6 +852,7 @@ async def _simulate_impl(
         evaluator_names=evaluator_names,
         evaluation_name=evaluation_name,
         hooks=hooks,
+        post_run=_recommendation_postprocessor(sim_model) if recommendations else None,
     )
 
 
@@ -1075,6 +1086,7 @@ def run(
                 evaluation_name=name,
                 save_datapoints=datapoints_path,
                 hooks=hooks,
+                recommendations=recommendations,
             )
         )
     except KeyboardInterrupt:
@@ -1099,9 +1111,6 @@ def run(
     _maybe_generate_executive_summary(run, enabled=executive_summary, model=sim_model)
     if hooks is not None and executive_summary:
         hooks.print_summary(results, executive_summary=run.executive_summary, experiment_url=run.experiment_url)
-
-    if recommendations:
-        run.recommendations = _maybe_generate_recommendations(results, sim_model)
 
     if report_md is not None:
         _export_report(run, report_md, fmt='md')
@@ -1134,6 +1143,7 @@ async def _run_impl(
     evaluation_name: str,
     save_datapoints: Path | None = None,
     hooks: Any = None,
+    recommendations: bool = False,
 ) -> SimulationRun:
     from evaluatorq.simulation.api import _generate_and_simulate_run
 
@@ -1162,6 +1172,7 @@ async def _run_impl(
         evaluation_name=evaluation_name,
         emit_datapoints=emit,
         hooks=hooks,
+        post_run=_recommendation_postprocessor(sim_model) if recommendations else None,
     )
 
 

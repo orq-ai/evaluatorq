@@ -616,7 +616,8 @@ def validate_dataset(
             from huggingface_hub import hf_hub_download
         except ImportError:
             typer.echo(
-                'huggingface-hub not installed. Install with: pip install evaluatorq[redteam]',
+                'huggingface-hub not installed. Install with: uv add "evaluatorq[redteam]" '
+                '(or: python -m pip install "evaluatorq[redteam]")',
                 err=True,
             )
             raise typer.Exit(code=1)
@@ -643,7 +644,8 @@ def validate_dataset(
             from huggingface_hub import hf_hub_download
         except ImportError:
             typer.echo(
-                'huggingface-hub not installed. Install with: pip install evaluatorq[redteam]',
+                'huggingface-hub not installed. Install with: uv add "evaluatorq[redteam]" '
+                '(or: python -m pip install "evaluatorq[redteam]")',
                 err=True,
             )
             raise typer.Exit(code=1)

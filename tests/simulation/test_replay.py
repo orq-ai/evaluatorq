@@ -207,9 +207,9 @@ def pipeline_spans():
 
 def _pipeline_attrs(exporter) -> dict[str, object]:
     for span in exporter.spans:
-        if span.name == 'orq.simulation.pipeline':
+        if span.name == 'Evaluatorq - Agent Simulation':
             return dict(span.attributes or {})
-    raise AssertionError('no orq.simulation.pipeline span was recorded')
+    raise AssertionError('no Evaluatorq - Agent Simulation span was recorded')
 
 
 @pytest.mark.asyncio

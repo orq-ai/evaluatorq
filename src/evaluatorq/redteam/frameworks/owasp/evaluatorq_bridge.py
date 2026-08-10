@@ -14,8 +14,9 @@ from pydantic import ValidationError
 from evaluatorq import DataPoint, EvaluationResult
 from evaluatorq.common.judge import JudgeError, build_eval_replacements, run_judge
 from evaluatorq.common.jury import Prediction, VerdictKind, _panel_composition_messages, append_jury_summary, run_jury
+from evaluatorq.common.output_adapters import output_error_text, output_to_messages
 from evaluatorq.common.tracing import set_span_attrs
-from evaluatorq.contracts import JURY_RAW_OUTPUT_KEY, OutputMessage, TextOutputItem, ToolCallOutputItem
+from evaluatorq.contracts import JURY_RAW_OUTPUT_KEY
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
@@ -31,7 +32,7 @@ from evaluatorq.redteam.contracts import (
 from evaluatorq.redteam.delivery_method_registry import delivery_method_str
 from evaluatorq.redteam.exceptions import DatasetError
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category
-from evaluatorq.redteam.tracing import with_redteam_span
+from evaluatorq.redteam.tracing import annotate_current_span, set_jury_span_attrs
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Collection
@@ -42,45 +43,6 @@ if TYPE_CHECKING:
 
 DEFAULT_HF_REPO = 'orq/redteam-vulnerabilities'
 DEFAULT_HF_FILENAME = 'redteam_dataset.v2.json'
-
-
-def _adapt_tool_call(tc: Any) -> ToolCallOutputItem:
-    """Coerce a static-output tool-call entry into a ToolCallOutputItem."""
-    if isinstance(tc, ToolCallOutputItem):
-        return tc
-    if isinstance(tc, dict):
-        fn = tc.get('function', tc)
-        raw_args = fn.get('arguments', '{}')
-        arguments = raw_args if isinstance(raw_args, str) else json.dumps(raw_args or {})
-        tid = str(tc.get('id', '') or '')
-        return ToolCallOutputItem(
-            id=tid, call_id=tid, name=str(fn.get('name', '')), arguments=arguments, result=tc.get('result')
-        )
-    # object with attributes (orchestrator item / test double)
-    args_dict = getattr(tc, 'arguments_dict', None)
-    if args_dict is not None:
-        arguments = json.dumps(args_dict)
-    else:
-        raw = getattr(tc, 'arguments', '{}')
-        arguments = raw if isinstance(raw, str) else json.dumps(raw or {})
-    tid = str(getattr(tc, 'id', '') or '')
-    return ToolCallOutputItem(
-        id=tid, call_id=tid, name=str(getattr(tc, 'name', '')), arguments=arguments, result=getattr(tc, 'result', None)
-    )
-
-
-def _adapt_static_output(output: Any) -> list[OutputMessage]:
-    """Adapt a static datapoint output ({response, tool_calls} dict, or a bare string)
-    into structured OutputMessage records."""
-    items: list[OutputMessage] = []
-    if isinstance(output, dict):
-        text = output.get('response', '')
-        if text:
-            items.append(TextOutputItem(text=str(text), annotations=[]))
-        items.extend(_adapt_tool_call(tc) for tc in output.get('tool_calls') or [])
-    elif output:
-        items.append(TextOutputItem(text=str(output), annotations=[]))
-    return items
 
 
 def _filter_by_categories(
@@ -256,8 +218,7 @@ def create_owasp_evaluator(
         data = params['data']
         output = params['output']
         category = data.inputs.get('category', '')
-        async with with_redteam_span(
-            'orq.redteam.security_evaluation',
+        async with annotate_current_span(
             {'orq.redteam.category': category, 'orq.redteam.model': evaluator_model},
         ) as evaluation_span:
 
@@ -281,12 +242,11 @@ def create_owasp_evaluator(
             # A target-level failure ([ERROR: ...] with AgentResponseError) is not
             # content — short-circuit before the judge so a failure is never scored
             # as RESISTANT.
-            target_error = output.get('error') if isinstance(output, dict) else None
+            target_error = output_error_text(output)
             if target_error is not None:
-                msg = getattr(target_error, 'message', str(target_error))
-                return error_result(f'Target agent error — not scored: {msg}')
+                return error_result(f'Target agent error — not scored: {target_error}')
 
-            output_messages = _adapt_static_output(output)
+            output_messages = output_to_messages(output)
 
             eval_replacements = build_eval_replacements(
                 input_messages=data.inputs.get('messages', []),
@@ -352,6 +312,7 @@ def create_owasp_evaluator(
             passed = deliberation.verdict if isinstance(deliberation.verdict, bool) else None
             explanation = append_jury_summary(deliberation.explanation, deliberation.jury)
             set_span_attrs(evaluation_span, {'orq.redteam.passed': span_pass_state(passed), 'output': explanation})
+            set_jury_span_attrs(evaluation_span, deliberation.jury)
             return EvaluationResult.model_validate({
                 'value': passed if passed is not None else 'inconclusive',
                 'explanation': explanation,
@@ -364,13 +325,15 @@ def create_owasp_evaluator(
                 },
             })
 
-    return {'name': 'owasp-agentic-security', 'scorer': scorer}
+    # evaluator_type marks these LLM-judge scorers so the tracing layer emits the
+    # gen_ai.evaluation.* evaluator-span attributes (opt-in; see set_evaluation_attributes).
+    return {'name': 'owasp-agentic-security', 'scorer': scorer, 'evaluator_type': 'llm_eval'}
 
 
 _HF_MISSING_MSG = (
     'Loading static datapoints from HuggingFace requires the huggingface-hub package. '
-    "Install the redteam extra: pip install 'evaluatorq[redteam]' "
-    "(or: uv pip install 'evaluatorq[redteam]'). "
+    "Install the redteam extra: uv add 'evaluatorq[redteam]' "
+    "(or: python -m pip install 'evaluatorq[redteam]'). "
     'Alternatively pass a local --dataset path, or use --mode dynamic to skip static datapoints.'
 )
 
@@ -457,7 +420,7 @@ def _fetch_all_datapoints(dataset_id: str) -> list[DataPoint]:
     except ImportError as e:
         msg = (
             'Fetching datasets from the ORQ platform requires the orq-ai-sdk package. '
-            'Install it with: pip install evaluatorq[orq]'
+            'Install it with: uv add "evaluatorq[orq]" (or: python -m pip install "evaluatorq[orq]")'
         )
         raise ImportError(msg) from e
 

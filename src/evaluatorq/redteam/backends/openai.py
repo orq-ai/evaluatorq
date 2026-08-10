@@ -7,8 +7,9 @@ from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
+from evaluatorq.common.llm_call import apply_pipeline_metadata
 from evaluatorq.common.llm_client import client_routes_through_orq
-from evaluatorq.common.thread_context import pipeline_metadata, thread_body_param
+from evaluatorq.common.thread_context import thread_body_param
 from evaluatorq.common.tracing import record_llm_response
 from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.backends._errors import extract_provider_error_code, extract_status_code
@@ -106,18 +107,17 @@ class OpenAIModelTarget(AgentTarget):
             ],
         )
         # Tag the target invocation so its Orq trace is attributable to the run:
-        # the pipeline surface via the documented `metadata` property, and the run
-        # thread via the router-only `thread` extra_body field. Only when routing
-        # through Orq — a plain OpenAI endpoint has no such trace and rejects `thread`.
+        # the pipeline surface + run id via the standard `metadata` property (sent
+        # on every endpoint — this is the direct-OpenAI backend, and its traces
+        # still reach Orq via OTel), and the run thread via the `thread` extra_body
+        # field, which IS router-only and so stays guarded.
         create_kwargs: dict[str, Any] = {
             'model': self.model,
             'messages': completion_messages,
             'max_tokens': self.max_tokens,
         }
+        apply_pipeline_metadata(create_kwargs)
         if client_routes_through_orq(self.client):
-            pipeline_md = pipeline_metadata()
-            if pipeline_md:
-                create_kwargs['metadata'] = pipeline_md
             thread = thread_body_param()
             if thread:
                 create_kwargs['extra_body'] = thread

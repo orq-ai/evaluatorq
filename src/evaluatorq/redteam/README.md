@@ -156,7 +156,7 @@ Or pass a custom client: `red_team(..., llm_client=AsyncOpenAI(api_key="sk-...")
 
 ## External agent frameworks
 
-Agents built with external frameworks are wrapped into a target the pipeline can attack. Install the matching extra (`pip install evaluatorq[langgraph]`, `evaluatorq[openai-agents]`, or `evaluatorq[all]`).
+Agents built with external frameworks are wrapped into a target the pipeline can attack. Install the matching extra (`uv add "evaluatorq[langgraph]"`, `"evaluatorq[openai-agents]"`, or `"evaluatorq[all]"`).
 
 ### LangGraph
 
@@ -215,10 +215,17 @@ Sync functions are run in a thread automatically. If the callable holds state, p
 `eq redteam` exposes the same capability. It accepts `agent:` / `deployment:` targets only — for an OpenAI model use `OpenAIModelTarget` in the Python API.
 
 ```bash
-uv tool install "evaluatorq[redteam]"
-eq redteam run -t "agent:my-agent-key" -c LLM01 -c LLM07 --max-turns 2 -y
-eq redteam run --help   # all options
+uv add "evaluatorq[redteam]"
+uv run eq redteam run -t "agent:my-agent-key" -c LLM01 -c LLM07 --max-turns 2 -y
+uv run eq redteam run --help   # all options
 ```
+
+`uv run evaluatorq` is the same entry point under its long name. Avoid
+`uv tool install` here: it builds an isolated environment that exposes the CLI
+but leaves `evaluatorq` unimportable from your own scripts.
+
+Prefer pip? `python -m pip install "evaluatorq[redteam]"` installs into the
+interpreter you just named, and `eq` lands on that environment's `PATH`.
 
 For the full flag reference (multi-target, report export, `eq redteam runs`, etc.), see [`examples/redteam/README.md`](../../../examples/redteam/README.md#cli-reference).
 

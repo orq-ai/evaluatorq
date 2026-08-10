@@ -22,7 +22,7 @@ pytest.importorskip("agents")
 from evaluatorq.contracts import Message  # noqa: E402
 from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget  # noqa: E402
 from evaluatorq.integrations.openai_agents_integration.target import (  # noqa: E402
-    _message_to_responses_input_items,
+    message_to_responses_input_items,
 )
 
 
@@ -100,7 +100,7 @@ async def test_to_input_list_echoes_input_prefix() -> None:
 
     agent = Agent(name="echo-probe", instructions="Reply with a single short word.")
     messages = [Message(role="user", content="Say hello in one word.")]
-    input_data = [item for m in messages for item in _message_to_responses_input_items(m)]
+    input_data = [item for m in messages for item in message_to_responses_input_items(m)]
     prev_len = len(input_data)
 
     # Runner.run types its input as list[TResponseInputItem] (a TypedDict union); the

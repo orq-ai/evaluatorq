@@ -40,34 +40,36 @@ examples/lib/
 
 ```bash
 # Basics
-python3 examples/lib/basics/examples.py
-python3 examples/lib/basics/pass_fail_simple.py
+uv run examples/lib/basics/examples.py
+uv run examples/lib/basics/pass_fail_simple.py
 
 # Datasets (requires ORQ_API_KEY)
-ORQ_API_KEY=... python3 examples/lib/datasets/dataset_example.py
+ORQ_API_KEY=... uv run examples/lib/datasets/dataset_example.py
 
 # Structured
-python3 examples/lib/structured/structured_rubric_eval.py
+uv run examples/lib/structured/structured_rubric_eval.py
 
 # Integrations (requires OPENAI_API_KEY)
-ORQ_API_KEY=... OPENAI_API_KEY=... python3 examples/lib/integrations/langchain/langgraph_research_eval.py
-ORQ_API_KEY=... OPENAI_API_KEY=... DATASET_ID=... python3 examples/lib/integrations/langchain/langgraph_dataset_eval.py
+ORQ_API_KEY=... OPENAI_API_KEY=... uv run examples/lib/integrations/langchain/langgraph_research_eval.py
+ORQ_API_KEY=... OPENAI_API_KEY=... DATASET_ID=... uv run examples/lib/integrations/langchain/langgraph_dataset_eval.py
 
 # CLI
-python3 examples/lib/cli/example_using_cli.py
+uv run examples/lib/cli/example_using_cli.py
 ```
 
 ## Prerequisites
 
 ```bash
-pip install evaluatorq python-dotenv
+uv add evaluatorq python-dotenv
 
 # For LLM examples
-pip install anthropic openai
+uv add anthropic openai
 
 # For LangGraph integration
-pip install langchain-openai langgraph
+uv add langchain-openai langgraph
 ```
+
+Not using uv? `python -m pip install evaluatorq python-dotenv` installs into the interpreter you just named.
 
 Set API keys:
 ```bash

@@ -154,3 +154,33 @@ def test_accepts_dict_and_object_shaped_response_items():
     assert json.loads(r.output[1].arguments) == {"q": "x"}
     assert r.usage is not None
     assert r.usage.total_tokens == 7
+
+
+def test_refusal_part_is_kept_as_text():
+    # A message part is 'output_text' or 'refusal'. Dropping the refusal left
+    # `output` empty, which callers report as a failed call — and for red
+    # teaming a refusal is the resistant outcome we are trying to measure.
+    r = AgentResponse.from_openresponses(_resp(
+        output=[{"type": "message", "content": [{"type": "refusal", "refusal": "I can't help with that."}]}],
+    ))
+    assert [type(i) for i in r.output] == [TextOutputItem]
+    assert r.text == "I can't help with that."
+
+
+def test_unknown_message_part_type_is_logged_and_skipped(caplog):
+    r = AgentResponse.from_openresponses(_resp(
+        output=[{"type": "message", "content": [{"type": "output_audio", "data": "..."}]}],
+    ))
+    assert r.output == []
+    assert "output_audio" in caplog.text
+
+
+def test_structured_tool_result_becomes_json_not_repr():
+    # str() would give "{'temp': 12}" — single quotes, unparseable downstream.
+    r = AgentResponse.from_openresponses(_resp(
+        output=[{"type": "function_call", "name": "f", "arguments": "{}", "call_id": "c1",
+                 "result": {"temp": 12, "ok": True}}],
+    ))
+    item = r.output[0]
+    assert isinstance(item, ToolCallOutputItem)
+    assert item.result == '{"temp": 12, "ok": true}'

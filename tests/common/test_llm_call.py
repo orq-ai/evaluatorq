@@ -332,7 +332,7 @@ async def test_pipeline_metadata_tags_when_client_routes_through_orq(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_pipeline_metadata_absent_for_direct_openai_client(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_pipeline_metadata_present_for_direct_openai_client(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
     from evaluatorq.common.thread_context import evaluatorq_pipeline
 
@@ -341,7 +341,7 @@ async def test_pipeline_metadata_absent_for_direct_openai_client(monkeypatch: py
     client.chat.completions.create = AsyncMock(return_value=_fake_response())
     with evaluatorq_pipeline('red_teaming'):
         kwargs = await _run(client)
-    assert 'metadata' not in kwargs
+    assert kwargs['metadata'] == {'evaluatorq_pipeline': 'red_teaming'}
 
 
 @pytest.mark.asyncio
