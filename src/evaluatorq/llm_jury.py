@@ -26,7 +26,7 @@ from evaluatorq.common.output_adapters import (
     output_to_messages,
     output_to_text,
 )
-from evaluatorq.contracts import LLMCallConfig
+from evaluatorq.contracts import JURY_RAW_OUTPUT_KEY, LLMCallConfig
 from evaluatorq.pairwise import PairwiseComparison, run_pairwise
 from evaluatorq.types import DataPoint, EvaluationResult, Evaluator, Output, ScorerParameter
 
@@ -231,6 +231,11 @@ def _to_evaluation_result(
         'explanation': explanation,
         'pass': passed,
         'token_usage': deliberation.token_usage,
+        # Same convention as the redteam bridge: the full JuryResult rides on
+        # raw_output under JURY_RAW_OUTPUT_KEY, so per-judge votes (which judge
+        # scored this item, what it said) stay auditable — under cyclic
+        # assignment this is the only record of the item->judge mapping.
+        'raw_output': {JURY_RAW_OUTPUT_KEY: deliberation.jury.model_dump(mode='json')},
     })
 
 
@@ -387,13 +392,14 @@ def llm_jury(
         agreement to report. The rotation runs over the *deduplicated* panel,
         so listing a judge twice to up-weight it only works under ``"all"``.
         ``repetitions`` still applies to the single assigned judge — N calls
-        to one judge, never N judges. The rotation cursor lives on the
-        evaluator, not the run: a reused evaluator (a second run, a framework
-        retry) continues the rotation where it left off, so the documented
-        "datapoint 0 goes to judge 0" start and exact balance hold per freshly
-        built evaluator. Shuffle the dataset first if its order is meaningful.
-        Requires ``min_successful_judges=1``; a failed item degrades to
-        inconclusive unless ``replacement_judges`` is set.
+        to one judge, never N judges. Inside ``evaluatorq()`` the assignment is
+        keyed on the dataset row (datapoint ``i`` goes to judge
+        ``i % len(panel)``), deterministic at any ``parallelism`` and across
+        evaluator reuse. A direct scorer call carries no row and rotates in
+        arrival order on a cursor that lives on the evaluator — only the equal
+        share balance is guaranteed there. Shuffle the dataset first if its
+        order is meaningful. Requires ``min_successful_judges=1``; a failed
+        item degrades to inconclusive unless ``replacement_judges`` is set.
 
     Examples
     --------
@@ -453,11 +459,15 @@ def llm_jury(
     )
     _validate_assignment(assignment, min_successful_judges=min_successful_judges)
     # Round-robin assignment (CyclicJudge, arXiv:2603.01865): each datapoint is
-    # scored by exactly one judge, cycling through the deduplicated panel in
-    # arrival order. Every judge covers an equal share of the run, so panel-
+    # scored by exactly one judge over the deduplicated panel. Inside
+    # evaluatorq() the runner passes the dataset row, so the item->judge
+    # mapping is `deduped[row % len(deduped)]` — deterministic at any
+    # parallelism. A direct scorer call carries no row and falls back to this
+    # arrival-order cycle, where only the equal share balance is guaranteed.
+    # Either way every judge covers an equal share of the run, so panel-
     # relative judge bias cancels in expectation at single-judge cost. Shuffle
-    # the dataset first if its order is meaningful, so the cycle cannot line up
-    # with a latent grouping (the paper's own caveat).
+    # the dataset first if its order is meaningful, so the rotation cannot line
+    # up with a latent grouping (the paper's own caveat).
     cycle = itertools.cycle(deduped) if assignment == 'cyclic' else None
     if temperature == 0.0:
         logger.warning(
@@ -513,9 +523,16 @@ def llm_jury(
                 extra_kwargs=extra_kwargs,
             )
 
-        # The advance happens before any await, so concurrent scorer calls
-        # still hand out exactly balanced judge shares.
-        run_panel = [next(cycle)] if cycle is not None else panel
+        if cycle is not None:
+            # Runner path: key on the dataset row so the mapping is reproducible
+            # regardless of parallelism or arrival order. Direct invocation has
+            # no row and falls back to the arrival-order cursor; that advance
+            # happens before any await, so concurrent calls still hand out
+            # exactly balanced judge shares.
+            row = params.get('row')
+            run_panel = [deduped[row % len(deduped)]] if row is not None else [next(cycle)]
+        else:
+            run_panel = panel
         deliberation = await run_jury(
             judge_fn=judge_fn,
             panel=run_panel,

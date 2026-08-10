@@ -119,12 +119,15 @@ of `labels`; omit it and the verdict is still recorded but `passed` is `None`.
 
 `assignment="cyclic"` implements CyclicJudge
 ([arXiv:2603.01865](https://arxiv.org/abs/2603.01865)): round-robin judge
-assignment. Datapoint 0 goes to judge 0, datapoint 1 to judge 1, and so on,
-wrapping around the panel. Every judge covers an equal share of the run, so
-systematic judge bias cancels in expectation across the dataset while each
-datapoint costs exactly one judge (`repetitions` still multiplies calls to
-that one judge). The paper shows this beats both all-judges and
-random-single-judge at any fixed budget.
+assignment. Inside `evaluatorq()` the assignment is keyed on the dataset row:
+datapoint `i` goes to judge `i % len(panel)`, so datapoint 0 gets judge 0,
+datapoint 1 gets judge 1, and so on, wrapping around the panel. Because the
+key is the row rather than call order, the mapping is deterministic at any
+`parallelism` and reproducible across runs. Every judge covers an equal share
+of the run, so systematic judge bias cancels in expectation across the
+dataset while each datapoint costs exactly one judge (`repetitions` still
+multiplies calls to that one judge). The paper shows this beats both
+all-judges and random-single-judge at any fixed budget.
 
 ```python
 jury = llm_jury(
@@ -142,11 +145,17 @@ per-item verdict is a single judge's opinion. Practical notes:
 - Per-item `stats` and `raw_agreement` come back `None`. A single vote has no
   cross-judge agreement, and reporting `1.0` / `std=0.0` would be
   indistinguishable from a genuinely unanimous panel.
-- The rotation cursor lives on the evaluator object. A freshly built jury
-  sends datapoint 0 to judge 0; reusing one `llm_jury(...)` across two runs
-  (or a framework retry of a datapoint) continues the rotation where it left
-  off, so exact balance holds per fresh evaluator, not per run. Build a new
-  jury per run if you need the judge-0 start.
+- The row-keyed mapping above holds when the scorer runs inside
+  `evaluatorq()`, which passes each datapoint's dataset index. Calling the
+  scorer directly (outside the runner) provides no index, so judges are
+  assigned in call-arrival order from a cursor that lives on the evaluator
+  object: only the equal share balance is guaranteed there, not which judge
+  sees which item, and a reused evaluator continues that rotation where it
+  left off. The same applies to `PairwiseComparator.compare`, which is always
+  arrival-ordered.
+- Which judge scored an item is recorded either way: every result carries the
+  full jury record (per-judge votes, models, verdicts) in
+  `raw_output["jury"]`, so the rotation is auditable after the run.
 - Rotation runs over the deduplicated panel: `judges=["a", "a", "b"]` gives
   `a` two votes per item under `"all"`, but an equal share under `"cyclic"` —
   duplicate entries do not up-weight a judge in cyclic mode.

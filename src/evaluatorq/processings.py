@@ -185,7 +185,11 @@ async def process_job(
             # Run all evaluators concurrently (unbounded concurrency)
             # Using create_task for better event loop scheduling
             tasks = [
-                asyncio.create_task(process_evaluator(evaluator, data_point, output, progress_service, tracing_context))
+                asyncio.create_task(
+                    process_evaluator(
+                        evaluator, data_point, output, progress_service, tracing_context, row_index=row_index
+                    )
+                )
                 for evaluator in evaluators
             ]
 
@@ -205,6 +209,7 @@ async def process_evaluator(
     output: Output,
     progress_service: ProgressService | None = None,
     tracing_context: 'TracingContext | None' = None,
+    row_index: int | None = None,
 ) -> EvaluatorScore:
     """
     Process a single evaluator.
@@ -215,6 +220,9 @@ async def process_evaluator(
         output: The job output to evaluate
         progress_service: Optional progress tracking service
         tracing_context: Optional tracing context for OTEL spans
+        row_index: Dataset index of the data point, forwarded to the scorer as
+            ``ScorerParameter['row']`` so per-item logic (e.g. cyclic judge
+            assignment) can key on dataset position instead of arrival order
 
     Returns:
         EvaluatorScore with the evaluation result or error
@@ -245,6 +253,8 @@ async def process_evaluator(
                 'data': data_point,
                 'output': output,
             }
+            if row_index is not None:
+                scorer_param['row'] = row_index
 
             result = await evaluator['scorer'](scorer_param)
 

@@ -25,6 +25,10 @@ llm_jury_mod = importlib.import_module("evaluatorq.llm_jury")
 def _fake_run_judge(calls: list[str], value: str = "yes"):
     async def fake(**kwargs):
         calls.append(kwargs["model"])
+        # Yield to the event loop so asyncio.gather genuinely interleaves:
+        # without this the concurrency tests cannot distinguish arrival order
+        # from dataset order and would pass whatever the assignment logic does.
+        await asyncio.sleep(0)
         return JudgeOutcome(
             payload=EvaluatorResponsePayload(value=value, explanation="ok"),
             token_usage=None,
@@ -37,6 +41,7 @@ def _fake_run_judge(calls: list[str], value: str = "yes"):
 def _fake_run_judge_failing(calls: list[str], fail_model: str, value: str = "yes"):
     async def fake(**kwargs):
         calls.append(kwargs["model"])
+        await asyncio.sleep(0)
         if kwargs["model"] == fail_model:
             raise RuntimeError("boom")
         return JudgeOutcome(
@@ -261,3 +266,83 @@ async def test_pairwise_cyclic_one_judge_per_pair_with_swap():
     report = build_report(comparisons)
     assert sorted(stats.model for stats in report.per_judge) == ["a", "b", "c"]
     assert report.a_win_rate == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Row-keyed assignment (the evaluatorq() runner path)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cyclic_maps_judge_by_dataset_row_not_arrival_order():
+    """Inside the runner the mapping is row % len(panel), not call order.
+
+    Rows arrive out of order on purpose: 3 -> m1 (3%3=0), 1 -> m2, 4 -> m2.
+    An arrival-order cursor would produce m1, m2, m3 here instead.
+    """
+    ev = llm_jury(
+        name="x", criteria="c", judges=["m1", "m2", "m3"], assignment="cyclic", client=MagicMock()
+    )
+    calls: list[str] = []
+    with patch.object(llm_jury_mod, "run_judge", side_effect=_fake_run_judge(calls)):
+        for row in (3, 1, 4):
+            await ev["scorer"]({"data": _datapoint(), "output": "x", "row": row})
+    assert calls == ["m1", "m2", "m2"]
+
+
+@pytest.mark.asyncio
+async def test_cyclic_row_mapping_is_parallelism_independent():
+    """Concurrent, shuffled rows still land on judge row % len(panel).
+
+    The judge identity is read back from raw_output, so this asserts the full
+    item->judge mapping, not just the share balance.
+    """
+    ev = llm_jury(
+        name="x", criteria="c", judges=["m1", "m2", "m3"], assignment="cyclic", client=MagicMock()
+    )
+    rows = [4, 0, 7, 2, 5, 8, 1, 6, 3]
+    calls: list[str] = []
+    with patch.object(llm_jury_mod, "run_judge", side_effect=_fake_run_judge(calls)):
+        results = await asyncio.gather(
+            *(ev["scorer"]({"data": _datapoint(), "output": "x", "row": row}) for row in rows)
+        )
+    panel = ["m1", "m2", "m3"]
+    for row, result in zip(rows, results):
+        assert not isinstance(result, dict)
+        assert result.raw_output is not None
+        votes = result.raw_output["jury"]["votes"]
+        assert [v["model"] for v in votes] == [panel[row % 3]]
+    assert Counter(calls) == {"m1": 3, "m2": 3, "m3": 3}
+
+
+@pytest.mark.asyncio
+async def test_cyclic_single_model_panel_propagates_judge_failure():
+    """A lone cyclic judge with no stand-ins has no redundancy: an outage must
+    raise out of the scorer, never degrade to inconclusive. This is the
+    propagate_errors contract (len(deduped) == 1 and no replacements); a
+    regression that swaps deduped for the always-length-1 run panel would make
+    every cyclic run swallow outages silently."""
+    ev = llm_jury(name="x", criteria="c", judges=["only"], assignment="cyclic", client=MagicMock())
+    calls: list[str] = []
+    with (
+        patch.object(llm_jury_mod, "run_judge", side_effect=_fake_run_judge_failing(calls, "only")),
+        pytest.raises(RuntimeError, match="boom"),
+    ):
+        await ev["scorer"]({"data": _datapoint(), "output": "x"})
+
+
+@pytest.mark.asyncio
+async def test_result_carries_jury_record_for_audit():
+    """raw_output['jury'] records which judge scored the item (per-judge votes),
+    so the cyclic rotation is auditable from the results alone."""
+    ev = llm_jury(
+        name="x", criteria="c", judges=["m1", "m2", "m3"], assignment="cyclic", client=MagicMock()
+    )
+    calls: list[str] = []
+    with patch.object(llm_jury_mod, "run_judge", side_effect=_fake_run_judge(calls)):
+        result = await ev["scorer"]({"data": _datapoint(), "output": "x", "row": 1})
+    assert not isinstance(result, dict)
+    assert result.raw_output is not None
+    votes = result.raw_output["jury"]["votes"]
+    assert [v["model"] for v in votes] == ["m2"]
+    assert votes[0]["value"] == "yes"
