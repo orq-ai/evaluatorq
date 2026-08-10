@@ -26,6 +26,19 @@ markers = [
 ]
 timeout = 120
 
+[tool.coverage.run]
+source = [ "src/evaluatorq" ]
+# relative_files is required by python-coverage-comment-action — the CI job runs
+# coverage in a different absolute path than the action reads it back from.
+relative_files = true
+
+[tool.coverage.report]
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+  "@overload",
+]
+
 [tool.ruff]
 line-length = 120
 preview = true
