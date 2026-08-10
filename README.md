@@ -52,7 +52,7 @@
 | src/evaluatorq/dashboard/filters.py                                      |      165 |       12 |     93% |139-140, 154, 160, 178, 185, 238-239, 293, 299, 341, 408 |
 | src/evaluatorq/dashboard/launch.py                                       |       48 |       10 |     79% |53-54, 81-89, 124 |
 | src/evaluatorq/dashboard/library.py                                      |      153 |        8 |     95% |136-140, 159-160, 170, 206 |
-| src/evaluatorq/dashboard/metrics.py                                      |      466 |       57 |     88% |73-74, 86-87, 105, 241-243, 260, 268-269, 272-273, 309, 312-313, 329-330, 333-334, 354-355, 358-359, 367-368, 371-372, 375-376, 466, 470, 495, 500, 508-509, 585-586, 605-606, 609-610, 708, 722-729, 756-757, 768-769, 772-773 |
+| src/evaluatorq/dashboard/metrics.py                                      |      543 |       58 |     89% |88-89, 101-102, 120, 279-281, 298, 306-307, 310-311, 347, 350-351, 394-395, 398-399, 415-416, 419-420, 428-429, 432-433, 436-437, 580, 644, 648, 673, 678, 686-687, 763-764, 783-784, 787-788, 886, 900-907, 934-935, 946-947, 950-951 |
 | src/evaluatorq/dashboard/orq\_links.py                                   |       40 |        0 |    100% |           |
 | src/evaluatorq/dashboard/orq\_workspace.py                               |       15 |        0 |    100% |           |
 | src/evaluatorq/dashboard/redteam\_charts.py                              |      189 |       20 |     89% |80-82, 94, 99-104, 114, 117, 176, 178, 207, 346, 359, 405, 419-420 |
@@ -67,7 +67,7 @@
 | src/evaluatorq/dashboard/surfaces.py                                     |       65 |        0 |    100% |           |
 | src/evaluatorq/dashboard/theme.py                                        |        2 |        0 |    100% |           |
 | src/evaluatorq/dashboard/trace\_links.py                                 |       38 |        0 |    100% |           |
-| src/evaluatorq/dashboard/view.py                                         |      406 |       32 |     92% |94-95, 268, 463, 470, 545, 601, 796, 837-838, 868-869, 1217-1257 |
+| src/evaluatorq/dashboard/view.py                                         |      413 |       32 |     92% |106-107, 280, 484, 491, 566, 622, 817, 858-859, 889-890, 1238-1278 |
 | src/evaluatorq/deployment.py                                             |       73 |       46 |     37% |76-95, 139-166, 177-204, 236-244 |
 | src/evaluatorq/evaluatorq.py                                             |      142 |       49 |     65% |51, 158, 223-321, 368, 393 |
 | src/evaluatorq/evaluators.py                                             |       37 |       18 |     51% |52, 73, 109-144 |
@@ -218,7 +218,7 @@
 | src/evaluatorq/tracing/setup.py                                          |      136 |       39 |     71% |103-113, 134-137, 142, 171, 177-183, 191-201, 235-243, 292-293, 314 |
 | src/evaluatorq/tracing/spans.py                                          |      101 |       24 |     76% |76-107, 154-161, 272 |
 | src/evaluatorq/types.py                                                  |       83 |        2 |     98% |   32, 219 |
-| **TOTAL**                                                                | **23825** | **4531** | **81%** |           |
+| **TOTAL**                                                                | **23909** | **4532** | **81%** |           |
 
 
 ## Setup coverage badge
