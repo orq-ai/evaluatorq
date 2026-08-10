@@ -93,6 +93,65 @@ async def test_network_error_with_cause_is_retried(monkeypatch: pytest.MonkeyPat
     assert calls == 2
 
 
+def _connection_error_wrapping(cause: Exception) -> APIConnectionError:
+    """An APIConnectionError wrapping an arbitrary httpx transport error, as the
+    SDK raises it. The __cause__ class name is deliberately NOT in the httpx
+    allowlist, so retry must come from the SDK class, not the name match."""
+    request = httpx.Request("POST", "https://router.example/v3/router")
+    err = APIConnectionError(request=request)
+    err.__cause__ = cause
+    return err
+
+
+@pytest.mark.asyncio
+async def test_remote_protocol_error_is_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A server that disconnects mid-response arrives as APIConnectionError with
+    an httpx.RemoteProtocolError cause. That class is NOT in the name allowlist,
+    so this only retries because APIConnectionError itself is treated as a
+    transport failure — the regression currentlycodinng flagged on RES-832."""
+
+    async def _instant(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(retry_module.asyncio, "sleep", _instant)
+    request = httpx.Request("POST", "https://router.example/v3/router")
+    calls = 0
+
+    async def flaky() -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise _connection_error_wrapping(httpx.RemoteProtocolError("server disconnected", request=request))
+        return "ok"
+
+    assert await with_retry(flaky, max_attempts=3, label="test") == "ok"
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_api_timeout_error_is_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    """APITimeoutError (a subclass of APIConnectionError) is a transport failure
+    and must retry."""
+    from openai import APITimeoutError
+
+    async def _instant(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(retry_module.asyncio, "sleep", _instant)
+    request = httpx.Request("POST", "https://router.example/v3/router")
+    calls = 0
+
+    async def flaky() -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise APITimeoutError(request=request)
+        return "ok"
+
+    assert await with_retry(flaky, max_attempts=3, label="test") == "ok"
+    assert calls == 2
+
+
 @pytest.mark.asyncio
 async def test_asyncio_timeout_is_never_retried() -> None:
     """Per-attempt timeouts stay per-attempt: a hung call fails immediately."""
