@@ -199,7 +199,7 @@ def fit_bt(
     sparse = sorted(judge for judge, count in judge_counts.items() if count < _MIN_JUDGE_COMPARISONS)
     if sparse:
         warnings.append(
-            f"judge(s) {', '.join(sparse)} have fewer than {_MIN_JUDGE_COMPARISONS} observations; "
+            f'judge(s) {", ".join(sparse)} have fewer than {_MIN_JUDGE_COMPARISONS} observations; '
             'their sigma estimates are weakly supported'
         )
 

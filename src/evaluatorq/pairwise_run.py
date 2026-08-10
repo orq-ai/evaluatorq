@@ -120,9 +120,7 @@ class PairwiseRun(BaseModel):
         alongside the plurality headline.
         """
         _validate_aggregation(aggregation)
-        self.report = _annotate_bt_sigma_scope(
-            build_report(self.comparisons(), aggregation=aggregation), self.entries
-        )
+        self.report = _annotate_bt_sigma_scope(build_report(self.comparisons(), aggregation=aggregation), self.entries)
         payload = self.model_dump_json(indent=2)
         if path is not None:
             target = Path(path)
