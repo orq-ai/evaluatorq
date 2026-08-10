@@ -173,8 +173,10 @@ report.bt_sigma.a_win_rate      # weighted rollup, next to the plurality one
 The headline plurality rates in the report are unchanged, so the two
 aggregations stay directly comparable, and each `JudgeStats` entry gains its
 fitted `sigma`. The fit is unsupervised maximum likelihood on the votes the run
-already collected: no extra LLM calls, no training data, and it runs in
-milliseconds.
+already collected: no extra LLM calls and no training data. Identical votes
+are collapsed into weighted counts before the fit (at most three distinct
+judgements per judge in the A/B setting), so the cost stays flat no matter how
+many comparisons the run holds.
 
 Notes worth knowing:
 
@@ -184,6 +186,14 @@ Notes worth knowing:
   to plain Bradley-Terry and says so in `fit_warnings`.
 - A perfectly split panel stays inconclusive rather than letting numerical
   noise crown one judge reliable.
+- A judge whose decisive votes are unanimous (always A, or always B) is
+  excluded from the weighting. With only two items such a judge's sigma
+  measures one-sidedness, not reliability, and `1/sigma` would hand the most
+  degenerate judge on the panel an unbounded weight - the exact shape a
+  position- or verbosity-biased judge takes. It votes with a neutral weight
+  instead, and `fit_warnings` names it.
+- Check `bt_sigma.converged` (and `fit_warnings`) before trusting sigmas: a
+  fit that stopped at the iteration cap still produces numbers.
 - Like all unsupervised aggregation, BT-sigma rewards internal consistency. A
   majority of judges sharing the same systematic bias will still carry the
   vote; it protects against noisy judges, not coordinated ones.
@@ -191,7 +201,9 @@ Notes worth knowing:
 For ranking more than two candidates (leaderboard-style), the underlying
 `evaluatorq.ranking.fit_bt()` accepts arbitrary item pairs from any number of
 judges and returns skills, a ranking, and per-judge reliability; `cycle_rate()`
-gives the matching consistency diagnostic.
+gives the matching consistency diagnostic. `cycle_rate` is deliberately not
+part of the two-item aggregation above: with two fixed items there are no
+3-cycles to rate, so it only means something on the multi-item ranking path.
 
 ## Saving a run and viewing it in the dashboard
 

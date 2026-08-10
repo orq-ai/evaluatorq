@@ -17,7 +17,7 @@ defaults). Needs ORQ_API_KEY.
 
 Usage::
 
-    python examples/bt_sigma_ranking.py [STRONG WEAK_1 WEAK_2]
+    python examples/pairwise/bt_sigma_ranking.py [STRONG WEAK_1 WEAK_2]
 """
 
 import asyncio

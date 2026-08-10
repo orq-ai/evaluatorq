@@ -170,3 +170,73 @@ def test_comparisons_per_judge_counts() -> None:
     comparisons = _soft_comparisons({'a': 1.0, 'b': 1.0})
     counts = comparisons_per_judge(comparisons)
     assert counts == {'a': 10, 'b': 10}
+
+
+def test_comparisons_per_judge_sums_weights() -> None:
+    weighted = [JudgedComparison(judge='j', item_a='a', item_b='b', p_a=1.0, weight=7.0)]
+    assert comparisons_per_judge(weighted) == {'j': 7.0}
+
+
+def test_fit_matches_independent_derivation() -> None:
+    # One judge, hard 3-1 votes for m1 over m2: with skills centred at +-g/2,
+    # plain-BT stationarity is 4*(0.75 - logistic(g)) = _RIDGE * g / 2. Solve
+    # it by bisection, independently of the optimiser, and pin the fit to it.
+    # A scaling bug in the gradient that preserved monotonicity would fail here.
+    votes = [JudgedComparison(judge='j', item_a='m1', item_b='m2', p_a=1.0) for _ in range(3)] + [
+        JudgedComparison(judge='j', item_a='m1', item_b='m2', p_a=0.0)
+    ]
+    fit = fit_bt(votes, judge_sigma=False)
+    gap = fit.skills['m1'] - fit.skills['m2']
+
+    def stationarity(g: float) -> float:
+        return 4.0 * (0.75 - _logistic(g)) - 1e-2 * g / 2.0
+
+    lo, hi = 0.0, 5.0
+    for _ in range(200):
+        mid = (lo + hi) / 2.0
+        if stationarity(mid) > 0:
+            lo = mid
+        else:
+            hi = mid
+    # abs=5e-3: the optimiser stops within ~_TOL-sized residue of the optimum;
+    # the tolerance is far below any scaling error (a 2x gradient bug lands
+    # the gap near 0.55 off) while not fighting the convergence criterion.
+    assert gap == pytest.approx(lo, abs=5e-3)
+    assert _logistic(gap) == pytest.approx(0.75, abs=2e-3)
+
+
+def test_weighted_records_match_repeated_records() -> None:
+    # The likelihood is additive over identical records, so a weight-5 record
+    # must fit exactly like five copies - this is what lets the pairwise
+    # aggregation collapse votes without changing the optimum.
+    def records(collapse: bool) -> list[JudgedComparison]:
+        spec = [('j1', 1.0, 5), ('j1', 0.0, 1), ('j2', 0.0, 2), ('j2', 1.0, 1)]
+        if collapse:
+            return [
+                JudgedComparison(judge=j, item_a='m1', item_b='m2', p_a=p, weight=float(n)) for j, p, n in spec
+            ]
+        return [
+            JudgedComparison(judge=j, item_a='m1', item_b='m2', p_a=p) for j, p, n in spec for _ in range(n)
+        ]
+
+    expanded = fit_bt(records(collapse=False), judge_sigma=True, hard=True)
+    collapsed = fit_bt(records(collapse=True), judge_sigma=True, hard=True)
+    assert collapsed.skills['m1'] == pytest.approx(expanded.skills['m1'], abs=1e-6)
+    assert collapsed.sigmas['j1'] == pytest.approx(expanded.sigmas['j1'], rel=1e-6)
+    assert collapsed.sigmas['j2'] == pytest.approx(expanded.sigmas['j2'], rel=1e-6)
+
+
+def test_cycle_rate_aggregates_duplicate_judgements() -> None:
+    # A judge that rated the same pair twice in opposite directions has no net
+    # preference on it: the edge must cancel (mean p = 0.5), not resolve to
+    # whichever judgement happened to come last.
+    base = [
+        JudgedComparison(judge='j', item_a='m1', item_b='m2', p_a=1.0),
+        JudgedComparison(judge='j', item_a='m2', item_b='m3', p_a=1.0),
+        JudgedComparison(judge='j', item_a='m3', item_b='m1', p_a=1.0),
+    ]
+    assert cycle_rate(base, 'j') == 1.0
+    # The duplicate arrives in the REVERSED frame (m2, m1): canonicalisation
+    # must fold it onto the same edge before averaging.
+    dup = [*base, JudgedComparison(judge='j', item_a='m2', item_b='m1', p_a=1.0)]
+    assert cycle_rate(dup, 'j') is None

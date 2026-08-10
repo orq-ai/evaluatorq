@@ -22,9 +22,21 @@ The paper's guidance: hard BT-sigma is the most robust when judges are highly
 inconsistent; soft BT-sigma wins under moderate noise. The per-aspect variant
 (BT-sigma-asp) is deliberately not implemented - the paper finds it marginal.
 
-Everything is pure Python on purpose: the problem is tiny (N items + K judges
-parameters), closed-form gradients converge in milliseconds, and evaluatorq's
-runtime dependency set stays unchanged (no scipy/numpy).
+Everything is pure Python on purpose: the parameter space is tiny (N items +
+K judges) and evaluatorq's runtime dependency set stays unchanged (no
+scipy/numpy). The cost is O(iterations x records) with iterations growing with
+the data, so collapse repeated identical judgements into one record with a
+``weight`` (see :class:`JudgedComparison`) before fitting large runs — the
+pairwise ``bt_sigma_aggregation`` does this and stays fast at any run size;
+an uncollapsed fit over thousands of records can take seconds.
+
+Optimiser choice, on the record (PR #113 review): plain Bradley-Terry has the
+hyperparameter-free, monotone Zermelo/MM update, and if this file ever drops
+the judge discriminator that is the solver to switch to. The per-judge
+``sigma_k`` exponent breaks the algebraic form the MM update relies on (the
+likelihood is no longer a ratio of sums of positive weights), so this uses a
+generic first-order optimiser instead, and the constants below exist to manage
+the failure modes that choice introduces.
 
 Comparisons carry judge identity so the records are reusable by other judging
 methods that need per-judge accounting (e.g. round-robin panel assignment).
@@ -48,7 +60,7 @@ if TYPE_CHECKING:
 # matters for its L-BFGS implementation).
 _LR = 0.1
 _LR_DECAY_STEPS = 200  # lr_t = _LR / (1 + step/_LR_DECAY_STEPS): kills Adam's oscillation floor
-_MAX_ITER = 20000  # fits are milliseconds; strongly separated data needs the decay tail to play out
+_MAX_ITER = 20000  # strongly separated data needs the decay tail to play out; cost is per-record, so collapse first
 # Converged when the iterate stops moving (max-abs parameter change after the
 # identifiability projections). A gradient criterion is wrong here: the ridge
 # leaves a constant radial gradient along the scale direction that the
@@ -56,17 +68,24 @@ _MAX_ITER = 20000  # fits are milliseconds; strongly separated data needs the de
 # the constrained optimum. 1e-4 is far below anything that moves a ranking or
 # a vote weight (skills live on a ~+-10 scale, sigmas are reported to 3
 # decimals); tighter tolerances just fight Adam's decay tail, which unanimous
-# panels ride to the iteration cap at ~3e-5 steps. Steps this small only occur
-# near stationarity, and the exact-saddle case has its own gradient floor.
+# panels ride to the iteration cap at ~3e-5 steps.
 _TOL = 1e-4
+# A single sub-_TOL step is not convergence: when Adam's momentum flips sign
+# crossing the optimum, one step can transiently stall far from stationarity
+# (caught by the review's pin-the-fit test: a 4-vote fit "converged" with a
+# 3e-2 gradient). Genuine stationarity keeps steps small on consecutive
+# iterations; a transient stall rebuilds momentum within a step or two.
+_TOL_STREAK = 5
 _ADAM_B1 = 0.9
 _ADAM_B2 = 0.999
 _ADAM_EPS = 1e-8
 # Weak gaussian prior on skills: keeps disconnected comparison graphs and
 # perfectly separated items (all wins one way -> unbounded skill MLE, which
 # otherwise drifts to the iteration cap exactly like the sigma case below)
-# finite and quick to converge. Shrinks only the MAGNITUDE of extreme gaps;
-# orderings, and therefore rankings and weighted winners, are untouched.
+# finite and quick to converge. Mostly shrinks the MAGNITUDE of extreme gaps;
+# because low-coverage items shrink harder than well-covered ones, it can in
+# principle reorder two items whose unpenalised skills are very close under
+# unbalanced coverage — a small effect at 1e-2, but not a guarantee.
 _RIDGE = 1e-2
 # Log-normal prior on sigma (ridge on tau), deliberately stronger than _RIDGE:
 # a perfectly consistent judge's ideal sigma is 0, so its tau otherwise drifts
@@ -100,6 +119,12 @@ class JudgedComparison(BaseModel):
     item_a: str = Field(description='First item ID in the canonical frame')
     item_b: str = Field(description='Second item ID in the canonical frame')
     p_a: float = Field(ge=0.0, le=1.0, description='P(item_a beats item_b) according to this judge')
+    weight: float = Field(
+        default=1.0,
+        gt=0.0,
+        description='Multiplicity: how many identical judgements this record stands for. The fit cost is '
+        'O(iterations x records), so collapsing repeats keeps large runs fast without changing the optimum.',
+    )
 
 
 class BTFit(BaseModel):
@@ -186,6 +211,7 @@ def fit_bt(
     iterations = 0
     converged = False
     delta = math.inf
+    still_streak = 0
     for step in range(1, _MAX_ITER + 1):
         iterations = step
         g_s = dict.fromkeys(items, 0.0)
@@ -195,7 +221,7 @@ def fit_bt(
             sigma_k = math.exp(tau[c.judge]) if use_sigma else 1.0
             z = (s[c.item_a] - s[c.item_b]) / sigma_k
             p_hat = _logistic(z)
-            err = p - p_hat  # d(loglik)/dz
+            err = (p - p_hat) * c.weight  # d(loglik)/dz, times record multiplicity
             g_s[c.item_a] += err / sigma_k
             g_s[c.item_b] -= err / sigma_k
             if use_sigma:
@@ -248,7 +274,8 @@ def fit_bt(
         delta = max(abs(s[i] - prev_s[i]) for i in items)
         if use_sigma:
             delta = max(delta, max(abs(tau[k] - prev_tau[k]) for k in judges))
-        if delta < _TOL:
+        still_streak = still_streak + 1 if delta < _TOL else 0
+        if still_streak >= _TOL_STREAK:
             converged = True
             break
 
@@ -281,17 +308,30 @@ def cycle_rate(comparisons: Sequence[JudgedComparison], judge: str) -> float | N
     not all C(n, 3) triplets. On fully covered tie-free data the two agree;
     on sparse or tie-heavy data the paper's form understates inconsistency by
     counting unassessable triplets as consistent.
+
+    Repeated judgements of the same pair (e.g. from ``repetitions``) are
+    aggregated by weighted mean preference before the sign is taken, so a
+    judge that split evenly on a pair contributes a no-preference edge rather
+    than whichever judgement happened to come last.
     """
-    prefers: dict[tuple[str, str], bool] = {}
+    p_sum: dict[tuple[str, str], float] = defaultdict(float)
+    w_sum: dict[tuple[str, str], float] = defaultdict(float)
     for c in comparisons:
         if c.judge != judge:
             continue
-        if c.p_a > 0.5:
-            prefers[c.item_a, c.item_b] = True
-            prefers[c.item_b, c.item_a] = False
-        elif c.p_a < 0.5:
-            prefers[c.item_a, c.item_b] = False
-            prefers[c.item_b, c.item_a] = True
+        # Canonicalize the pair frame so (a, b, p) and (b, a, 1-p) aggregate together.
+        a, b, p = (c.item_a, c.item_b, c.p_a) if c.item_a <= c.item_b else (c.item_b, c.item_a, 1.0 - c.p_a)
+        p_sum[a, b] += p * c.weight
+        w_sum[a, b] += c.weight
+    prefers: dict[tuple[str, str], bool] = {}
+    for (a, b), total_w in w_sum.items():
+        mean_p = p_sum[a, b] / total_w
+        if mean_p > 0.5:
+            prefers[a, b] = True
+            prefers[b, a] = False
+        elif mean_p < 0.5:
+            prefers[a, b] = False
+            prefers[b, a] = True
 
     items = sorted({i for pair in prefers for i in pair})
     n = len(items)
@@ -319,11 +359,13 @@ def cycle_rate(comparisons: Sequence[JudgedComparison], judge: str) -> float | N
     return cycles / triplets
 
 
-def comparisons_per_judge(comparisons: Sequence[JudgedComparison]) -> dict[str, int]:
-    """Comparison counts by judge - a cheap sanity check before trusting sigmas."""
-    counts: dict[str, int] = defaultdict(int)
+def comparisons_per_judge(comparisons: Sequence[JudgedComparison]) -> dict[str, float]:
+    """Comparison counts by judge (record weights included) - a cheap sanity
+    check before trusting sigmas. ``bt_sigma_aggregation`` uses it to warn when
+    a judge has too few decisive votes for its sigma to mean much."""
+    counts: dict[str, float] = defaultdict(float)
     for c in comparisons:
-        counts[c.judge] += 1
+        counts[c.judge] += c.weight
     return dict(counts)
 
 

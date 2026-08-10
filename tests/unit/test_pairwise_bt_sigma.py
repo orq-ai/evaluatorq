@@ -8,6 +8,8 @@ unreliable judges.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import pytest
 
 from evaluatorq.pairwise import (
@@ -18,8 +20,10 @@ from evaluatorq.pairwise import (
     pairwise_consensus,
 )
 
+_Vote = Literal["A", "B", "tie"]
 
-def _vote(model: str, value: str | None) -> PairwiseVote:
+
+def _vote(model: str, value: _Vote | None) -> PairwiseVote:
     return PairwiseVote(model=model, vote=value)
 
 
@@ -28,18 +32,20 @@ def _comparison(votes: list[PairwiseVote]) -> PairwiseComparison:
 
 
 def _heterogeneous_run() -> list[PairwiseComparison]:
-    """One steady judge always voting A; two noisy judges that flip sides.
+    """One steady judge voting A on 11 of 12 rows; two noisy judges that flip.
 
-    The steady judge is perfectly consistent with a fixed A-beats-B gap, so the
-    fit assigns it a small sigma. The noisy pair split across rows, earning
-    large sigmas. On rows where both noisy judges vote B, plurality says B but
-    the reliability-weighted vote should say A.
+    The steady judge votes B once (row 1, where the noisy pair also votes B) so
+    it stays out of the one-sided guard and its small sigma is a genuine
+    reliability estimate. The noisy pair split across rows, earning large
+    sigmas. On rows where both noisy judges outvote a steady A under plurality,
+    the reliability-weighted vote should restore A.
     """
     rows = []
     for k in range(12):
-        noisy_1 = 'A' if k % 2 == 0 else 'B'
-        noisy_2 = 'A' if k % 3 == 0 else 'B'
-        rows.append(_comparison([_vote('steady', 'A'), _vote('noisy-1', noisy_1), _vote('noisy-2', noisy_2)]))
+        steady: _Vote = "B" if k == 1 else "A"
+        noisy_1: _Vote = "A" if k % 2 == 0 else "B"
+        noisy_2: _Vote = "A" if k % 3 == 0 else "B"
+        rows.append(_comparison([_vote("steady", steady), _vote("noisy-1", noisy_1), _vote("noisy-2", noisy_2)]))
     return rows
 
 
@@ -59,21 +65,24 @@ def test_bt_sigma_downweights_noisy_judges_and_flips_consensus() -> None:
     report = build_report(rows, aggregation='bt-sigma')
     block = report.bt_sigma
     assert block is not None
+    assert block.converged is True
     assert block.judge_sigmas['steady'] < block.judge_sigmas['noisy-1']
     assert block.judge_sigmas['steady'] < block.judge_sigmas['noisy-2']
-    # Rows where the two noisy judges outvote the steady one under plurality:
-    outvoted = [i for i, row in enumerate(rows) if row.winner == 'B']
-    assert outvoted, 'fixture must contain plurality-B rows'
+    # Rows where the two noisy judges outvote a steady A under plurality:
+    outvoted = [i for i, row in enumerate(rows) if row.winner == 'B' and row.votes[0].vote == 'A']
+    assert outvoted, 'fixture must contain plurality-B rows against a steady A'
     # The weighted vote restores A on those rows.
     assert all(block.winners[i] == 'A' for i in outvoted)
+    # Row 1 is unanimous B and must stay B under any weighting.
+    assert block.winners[1] == 'B'
     assert block.p_a_beats_b > 0.5
     assert block.skill_gap > 0.0
     # Weighted rollup beats the plurality rollup toward the steady signal.
     weighted_a = block.a_win_rate
     plurality_a = report.a_win_rate
-    assert weighted_a == 1.0
     assert weighted_a is not None
     assert plurality_a is not None
+    assert weighted_a == pytest.approx(11 / 12)
     assert weighted_a > plurality_a
 
 
@@ -121,6 +130,56 @@ def test_tie_between_weighted_sides_is_inconclusive() -> None:
     rows = [_comparison([_vote('a', 'A'), _vote('b', 'B')]) for _ in range(6)]
     block = bt_sigma_aggregation(rows)
     assert set(block.winners) == {'inconclusive'}
+
+
+def test_one_sided_judge_cannot_take_over_the_run() -> None:
+    # The production shape of a position- or verbosity-biased judge: it never
+    # picks B at all. In the two-item fit its sigma collapses toward zero
+    # (sigma is pinned by the judge's own one-sidedness), so 1/sigma weighting
+    # would let it outvote an agreeing two-judge majority on every row. The
+    # guard weights it neutrally instead and says so.
+    rows = []
+    for k in range(10):
+        majority: Literal["A", "B"] = "B" if k < 6 else "A"
+        rows.append(_comparison([_vote("always-a", "A"), _vote("y", majority), _vote("z", majority)]))
+    block = bt_sigma_aggregation(rows)
+    assert "always-a" not in block.judge_sigmas
+    assert any("always-a" in w and "one-sidedness" in w for w in block.fit_warnings)
+    # The agreeing majority keeps every row it won under plurality.
+    assert block.winners == [row.winner for row in rows]
+    assert block.b_win_rate is not None
+    assert block.b_win_rate == pytest.approx(6 / 10)
+
+
+def test_tie_votes_flow_through_the_aggregation() -> None:
+    # End-to-end 'tie' coverage: tie maps to p=0.5 in the fit, and a weighted
+    # tie leader stays 'tie' in the winners.
+    pattern: list[_Vote] = ["A", "A", "tie", "A", "B", "tie"]
+    rows = [_comparison([_vote("a", pattern[k]), _vote("b", pattern[k])]) for k in range(6)]
+    block = bt_sigma_aggregation(rows)
+    assert block.winners[2] == "tie"
+    assert block.winners[5] == "tie"
+    assert block.tie_rate == pytest.approx(2 / 6)
+    assert block.p_a_beats_b > 0.5
+
+
+def test_cap_hit_reports_unconverged(monkeypatch: pytest.MonkeyPatch) -> None:
+    import evaluatorq.ranking as ranking_mod
+
+    monkeypatch.setattr(ranking_mod, "_MAX_ITER", 3)
+    block = bt_sigma_aggregation(_heterogeneous_run())
+    assert block.converged is False
+    assert any("iteration cap" in w for w in block.fit_warnings)
+
+
+def test_low_vote_count_judges_are_flagged() -> None:
+    # Three decisive votes per judge, mixed so the one-sided guard stays out of
+    # the way: sigmas exist but are mostly prior, and fit_warnings says so.
+    pattern_a: list[_Vote] = ["A", "B", "A"]
+    pattern_b: list[_Vote] = ["B", "A", "A"]
+    rows = [_comparison([_vote("a", pattern_a[k]), _vote("b", pattern_b[k])]) for k in range(3)]
+    block = bt_sigma_aggregation(rows)
+    assert any("only 3 decisive vote" in w for w in block.fit_warnings)
 
 
 def test_run_rollup_and_save_thread_aggregation(tmp_path) -> None:
