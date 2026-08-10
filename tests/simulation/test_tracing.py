@@ -1233,7 +1233,7 @@ async def test_target_agent_usage_aggregated_into_run_result(
     assert target_attrs['gen_ai.usage.total_tokens'] == 20
     assert target_attrs['gen_ai.usage.calls'] == 1
     assert target_attrs['gen_ai.usage.cache_read.input_tokens'] == 2
-    assert target_attrs['gen_ai.usage.completion_tokens_details.reasoning_tokens'] == 3
+    assert target_attrs['gen_ai.usage.reasoning.output_tokens'] == 3
 
 
 @pytest.mark.asyncio

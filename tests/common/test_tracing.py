@@ -298,7 +298,7 @@ def test_record_llm_response_reasoning_tokens_attr() -> None:
     span = MagicMock()
     record_llm_response(span, _Resp())
     set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
-    assert set_attrs['gen_ai.usage.completion_tokens_details.reasoning_tokens'] == 42
+    assert set_attrs['gen_ai.usage.reasoning.output_tokens'] == 42
 
 
 def test_record_llm_response_does_not_introduce_calls_attr() -> None:

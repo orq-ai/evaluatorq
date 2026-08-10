@@ -65,7 +65,7 @@ def test_openresponses_trace_preserves_output_reasoning_tokens() -> None:
     record_llm_response(span, _Response())
     attrs = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
 
-    assert attrs['gen_ai.usage.completion_tokens_details.reasoning_tokens'] == 2
+    assert attrs['gen_ai.usage.reasoning.output_tokens'] == 2
 
 
 def test_token_usage_trace_accepts_canonical_detail_counts() -> None:
@@ -76,7 +76,7 @@ def test_token_usage_trace_accepts_canonical_detail_counts() -> None:
     attrs = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
 
     assert attrs['gen_ai.usage.cache_read.input_tokens'] == 3
-    assert attrs['gen_ai.usage.completion_tokens_details.reasoning_tokens'] == 2
+    assert attrs['gen_ai.usage.reasoning.output_tokens'] == 2
 
 
 def test_token_section_aggregates_canonical_and_optional_counts() -> None:

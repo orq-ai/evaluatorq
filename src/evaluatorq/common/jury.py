@@ -280,8 +280,8 @@ async def _judge_vote(
     """Run one judge (its repetitions) inside a per-judge span, then stamp the
     resolved ``JuryVote`` onto the span (RES-985). The span is a no-op when
     tracing is disabled; the vote/usages are unchanged either way."""
-    start = time.monotonic()
     async with with_span('orq.judge', parent_context=parent_context) as span:
+        start = time.monotonic()
         # Identity up front so a propagate_errors=True abort still leaves a span
         # that says which judge died.
         set_span_attrs(
@@ -526,9 +526,9 @@ def record_jury_span(
 
     Comparative mode computes its aggregates from reconciled pair votes rather
     than a ``JuryResult``, so it stamps its own set (see
-    ``pairwise._record_pairwise_span``) using the same ``jury.*`` vocabulary and
-    the same ``jury.*`` vocabulary. ``jury.verdict`` is stringified so bool /
-    float / str verdicts share one attribute type, matching ``judge.verdict_raw``.
+    ``pairwise._record_pairwise_span``) using the same ``jury.*`` vocabulary.
+    ``jury.verdict`` is stringified so bool / float / str verdicts share one
+    attribute type, matching ``judge.verdict_raw``.
 
     No token usage or cost here: those are recorded once, on the underlying
     ``chat`` spans, and rolled up by the consumer.

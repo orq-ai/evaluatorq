@@ -192,9 +192,30 @@ LLM spans (`chat ...`) carry standard GenAI attributes:
 | `gen_ai.usage.total_tokens` | Total token count |
 | `gen_ai.usage.calls` | Number of LLM calls rolled into this span (omitted when zero) |
 | `gen_ai.usage.cost` | Total cost in USD, only when the provider reported one (also emitted as `gen_ai.usage.total_cost`; `gen_ai.usage.input_cost` / `gen_ai.usage.output_cost` when the provider breaks it down) |
+| `gen_ai.usage.cache_read.input_tokens` | Cached prompt tokens, when the provider reports them |
+| `gen_ai.usage.cache_creation.input_tokens` | Cache-write prompt tokens, when the provider reports them |
+| `gen_ai.usage.reasoning.output_tokens` | Reasoning tokens, when the provider reports them |
 | `gen_ai.input.messages` | JSON serialised input messages (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
 | `gen_ai.output.messages` | JSON serialised output messages (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
 | `orq.llm.purpose` | Cross-domain purpose tag (e.g. `"adversarial"`, `"evaluation"`, `"target"`) |
+
+!!! note "Attribute aliases removed (August 2026, RES-985)"
+    Earlier releases emitted every token count under up to three names: the
+    canonical `gen_ai.usage.*` key above, a legacy alias
+    (`gen_ai.usage.prompt_tokens`, `gen_ai.usage.completion_tokens`,
+    `gen_ai.usage.prompt_tokens_details.cached_tokens`), and a bare
+    un-namespaced key (`prompt_tokens`, `completion_tokens`, `input_tokens`,
+    `output_tokens`, `total_tokens`, `calls`). The aliases and bare keys are no
+    longer emitted. This was verified against the Orq platform's OTel ingest
+    (`extractCommonUsage` in `orquesta-web` `apps/traces-api`): its attribute
+    pattern lists try the canonical `gen_ai.usage.*` spellings first, cache
+    counts are read from the `cache_read.input_tokens` /
+    `cache_creation.input_tokens` keys kept here, and the bare keys and `calls`
+    are read nowhere. Reasoning tokens moved from
+    `gen_ai.usage.completion_tokens_details.reasoning_tokens` (a spelling the
+    platform never read) to `gen_ai.usage.reasoning.output_tokens`, the one it
+    does. Third-party OTLP consumers that matched the removed aliases must
+    switch to the canonical keys.
 
 The root `Evaluatorq - Red Teaming` span additionally carries:
 

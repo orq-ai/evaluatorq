@@ -134,7 +134,7 @@ def test_record_llm_response_sets_canonical_token_attrs():
     mock_span.set_attribute.assert_any_call("gen_ai.usage.input_tokens", 100)
     mock_span.set_attribute.assert_any_call("gen_ai.usage.output_tokens", 50)
     mock_span.set_attribute.assert_any_call("gen_ai.usage.cache_read.input_tokens", 30)
-    mock_span.set_attribute.assert_any_call("gen_ai.usage.completion_tokens_details.reasoning_tokens", 10)
+    mock_span.set_attribute.assert_any_call("gen_ai.usage.reasoning.output_tokens", 10)
     mock_span.set_attribute.assert_any_call("gen_ai.response.id", "resp-123")
     mock_span.set_attribute.assert_any_call("gen_ai.response.model", "gpt-5-mini")
 

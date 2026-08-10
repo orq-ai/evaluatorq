@@ -305,7 +305,10 @@ def record_token_usage(
     if cache_read is not None:
         span.set_attribute('gen_ai.usage.cache_read.input_tokens', cache_read)
     if reasoning_tokens is not None:
-        span.set_attribute('gen_ai.usage.completion_tokens_details.reasoning_tokens', reasoning_tokens)
+        # This spelling (not the flat completion_tokens_details.* one) is what the
+        # platform's generic OTel adapter reads — see extractCommonUsage in
+        # orquesta-web apps/traces-api/.../utils/adapter-patterns.ts.
+        span.set_attribute('gen_ai.usage.reasoning.output_tokens', reasoning_tokens)
     if cache_creation_input_tokens is not None:
         span.set_attribute('gen_ai.usage.cache_creation.input_tokens', cache_creation_input_tokens)
     # Provider-reported cost breakdown (USD). Only set when reported — a $0
