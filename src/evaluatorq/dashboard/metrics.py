@@ -45,6 +45,12 @@ class RunRow:
     score: float | None  # 0..1; redteam resistance, sim mean scorer avg
     status: str  # 'passed' | 'warning' | 'failed'
     error: bool
+    evaluated: int = 0  # attacks that produced a verdict (red team only)
+    attacks: int = 0  # attacks attempted, verdict or not (red team only)
+    # The rate recorded in the report itself, set only when ``score`` was
+    # re-derived and lands somewhere else. Drives the "recalculated" marker: the
+    # dashboard shows its own number but never silently overwrites the record.
+    stored_score: float | None = None
 
 
 @dataclass(frozen=True)
@@ -170,13 +176,26 @@ def _redteam_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
     # zero_evaluated_attacks).
     if zero_evaluated_attacks(summary):
         resistance = None
+    stored_score: float | None = None
+    attacks = total
     if summary.get('evaluated_attacks') is None:
         # Legacy summary: its stored rate may have been computed over a
         # different denominator than the evaluated-only one the landing donut
         # derives. Use the same classifier, so the row and the donut above it
         # cannot show two different numbers for one run.
         counts = _redteam_counts(data)
-        resistance = (counts.evaluated - counts.vulnerable) / counts.evaluated if counts.evaluated else None
+        evaluated, attacks = counts.evaluated, counts.attacks
+        if counts.evaluated:
+            derived = (counts.evaluated - counts.vulnerable) / counts.evaluated
+            # Keep the recorded rate visible whenever the derivation moves it,
+            # so the row can be reconciled against the run's own exported
+            # report instead of quietly contradicting it.
+            if resistance is None or abs(derived - resistance) > 0.005:
+                stored_score = resistance
+            resistance = derived
+        # No derivable verdicts: keep whatever rate the report recorded rather
+        # than blanking a run that has one. Deriving nothing is not the same as
+        # measuring zero.
     return RunRow(
         id=card.id,
         surface='redteam',
@@ -188,6 +207,9 @@ def _redteam_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
             broken=bool(card.error), all_errored=(total > 0 and evaluated == 0 and errors >= total)
         ),
         error=bool(card.error),
+        evaluated=evaluated,
+        attacks=attacks,
+        stored_score=stored_score,
     )
 
 

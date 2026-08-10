@@ -206,6 +206,64 @@ class TestMetrics:
         assert data.vulnerable == 0
         assert data.resistance_rate is None
 
+    def test_legacy_row_keeps_its_recorded_rate_when_nothing_is_derivable(self, tmp_path: Path) -> None:
+        # Deriving nothing is not the same as measuring zero: a run with a
+        # recorded rate but no per-attack results to re-derive from must keep
+        # showing that rate rather than blanking its score.
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        (rt / 'legacy_20260101_000000.json').write_text(
+            json.dumps(_legacy_redteam_payload('Rate only', created='2026-01-01T00:00:00', resistance=0.5, results=[]))
+        )
+        row = metrics.run_rows([rt])[0]
+        assert row.score == pytest.approx(0.5)
+        assert row.stored_score is None  # not re-derived, so nothing to reconcile
+
+    def test_legacy_row_marks_a_rate_it_recalculated(self, tmp_path: Path) -> None:
+        # The recorded rate was computed over every attack (1/2); the dashboard
+        # counts evaluated-only (1/1). Both numbers stay visible.
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        (rt / 'legacy_20260101_000000.json').write_text(
+            json.dumps(
+                _legacy_redteam_payload(
+                    'Judge crashed',
+                    created='2026-01-01T00:00:00',
+                    resistance=0.5,
+                    results=[
+                        _legacy_result(evaluation={'passed': True}),
+                        _legacy_result(evaluation={'passed': None}),
+                    ],
+                )
+            )
+        )
+        row = metrics.run_rows([rt])[0]
+        assert row.score == pytest.approx(1.0)
+        assert row.stored_score == pytest.approx(0.5)
+        assert (row.evaluated, row.attacks) == (1, 2)
+
+    def test_legacy_row_is_unmarked_when_the_derivation_agrees(self, tmp_path: Path) -> None:
+        # An indicator on every legacy run would be noise. Only a rate that
+        # actually moved is worth flagging.
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        (rt / 'legacy_20260101_000000.json').write_text(
+            json.dumps(
+                _legacy_redteam_payload(
+                    'Agrees',
+                    created='2026-01-01T00:00:00',
+                    resistance=0.5,
+                    results=[
+                        _legacy_result(evaluation={'passed': True}),
+                        _legacy_result(evaluation={'passed': False}),
+                    ],
+                )
+            )
+        )
+        row = metrics.run_rows([rt])[0]
+        assert row.score == pytest.approx(0.5)
+        assert row.stored_score is None
+
     def test_landing_legacy_severity_and_tokens_are_derived(self, tmp_path: Path) -> None:
         # A legacy run must weigh in on the severity bars and the cost totals
         # too, not just the donut — otherwise it is counted as a run whose
@@ -719,3 +777,34 @@ class TestZeroAttackScore:
         assert len(rows) == 1
         # 0 attacks evaluated: 1.00 would read as a perfect score.
         assert rows[0].score is None
+
+
+class TestScoreTooltip:
+    """The Score cell must name what the rate was measured over (RES-1202)."""
+
+    def _row(self, **kw: object) -> metrics.RunRow:
+        base: dict = dict(
+            id='r', surface='redteam', name='n', when='2026-01-01 00:00', headline='100 attacks',
+            score=0.95, status='finished', error=False,
+        )
+        base.update(kw)
+        return metrics.RunRow(**base)
+
+    def test_tooltip_names_the_evaluated_denominator(self) -> None:
+        title = view._score_title(self._row(evaluated=60, attacks=100))
+        assert 'Resistance rate' in title
+        assert '60 of 100 attacks evaluated' in title
+
+    def test_tooltip_and_marker_surface_the_recorded_rate(self) -> None:
+        row = self._row(evaluated=60, attacks=100, stored_score=0.71)
+        assert '0.71' in view._score_title(row)
+        assert 'recalculated' in view._score_title(row)
+        assert view._score_marker(row) != ''
+
+    def test_unrecalculated_rows_carry_no_marker(self) -> None:
+        assert view._score_marker(self._row(evaluated=100, attacks=100)) == ''
+
+    def test_non_redteam_rows_get_no_denominator(self) -> None:
+        title = view._score_title(self._row(surface='sim', evaluated=0, attacks=0))
+        assert 'Mean scorer average' in title
+        assert 'evaluated' not in title
