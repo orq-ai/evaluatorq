@@ -27,6 +27,21 @@ if TYPE_CHECKING:
 VerdictValue = bool | float | str
 TieBreak = Callable[[list[VerdictValue]], VerdictValue | None]
 
+_UNSWAP = {'A': 'B', 'B': 'A'}
+
+
+def unswap(value: VerdictValue | None) -> VerdictValue | None:
+    """Map a verdict from the swapped ordering back to the canonical A/B frame.
+
+    Lives here rather than in ``pairwise`` because the judge span needs it too,
+    and ``pairwise`` already imports from this module. Pure and per-ordering:
+    only *flip detection* needs both orderings, un-swapping does not.
+    """
+    if value is None:
+        return None
+    return _UNSWAP.get(str(value), value)
+
+
 # A custom panel aggregator sees ALL per-judge votes — including abstained and
 # failed ones (filter on .success / .abstained yourself) — plus model and
 # replacement, so it can weight or quorum. It returns the consensus verdict, or
@@ -292,13 +307,6 @@ async def _judge_vote(
                 'judge.replacement': replacement,
                 # Only set in comparative mode, where the same judge votes twice.
                 'judge.label_swapped': label_swapped,
-                # Which frame judge.verdict_raw is expressed in. In comparative
-                # mode the labels mean *slot*, not response: a judge that names
-                # the same response in both orderings necessarily says 'A' once
-                # and 'B' once. Reconciliation into the canonical frame happens
-                # after both orderings finish, by which point this span is
-                # closed — see jury.flipped_judges on the parent.
-                'judge.verdict_frame': 'slot' if label_swapped is not None else 'canonical',
             },
         )
         vote, usages = await _compute_judge_vote(
@@ -312,24 +320,41 @@ async def _judge_vote(
             propagate_errors=propagate_errors,
             semaphore=semaphore,
         )
-        _record_judge_span(span, vote, latency_ms=(time.monotonic() - start) * 1000.0)
+        _record_judge_span(span, vote, latency_ms=(time.monotonic() - start) * 1000.0, label_swapped=label_swapped)
     return vote, usages
 
 
-def _record_judge_span(span: Span | None, vote: JuryVote, *, latency_ms: float) -> None:
+def _record_judge_span(
+    span: Span | None, vote: JuryVote, *, latency_ms: float, label_swapped: bool | None = None
+) -> None:
     """Set the outcome ``judge.*`` attributes on a judge span from its vote.
 
     Identity (``judge.name`` / ``judge.model`` / ``judge.replacement`` /
-    ``judge.label_swapped`` / ``judge.verdict_frame``) is already stamped by
-    :func:`_judge_vote` at span-open and cannot change here, so it is not
-    re-written. ``judge.verdict_raw``
-    is stringified so bool / float / str verdicts share one attribute type.
+    ``judge.label_swapped``) is already stamped by :func:`_judge_vote` at
+    span-open and cannot change here, so it is not re-written. Both verdicts are
+    stringified so bool / float / str verdicts share one attribute type.
+
+    Two verdict attributes, because in comparative mode the labels a judge
+    returns mean *slot*, not response — a judge naming the same response in both
+    orderings necessarily says 'A' once and 'B' once:
+
+    * ``judge.verdict`` — the canonical frame, so "how often did this judge pick
+      response A" is answerable from this attribute alone;
+    * ``judge.verdict_raw`` — what the judge actually returned, matching the
+      ``chat`` child span whose ``gen_ai.output.messages`` holds the text it came
+      from.
+
+    Un-swapping is per-ordering and pure; only *flip detection* needs both
+    orderings, and that lands on the parent as ``jury.flipped_judges``.
+
     Token usage and cost are not recorded here: they belong on the underlying
     ``chat`` spans, which the consumer rolls up.
     """
+    canonical = unswap(vote.value) if label_swapped else vote.value
     set_span_attrs(
         span,
         {
+            'judge.verdict': None if canonical is None else str(canonical),
             'judge.verdict_raw': None if vote.value is None else str(vote.value),
             'judge.success': vote.success,
             'judge.abstained': vote.abstained,

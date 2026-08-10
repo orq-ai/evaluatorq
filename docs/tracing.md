@@ -343,8 +343,8 @@ Span attributes on `orq.judge`:
 |---|---|
 | `judge.name` | Judge model ID |
 | `judge.model` | Judge model ID (same value as `judge.name`) |
-| `judge.verdict_raw` | Stringified verdict exactly as this judge gave it, before any reconciliation (bool / float / str all coerce to `str`); unset when the vote has no value |
-| `judge.verdict_frame` | What `judge.verdict_raw`'s labels mean: `canonical` (pointwise — the label *is* the answer) or `slot` (comparative — the label denotes a position, see below) |
+| `judge.verdict` | Stringified verdict in the canonical frame — the one to query (bool / float / str all coerce to `str`); unset when the vote has no value |
+| `judge.verdict_raw` | Stringified verdict exactly as this judge gave it (in comparative mode, in the *slot* frame — see below); unset when the vote has no value |
 | `judge.success` | Whether the judge produced a usable outcome (decisive or abstained) |
 | `judge.abstained` | Whether the judge explicitly abstained |
 | `judge.replacement` | Whether this judge stood in for a failed configured judge |
@@ -407,15 +407,20 @@ shape from the plain jury case:
 | `jury.flipped_judges` | Comma-separated model names of the flipped judges |
 | `jury.swap` | Whether the comparison ran both orderings (`swap=True`, the default) or only one |
 
-**Read `judge.verdict_raw` in comparative mode with care.** `judge.verdict_frame`
-is `slot` there, meaning `A` and `B` name a *position*, not a response. A judge
-that picks the same response both times therefore says `A` in one ordering and
-`B` in the other — the two spans look like a self-contradiction and are in fact
-the opposite, a perfectly consistent judge. A judge that really does just follow
-slot order produces the same raw pair. The distinction lives on the parent:
-`reconcile_pair` un-swaps the second ordering after both have finished, and by
-then the judge spans are closed, so the canonical-frame result is only ever on
-`orq.pairwise_jury` (`jury.flipped_judges` names the biased judges).
+**In comparative mode, query `judge.verdict`, not `judge.verdict_raw`.** The raw
+labels name a *position*, not a response: a judge that picks the same response
+both times says `A` in one ordering and `B` in the other, so the two spans look
+like a self-contradiction and are in fact the opposite, a perfectly consistent
+judge. `judge.verdict` un-swaps that (`label_swapped=True` spans are mapped back
+before the attribute is written), so "how often did this judge pick response A"
+is answerable from one attribute with no join against `judge.label_swapped`.
+
+`judge.verdict_raw` is kept because it matches the `chat` child span whose
+`gen_ai.output.messages` holds the text it was parsed from.
+
+Un-swapping is per-ordering and needs nothing but `label_swapped`. *Flip
+detection* is what needs both orderings, and it stays on the parent —
+`jury.flipped_judges` names the judges that really did follow slot order.
 
 `jury.flipped` counts judges that answered in both orderings but disagreed
 with themselves — that is position bias, not a failure, so a flipped judge is

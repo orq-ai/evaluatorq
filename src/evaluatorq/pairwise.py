@@ -23,6 +23,7 @@ from evaluatorq.common.jury import (
     _sum_usage,
     as_semaphore,
     resolve_panel,
+    unswap,
 )
 from evaluatorq.common.tracing import current_otel_context, set_span_attrs, with_span
 from evaluatorq.contracts import TokenUsage  # noqa: TC001  # runtime-needed: pydantic field type on PairwiseComparison
@@ -179,7 +180,6 @@ def build_report(comparisons: Sequence[PairwiseComparison]) -> PairwiseReport:
     )
 
 
-_UNSWAP = {'A': 'B', 'B': 'A'}
 _PAIRWISE_VALUES = frozenset({'A', 'B', 'tie'})
 
 
@@ -198,13 +198,6 @@ def _decisive_value(vote: JuryVote) -> VerdictValue | None:
     return vote.value
 
 
-def _unswap(value: VerdictValue | None) -> VerdictValue | None:
-    """Map a verdict from the swapped ordering back to the canonical A/B frame."""
-    if value is None:
-        return None
-    return _UNSWAP.get(str(value), value)
-
-
 def _reconciled_explanation(
     value: VerdictValue | None, first_vote: JuryVote | None, second_vote: JuryVote | None
 ) -> str:
@@ -213,7 +206,7 @@ def _reconciled_explanation(
         return ''
     if first_vote is not None and _decisive_value(first_vote) == value and first_vote.explanation:
         return first_vote.explanation
-    if second_vote is not None and _unswap(_decisive_value(second_vote)) == value and second_vote.explanation:
+    if second_vote is not None and unswap(_decisive_value(second_vote)) == value and second_vote.explanation:
         return second_vote.explanation
     return (first_vote.explanation if first_vote else '') or (second_vote.explanation if second_vote else '')
 
@@ -341,7 +334,7 @@ async def run_pairwise(
             second_vote = second_votes.get(model)
             first_value = _decisive_value(first_vote) if first_vote else None
             if swap:
-                second_value = _unswap(_decisive_value(second_vote)) if second_vote else None
+                second_value = unswap(_decisive_value(second_vote)) if second_vote else None
                 vote, flipped = reconcile_pair(first_value, second_value)
                 completed = first_value is not None and second_value is not None
             else:

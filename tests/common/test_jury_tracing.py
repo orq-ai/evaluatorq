@@ -116,17 +116,20 @@ async def test_judge_span_attributes(span_collector) -> None:
 
     decisive = by_model['gpt-a']
     assert decisive['judge.name'] == 'gpt-a'
+    assert decisive['judge.verdict'] == 'yes'
     assert decisive['judge.verdict_raw'] == 'yes'
     assert decisive['judge.success'] is True
     assert decisive['judge.abstained'] is False
     assert decisive['judge.replacement'] is False
     assert 'judge.latency_ms' in decisive
-    assert decisive['judge.verdict_frame'] == 'canonical'  # pointwise: no slot ambiguity
+    # Pointwise: no slot ambiguity, so raw and canonical agree (asserted above).
 
     abstained = by_model['gpt-b']
     assert abstained['judge.success'] is True
     assert abstained['judge.abstained'] is True
-    assert 'judge.verdict_raw' not in abstained  # None value is not stamped
+    # A None value is not stamped, under either name.
+    assert 'judge.verdict' not in abstained
+    assert 'judge.verdict_raw' not in abstained
 
 
 @pytest.mark.asyncio
@@ -304,7 +307,10 @@ async def test_pairwise_emits_one_jury_span_for_both_orderings(span_collector) -
     per_ordering = {_attrs(s)['judge.label_swapped']: _attrs(s) for s in judge_spans}
     assert per_ordering[False]['judge.verdict_raw'] == 'A'
     assert per_ordering[True]['judge.verdict_raw'] == 'B'
-    assert all(_attrs(s)['judge.verdict_frame'] == 'slot' for s in judge_spans)
+    # Same response, both orderings: the raw labels differ because they name a
+    # slot, but the canonical verdict is the same 'A' on both spans.
+    assert per_ordering[False]['judge.verdict'] == 'A'
+    assert per_ordering[True]['judge.verdict'] == 'A'
 
     jury = _attrs(_by_name(exporter, 'orq.pairwise_jury')[0])
     assert jury['jury.verdict'] == 'A'
