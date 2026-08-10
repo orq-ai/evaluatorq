@@ -224,6 +224,9 @@ uv run eq redteam run --help   # all options
 `uv tool install` here: it builds an isolated environment that exposes the CLI
 but leaves `evaluatorq` unimportable from your own scripts.
 
+Prefer pip? `python -m pip install "evaluatorq[redteam]"` installs into the
+interpreter you just named, and `eq` lands on that environment's `PATH`.
+
 For the full flag reference (multi-target, report export, `eq redteam runs`, etc.), see [`examples/redteam/README.md`](../../../examples/redteam/README.md#cli-reference).
 
 ## Tracing & PII

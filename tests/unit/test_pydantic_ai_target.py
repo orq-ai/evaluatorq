@@ -66,6 +66,18 @@ class TestPydanticAIRespond:
         assert tools[0].result == 'the answer'
 
     @pytest.mark.asyncio
+    async def test_structured_tool_return_is_json_not_repr(self) -> None:
+        # Tools routinely return a dict. str() gave "{'temp': 12, 'ok': True}" —
+        # data preserved on screen but unparseable by anything downstream.
+        parts = [
+            ToolCallPart(tool_name='weather', args={}, tool_call_id='c1'),
+            ToolReturnPart(tool_name='weather', content={'temp': 12, 'ok': True}, tool_call_id='c1'),
+        ]
+        res = await PydanticAITarget(_agent(_result([parts]))).respond(_user())
+        tools = [o for o in res.output if isinstance(o, ToolCallOutputItem)]
+        assert tools[0].result == '{"temp": 12, "ok": true}'
+
+    @pytest.mark.asyncio
     async def test_empty_text_part_skipped_then_falls_back_to_output(self) -> None:
         res = await PydanticAITarget(_agent(_result([[TextPart(content='')]], output='fallback'))).respond(_user())
         assert res.text == 'fallback'

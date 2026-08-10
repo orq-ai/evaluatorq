@@ -1,0 +1,3 @@
+# Review is requested from these three on every PR, automatically. GitHub skips
+# whoever opened it, so an author never blocks on their own review.
+* @Baukebrenninkmeijer @arianpasquali @currentlycodinng

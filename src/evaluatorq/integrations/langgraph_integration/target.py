@@ -32,6 +32,37 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Carried by other channels, so skipping them loses nothing: tool_use blocks are
+# read from ``msg.tool_calls``, and reasoning is dropped from ``output`` anyway.
+_NON_TEXT_BLOCKS_HANDLED_ELSEWHERE = frozenset({'tool_use', 'thinking', 'redacted_thinking'})
+
+
+def _lc_content_to_text(content: Any) -> str:
+    """Extract the text of a LangChain message's ``content``.
+
+    ``content`` is a plain string on OpenAI-backed models but a list of typed
+    blocks on Anthropic-backed ones — even for a turn that is purely text.
+    ``str()`` on that list yields its Python repr (``"[{'type': 'text', ...}]"``),
+    which then flows into transcripts, judges and reports looking like the
+    model's answer. Corrupted text is worse than missing text: a judge scores it
+    and nothing appears broken.
+    """
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return str(content)
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, str):
+            parts.append(block)
+        elif isinstance(block, dict):
+            kind = block.get('type')
+            if kind == 'text':
+                parts.append(str(block.get('text') or ''))
+            elif kind not in _NON_TEXT_BLOCKS_HANDLED_ELSEWHERE:
+                logger.warning('LangGraphTarget: dropping unrenderable content block type=%r', kind)
+    return ''.join(parts)
+
 
 class _TokenUsageCollector(BaseCallbackHandler):
     """Sync LangChain callback handler that accumulates token usage across LLM calls.
@@ -253,8 +284,7 @@ class LangGraphTarget(AgentTarget):
                 msg_content = getattr(msg, 'content', '')
                 tool_calls_iter = getattr(msg, 'tool_calls', None) or []
 
-            if not isinstance(msg_content, str):
-                msg_content = str(msg_content)
+            msg_content = _lc_content_to_text(msg_content)
             if msg_content:
                 output_items.append(TextOutputItem(text=msg_content, annotations=[]))
 
@@ -281,9 +311,7 @@ class LangGraphTarget(AgentTarget):
                 type(last).__name__,
             )
             last_content = last.get('content', '') if isinstance(last, dict) else getattr(last, 'content', '')
-            if not isinstance(last_content, str):
-                last_content = str(last_content)
-            output_items.append(TextOutputItem(text=last_content, annotations=[]))
+            output_items.append(TextOutputItem(text=_lc_content_to_text(last_content), annotations=[]))
         return AgentResponse(output=output_items, usage=usage)
 
     def reset_conversation(self) -> None:

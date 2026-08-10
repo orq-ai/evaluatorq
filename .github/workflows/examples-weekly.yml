@@ -1,0 +1,94 @@
+name: Real-API checks (weekly)
+
+# Actually runs a curated subset of examples, plus the integration test suite,
+# against real APIs — to catch the breakage a static import check and mocked
+# unit tests cannot see. Weekly rather than per-PR: these cost money, need
+# secrets (which forked PRs never get), and fail for reasons unrelated to any
+# given diff. A check people learn to ignore is worse than none,
+# so this never blocks a PR — it opens an issue instead.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  run-examples:
+    name: Run curated examples
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep this list short and cheap. Each entry should exercise a distinct
+        # usage path, not a distinct flag.
+        example:
+          - examples/redteam/01_basic_dynamic.py
+          - examples/redteam/02_static_dataset.py
+          - examples/agent_simulation/01_basic_simulation.py
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-extras --all-groups
+
+      - name: Run ${{ matrix.example }}
+        env:
+          ORQ_API_KEY: ${{ secrets.ORQ_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: uv run python ${{ matrix.example }}
+
+  integration-tests:
+    name: Integration tests (real API)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-extras --all-groups
+
+      # Unit tests mock the client, so they assert the shape we *believe* the
+      # API wants. Only a real call proves it accepts that shape — RES-1231 was
+      # exactly a case where the mocked shape was confidently wrong.
+      - name: Run integration tests
+        env:
+          ORQ_API_KEY: ${{ secrets.ORQ_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: uv run pytest -m integration
+
+  report:
+    name: Report failures
+    needs: [run-examples, integration-tests]
+    if: failure()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Open an issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Weekly example run failed (${new Date().toISOString().slice(0, 10)})`,
+              body: `One or more curated examples failed to run.\n\nRun: ${url}\n\nLikely either genuine drift in the examples or a flaky upstream API — check which before editing anything.`,
+              labels: ['examples', 'ci'],
+            })

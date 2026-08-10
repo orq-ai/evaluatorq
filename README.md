@@ -3,6 +3,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/evaluatorq.svg)](https://pypi.org/project/evaluatorq/)
 [![Python versions](https://img.shields.io/pypi/pyversions/evaluatorq.svg)](https://pypi.org/project/evaluatorq/)
 [![CI](https://github.com/orq-ai/evaluatorq/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/orq-ai/evaluatorq/actions/workflows/ci.yml)
+[![Coverage](https://raw.githubusercontent.com/orq-ai/evaluatorq/python-coverage-comment-action-data/badge.svg)](https://htmlpreview.github.io/?https://github.com/orq-ai/evaluatorq/blob/python-coverage-comment-action-data/htmlcov/index.html)
 [![Docs CI](https://img.shields.io/github/actions/workflow/status/orq-ai/evaluatorq/docs.yml?branch=main&label=Docs%20CI)](https://github.com/orq-ai/evaluatorq/actions/workflows/docs.yml)
 [![Docs Site](https://img.shields.io/badge/Docs-Live%20Site-0A7B83)](https://orq-ai.github.io/evaluatorq/)
 [![Release](https://github.com/orq-ai/evaluatorq/actions/workflows/release.yml/badge.svg)](https://github.com/orq-ai/evaluatorq/actions/workflows/release.yml)
@@ -60,6 +61,9 @@ The library is deliberately lightweight: async-first, typed end-to-end, and usab
 uv add evaluatorq
 ```
 
+`uv add` installs into the current project. If you don't have a project, use
+`uv pip install evaluatorq` in an existing virtual environment instead.
+
 Then run your evaluation and the CLI through the same project environment:
 
 ```bash
@@ -83,7 +87,7 @@ Poetry (`poetry add evaluatorq`, `poetry run python my_eval.py`) works the same 
 If you want to use the Orq platform integration:
 
 ```bash
-uv add "evaluatorq[orq]"
+uv add "evaluatorq[orq]"          # or the SDK on its own: uv add orq-ai-sdk
 ```
 
 For OpenTelemetry tracing (optional):
@@ -95,8 +99,10 @@ uv add "evaluatorq[otel]"
 For LangChain/LangGraph integration:
 
 ```bash
-uv add "evaluatorq[langchain]"
+uv add "evaluatorq[langchain]"    # or bring your own: uv add langchain langgraph
 ```
+
+Each extra works with pip too — `python -m pip install "evaluatorq[orq]"`.
 
 ## 🏁 Getting Started
 
@@ -856,7 +862,7 @@ No personas yet? `generate_and_simulate(agent_description=...)` invents personas
 
 ## 📚 API Reference
 
-### `evaluatorq(name, params?, *, data?, jobs?, evaluators?, parallelism?, print_results?, description?) -> EvaluatorqResult`
+### `evaluatorq(name, params?, *, data?, jobs?, evaluators?, parallelism?, print_results?, description?, path?) -> EvaluatorqResult`
 
 Main async function to run evaluations.
 
@@ -873,6 +879,7 @@ async def evaluatorq(
     parallelism: int = 1,
     print_results: bool = True,
     description: str | None = None,
+    path: str | None = None,
 ) -> EvaluatorqResult
 ```
 
@@ -908,7 +915,7 @@ class DataPoint(BaseModel):
     inputs: dict[str, Any]
     expected_output: Output | None = None
 
-EvaluationResultCellValue = str | float | dict[str, "str | float | dict[str, str | float]"]
+EvaluationResultCellValue = str | int | float | dict[str, "str | float | dict[str, str | float]"]
 
 class EvaluationResultCell(BaseModel):
     """Structured evaluation result with multi-dimensional metrics."""
@@ -917,7 +924,7 @@ class EvaluationResultCell(BaseModel):
 
 class EvaluationResult(BaseModel):
     """Result from an evaluator."""
-    value: str | float | bool | EvaluationResultCell
+    value: str | int | float | bool | EvaluationResultCell | dict[str, Any]
     explanation: str | None = None
     pass_: bool | None = None  # Optional pass/fail indicator for CI/CD integration
 

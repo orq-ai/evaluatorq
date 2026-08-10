@@ -586,7 +586,8 @@ class ORQBackend(Backend):
         else:
             if _orq_cls is None:
                 raise ImportError(
-                    'ORQ backend requires the orq-ai-sdk package. Install with: pip install evaluatorq[orq]'
+                    'ORQ backend requires the orq-ai-sdk package. '
+                    'Install with: uv add "evaluatorq[orq]" (or: python -m pip install "evaluatorq[orq]")'
                 )
             self._orq_client = _orq_cls(
                 api_key=_get_orq_api_key(),

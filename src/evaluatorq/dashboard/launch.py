@@ -24,7 +24,8 @@ def ensure_fasthtml() -> None:
         import typer
 
         typer.echo(
-            'The dashboard requires "dashboard" extra:\n  pip install "evaluatorq[dashboard]"',
+            'The dashboard requires "dashboard" extra. Install with: uv add "evaluatorq[dashboard]" '
+            '(or: python -m pip install "evaluatorq[dashboard]")',
             err=True,
         )
         raise typer.Exit(code=1)

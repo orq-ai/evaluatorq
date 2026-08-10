@@ -5,8 +5,8 @@ This guide explains how to add custom evaluators, vulnerabilities, attack strate
 !!! note "Requires editing the package source"
     The extension points below modify evaluatorq's internal registries directly —
     they are not a stable runtime API. Clone the repo and sync the dev
-    environment (`uv sync --all-extras --all-groups`), then make your changes there. A runtime
-    registration API is planned; see the [Roadmap](roadmap.md).
+    environment (`uv sync --all-extras --all-groups`), then make your changes
+    there. A runtime registration API is planned; see the [Roadmap](roadmap.md).
 
 ## Architecture overview
 

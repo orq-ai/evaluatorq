@@ -294,7 +294,8 @@ def __getattr__(name: str) -> Any:
         extra = _OPTIONAL_TARGET_EXTRAS.get(name)
         if extra is not None:
             raise ImportError(
-                f"{name} requires the optional '{extra}' dependency. Install it with: pip install 'evaluatorq[{extra}]'"
+                f"{name} requires the optional '{extra}' dependency. "
+                f"Install it with: uv add 'evaluatorq[{extra}]' (or: python -m pip install 'evaluatorq[{extra}]')"
             ) from exc
         raise
     globals()[name] = value

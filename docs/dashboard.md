@@ -27,6 +27,10 @@ uv add "evaluatorq[dashboard]"
 uv add "evaluatorq[redteam,dashboard]"
 ```
 
+Prefer pip? Use `python -m pip install "evaluatorq[dashboard]"`, which installs
+into the interpreter you just named rather than whichever `pip` happens to be
+first on your `PATH`.
+
 ## Launch
 
 Launch it with `eq dashboard` (the `evaluatorq` and `eq` entry points are
@@ -126,6 +130,33 @@ first).  Each run row drills into its report view; reports whose JSON is only
 partially valid surface an error badge instead of a traceback.  The **export**
 action on a report downloads the standalone self-contained HTML for offline
 sharing.
+
+### How attack resistance is counted
+
+Resistance is **attack-weighted**: the rate is resisted attacks over *evaluated*
+attacks, not over every attack attempted.  An attack only counts as evaluated
+once a judge returned a verdict — an attack whose target call failed, or whose
+judge crashed, timed out or was skipped, is excluded from both sides of the
+ratio rather than counted as resisted.  So a run headlined `100 attacks` can
+show a rate measured over 60; the Score tooltip names both numbers.
+
+Older reports predate the summary fields this rolls up (`evaluated_attacks`,
+`by_severity`, `token_usage_total`), so the dashboard derives their counts,
+severities and token usage from the stored per-attack results instead of
+dropping them from the totals.  Where that derivation lands on a different rate
+than the one recorded in the report itself — usually because the recorded rate
+was computed over a wider denominator — the Score cell is marked with `*` and
+the tooltip gives the recorded value, so a row can always be reconciled against
+that run's own exported report.
+
+!!! note "Rates may shift for existing runs"
+
+    Attacks with no judge verdict were previously counted as resisted.  They are
+    now excluded, so red-team runs recorded before this change can read lower on
+    the dashboard than they did before, and lower than their own exported HTML
+    report.  Nothing about the runs changed — only what the dashboard counts as
+    a measured attack.  Re-exporting a report regenerates it under the current
+    rule.
 
 ---
 

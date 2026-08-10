@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+from typing import Literal
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 
-from evaluatorq.contracts import FunctionCall, Message, StrategyToolCall
+from evaluatorq.contracts import (
+    FunctionCall,
+    InputImageContent,
+    InputTextContent,
+    Message,
+    StrategyToolCall,
+)
 from evaluatorq.integrations.vercel_ai_sdk_integration import VercelAISdkTarget
 from evaluatorq.integrations.vercel_ai_sdk_integration.target import (
+    _message_to_ai_sdk_message,
     _parse_data_stream,
     _parse_json_response,
 )
@@ -497,3 +505,38 @@ class TestVercelAISdkTargetAgentContext:
         target = VercelAISdkTarget("http://test/api/chat", agent_context=override)
         cloned = target.new()
         assert cloned._agent_context is override
+
+
+class TestToolResultContentParts:
+    """The tool branch used to assign `m.content` raw into the request body.
+
+    Every other branch of the converter goes through `content_to_text`; this one
+    skipped it, so a parts list reached httpx as Pydantic models and died in
+    json.dumps — every turn after a tool returned an image.
+    """
+
+    @pytest.mark.parametrize("version", ["v4", "v5"])
+    def test_text_parts_are_flattened(self, version: Literal["v4", "v5"]) -> None:
+        m = Message(
+            role="tool",
+            tool_call_id="c1",
+            name="lookup",
+            content=[InputTextContent(type="input_text", text="42")],
+        )
+        rendered = _message_to_ai_sdk_message(m, version=version)
+        part = rendered["content"][0]
+        assert (part["result"] if version == "v4" else part["output"]["value"]) == "42"
+
+    @pytest.mark.parametrize("version", ["v4", "v5"])
+    def test_image_part_raises_naming_the_part(self, version: Literal["v4", "v5"]) -> None:
+        # The AI SDK tool-result shape is typed `{type: 'text'}`, so an image
+        # cannot be carried. Failing here names the part; failing in the JSON
+        # encoder does not.
+        m = Message(
+            role="tool",
+            tool_call_id="c1",
+            name="screenshot",
+            content=[InputImageContent(type="input_image", image_url="https://x/y.png")],
+        )
+        with pytest.raises(NotImplementedError, match="input_image"):
+            _message_to_ai_sdk_message(m, version=version)

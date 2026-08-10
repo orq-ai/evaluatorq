@@ -33,6 +33,10 @@ jobs:
     name: Typecheck + test
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Only the 3.13 leg publishes coverage (see the two conditional steps below).
+    permissions:
+      contents: write
+      pull-requests: write
     strategy:
       fail-fast: false
       matrix:
@@ -55,7 +59,48 @@ jobs:
         run: uv run basedpyright
 
       - name: Test (unit only)
+        if: matrix.python-version != '3.13'
         run: uv run pytest -m 'not integration'
+
+      # Coverage instrumentation costs wall-clock, so only the canonical leg pays
+      # for it. The other legs run the same suite bare, above.
+      - name: Test (unit only, with coverage)
+        if: matrix.python-version == '3.13'
+        run: uv run pytest -m 'not integration' --cov --cov-report=term
+
+      # Posts a coverage comment on PRs and, on push to main, writes badge +
+      # report data to the `python-coverage-comment-action-data` branch. Uses the
+      # built-in GITHUB_TOKEN — no secret to configure. Fork PRs get a read-only
+      # token, so the comment is skipped there; the badge still updates on main.
+      - name: Coverage badge + PR comment
+        if: matrix.python-version == '3.13'
+        uses: py-cov-action/python-coverage-comment-action@v3
+        continue-on-error: true
+        with:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  examples:
+    name: Examples (static)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-extras --all-groups
+
+      # Parses examples and notebooks, resolves every evaluatorq import against
+      # the installed package. No execution, no credentials, no API spend —
+      # several examples call an LLM at module level, so importing them is not
+      # free. Runtime breakage is covered by examples-weekly.yml.
+      - name: Check example imports
+        run: uv run python scripts/check_examples.py
 
   resolve-sdk-matrix:
     name: Resolve SDK matrix

@@ -9,7 +9,7 @@ The agent's model is pointed at the Orq router with ``ORQ_API_KEY`` — no OpenA
 key needed. The red-team attacker + judge auto-route the same way.
 
 Prerequisites:
-    - pip install "evaluatorq[redteam,langgraph]" langchain-openai
+    - uv add "evaluatorq[redteam,langgraph]" langchain-openai
     - ORQ_API_KEY set (drives the agent's model, the attacker LLM, and the judge)
 
 Usage:

@@ -9,6 +9,8 @@ import pytest
 
 pytest.importorskip('langgraph')
 
+from langchain_core.messages import AIMessage  # noqa: E402
+
 from evaluatorq.contracts import Message  # noqa: E402
 from evaluatorq.integrations.langgraph_integration import LangGraphTarget  # noqa: E402
 from evaluatorq.redteam.contracts import AgentResponse  # noqa: E402
@@ -584,3 +586,51 @@ class TestLangGraphTargetTokenUsage:
         result = await target.respond([Message(role='user', content='hi')])
         # ainvoke mock doesn't fire callbacks, so collector gets no calls
         assert result.usage is None
+
+
+class TestAnthropicBlockContent:
+    """Claude-backed graphs return list-of-block content even for plain text.
+
+    ``str()`` on that list yields its Python repr, which used to land in
+    ``AgentResponse.text`` and flow on into transcripts and judges as if it were
+    the model's answer.
+    """
+
+    @pytest.mark.asyncio
+    async def test_text_blocks_are_extracted_not_repr(self) -> None:
+        graph = MagicMock()
+        graph.name = 'test_graph'
+        msg = AIMessage(content=[{'type': 'text', 'text': 'Hello'}])
+        graph.ainvoke = AsyncMock(return_value={'messages': [msg]})
+
+        result = await LangGraphTarget(graph).respond([Message(role='user', content='hi')])
+        assert result.text == 'Hello'
+
+    @pytest.mark.asyncio
+    async def test_interleaved_text_blocks_are_joined(self) -> None:
+        graph = MagicMock()
+        graph.name = 'test_graph'
+        msg = AIMessage(
+            content=[
+                {'type': 'text', 'text': 'Let me check. '},
+                {'type': 'tool_use', 'id': 't1', 'name': 'search', 'input': {}},
+                {'type': 'text', 'text': 'Found it.'},
+            ]
+        )
+        graph.ainvoke = AsyncMock(return_value={'messages': [msg]})
+
+        result = await LangGraphTarget(graph).respond([Message(role='user', content='hi')])
+        # tool_use is read separately from .tool_calls, so it contributes no text.
+        assert result.text == 'Let me check. Found it.'
+
+    @pytest.mark.asyncio
+    async def test_unrenderable_block_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        graph = MagicMock()
+        graph.name = 'test_graph'
+        msg = AIMessage(content=[{'type': 'image', 'source': {}}, {'type': 'text', 'text': 'see above'}])
+        graph.ainvoke = AsyncMock(return_value={'messages': [msg]})
+
+        with caplog.at_level('WARNING'):
+            result = await LangGraphTarget(graph).respond([Message(role='user', content='hi')])
+        assert result.text == 'see above'
+        assert 'image' in caplog.text
