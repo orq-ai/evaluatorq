@@ -79,6 +79,9 @@ class Landing:
     cost_by_kind: list[tuple[str, float]] = field(default_factory=list)  # non-zero only
     total_input_cost: float | None = None  # summed input_cost across all stores; None when unrecorded
     total_output_cost: float | None = None  # summed output_cost across all stores; None when unrecorded
+    priced_calls: int = 0  # LLM calls that reported a cost, across all stores
+    cost_calls: int = 0  # calls seen alongside those, for the "N of M calls" coverage label
+    unknown_calls: int = 0  # costed calls from reports predating priced_calls — coverage unknown
     recent: list[RunRow] = field(default_factory=list)
 
 
@@ -145,6 +148,33 @@ def _input_cost(usage: object) -> float | None:
     if not isinstance(usage, dict):
         return None
     return _as_float_or_none(usage.get('input_cost'))
+
+
+def _cost_calls(usage: object) -> tuple[int, int, int]:
+    """``(priced_calls, calls, unknown_calls)`` from a Usage-shaped dict.
+
+    A cost summed over calls where only some reported one is a *lower bound*,
+    not a total. Reports render "(N of M calls)" next to such a figure via
+    ``cost_coverage``; the dashboard reads the same two fields so both surfaces
+    agree.
+
+    Reports written before ``priced_calls`` existed count into the third slot
+    instead. Their coverage is *unknown*, not "nothing was priced", so folding
+    them into the denominator would report "1 of 11 calls" for one new call
+    beside ten legacy ones whose prices may all have been known. Dropping them
+    silently is the opposite lie: the dashboard sums across reports, so an empty
+    label would then mean both "everything was priced" and "we have no idea".
+    Counting them separately lets the renderer say which.
+    """
+    if not isinstance(usage, dict):
+        return (0, 0, 0)
+    if usage.get('priced_calls') is None:
+        # A legacy report with no cost at all contributes nothing to the total,
+        # so it has no coverage to be unknown about.
+        if _cost_usd(usage) is None:
+            return (0, 0, 0)
+        return (0, 0, _as_int(usage.get('calls')) or 1)
+    return (_as_int(usage.get('priced_calls')), _as_int(usage.get('calls')), 0)
 
 
 def _output_cost(usage: object) -> float | None:
@@ -353,6 +383,9 @@ def landing(roots: list[Path] | None = None) -> Landing:
     pw_cost = 0.0
     input_cost_total = 0.0
     output_cost_total = 0.0
+    priced_calls_total = 0
+    cost_calls_total = 0
+    unknown_calls_total = 0
     has_input_cost = False
     has_output_cost = False
     resistant = 0
@@ -413,6 +446,10 @@ def landing(roots: list[Path] | None = None) -> Landing:
                 if run_output is not None:
                     output_cost_total += run_output
                     has_output_cost = True
+                run_priced, run_calls, run_unknown = _cost_calls(usage)
+                priced_calls_total += run_priced
+                cost_calls_total += run_calls
+                unknown_calls_total += run_unknown
                 by_sev = _summary_severity(summary)
             for sev, n in by_sev.items():
                 severity_counts[sev] = severity_counts.get(sev, 0) + n
@@ -434,6 +471,11 @@ def landing(roots: list[Path] | None = None) -> Landing:
             if outputs:
                 output_cost_total += sum(outputs)
                 has_output_cost = True
+            for u in usages:
+                res_priced, res_calls, res_unknown = _cost_calls(u)
+                priced_calls_total += res_priced
+                cost_calls_total += res_calls
+                unknown_calls_total += res_unknown
         elif card.surface == 'pairwise':
             usages = [_comparison_usage(entry) for entry in _entries(data)]
             tok = sum(_tokens_total(u) for u in usages)
@@ -451,6 +493,11 @@ def landing(roots: list[Path] | None = None) -> Landing:
             if outputs:
                 output_cost_total += sum(outputs)
                 has_output_cost = True
+            for u in usages:
+                res_priced, res_calls, res_unknown = _cost_calls(u)
+                priced_calls_total += res_priced
+                cost_calls_total += res_calls
+                unknown_calls_total += res_unknown
 
     # Unknown sorts last, after the real scale, and only appears when non-zero.
     severity = [(sev, severity_counts[sev]) for sev in (*SEVERITY_ORDER, UNKNOWN_SEVERITY) if severity_counts.get(sev)]
@@ -486,6 +533,9 @@ def landing(roots: list[Path] | None = None) -> Landing:
         cost_by_kind=cost_by_kind,
         total_input_cost=input_cost_total if has_input_cost else None,
         total_output_cost=output_cost_total if has_output_cost else None,
+        priced_calls=priced_calls_total,
+        cost_calls=cost_calls_total,
+        unknown_calls=unknown_calls_total,
         recent=rows[:5],
     )
 
@@ -737,6 +787,9 @@ class SimOverview:
     avg_cost: float | None  # mean cost_usd per sim
     avg_input_cost: float | None  # mean input_cost per sim, averaged over costed sims only
     avg_output_cost: float | None  # mean output_cost per sim, averaged over costed sims only
+    priced_calls: int  # LLM calls that reported a cost
+    cost_calls: int  # LLM calls seen alongside those, for the coverage label
+    unknown_calls: int  # costed calls whose coverage predates priced_calls
     achieved: int  # outcomes donut segments
     not_achieved: int
     errors: int
@@ -768,6 +821,9 @@ def sim_overview(roots: list[Path] | None = None, *, page: int = 1, per_page: in
     input_costed = 0
     output_cost_total = 0.0
     output_costed = 0
+    priced_calls_total = 0
+    cost_calls_total = 0
+    unknown_calls_total = 0
     achieved = not_achieved = errors = 0
     total = 0
 
@@ -802,6 +858,10 @@ def sim_overview(roots: list[Path] | None = None, *, page: int = 1, per_page: in
             if output_cost is not None:
                 output_cost_total += output_cost
                 output_costed += 1
+            res_priced, res_calls, res_unknown = _cost_calls(usage)
+            priced_calls_total += res_priced
+            cost_calls_total += res_calls
+            unknown_calls_total += res_unknown
             # Mirror the donut segments (goal_achieved / error) exactly.
             if is_error:
                 errors += 1
@@ -840,6 +900,9 @@ def sim_overview(roots: list[Path] | None = None, *, page: int = 1, per_page: in
         avg_cost=(cost_total / costed) if costed else None,
         avg_input_cost=(input_cost_total / input_costed) if input_costed else None,
         avg_output_cost=(output_cost_total / output_costed) if output_costed else None,
+        priced_calls=priced_calls_total,
+        cost_calls=cost_calls_total,
+        unknown_calls=unknown_calls_total,
         achieved=achieved,
         not_achieved=not_achieved,
         errors=errors,
@@ -881,6 +944,9 @@ class RedTeamOverview:
     total_cost: float | None  # summed cost_usd across red team runs
     total_input_cost: float | None = None  # summed input_cost across red team runs
     total_output_cost: float | None = None  # summed output_cost across red team runs
+    priced_calls: int = 0  # LLM calls that reported a cost
+    cost_calls: int = 0  # LLM calls seen alongside those, for the coverage label
+    unknown_calls: int = 0  # costed calls whose coverage predates priced_calls
     recent: list[RedTeamRunRow] = field(default_factory=list)  # newest run first, current page
     total_runs: int = 0  # total runs before paging (for the pager)
     page: int = 1
@@ -940,6 +1006,9 @@ def redteam_overview(roots: list[Path] | None = None, *, page: int = 1, per_page
     has_input_cost = False
     output_cost_total = 0.0
     has_output_cost = False
+    priced_calls_total = 0
+    cost_calls_total = 0
+    unknown_calls_total = 0
     total_attacks = 0
 
     for card in library.scan(roots):
@@ -965,6 +1034,10 @@ def redteam_overview(roots: list[Path] | None = None, *, page: int = 1, per_page
         if run_output is not None:
             output_cost_total += run_output
             has_output_cost = True
+        run_priced, run_calls, run_unknown = _cost_calls(usage)
+        priced_calls_total += run_priced
+        cost_calls_total += run_calls
+        unknown_calls_total += run_unknown
 
         counts = _redteam_counts(data)
         total_attacks += counts.attacks
@@ -1004,6 +1077,9 @@ def redteam_overview(roots: list[Path] | None = None, *, page: int = 1, per_page
         total_cost=cost_total if has_cost else None,
         total_input_cost=input_cost_total if has_input_cost else None,
         total_output_cost=output_cost_total if has_output_cost else None,
+        priced_calls=priced_calls_total,
+        cost_calls=cost_calls_total,
+        unknown_calls=unknown_calls_total,
         recent=runs[(page - 1) * per_page : page * per_page],
         total_runs=len(runs),
         page=page,

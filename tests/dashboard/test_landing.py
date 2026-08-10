@@ -805,6 +805,178 @@ class TestZeroAttackScore:
         assert rows[0].score is None
 
 
+class TestDashboardCostCoverage:
+    """Spend figures the dashboard shows must carry the same lower-bound label
+    the markdown/HTML reports render. A total summed over calls where only some
+    reported a cost is a lower bound; showing it bare reads as authoritative."""
+
+    def _redteam_payload(self, name: str, *, created: str, priced: int, calls: int) -> dict:
+        return {
+            'pipeline': {'mode': 'adaptive'},
+            'created_at': created,
+            'run_name': name,
+            'total_results': 1,
+            'results': [
+                {
+                    'attack': {'severity': 'low', 'strategy_name': 'roleplay'},
+                    'agent': {'display_name': 'Refund agent', 'model': 'gpt-5.4'},
+                    'vulnerable': False,
+                    'error': None,
+                }
+            ],
+            'summary': {
+                'resistance_rate': 1.0,
+                'vulnerabilities_found': 0,
+                'evaluated_attacks': 1,
+                'token_usage_total': {
+                    'total_tokens': 500,
+                    'cost_usd': 0.5,
+                    'calls': calls,
+                    'priced_calls': priced,
+                },
+                'by_severity': {},
+            },
+        }
+
+    def _roots(self, tmp_path: Path, payload: dict) -> tuple[Path, Path]:
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        (rt / 'p.json').write_text(json.dumps(payload))
+        return rt, sim
+
+    def test_partial_coverage_labelled_on_landing_and_redteam(self, tmp_path: Path) -> None:
+        rt, sim = self._roots(tmp_path, self._redteam_payload('P', created='2026-06-29T10:00:00', priced=3, calls=10))
+
+        data = metrics.landing([rt, sim])
+        assert (data.priced_calls, data.cost_calls) == (3, 10)
+        assert '(3 of 10 calls)' in view.landing_body(data)
+
+        ov = metrics.redteam_overview([rt, sim])
+        assert (ov.priced_calls, ov.cost_calls) == (3, 10)
+        assert '(3 of 10 calls)' in view.redteam_overview_body(ov)
+
+    def test_no_label_when_every_call_priced(self, tmp_path: Path) -> None:
+        rt, sim = self._roots(tmp_path, self._redteam_payload('P', created='2026-06-29T10:00:00', priced=10, calls=10))
+
+        assert 'of 10 calls' not in view.landing_body(metrics.landing([rt, sim]))
+        assert 'of 10 calls' not in view.redteam_overview_body(metrics.redteam_overview([rt, sim]))
+
+    def test_no_label_for_pre_coverage_reports(self, tmp_path: Path) -> None:
+        """Reports saved before priced_calls existed must not be labelled "0 of N"."""
+        payload = self._redteam_payload('P', created='2026-06-29T10:00:00', priced=0, calls=10)
+        rt, sim = self._roots(tmp_path, payload)
+
+        assert 'calls)' not in view.landing_body(metrics.landing([rt, sim]))
+        assert 'calls)' not in view.redteam_overview_body(metrics.redteam_overview([rt, sim]))
+
+    def test_sim_overview_labels_partial_coverage(self, tmp_path: Path) -> None:
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        (sim / 's.json').write_text(
+            json.dumps({
+                'mode': 'run',
+                'created_at': '2026-06-30T10:00:00',
+                'run_name': 'S',
+                'total_results': 2,
+                'scorer_averages': {},
+                'results': [
+                    {
+                        'token_usage': {'total_tokens': 100, 'cost_usd': 0.5, 'calls': 1, 'priced_calls': 1},
+                        'goal_achieved': True,
+                        'turn_count': 1,
+                    },
+                    {
+                        'token_usage': {'total_tokens': 100, 'cost_usd': None, 'calls': 1, 'priced_calls': 0},
+                        'goal_achieved': True,
+                        'turn_count': 1,
+                    },
+                ],
+            })
+        )
+
+        ov = metrics.sim_overview([rt, sim])
+        assert (ov.priced_calls, ov.cost_calls) == (1, 2)
+        assert '(1 of 2 calls)' in view.sim_overview_body(ov)
+
+    def test_legacy_report_does_not_inflate_the_coverage_denominator(self, tmp_path: Path) -> None:
+        """A report predating priced_calls has *unknown* coverage, not zero coverage.
+
+        Counting its calls in the denominator only would report "1 of 11 calls"
+        for one new priced call beside ten legacy ones that may all have been
+        priced — a fabricated warning, the mirror of the fabricated $0.00 this
+        whole feature exists to avoid.
+        """
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        legacy = self._redteam_payload('L', created='2026-06-29T10:00:00', priced=0, calls=10)
+        del legacy['summary']['token_usage_total']['priced_calls']
+        (rt / 'legacy.json').write_text(json.dumps(legacy))
+        (rt / 'new.json').write_text(
+            json.dumps(self._redteam_payload('N', created='2026-06-29T11:00:00', priced=1, calls=1))
+        )
+
+        data = metrics.landing([rt, sim])
+        assert (data.priced_calls, data.cost_calls, data.unknown_calls) == (1, 1, 10)
+        body = view.landing_body(data)
+        assert '1 of 11 calls' not in body
+        # ...but the combined $10.50 must not read as authoritative either: 10 of
+        # the 11 calls behind it have coverage nobody recorded.
+        assert '10 calls of unknown coverage' in body
+
+    def test_legacy_only_totals_are_labelled_unknown_not_complete(self, tmp_path: Path) -> None:
+        """With no new report beside it, a legacy total still has unknown coverage.
+
+        An empty label here would claim every call was priced, which the report
+        never said.
+        """
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        legacy = self._redteam_payload('L', created='2026-06-29T10:00:00', priced=0, calls=10)
+        del legacy['summary']['token_usage_total']['priced_calls']
+        (rt / 'legacy.json').write_text(json.dumps(legacy))
+
+        data = metrics.landing([rt, sim])
+        assert (data.priced_calls, data.cost_calls, data.unknown_calls) == (0, 0, 10)
+        assert '10 calls of unknown coverage' in view.landing_body(data)
+
+    def test_a_legacy_report_with_no_cost_contributes_no_unknown_coverage(self, tmp_path: Path) -> None:
+        """Unknown coverage is about cost that was summed. A costless legacy report
+        adds nothing to the total, so it has no coverage to be unknown about."""
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        legacy = self._redteam_payload('L', created='2026-06-29T10:00:00', priced=0, calls=10)
+        del legacy['summary']['token_usage_total']['priced_calls']
+        legacy['summary']['token_usage_total']['cost_usd'] = None
+        (rt / 'legacy.json').write_text(json.dumps(legacy))
+        (rt / 'new.json').write_text(
+            json.dumps(self._redteam_payload('N', created='2026-06-29T11:00:00', priced=1, calls=1))
+        )
+
+        data = metrics.landing([rt, sim])
+        assert (data.priced_calls, data.cost_calls, data.unknown_calls) == (1, 1, 0)
+        assert 'unknown coverage' not in view.landing_body(data)
+
+    def test_no_coverage_label_when_cost_is_unknown(self, tmp_path: Path) -> None:
+        """Coverage qualifies a figure that exists — an em dash "no cost" tile with
+        "(1 of 2 calls)" under it labels a total that was never shown."""
+        payload = self._redteam_payload('P', created='2026-06-29T10:00:00', priced=1, calls=2)
+        payload['summary']['token_usage_total']['cost_usd'] = None
+        rt, sim = self._roots(tmp_path, payload)
+
+        data = metrics.landing([rt, sim])
+        assert data.total_cost is None
+        assert '(1 of 2 calls)' not in view.landing_body(data)
+        assert '(1 of 2 calls)' not in view.redteam_overview_body(metrics.redteam_overview([rt, sim]))
 class TestScoreTooltip:
     """The Score cell must name what the rate was measured over (RES-1202)."""
 

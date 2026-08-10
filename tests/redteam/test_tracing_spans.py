@@ -1001,3 +1001,51 @@ def test_set_jury_span_attrs_noop_without_jury() -> None:
     span = MagicMock()
     set_jury_span_attrs(span, None)
     span.set_attribute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_orq_agent_target_emits_one_llm_span_per_create(span_collector: _CollectingExporter) -> None:
+    """Each agents.responses.create gets its own LLM span; the target span carries no usage.
+
+    The agents endpoint loops for tool continuations, so one respond() makes
+    several priced calls. Usage belongs on those per-call spans only — a total
+    on the parent would double-count when the sink aggregates.
+    """
+    from tests.redteam.test_backend_send_prompt_with_usage import _make_orq_response
+
+    from evaluatorq.redteam.backends.orq import ORQAgentTarget
+    from evaluatorq.redteam.contracts import Message
+
+    pending = MagicMock()
+    pending.id = 'tool-call-001'
+    pending.name = 'lookup'
+    pending.arguments = {}
+
+    first = _make_orq_response(text='', prompt_tokens=15, completion_tokens=5, total_tokens=20, pending_tool_calls=[pending])
+    second = _make_orq_response(text='done', prompt_tokens=7, completion_tokens=3, total_tokens=10)
+    responses = iter([first, second])
+
+    async def fake_to_thread(fn: Any, **kwargs: Any) -> Any:  # noqa: RUF029
+        return next(responses)
+
+    target = ORQAgentTarget(agent_key='test-agent', orq_client=MagicMock())
+    with patch('asyncio.to_thread', side_effect=fake_to_thread):
+        result = await target.respond([Message(role='user', content='prompt')])
+
+    llm_spans = _find_spans(span_collector, 'agents.responses')
+    assert len(llm_spans) == 2
+    assert [_attrs(s)['gen_ai.usage.input_tokens'] for s in llm_spans] == [15, 7]
+    assert [_attrs(s)['gen_ai.usage.output_tokens'] for s in llm_spans] == [5, 3]
+
+    agent_span = _find_span(span_collector, 'agent test-agent')
+    assert agent_span is not None
+    assert not [k for k in _attrs(agent_span) if k.startswith('gen_ai.usage.')]
+    assert agent_span.context is not None
+    for s in llm_spans:
+        assert s.parent is not None
+        assert s.parent.span_id == agent_span.context.span_id
+
+    # The aggregate still rides on the returned response — reports read it there.
+    assert result.usage is not None
+    assert result.usage.input_tokens == 22
+    assert result.usage.calls == 2

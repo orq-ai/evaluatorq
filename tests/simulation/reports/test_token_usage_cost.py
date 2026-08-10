@@ -158,3 +158,24 @@ def test_total_cost_row_unlabelled_for_pre_coverage_reports():
     """Saved reports predating priced_calls must not be labelled "0 of N"."""
     rows = build_token_usage_rows({'total_cost': 0.5, 'calls': 10})
     assert ['Total Cost', '$0.5000'] in rows
+
+
+def test_section_to_rows_labels_partial_coverage_end_to_end():
+    """The coverage label must survive the real section → renderer path.
+
+    ``_build_token_usage_section`` previously dropped ``calls``/``priced_calls``,
+    so ``build_token_usage_rows`` always saw 0 and silently omitted the
+    "(N of M calls)" qualifier — a lower-bound total read as authoritative.
+    """
+    results = [
+        _make_result(
+            token_usage=TokenUsage(
+                prompt_tokens=10, completion_tokens=5, total_tokens=15, total_cost=0.5, calls=1, priced_calls=1
+            )
+        ),
+        _make_result(token_usage=TokenUsage(prompt_tokens=20, completion_tokens=10, total_tokens=30, calls=1)),
+    ]
+    section = _build_token_usage_section(results)
+    assert section.data['calls'] == 2
+    assert section.data['priced_calls'] == 1
+    assert ['Total Cost', '$0.5000 (1 of 2 calls)'] in build_token_usage_rows(section.data)
