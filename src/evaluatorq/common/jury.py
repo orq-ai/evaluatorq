@@ -30,12 +30,17 @@ TieBreak = Callable[[list[VerdictValue]], VerdictValue | None]
 _UNSWAP = {'A': 'B', 'B': 'A'}
 
 
-def unswap(value: VerdictValue | None) -> VerdictValue | None:
+def _unswap(value: VerdictValue | None) -> VerdictValue | None:
     """Map a verdict from the swapped ordering back to the canonical A/B frame.
 
     Lives here rather than in ``pairwise`` because the judge span needs it too,
     and ``pairwise`` already imports from this module. Pure and per-ordering:
     only *flip detection* needs both orderings, un-swapping does not.
+
+    Anything that is not ``'A'`` or ``'B'`` passes through unchanged, which is
+    required rather than incidental: ``'tie'`` is symmetric and must not flip,
+    and a non-comparative panel's bool / float / str verdicts have no slot frame
+    to be mapped out of.
     """
     if value is None:
         return None
@@ -324,25 +329,23 @@ async def _judge_vote(
     return vote, usages
 
 
-def _record_judge_span(
-    span: Span | None, vote: JuryVote, *, latency_ms: float, label_swapped: bool | None = None
-) -> None:
+def _record_judge_span(span: Span | None, vote: JuryVote, *, latency_ms: float, label_swapped: bool | None) -> None:
     """Set the outcome ``judge.*`` attributes on a judge span from its vote.
 
     Identity (``judge.name`` / ``judge.model`` / ``judge.replacement`` /
     ``judge.label_swapped``) is already stamped by :func:`_judge_vote` at
-    span-open and cannot change here, so it is not re-written. Both verdicts are
+    span-open and cannot change here, so it is not re-written. The verdict is
     stringified so bool / float / str verdicts share one attribute type.
 
-    Two verdict attributes, because in comparative mode the labels a judge
-    returns mean *slot*, not response — a judge naming the same response in both
-    orderings necessarily says 'A' once and 'B' once:
-
-    * ``judge.verdict`` — the canonical frame, so "how often did this judge pick
-      response A" is answerable from this attribute alone;
-    * ``judge.verdict_raw`` — what the judge actually returned, matching the
-      ``chat`` child span whose ``gen_ai.output.messages`` holds the text it came
-      from.
+    ``judge.verdict`` is the single verdict attribute, and it is always in the
+    canonical frame. In comparative mode the labels a judge returns mean *slot*,
+    not response — a judge naming the same response in both orderings
+    necessarily says 'A' once and 'B' once — so a raw-frame attribute would make
+    "how often did this judge pick response A" need a per-span join against
+    ``judge.label_swapped`` first. The raw text the verdict was parsed from is
+    still one level down, on the ``chat`` child's ``gen_ai.output.messages``,
+    which is why a second raw-frame attribute here would only restate what the
+    trace already holds (see the alias-removal note in ``docs/tracing.md``).
 
     Un-swapping is per-ordering and pure; only *flip detection* needs both
     orderings, and that lands on the parent as ``jury.flipped_judges``.
@@ -350,12 +353,11 @@ def _record_judge_span(
     Token usage and cost are not recorded here: they belong on the underlying
     ``chat`` spans, which the consumer rolls up.
     """
-    canonical = unswap(vote.value) if label_swapped else vote.value
+    canonical = _unswap(vote.value) if label_swapped else vote.value
     set_span_attrs(
         span,
         {
             'judge.verdict': None if canonical is None else str(canonical),
-            'judge.verdict_raw': None if vote.value is None else str(vote.value),
             'judge.success': vote.success,
             'judge.abstained': vote.abstained,
             'judge.latency_ms': round(latency_ms, 3),
@@ -553,7 +555,7 @@ def record_jury_span(
     than a ``JuryResult``, so it stamps its own set (see
     ``pairwise._record_pairwise_span``) using the same ``jury.*`` vocabulary.
     ``jury.verdict`` is stringified so bool / float / str verdicts share one
-    attribute type, matching ``judge.verdict_raw``.
+    attribute type, matching ``judge.verdict``.
 
     No token usage or cost here: those are recorded once, on the underlying
     ``chat`` spans, and rolled up by the consumer.

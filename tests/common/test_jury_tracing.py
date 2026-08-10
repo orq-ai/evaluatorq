@@ -117,19 +117,18 @@ async def test_judge_span_attributes(span_collector) -> None:
     decisive = by_model['gpt-a']
     assert decisive['judge.name'] == 'gpt-a'
     assert decisive['judge.verdict'] == 'yes'
-    assert decisive['judge.verdict_raw'] == 'yes'
     assert decisive['judge.success'] is True
     assert decisive['judge.abstained'] is False
     assert decisive['judge.replacement'] is False
     assert 'judge.latency_ms' in decisive
-    # Pointwise: no slot ambiguity, so raw and canonical agree (asserted above).
+    # One verdict attribute, always canonical; the raw text it was parsed from
+    # lives on the chat child span, not here.
+    assert 'judge.verdict_raw' not in decisive
 
     abstained = by_model['gpt-b']
     assert abstained['judge.success'] is True
     assert abstained['judge.abstained'] is True
-    # A None value is not stamped, under either name.
-    assert 'judge.verdict' not in abstained
-    assert 'judge.verdict_raw' not in abstained
+    assert 'judge.verdict' not in abstained  # a None value is not stamped
 
 
 @pytest.mark.asyncio
@@ -148,7 +147,7 @@ async def test_replacement_judge_span_is_flagged(span_collector) -> None:
     assert by_model['gpt-a']['judge.success'] is False
     assert by_model['gpt-a']['judge.replacement'] is False
     assert by_model['stand-in']['judge.replacement'] is True
-    assert by_model['stand-in']['judge.verdict_raw'] == 'yes'
+    assert by_model['stand-in']['judge.verdict'] == 'yes'
     # The replacement span still parents to the jury span.
     jury_span_id = _span_id(_by_name(exporter, 'orq.jury')[0])
     stand_in_span = next(s for s in _by_name(exporter, 'orq.judge') if _attrs(s)['judge.model'] == 'stand-in')
@@ -268,6 +267,37 @@ async def test_jury_span_records_outcome(span_collector) -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_tie_is_not_flipped_by_the_swapped_ordering(span_collector) -> None:
+    """'tie' is symmetric, so un-swapping must leave it alone.
+
+    Only 'A' and 'B' name a slot. Mapping a tie would invent a preference the
+    judge never expressed, and the same pass-through protects the bool / float
+    verdicts a non-comparative panel produces.
+    """
+    exporter = span_collector
+
+    async def judge_fn(first: str, second: str, model: str) -> Prediction:
+        return Prediction(value='tie')
+
+    await run_pairwise(judge_fn=judge_fn, panel=['gpt-a'], response_a='same', response_b='same')
+
+    verdicts = [_attrs(s)['judge.verdict'] for s in _by_name(exporter, 'orq.judge')]
+    assert verdicts == ['tie', 'tie']  # both orderings, neither flipped
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('value', 'expected'), [(0.75, '0.75'), (True, 'True'), ('yes', 'yes')])
+async def test_non_pairwise_verdicts_reach_the_span_unchanged(span_collector, value, expected) -> None:
+    """A plain panel has no slot frame, so its verdict is stamped as given."""
+    exporter = span_collector
+    kind = VerdictKind.NUMERIC if isinstance(value, float) else VerdictKind.CATEGORICAL
+
+    await run_jury(judge_fn=_make_judge_fn({'gpt-a': value}), panel=['gpt-a'], verdict_kind=kind)
+
+    assert _attrs(_by_name(exporter, 'orq.judge')[0])['judge.verdict'] == expected
+
+
+@pytest.mark.asyncio
 async def test_pairwise_emits_one_jury_span_for_both_orderings(span_collector) -> None:
     """A comparison runs each judge twice (A/B then B/A). Those orderings must
     NOT each open their own orq.jury span — one span per comparison, with the
@@ -299,16 +329,12 @@ async def test_pairwise_emits_one_jury_span_for_both_orderings(span_collector) -
     swapped = [_attrs(s)['judge.label_swapped'] for s in judge_spans]
     assert sorted(swapped) == [False, False, True, True]
 
-    # These judges are perfectly consistent — they name 'better' both times —
-    # yet each says 'A' in one ordering and 'B' in the other, because in
-    # comparative mode the labels denote the *slot*, not the response. The
-    # frame attribute is what tells a reader not to read these as disagreement;
-    # the reconciled, canonical-frame outcome is on the parent jury span.
+    # These judges are perfectly consistent — they name 'better' both times — yet
+    # the labels they return say 'A' in one ordering and 'B' in the other, because
+    # in comparative mode a label denotes the *slot*, not the response. Both spans
+    # therefore read 'A': judge.verdict is un-swapped before it is written, so it
+    # takes no join against judge.label_swapped to see the agreement.
     per_ordering = {_attrs(s)['judge.label_swapped']: _attrs(s) for s in judge_spans}
-    assert per_ordering[False]['judge.verdict_raw'] == 'A'
-    assert per_ordering[True]['judge.verdict_raw'] == 'B'
-    # Same response, both orderings: the raw labels differ because they name a
-    # slot, but the canonical verdict is the same 'A' on both spans.
     assert per_ordering[False]['judge.verdict'] == 'A'
     assert per_ordering[True]['judge.verdict'] == 'A'
 

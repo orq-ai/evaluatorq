@@ -343,8 +343,7 @@ Span attributes on `orq.judge`:
 |---|---|
 | `judge.name` | Judge model ID |
 | `judge.model` | Judge model ID (same value as `judge.name`) |
-| `judge.verdict` | Stringified verdict in the canonical frame — the one to query (bool / float / str all coerce to `str`); unset when the vote has no value |
-| `judge.verdict_raw` | Stringified verdict exactly as this judge gave it (in comparative mode, in the *slot* frame — see below); unset when the vote has no value |
+| `judge.verdict` | Stringified verdict, always in the canonical frame (bool / float / str all coerce to `str`); unset when the vote has no value |
 | `judge.success` | Whether the judge produced a usable outcome (decisive or abstained) |
 | `judge.abstained` | Whether the judge explicitly abstained |
 | `judge.replacement` | Whether this judge stood in for a failed configured judge |
@@ -407,16 +406,18 @@ shape from the plain jury case:
 | `jury.flipped_judges` | Comma-separated model names of the flipped judges |
 | `jury.swap` | Whether the comparison ran both orderings (`swap=True`, the default) or only one |
 
-**In comparative mode, query `judge.verdict`, not `judge.verdict_raw`.** The raw
-labels name a *position*, not a response: a judge that picks the same response
-both times says `A` in one ordering and `B` in the other, so the two spans look
-like a self-contradiction and are in fact the opposite, a perfectly consistent
-judge. `judge.verdict` un-swaps that (`label_swapped=True` spans are mapped back
-before the attribute is written), so "how often did this judge pick response A"
-is answerable from one attribute with no join against `judge.label_swapped`.
+**`judge.verdict` is already un-swapped in comparative mode.** The labels a judge
+returns there name a *position*, not a response: a judge that picks the same
+response both times says `A` in one ordering and `B` in the other, which reads as
+a self-contradiction and is in fact the opposite, a perfectly consistent judge.
+`label_swapped=True` spans are mapped back to the canonical frame before the
+attribute is written, so "how often did this judge pick response A" is answerable
+from `judge.verdict` alone, with no join against `judge.label_swapped`.
 
-`judge.verdict_raw` is kept because it matches the `chat` child span whose
-`gen_ai.output.messages` holds the text it was parsed from.
+There is deliberately no raw-frame twin. The text the verdict was parsed from is
+one level down, on the `chat` child's `gen_ai.output.messages`, so a second
+attribute here would only restate what the trace already holds — the same
+reasoning as the alias removal noted above.
 
 Un-swapping is per-ordering and needs nothing but `label_swapped`. *Flip
 detection* is what needs both orderings, and it stays on the parent —
