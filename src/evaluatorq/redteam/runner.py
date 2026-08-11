@@ -1130,17 +1130,7 @@ async def red_team(
             # Only mark completion after the user completion hook succeeds.  If
             # it raises, the lifecycle context above records the surfaced error.
             if manifest_writer is not None:
-                manifest_writer.complete(
-                    report_path=run_path,
-                    summary={
-                        'pipeline': report.pipeline.value,
-                        'total_results': report.total_results,
-                        'total_attacks': report.summary.total_attacks,
-                        'vulnerability_rate': report.summary.vulnerability_rate,
-                        'resistance_rate': report.summary.resistance_rate,
-                        'tested_agents': list(report.tested_agents),
-                    },
-                )
+                manifest_writer.complete(report_path=run_path, summary=report.manifest_summary())
 
             return report
 

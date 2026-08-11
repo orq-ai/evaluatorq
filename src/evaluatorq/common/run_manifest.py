@@ -201,6 +201,24 @@ def list_manifests(runs_dir: Path) -> list[RunManifest]:
     return sorted(out, key=lambda m: m.started_at, reverse=True)
 
 
+def summary_is_complete(summary: RunSummary | None) -> bool:
+    """Whether a manifest ``summary`` carries a full run-list row.
+
+    A summary written by a run writer (``manifest_summary()`` on the report
+    model) always carries more than ``total_results``; an early version of the
+    dashboard's legacy backfill wrote that one field alone, which renders the
+    dashboard card fine but blanks the pipeline / agents / rate columns of
+    ``eq redteam runs``. Such a sidecar reads as incomplete, so callers fall back
+    to the full report (and the dashboard rewrites the sidecar on its next scan).
+
+    ponytail: "more than total_results", not a per-surface required-key list — a
+    second list of the fields each surface writes is exactly the drift this
+    guards against. Tighten to per-surface keys only if a writer summary ever
+    legitimately shrinks.
+    """
+    return bool(summary) and not set(summary).issubset({'total_results'})
+
+
 def list_run_records(runs_dir: Path) -> list[tuple[RunManifest | None, Path | None]]:
     """Unified, manifest-first run listing for a runs dir, newest first.
 
@@ -210,7 +228,10 @@ def list_run_records(runs_dir: Path) -> list[tuple[RunManifest | None, Path | No
       runs carry a ``report_path``; in-flight (running/error/cancelled) runs have
       ``None`` — they render from the manifest's status/stage/summary alone.
     * A LEGACY report with no manifest yields ``(None, report_path)`` — the
-      backwards-compatible path (read the full report for its stats).
+      backwards-compatible path (read the full report for its stats). A completed
+      manifest whose ``summary`` is too thin to build a row (see
+      :func:`summary_is_complete`) is demoted to this path rather than listed
+      with blank columns.
 
     Reports already covered by a manifest's ``report_path`` are de-duplicated out
     of the legacy set, so a run is never listed twice. Sorted newest-first by
@@ -219,9 +240,12 @@ def list_run_records(runs_dir: Path) -> list[tuple[RunManifest | None, Path | No
     records: list[tuple[RunManifest | None, Path | None, float]] = []
     covered: set[Path] = set()
     for m in list_manifests(runs_dir):
-        report_path: Path | None = None
-        if m.report_path:
-            report_path = Path(m.report_path)
+        report_path = Path(m.report_path) if m.report_path else None
+        if m.status == ManifestStatus.COMPLETED and report_path is not None and not summary_is_complete(m.summary):
+            # Thin sidecar: leave the report uncovered so the legacy full-report
+            # row below carries the run instead of a half-blank manifest row.
+            continue
+        if report_path is not None:
             covered.add(report_path.resolve())
         records.append((m, report_path, m.started_at.timestamp()))
 

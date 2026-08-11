@@ -225,7 +225,7 @@ def test_list_run_records_manifest_first_dedups_and_falls_back(tmp_path: Path) -
     report = runs / 'done_20250101.json'
     report.write_text('{"pipeline": "dynamic", "summary": {}}', encoding='utf-8')
     start_manifest(run_id='done', surface='redteam', run_name='done', runs_dir=runs).complete(
-        report_path=report, summary={'total_results': 1}
+        report_path=report, summary={'pipeline': 'dynamic', 'total_results': 1, 'total_attacks': 1}
     )
     # In-flight run — manifest only, no report.
     start_manifest(run_id='live', surface='redteam', run_name='live', runs_dir=runs)
@@ -245,3 +245,20 @@ def test_list_run_records_manifest_first_dedups_and_falls_back(tmp_path: Path) -
     live = next(m for m, _ in records if m is not None and m.run_name == 'live')
     assert live.report_path is None
     assert live.status == 'running'
+
+
+def test_list_run_records_demotes_a_thin_summary_to_a_full_read(tmp_path: Path) -> None:
+    """A sidecar carrying only ``total_results`` can't fill a runs row, so the
+    record falls back to the report instead of listing with blank columns."""
+    from evaluatorq.common.run_manifest import list_run_records
+
+    runs = tmp_path / 'runs'
+    runs.mkdir()
+    report = runs / 'thin_20250101.json'
+    report.write_text('{"pipeline": "dynamic", "summary": {}}', encoding='utf-8')
+    start_manifest(run_id='thin', surface='redteam', run_name='thin', runs_dir=runs).complete(
+        report_path=report, summary={'total_results': 1}
+    )
+
+    records = list_run_records(runs)
+    assert records == [(None, report)]  # listed once, as a legacy full-read row

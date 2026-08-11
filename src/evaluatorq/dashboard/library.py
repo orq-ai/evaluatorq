@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, TypeVar
 
 from loguru import logger
 
-from evaluatorq.common.run_manifest import MANIFESTS_DIR_NAME
+from evaluatorq.common.run_manifest import MANIFESTS_DIR_NAME, summary_is_complete
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -234,10 +234,14 @@ def fingerprint(roots: list[Path] | None = None) -> tuple[int, int]:
     """``(file count, newest mtime_ns)`` across every run store — a cheap staleness key.
 
     Callers cache expensive whole-store aggregates against this: one stat sweep
-    (~5 ms per 1000 files) instead of re-reading every report. Reports are
-    write-once, so a new run always bumps the count; manifests are *not* (an
-    in-flight run rewrites its own on every stage), so ``.manifests/`` is swept
-    too and the newest mtime catches that stage advance.
+    instead of re-reading every report. Reports are write-once, so a new run
+    always bumps the count; manifests are *not* (an in-flight run rewrites its
+    own on every stage), so ``.manifests/`` is swept too and the newest mtime
+    catches that stage advance.
+
+    The report sweep goes through :func:`_iter_report_files`, the same predicate
+    the aggregate itself reads, so stage artifacts (``01_``/``02_``/``03_``) that
+    no aggregate looks at can't invalidate the cache when they are rewritten.
 
     Unreadable entries are skipped rather than raised on: a fingerprint that
     fails is a dashboard that fails, and a missed file only costs staleness
@@ -247,7 +251,7 @@ def fingerprint(roots: list[Path] | None = None) -> tuple[int, int]:
     count = 0
     newest = 0
     for root in roots:
-        for p in (*root.glob('*.json'), *(root / MANIFESTS_DIR_NAME).glob('*.json')):
+        for p in (*_iter_report_files([root]), *(root / MANIFESTS_DIR_NAME).glob('*.json')):
             count += 1
             try:
                 newest = max(newest, p.stat().st_mtime_ns)
@@ -264,20 +268,36 @@ def _backfill_manifest(path: Path, card: ReportCard) -> None:
     (and ``eq runs``) builds this row from the manifest alone. No separate
     migration command to run — the runs dir heals itself as it is browsed.
 
-    Best-effort in every direction: an existing sidecar is never overwritten, an
-    errored/pairwise report is skipped (pairwise has no ``ManifestSurface``), and
-    a failed write only costs the next scan another full read.
+    The summary comes from the report model's own ``manifest_summary()`` — the
+    same builder the live runners use — so a backfilled row is field-identical
+    to one written by the run itself.
+
+    Best-effort in every direction: a complete existing sidecar is never
+    overwritten (a thin one from an earlier version is), an errored/pairwise
+    report is skipped (pairwise has no ``ManifestSurface``), and a failed read or
+    write only costs the next scan another full read.
     """
     from evaluatorq.common.run_manifest import ManifestWriter
     from evaluatorq.contracts import ManifestStatus, ManifestSurface, RunManifest
+    from evaluatorq.dashboard.surfaces import ADAPTERS
 
     if card.error or card.surface not in (ManifestSurface.SIM, ManifestSurface.REDTEAM):
         return
     mpath = path.parent / MANIFESTS_DIR_NAME / f'{path.stem}.json'
     if mpath.exists():
+        try:
+            existing = read_json_cached(mpath)
+        except (json.JSONDecodeError, OSError):
+            existing = {}
+        raw = existing.get('summary')
+        if summary_is_complete(raw if isinstance(raw, dict) else None):
+            return
+    try:
+        # Full model validate (mtime-keyed LRU): the price of one migration read.
+        summary = ADAPTERS[card.surface].load(path).manifest_summary()
+    except Exception as exc:  # a report we can't model is simply not migrated
+        logger.debug(f'Skipping manifest backfill for {path}: {exc}')
         return
-    _, data = load_surface(path)  # mtime-keyed LRU hit — _card just read this file
-    total = data.get('total_results')
     manifest = RunManifest(
         run_id=path.stem,
         surface=ManifestSurface(card.surface),
@@ -287,7 +307,7 @@ def _backfill_manifest(path: Path, card: ReportCard) -> None:
         updated_at=card.created_at,
         ended_at=card.created_at,
         report_path=str(path),
-        summary={'total_results': total if isinstance(total, int) else 0},
+        summary=summary,
     )
     ManifestWriter(manifest, mpath).flush()
 
@@ -323,6 +343,11 @@ def scan(roots: list[Path] | None = None) -> list[ReportCard]:
     covered: set[Path] = set()
     for root in roots:
         for m in list_manifests(root):
+            # A completed manifest whose summary is too thin to build a full
+            # `eq runs` row is ignored here: leaving its report uncovered sends
+            # it down the legacy full-read path, which rewrites the sidecar.
+            if m.status.value == 'completed' and m.report_path and not summary_is_complete(m.summary):
+                continue
             card = _card_from_manifest(m)
             cards.append(card)
             if card.path is not None:
