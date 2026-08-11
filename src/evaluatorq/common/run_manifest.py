@@ -23,11 +23,12 @@ import operator
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 from evaluatorq.contracts import (
+    RUN_SUMMARY_TOTAL_KEY,
     ManifestStatus,
     RunManifest,
     RunSummary,
@@ -37,7 +38,12 @@ from evaluatorq.contracts import (
     ManifestSurface as Surface,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
 MANIFESTS_DIR_NAME = '.manifests'
+# Stage artifacts (save='detail') sit beside reports but are not runs.
+_ARTIFACT_PREFIXES = ('01_', '02_', '03_')
 
 
 def _manifests_dir(runs_dir: Path) -> Path:
@@ -216,7 +222,27 @@ def summary_is_complete(summary: RunSummary | None) -> bool:
     guards against. Tighten to per-surface keys only if a writer summary ever
     legitimately shrinks.
     """
-    return bool(summary) and not set(summary).issubset({'total_results'})
+    return bool(summary) and not set(summary).issubset({RUN_SUMMARY_TOTAL_KEY})
+
+
+def iter_report_files(runs_dir: Path) -> Iterator[Path]:
+    """Report files in *runs_dir*, sorted: non-recursive ``*.json`` minus stage artifacts.
+
+    The one definition of "is a report" shared by every reader — the run listings
+    here, the dashboard's scan and its store fingerprint. ``save='detail'`` writes
+    ``01_``/``02_``/``03_`` stage artifacts next to reports; they are not runs, and
+    a reader that globs them lists phantom rows (and invalidates caches) for files
+    nothing renders.
+
+    Yields:
+        Each report file in *runs_dir*, in sorted path order. Nothing when the
+        directory does not exist.
+    """
+    if not runs_dir.is_dir():
+        return
+    for p in sorted(runs_dir.glob('*.json')):
+        if not p.name.startswith(_ARTIFACT_PREFIXES):
+            yield p
 
 
 def list_run_records(runs_dir: Path) -> list[tuple[RunManifest | None, Path | None]]:
@@ -250,7 +276,7 @@ def list_run_records(runs_dir: Path) -> list[tuple[RunManifest | None, Path | No
         records.append((m, report_path, m.started_at.timestamp()))
 
     if runs_dir.is_dir():
-        for p in runs_dir.glob('*.json'):
+        for p in iter_report_files(runs_dir):
             try:
                 if p.resolve() in covered:
                     continue

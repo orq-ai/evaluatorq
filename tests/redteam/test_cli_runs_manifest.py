@@ -121,3 +121,21 @@ def test_backfilled_sidecar_keeps_the_full_read_stats(tmp_path: Path) -> None:
     scan([runs])  # the dashboard visit that backfills the sidecar
     assert (runs / '.manifests' / 'rt_20260101_000000.json').exists()
     assert _row() == before
+
+
+def test_runs_ignores_stage_artifacts(tmp_path: Path) -> None:
+    """`save='detail'` writes 01_/02_/03_ stage artifacts beside reports. They are
+    not runs: listing them would spend --limit slots and emit skip warnings for
+    files nobody asked about."""
+    runs = tmp_path / 'runs'
+    runs.mkdir()
+    (runs / 'rt_20260101_000000.json').write_text(
+        json.dumps({'pipeline': 'static', 'summary': {}, 'total_results': 1}), encoding='utf-8'
+    )
+    (runs / '01_all_datapoints.json').write_text('[]', encoding='utf-8')
+    (runs / '02_attack_results.json').write_text('[]', encoding='utf-8')
+
+    result = CliRunner().invoke(redteam_app, ['runs', str(runs), '--json'])
+    assert result.exit_code == 0, result.output
+    rows = json.loads(result.stdout)
+    assert [r['file'] for r in rows] == ['rt_20260101_000000.json']

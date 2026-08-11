@@ -13,14 +13,13 @@ from typing import TYPE_CHECKING, TypeVar
 
 from loguru import logger
 
-from evaluatorq.common.run_manifest import MANIFESTS_DIR_NAME, summary_is_complete
+from evaluatorq.common.run_manifest import MANIFESTS_DIR_NAME, iter_report_files, summary_is_complete
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
     from evaluatorq.contracts import RunManifest
 
-_ARTIFACT_PREFIXES = ('01_', '02_', '03_')
 _Model = TypeVar('_Model')
 
 
@@ -143,12 +142,13 @@ def default_roots() -> list[Path]:
 
 
 def _iter_report_files(roots: list[Path]) -> Iterator[Path]:
+    """Report files across *roots* — the shared per-dir predicate, flattened.
+
+    Yields:
+        Each report file, root by root, sorted within a root.
+    """
     for root in roots:
-        if not root.is_dir():
-            continue
-        for p in sorted(root.glob('*.json')):
-            if not p.name.startswith(_ARTIFACT_PREFIXES):
-                yield p
+        yield from iter_report_files(root)
 
 
 def _card(path: Path) -> ReportCard | None:
@@ -295,8 +295,11 @@ def _backfill_manifest(path: Path, card: ReportCard) -> None:
     try:
         # Full model validate (mtime-keyed LRU): the price of one migration read.
         summary = ADAPTERS[card.surface].load(path).manifest_summary()
-    except Exception as exc:  # a report we can't model is simply not migrated
-        logger.debug(f'Skipping manifest backfill for {path}: {exc}')
+    except Exception as exc:
+        # The card already parsed, so a model failure here is a schema mismatch,
+        # not routine noise: warn (as list_manifests does) rather than migrate
+        # silently-never. The run still lists via the full-report path.
+        logger.warning(f'Skipping manifest backfill for {path}: {exc}')
         return
     manifest = RunManifest(
         run_id=path.stem,
@@ -328,7 +331,7 @@ def scan(roots: list[Path] | None = None) -> list[ReportCard]:
     inside another's expansion — and a duplicated root would double-count every
     report in the landing rollups (jobs, spend, costed runs).
     """
-    from evaluatorq.common.run_manifest import list_manifests
+    from evaluatorq.common.run_manifest import list_run_records
 
     roots = roots or default_roots()
     seen_roots: set[Path] = set()
@@ -338,26 +341,17 @@ def scan(roots: list[Path] | None = None) -> list[ReportCard]:
         if resolved not in seen_roots:
             seen_roots.add(resolved)
             deduped_roots.append(root)
-    roots = deduped_roots
     cards: list[ReportCard] = []
-    covered: set[Path] = set()
-    for root in roots:
-        for m in list_manifests(root):
-            # A completed manifest whose summary is too thin to build a full
-            # `eq runs` row is ignored here: leaving its report uncovered sends
-            # it down the legacy full-read path, which rewrites the sidecar.
-            if m.status.value == 'completed' and m.report_path and not summary_is_complete(m.summary):
-                continue
-            card = _card_from_manifest(m)
-            cards.append(card)
-            if card.path is not None:
-                covered.add(card.path.resolve())
-    for p in _iter_report_files(roots):
-        if p.resolve() in covered:
-            continue
-        if (c := _card(p)) is not None:
-            cards.append(c)
-            _backfill_manifest(p, c)
+    for root in deduped_roots:
+        # list_run_records owns manifest-first ordering, report de-duplication and
+        # the demotion of thin-summary sidecars to a legacy row — the CLI run
+        # tables read the same function, so the two views can't drift apart.
+        for manifest, path in list_run_records(root):
+            if manifest is not None:
+                cards.append(_card_from_manifest(manifest))
+            elif path is not None and (c := _card(path)) is not None:
+                cards.append(c)
+                _backfill_manifest(path, c)
     return sorted(cards, key=lambda c: c.created_at, reverse=True)
 
 
