@@ -2339,6 +2339,30 @@ _RT_REPORT_CSS = """
 .rt-drawer-recs li { font-size: 13px; line-height: 1.5; }
 .rt-drawer-error { color: var(--sev-high, #dc2626); font-size: 13px; line-height: 1.55; }
 .rt-drawer-success { font-size: 14px; line-height: 1.6; }
+/* Applied celebration screen: centered, green check drawn in (RES-1143). */
+.rt-drawer-body--applied {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; gap: 6px; padding: 56px 24px 32px; min-height: 60%;
+}
+.rt-applied-check { width: 84px; height: 84px; margin-bottom: 14px; animation: rt-applied-pop 0.45s cubic-bezier(0.22, 1.4, 0.36, 1); }
+.rt-applied-check-ring {
+    stroke: var(--green-600, #299D8F); stroke-dasharray: 202; stroke-dashoffset: 202;
+    animation: rt-draw 0.6s ease-out 0.1s forwards;
+}
+.rt-applied-check-mark {
+    stroke: var(--green-600, #299D8F); stroke-dasharray: 44; stroke-dashoffset: 44;
+    animation: rt-draw 0.35s ease-out 0.55s forwards;
+}
+@keyframes rt-draw { to { stroke-dashoffset: 0; } }
+@keyframes rt-applied-pop { from { transform: scale(0.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.rt-applied-headline { font-family: var(--font-display); font-size: 19px; font-weight: 700; margin: 0; }
+.rt-applied-target { font-size: 14px; color: var(--text-muted); margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+.rt-applied-version {
+    font-family: var(--font-mono); font-size: 11px; color: var(--green-600, #299D8F);
+    background: color-mix(in srgb, #299D8F 12%, transparent);
+    border-radius: 999px; padding: 2px 9px;
+}
+.rt-drawer-body--applied .rt-drawer-note { max-width: 360px; }
 .rt-drawer-note { font-size: 12px; color: var(--text-muted); line-height: 1.55; }
 .rt-diff {
     font-family: var(--font-mono); font-size: 11.5px; line-height: 1.5; margin: 0;

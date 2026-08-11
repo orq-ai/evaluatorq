@@ -252,12 +252,27 @@ def render_preview_drawer(
 
 
 def render_applied_drawer(agent_key: str, applied_count: int, new_version: str | None) -> str:
-    version_note = f' as version <b>{esc(new_version)}</b>' if new_version else ''
+    """Celebration screen: centered, animated green check, the what and where,
+    and the follow-up note. The version chip renders only when the platform
+    returned one."""
+    version_chip = f'<span class="rt-applied-version">v{esc(new_version)}</span>' if new_version else ''
+    # Inline SVG: circle + check drawn via stroke-dashoffset keyframes.
+    check_svg = (
+        '<svg class="rt-applied-check" viewBox="0 0 72 72" aria-hidden="true">'
+        '<circle class="rt-applied-check-ring" cx="36" cy="36" r="32" fill="none" stroke-width="4"/>'
+        '<path class="rt-applied-check-mark" fill="none" stroke-width="5" stroke-linecap="round" '
+        'stroke-linejoin="round" d="M22 37 L32 47 L51 27"/>'
+        '</svg>'
+    )
     body = (
-        f'<p class="rt-drawer-success">✓ Applied {applied_count} recommendation(s) to '
-        f'<b>{esc(agent_key)}</b>{version_note}.</p>'
+        '<div class="rt-drawer-body--applied">'
+        f'{check_svg}'
+        '<p class="rt-applied-headline">'
+        f'Applied {applied_count} recommendation(s)</p>'
+        f'<p class="rt-applied-target">to <b>{esc(agent_key)}</b>{version_chip}</p>'
         '<p class="rt-drawer-note">The report now records them as applied; reload the page to '
         'see the updated state. Review the new version in the Orq UI before routing traffic to it.</p>'
+        '</div>'
     )
     return _drawer('Applied', body)
 
