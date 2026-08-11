@@ -130,6 +130,25 @@ _PACKAGE_DESC = {
 }
 
 
+def _submodule_shadowed(mod: object, dotted: str, name: str) -> str | None:
+    """Return the full path of a symbol that a same-named sub-module hides.
+
+    ``evaluatorq/__init__.py`` does ``from .evaluatorq import evaluatorq``, so at
+    runtime the name binds to the function. griffe resolves statically, where the
+    sub-module ``evaluatorq.evaluatorq`` wins the name instead — and mkdocstrings
+    then emits nothing for it, silently, even when the name is pinned in
+    ``members:``. That left ``evaluatorq()``, ``deployment()`` and ``llm_jury()``
+    with no reference entry at all.
+
+    Detect it by asking where the runtime object is actually defined: a hit means
+    the defining module is named exactly like the symbol. Returns the unambiguous
+    ``pkg.mod.symbol`` path to document it under, or None when there is no clash.
+    """
+    obj = _safe_getattr(mod, name, dotted)
+    defining = getattr(obj, "__module__", "") or ""
+    return f"{defining}.{name}" if defining == f"{dotted}.{name}" else None
+
+
 def write_api_pages() -> None:
     nav_lines = []
     index_rows = []
@@ -147,6 +166,10 @@ def write_api_pages() -> None:
             )
             in (dotted, None)
         ]
+        # Names a same-named sub-module hides from griffe; documented separately
+        # below, since mkdocstrings drops them from the package's `members:`.
+        shadowed = {n: p for n in members if (p := _submodule_shadowed(mod, dotted, n))}
+        members = [n for n in members if n not in shadowed]
         page_path = Path("reference", *dotted.split(".")).with_suffix(".md")
         with mkdocs_gen_files.open(page_path, "w") as fd:
             fd.write(f"# `{dotted}`\n\n")
@@ -158,6 +181,16 @@ def write_api_pages() -> None:
             else:
                 # All members canonical here (or filter would empty the page) — document all.
                 fd.write(f"::: {dotted}\n")
+            for full_path in shadowed.values():
+                # Address the symbol by its defining module so griffe cannot
+                # resolve the name to the sub-module. `show_root_full_path: false`
+                # keeps the heading reading as the bare symbol name.
+                fd.write(
+                    f"\n::: {full_path}\n"
+                    "    options:\n"
+                    "      show_root_heading: true\n"
+                    "      show_root_full_path: false\n"
+                )
         mkdocs_gen_files.set_edit_path(page_path, "gen_pages.py")
         title = dotted.replace("evaluatorq.integrations.", "integrations/").replace("evaluatorq.", "") or "evaluatorq"
         href = page_path.relative_to("reference").as_posix()
