@@ -2402,7 +2402,9 @@ def _rt_agent_pill(stats: dict[str, Any]) -> str:
     """One hero agent pill: dot (critical→red/vuln→orange/clean→green) + name
     + mono faint ``{model} · {n} vuln`` / ``clean`` (spec §Run header). The
     model rides in the sub so "what was tested" is readable without opening
-    the Config tab — the run name alone never said which model answered."""
+    the Config tab — the run name alone never said which model answered. It
+    is dropped from the sub when the results carry no model (custom
+    ``AgentTarget`` backends don't report one)."""
     vulns = stats.get('vulns', 0)
     critical = stats.get('critical', 0)
     dot_cls = 'rt-hero-dot--critical' if critical else ('rt-hero-dot--vuln' if vulns else 'rt-hero-dot--clean')
@@ -2433,11 +2435,20 @@ def _rt_run_name(report: RedTeamReport) -> str:
     are stripped here rather than shown three times. Only suffixes we
     recognise are dropped — a user-written ``"Q3 sweep (post-patch)"`` keeps
     its parenthetical.
+
+    The suffix carries ``PreparedTarget.target``, which is the *full* target
+    string (``"agent:my-key"``), while ``tested_agents`` holds bare keys
+    (``"my-key"``) — so both sides are compared with any ``kind:`` prefix
+    dropped, or ``(agent:my-key)`` would survive into the title.
     """
+
+    def _bare(s: str) -> str:
+        return s.rsplit(':', 1)[-1].strip().lower()
+
     name = (report.description or '').strip()
-    known = {'static', 'dynamic', 'hybrid'} | {a.strip().lower() for a in report.tested_agents}
+    known = {'static', 'dynamic', 'hybrid'} | {_bare(a) for a in report.tested_agents}
     while (m := _RT_TRAILING_PAREN.search(name)) is not None:
-        inner = m.group(1).strip().lower()
+        inner = _bare(m.group(1))
         if inner in known or re.fullmatch(r'\d+ targets?', inner):
             name = name[: m.start()].rstrip()
         else:
@@ -2447,7 +2458,8 @@ def _rt_run_name(report: RedTeamReport) -> str:
 
 def _redteam_hero(summary_section: Any, report: RedTeamReport) -> str:
     """Kicker (`Red Team · {pipeline}`) + run-name title + `N agents` pill
-    (multi only) + per-agent pill row carrying agent name and model. The
+    (multi only) + per-agent pill row carrying agent name and, when the
+    results report one, model. The
     5-card KPI band moves to the Overview tab (spec §Run header) — no double
     KPI band."""
     multi_agent = len(report.tested_agents) > 1

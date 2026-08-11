@@ -2099,10 +2099,11 @@ _RT_REPORT_CSS = """
     background: var(--surface-sunken); color: var(--text-muted);
     border-radius: 999px; padding: 2px 8px;
 }
-/* Sized and spaced to match `.report-hero-sub` on the sim report (13px name,
-   12px mono sub, 4px/16px margins): both surfaces answer "what was tested?"
-   on the line under the run name, so they read at the same weight. */
-.rt-hero-agent-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 16px; }
+/* Occupies the same slot as `.report-hero-sub` on the sim report — the line
+   under the run name answering "what was tested?" — so it carries that rule's
+   13px size and `4px 0 16px` margins. The mono 12px sub is a nested element
+   here (sim has no equivalent), one step down from the pill's own 13px. */
+.rt-hero-agent-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 16px; }
 .rt-hero-pill {
     display: inline-flex; align-items: center; gap: 6px;
     background: var(--surface-card); border: 1px solid var(--border-subtle);

@@ -694,6 +694,47 @@ def test_redteam_hero_keeps_unrecognised_parenthetical(rt_report_single):
     assert _rt_run_name(report) == 'Q3 sweep (post-patch)'
 
 
+@pytest.mark.parametrize(
+    'description',
+    [
+        # The runner interpolates PreparedTarget.target, which is the full
+        # target string, not the bare key held in tested_agents.
+        'Nightly sweep (agent:agent-a) (dynamic)',
+        'Nightly sweep (agent-a)',
+        'Nightly sweep (2 targets)',
+        'Nightly sweep (1 target)',
+    ],
+)
+def test_rt_run_name_strips_runner_suffixes(rt_report_single, description):
+    from evaluatorq.dashboard.report_tabs import _rt_run_name
+
+    report = rt_report_single.model_copy(update={'description': description})
+    assert _rt_run_name(report) == 'Nightly sweep'
+
+
+def test_redteam_hero_pill_carries_own_model_per_agent(rt_report_multi):
+    """Each pill shows its own agent's model — a global lookup would paste the
+    first agent's model onto every pill."""
+    import re as _re
+
+    from evaluatorq.dashboard.report_tabs import _redteam_hero, _rt_by_kind
+
+    models: dict[str, str] = {}
+    for r in rt_report_multi.results:
+        r.agent.display_name = f'Agent {r.agent.key}'
+        r.agent.model = f'model-{r.agent.key}'
+        models[r.agent.display_name] = r.agent.model
+
+    html = _redteam_hero(_rt_by_kind(rt_report_multi).get('summary'), rt_report_multi)
+    pills = _re.findall(
+        r'rt-hero-pill-name">([^<]*)</span><span class="rt-hero-pill-sub">([^<]*)<',
+        html,
+    )
+    assert len(pills) == len(models) >= 2
+    for name, sub in pills:
+        assert sub.startswith(f'{models[name]} · ')
+
+
 def test_redteam_hero_shows_agent_pills_multi(rt_report_multi):
     from evaluatorq.dashboard.report_tabs import _redteam_hero, _rt_by_kind
 
