@@ -47,14 +47,16 @@ class PydanticAITarget(AgentTarget):
       total; total is derived. ``usage`` is a property on recent versions and a
       method on older ones, so both are tried.
 
-    Usage::
+    Usage:
 
-        from pydantic_ai import Agent
-        from evaluatorq.integrations.pydantic_ai_integration import PydanticAITarget
+    ```python
+    from pydantic_ai import Agent
+    from evaluatorq.integrations.pydantic_ai_integration import PydanticAITarget
 
-        agent = Agent(model, system_prompt="You are a support agent.")
-        target = PydanticAITarget(agent)
-        results = await simulate(target=target, ...)
+    agent = Agent(model, system_prompt="You are a support agent.")
+    target = PydanticAITarget(agent)
+    results = await simulate(target=target, ...)
+    ```
     """
 
     def __init__(

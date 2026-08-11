@@ -664,12 +664,14 @@ class LLMConfig(BaseModel):
     Configure per-role LLM behaviour via ``attacker`` and ``evaluator``.
     Pass an instance as ``llm_config=LLMConfig(...)`` to :func:`red_team`.
 
-    Example::
+    Example:
 
-        config = LLMConfig(
-            attacker=LLMCallConfig(model="anthropic/claude-3-5-sonnet", temperature=0.9),
-            evaluator=EvaluatorConfig(model="openai/gpt-4o-mini", temperature=0.0),
-        )
+    ```python
+    config = LLMConfig(
+        attacker=LLMCallConfig(model="anthropic/claude-3-5-sonnet", temperature=0.9),
+        evaluator=EvaluatorConfig(model="openai/gpt-4o-mini", temperature=0.0),
+    )
+    ```
     """
 
     model_config = ConfigDict(extra='forbid')

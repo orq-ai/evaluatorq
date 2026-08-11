@@ -42,26 +42,26 @@ from evaluatorq import evaluatorq, DataPoint
 
 A minimal `.env` for Orq platform use:
 
-```dotenv
+```ini
 ORQ_API_KEY=your_orq_api_key_here
 ```
 
 With OpenAI as the LLM backend (red teaming / simulation, no Orq):
 
-```dotenv
+```ini
 OPENAI_API_KEY=sk-...
 ```
 
 Self-hosted LLM endpoint:
 
-```dotenv
+```ini
 OPENAI_API_KEY=dummy
 OPENAI_BASE_URL=http://localhost:8000/v1
 ```
 
 To send traces to a custom OTLP collector instead of Orq:
 
-```dotenv
+```ini
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 ```
 

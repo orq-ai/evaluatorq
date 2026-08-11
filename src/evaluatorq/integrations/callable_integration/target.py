@@ -54,33 +54,35 @@ class CallableTarget(AgentTarget):
     full context, matching the stateless OpenAI / Vercel / OpenAI-Agents targets
     (which likewise consume the typed ``Message`` list at the boundary).
 
-    Usage::
+    Usage:
 
-        from evaluatorq.contracts import Message
-        from evaluatorq.integrations.callable_integration import CallableTarget
+    ```python
+    from evaluatorq.contracts import Message
+    from evaluatorq.integrations.callable_integration import CallableTarget
 
-        # Async function — receives the whole conversation as Message objects
-        async def my_agent(messages: list[Message]) -> str:
-            result = await some_framework.run(messages[-1].content)
-            return result.text
+    # Async function — receives the whole conversation as Message objects
+    async def my_agent(messages: list[Message]) -> str:
+        result = await some_framework.run(messages[-1].content)
+        return result.text
 
-        target = CallableTarget(my_agent)
+    target = CallableTarget(my_agent)
 
-        # Need OpenAI chat-completion dicts? Convert at the boundary yourself:
-        async def openai_agent(messages: list[Message]) -> str:
-            chat = [m.to_chat_completion() for m in messages]
-            return (await client.chat.completions.create(model="gpt-4o", messages=chat)).choices[0].message.content
+    # Need OpenAI chat-completion dicts? Convert at the boundary yourself:
+    async def openai_agent(messages: list[Message]) -> str:
+        chat = [m.to_chat_completion() for m in messages]
+        return (await client.chat.completions.create(model="gpt-4o", messages=chat)).choices[0].message.content
 
-        target = CallableTarget(openai_agent)
+    target = CallableTarget(openai_agent)
 
-        # Plumb token counts via usage_fn — it sees the full transcript
-        def get_usage(messages: list[Message], response: str) -> TokenUsage:
-            return TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15, calls=1)
+    # Plumb token counts via usage_fn — it sees the full transcript
+    def get_usage(messages: list[Message], response: str) -> TokenUsage:
+        return TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15, calls=1)
 
-        target = CallableTarget(my_agent, usage_fn=get_usage)
+    target = CallableTarget(my_agent, usage_fn=get_usage)
 
-        # Pass to simulation or red teaming
-        config = DynamicRunConfig(targets=[target])
+    # Pass to simulation or red teaming
+    config = DynamicRunConfig(targets=[target])
+    ```
     """
 
     def __init__(

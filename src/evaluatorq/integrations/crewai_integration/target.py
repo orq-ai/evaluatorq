@@ -64,19 +64,21 @@ class CrewAITarget(AgentTarget):
     For parallel jobs pass a ``crew_factory`` so :meth:`new` can build an
     independent crew; otherwise the same crew instance is reused.
 
-    Usage::
+    Usage:
 
-        from crewai import Agent, Task, Crew
-        from evaluatorq.integrations.crewai_integration import CrewAITarget
+    ```python
+    from crewai import Agent, Task, Crew
+    from evaluatorq.integrations.crewai_integration import CrewAITarget
 
-        def make_crew() -> Crew:
-            agent = Agent(role=..., goal=..., backstory=..., llm=llm)
-            task = Task(description="Conversation so far:\\n{conversation}",
-                        expected_output="The agent's next reply.", agent=agent)
-            return Crew(agents=[agent], tasks=[task])
+    def make_crew() -> Crew:
+        agent = Agent(role=..., goal=..., backstory=..., llm=llm)
+        task = Task(description="Conversation so far:\\n{conversation}",
+                    expected_output="The agent's next reply.", agent=agent)
+        return Crew(agents=[agent], tasks=[task])
 
-        target = CrewAITarget(make_crew(), crew_factory=make_crew)
-        results = await simulate(target=target, ...)
+    target = CrewAITarget(make_crew(), crew_factory=make_crew)
+    results = await simulate(target=target, ...)
+    ```
     """
 
     def __init__(

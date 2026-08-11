@@ -366,28 +366,34 @@ def llm_jury(
 
     Examples
     --------
-    Boolean — "is the answer correct?" (``verdict_kind="categorical"``, the default)::
+    Boolean — "is the answer correct?" (``verdict_kind="categorical"``, the default):
 
-        llm_jury(name="correct", criteria="Is the answer factually correct?")
+    ```python
+    llm_jury(name="correct", criteria="Is the answer factually correct?")
+    ```
 
-    Labeled categorical (``verdict_kind="categorical"``)::
+    Labeled categorical (``verdict_kind="categorical"``):
 
-        llm_jury(
-            name="grade",
-            criteria="Grade the answer.",
-            labels=["correct", "partially_correct", "incorrect"],
-            passing_labels=["correct", "partially_correct"],
-        )
+    ```python
+    llm_jury(
+        name="grade",
+        criteria="Grade the answer.",
+        labels=["correct", "partially_correct", "incorrect"],
+        passing_labels=["correct", "partially_correct"],
+    )
+    ```
 
-    Numeric (``verdict_kind="numeric"``)::
+    Numeric (``verdict_kind="numeric"``):
 
-        llm_jury(
-            name="helpfulness",
-            criteria="Rate helpfulness from 0 to 1.",
-            verdict_kind="numeric",
-            score_range=(0.0, 1.0),
-            threshold=0.7,
-        )
+    ```python
+    llm_jury(
+        name="helpfulness",
+        criteria="Rate helpfulness from 0 to 1.",
+        verdict_kind="numeric",
+        score_range=(0.0, 1.0),
+        threshold=0.7,
+    )
+    ```
     """
     # --- validation (fail fast) ---
     if bool(criteria) == bool(prompt):
