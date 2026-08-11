@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_7e445d3ad6642247_filter_request_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.15.4">coverage.py v7.15.4</a>,
-            created at 2026-08-11 07:00 +0000
+            created at 2026-08-11 19:53 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -220,11 +220,11 @@
     <p class="pln"><span class="n"><a id="t138" href="#t138">138</a></span><span class="t"><span class="str">    masked suffix (never the full value).&quot;&quot;&quot;</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t139" href="#t139">139</a></span><span class="t">    <span class="key">import</span> <span class="nam">os</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t140" href="#t140">140</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t141" href="#t141">141</a></span><span class="t">    <span class="key">from</span> <span class="nam">evaluatorq</span><span class="op">.</span><span class="nam">dashboard</span><span class="op">.</span><span class="nam">library</span> <span class="key">import</span> <span class="nam">_default_roots</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t141" href="#t141">141</a></span><span class="t">    <span class="key">from</span> <span class="nam">evaluatorq</span><span class="op">.</span><span class="nam">dashboard</span><span class="op">.</span><span class="nam">library</span> <span class="key">import</span> <span class="nam">default_roots</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t142" href="#t142">142</a></span><span class="t">    <span class="key">from</span> <span class="nam">evaluatorq</span><span class="op">.</span><span class="nam">dashboard</span><span class="op">.</span><span class="nam">orq_workspace</span> <span class="key">import</span> <span class="nam">classify_host</span><span class="op">,</span> <span class="nam">resolve_base_url</span><span class="op">,</span> <span class="nam">resolve_slug</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t143" href="#t143">143</a></span><span class="t">    <span class="key">from</span> <span class="nam">evaluatorq</span><span class="op">.</span><span class="nam">simulation</span><span class="op">.</span><span class="nam">types</span> <span class="key">import</span> <span class="nam">DEFAULT_MODEL</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t144" href="#t144">144</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t145" href="#t145">145</a></span><span class="t">    <span class="nam">scan_roots</span> <span class="op">=</span> <span class="nam">roots</span> <span class="key">if</span> <span class="nam">roots</span> <span class="key">is</span> <span class="key">not</span> <span class="key">None</span> <span class="key">else</span> <span class="nam">_default_roots</span><span class="op">(</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t145" href="#t145">145</a></span><span class="t">    <span class="nam">scan_roots</span> <span class="op">=</span> <span class="nam">roots</span> <span class="key">if</span> <span class="nam">roots</span> <span class="key">is</span> <span class="key">not</span> <span class="key">None</span> <span class="key">else</span> <span class="nam">default_roots</span><span class="op">(</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t146" href="#t146">146</a></span><span class="t">    <span class="nam">store_paths</span> <span class="op">=</span> <span class="op">[</span><span class="nam">str</span><span class="op">(</span><span class="nam">p</span><span class="op">)</span> <span class="key">for</span> <span class="nam">p</span> <span class="key">in</span> <span class="nam">scan_roots</span><span class="op">]</span> <span class="key">or</span> <span class="op">[</span><span class="str">&#x27;&#8212;&#x27;</span><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t147" href="#t147">147</a></span><span class="t">    <span class="nam">config</span><span class="op">:</span> <span class="nam">list</span><span class="op">[</span><span class="nam">tuple</span><span class="op">[</span><span class="nam">str</span><span class="op">,</span> <span class="nam">str</span> <span class="op">|</span> <span class="nam">list</span><span class="op">[</span><span class="nam">str</span><span class="op">]</span><span class="op">]</span><span class="op">]</span> <span class="op">=</span> <span class="op">[</span><span class="op">(</span><span class="str">&#x27;Run stores&#x27;</span><span class="op">,</span> <span class="nam">store_paths</span><span class="op">)</span><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t148" href="#t148">148</a></span><span class="t">    <span class="nam">config</span><span class="op">.</span><span class="nam">append</span><span class="op">(</span><span class="op">(</span><span class="str">&#x27;Default sim model&#x27;</span><span class="op">,</span> <span class="nam">DEFAULT_MODEL</span><span class="op">)</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
@@ -689,7 +689,7 @@
             <a class="nav" href="z_7e445d3ad6642247_filter_request_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.15.4">coverage.py v7.15.4</a>,
-            created at 2026-08-11 07:00 +0000
+            created at 2026-08-11 19:53 +0000
         </p>
     </div>
 </footer>
