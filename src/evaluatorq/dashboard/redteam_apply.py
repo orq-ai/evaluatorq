@@ -97,7 +97,13 @@ def render_apply_panel(rid: str, report: RedTeamReport) -> str:
         only = agents[0] if agents else ''
         agent_field = f'<input type="hidden" id="{AGENT_FIELD_ID}" name="agent_key" value="{esc(only)}">'
         if only:
-            agent_field += f'<span class="rt-apply-agent-name">{esc(only)}</span>'
+            # A LABEL, not a control: single-agent runs have nothing to choose,
+            # so this must not look clickable (review feedback: the pill chip
+            # read as a mystery button).
+            agent_field += (
+                '<span class="rt-apply-agent-name">'
+                f'<span class="rt-apply-agent-label">Agent</span>{esc(only)}</span>'
+            )
 
     applied_note = f' · {applied_n} already applied' if applied_n else ''
     return (

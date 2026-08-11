@@ -2289,8 +2289,10 @@ _RT_REPORT_CSS = """
 }
 .rt-report .rt-apply-agent-name {
     font-family: var(--font-mono); font-size: 12px; color: var(--text-muted);
-    background: var(--surface-card, #fdfcfb); border: 1px solid var(--border-default); border-radius: 999px;
-    padding: 4px 12px; white-space: nowrap;
+    display: inline-flex; align-items: baseline; gap: 7px; white-space: nowrap;
+}
+.rt-report .rt-apply-agent-label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-faint);
 }
 .rt-apply-btn {
     font-size: 13px; font-weight: 600; padding: 7px 14px; border-radius: 8px; cursor: pointer;
