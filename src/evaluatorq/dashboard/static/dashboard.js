@@ -520,7 +520,8 @@
       '<span class="rt-drawer-spinner" aria-hidden="true"></span>' +
       '<p class="rt-drawer-loading-title">' + message + '</p>' +
       '<p class="rt-drawer-note">This rewrites the agent instructions with an LLM and usually ' +
-      'takes 10–30 seconds. Nothing is written to the agent.</p>' +
+      'takes 10–30 seconds. This is a read-only preview: the agent on the platform is ' +
+      'not modified unless you click Apply on the next screen.</p>' +
       '<div class="rt-drawer-skeleton" aria-hidden="true"><span></span><span></span><span></span><span></span></div>' +
       '</div></aside>'
     );
