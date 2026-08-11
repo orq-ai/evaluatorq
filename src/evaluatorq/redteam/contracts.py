@@ -679,7 +679,12 @@ class LLMConfig(BaseModel):
     evaluator: EvaluatorConfig = Field(default_factory=EvaluatorConfig)
 
     # --- Retry configuration --------------------------------------------------
-    retry_count: int = 3
+    # Client-side retries per LLM call (OpenAI SDK ``max_retries``), and — on the
+    # Orq router path only — also the router-side budget via ``retry_extra_body``.
+    # The two layers multiply only during sustained outages: worst case per call
+    # is (retry_count + 1) HTTP requests, each asking the router for up to
+    # retry_count provider retries.
+    retry_count: int = Field(default=3, ge=0, le=10)
     retry_on_codes: list[int] = Field(default=[429, 500, 502, 503, 504])
     # How many times to regenerate an attacker turn that the attack model
     # content-filtered or self-censored (a refusal/safety disclaimer) before
@@ -727,6 +732,11 @@ class LLMConfig(BaseModel):
         if not client_routes_through_orq(client):
             return {}
         return {'retry': {'count': self.retry_count, 'on_codes': self.retry_on_codes}}
+
+    @property
+    def retry_attempts(self) -> int:
+        """Total attempts for ``with_retry``-style callers: initial call + retries."""
+        return self.retry_count + 1
 
 
 # Module-level default used by internal pipeline components.
