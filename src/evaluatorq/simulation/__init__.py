@@ -51,8 +51,10 @@ if TYPE_CHECKING:
     from evaluatorq.common.replay import ReplayError
     from evaluatorq.contracts import AgentTarget, LLMCallConfig, TokenUsage
     from evaluatorq.integrations.callable_integration import CallableTarget
+    from evaluatorq.integrations.crewai_integration import CrewAITarget
     from evaluatorq.integrations.langgraph_integration import LangGraphTarget
     from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget
+    from evaluatorq.integrations.pydantic_ai_integration import PydanticAITarget
     from evaluatorq.integrations.vercel_ai_sdk_integration import VercelAISdkTarget
     from evaluatorq.openresponses.target import OrqResponsesTarget
     from evaluatorq.simulation.adapters import (
@@ -205,8 +207,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
     ),
     'AgentTarget': ('evaluatorq.contracts', 'AgentTarget'),
     'CallableTarget': ('evaluatorq.integrations.callable_integration', 'CallableTarget'),
+    'CrewAITarget': ('evaluatorq.integrations.crewai_integration', 'CrewAITarget'),
     'LangGraphTarget': ('evaluatorq.integrations.langgraph_integration', 'LangGraphTarget'),
     'OpenAIAgentTarget': ('evaluatorq.integrations.openai_agents_integration', 'OpenAIAgentTarget'),
+    'PydanticAITarget': ('evaluatorq.integrations.pydantic_ai_integration', 'PydanticAITarget'),
     'VercelAISdkTarget': ('evaluatorq.integrations.vercel_ai_sdk_integration', 'VercelAISdkTarget'),
     'DEFAULT_MODEL': ('evaluatorq.simulation.types', 'DEFAULT_MODEL'),
     'CommunicationStyle': ('evaluatorq.simulation.types', 'CommunicationStyle'),
@@ -281,8 +285,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
 # missing extra surfaces as an actionable message instead of a bare ImportError
 # about the third-party package. (Callable/Vercel need no extra.)
 _OPTIONAL_TARGET_EXTRAS: dict[str, str] = {  # noqa: RUF067  # lazy-import lookup table backing __getattr__ below
+    'CrewAITarget': 'crewai',
     'LangGraphTarget': 'langgraph',
     'OpenAIAgentTarget': 'openai-agents',
+    'PydanticAITarget': 'pydantic-ai',
 }
 
 
@@ -319,6 +325,7 @@ __all__ = [
     'CallableTarget',
     'CommunicationStyle',
     'ConversationStrategy',
+    'CrewAITarget',
     'Criterion',
     'CulturalContext',
     # Generators
@@ -341,6 +348,7 @@ __all__ = [
     'PersonaGenerator',
     # Quality
     'PerturbationType',
+    'PydanticAITarget',
     'ReplayError',
     'RichHooks',
     'Scenario',

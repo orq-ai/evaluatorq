@@ -13,8 +13,10 @@ import pytest
     "module",
     [
         "evaluatorq.integrations.callable_integration.target",
+        "evaluatorq.integrations.crewai_integration.target",
         "evaluatorq.integrations.langgraph_integration.target",
         "evaluatorq.integrations.openai_agents_integration.target",
+        "evaluatorq.integrations.pydantic_ai_integration.target",
         "evaluatorq.integrations.vercel_ai_sdk_integration.target",
     ],
 )
@@ -41,7 +43,14 @@ def test_importing_integration_target_does_not_import_redteam(module: str) -> No
 
 @pytest.mark.parametrize(
     "name",
-    ["OpenAIAgentTarget", "LangGraphTarget", "VercelAISdkTarget", "CallableTarget"],
+    [
+        "OpenAIAgentTarget",
+        "LangGraphTarget",
+        "VercelAISdkTarget",
+        "CallableTarget",
+        "CrewAITarget",
+        "PydanticAITarget",
+    ],
 )
 def test_framework_target_exposed_from_simulation(name: str) -> None:
     import evaluatorq.simulation as sim
@@ -52,7 +61,12 @@ def test_framework_target_exposed_from_simulation(name: str) -> None:
 
 @pytest.mark.parametrize(
     ("name", "extra"),
-    [("LangGraphTarget", "langgraph"), ("OpenAIAgentTarget", "openai-agents")],
+    [
+        ("LangGraphTarget", "langgraph"),
+        ("OpenAIAgentTarget", "openai-agents"),
+        ("CrewAITarget", "crewai"),
+        ("PydanticAITarget", "pydantic-ai"),
+    ],
 )
 def test_missing_optional_dep_gives_actionable_error(
     name: str, extra: str, monkeypatch: pytest.MonkeyPatch
