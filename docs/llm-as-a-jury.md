@@ -117,17 +117,10 @@ of `labels`; omit it and the verdict is still recorded but `passed` is `None`.
 
 ### Cyclic assignment (CyclicJudge)
 
-`assignment="cyclic"` implements CyclicJudge
-([arXiv:2603.01865](https://arxiv.org/abs/2603.01865)): round-robin judge
-assignment. Inside `evaluatorq()` the assignment is keyed on the dataset row:
-datapoint `i` goes to judge `i % len(panel)`, so datapoint 0 gets judge 0,
-datapoint 1 gets judge 1, and so on, wrapping around the panel. Because the
-key is the row rather than call order, the mapping is deterministic at any
-`parallelism` and reproducible across runs. Every judge covers an equal share
-of the run, so systematic judge bias cancels in expectation across the
-dataset while each datapoint costs exactly one judge (`repetitions` still
-multiplies calls to that one judge). The paper shows this beats both
-all-judges and random-single-judge at any fixed budget.
+`assignment="cyclic"` gives each datapoint exactly one judge, rotating through
+the panel so every judge covers an equal share of the run. Judge bias still
+cancels in expectation across the dataset, but the run costs the same as a
+single-judge evaluation instead of `len(panel)` times as much.
 
 ```python
 jury = llm_jury(
@@ -138,45 +131,13 @@ jury = llm_jury(
 )
 ```
 
-Use it when you care about the run-level score (a benchmark mean, a pass
-rate), not when every individual verdict must be trustworthy on its own: each
-per-item verdict is a single judge's opinion. Practical notes:
+Use it for run-level scores (a benchmark mean, a pass rate); keep the default
+`"all"` when an individual verdict has to stand on its own, since each per-item
+verdict under `"cyclic"` is one judge's opinion and `stats`/`raw_agreement` come
+back `None`.
 
-- Per-item `stats` and `raw_agreement` come back `None`. A single vote has no
-  cross-judge agreement, and reporting `1.0` / `std=0.0` would be
-  indistinguishable from a genuinely unanimous panel.
-- The row-keyed mapping above holds when the scorer runs inside
-  `evaluatorq()`, which passes each datapoint's dataset index. Calling the
-  scorer directly (outside the runner) provides no index, so judges are
-  assigned in call-arrival order from a cursor that lives on the evaluator
-  object: only the equal share balance is guaranteed there, not which judge
-  sees which item, and a reused evaluator continues that rotation where it
-  left off. The same applies to `PairwiseComparator.compare`, which is always
-  arrival-ordered.
-- Which judge scored an item is recorded: under cyclic assignment every
-  result carries the full jury record (per-judge votes, models, verdicts) in
-  `raw_output["jury"]`, so the rotation is auditable after the run. This is
-  cyclic-only: under `"all"` the panel itself is the record, `raw_output`
-  stays `None`, and results keep their pre-cyclic shape.
-- In a multi-job run the same datapoint draws the same judge under every job
-  (the mapping is keyed on the dataset row, not the job), so judge identity is
-  never a confound when comparing job A against job B on the same data. One
-  caveat: for dataset-ID runs fetched from the platform, cross-run
-  reproducibility of the mapping rests on the Orq API returning stable
-  pagination order; in-memory datasets are exactly stable.
-- Rotation runs over the deduplicated panel: `judges=["a", "a", "b"]` gives
-  `a` two votes per item under `"all"`, but an equal share under `"cyclic"` —
-  duplicate entries do not up-weight a judge in cyclic mode.
-- `repetitions` still applies to the single assigned judge: `repetitions=3`
-  means three calls to one judge (smoothing that judge's call noise), never
-  three judges.
-- Shuffle your dataset first if its order is meaningful, so the rotation
-  cannot line up with a latent grouping (for example a dataset sorted by
-  category).
-- `min_successful_judges` must stay `1`, and a mechanically failed item comes
-  back inconclusive unless `replacement_judges` provides a stand-in.
-
-For per-item confidence keep `assignment="all"`.
+See [Cyclic judge assignment](cyclic-judge.md) for how items map to judges,
+auditing the rotation via `raw_output["jury"]`, and the failure semantics.
 
 ## How the verdict is decided
 
