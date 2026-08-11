@@ -14,6 +14,8 @@ crewai) use lazy imports so that importing this package does not fail when those
 libraries are not installed.
 """
 
+import importlib
+
 from . import langchain_integration
 
 __all__ = [
@@ -28,28 +30,11 @@ __all__ = [
 
 
 def __getattr__(name: str):
-    if name == 'langgraph_integration':
-        from . import langgraph_integration
-
-        return langgraph_integration
-    if name == 'openai_agents_integration':
-        from . import openai_agents_integration
-
-        return openai_agents_integration
-    if name == 'pydantic_ai_integration':
-        from . import pydantic_ai_integration
-
-        return pydantic_ai_integration
-    if name == 'crewai_integration':
-        from . import crewai_integration
-
-        return crewai_integration
-    if name == 'vercel_ai_sdk_integration':
-        from . import vercel_ai_sdk_integration
-
-        return vercel_ai_sdk_integration
-    if name == 'callable_integration':
-        from . import callable_integration
-
-        return callable_integration
+    # `from . import <name>` here would recurse: its `_handle_fromlist` calls
+    # getattr on this package, which re-enters __getattr__ forever whenever the
+    # sub-module is not already imported. `import_module` goes through the
+    # import machinery instead, and binds the sub-module on this package itself,
+    # so later lookups never reach __getattr__ again.
+    if name in __all__:
+        return importlib.import_module(f'.{name}', __name__)
     raise AttributeError(f'module {__name__!r} has no attribute {name!r}')

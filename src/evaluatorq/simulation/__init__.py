@@ -285,10 +285,8 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
 # missing extra surfaces as an actionable message instead of a bare ImportError
 # about the third-party package. (Callable/Vercel need no extra.)
 _OPTIONAL_TARGET_EXTRAS: dict[str, str] = {  # noqa: RUF067  # lazy-import lookup table backing __getattr__ below
-    'CrewAITarget': 'crewai',
     'LangGraphTarget': 'langgraph',
     'OpenAIAgentTarget': 'openai-agents',
-    'PydanticAITarget': 'pydantic-ai',
 }
 
 

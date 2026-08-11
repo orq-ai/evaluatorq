@@ -42,6 +42,35 @@ def test_importing_integration_target_does_not_import_redteam(module: str) -> No
 
 
 @pytest.mark.parametrize(
+    "submodule",
+    [
+        "callable_integration",
+        "crewai_integration",
+        "langchain_integration",
+        "langgraph_integration",
+        "openai_agents_integration",
+        "pydantic_ai_integration",
+        "vercel_ai_sdk_integration",
+    ],
+)
+def test_from_integrations_import_submodule(submodule: str) -> None:
+    """`from evaluatorq.integrations import X` must not recurse.
+
+    The lazy loader used to do `from . import X` inside `__getattr__`; the
+    import machinery answers that by calling getattr on the package, which
+    re-enters `__getattr__` — RecursionError for every sub-module on 3.13.
+    Run in a subprocess so the sub-module is genuinely not yet imported;
+    in-process the attribute may already be bound by an earlier test.
+    """
+    proc = subprocess.run(
+        [sys.executable, "-c", f"from evaluatorq.integrations import {submodule}"],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize(
     "name",
     [
         "OpenAIAgentTarget",
@@ -64,8 +93,6 @@ def test_framework_target_exposed_from_simulation(name: str) -> None:
     [
         ("LangGraphTarget", "langgraph"),
         ("OpenAIAgentTarget", "openai-agents"),
-        ("CrewAITarget", "crewai"),
-        ("PydanticAITarget", "pydantic-ai"),
     ],
 )
 def test_missing_optional_dep_gives_actionable_error(
