@@ -56,6 +56,16 @@ site/
 .cache/
 .worktrees/
 
+# Pages docs/gen_pages.py generates into docs/ on every mkdocs build/serve.
+# Sources of truth are src/ docstrings and the repo-root CONTRIBUTING/CHANGELOG/
+# ROADMAP — committing these copies would let them go stale against both.
+docs/reference/
+docs/examples/
+docs/api-reference.md
+docs/contributing.md
+docs/changelog.md
+docs/roadmap.md
+
 # Logs
 *.log
 
