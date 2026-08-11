@@ -39,10 +39,11 @@ from evaluatorq.common.reports import esc
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from evaluatorq.redteam.contracts import RedTeamReport
+    from evaluatorq.redteam.contracts import FocusAreaRecommendation, RedTeamReport
     from evaluatorq.redteam.reports.apply import ApplyRecommendationsResult
 
 DRAWER_ID = 'rt-apply-drawer'
+AGENT_FIELD_ID = 'rt-apply-agent-field'
 
 
 # ---------------------------------------------------------------------------
@@ -83,13 +84,18 @@ def render_apply_panel(rid: str, report: RedTeamReport) -> str:
         return f'<div class="rt-apply-bar">{status}</div><div id="{DRAWER_ID}"></div>'
 
     agents = report.tested_agents or []
+    # The agent field carries a stable id so the per-recommendation Apply
+    # buttons on the focus cards can hx-include it into their own requests.
     if len(agents) > 1:
         options = ''.join(f'<option value="{esc(a)}">{esc(a)}</option>' for a in agents)
-        agent_field = f'<select class="rt-apply-agent" name="agent_key" aria-label="Agent">{options}</select>'
+        agent_field = (
+            f'<select id="{AGENT_FIELD_ID}" class="rt-apply-agent" name="agent_key" aria-label="Agent">'
+            f'{options}</select>'
+        )
     else:
         # Single (or unknown) agent: fixed value, no chrome.
         only = agents[0] if agents else ''
-        agent_field = f'<input type="hidden" name="agent_key" value="{esc(only)}">'
+        agent_field = f'<input type="hidden" id="{AGENT_FIELD_ID}" name="agent_key" value="{esc(only)}">'
         if only:
             agent_field += f'<span class="rt-apply-agent-name">{esc(only)}</span>'
 
@@ -98,16 +104,33 @@ def render_apply_panel(rid: str, report: RedTeamReport) -> str:
         '<div class="rt-apply-bar">'
         '<div class="rt-apply-bar-text">'
         f'<span class="rt-apply-count">{len(pending)} recommendation(s) ready to apply{esc(applied_note)}</span>'
-        '<span class="rt-apply-hint">Preview folds them into the agent instructions; nothing is '
-        'written until you approve the diff.</span>'
+        '<span class="rt-apply-hint">Apply one from its card below, or all at once here. Preview folds '
+        'them into the agent instructions; nothing is written until you approve the diff.</span>'
         '</div>'
         f'<form class="rt-apply-form" hx-post="/r/{safe_rid}/redteam/apply/preview" '
         f'hx-target="#{DRAWER_ID}" hx-swap="innerHTML">'
         f'{agent_field}'
-        '<button type="submit" class="rt-apply-btn">Preview &amp; apply…</button>'
+        f'<button type="submit" class="rt-apply-btn">Preview &amp; apply all {len(pending)}…</button>'
         '</form>'
         '</div>'
         f'<div id="{DRAWER_ID}"></div>'
+    )
+
+
+def render_rec_apply_button(rid: str, category: str, rec: str) -> str:
+    """Per-recommendation Apply button for a focus-card bullet.
+
+    Posts the single recommendation (plus its area category, so the drawer can
+    show that area's breakdown) to the preview route; the agent comes from the
+    apply bar's field via ``hx-include``.
+    """
+    return (
+        f'<form class="rt-focus-rec-apply" hx-post="/r/{esc(rid)}/redteam/apply/preview" '
+        f'hx-target="#{DRAWER_ID}" hx-swap="innerHTML" hx-include="#{AGENT_FIELD_ID}">'
+        f'<input type="hidden" name="rec" value="{esc(rec)}">'
+        f'<input type="hidden" name="category" value="{esc(category)}">'
+        '<button type="submit" class="rt-apply-btn rt-apply-btn--sm">Apply…</button>'
+        '</form>'
     )
 
 
@@ -158,14 +181,49 @@ def _diff_html(diff: str) -> str:
     return f'<pre class="rt-diff">{"".join(out)}</pre>'
 
 
-def render_preview_drawer(rid: str, result: ApplyRecommendationsResult) -> str:
-    """Breakdown drawer for a preview: what will be merged, and the exact diff."""
+def _area_breakdown_html(area: FocusAreaRecommendation) -> str:
+    """Focus-area context block for a single-recommendation preview: where the
+    finding came from and what the analysis saw."""
+    # Same tier thresholds as the focus cards (report_tabs._rt_focus_tier);
+    # duplicated here because report_tabs imports this module.
+    if area.risk_score >= 2:
+        tier, color = 'P1 · Critical priority', 'var(--red-600)'
+    elif area.risk_score >= 1:
+        tier, color = 'P2 · High priority', 'var(--orange-600)'
+    else:
+        tier, color = 'P3 · Medium priority', 'var(--amber-600)'
+    patterns = f'<div class="rt-drawer-patterns">{esc(area.patterns_observed)}</div>' if area.patterns_observed else ''
+    return (
+        '<div class="rt-drawer-section-label">Focus area</div>'
+        '<div class="rt-drawer-area">'
+        f'<span class="rt-drawer-area-tier" style="color:{color}">{esc(tier)}</span>'
+        f'<span class="rt-drawer-area-name">{esc(area.category_name)} '
+        f'<span class="rt-drawer-area-code">{esc(area.category)}</span></span>'
+        f'<span class="rt-drawer-area-meta">risk {area.risk_score:.1f} · '
+        f'{area.traces_analyzed} failed trace(s) analyzed</span>'
+        f'{patterns}'
+        '</div>'
+    )
+
+
+def render_preview_drawer(
+    rid: str, result: ApplyRecommendationsResult, area: FocusAreaRecommendation | None = None
+) -> str:
+    """Breakdown drawer for a preview: where the recommendation(s) came from
+    (single-rec applies carry their focus area), what will be merged, and the
+    exact instructions diff."""
     recs = ''.join(f'<li>{esc(r)}</li>' for r in result.recommendations)
     unchanged = result.new_instructions.strip() == result.original_instructions.strip()
+    rec_label = (
+        'Recommendation to fold in'
+        if len(result.recommendations) == 1
+        else f'{len(result.recommendations)} recommendations to fold in'
+    )
     body = (
         f'<div class="rt-drawer-section-label">Agent</div>'
         f'<div class="rt-drawer-agent">{esc(result.agent_key)}</div>'
-        f'<div class="rt-drawer-section-label">{len(result.recommendations)} recommendation(s) to fold in</div>'
+        + (_area_breakdown_html(area) if area is not None else '')
+        + f'<div class="rt-drawer-section-label">{esc(rec_label)}</div>'
         f'<ul class="rt-drawer-recs">{recs}</ul>'
         '<div class="rt-drawer-section-label">Instructions diff</div>'
         + (
@@ -286,6 +344,31 @@ def register_redteam_apply_routes(app: Any, roots: list[Any] | None = None) -> N
                 render_error_drawer('This run does not record which agent it tested, so there is nothing to apply to.'),
                 media_type='text/html',
             )
+
+        # Per-recommendation apply: `rec` (+ its area `category`) narrows the
+        # merge to that single bullet, and the drawer shows the area breakdown.
+        # Without `rec` the whole pending set is merged (the apply-all bar).
+        areas = list(report.focus_area_recommendations or [])
+        single_rec = str(form.get('rec') or '').strip()
+        area: FocusAreaRecommendation | None = None
+        if single_rec:
+            category = str(form.get('category') or '').strip()
+            area = next(
+                (a for a in areas if a.category == category and single_rec in [r.strip() for r in a.recommendations]),
+                None,
+            )
+            if area is None:
+                return Response(
+                    render_error_drawer('That recommendation is no longer on the report; reload the page.'),
+                    media_type='text/html',
+                )
+            if single_rec in {r.strip() for r in report.applied_recommendations}:
+                return Response(
+                    render_error_drawer('That recommendation is already applied to the agent.'),
+                    media_type='text/html',
+                )
+            areas = [area.model_copy(update={'recommendations': [single_rec]})]
+
         try:
             orq_client, llm_client, model = _build_clients()
         except ValueError as e:
@@ -295,7 +378,7 @@ def register_redteam_apply_routes(app: Any, roots: list[Any] | None = None) -> N
 
         try:
             result = await apply_recommendations(
-                report.focus_area_recommendations or [],
+                areas,
                 agent_key,
                 orq_client,
                 llm_client,
@@ -312,7 +395,7 @@ def register_redteam_apply_routes(app: Any, roots: list[Any] | None = None) -> N
                 render_error_drawer('No new recommendations to apply — everything is already applied.'),
                 media_type='text/html',
             )
-        return Response(render_preview_drawer(rid, result), media_type='text/html')
+        return Response(render_preview_drawer(rid, result, area), media_type='text/html')
 
     @app.post('/r/{rid}/redteam/apply/confirm')
     async def apply_confirm(rid: str, req: Request) -> Response:

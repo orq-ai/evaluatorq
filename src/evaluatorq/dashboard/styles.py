@@ -2227,8 +2227,13 @@ _RT_REPORT_CSS = """
 
 /* ---- Apply recommendations: bar, bullets, right drawer (RES-1143) ---- */
 .rt-report .rt-focus-recs-label { margin-top: 12px; }
-.rt-report .rt-focus-recs { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px; }
-.rt-report .rt-focus-rec { font-size: 13px; line-height: 1.5; }
+.rt-report .rt-focus-recs { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.rt-report .rt-focus-rec {
+    font-size: 13px; line-height: 1.5; display: flex; align-items: center; gap: 10px;
+}
+.rt-report .rt-focus-rec-text { flex: 1 1 auto; min-width: 0; }
+.rt-report .rt-focus-rec-apply { flex: 0 0 auto; margin: 0; }
+.rt-apply-btn--sm { font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 6px; }
 .rt-report .rt-focus-rec--applied { color: var(--text-muted); }
 .rt-report .rt-focus-rec-applied {
     font-family: var(--font-mono); font-size: 10px; color: var(--green-600, #16a34a);
@@ -2287,6 +2292,16 @@ _RT_REPORT_CSS = """
 }
 .rt-drawer-section-label:first-child { margin-top: 0; }
 .rt-drawer-agent { font-family: var(--font-mono); font-size: 13px; }
+.rt-drawer-area {
+    display: flex; flex-direction: column; gap: 3px;
+    background: var(--surface-sunken); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 12px;
+}
+.rt-drawer-area-tier { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+.rt-drawer-area-name { font-size: 13px; font-weight: 600; }
+.rt-drawer-area-code { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); font-weight: 400; }
+.rt-drawer-area-meta { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+.rt-drawer-patterns { font-size: 12px; color: var(--text-muted); line-height: 1.5; margin-top: 4px; }
 .rt-drawer-recs { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px; }
 .rt-drawer-recs li { font-size: 13px; line-height: 1.5; }
 .rt-drawer-error { color: var(--sev-high, #dc2626); font-size: 13px; line-height: 1.55; }

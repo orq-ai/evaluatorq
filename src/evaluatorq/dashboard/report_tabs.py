@@ -1771,26 +1771,35 @@ def _rt_focus_remediation_box(area: dict[str, Any]) -> str:
     )
 
 
-def _rt_focus_recommendation_list(area: dict[str, Any], applied: set[str]) -> str:
-    """Bulleted ``llm_recommendations.recommendations`` with an applied tick on
-    each bullet already folded into the agent (RES-1143). Empty when the
+def _rt_focus_recommendation_list(area: dict[str, Any], applied: set[str], rid: str) -> str:
+    """Bulleted ``llm_recommendations.recommendations``, each pending bullet
+    with its own Apply button (opens the breakdown drawer for exactly that
+    recommendation), applied bullets with a tick (RES-1143). Empty when the
     pipeline generated none (static runs; never subscript)."""
+    from evaluatorq.dashboard.redteam_apply import render_rec_apply_button
+
     recs = area.get('llm_recommendations', {}).get('recommendations') or []
     if not recs:
         return ''
+    category = str(area.get('category', ''))
     items = []
     for rec in recs:
-        done = str(rec).strip() in applied
-        badge = '<span class="rt-focus-rec-applied">✓ applied</span>' if done else ''
-        cls = ' rt-focus-rec--applied' if done else ''
-        items.append(f'<li class="rt-focus-rec{cls}">{esc(str(rec))}{badge}</li>')
+        rec_text = str(rec)
+        done = rec_text.strip() in applied
+        if done:
+            tail = '<span class="rt-focus-rec-applied">✓ applied</span>'
+            cls = ' rt-focus-rec--applied'
+        else:
+            tail = render_rec_apply_button(rid, category, rec_text)
+            cls = ''
+        items.append(f'<li class="rt-focus-rec{cls}"><span class="rt-focus-rec-text">{esc(rec_text)}</span>{tail}</li>')
     return (
         '<div class="rt-focus-fixbox-label rt-focus-recs-label">Recommendations</div>'
         f'<ul class="rt-focus-recs">{"".join(items)}</ul>'
     )
 
 
-def _rt_focus_area_card(area: dict[str, Any], applied: set[str] | None = None) -> str:
+def _rt_focus_area_card(area: dict[str, Any], applied: set[str] | None = None, rid: str = '') -> str:
     """One focus-area panel: tier + category header, pattern chips,
     remediation box + recommendation bullets with applied ticks (main column)
     and risk dial + ASR/hits mini-stats (fixed 100px right column). Spec
@@ -1812,7 +1821,7 @@ def _rt_focus_area_card(area: dict[str, Any], applied: set[str] | None = None) -
 
     patterns_html = _rt_focus_pattern_chips(area, color)
     fixbox_html = _rt_focus_remediation_box(area)
-    recs_html = _rt_focus_recommendation_list(area, applied or set())
+    recs_html = _rt_focus_recommendation_list(area, applied or set(), rid)
 
     main_col = f'<div class="rt-focus-main">{header}{patterns_html}{fixbox_html}{recs_html}</div>'
 
@@ -1853,7 +1862,7 @@ def _rt_focus(by_kind: dict[str, Any], rid: str, report: RedTeamReport) -> str:
         '<code>risk = success rate × avg severity</code>. Start at the top — P1 first.</p>'  # noqa: RUF001
     )
     applied = {r.strip() for r in report.applied_recommendations}
-    cards = ''.join(_rt_focus_area_card(area, applied) for area in areas)
+    cards = ''.join(_rt_focus_area_card(area, applied, rid) for area in areas)
     return f'{apply_bar}{intro}{cards}'
 
 

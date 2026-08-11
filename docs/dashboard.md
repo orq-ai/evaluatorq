@@ -232,10 +232,14 @@ the static report body:
 
 When a run was executed with `generate_recommendations=True`, the **Focus
 areas** tab lists each area's actionable recommendations and an apply bar
-showing how many are still pending. **Preview & apply…** folds the pending
-recommendations into the tested agent's instructions with an LLM (the agent is
-only read at this point) and opens a right-hand drawer with the breakdown: the
-recommendations being merged and a colorized diff of the instructions change.
+showing how many are still pending. Every pending recommendation carries its
+own **Apply…** button; the bar's **Preview & apply all…** takes the whole
+pending set at once. Either way the recommendations are folded into the tested
+agent's instructions with an LLM (the agent is only read at this point) and a
+right-hand drawer opens with the breakdown: for a single recommendation, its
+focus area (priority tier, risk score, traces analyzed, observed patterns),
+the recommendation being merged, and a colorized diff of the instructions
+change.
 Nothing is written until you click **Apply to agent** in the drawer, which
 writes the previewed instructions back as a new **minor agent version** —
 exactly what you saw in the diff, no second LLM call — and records the applied

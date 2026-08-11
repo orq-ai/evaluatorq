@@ -232,3 +232,89 @@ class TestUnits:
         path.write_text(json.dumps({"applied_recommendations": ["a"]}))
         record_applied_on_report(path, ["a", "b", "b "])
         assert json.loads(path.read_text())["applied_recommendations"] == ["a", "b"]
+
+
+# ---------------------------------------------------------------------------
+# Per-recommendation apply (breakdown drawer)
+# ---------------------------------------------------------------------------
+
+
+class TestPerRecommendationApply:
+    def test_pending_bullets_carry_apply_buttons(self, apply_client) -> None:
+        client, rid, _path = apply_client
+        html = client.get(f"/r/{rid}").text
+        assert 'name="rec"' in html
+        assert html.count("rt-focus-rec-apply") >= 2  # one per pending bullet
+
+    def test_applied_bullet_has_tick_and_no_button(self, apply_client) -> None:
+        client, rid, path = apply_client
+        raw = json.loads(path.read_text())
+        raw["applied_recommendations"] = ["Add stricter goal-boundary checks"]
+        path.write_text(json.dumps(raw))
+        html = client.get(f"/r/{rid}").text
+        # The applied bullet gets a tick; the other stays a button.
+        assert "✓ applied" in html
+        assert "rt-focus-rec-apply" in html
+
+    def test_single_rec_preview_narrows_merge_and_shows_area_breakdown(
+        self, apply_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client, rid, _path = apply_client
+        monkeypatch.setattr(apply_mod, "_build_clients", lambda: (object(), object(), "m"))
+        seen_areas = []
+
+        async def fake_apply(areas, agent_key, *args, **kwargs):
+            seen_areas.append(areas)
+            return ApplyRecommendationsResult(
+                agent_key=agent_key,
+                recommendations=["Add stricter goal-boundary checks"],
+                original_instructions="Old.",
+                new_instructions="Old.\nGuard.",
+                diff="+Guard.\n",
+                applied=False,
+            )
+
+        import evaluatorq.redteam.reports.apply as source_mod
+
+        monkeypatch.setattr(source_mod, "apply_recommendations", fake_apply)
+        r = client.post(
+            f"/r/{rid}/redteam/apply/preview",
+            data={
+                "agent_key": "agent-a",
+                "rec": "Add stricter goal-boundary checks",
+                "category": "ASI01",
+            },
+        )
+        assert r.status_code == 200
+        # The merge saw exactly one area holding exactly the chosen rec.
+        assert len(seen_areas[0]) == 1
+        assert seen_areas[0][0].recommendations == ["Add stricter goal-boundary checks"]
+        # The drawer carries the focus-area breakdown block.
+        assert "Focus area" in r.text
+        assert "Goal Hijacking" in r.text
+        assert "failed trace(s) analyzed" in r.text
+        assert "Recommendation to fold in" in r.text
+
+    def test_single_rec_preview_rejects_already_applied(self, apply_client) -> None:
+        client, rid, path = apply_client
+        raw = json.loads(path.read_text())
+        raw["applied_recommendations"] = ["Add stricter goal-boundary checks"]
+        path.write_text(json.dumps(raw))
+        r = client.post(
+            f"/r/{rid}/redteam/apply/preview",
+            data={
+                "agent_key": "agent-a",
+                "rec": "Add stricter goal-boundary checks",
+                "category": "ASI01",
+            },
+        )
+        assert "already applied" in r.text
+        assert "rt-drawer-error" in r.text
+
+    def test_single_rec_preview_rejects_unknown_rec(self, apply_client) -> None:
+        client, rid, _path = apply_client
+        r = client.post(
+            f"/r/{rid}/redteam/apply/preview",
+            data={"agent_key": "agent-a", "rec": "made up", "category": "ASI01"},
+        )
+        assert "no longer on the report" in r.text
