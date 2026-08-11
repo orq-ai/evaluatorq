@@ -1771,10 +1771,30 @@ def _rt_focus_remediation_box(area: dict[str, Any]) -> str:
     )
 
 
-def _rt_focus_area_card(area: dict[str, Any]) -> str:
+def _rt_focus_recommendation_list(area: dict[str, Any], applied: set[str]) -> str:
+    """Bulleted ``llm_recommendations.recommendations`` with an applied tick on
+    each bullet already folded into the agent (RES-1143). Empty when the
+    pipeline generated none (static runs; never subscript)."""
+    recs = area.get('llm_recommendations', {}).get('recommendations') or []
+    if not recs:
+        return ''
+    items = []
+    for rec in recs:
+        done = str(rec).strip() in applied
+        badge = '<span class="rt-focus-rec-applied">✓ applied</span>' if done else ''
+        cls = ' rt-focus-rec--applied' if done else ''
+        items.append(f'<li class="rt-focus-rec{cls}">{esc(str(rec))}{badge}</li>')
+    return (
+        '<div class="rt-focus-fixbox-label rt-focus-recs-label">Recommendations</div>'
+        f'<ul class="rt-focus-recs">{"".join(items)}</ul>'
+    )
+
+
+def _rt_focus_area_card(area: dict[str, Any], applied: set[str] | None = None) -> str:
     """One focus-area panel: tier + category header, pattern chips,
-    remediation box (main column) and risk dial + ASR/hits mini-stats
-    (fixed 100px right column). Spec §Focus areas."""
+    remediation box + recommendation bullets with applied ticks (main column)
+    and risk dial + ASR/hits mini-stats (fixed 100px right column). Spec
+    §Focus areas; bullets + ticks are RES-1143."""
     from evaluatorq.common.reports.html_helpers import pct
     from evaluatorq.dashboard.report_kit import dial
 
@@ -1792,8 +1812,9 @@ def _rt_focus_area_card(area: dict[str, Any]) -> str:
 
     patterns_html = _rt_focus_pattern_chips(area, color)
     fixbox_html = _rt_focus_remediation_box(area)
+    recs_html = _rt_focus_recommendation_list(area, applied or set())
 
-    main_col = f'<div class="rt-focus-main">{header}{patterns_html}{fixbox_html}</div>'
+    main_col = f'<div class="rt-focus-main">{header}{patterns_html}{fixbox_html}{recs_html}</div>'
 
     vulnerability_rate = area.get('vulnerability_rate', 0.0)
     vulnerabilities_found = area.get('vulnerabilities_found', 0)
@@ -1815,21 +1836,25 @@ def _rt_focus_area_card(area: dict[str, Any]) -> str:
     return f'<div class="rk-panel rt-focus-card">{main_col}{right_col}</div>'
 
 
-def _rt_focus(by_kind: dict[str, Any]) -> str:
-    """Focus areas tab body: intro copy + one card per top-risk area (worst
-    first, section list is already top-5). Empty list (clean run) -> ``''``
-    so the tab drops entirely (spec §Focus areas)."""
+def _rt_focus(by_kind: dict[str, Any], rid: str, report: RedTeamReport) -> str:
+    """Focus areas tab body: apply bar (RES-1143), intro copy + one card per
+    top-risk area (worst first, section list is already top-5). Empty list
+    (clean run) -> ``''`` so the tab drops entirely (spec §Focus areas)."""
+    from evaluatorq.dashboard.redteam_apply import render_apply_panel
+
     section = by_kind.get('focus_areas')
     areas: list[dict[str, Any]] = section.data.get('focus_areas', []) if section is not None else []
     if not areas:
         return ''
 
+    apply_bar = render_apply_panel(rid, report)
     intro = (
         '<p class="rt-focus-intro">Prioritized fixes, ranked by '
         '<code>risk = success rate × avg severity</code>. Start at the top — P1 first.</p>'  # noqa: RUF001
     )
-    cards = ''.join(_rt_focus_area_card(area) for area in areas)
-    return f'{intro}{cards}'
+    applied = {r.strip() for r in report.applied_recommendations}
+    cards = ''.join(_rt_focus_area_card(area, applied) for area in areas)
+    return f'{apply_bar}{intro}{cards}'
 
 
 def _rt_agent_card_chip_row(label: str, items: list[str]) -> str:
@@ -2373,7 +2398,7 @@ def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
 
     agents_tab = _rt_agents(by_kind, report, rid)
 
-    focus_tab = _rt_focus(by_kind)
+    focus_tab = _rt_focus(by_kind, rid, report)
 
     breakdowns_tab = _rt_breakdowns(by_kind) + render('framework_breakdown', 'vulnerability_breakdown')
 

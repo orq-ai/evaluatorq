@@ -228,6 +228,25 @@ the static report body:
 4. **Disagreement viewer** — for multi-agent runs, select any agent pair and
    page through attacks where their results differ (side-by-side transcripts).
 
+### Apply recommendations to the agent (red team)
+
+When a run was executed with `generate_recommendations=True`, the **Focus
+areas** tab lists each area's actionable recommendations and an apply bar
+showing how many are still pending. **Preview & apply…** folds the pending
+recommendations into the tested agent's instructions with an LLM (the agent is
+only read at this point) and opens a right-hand drawer with the breakdown: the
+recommendations being merged and a colorized diff of the instructions change.
+Nothing is written until you click **Apply to agent** in the drawer, which
+writes the previewed instructions back as a new **minor agent version** —
+exactly what you saw in the diff, no second LLM call — and records the applied
+recommendations on the report, so applied bullets show a ✓ tick and a later
+preview skips them.
+
+Requirements: `ORQ_API_KEY` in the dashboard's environment and the `orq`
+extra (`orq-ai-sdk`) installed. Without them the drawer explains what is
+missing instead of failing. The same flow is available programmatically via
+`evaluatorq.redteam.reports.apply.apply_recommendations`.
+
 ### Simulation transcript viewer
 
 Simulation reports expose a conversation transcript panel: select any

@@ -48,6 +48,7 @@ import evaluatorq.dashboard._compat  # noqa: F401 — side-effect import; must p
 from evaluatorq.dashboard import library, metrics, report_tabs
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
+from evaluatorq.dashboard.redteam_apply import register_redteam_apply_routes
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.sim_compare import register_sim_compare_routes
@@ -580,6 +581,11 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     # Routes: GET /r/{rid}/view/*  — redteam interactive fragment views
     # ------------------------------------------------------------------
     register_redteam_view_routes(app, roots)
+
+    # ------------------------------------------------------------------
+    # Routes: POST /r/{rid}/redteam/apply/*  — apply recommendations (RES-1143)
+    # ------------------------------------------------------------------
+    register_redteam_apply_routes(app, roots)
 
     # ------------------------------------------------------------------
     # Routes: GET /r/{rid}/sim/*  — sim interactive fragment views
