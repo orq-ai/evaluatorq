@@ -1,7 +1,12 @@
-"""Apply-recommendations UI for the red-team dashboard (RES-1143).
+"""Apply-recommendations UI for the dashboard (RES-1143).
 
-Surfaces the report's ``focus_area_recommendations`` in the Focus areas tab
-with an "Apply to agent" flow backed by ``redteam.reports.apply``:
+Serves both surfaces on top of the shared engine in
+:mod:`evaluatorq.common.apply`: red team surfaces the report's
+``focus_area_recommendations`` in the Focus areas tab, agent simulation
+surfaces the run's ``recommendations`` in its Recommendations tab. Same bar,
+drawer, and confirm flow; only the routes, the write-back field
+(``applied_recommendations`` vs ``applied_suggestions``), and the breakdown
+block differ. The red-team flow:
 
 1. The apply panel (rendered into the Focus areas tab) shows how many
    recommendations are pending vs already applied, an agent picker when the
@@ -20,8 +25,9 @@ The confirm step reuses the previewed instructions verbatim — no second LLM
 call, what you saw is what is written.
 
 Public entry points:
-    render_apply_panel(rid, report)   — panel + drawer mount for the tab body
-    register_redteam_apply_routes(app, roots)
+    render_apply_panel(rid, report)      — red-team panel + drawer mount
+    render_sim_apply_panel(rid, run)     — simulation panel + drawer mount
+    register_apply_routes(app, roots)
 """
 
 from __future__ import annotations
@@ -41,6 +47,7 @@ if TYPE_CHECKING:
 
     from evaluatorq.redteam.contracts import FocusAreaRecommendation, RedTeamReport
     from evaluatorq.redteam.reports.apply import ApplyRecommendationsResult
+    from evaluatorq.simulation.types import SimulationRecommendation, SimulationRun
 
 DRAWER_ID = 'rt-apply-drawer'
 AGENT_FIELD_ID = 'rt-apply-agent-field'
@@ -86,13 +93,9 @@ def is_apply_enabled(report: RedTeamReport) -> bool:
     return bool(report.focus_area_recommendations) and len(report.tested_agents or []) == 1
 
 
-def render_apply_panel(rid: str, report: RedTeamReport) -> str:
-    """The apply bar + drawer mount. Empty string when there is nothing to show
-    (no recommendations, or a multi-agent comparison run)."""
-    if not is_apply_enabled(report):
-        return ''
-    pending = pending_recommendations(report)
-    applied_n = len(report.applied_recommendations)
+def _panel_html(rid: str, surface: str, agent_key: str, pending: list[str], applied_n: int) -> str:
+    """The apply bar + drawer mount, shared by both surfaces; *surface* is the
+    route segment ('redteam' or 'sim')."""
     safe_rid = esc(rid)
 
     if not pending:
@@ -106,7 +109,7 @@ def render_apply_panel(rid: str, report: RedTeamReport) -> str:
     # The run's single agent rides along invisibly: showing it as a tag read
     # like a mystery button in review, and with one agent there is nothing to
     # choose. The stable id lets the per-recommendation buttons hx-include it.
-    agent_field = f'<input type="hidden" id="{AGENT_FIELD_ID}" name="agent_key" value="{esc(report.tested_agents[0])}">'
+    agent_field = f'<input type="hidden" id="{AGENT_FIELD_ID}" name="agent_key" value="{esc(agent_key)}">'
 
     applied_note = f' · {applied_n} already applied' if applied_n else ''
     return (
@@ -116,7 +119,7 @@ def render_apply_panel(rid: str, report: RedTeamReport) -> str:
         '<span class="rt-apply-hint">Apply one from its card below, or all at once here. Preview folds '
         'them into the agent instructions; nothing is written until you approve the diff.</span>'
         '</div>'
-        f'<form class="rt-apply-form" hx-post="/r/{safe_rid}/redteam/apply/preview" '
+        f'<form class="rt-apply-form" hx-post="/r/{safe_rid}/{surface}/apply/preview" '
         f'hx-target="#{DRAWER_ID}" hx-swap="innerHTML">'
         f'{agent_field}'
         f'<button type="submit" class="rt-apply-btn">Preview &amp; apply all '
@@ -124,6 +127,61 @@ def render_apply_panel(rid: str, report: RedTeamReport) -> str:
         '</form>'
         '</div>'
         f'<div id="{DRAWER_ID}"></div>'
+    )
+
+
+def render_apply_panel(rid: str, report: RedTeamReport) -> str:
+    """Red-team apply bar + drawer mount. Empty string when there is nothing
+    to show (no recommendations, or a multi-agent comparison run)."""
+    if not is_apply_enabled(report):
+        return ''
+    pending = pending_recommendations(report)
+    return _panel_html(rid, 'redteam', report.tested_agents[0], pending, len(report.applied_recommendations))
+
+
+# ---------------------------------------------------------------------------
+# Simulation surface
+# ---------------------------------------------------------------------------
+
+
+def is_sim_apply_enabled(run: SimulationRun) -> bool:
+    """Sim apply targets the run's single orq agent; other target kinds (models,
+    callbacks, deployments) have no agent instructions to write back to."""
+    return bool(run.recommendations) and run.target_kind == 'orq_agent' and bool(run.target)
+
+
+def pending_sim_suggestions(run: SimulationRun) -> list[str]:
+    """Suggestion strings not yet recorded as applied, order-preserving."""
+    from evaluatorq.common.apply import collect_recommendations
+
+    return collect_recommendations(
+        run.recommendations, max_recommendations=10_000, already_applied=run.applied_suggestions
+    )
+
+
+def render_sim_apply_panel(rid: str, run: SimulationRun) -> str:
+    """Simulation apply bar + drawer mount. Empty string when the run has no
+    recommendations or does not target an orq agent."""
+    if not is_sim_apply_enabled(run):
+        return ''
+    pending = pending_sim_suggestions(run)
+    return _panel_html(rid, 'sim', run.target or '', pending, len(run.applied_suggestions))
+
+
+def render_sim_rec_apply_button(rid: str, result_index: int, rec: str) -> str:
+    """Per-suggestion Apply button for a simulation recommendation card.
+
+    Posts the single suggestion (plus its card's ``result_index``, so the
+    drawer can show that card's persona/scenario breakdown) to the sim preview
+    route; the agent comes from the apply bar's field via ``hx-include``.
+    """
+    return (
+        f'<form class="rt-focus-rec-apply" hx-post="/r/{esc(rid)}/sim/apply/preview" '
+        f'hx-target="#{DRAWER_ID}" hx-swap="innerHTML" hx-include="#{AGENT_FIELD_ID}">'
+        f'<input type="hidden" name="rec" value="{esc(rec)}">'
+        f'<input type="hidden" name="result_index" value="{result_index}">'
+        '<button type="submit" class="rt-apply-btn rt-apply-btn--sm">Apply</button>'
+        '</form>'
     )
 
 
@@ -216,12 +274,31 @@ def _area_breakdown_html(area: FocusAreaRecommendation) -> str:
     )
 
 
+def sim_breakdown_html(rec: SimulationRecommendation) -> str:
+    """Simulation context block for a single-suggestion preview: the persona,
+    scenario, and triggers the suggestion came from."""
+    triggers = f'<div class="rt-drawer-patterns">{esc("; ".join(rec.triggers))}</div>' if rec.triggers else ''
+    return (
+        '<div class="rt-drawer-section-label">Simulation finding</div>'
+        '<div class="rt-drawer-area">'
+        f'<span class="rt-drawer-area-name">{esc(rec.persona)}</span>'
+        f'<span class="rt-drawer-area-meta">{esc(rec.scenario)}</span>'
+        f'{triggers}'
+        '</div>'
+    )
+
+
 def render_preview_drawer(
-    rid: str, result: ApplyRecommendationsResult, area: FocusAreaRecommendation | None = None
+    rid: str,
+    result: ApplyRecommendationsResult,
+    area: FocusAreaRecommendation | None = None,
+    *,
+    surface: str = 'redteam',
+    breakdown: str = '',
 ) -> str:
     """Breakdown drawer for a preview: where the recommendation(s) came from
-    (single-rec applies carry their focus area), what will be merged, and the
-    exact instructions diff."""
+    (single-rec applies carry their focus area or, for sim, a pre-rendered
+    *breakdown* block), what will be merged, and the exact instructions diff."""
     recs = ''.join(f'<li>{esc(r)}</li>' for r in result.recommendations)
     unchanged = result.new_instructions.strip() == result.original_instructions.strip()
     rec_label = (
@@ -232,7 +309,7 @@ def render_preview_drawer(
     body = (
         f'<div class="rt-drawer-section-label">Agent</div>'
         f'<div class="rt-drawer-agent">{esc(result.agent_key)}</div>'
-        + (_area_breakdown_html(area) if area is not None else '')
+        + (_area_breakdown_html(area) if area is not None else breakdown)
         + f'<div class="rt-drawer-section-label">{esc(rec_label)}</div>'
         f'<ul class="rt-drawer-recs">{recs}</ul>'
         '<div class="rt-drawer-section-label">Instructions diff</div>'
@@ -252,7 +329,7 @@ def render_preview_drawer(
     }
     safe_rid = esc(rid)
     footer = (
-        f'<form hx-post="/r/{safe_rid}/redteam/apply/confirm" hx-target="#{DRAWER_ID}" hx-swap="innerHTML">'
+        f'<form hx-post="/r/{safe_rid}/{surface}/apply/confirm" hx-target="#{DRAWER_ID}" hx-swap="innerHTML">'
         f'<input type="hidden" name="payload" value="{esc(json.dumps(payload))}">'
         '<button type="submit" class="rt-apply-btn rt-apply-btn--confirm">Apply to agent</button>'
         '</form>'
@@ -294,20 +371,21 @@ def render_applied_drawer(agent_key: str, applied_count: int, new_version: str |
 # ---------------------------------------------------------------------------
 
 
-def record_applied_on_report(path: Path, recommendations: list[str]) -> None:
+def record_applied_on_report(path: Path, recommendations: list[str], field: str = 'applied_recommendations') -> None:
     """Append newly applied recommendations to the report JSON, atomically.
 
-    Deduplicates against what is already recorded so a double-click cannot
-    inflate the list.
+    *field* is the surface's tracking field (``applied_recommendations`` for
+    red team, ``applied_suggestions`` for simulation). Deduplicates against
+    what is already recorded so a double-click cannot inflate the list.
     """
     raw = json.loads(path.read_text(encoding='utf-8'))
-    existing = raw.get('applied_recommendations') or []
+    existing = raw.get(field) or []
     seen = {str(r).strip() for r in existing}
     for rec in recommendations:
         if rec.strip() not in seen:
             existing.append(rec)
             seen.add(rec.strip())
-    raw['applied_recommendations'] = existing
+    raw[field] = existing
     tmp = path.with_suffix(path.suffix + '.tmp')
     tmp.write_text(json.dumps(raw, indent=2, default=str), encoding='utf-8')
     tmp.replace(path)
@@ -349,9 +427,69 @@ def _build_clients() -> tuple[Any, Any, str]:
 # ---------------------------------------------------------------------------
 
 
-def register_redteam_apply_routes(app: Any, roots: list[Any] | None = None) -> None:
-    """Register the apply preview/confirm/dismiss routes on *app*."""
+async def _confirm_response(
+    rid: str, req: Request, roots: list[Any] | None, *, field: str, version_note: str
+) -> Response:
+    """Shared confirm handler: write the previewed instructions to the agent,
+    record the applied recommendations on the report JSON under *field*."""
+    from evaluatorq.dashboard import library
+
+    form = await req.form()
+    try:
+        payload = json.loads(str(form.get('payload') or '{}'))
+        agent_key = str(payload['agent_key'])
+        new_instructions = str(payload['new_instructions'])
+        recommendations = [str(r) for r in payload['recommendations']]
+    except (KeyError, ValueError, TypeError):
+        return Response(render_error_drawer('Malformed apply payload; re-run the preview.'), media_type='text/html')
+    if not agent_key or not new_instructions or not recommendations:
+        return Response(render_error_drawer('Nothing to apply; re-run the preview.'), media_type='text/html')
+
+    try:
+        orq_client, _llm_client, _model = _build_clients()
+    except ValueError as e:
+        return Response(render_error_drawer(str(e)), media_type='text/html')
+
+    import asyncio
+    import functools
+
+    try:
+        updated = await asyncio.to_thread(
+            functools.partial(
+                orq_client.agents.update,
+                agent_key=agent_key,
+                instructions=new_instructions,
+                version_increment='minor',
+                version_description=f'Applied {len(recommendations)} {version_note}',
+            )
+        )
+    except Exception as e:
+        logger.opt(exception=True).warning('apply_ui: agent update failed for {}', agent_key)
+        return Response(render_error_drawer(f'Agent update failed: {e}'), media_type='text/html')
+
+    # Record on the report so a later preview skips these. A write-back
+    # failure must not hide that the agent WAS updated - report it as a
+    # warning inside the success drawer instead of failing the request.
+    path = library.resolve(rid, roots)
+    record_note = ''
+    if path is not None:
+        try:
+            record_applied_on_report(path, recommendations, field)
+        except Exception:
+            logger.opt(exception=True).warning('apply_ui: could not record applied recs on {}', path)
+            record_note = ' (warning: the report file could not be updated, so these may show as pending again)'
+
+    version = getattr(updated, 'version', None)
+    html = render_applied_drawer(agent_key, len(recommendations), str(version) if version is not None else None)
+    if record_note:
+        html = html.replace('</p>', esc(record_note) + '</p>', 1)
+    return Response(html, media_type='text/html')
+
+
+def register_apply_routes(app: Any, roots: list[Any] | None = None) -> None:
+    """Register the apply preview/confirm/dismiss routes for both surfaces."""
     from evaluatorq.dashboard.redteam_views import _404, _load_report
+    from evaluatorq.dashboard.sim_views import _load_run
 
     @app.get('/redteam/apply/dismiss')
     def apply_dismiss() -> Response:
@@ -420,7 +558,7 @@ def register_redteam_apply_routes(app: Any, roots: list[Any] | None = None) -> N
                 already_applied=report.applied_recommendations,
             )
         except Exception as e:
-            logger.opt(exception=True).warning('redteam_apply: preview failed for {}', agent_key)
+            logger.opt(exception=True).warning('apply_ui: preview failed for {}', agent_key)
             return Response(render_error_drawer(f'Preview failed: {e}'), media_type='text/html')
 
         if not result.recommendations:
@@ -432,55 +570,85 @@ def register_redteam_apply_routes(app: Any, roots: list[Any] | None = None) -> N
 
     @app.post('/r/{rid}/redteam/apply/confirm')
     async def apply_confirm(rid: str, req: Request) -> Response:
-        from evaluatorq.dashboard import library
+        return await _confirm_response(
+            rid, req, roots, field='applied_recommendations', version_note='red-team remediation recommendation(s)'
+        )
 
+    @app.post('/r/{rid}/sim/apply/preview')
+    async def sim_apply_preview(rid: str, req: Request) -> Response:
+        run = _load_run(rid, roots)
+        if run is None:
+            return Response(_404(f'Report {rid} not found'), status_code=404, media_type='text/html')
+        if not is_sim_apply_enabled(run):
+            return Response(
+                render_error_drawer('Applying suggestions needs a run that targeted an orq agent.'),
+                media_type='text/html',
+            )
         form = await req.form()
-        try:
-            payload = json.loads(str(form.get('payload') or '{}'))
-            agent_key = str(payload['agent_key'])
-            new_instructions = str(payload['new_instructions'])
-            recommendations = [str(r) for r in payload['recommendations']]
-        except (KeyError, ValueError, TypeError):
-            return Response(render_error_drawer('Malformed apply payload; re-run the preview.'), media_type='text/html')
-        if not agent_key or not new_instructions or not recommendations:
-            return Response(render_error_drawer('Nothing to apply; re-run the preview.'), media_type='text/html')
+        agent_key = str(form.get('agent_key') or '').strip() or str(run.target or '')
+        if not agent_key:
+            return Response(
+                render_error_drawer('This run does not record which agent it tested, so there is nothing to apply to.'),
+                media_type='text/html',
+            )
+
+        # Per-suggestion apply: `rec` (+ its card's `result_index`) narrows the
+        # merge to that single bullet, and the drawer shows the card breakdown.
+        recs = list(run.recommendations)
+        single_rec = str(form.get('rec') or '').strip()
+        breakdown = ''
+        if single_rec:
+            try:
+                idx = int(str(form.get('result_index') or ''))
+            except ValueError:
+                idx = -1
+            card = next(
+                (r for r in recs if r.result_index == idx and single_rec in [s.strip() for s in r.suggestions]),
+                None,
+            )
+            if card is None:
+                return Response(
+                    render_error_drawer('That suggestion is no longer on the report; reload the page.'),
+                    media_type='text/html',
+                )
+            if single_rec in {s.strip() for s in run.applied_suggestions}:
+                return Response(
+                    render_error_drawer('That suggestion is already applied to the agent.'),
+                    media_type='text/html',
+                )
+            breakdown = sim_breakdown_html(card)
+            recs = [card.model_copy(update={'suggestions': [single_rec]})]
 
         try:
-            orq_client, _llm_client, _model = _build_clients()
+            orq_client, llm_client, model = _build_clients()
         except ValueError as e:
             return Response(render_error_drawer(str(e)), media_type='text/html')
 
-        import asyncio
-        import functools
+        from evaluatorq.simulation.reports.apply import apply_suggestions
 
         try:
-            updated = await asyncio.to_thread(
-                functools.partial(
-                    orq_client.agents.update,
-                    agent_key=agent_key,
-                    instructions=new_instructions,
-                    version_increment='minor',
-                    version_description=f'Applied {len(recommendations)} red-team remediation recommendation(s)',
-                )
+            result = await apply_suggestions(
+                recs,
+                agent_key,
+                orq_client,
+                llm_client,
+                model,
+                apply=False,
+                already_applied=run.applied_suggestions,
             )
         except Exception as e:
-            logger.opt(exception=True).warning('redteam_apply: agent update failed for {}', agent_key)
-            return Response(render_error_drawer(f'Agent update failed: {e}'), media_type='text/html')
+            logger.opt(exception=True).warning('apply_ui: sim preview failed for {}', agent_key)
+            return Response(render_error_drawer(f'Preview failed: {e}'), media_type='text/html')
 
-        # Record on the report so a later preview skips these. A write-back
-        # failure must not hide that the agent WAS updated - report it as a
-        # warning inside the success drawer instead of failing the request.
-        path = library.resolve(rid, roots)
-        record_note = ''
-        if path is not None:
-            try:
-                record_applied_on_report(path, recommendations)
-            except Exception:
-                logger.opt(exception=True).warning('redteam_apply: could not record applied recs on {}', path)
-                record_note = ' (warning: the report file could not be updated, so these may show as pending again)'
+        if not result.recommendations:
+            return Response(
+                render_error_drawer('No new suggestions to apply — everything is already applied.'),
+                media_type='text/html',
+            )
+        return Response(render_preview_drawer(rid, result, surface='sim', breakdown=breakdown), media_type='text/html')
 
-        version = getattr(updated, 'version', None)
-        html = render_applied_drawer(agent_key, len(recommendations), str(version) if version is not None else None)
-        if record_note:
-            html = html.replace('</p>', esc(record_note) + '</p>', 1)
-        return Response(html, media_type='text/html')
+    @app.post('/r/{rid}/sim/apply/confirm')
+    async def sim_apply_confirm(rid: str, req: Request) -> Response:
+        return await _confirm_response(
+            rid, req, roots, field='applied_suggestions', version_note='simulation remediation suggestion(s)'
+        )

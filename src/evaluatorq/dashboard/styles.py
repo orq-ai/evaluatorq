@@ -2193,70 +2193,70 @@ _RT_REPORT_CSS = """
 .rt-report .rt-agent-card-chip-empty { color: var(--text-faint); font-size: 12px; }
 
 /* ---- Focus areas tab (spec §Focus areas) ---- */
-.rt-report .rt-focus-intro { font-size: 13px; color: var(--text-muted); margin: 0 0 16px; max-width: 720px; }
-.rt-report .rt-focus-intro code { font-family: var(--font-mono); }
-.rt-report .rt-focus-card { display: flex; flex-direction: column; margin-bottom: 22px; padding: 0; overflow: hidden; }
-.rt-report .rt-focus-head {
+.report-aligned .rt-focus-intro { font-size: 13px; color: var(--text-muted); margin: 0 0 16px; max-width: 720px; }
+.report-aligned .rt-focus-intro code { font-family: var(--font-mono); }
+.report-aligned .rt-focus-card { display: flex; flex-direction: column; margin-bottom: 22px; padding: 0; overflow: hidden; }
+.report-aligned .rt-focus-head {
     display: flex; align-items: center; justify-content: space-between; gap: 20px;
     padding: 14px 18px; border-bottom: 1px solid var(--border-subtle);
 }
-.rt-report .rt-focus-head-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.rt-report .rt-focus-head-stats {
+.report-aligned .rt-focus-head-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.report-aligned .rt-focus-head-stats {
     display: flex; align-items: center; flex: 0 0 auto;
     background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 9px;
     padding: 6px 0;
 }
-.rt-report .rt-focus-stat {
+.report-aligned .rt-focus-stat {
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 2px; padding: 0 16px; min-width: 64px;
 }
-.rt-report .rt-focus-stat + .rt-focus-stat { border-left: 1px solid var(--border-default); }
-.rt-report .rt-focus-stat--dial { padding: 0 10px; }
-.rt-report .rt-focus-body { display: flex; flex-direction: column; gap: 12px; padding: 14px 18px 16px; }
-.rt-report .rt-focus-tier-row { display: flex; align-items: center; gap: 8px; }
-.rt-report .rt-focus-tier-dot { width: 8px; height: 8px; border-radius: 999px; display: inline-block; }
-.rt-report .rt-focus-tier-label {
+.report-aligned .rt-focus-stat + .rt-focus-stat { border-left: 1px solid var(--border-default); }
+.report-aligned .rt-focus-stat--dial { padding: 0 10px; }
+.report-aligned .rt-focus-body { display: flex; flex-direction: column; gap: 12px; padding: 14px 18px 16px; }
+.report-aligned .rt-focus-tier-row { display: flex; align-items: center; gap: 8px; }
+.report-aligned .rt-focus-tier-dot { width: 8px; height: 8px; border-radius: 999px; display: inline-block; }
+.report-aligned .rt-focus-tier-label {
     font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; text-transform: uppercase;
     letter-spacing: 0.07em;
 }
-.rt-report .rt-focus-category-name { font-family: var(--font-display); font-size: 17px; font-weight: 600; }
-.rt-report .rt-focus-category-code { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); font-weight: 400; margin-left: 4px; }
-.rt-report .rt-focus-patterns {
+.report-aligned .rt-focus-category-name { font-family: var(--font-display); font-size: 17px; font-weight: 600; }
+.report-aligned .rt-focus-category-code { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); font-weight: 400; margin-left: 4px; }
+.report-aligned .rt-focus-patterns {
     display: flex; align-items: center; gap: 8px; font-size: 12px; background: var(--surface-sunken);
     border-radius: 6px; padding: 4px 10px; width: fit-content; margin: 0;
 }
-.rt-report .rt-focus-pattern-dot { width: 5px; height: 5px; border-radius: 999px; display: inline-block; flex: 0 0 auto; }
-.rt-report .rt-focus-fixbox { background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin: 0; }
-.rt-report .rt-focus-fixbox-label {
+.report-aligned .rt-focus-pattern-dot { width: 5px; height: 5px; border-radius: 999px; display: inline-block; flex: 0 0 auto; }
+.report-aligned .rt-focus-fixbox { background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin: 0; }
+.report-aligned .rt-focus-fixbox-label {
     font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; color: var(--accent-hover);
     letter-spacing: 0.05em;
 }
-.rt-report .rt-focus-fixbox-body { font-size: 13px; line-height: 1.55; margin-top: 6px; }
-.rt-report .rt-focus-mini-key {
+.report-aligned .rt-focus-fixbox-body { font-size: 13px; line-height: 1.55; margin-top: 6px; }
+.report-aligned .rt-focus-mini-key {
     font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em;
     color: var(--text-faint);
 }
-.rt-report .rt-focus-mini-value { font-family: var(--font-mono); font-size: 14px; font-weight: 600; }
+.report-aligned .rt-focus-mini-value { font-family: var(--font-mono); font-size: 14px; font-weight: 600; }
 
 /* ---- Apply recommendations: bar, bullets, right drawer (RES-1143) ---- */
-.rt-report .rt-focus-recs-section { display: flex; flex-direction: column; gap: 6px; }
-.rt-report .rt-focus-recs-label { margin: 0; }
+.report-aligned .rt-focus-recs-section { display: flex; flex-direction: column; gap: 6px; }
+.report-aligned .rt-focus-recs-label { margin: 0; }
 /* One grouped list, hairline dividers between rows — not a stack of boxes. */
-.rt-report .rt-focus-recs {
+.report-aligned .rt-focus-recs {
     list-style: none; margin: 6px 0 0; padding: 0;
     border: 1px solid var(--border-default); border-radius: 8px; background: var(--surface-card, #fdfcfb);
     overflow: hidden;
 }
-.rt-report .rt-focus-rec {
+.report-aligned .rt-focus-rec {
     font-size: 13px; line-height: 1.5; display: flex; align-items: center; gap: 14px;
     padding: 10px 12px;
 }
-.rt-report .rt-focus-rec + .rt-focus-rec { border-top: 1px solid var(--border-subtle); }
-.rt-report .rt-focus-rec:hover { background: var(--surface-sunken); }
-.rt-report .rt-focus-rec-text { flex: 1 1 auto; min-width: 0; }
+.report-aligned .rt-focus-rec + .rt-focus-rec { border-top: 1px solid var(--border-subtle); }
+.report-aligned .rt-focus-rec:hover { background: var(--surface-sunken); }
+.report-aligned .rt-focus-rec-text { flex: 1 1 auto; min-width: 0; }
 /* The action slot is a fixed-width right rail so every button and applied
    pill lines up down the column regardless of text length. */
-.rt-report .rt-focus-rec-apply {
+.report-aligned .rt-focus-rec-apply {
     flex: 0 0 auto; margin: 0 0 0 auto; width: 76px; display: flex; justify-content: flex-end;
 }
 .rt-apply-btn--sm {
@@ -2264,14 +2264,14 @@ _RT_REPORT_CSS = """
     background: transparent; color: var(--accent); border: 1px solid var(--accent);
 }
 .rt-apply-btn--sm:hover { background: var(--accent); color: #fff; }
-.rt-report .rt-focus-rec--applied .rt-focus-rec-text { color: var(--text-muted); }
-.rt-report .rt-focus-rec-applied {
+.report-aligned .rt-focus-rec--applied .rt-focus-rec-text { color: var(--text-muted); }
+.report-aligned .rt-focus-rec-applied {
     font-family: var(--font-mono); font-size: 10px; color: var(--green-600, #16a34a);
     background: color-mix(in srgb, #16a34a 12%, transparent);
     border-radius: 999px; padding: 2px 9px; margin-left: auto; white-space: nowrap;
     flex: 0 0 auto;
 }
-.rt-report .rt-apply-bar {
+.report-aligned .rt-apply-bar {
     display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap;
     /* Raised like the cards, not sunken: this is the tab's primary action,
        and the recessed background read as a backdrop (review feedback). The
@@ -2283,11 +2283,11 @@ _RT_REPORT_CSS = """
 }
 /* Cap the text column so the action side stays on the same row on wide
    screens instead of wrapping underneath. */
-.rt-report .rt-apply-bar-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 320px; max-width: 640px; }
-.rt-report .rt-apply-count { font-size: 13px; font-weight: 600; }
-.rt-report .rt-apply-count--done { color: var(--green-600, #16a34a); }
-.rt-report .rt-apply-hint { font-size: 12px; color: var(--text-muted); }
-.rt-report .rt-apply-form { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; margin-left: auto; }
+.report-aligned .rt-apply-bar-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 320px; max-width: 640px; }
+.report-aligned .rt-apply-count { font-size: 13px; font-weight: 600; }
+.report-aligned .rt-apply-count--done { color: var(--green-600, #16a34a); }
+.report-aligned .rt-apply-hint { font-size: 12px; color: var(--text-muted); }
+.report-aligned .rt-apply-form { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; margin-left: auto; }
 .rt-apply-btn {
     font-size: 13px; font-weight: 600; padding: 7px 14px; border-radius: 8px; cursor: pointer;
     border: 1px solid var(--accent); background: var(--accent); color: #fff;

@@ -101,7 +101,7 @@ def _stable_entries(run: SimulationRun, rows: list[Any]) -> list[Any]:
 def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = None, compare_html: str = '') -> str:
     """Render the Agent Sim report body as Streamlit-aligned tabs.
 
-    Tabs: Overview · Breakdown · Transcripts · Turn quality · Config — each
+    Tabs: Overview · Breakdown · Recommendations · Transcripts · Turn quality · Config — each
     populated from the precomputed report sections (empty tabs drop out; Turn
     quality drops when a run carries no ``turn_metrics``). Config folds job-level
     metadata (run configuration, personas, scenarios) plus the kept token_usage
@@ -158,11 +158,19 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
     # Folded 7→5 to curb tab sprawl: Evaluators + Judge & errors → Transcripts
     # (all per-conversation verdicts); Tokens → Config. Turn quality is its own
     # tab (unfolded from Breakdown) and drops out when a run has no turn_metrics.
+    recs_body = _sim_recommendations(rid, run)
+    n_sim_recs = sum(len(r.suggestions) for r in run.recommendations or [])
+
     tabs = _tabs(
         'simtab',
         [
             ('Overview', _sim_overview(rid, by_kind, entity_by_kind, rows, run, filtered=results is not None)),
             ('Breakdown', breakdown_body),
+            (
+                'Recommendations',
+                recs_body,
+                f'Recommendations <span class="tab-count">{n_sim_recs}</span>',
+            ),
             (
                 'Transcripts',
                 transcripts_body,
@@ -173,6 +181,67 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
         ],
     )
     return f'<div class="report-aligned sim-report">{hero}{tabs}{_sim_entity_modal(entity_context)}</div>'
+
+
+def _sim_recommendations(rid: str, run: SimulationRun) -> str:
+    """Recommendations tab body: apply bar (RES-1143) + one card per
+    simulation recommendation (persona/scenario context, trigger chips, and
+    suggestion bullets with per-suggestion Apply buttons). Empty string (tab
+    drops out) when the run generated no recommendations."""
+    from evaluatorq.dashboard.apply_ui import (
+        is_sim_apply_enabled,
+        render_sim_apply_panel,
+        render_sim_rec_apply_button,
+    )
+
+    if not run.recommendations:
+        return ''
+    apply_on = is_sim_apply_enabled(run)
+    apply_bar = render_sim_apply_panel(rid, run)
+    applied = {s.strip() for s in run.applied_suggestions}
+
+    intro = (
+        '<p class="rt-focus-intro">Remediation suggestions generated from the simulated '
+        'conversations, grouped by the persona and scenario that surfaced them.</p>'
+    )
+    cards: list[str] = []
+    for rec in run.recommendations:
+        items = []
+        for s in rec.suggestions:
+            done = s.strip() in applied
+            if done:
+                tail = '<span class="rt-focus-rec-applied">✓ applied</span>'
+                cls = ' rt-focus-rec--applied'
+            elif apply_on:
+                tail = render_sim_rec_apply_button(rid, rec.result_index, s)
+                cls = ''
+            else:
+                # Apply disabled (non-agent target): plain bullet.
+                tail = ''
+                cls = ''
+            items.append(f'<li class="rt-focus-rec{cls}"><span class="rt-focus-rec-text">{esc(s)}</span>{tail}</li>')
+        triggers_html = (
+            '<div class="rt-focus-patterns">'
+            '<span class="rt-focus-pattern-dot" style="background:var(--accent)"></span>'
+            f'<span>{esc("; ".join(rec.triggers))}</span></div>'
+            if rec.triggers
+            else ''
+        )
+        head = (
+            '<div class="rt-focus-head"><div class="rt-focus-head-main">'
+            f'<div class="rt-focus-category-name">{esc(rec.persona)}</div>'
+            f'<div class="rt-focus-tier-row"><span class="rt-focus-tier-label">{esc(rec.scenario)}</span></div>'
+            '</div></div>'
+        )
+        body = (
+            f'<div class="rt-focus-body">{triggers_html}'
+            '<div class="rt-focus-recs-section">'
+            '<div class="rt-focus-fixbox-label rt-focus-recs-label">Suggestions</div>'
+            f'<ul class="rt-focus-recs">{"".join(items)}</ul>'
+            '</div></div>'
+        )
+        cards.append(f'<div class="rk-panel rt-focus-card">{head}{body}</div>')
+    return f'{apply_bar}{intro}{"".join(cards)}'
 
 
 def _section_rows(by_kind: dict[str, Any], section_kind: str, key: str) -> list[dict[str, Any]]:
@@ -1776,7 +1845,7 @@ def _rt_focus_recommendation_list(area: dict[str, Any], applied: set[str], rid: 
     with its own Apply button (opens the breakdown drawer for exactly that
     recommendation), applied bullets with a tick (RES-1143). Empty when the
     pipeline generated none (static runs; never subscript)."""
-    from evaluatorq.dashboard.redteam_apply import render_rec_apply_button
+    from evaluatorq.dashboard.apply_ui import render_rec_apply_button
 
     recs = area.get('llm_recommendations', {}).get('recommendations') or []
     if not recs:
@@ -1855,14 +1924,14 @@ def _rt_focus(by_kind: dict[str, Any], rid: str, report: RedTeamReport) -> str:
     """Focus areas tab body: apply bar (RES-1143), intro copy + one card per
     top-risk area (worst first, section list is already top-5). Empty list
     (clean run) -> ``''`` so the tab drops entirely (spec §Focus areas)."""
-    from evaluatorq.dashboard.redteam_apply import render_apply_panel
+    from evaluatorq.dashboard.apply_ui import render_apply_panel
 
     section = by_kind.get('focus_areas')
     areas: list[dict[str, Any]] = section.data.get('focus_areas', []) if section is not None else []
     if not areas:
         return ''
 
-    from evaluatorq.dashboard.redteam_apply import is_apply_enabled
+    from evaluatorq.dashboard.apply_ui import is_apply_enabled
 
     apply_bar = render_apply_panel(rid, report)
     intro = (

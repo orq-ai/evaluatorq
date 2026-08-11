@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-import evaluatorq.dashboard.redteam_apply as apply_mod
-from evaluatorq.dashboard.redteam_apply import record_applied_on_report, render_preview_drawer
+import evaluatorq.dashboard.apply_ui as apply_mod
+from evaluatorq.dashboard.apply_ui import record_applied_on_report, render_preview_drawer
 from evaluatorq.redteam.reports.apply import ApplyRecommendationsResult
 
 if TYPE_CHECKING:

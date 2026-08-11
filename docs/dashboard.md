@@ -228,9 +228,10 @@ the static report body:
 4. **Disagreement viewer** — for multi-agent runs, select any agent pair and
    page through attacks where their results differ (side-by-side transcripts).
 
-### Apply recommendations to the agent (red team)
+### Apply recommendations to the agent
 
-When a **single-agent** run was executed with `generate_recommendations=True`,
+Both surfaces share the same apply flow. For red team, when a
+**single-agent** run was executed with `generate_recommendations=True`,
 the **Focus areas** tab lists each area's actionable recommendations and an apply bar
 showing how many are still pending. Every pending recommendation carries its
 own **Apply…** button; the bar's **Preview & apply all…** takes the whole
@@ -259,6 +260,16 @@ are aimed at comparing agents, and the recommendations render as plain
 bullets there. Without them the drawer explains what is
 missing instead of failing. The same flow is available programmatically via
 `evaluatorq.redteam.reports.apply.apply_recommendations`.
+
+**Agent simulation** reports get the same UI in their **Recommendations**
+tab: one card per simulation recommendation (the persona, scenario, and
+triggers that surfaced it) with per-suggestion Apply buttons and the same
+apply bar, preview drawer, and confirm step. Applied suggestions are recorded
+on the run as `applied_suggestions`. The flow is available for runs that
+targeted an **orq agent**; runs against plain models, deployments, or
+callbacks have no agent instructions to write back to, so their suggestions
+render as plain bullets. Programmatic equivalent:
+`evaluatorq.simulation.reports.apply.apply_suggestions`.
 
 ### Simulation transcript viewer
 

@@ -46,7 +46,9 @@ async def apply_suggestions(
     model: str,
     *,
     apply: bool = False,
-    temperature: float = 0.0,
+    # None = model default; reasoning models (e.g. gpt-5.6-luna) reject any
+    # explicit temperature, so only pass one deliberately.
+    temperature: float | None = None,
     max_suggestions: int = _MAX_SUGGESTIONS,
     already_applied: Sequence[str] = (),
 ) -> ApplyRecommendationsResult:
