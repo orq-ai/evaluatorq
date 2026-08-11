@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -334,10 +335,23 @@ def _usage_first_int(usage: Any, keys: tuple[str, ...]) -> int:
 
     Only genuine ``int``/``float`` values count; ``None`` and non-numeric stand-ins
     (e.g. a bare ``MagicMock`` attribute) are skipped so the next alias is tried.
+
+    Unusable numbers — negative, NaN, ±inf — are skipped the same way rather than
+    raising. ``Usage.extract`` runs from ``record_llm_response`` on the *success*
+    path of every LLM call, so a hostile payload must degrade to 0, never turn a
+    good response into a failure: ``int(nan)`` raises ValueError, ``int(-inf)``
+    raises OverflowError, and a negative would trip the ``ge=0`` field constraint.
+    Skipping (rather than clamping in place) also lets a valid later alias win, so
+    ``{'input_tokens': -1, 'prompt_tokens': 10}`` still reads 10.
     """
     for key in keys:
         val = _usage_get(usage, key)
         if isinstance(val, (int, float)) and not isinstance(val, bool):
+            if not math.isfinite(val) or val < 0:
+                # debug, not warning: a provider that reports something unusable does so on
+                # every call, and one line per LLM call drowns the log it belongs to.
+                logger.debug('Usage.extract: ignoring unusable {} value {!r}', key, val)
+                continue
             return int(val)
     return 0
 
@@ -360,10 +374,18 @@ def _usage_detail_int(usage: Any, containers: tuple[str, ...], keys: tuple[str, 
 
 
 def _usage_first_float(usage: Any, keys: tuple[str, ...]) -> float | None:
-    """First numeric value across ``keys`` coerced to float, or None if absent."""
+    """First numeric value across ``keys`` coerced to float, or None if absent.
+
+    Non-finite values are skipped: NaN fails the ``ge=0`` cost constraint (``nan >= 0``
+    is False) and ``_clamped_cost`` cannot catch it (``nan < 0`` is False either), so
+    it would raise out of the telemetry path. See ``_usage_first_int``.
+    """
     for key in keys:
         val = _usage_get(usage, key)
         if isinstance(val, (int, float)) and not isinstance(val, bool):
+            if not math.isfinite(val):
+                logger.debug('Usage.extract: ignoring non-finite {} value {!r}', key, val)
+                continue
             return float(val)
     return None
 
@@ -378,7 +400,7 @@ def _clamped_cost(usage: Any, keys: tuple[str, ...]) -> float | None:
     """
     raw = _usage_first_float(usage, keys)
     if raw is not None and raw < 0:
-        logger.warning('Usage.extract: provider reported negative cost {!r} for {}; clamping to 0.0', raw, keys[0])
+        logger.debug('Usage.extract: provider reported negative cost {!r} for {}; clamping to 0.0', raw, keys[0])
         return 0.0
     return raw
 
@@ -718,6 +740,12 @@ TokenUsage = Usage
 # EvaluationResult.raw_output, and under which converters lift it back onto typed
 # result models. Shared so writers/readers cannot drift.
 JURY_RAW_OUTPUT_KEY = 'jury'
+
+# Same mechanism for the judge's own failure. A judge that could not return a verdict
+# records why here, and converters lift it onto the typed result as ``evaluation_error``
+# — so a blocked or unparseable judge shows up in the run's error rollup instead of
+# being buried in one attack's explanation string.
+EVAL_ERROR_RAW_OUTPUT_KEY = 'evaluation_error'
 
 
 class JuryVote(BaseModel):
@@ -1418,8 +1446,9 @@ class RunSummary(TypedDict, total=False):
     # Red-team extras
     pipeline: str
     total_attacks: int
-    vulnerability_rate: float
-    resistance_rate: float
+    # Both None when no attack could be evaluated — see ReportSummary._RATE_NONE_DOC.
+    vulnerability_rate: float | None
+    resistance_rate: float | None
     tested_agents: list[str]
     # Sim extras
     mode: str

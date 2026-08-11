@@ -44,7 +44,7 @@ def _get_orq_server_url() -> str:
 
 
 from evaluatorq.common.thread_context import pipeline_metadata_param, thread_body_param
-from evaluatorq.common.tracing import record_token_usage, set_span_attrs, truncate_for_span
+from evaluatorq.common.tracing import record_llm_response, set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentTarget, Message, content_to_text
 from evaluatorq.redteam.backends._errors import extract_provider_error_code, extract_status_code
 from evaluatorq.redteam.backends.base import Backend
@@ -60,7 +60,7 @@ from evaluatorq.redteam.contracts import (
     ToolCallOutputItem,
     ToolInfo,
 )
-from evaluatorq.redteam.tracing import with_redteam_span
+from evaluatorq.redteam.tracing import with_llm_span, with_redteam_span
 
 
 def _orq_retry_config(
@@ -239,6 +239,26 @@ class ORQAgentTarget(AgentTarget):
                             return text
             return ''
 
+        async def _create_traced(input_messages: list[dict[str, Any]], **kwargs: Any) -> Any:
+            """Run one ``agents.responses.create`` inside its own LLM span.
+
+            The agents endpoint is stateful and loops for tool continuations, so a
+            single ``respond()`` makes several calls. Each gets a span mirroring the
+            chat-completions / responses shape other backends emit, carrying that
+            call's own usage. The enclosing target span deliberately records no
+            usage of its own: a total there would double-count against these.
+            """
+            async with with_llm_span(
+                model=self.model or self.agent_key,
+                operation='agents.responses',
+                provider='orq',
+                input_messages=input_messages,
+                attributes={'orq.redteam.llm_purpose': 'target', 'orq.agent.key': self.agent_key},
+            ) as llm_span:
+                resp = await asyncio.to_thread(self.orq_client.agents.responses.create, **kwargs)
+                record_llm_response(llm_span, resp, output_content=_extract_text(resp))
+                return resp
+
         def _pending_tool_call_ids(resp: object) -> list[str]:
             """Return IDs of pending tool calls from a response."""
             pending = getattr(resp, 'pending_tool_calls', None) or []
@@ -313,7 +333,7 @@ class ORQAgentTarget(AgentTarget):
                 kwargs.update(thread_body_param())
                 kwargs.update(pipeline_metadata_param())
 
-                response = await asyncio.to_thread(self.orq_client.agents.responses.create, **kwargs)
+                response = await _create_traced([{'role': 'user', 'content': prompt}], **kwargs)
 
                 if response.task_id:
                     self._task_id = response.task_id
@@ -345,8 +365,8 @@ class ORQAgentTarget(AgentTarget):
                         }
                         for tool_call_id in pending_ids
                     ]
-                    response = await asyncio.to_thread(
-                        self.orq_client.agents.responses.create,
+                    response = await _create_traced(
+                        [{'role': 'tool', 'content': json.dumps(tool_parts, ensure_ascii=False)}],
                         agent_key=self.agent_key,
                         message={'role': 'tool', 'parts': tool_parts},
                         task_id=self._task_id,
@@ -392,6 +412,10 @@ class ORQAgentTarget(AgentTarget):
                     },
                 )
 
+                # This span records no usage of its own: each `agents.responses.create`
+                # records its own on the LLM span `_create_traced` opens, and a total
+                # here would double-count against them. `accumulated_usage` still rides
+                # on the returned AgentResponse, which is what the reports read.
                 usage = accumulated_usage if accumulated_usage.calls > 0 else None
                 output: list[OutputMessage] = cast('list[OutputMessage]', list(all_tool_calls))
                 output.append(TextOutputItem(text=result_text, annotations=[]))
@@ -408,9 +432,6 @@ class ORQAgentTarget(AgentTarget):
             except Exception as e:
                 logger.error(f'ORQ agent call failed: {e}')
                 raise
-            finally:
-                if accumulated_usage.calls > 0:
-                    record_token_usage(span, usage=accumulated_usage)
 
     def new(self) -> ORQAgentTarget:
         """Return a fresh target instance with isolated state.

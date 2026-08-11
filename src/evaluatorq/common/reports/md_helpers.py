@@ -10,10 +10,13 @@ from __future__ import annotations
 import html
 import textwrap
 
+from evaluatorq.common.reports.html_helpers import pct as _html_pct
 
-def pct(rate: float) -> str:
-    """Format a float rate as a percentage string, e.g. ``0.75`` -> ``'75%'``."""
-    return f'{rate:.0%}'
+# Deliberately the same object as the HTML helper, not a parallel implementation:
+# both are re-exported from evaluatorq.common.reports under the name ``pct``, so a
+# second definition here silently shadows one of them depending on import order —
+# which is how a float-only pct once defeated the None-safe one package-wide.
+pct = _html_pct
 
 
 def fmt_cost(cost: float | None) -> str:
@@ -45,21 +48,24 @@ def cost_coverage(priced_calls: int, calls: int) -> str:
     return ''
 
 
-def bar(rate: float, width: int = 10) -> str:
+def bar(rate: float | None, width: int = 10) -> str:
     """Render a Unicode block-character progress bar with a numeric percentage.
 
     Uses U+2588 (full block) for filled segments and U+2591 (light shade) for
     empty segments. Always ``width`` characters wide, followed by the numeric
-    percentage. Example: ``'████░░░░░░ 40%'``.
+    percentage. Example: ``'████░░░░░░ 40%'``. An unknown rate renders as an empty
+    bar labelled ``n/a`` — there is no bar length that honestly means "not measured".
     """
+    if rate is None:
+        return '░' * width + f' {pct(rate)}'
     filled = round(rate * width)
-    return '█' * filled + '░' * (width - filled) + f' {rate:.0%}'
+    return '█' * filled + '░' * (width - filled) + f' {pct(rate)}'
 
 
-def bold_bar(rate: float, threshold: float = 0.5) -> str:
+def bold_bar(rate: float | None, threshold: float = 0.5) -> str:
     """Return a Unicode bar, bolded when rate exceeds ``threshold``."""
     cell = bar(rate)
-    return f'**{cell}**' if rate > threshold else cell
+    return f'**{cell}**' if rate is not None and rate > threshold else cell
 
 
 def md_table(

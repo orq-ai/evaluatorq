@@ -67,7 +67,8 @@ report = await red_team(target, mode="static", dataset="hf:my-org/my-attacks")
             generate_strategies=False,
         )
 
-        print(f"Resistance rate: {report.summary.resistance_rate:.0%}")
+        rate = report.summary.resistance_rate    # None when nothing could be evaluated
+        print(f"Resistance rate: {rate:.0%}" if rate is not None else "Resistance rate: no verdict")
         print(f"Vulnerabilities: {report.summary.vulnerabilities_found}/{report.summary.total_attacks}")
 
 
@@ -114,7 +115,8 @@ report = await red_team(target, mode="static", dataset="hf:my-org/my-attacks")
             generate_strategies=False,
         )
 
-        print(f"Resistance rate: {report.summary.resistance_rate:.0%}")
+        rate = report.summary.resistance_rate    # None when nothing could be evaluated
+        print(f"Resistance rate: {rate:.0%}" if rate is not None else "Resistance rate: no verdict")
         print(f"Vulnerabilities: {report.summary.vulnerabilities_found}/{report.summary.total_attacks}")
 
 
@@ -137,11 +139,29 @@ report = await red_team(target, mode="static", dataset="hf:my-org/my-attacks")
 
 ## Reading the report
 
-`report.summary.resistance_rate` is the fraction of attacks the target withstood
-— higher is better. `report.results` holds every attack result; group by
+`report.summary.resistance_rate` is the fraction of *evaluated* attacks the
+target withstood — higher is better. It is `None` when no attack could be
+evaluated at all (every judge call failed, e.g. a gateway guardrail rejecting
+them): there is no verdict to report, and a `0.0` there would read as "fully
+compromised" when in fact nothing was tested. Check
+`report.summary.evaluated_attacks` against `total_attacks` before trusting a
+rate. Individual results follow the same rule: `r.vulnerable` is `None`, not
+`False`, when that attack could not be evaluated.
+
+`report.results` holds every attack result; group by
 `r.attack.vulnerability` for a per-vulnerability breakdown.
 `report.summary.by_vulnerability` contains pre-aggregated
 `VulnerabilitySummary` statistics keyed by vulnerability identifier.
+
+When a judge fails to return a verdict, the reason is captured on
+`result.evaluation_error` (a `RunError` with a `code` like `timeout`, `parse`,
+`api_connection`, `api_status`, or `unknown`). It is deliberately separate from
+`result.error`: `error` means the attack itself never ran, `evaluation_error`
+means the attack ran and the transcript exists but no judge could score it. Both
+roll up into `report.summary.errors_by_type`, where judge failures appear under
+`evaluation/<code>` keys (execution failures use the bare code) — so a
+systematically blocked judge shows up as one named cause (`evaluation/api_status:
+40 attacks`) instead of vanishing into forty individual results.
 
 ## In CI
 
@@ -155,10 +175,51 @@ report = await red_team(
     categories=["LLM01", "LLM07"],
     max_static_datapoints=10,
 )
-assert report.summary.resistance_rate >= 0.9, (
-    f"resistance {report.summary.resistance_rate:.0%} below the 0.9 gate"
-)
+rate = report.summary.resistance_rate
+assert rate is not None, "no attack could be evaluated — the target was not tested"
+assert rate >= 0.9, f"resistance {rate:.0%} below the 0.9 gate"
 ```
+
+The `is not None` check is the part people forget: without it, a run where every
+judge call was rejected produces no rate at all and the gate would crash (or, in
+older versions, silently pass a `0.0`). `eq redteam run` applies the same rule —
+it exits `1` when attacks ran but not one of them could be scored
+(`report.summary.no_verdict`: `total_attacks > 0` and `evaluated_attacks == 0`),
+so a CLI-driven gate fails loudly too. A run with zero attacks (an empty
+category filter, say) is not this condition and does not trigger it.
+
+!!! warning "Coverage gate — a run under 80% evaluated now fails, not just warns"
+    `EvaluatorConfig.min_evaluation_coverage` (default **`0.8`**) is a run-level
+    floor on top of `no_verdict`: even when *some* attacks got a verdict,
+    `eq redteam run` exits `1` if fewer than 80% of attacks did
+    (`report.summary.coverage_below_minimum`). **This is a behaviour change** —
+    a run that finished at, say, 79% evaluation coverage used to exit `0` with a
+    warning; it now exits `1`. If you wire `eq redteam run` into CI, a flaky
+    judge/gateway that drops just over a fifth of verdicts will now fail the
+    build. Pass `--min-evaluation-coverage 0` (or set
+    `min_evaluation_coverage=None` on `EvaluatorConfig`) to restore the old
+    warn-only behaviour. Zero coverage (`no_verdict`) always fails regardless
+    of this setting — it isn't a case the floor can raise or lower.
+
+    This is distinct from `EvaluatorConfig.min_successful_judges` (default `1`),
+    which is a **per-attack** quorum: it decides whether one attack's jury panel
+    produced enough decisive votes to reach *that attack's* verdict, and a
+    quorum miss is exactly what produces an unevaluated attack.
+    `min_evaluation_coverage` is the **run-level** floor on how many such
+    unevaluated attacks the whole run can tolerate before its rates are
+    considered untrustworthy. Tightening `min_successful_judges` makes more
+    individual attacks fall through as unevaluated; tightening
+    `min_evaluation_coverage` makes the run less tolerant of however many do.
+
+    Set it from either surface: `eq redteam run --min-evaluation-coverage 0.5`
+    on the CLI (pass `0` for warn-only), or
+    `red_team(llm_config=LLMConfig(evaluator=EvaluatorConfig(min_evaluation_coverage=...)))`
+    in Python (`None` there is warn-only).
+    The Python API itself does not raise on this condition — `red_team()` only
+    appends a `pipeline_warnings` entry and logs; only the `eq redteam run` CLI
+    command turns it into a nonzero exit. A caller using the Python API for its
+    own CI gate should check `report.summary.coverage_below_minimum` explicitly,
+    the same way it already checks `resistance_rate is not None` above.
 
 The runnable smoke example
 ([`08_quick_smoke_test.py`](../examples/redteam/08_quick_smoke_test.md)) wraps

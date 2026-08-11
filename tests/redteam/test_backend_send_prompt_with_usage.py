@@ -347,7 +347,7 @@ class TestORQAgentTargetSendPromptWithUsage:
 
     @pytest.mark.asyncio
     async def test_orq_partial_usage_on_error(self) -> None:
-        """record_token_usage is called on span with partial totals when mid-loop exception fires."""
+        """Each completed create keeps its own LLM span usage when a later call raises."""
         from evaluatorq.redteam.backends.orq import ORQAgentTarget
 
         mock_orq_client = MagicMock()
@@ -382,19 +382,15 @@ class TestORQAgentTargetSendPromptWithUsage:
         with (
             patch("asyncio.to_thread", side_effect=fake_to_thread),
             patch("evaluatorq.redteam.tracing.get_tracer", return_value=None),
-            patch("evaluatorq.redteam.backends.orq.record_token_usage") as mock_record,
+            patch("evaluatorq.redteam.backends.orq.record_llm_response") as mock_record,
         ):
             with pytest.raises(RuntimeError, match="network failure mid-loop"):
                 await target.respond([Message(role="user", content="prompt")])
 
-        # Partial usage from the first call must have been recorded before the exception propagated
+        # The first call's own LLM span recorded its usage; the failed call recorded nothing.
+        # No aggregate is written anywhere — the sink sums the per-call spans.
         mock_record.assert_called_once()
-        _, kwargs_called = mock_record.call_args
-        recorded_usage = kwargs_called["usage"]
-        assert recorded_usage.input_tokens == 15
-        assert recorded_usage.output_tokens == 5
-        assert recorded_usage.total_tokens == 20
-        assert recorded_usage.calls == 1
+        assert mock_record.call_args.args[1] is first_response
 
     @pytest.mark.asyncio
     async def test_orq_total_zero_falls_back_to_sum(self) -> None:

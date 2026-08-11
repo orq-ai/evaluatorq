@@ -2,6 +2,7 @@
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from pydantic import ValidationError
 
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
@@ -57,6 +58,22 @@ def test_llm_config_has_retry_and_timeout_fields():
     assert cfg.retry_count == 3
     assert cfg.cleanup_timeout_ms == 60_000
     assert cfg.max_target_retries == 2
+
+
+def test_evaluator_config_min_evaluation_coverage_defaults_to_0_8():
+    cfg = EvaluatorConfig()
+    assert cfg.min_evaluation_coverage == 0.8
+
+
+@pytest.mark.parametrize('value', [-0.1, 1.1])
+def test_evaluator_config_min_evaluation_coverage_rejects_out_of_range(value):
+    with pytest.raises(ValidationError):
+        EvaluatorConfig(min_evaluation_coverage=value)
+
+
+def test_evaluator_config_min_evaluation_coverage_accepts_none():
+    cfg = EvaluatorConfig(min_evaluation_coverage=None)
+    assert cfg.min_evaluation_coverage is None
 
 
 def test_llm_config_no_backend_field():

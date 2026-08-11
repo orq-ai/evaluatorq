@@ -660,22 +660,28 @@ def test_csv_header_escaping_covers_a_hostile_judge_name(tmp_path: Path) -> None
 
 
 def test_filtered_view_rolls_up_once(saved: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch) -> None:
-    """The header and two section builders each call rollup()."""
-    import evaluatorq.pairwise as pw_mod
+    """The header and two section builders each call rollup().
+
+    The adapter routes the filtered rollup through ``PairwiseRun.rollup`` (so a
+    BT-sigma run keeps its aggregation on filtered views), and ``pairwise_run``
+    binds ``build_report`` into its own namespace at import — so the counter
+    must patch that binding, not ``evaluatorq.pairwise``.
+    """
+    import evaluatorq.pairwise_run as pw_run_mod
     from evaluatorq.dashboard.surfaces import ADAPTERS
 
     _, path = saved
     run = ADAPTERS['pairwise'].load(path)
 
     calls = 0
-    real = pw_mod.build_report
+    real = pw_run_mod.build_report
 
-    def counting(comparisons: list[PairwiseComparison]) -> object:
+    def counting(comparisons: list[PairwiseComparison], **kwargs: object) -> object:
         nonlocal calls
         calls += 1
-        return real(comparisons)
+        return real(comparisons, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(pw_mod, 'build_report', counting)
+    monkeypatch.setattr(pw_run_mod, 'build_report', counting)
     body = ADAPTERS['pairwise'].body_from_results(run, list(run.entries[:2]))
 
     assert calls == 1, f'rolled up {calls} times'

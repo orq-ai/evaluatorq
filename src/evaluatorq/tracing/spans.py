@@ -2,8 +2,8 @@
 Span creation utilities for OpenTelemetry instrumentation.
 
 Span hierarchy:
-- orq.evaluation_run (root or child of parent context)
-  └── orq.job (per job per data point)
+- evaluatorq.run (opt-in via ``single_trace=True``; root or child of parent context)
+  └── orq.job (per job per data point — the root itself when single_trace is off)
       ├── [User's instrumented code becomes child spans]
       └── orq.evaluation (per evaluator - child of its job)
 """
@@ -42,11 +42,60 @@ class JobSpanOptions:
 
 
 @dataclass
+class RunSpanOptions:
+    """Options for creating a run span."""
+
+    run_id: str
+    run_name: str
+    parent_context: Any | None = None
+    trace_type: str = 'evaluatorq'
+
+
+@dataclass
 class EvaluationSpanOptions:
     """Options for creating an evaluation span."""
 
     run_id: str
     evaluator_name: str
+
+
+@asynccontextmanager
+async def with_run_span(
+    options: RunSpanOptions,
+) -> AsyncGenerator[Span | None, None]:
+    """Execute an evaluation run inside one ``evaluatorq.run`` span.
+
+    Opt-in (``evaluatorq(..., single_trace=True)``). Without it no run span
+    exists and every ``orq.job`` is its own root, so an N-row evaluation lands
+    as N separate traces. With it, all rows share one trace.
+
+    Named ``evaluatorq.run`` rather than ``orq.run`` because it brackets an
+    ``evaluatorq()`` call specifically — red teaming and simulation already
+    open their own equivalents (``Evaluatorq - Red Teaming`` /
+    ``Evaluatorq - Agent Simulation``).
+
+    Yields:
+        The span if tracing is enabled, None otherwise.
+    """
+    # Delegates to the shared helper rather than repeating the open/status/error
+    # dance: `with_span` also catches BaseException (so a cancelled run is still
+    # marked failed), stamps `error.type`, and won't clobber an ERROR the body
+    # set deliberately.
+    from evaluatorq.common.tracing import with_span
+
+    async with with_span(
+        'evaluatorq.run',
+        {
+            'orq.trace_type': options.trace_type,
+            'orq.run_id': options.run_id,
+            'orq.run_name': options.run_name,
+            # Same key the red-team / simulation roots stamp, so one query
+            # finds the root of any evaluatorq run whatever the surface.
+            'orq.evaluatorq_run_id': options.run_id,
+        },
+        parent_context=options.parent_context,
+    ) as span:
+        yield span
 
 
 @asynccontextmanager

@@ -14,6 +14,7 @@ from evaluatorq.common.jury import (
     run_jury,
 )
 from evaluatorq.common.jury import provider_family as provider_family
+from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
@@ -22,6 +23,7 @@ from evaluatorq.redteam.contracts import (
     EvaluatorConfig,
     LLMCallConfig,
     OutputMessage,
+    PipelineStage,
     Vulnerability,
 )
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category, get_evaluator_for_vulnerability
@@ -230,13 +232,14 @@ class OWASPEvaluator:
             )
             return self._single_outcome_to_result(outcome, evaluator_id)
 
-        # A lone judge with no replacements has no redundancy to absorb an
-        # outage. Mirror the single-judge fast path's fail-loud policy: infra
-        # errors must abort the run rather than degrade every datapoint to an
-        # inconclusive verdict (e.g. an invalid API key with judge_repetitions>1).
-        no_redundancy = len(self.panel) == 1 and not self.replacement_judges
+        # Every judge failure is recorded, none re-raised — see
+        # _single_outcome_to_result for why fail-loud was dropped. The last
+        # failure's kind is kept so the panel result can name a cause instead of
+        # reporting only "quorum not met".
+        last_error: JudgeOutcome | None = None
 
         async def judge_fn(model: str) -> Prediction:
+            nonlocal last_error
             outcome = await run_judge(
                 client=self.client,
                 model=model,
@@ -245,12 +248,8 @@ class OWASPEvaluator:
                 replacements=replacements,
                 span_attributes=span_attributes,
             )
-            if (
-                outcome.error_kind in (JudgeError.API_CONNECTION, JudgeError.API_STATUS)
-                and outcome.error_exc is not None
-            ):
-                raise outcome.error_exc
             if outcome.error_kind is not None or outcome.payload is None:
+                last_error = outcome
                 return Prediction(
                     error=outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'error')
                 )
@@ -270,42 +269,82 @@ class OWASPEvaluator:
             verdict_kind=VerdictKind.CATEGORICAL,
             tie_break=lambda _values: False,
             tie_break_label='fail-closed to VULNERABLE',
-            propagate_errors=no_redundancy,
+            propagate_errors=False,
         )
         final_passed = deliberation.verdict if isinstance(deliberation.verdict, bool) else None
         explanation = deliberation.explanation
+
+        raw_output: dict[str, Any] = {'value': final_passed, 'explanation': explanation}
+        # No verdict from a panel means the quorum was not met, i.e. judges failed.
+        # Without this the panel path produced passed=None with no recorded cause,
+        # so a whole-panel outage was invisible to the error rollup and the CLI hint.
+        if final_passed is None and last_error is not None:
+            raw_output[EVAL_ERROR_RAW_OUTPUT_KEY] = self._judge_error_payload(last_error, evaluator_id)
 
         return AttackEvaluationResult(
             passed=final_passed,
             explanation=explanation,
             evaluator_id=evaluator_id,
             token_usage=deliberation.token_usage,
-            raw_output={'value': final_passed, 'explanation': explanation},
+            raw_output=raw_output,
             jury=deliberation.jury,
         )
 
-    def _single_outcome_to_result(self, outcome: JudgeOutcome, evaluator_id: str) -> AttackEvaluationResult:
-        """Map a single JudgeOutcome to a result, preserving the fail-loud policy.
+    @staticmethod
+    def _judge_error_payload(outcome: JudgeOutcome, evaluator_id: str) -> dict[str, Any]:
+        """Serialize a failed judge call into the shape converters lift to ``RunError``.
 
-        Infrastructure errors (API connection/status) re-raise so the run surfaces
-        them; timeout and parse/unknown errors degrade to an inconclusive verdict.
+        ``stage`` is always 'evaluation': the attack itself ran, so this is not an
+        execution error and must not be conflated with one. ``code`` is the JudgeError
+        kind, which is what makes 'every judge call was blocked' legible as a single
+        cause in the error rollup rather than N unrelated one-off failures.
         """
-        if outcome.error_kind in (JudgeError.API_CONNECTION, JudgeError.API_STATUS):
-            if outcome.error_exc is not None:
-                raise outcome.error_exc
+        return {
+            'message': outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'unknown'),
+            'error_type': outcome.error_kind.value if outcome.error_kind else 'unknown',
+            'stage': PipelineStage.EVALUATION.value,
+            'code': outcome.error_kind.value if outcome.error_kind else None,
+            'details': {
+                'evaluator_id': evaluator_id,
+                # Truncated: the point is to identify the cause, not to store the payload
+                # twice — the untruncated content stays under raw_output['raw_content'].
+                'raw_content': (outcome.raw_content or '')[:500] or None,
+                'timeout_ms': outcome.timeout_ms,
+            },
+        }
+
+    def _single_outcome_to_result(self, outcome: JudgeOutcome, evaluator_id: str) -> AttackEvaluationResult:
+        """Map a single JudgeOutcome to a result — every failure kind is structured.
+
+        Infrastructure errors (API connection/status) used to re-raise on a
+        fail-loud policy, but nothing upstream honoured it:
+        ``evaluatorq.processings.process_evaluator`` catches every exception into
+        ``EvaluatorScore.error``, so the run kept going *and* the cause was discarded. Returning a structured inconclusive
+        result instead keeps the diagnosis attached to the attack, and the
+        run-level coverage gate (``min_evaluation_coverage``) is what now makes
+        a judge outage fail the run.
+        """
         if outcome.error_kind is JudgeError.TIMEOUT:
             return AttackEvaluationResult(
                 passed=None,
                 explanation=f'Evaluation timed out after {outcome.timeout_ms}ms',
                 evaluator_id=evaluator_id,
-                raw_output={'error': 'timeout', 'timeout_ms': outcome.timeout_ms},
+                raw_output={
+                    'error': 'timeout',
+                    'timeout_ms': outcome.timeout_ms,
+                    EVAL_ERROR_RAW_OUTPUT_KEY: self._judge_error_payload(outcome, evaluator_id),
+                },
             )
         if outcome.error_kind is not None or outcome.payload is None:
             return AttackEvaluationResult(
                 passed=None,
                 explanation=f'Evaluation error: {outcome.error_message}',
                 evaluator_id=evaluator_id,
-                raw_output={'error': outcome.error_message, 'raw_content': outcome.raw_content},
+                raw_output={
+                    'error': outcome.error_message,
+                    'raw_content': outcome.raw_content,
+                    EVAL_ERROR_RAW_OUTPUT_KEY: self._judge_error_payload(outcome, evaluator_id),
+                },
             )
 
         passed = outcome.payload.value if isinstance(outcome.payload.value, bool) else None

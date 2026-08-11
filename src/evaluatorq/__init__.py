@@ -41,13 +41,16 @@ from .job_helper import job
 from .llm_jury import PairwiseComparator, llm_jury, llm_jury_pairwise
 from .openresponses import ResponseResourceDict
 from .pairwise import (
+    BTSigmaAggregation,
     JudgeStats,
     PairwiseComparison,
     PairwiseReport,
     PairwiseVote,
+    bt_sigma_aggregation,
     build_report,
     run_pairwise,
 )
+from .ranking import BTFit, JudgedComparison, fit_bt
 from .types import (
     DataPoint,
     DataPointDict,
@@ -73,6 +76,8 @@ from .types import (
 __all__ = [
     'AgentResponse',
     # Types
+    'BTFit',
+    'BTSigmaAggregation',
     'DataPoint',
     'DataPointDict',
     'DataPointInput',
@@ -91,6 +96,7 @@ __all__ = [
     'JobResult',
     'JobReturn',
     'JudgeStats',
+    'JudgedComparison',
     'MessageDict',
     'Output',
     # Pairwise (preference) jury
@@ -102,12 +108,14 @@ __all__ = [
     'Scorer',
     'ScorerParameter',
     'ThreadConfig',
+    'bt_sigma_aggregation',
     'build_report',
     # Deployment helpers
     'deployment',
     # Main function
     'evaluatorq',
     'exact_match_evaluator',
+    'fit_bt',
     'invoke',
     # Helper functions
     'job',

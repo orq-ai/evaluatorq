@@ -226,6 +226,21 @@ def set_span_attrs(span: Span | None, attrs: AttrMap) -> None:
             span.set_attribute(key, value)
 
 
+def set_span_error(span: Span | None, message: str) -> None:
+    """Mark a span as failed without raising. Safe no-op when span is None.
+
+    For swallowed failures — the code recovered, but the span should not read
+    as OK in a trace viewer.
+    """
+    if span is None:
+        return
+    try:
+        from opentelemetry.trace import Status, StatusCode
+    except ImportError:  # pragma: no cover - OTel always present when a span exists
+        return
+    span.set_status(Status(StatusCode.ERROR, message))
+
+
 def record_token_usage(
     span: Span | None,
     *,
@@ -244,9 +259,13 @@ def record_token_usage(
 ) -> None:
     """Record token usage on a span. Safe no-op when span is None.
 
-    Superset of both former redteam and simulation impls: sets OTel GenAI
-    attribute names, their aliases, bare keys, call count, cache details, and
-    the provider-reported cost breakdown (Orq Responses v3).
+    One canonical attribute name per number, all under the OTel GenAI
+    ``gen_ai.usage.*`` namespace. The former ``prompt_tokens`` /
+    ``completion_tokens`` spellings and the bare (un-namespaced) keys are
+    deliberately not emitted: they carried the same values under three names
+    each, which triples attribute volume and lets two consumers disagree about
+    which key is authoritative. Also records the provider-reported cost
+    breakdown (Orq Responses v3) when present.
 
     ``usage`` accepts a :class:`evaluatorq.contracts.Usage` and expands it into
     the individual parameters; explicitly-passed parameters win over it.
@@ -279,24 +298,17 @@ def record_token_usage(
     total = total_tokens if total_tokens is not None else prompt + completion
     span.set_attribute('gen_ai.usage.input_tokens', prompt)
     span.set_attribute('gen_ai.usage.output_tokens', completion)
-    span.set_attribute('gen_ai.usage.prompt_tokens', prompt)
-    span.set_attribute('gen_ai.usage.completion_tokens', completion)
     span.set_attribute('gen_ai.usage.total_tokens', total)
-    span.set_attribute('prompt_tokens', prompt)
-    span.set_attribute('completion_tokens', completion)
-    span.set_attribute('input_tokens', prompt)
-    span.set_attribute('output_tokens', completion)
-    span.set_attribute('total_tokens', total)
     if calls:
         span.set_attribute('gen_ai.usage.calls', calls)
-        span.set_attribute('calls', calls)
     cache_read = cached_tokens if cached_tokens is not None else cache_read_input_tokens
     if cache_read is not None:
         span.set_attribute('gen_ai.usage.cache_read.input_tokens', cache_read)
-        # Legacy attribute name emitted by the former redteam impl — kept for platform dashboard compat.
-        span.set_attribute('gen_ai.usage.prompt_tokens_details.cached_tokens', cache_read)
     if reasoning_tokens is not None:
-        span.set_attribute('gen_ai.usage.completion_tokens_details.reasoning_tokens', reasoning_tokens)
+        # This spelling (not the flat completion_tokens_details.* one) is what the
+        # platform's generic OTel adapter reads — see extractCommonUsage in
+        # orquesta-web apps/traces-api/.../utils/adapter-patterns.ts.
+        span.set_attribute('gen_ai.usage.reasoning.output_tokens', reasoning_tokens)
     if cache_creation_input_tokens is not None:
         span.set_attribute('gen_ai.usage.cache_creation.input_tokens', cache_creation_input_tokens)
     # Provider-reported cost breakdown (USD). Only set when reported — a $0
@@ -435,7 +447,9 @@ async def with_llm_span(  # noqa: RUF029
         yield None
         return
 
-    ctx = parent_context or otel_context.get_current()
+    # `is not None`, not truthiness: Context subclasses dict, so a legitimately
+    # empty (root) context is falsy and would be silently swapped for ambient.
+    ctx = parent_context if parent_context is not None else otel_context.get_current()
     resolved_provider = provider or _derive_provider(model)
     span_name = f'{operation} {model}'
 
@@ -483,6 +497,79 @@ async def with_llm_span(  # noqa: RUF029
             span.set_status(Status(StatusCode.ERROR, str(e)))
             span.record_exception(e)
             raise
+
+
+@asynccontextmanager
+async def with_span(  # noqa: RUF029
+    name: str,
+    attributes: AttrMap | None = None,
+    *,
+    parent_context: Any | None = None,
+) -> AsyncGenerator[Span | None, None]:
+    """Execute code within a generic INTERNAL span (not an LLM call span).
+
+    The neutral counterpart to :func:`with_llm_span` for orchestration spans
+    that group work (e.g. a jury deliberation and its per-judge children).
+    ``get_tracer()``-gated, so it is a zero-cost no-op when tracing is off.
+
+    ``parent_context`` pins the span's parent explicitly, which matters when
+    the caller opens several children under one parent via ``asyncio.gather``:
+    the shared context is captured once and passed in, so parenting does not
+    depend on gather scheduling order.
+
+    Yields:
+        The active span when tracing is enabled, otherwise None.
+    """
+    tracer = get_tracer()
+    if tracer is None:
+        yield None
+        return
+
+    try:
+        from opentelemetry import context as otel_context
+        from opentelemetry.trace import SpanKind, Status, StatusCode
+    except ImportError:
+        yield None
+        return
+
+    # `is not None`, not truthiness: Context subclasses dict, so a legitimately
+    # empty (root) context is falsy and would be silently swapped for ambient.
+    ctx = parent_context if parent_context is not None else otel_context.get_current()
+    clean_attrs = {k: v for k, v in (attributes or {}).items() if v is not None}
+
+    with tracer.start_as_current_span(
+        name,
+        context=ctx,
+        kind=SpanKind.INTERNAL,
+        attributes=clean_attrs,
+    ) as span:
+        try:
+            yield span
+            # Don't clobber an ERROR the body set deliberately (set_span_error):
+            # OK is final in the OTel spec and would hide a swallowed failure.
+            # `status` is on the SDK's Span, not the API protocol — read it
+            # defensively so a non-SDK span just takes the OK path.
+            status = getattr(span, 'status', None)
+            if getattr(status, 'status_code', None) is not StatusCode.ERROR:
+                span.set_status(Status(StatusCode.OK))
+        except BaseException as e:
+            span.set_attribute('error.type', type(e).__name__)
+            span.set_status(Status(StatusCode.ERROR, str(e)))
+            span.record_exception(e)
+            raise
+
+
+def current_otel_context() -> Any | None:
+    """Return the active OTel context, or None when OTel is unavailable.
+
+    Used to capture a parent span's context for passing to ``with_span`` /
+    ``with_llm_span`` children created concurrently (see ``parent_context``).
+    """
+    try:
+        from opentelemetry import context as otel_context
+    except ImportError:
+        return None
+    return otel_context.get_current()
 
 
 async def get_trace_context_headers() -> dict[str, str]:  # noqa: RUF029
