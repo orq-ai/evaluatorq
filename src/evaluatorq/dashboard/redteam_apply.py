@@ -101,8 +101,7 @@ def render_apply_panel(rid: str, report: RedTeamReport) -> str:
             # so this must not look clickable (review feedback: the pill chip
             # read as a mystery button).
             agent_field += (
-                '<span class="rt-apply-agent-name">'
-                f'<span class="rt-apply-agent-label">Agent</span>{esc(only)}</span>'
+                f'<span class="rt-apply-agent-name"><span class="rt-apply-agent-label">Agent</span>{esc(only)}</span>'
             )
 
     applied_note = f' · {applied_n} already applied' if applied_n else ''
