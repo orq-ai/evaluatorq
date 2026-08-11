@@ -36,7 +36,8 @@ class OpenAIAgentTarget(AgentTarget):
     target = OpenAIAgentTarget(agent)
 
     # Pass to simulation or red teaming
-    config = DynamicRunConfig(targets=[target])
+    results = await simulate(target=target, ...)
+    report = await red_team(target)
     ```
     """
 

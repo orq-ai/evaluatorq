@@ -81,7 +81,8 @@ class CallableTarget(AgentTarget):
     target = CallableTarget(my_agent, usage_fn=get_usage)
 
     # Pass to simulation or red teaming
-    config = DynamicRunConfig(targets=[target])
+    results = await simulate(target=target, ...)
+    report = await red_team(target)
     ```
     """
 
