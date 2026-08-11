@@ -2359,6 +2359,22 @@ _RT_REPORT_CSS = """
     border-top: 1px solid var(--border); flex: 0 0 auto;
 }
 .rt-drawer-footnote { font-size: 11px; color: var(--text-faint); margin-left: auto; text-align: right; }
+.rt-drawer-body--loading {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; gap: 12px; padding: 48px 28px;
+}
+.rt-drawer-loading-title { font-size: 14px; font-weight: 600; margin: 0; }
+.rt-drawer-spinner {
+    width: 26px; height: 26px; border-radius: 999px;
+    border: 3px solid var(--border); border-top-color: var(--accent);
+    animation: rt-spin 0.8s linear infinite;
+}
+@keyframes rt-spin { to { transform: rotate(360deg); } }
+/* htmx tags the in-flight form; freeze its button so a double-click cannot
+   queue a second merge. */
+.rt-apply-form.htmx-request .rt-apply-btn,
+.rt-focus-rec-apply.htmx-request .rt-apply-btn,
+.rt-drawer-footer form.htmx-request .rt-apply-btn { opacity: 0.55; pointer-events: none; }
 
 /* ---- Attack evidence fragment (spec §Attacks, Task 13) ---- */
 .rt-report .rt-attack-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }

@@ -465,3 +465,69 @@
   // Honor a tab hash on initial load / refresh.
   if (location.hash) selectRadio(location.hash.slice(1));
 })();
+
+/**
+ * Apply-recommendations drawer: instant loading state (RES-1143)
+ * ──────────────────────────────────────────────────────────────
+ * The preview endpoint runs an LLM merge of the agent's full instructions,
+ * which takes tens of seconds. Without this, the click gives no feedback
+ * until the response lands. On beforeRequest for any request targeting the
+ * drawer mount, inject the drawer shell with a spinner immediately; the
+ * HTMX swap then replaces it with the real content (or an error drawer).
+ */
+(function () {
+  var DRAWER = 'rt-apply-drawer';
+
+  function loadingDrawer(message) {
+    return (
+      '<div class="rt-drawer-overlay"></div>' +
+      '<aside class="rt-drawer" role="dialog" aria-modal="true" aria-busy="true">' +
+      '<div class="rt-drawer-head"><h3 class="rt-drawer-title">Preview changes</h3></div>' +
+      '<div class="rt-drawer-body rt-drawer-body--loading">' +
+      '<span class="rt-drawer-spinner" aria-hidden="true"></span>' +
+      '<p class="rt-drawer-loading-title">' + message + '</p>' +
+      '<p class="rt-drawer-note">This rewrites the agent instructions with an LLM and usually ' +
+      'takes 10–30 seconds. Nothing is written to the agent.</p>' +
+      '</div></aside>'
+    );
+  }
+
+  document.body.addEventListener('htmx:beforeRequest', function (evt) {
+    var src = evt.detail.elt;
+    if (!src || !src.closest) return;
+    var form = src.closest('.rt-apply-form, .rt-focus-rec-apply');
+    if (!form) return;
+    var mount = document.getElementById(DRAWER);
+    if (!mount) return;
+    var single = form.classList.contains('rt-focus-rec-apply');
+    mount.innerHTML = loadingDrawer(
+      single
+        ? 'Merging this recommendation into the agent instructions…'
+        : 'Merging the pending recommendations into the agent instructions…'
+    );
+  });
+
+  // A transport failure would otherwise leave the spinner up forever.
+  ['htmx:sendError', 'htmx:responseError', 'htmx:timeout'].forEach(function (name) {
+    document.body.addEventListener(name, function (evt) {
+      var src = evt.detail.elt;
+      if (!src || !src.closest || !src.closest('.rt-apply-form, .rt-focus-rec-apply, .rt-drawer')) return;
+      var mount = document.getElementById(DRAWER);
+      if (!mount || !mount.querySelector('.rt-drawer-body--loading')) return;
+      mount.innerHTML =
+        '<div class="rt-drawer-overlay"></div>' +
+        '<aside class="rt-drawer" role="dialog" aria-modal="true">' +
+        '<div class="rt-drawer-head"><h3 class="rt-drawer-title">Apply recommendations</h3></div>' +
+        '<div class="rt-drawer-body"><p class="rt-drawer-error">The request failed before a preview ' +
+        'came back. Check the dashboard terminal for details and try again.</p></div></aside>';
+    });
+  });
+
+  // Clicking the injected overlay (no hx- attributes on the client-side shell)
+  // closes the drawer, matching the server-rendered overlay behavior.
+  document.body.addEventListener('click', function (evt) {
+    if (!evt.target || !evt.target.classList || !evt.target.classList.contains('rt-drawer-overlay')) return;
+    var mount = document.getElementById(DRAWER);
+    if (mount && mount.querySelector('.rt-drawer-body--loading')) mount.innerHTML = '';
+  });
+})();
