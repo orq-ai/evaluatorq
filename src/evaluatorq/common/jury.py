@@ -4,17 +4,48 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from loguru import logger
 from pydantic import BaseModel
 
+from evaluatorq.common.tracing import (
+    current_otel_context,
+    set_span_attrs,
+    set_span_error,
+    truncate_for_span,
+    with_span,
+)
 from evaluatorq.contracts import JuryResult, JuryStats, JuryVote, StrEnum, TokenUsage
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span
 
 VerdictValue = bool | float | str
 TieBreak = Callable[[list[VerdictValue]], VerdictValue | None]
+
+_UNSWAP = {'A': 'B', 'B': 'A'}
+
+
+def _unswap(value: VerdictValue | None) -> VerdictValue | None:
+    """Map a verdict from the swapped ordering back to the canonical A/B frame.
+
+    Lives here rather than in ``pairwise`` because the judge span needs it too,
+    and ``pairwise`` already imports from this module. Pure and per-ordering:
+    only *flip detection* needs both orderings, un-swapping does not.
+
+    Anything that is not ``'A'`` or ``'B'`` passes through unchanged, which is
+    required rather than incidental: ``'tie'`` is symmetric and must not flip,
+    and a non-comparative panel's bool / float / str verdicts have no slot frame
+    to be mapped out of.
+    """
+    if value is None:
+        return None
+    return _UNSWAP.get(str(value), value)
+
 
 # A custom panel aggregator sees ALL per-judge votes — including abstained and
 # failed ones (filter on .success / .abstained yourself) — plus model and
@@ -263,6 +294,94 @@ async def _judge_vote(
     numeric_how: NumericAggName,
     propagate_errors: bool = False,
     semaphore: asyncio.Semaphore | None = None,
+    parent_context: object | None = None,
+    label_swapped: bool | None = None,
+) -> tuple[JuryVote, list[TokenUsage]]:
+    """Run one judge (its repetitions) inside a per-judge span, then stamp the
+    resolved ``JuryVote`` onto the span (RES-985). The span is a no-op when
+    tracing is disabled; the vote/usages are unchanged either way."""
+    async with with_span('orq.judge', parent_context=parent_context) as span:
+        start = time.monotonic()
+        # Identity up front so a propagate_errors=True abort still leaves a span
+        # that says which judge died.
+        set_span_attrs(
+            span,
+            {
+                'judge.name': model,
+                'judge.model': model,
+                'judge.replacement': replacement,
+                # Only set in comparative mode, where the same judge votes twice.
+                'judge.label_swapped': label_swapped,
+            },
+        )
+        vote, usages = await _compute_judge_vote(
+            model=model,
+            judge_fn=judge_fn,
+            repetitions=repetitions,
+            verdict_kind=verdict_kind,
+            tie_break=tie_break,
+            replacement=replacement,
+            numeric_how=numeric_how,
+            propagate_errors=propagate_errors,
+            semaphore=semaphore,
+        )
+        _record_judge_span(span, vote, latency_ms=(time.monotonic() - start) * 1000.0, label_swapped=label_swapped)
+    return vote, usages
+
+
+def _record_judge_span(span: Span | None, vote: JuryVote, *, latency_ms: float, label_swapped: bool | None) -> None:
+    """Set the outcome ``judge.*`` attributes on a judge span from its vote.
+
+    Identity (``judge.name`` / ``judge.model`` / ``judge.replacement`` /
+    ``judge.label_swapped``) is already stamped by :func:`_judge_vote` at
+    span-open and cannot change here, so it is not re-written. The verdict is
+    stringified so bool / float / str verdicts share one attribute type.
+
+    ``judge.verdict`` is the single verdict attribute, and it is always in the
+    canonical frame. In comparative mode the labels a judge returns mean *slot*,
+    not response — a judge naming the same response in both orderings
+    necessarily says 'A' once and 'B' once — so a raw-frame attribute would make
+    "how often did this judge pick response A" need a per-span join against
+    ``judge.label_swapped`` first. The raw text the verdict was parsed from is
+    still one level down, on the ``chat`` child's ``gen_ai.output.messages``,
+    which is why a second raw-frame attribute here would only restate what the
+    trace already holds (see the alias-removal note in ``docs/tracing.md``).
+
+    Un-swapping is per-ordering and pure; only *flip detection* needs both
+    orderings, and that lands on the parent as ``jury.flipped_judges``.
+
+    Token usage and cost are not recorded here: they belong on the underlying
+    ``chat`` spans, which the consumer rolls up.
+    """
+    canonical = _unswap(vote.value) if label_swapped else vote.value
+    set_span_attrs(
+        span,
+        {
+            'judge.verdict': None if canonical is None else str(canonical),
+            'judge.success': vote.success,
+            'judge.abstained': vote.abstained,
+            'judge.latency_ms': round(latency_ms, 3),
+            # Provider errors are unbounded; cap like every other text attribute.
+            'judge.error': None if vote.error is None else truncate_for_span(vote.error),
+            'judge.repetitions_failed': vote.repetitions_failed,
+        },
+    )
+    if not vote.success:
+        # The failure is swallowed (the panel carries on), but the span must not read as OK.
+        set_span_error(span, vote.error or f'judge {vote.model} produced no usable verdict')
+
+
+async def _compute_judge_vote(
+    *,
+    model: str,
+    judge_fn: Callable[[str], Awaitable[Prediction]],
+    repetitions: int,
+    verdict_kind: VerdictKind,
+    tie_break: TieBreak | None,
+    replacement: bool,
+    numeric_how: NumericAggName,
+    propagate_errors: bool = False,
+    semaphore: asyncio.Semaphore | None = None,
 ) -> tuple[JuryVote, list[TokenUsage]]:
     predictions = await asyncio.gather(*[
         _call_prediction(judge_fn, model, propagate_errors=propagate_errors, semaphore=semaphore)
@@ -375,7 +494,114 @@ async def run_jury(
     whole panel (judges x repetitions, replacements included). Pass an int for
     a run-local cap, or an existing ``asyncio.Semaphore`` to share one budget
     across several jury runs. ``None`` (default) keeps the fan-out unbounded.
+
+    The deliberation runs inside an ``orq.jury`` span with the panel's
+    aggregate attributes; each judge opens a child ``orq.judge`` span, and the
+    judge's own LLM calls nest under that (RES-985). The full hierarchy is
+    ``orq.evaluation`` -> ``orq.jury`` -> ``orq.judge`` -> ``chat {model}``.
+
+    Comparative mode needs one jury span across BOTH label orderings, so it
+    drives :func:`_run_jury_core` directly rather than calling this function
+    twice; see :func:`evaluatorq.pairwise.run_pairwise`.
     """
+    async with with_span('orq.jury') as jury_span:
+        # Captured once and threaded into each judge so per-judge spans parent
+        # to this jury span deterministically, regardless of gather scheduling.
+        deliberation = await _run_jury_core(
+            judge_fn=judge_fn,
+            panel=panel,
+            repetitions=repetitions,
+            replacement_judges=replacement_judges,
+            min_successful_judges=min_successful_judges,
+            verdict_kind=verdict_kind,
+            tie_break=tie_break,
+            aggregator=aggregator,
+            tie_break_label=tie_break_label,
+            propagate_errors=propagate_errors,
+            max_concurrency=max_concurrency,
+            parent_context=current_otel_context(),
+        )
+        record_jury_span(
+            jury_span,
+            deliberation,
+            aggregator=aggregator,
+            verdict_kind=verdict_kind,
+            min_successful_judges=min_successful_judges,
+        )
+    return deliberation
+
+
+def _aggregator_name(aggregator: AggregatorSpec | None, verdict_kind: VerdictKind) -> str:
+    """Display name for the consensus rule — the same defaulting _run_jury_core
+    applies, with custom callables collapsed to ``'custom'``."""
+    if isinstance(aggregator, str):
+        return aggregator
+    if callable(aggregator):
+        return 'custom'
+    return 'mean_std' if verdict_kind is VerdictKind.NUMERIC else 'mode'
+
+
+def record_jury_span(
+    span: Span | None,
+    deliberation: JuryDeliberation,
+    *,
+    aggregator: AggregatorSpec | None,
+    verdict_kind: VerdictKind,
+    min_successful_judges: int,
+) -> None:
+    """Stamp panel-level attributes on the ``orq.jury`` span (RES-985).
+
+    Comparative mode computes its aggregates from reconciled pair votes rather
+    than a ``JuryResult``, so it stamps its own set (see
+    ``pairwise._record_pairwise_span``) using the same ``jury.*`` vocabulary.
+    ``jury.verdict`` is stringified so bool / float / str verdicts share one
+    attribute type, matching ``judge.verdict``.
+
+    No token usage or cost here: those are recorded once, on the underlying
+    ``chat`` spans, and rolled up by the consumer.
+    """
+    j = deliberation.jury
+    set_span_attrs(
+        span,
+        {
+            'jury.verdict': None if deliberation.verdict is None else str(deliberation.verdict),
+            'jury.aggregator': _aggregator_name(aggregator, verdict_kind),
+            'jury.min_successful_judges': min_successful_judges,
+            'jury.raw_agreement': j.raw_agreement,
+            'jury.judges_succeeded': j.judges_succeeded,
+            'jury.judges_configured': j.judges_configured,
+            'jury.judges_failed': j.judges_failed,
+            'jury.replacements_used': j.replacements_used,
+            'jury.tie': j.tie,
+            'jury.inconclusive': j.inconclusive,
+        },
+    )
+
+
+async def _run_jury_core(
+    *,
+    judge_fn: Callable[[str], Awaitable[Prediction]],
+    panel: Sequence[str],
+    repetitions: int = 1,
+    replacement_judges: Sequence[str] | None = None,
+    min_successful_judges: int = 1,
+    verdict_kind: VerdictKind = VerdictKind.CATEGORICAL,
+    tie_break: TieBreak | None = None,
+    aggregator: AggregatorSpec | None = None,
+    tie_break_label: str | None = None,
+    propagate_errors: bool = False,
+    max_concurrency: int | asyncio.Semaphore | None = None,
+    parent_context: object | None = None,
+    label_swapped: bool | None = None,
+    replacement: bool = False,
+) -> JuryDeliberation:
+    """Panel deliberation + aggregation (see :func:`run_jury` for semantics).
+
+    Split out so :func:`run_jury` owns only the span; ``parent_context`` is the
+    jury span's context, threaded into each judge span. ``replacement=True``
+    marks the WHOLE panel as stand-ins — comparative mode promotes replacements
+    at the pair level and runs them through a second core call, so without it
+    those judge spans would claim to be configured judges."""
     if aggregator is None:
         aggregator = 'mean_std' if verdict_kind is VerdictKind.NUMERIC else 'mode'
     # Per-judge repetition collapse reuses the numeric keyword when one is set,
@@ -404,10 +630,12 @@ async def run_jury(
             repetitions=repetitions,
             verdict_kind=verdict_kind,
             tie_break=tie_break,
-            replacement=False,
+            replacement=replacement,
             numeric_how=numeric_how,
             propagate_errors=propagate_errors,
             semaphore=semaphore,
+            parent_context=parent_context,
+            label_swapped=label_swapped,
         )
         for model in resolved_panel
     ])
@@ -431,6 +659,8 @@ async def run_jury(
                 replacement=True,
                 numeric_how=numeric_how,
                 semaphore=semaphore,
+                parent_context=parent_context,
+                label_swapped=label_swapped,
             )
             for model in stand_ins
         ])
@@ -491,10 +721,14 @@ async def run_jury(
             explanation = f'[TIE — {tie_label}] {explanation}'
 
     jury = JuryResult(
-        judges_configured=len(resolved_panel),
+        # replacement=True means the caller already promoted this whole panel as
+        # stand-ins (comparative mode): none of them is a configured judge, so
+        # they land in replacements_used instead. The caller derives the real
+        # panel-level aggregates itself; these keep JuryResult self-consistent.
+        judges_configured=0 if replacement else len(resolved_panel),
         judges_succeeded=len(decisive_votes),
-        judges_failed=failures,
-        replacements_used=len(stand_ins),
+        judges_failed=failures if not replacement else 0,
+        replacements_used=len(stand_ins) + (len(resolved_panel) if replacement else 0),
         tie=tie,
         inconclusive=inconclusive,
         votes=votes,

@@ -22,10 +22,14 @@ from evaluatorq.common.reports import format_date as _format_date
 from evaluatorq.common.reports import html_table as _html_table
 from evaluatorq.common.reports import load_css as _load_css_common
 from evaluatorq.common.reports import load_logo_svg as _load_logo_svg
-from evaluatorq.common.reports import pct as _pct
 from evaluatorq.common.reports import render_donut_chart as _render_donut_chart_common
 from evaluatorq.common.reports import status_badge as _status_badge
 from evaluatorq.common.reports import truncate as _truncate
+
+# `evaluatorq.common.reports.pct` re-exports whichever of html_helpers/md_helpers
+# was imported last in that package's __init__, currently md_helpers's
+# float-only variant — import the None-safe html_helpers one directly instead.
+from evaluatorq.common.reports.html_helpers import pct as _pct
 from evaluatorq.common.reports.html_helpers import scale_color as _scale_color
 from evaluatorq.common.reports.vega import render_svg as _render_svg
 from evaluatorq.common.reports.vega import vl_bar_h as _vl_bar_h
@@ -137,10 +141,11 @@ def _render_category_bar_chart(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return ''
 
-    # Take top 10 by vulnerability rate
-    sorted_rows = sorted(rows, key=lambda r: r.get('vulnerability_rate', 0), reverse=True)[:10]
+    # Take top 10 by vulnerability rate. Unevaluated rows (None) have no rate to chart.
+    evaluated_rows = [r for r in rows if r.get('vulnerability_rate') is not None]
+    sorted_rows = sorted(evaluated_rows, key=operator.itemgetter('vulnerability_rate'), reverse=True)[:10]
     labels = [r.get('category', '?') for r in sorted_rows]
-    rates = [r.get('vulnerability_rate', 0) * 100 for r in sorted_rows]
+    rates = [r['vulnerability_rate'] * 100 for r in sorted_rows]
 
     spec = _vl_bar_h(
         labels=labels,
@@ -163,9 +168,11 @@ def _render_technique_bar_chart(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return ''
 
-    sorted_rows = sorted(rows, key=lambda r: r.get('vulnerability_rate', 0), reverse=True)[:15]
+    # Unevaluated rows (None) have no rate to chart.
+    evaluated_rows = [r for r in rows if r.get('vulnerability_rate') is not None]
+    sorted_rows = sorted(evaluated_rows, key=operator.itemgetter('vulnerability_rate'), reverse=True)[:15]
     labels = [r.get('technique', '?') for r in sorted_rows]
-    rates = [r.get('vulnerability_rate', 0) * 100 for r in sorted_rows]
+    rates = [r['vulnerability_rate'] * 100 for r in sorted_rows]
 
     spec = _vl_bar_h(
         labels=labels,
@@ -188,10 +195,12 @@ def _render_vulnerability_bar_chart(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return ''
 
-    sorted_rows = sorted(rows, key=lambda r: r.get('vulnerability_rate', 0), reverse=True)[:15]
+    # Unevaluated rows (None) have no rate to chart.
+    evaluated_rows = [r for r in rows if r.get('vulnerability_rate') is not None]
+    sorted_rows = sorted(evaluated_rows, key=operator.itemgetter('vulnerability_rate'), reverse=True)[:15]
     # Prefer the human-readable name; fall back to the ID.
     labels = [r.get('vulnerability_name') or r.get('vulnerability', '?') for r in sorted_rows]
-    rates = [r.get('vulnerability_rate', 0) * 100 for r in sorted_rows]
+    rates = [r['vulnerability_rate'] * 100 for r in sorted_rows]
 
     spec = _vl_bar_h(
         labels=labels,
@@ -235,13 +244,14 @@ def _render_header_html(data: dict[str, Any]) -> str:
 
 def _render_kpi_cards(data: dict[str, Any]) -> str:
     """Render a row of KPI metric cards for the executive summary."""
-    asr = data.get('vulnerability_rate', 0.0)
+    asr = data.get('vulnerability_rate')
     critical_exposure = data.get('critical_exposure', 0)
     eval_coverage = data.get('evaluation_coverage', 0.0)
     total_errors = data.get('total_errors', 0)
     total_attacks = data.get('total_attacks', 0)
 
-    asr_class = 'kpi-alert' if asr >= 0.5 else ('kpi-warn' if asr >= 0.2 else '')
+    # asr is None when nothing was evaluated — neutral, not alert/warn.
+    asr_class = '' if asr is None else ('kpi-alert' if asr >= 0.5 else ('kpi-warn' if asr >= 0.2 else ''))
     critical_class = 'kpi-alert' if critical_exposure > 0 else ''
     errors_class = 'kpi-warn' if total_errors > 0 else ''
 
@@ -463,9 +473,11 @@ def _render_delivery_bar_chart(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return ''
 
-    sorted_rows = sorted(rows, key=lambda r: r.get('vulnerability_rate', 0), reverse=True)
+    # Unevaluated rows (None) have no rate to chart.
+    evaluated_rows = [r for r in rows if r.get('vulnerability_rate') is not None]
+    sorted_rows = sorted(evaluated_rows, key=operator.itemgetter('vulnerability_rate'), reverse=True)
     labels = [r.get('delivery_method', '?') for r in sorted_rows]
-    rates = [r.get('vulnerability_rate', 0) * 100 for r in sorted_rows]
+    rates = [r['vulnerability_rate'] * 100 for r in sorted_rows]
 
     spec = _vl_bar_h(
         labels=labels,
@@ -625,7 +637,9 @@ def _render_attack_heatmap_html(section: ReportSection) -> str:
         row_parts = [f'<td><strong>{_esc(vuln)}</strong></td>']
         for tech in techniques:
             c = cell_lookup.get((vuln, tech))
-            if c and c['total_attacks'] > 0:
+            # asr is None when the cell has attacks but none were evaluated —
+            # render as the neutral "no attacks" cell rather than a colored ASR.
+            if c and c['total_attacks'] > 0 and c['vulnerability_rate'] is not None:
                 asr = c['vulnerability_rate']
                 color = _heatmap_color(asr, c['total_attacks'])
                 label = _pct(asr)
@@ -663,11 +677,13 @@ def _render_individual_results_html(section: ReportSection) -> str:
     parts.append(f'<p>{_esc(str(len(entries)))} total results</p>')
 
     for entry in entries:
-        is_vulnerable = entry.get('vulnerable', False)
+        is_vulnerable = entry.get('vulnerable')
         has_error = bool(entry.get('error'))
 
         if has_error:
             status_badge = '<span class="badge badge-error">ERROR</span>'
+        elif is_vulnerable is None:
+            status_badge = '<span class="badge badge-error">NOT EVALUATED</span>'
         elif is_vulnerable:
             status_badge = '<span class="badge badge-vulnerable">VULNERABLE</span>'
         else:
@@ -890,11 +906,13 @@ def _render_turn_scope_breakdown_html(section: ReportSection) -> str:
 
 def _render_turn_depth_bar_chart(rows: list[dict[str, Any]]) -> str:
     """Render a horizontal bar chart of ASR% by turn count."""
+    # Unevaluated depths (vulnerability_rate is None) have no rate to chart.
+    rows = [r for r in rows if r.get('vulnerability_rate') is not None]
     if not rows:
         return ''
 
     turn_counts = [str(r['turn_count']) for r in rows]
-    asr_pcts = [r.get('vulnerability_rate', 0.0) * 100 for r in rows]
+    asr_pcts = [r['vulnerability_rate'] * 100 for r in rows]
     bar_colors = [
         _COLORS['red_400'] if asr >= 50 else (_COLORS['yellow_400'] if asr >= 20 else _COLORS['success_400'])
         for asr in asr_pcts
@@ -1054,7 +1072,10 @@ def _render_token_usage_html(section: ReportSection) -> str:
             ]
             if any_cost:
                 agent_total_cost = r.get('total_cost')
-                row.append(_esc(_fmt_cost(agent_total_cost)) if agent_total_cost is not None else '—')
+                agent_coverage = _cost_coverage(r.get('priced_calls', 0), r.get('calls', 0))
+                row.append(
+                    _esc(f'{_fmt_cost(agent_total_cost)}{agent_coverage}') if agent_total_cost is not None else '—'
+                )
             table_rows.append(row)
         table = _html_table(headers, table_rows)
         parts.extend(('<h3>Per-Agent Breakdown</h3>', table))
@@ -1121,6 +1142,8 @@ def _asr_cell_color(asr_pct: float) -> str:
 
 def _render_framework_bar_chart(rows: list[dict[str, Any]]) -> str:
     """Render a horizontal bar chart of ASR% by framework."""
+    # Unevaluated rows (None) have no rate to chart.
+    rows = [r for r in rows if r['vulnerability_rate'] is not None]
     if not rows:
         return ''
 
@@ -1168,7 +1191,8 @@ def _render_agent_comparison_html(section: ReportSection) -> str:
     for am in agent_metrics:
         agent_name = _esc(am['agent'])
         asr = am['asr']
-        asr_class = 'kpi-alert' if asr >= 0.5 else ('kpi-warn' if asr >= 0.2 else '')
+        # asr is None when the agent has no evaluated attacks — neutral, not alert/warn.
+        asr_class = '' if asr is None else ('kpi-alert' if asr >= 0.5 else ('kpi-warn' if asr >= 0.2 else ''))
         parts.append(
             f'<div class="kpi-card {asr_class}" style="flex:1 1 160px;">'
             f'<div class="kpi-label" style="font-size:.9em;color:var(--clay);">{agent_name}</div>'
@@ -1201,8 +1225,10 @@ def _render_agent_comparison_html(section: ReportSection) -> str:
                 except IndexError:
                     asr_pct = 0.0
                     cell_text = '-'
-                bg = _asr_cell_color(asr_pct)
-                text_color = 'white' if asr_pct >= 30 else _COLORS['ink_700']
+                # No verdicts (n/a) render as a neutral grey cell, not "0% = safe".
+                not_evaluated = cell_text.startswith('n/a')
+                bg = _COLORS['sand_400'] if not_evaluated else _asr_cell_color(asr_pct)
+                text_color = _COLORS['ink_700'] if not_evaluated else ('white' if asr_pct >= 30 else _COLORS['ink_700'])
                 tbl_parts.append(
                     f'<td style="text-align:center;">'
                     f'<span class="heatmap-cell" style="background:{bg};color:{text_color};">'
@@ -1259,8 +1285,12 @@ def _render_agent_disagreements_html(section: ReportSection) -> str:
         for agent_entry in per_agent:
             agent_name = _esc(agent_entry['agent'])
             is_vulnerable = agent_entry['vulnerable']
-            verdict_cls = 'badge-vulnerable' if is_vulnerable else 'badge-resistant'
-            verdict_label = 'VULNERABLE' if is_vulnerable else 'RESISTANT'
+            if is_vulnerable is None:
+                # badge-error is the only existing neutral (non pass/fail) badge style.
+                verdict_cls, verdict_label = 'badge-error', 'NOT EVALUATED'
+            else:
+                verdict_cls = 'badge-vulnerable' if is_vulnerable else 'badge-resistant'
+                verdict_label = 'VULNERABLE' if is_vulnerable else 'RESISTANT'
             explanation = agent_entry.get('explanation', '')
             response_snippet = agent_entry.get('response_snippet', '')
 
@@ -1457,11 +1487,16 @@ _SECTION_RENDERERS = {
 # ---------------------------------------------------------------------------
 
 
-def _risk_level(asr: float, critical_count: int) -> tuple[str, str]:
+def _risk_level(asr: float | None, critical_count: int) -> tuple[str, str]:
     """Derive a qualitative risk level from ASR and critical findings.
 
     Returns (level, css_class) where level is a human-readable label.
+    ``asr is None`` (nothing evaluated) is its own neutral level — not "Low Risk".
     """
+    if asr is None:
+        # risk-medium (amber/warn) is the closest existing neutral style — no
+        # dedicated "not evaluated" risk-banner class exists in report.css.
+        return 'Not Evaluated', 'risk-medium'
     if critical_count > 0 or asr >= 0.5:
         return 'Critical Risk', 'risk-critical'
     if asr >= 0.25:
@@ -1472,7 +1507,7 @@ def _risk_level(asr: float, critical_count: int) -> tuple[str, str]:
 
 
 def _render_risk_banner(
-    asr: float,
+    asr: float | None,
     critical_count: int,
     total_attacks: int,
     confidence: str = '',
@@ -1480,10 +1515,10 @@ def _render_risk_banner(
 ) -> str:
     """Render a prominent risk-level verdict banner."""
     level, css_cls = _risk_level(asr, critical_count)
-    summary = (
-        f'Based on {total_attacks:,} attack simulations, the agent demonstrates a {asr:.1%} attack success rate (ASR). '
-    )
-    if critical_count > 0:
+    summary = f'Based on {total_attacks:,} attack simulations, the agent demonstrates a {_pct(asr)} attack success rate (ASR). '
+    if asr is None:
+        summary += 'No attacks were evaluated.'
+    elif critical_count > 0:
         summary += f'{critical_count} critical-severity vulnerabilities were confirmed.'
     elif asr < 0.10:
         summary += 'No critical exposures detected.'

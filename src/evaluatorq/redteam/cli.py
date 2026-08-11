@@ -8,9 +8,10 @@ import logging
 import re
 import shlex
 import sys
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 
@@ -19,8 +20,19 @@ from evaluatorq.common.cli_epilog import examples
 from evaluatorq.common.cli_help import CONTEXT_SETTINGS
 from evaluatorq.common.cli_json import echo_json
 from evaluatorq.common.cli_tty import should_skip_confirm
+from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.dashboard.library import report_id
-from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, DeliveryMethod, Pipeline, SaveMode, Vulnerability
+from evaluatorq.redteam.contracts import (
+    DEFAULT_PIPELINE_MODEL,
+    DeliveryMethod,
+    EvaluatorConfig,
+    Pipeline,
+    SaveMode,
+    Vulnerability,
+)
+
+if TYPE_CHECKING:
+    from evaluatorq.redteam.contracts import RedTeamReport
 
 app = typer.Typer(
     name='redteam',
@@ -195,6 +207,41 @@ def write_html_report(
     return output_path
 
 
+_GENERIC_EVAL_HINT = (
+    'Check evaluator model configuration, credentials, and any gateway guardrails that may be '
+    'rejecting judge or target calls.'
+)
+
+
+def _evaluation_error_hint(report: RedTeamReport) -> str:
+    """Name the dominant reason attacks could not be scored, with a sample.
+
+    Covers both halves of "unscored": the judge failing (``evaluation_error``) and
+    the target failing so there was nothing to judge (``error``). Restricting this
+    to judge errors left a target outage — which fails the coverage gate just the
+    same — with only the generic advice, which is not a diagnosis.
+
+    The generic advice is a fallback, not the answer — when the results actually
+    recorded why, say that instead, because "parse (47 attacks): <the guardrail's
+    refusal text>" is diagnosable and "check three things" is not.
+    """
+    causes: list[tuple[str, str]] = []
+    for r in report.results:
+        if r.evaluation_error is not None:
+            ev = r.evaluation_error
+            causes.append((f'evaluation/{ev.code or ev.error_type or "unknown"}', ev.message or ''))
+        elif r.vulnerable is None and r.error:
+            causes.append((f'execution/{r.error_code or r.error_type or "unknown"}', r.error))
+    if not causes:
+        return _GENERIC_EVAL_HINT
+
+    counts = Counter(code for code, _ in causes)
+    top_code, top_n = counts.most_common(1)[0]
+    sample = next((msg for code, msg in causes if code == top_code), '')
+    detail = f': {sample[:200]}' if sample else ''
+    return f'Dominant failure: {top_code} ({top_n}/{len(causes)} unscored attacks){detail}. {_GENERIC_EVAL_HINT}'
+
+
 @app.command(no_args_is_help=True, epilog=_RUN_EPILOG)
 def run(
     target: Annotated[
@@ -291,6 +338,16 @@ def run(
         str,
         typer.Option(help='Model for OWASP evaluation scoring.'),
     ] = DEFAULT_PIPELINE_MODEL,
+    min_evaluation_coverage: Annotated[
+        float,
+        typer.Option(
+            min=0.0,
+            max=1.0,
+            help='Fraction of attacks that must produce a verdict, else exit non-zero. '
+            'Pass 0 to warn instead of failing; a run where nothing could be scored '
+            'still exits non-zero regardless.',
+        ),
+    ] = EvaluatorConfig.model_fields['min_evaluation_coverage'].default,
     parallelism: Annotated[
         int,
         typer.Option(help='Maximum concurrent evaluatorq jobs.'),
@@ -396,7 +453,7 @@ def run(
 
     from evaluatorq.common.replay import ReplayError
     from evaluatorq.redteam import red_team
-    from evaluatorq.redteam.contracts import EvaluatorConfig, LLMCallConfig, LLMConfig, TargetConfig
+    from evaluatorq.redteam.contracts import LLMCallConfig, LLMConfig, TargetConfig
     from evaluatorq.redteam.exceptions import CancelledError, RedTeamError
     from evaluatorq.redteam.hooks import RichHooks
 
@@ -463,7 +520,7 @@ def run(
     # Build LLMConfig from CLI flags
     config = LLMConfig(
         attacker=LLMCallConfig(model=attack_model),
-        evaluator=EvaluatorConfig(model=evaluator_model),
+        evaluator=EvaluatorConfig(model=evaluator_model, min_evaluation_coverage=min_evaluation_coverage),
     )
 
     try:
@@ -528,6 +585,28 @@ def run(
         target_label = targets if isinstance(targets, str) else ', '.join(targets)
         html_path = write_html_report(report, output_dir=report_html, target=target_label)
         typer.echo(f'HTML report written to {html_path}')
+
+    # Coverage gates run last, after artifacts are written — those artifacts are exactly
+    # what you need to diagnose the failure, so they must exist before we exit non-zero.
+    # Neither case may exit 0: CI cannot read an unscored run as a clean bill of health.
+    summary = report.summary
+    if summary.no_verdict:
+        typer.echo(
+            f'Error: 0/{summary.total_attacks} attacks could be evaluated — the target was '
+            f'not tested. {_evaluation_error_hint(report)}',
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if summary.coverage_below_minimum:
+        typer.echo(
+            f'Error: only {summary.evaluated_attacks}/{summary.total_attacks} attacks could be '
+            f'evaluated ({pct(summary.evaluation_coverage)}), below the configured minimum of '
+            f'{pct(summary.min_evaluation_coverage)}. The reported rates cover that subset only. '
+            f'{_evaluation_error_hint(report)}',
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
 
 @app.command()

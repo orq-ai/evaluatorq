@@ -20,7 +20,7 @@ import httpx
 import pytest
 from openai import APIConnectionError, APIStatusError
 
-from evaluatorq.contracts import TextOutputItem
+from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY, TextOutputItem
 from evaluatorq.redteam.contracts import AttackEvaluationResult, LLMCallConfig, Vulnerability
 
 
@@ -99,13 +99,18 @@ class TestRunEvaluatorErrorPaths:
         assert 'error' in (result.raw_output or {})
 
     # ------------------------------------------------------------------
-    # 2. APIConnectionError — must propagate
+    # 2. APIConnectionError — recorded, not raised
     # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    async def test_api_connection_error_propagates(self):
-        """APIConnectionError raised by the LLM client must NOT be swallowed;
-        it should propagate out of _run_evaluator() to the caller."""
+    async def test_api_connection_error_is_recorded_not_raised(self):
+        """A connection failure must reach the result as a structured cause.
+
+        It used to re-raise on a fail-loud policy, but ``run_evaluations`` catches
+        every exception into a bare ``EvaluatorScore.error``, so the run continued
+        anyway and the cause was lost — which is the reported bug. The run-level
+        coverage gate is what fails the run now.
+        """
         from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
 
         mock_client = AsyncMock()
@@ -115,21 +120,24 @@ class TestRunEvaluatorErrorPaths:
         with contextlib.ExitStack() as es:
             for p in _patch_tracing():
                 es.enter_context(p)
-            with pytest.raises(APIConnectionError):
-                await evaluator.evaluate_vulnerability(
-                    vuln=Vulnerability.GOAL_HIJACKING,
-                    messages=[{'role': 'user', 'content': 'attack prompt'}],
-                    output_messages=[TextOutputItem(text='agent response', annotations=[])],
-                )
+            result = await evaluator.evaluate_vulnerability(
+                vuln=Vulnerability.GOAL_HIJACKING,
+                messages=[{'role': 'user', 'content': 'attack prompt'}],
+                output_messages=[TextOutputItem(text='agent response', annotations=[])],
+            )
+
+        assert result.passed is None
+        payload = (result.raw_output or {})[EVAL_ERROR_RAW_OUTPUT_KEY]
+        assert payload['code'] == 'api_connection'
+        assert payload['stage'] == 'evaluation'
 
     # ------------------------------------------------------------------
-    # 3. APIStatusError — must propagate
+    # 3. APIStatusError — recorded, not raised
     # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    async def test_api_status_error_propagates(self):
-        """APIStatusError raised by the LLM client must NOT be swallowed;
-        it should propagate out of _run_evaluator() to the caller."""
+    async def test_api_status_error_is_recorded_not_raised(self):
+        """Same policy as the connection error: structured cause, no re-raise."""
         from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
 
         http_response = httpx.Response(
@@ -149,12 +157,16 @@ class TestRunEvaluatorErrorPaths:
         with contextlib.ExitStack() as es:
             for p in _patch_tracing():
                 es.enter_context(p)
-            with pytest.raises(APIStatusError):
-                await evaluator.evaluate_vulnerability(
-                    vuln=Vulnerability.GOAL_HIJACKING,
-                    messages=[{'role': 'user', 'content': 'attack prompt'}],
-                    output_messages=[TextOutputItem(text='agent response', annotations=[])],
-                )
+            result = await evaluator.evaluate_vulnerability(
+                vuln=Vulnerability.GOAL_HIJACKING,
+                messages=[{'role': 'user', 'content': 'attack prompt'}],
+                output_messages=[TextOutputItem(text='agent response', annotations=[])],
+            )
+
+        assert result.passed is None
+        payload = (result.raw_output or {})[EVAL_ERROR_RAW_OUTPUT_KEY]
+        assert payload['code'] == 'api_status'
+        assert 'rate limit exceeded' in payload['message']
 
     # ------------------------------------------------------------------
     # 4. Empty LLM response content — graceful fallback
@@ -215,7 +227,15 @@ class TestRunEvaluatorErrorPaths:
         assert result.passed is None
         assert result.evaluator_id == 'goal_hijacking'
         assert result.explanation == 'Evaluation timed out after 1ms'
-        assert result.raw_output == {'error': 'timeout', 'timeout_ms': 1}
+        assert result.raw_output is not None
+        assert result.raw_output['error'] == 'timeout'
+        assert result.raw_output['timeout_ms'] == 1
+        # The structured reason rides alongside, so converters can lift it onto
+        # RedTeamResult.evaluation_error and it reaches the run's error rollup.
+        err = result.raw_output[EVAL_ERROR_RAW_OUTPUT_KEY]
+        assert err['stage'] == 'evaluation'
+        assert err['code'] == 'timeout'
+        assert err['details']['evaluator_id'] == 'goal_hijacking'
 
     # ------------------------------------------------------------------
     # 5. resolve_category_safe fallback path in evaluate()
