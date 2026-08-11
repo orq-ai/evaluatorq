@@ -246,7 +246,10 @@ exactly what you saw in the diff, no second LLM call — and records the applied
 recommendations on the report, so applied bullets show a ✓ tick and a later
 preview skips them.
 
-The merge model is a dashboard config setting: `EVALUATORQ_APPLY_MODEL`
+The merge asks the model for targeted search/replace edits first (output is
+proportional to the change, so previews are fast); if any edit fails to apply
+cleanly it falls back to a full instruction rewrite, so reliability never
+regresses. The merge model is a dashboard config setting: `EVALUATORQ_APPLY_MODEL`
 (default `gpt-5.6-luna`), shown on the Settings page next to the other
 runtime config.
 
