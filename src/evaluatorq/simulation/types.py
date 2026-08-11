@@ -457,6 +457,10 @@ class SimulationRun(BaseModel):
     recommendations: list[SimulationRecommendation] | None = None
     """LLM-generated remediation suggestions for remediable failures
     (see ``reports.recommendations``). None when never generated."""
+    applied_suggestions: list[str] = Field(default_factory=list)
+    """Suggestion strings already applied to the agent via ``reports.apply``.
+    Written back onto the run so the dashboard renders them differently and a
+    later apply skips them instead of re-applying the same fix."""
 
 
 # ---------------------------------------------------------------------------
