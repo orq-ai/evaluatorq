@@ -138,11 +138,11 @@ def _settings_config(roots: list[Path] | None) -> list[tuple[str, str | list[str
     masked suffix (never the full value)."""
     import os
 
-    from evaluatorq.dashboard.library import _default_roots
+    from evaluatorq.dashboard.library import default_roots
     from evaluatorq.dashboard.orq_workspace import classify_host, resolve_base_url, resolve_slug
     from evaluatorq.simulation.types import DEFAULT_MODEL
 
-    scan_roots = roots if roots is not None else _default_roots()
+    scan_roots = roots if roots is not None else default_roots()
     store_paths = [str(p) for p in scan_roots] or ['—']
     config: list[tuple[str, str | list[str]]] = [('Run stores', store_paths)]
     config.append(('Default sim model', DEFAULT_MODEL))
