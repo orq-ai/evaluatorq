@@ -25,13 +25,15 @@
 
 Shipping an agent means answering three questions no test suite answers: does it
 give good answers, can it be talked into doing something it shouldn't, and does
-it still hold up over a real multi-turn conversation with an impatient human?
-evaluatorq answers all three from Python — score outputs against your data,
-attack the agent with OWASP-mapped adversarial probes, and put a simulated user
-in front of it — then hands you a report you can act on. It works against any
-agent (LangChain, LangGraph, OpenAI Agents SDK, PydanticAI, CrewAI, a plain
-async function, or an Orq-hosted agent); the [Orq](https://orq.ai) platform is
-optional.
+it hold up over a real conversation with an impatient human? evaluatorq answers
+all three from Python. It scores your agent's outputs against your data, attacks
+it the way a bad actor would — jailbreaks, prompt injection, tool abuse, data
+exfiltration — and puts a simulated user in front of it for a few dozen turns.
+Then it hands you a report naming what broke and what to do about it.
+
+It runs locally against any agent — LangChain, LangGraph, OpenAI Agents SDK,
+PydanticAI, CrewAI, a plain async function, or an Orq-hosted agent. Nothing
+leaves your machine unless you opt into the [Orq](https://orq.ai) platform.
 
 ![Red team report: attack success rate, vulnerabilities found, and per-finding remediation guidance](docs/assets/readme-hero-redteam.png)
 
@@ -43,40 +45,57 @@ uv add "evaluatorq[redteam]"          # + adversarial red teaming
 uv add "evaluatorq[simulation]"       # + multi-turn agent simulation
 ```
 
-New here? `uv add evaluatorq` and the quick start below need no API key and no
-account. Prefer pip: `python -m pip install evaluatorq`.
+New here? Take the first line — it and the quick start below need no API key and
+no account. On pip: `python -m pip install evaluatorq`.
 
 ## Quick start
+
+Two versions of a support agent, the same questions, one table telling you which
+one to ship:
 
 ```python
 import asyncio
 
 from evaluatorq import DataPoint, evaluatorq, job, string_contains_evaluator
 
+POLICY = {
+    "refund": "Refunds are available within 30 days of delivery.",
+    "ship": "Orders ship within 2 business days.",
+    "warranty": "Every device carries a 12 months warranty.",
+}
 
-async def support_agent(question: str) -> str:
-    """Your agent. Swap the body for a model call, a framework agent, an HTTP request."""
-    if "refund" in question.lower():
+
+@job("agent-v1")
+async def agent_v1(data: DataPoint, _row: int) -> str:
+    """Answers from memory — so it only really knows about refunds."""
+    question = str(data.inputs["question"]).lower()
+    if "refund" in question:
         return "Sure — you can request a refund within 30 days of delivery."
     return "Our support team is happy to help with that."
 
 
-@job("support-agent")
-async def support_job(data: DataPoint, _row: int) -> str:
-    return await support_agent(str(data.inputs["question"]))
+@job("agent-v2")
+async def agent_v2(data: DataPoint, _row: int) -> str:
+    """Looks the answer up in the support policy first."""
+    question = str(data.inputs["question"]).lower()
+    for topic, answer in POLICY.items():
+        if topic in question:
+            return answer
+    return "Our support team is happy to help with that."
 
 
 async def main():
     data = [
         DataPoint(inputs={"question": "How do I get a refund?"}, expected_output="30 days"),
         DataPoint(inputs={"question": "When will my order ship?"}, expected_output="2 business days"),
+        DataPoint(inputs={"question": "How long is the warranty?"}, expected_output="12 months"),
     ]
     await evaluatorq(
         "support-agent-eval",
         data=data,
-        jobs=[support_job],
+        jobs=[agent_v1, agent_v2],
         evaluators=[string_contains_evaluator()],
-        parallelism=2,
+        parallelism=3,
     )
 
 
@@ -84,15 +103,17 @@ asyncio.run(main())
 ```
 
 ```bash
-uv run my_eval.py
+uv run support_agent_eval.py
 ```
 
-<img src="docs/assets/readme-eval-terminal.svg" alt="Terminal output: summary table and a string-contains score of 0.50 for the support-agent job" width="720">
+<img src="docs/assets/readme-eval-terminal.svg" alt="Terminal output: summary table and a Detailed Results table scoring agent-v1 at 0.33 against agent-v2 at 1.00 on the string-contains evaluator" width="720">
 
-The agent answers the refund question and misses the shipping one — hence
-`0.50`. Point `support_agent` at your real agent and the loop is unchanged. Any
-evaluator that returns `pass_=False` exits the process non-zero, so the same
-script gates CI.
+Every job runs against every data point, so adding a variant adds a column.
+Swap the two function bodies for real model or agent calls and nothing else
+changes. Any evaluator that returns `pass_=False` exits the process non-zero,
+so the same script gates CI.
+
+This example is in the repo — [`examples/lib/basics/support_agent_eval.py`](examples/lib/basics/support_agent_eval.py).
 
 → [Getting Started](https://orq-ai.github.io/evaluatorq/guides/getting-started/) ·
 [Evaluation reference](https://orq-ai.github.io/evaluatorq/evaluation-reference/) ·
@@ -101,10 +122,29 @@ script gates CI.
 
 ## Red teaming
 
-Adaptive adversarial testing mapped to the OWASP LLM Top 10 and OWASP Agentic
-Security Initiative. evaluatorq inspects the target, picks attack strategies per
-vulnerability, generates the prompts, runs them (single- or multi-turn), and
-judges each response with an LLM evaluator.
+**19 OWASP categories · 18 vulnerabilities · 45 curated attack strategies ·
+16 delivery methods · 18 LLM judges.** evaluatorq inspects the target, picks
+attack strategies per vulnerability, generates the prompts, runs them (single-
+or multi-turn), and judges each response with an evaluator written for that
+specific vulnerability.
+
+| OWASP Agentic Security Initiative | OWASP LLM Top 10 |
+|---|---|
+| ASI01 Agent Goal Hijacking | LLM01 Prompt Injection |
+| ASI02 Tool Misuse & Exploitation | LLM02 Sensitive Information Disclosure |
+| ASI03 Identity & Privilege Abuse | LLM03 Supply Chain Vulnerabilities |
+| ASI04 Supply Chain Vulnerabilities | LLM04 Data and Model Poisoning |
+| ASI05 Unexpected Code Execution | LLM05 Improper Output Handling |
+| ASI06 Memory & Context Poisoning | LLM06 Excessive Agency |
+| ASI07 Insecure Inter-Agent Communication | LLM07 System Prompt Leakage |
+| ASI08 Cascading Failures | LLM08 Vector and Embedding Weaknesses |
+| ASI09 Human-Agent Trust Exploitation | LLM09 Misinformation |
+| ASI10 Rogue Agents | |
+
+Each category maps to a vulnerability with its own judge. Categories without
+curated strategies get them generated per-run against the target's actual tools
+and system prompt — see the [strategy coverage
+table](https://orq-ai.github.io/evaluatorq/guides/red-teaming/#coverage).
 
 ```python
 import asyncio
@@ -132,6 +172,22 @@ or an agent from an external framework. Every attack, response and verdict is
 browsable afterwards:
 
 ![Conversation viewer showing an indirect prompt injection and the judge's verdict](docs/assets/readme-redteam-transcript.png)
+
+### What a run costs
+
+Measured from real runs against an Orq-hosted agent, judged by `gpt-5-mini`
+(numbers are that workspace's billed cost and wall clock, not estimates):
+
+| Run | Wall clock | Tokens | Cost |
+|---|---|---|---|
+| Hybrid, 4 attacks against one agent | 3m 53s | 51k | $0.063 |
+| Same shape, second run | 3m 47s | 48k | $0.065 |
+| Short dynamic runs (1–2 categories) | 9s – 1m 26s | 6k – 26k | $0.004 – $0.031 |
+
+Roughly **$0.015 and under a minute per attack**, dominated by the judge's
+reasoning tokens. Attacks run concurrently (`parallelism`), so a 40-attack sweep
+is minutes, not hours. Attacker and judge models are both configurable — point
+them at a cheaper model and the whole run gets cheaper.
 
 → [Red teaming guide](https://orq-ai.github.io/evaluatorq/guides/red-teaming/) ·
 [Intro notebook](examples/red_teaming_intro.ipynb) ·
@@ -167,7 +223,7 @@ print(results[0].goal_achieved, results[0].goal_completion_score)
 ```
 
 Runs exit non-zero on failure by default (`exit_on_failure=True`), so they drop
-straight into CI. Recordings of simulations driving agents in four frameworks:
+straight into CI. Recordings of simulations driving real agents:
 [OpenAI Agents SDK](docs/assets/sim-openai-agents.mp4) ·
 [LangGraph](docs/assets/sim-langgraph.mp4) ·
 [CrewAI](docs/assets/sim-crewai.mp4) ·
@@ -214,16 +270,5 @@ Everything is environment variables; none are required for local evaluation.
 
 ## Development
 
-```bash
-uv sync --all-extras --all-groups
-uv run pytest -m 'not integration'
-uv run ruff check src
-uv run basedpyright
-uv run --group docs mkdocs serve      # docs at http://127.0.0.1:8000/evaluatorq/
-```
-
-Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+`uv sync --all-extras --all-groups`, then `uv run pytest -m 'not integration'`.
+Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). MIT licensed.
