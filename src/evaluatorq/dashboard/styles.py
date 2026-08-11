@@ -2273,8 +2273,13 @@ _RT_REPORT_CSS = """
 }
 .rt-report .rt-apply-bar {
     display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap;
-    background: var(--surface-sunken); border: 1px solid var(--border-default);
+    /* Raised like the cards, not sunken: this is the tab's primary action,
+       and the recessed background read as a backdrop (review feedback). The
+       accent edge marks it as the call to action. */
+    background: var(--surface-card, #fdfcfb); border: 1px solid var(--border-default);
+    border-left: 3px solid var(--accent);
     border-radius: 10px; padding: 14px 18px; margin: 0 0 16px;
+    box-shadow: 0 1px 2px rgba(20, 18, 15, 0.05);
 }
 /* Cap the text column so the action side stays on the same row on wide
    screens instead of wrapping underneath. */
