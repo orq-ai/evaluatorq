@@ -478,7 +478,37 @@
 (function () {
   var DRAWER = 'rt-apply-drawer';
 
+  // The loading state's styles ride along with the injection instead of the
+  // server-rendered page CSS, so a cached page can never show it unstyled.
+  function ensureLoadingCss() {
+    if (document.getElementById('rt-apply-anim-css')) return;
+    var style = document.createElement('style');
+    style.id = 'rt-apply-anim-css';
+    style.textContent =
+      '@keyframes rt-spin { to { transform: rotate(360deg); } }' +
+      '@keyframes rt-shimmer { 0% { opacity: 0.45; } 50% { opacity: 1; } 100% { opacity: 0.45; } }' +
+      '@keyframes rt-dots { 0%, 20% { content: ""; } 40% { content: "."; } ' +
+      '60% { content: ".."; } 80%, 100% { content: "..."; } }' +
+      '.rt-drawer-body--loading { display: flex; flex-direction: column; align-items: center; ' +
+      'justify-content: center; text-align: center; gap: 14px; padding: 56px 28px 40px; }' +
+      '.rt-drawer-spinner { display: block; width: 30px; height: 30px; border-radius: 999px; ' +
+      'border: 3px solid var(--border, #ddd); border-top-color: var(--accent, #e8763a); ' +
+      'animation: rt-spin 0.8s linear infinite; }' +
+      '.rt-drawer-loading-title { font-size: 14px; font-weight: 600; margin: 0; }' +
+      '.rt-drawer-loading-title::after { display: inline-block; width: 1.2em; text-align: left; ' +
+      'content: "..."; animation: rt-dots 1.6s steps(1) infinite; }' +
+      '.rt-drawer-skeleton { width: 100%; max-width: 380px; display: flex; flex-direction: column; ' +
+      'gap: 8px; margin-top: 18px; }' +
+      '.rt-drawer-skeleton span { display: block; height: 10px; border-radius: 5px; ' +
+      'background: var(--border, #ddd); animation: rt-shimmer 1.4s ease-in-out infinite; }' +
+      '.rt-drawer-skeleton span:nth-child(2) { width: 82%; animation-delay: 0.15s; }' +
+      '.rt-drawer-skeleton span:nth-child(3) { width: 91%; animation-delay: 0.3s; }' +
+      '.rt-drawer-skeleton span:nth-child(4) { width: 68%; animation-delay: 0.45s; }';
+    document.head.appendChild(style);
+  }
+
   function loadingDrawer(message) {
+    ensureLoadingCss();
     return (
       '<div class="rt-drawer-overlay"></div>' +
       '<aside class="rt-drawer" role="dialog" aria-modal="true" aria-busy="true">' +
@@ -488,6 +518,7 @@
       '<p class="rt-drawer-loading-title">' + message + '</p>' +
       '<p class="rt-drawer-note">This rewrites the agent instructions with an LLM and usually ' +
       'takes 10–30 seconds. Nothing is written to the agent.</p>' +
+      '<div class="rt-drawer-skeleton" aria-hidden="true"><span></span><span></span><span></span><span></span></div>' +
       '</div></aside>'
     );
   }
@@ -502,8 +533,8 @@
     var single = form.classList.contains('rt-focus-rec-apply');
     mount.innerHTML = loadingDrawer(
       single
-        ? 'Merging this recommendation into the agent instructions…'
-        : 'Merging the pending recommendations into the agent instructions…'
+        ? 'Merging this recommendation into the agent instructions'
+        : 'Merging the pending recommendations into the agent instructions'
     );
   });
 
