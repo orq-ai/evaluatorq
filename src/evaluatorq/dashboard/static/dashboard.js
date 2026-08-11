@@ -491,8 +491,11 @@
       '60% { content: ".."; } 80%, 100% { content: "..."; } }' +
       '.rt-drawer-body--loading { display: flex; flex-direction: column; align-items: center; ' +
       'justify-content: center; text-align: center; gap: 14px; padding: 56px 28px 40px; }' +
+      // Literal colors: this theme's --border is a full shorthand (not a
+      // color), which silently invalidated the earlier var()-based border and
+      // background declarations and left the spinner and skeleton invisible.
       '.rt-drawer-spinner { display: block; width: 30px; height: 30px; border-radius: 999px; ' +
-      'border: 3px solid var(--border, #ddd); border-top-color: var(--accent, #e8763a); ' +
+      'border: 3px solid #dad8d2; border-top-color: var(--accent, #ff8f34); ' +
       'animation: rt-spin 0.8s linear infinite; }' +
       '.rt-drawer-loading-title { font-size: 14px; font-weight: 600; margin: 0; }' +
       '.rt-drawer-loading-title::after { display: inline-block; width: 1.2em; text-align: left; ' +
@@ -500,7 +503,7 @@
       '.rt-drawer-skeleton { width: 100%; max-width: 380px; display: flex; flex-direction: column; ' +
       'gap: 8px; margin-top: 18px; }' +
       '.rt-drawer-skeleton span { display: block; height: 10px; border-radius: 5px; ' +
-      'background: var(--border, #ddd); animation: rt-shimmer 1.4s ease-in-out infinite; }' +
+      'background: #dad8d2; animation: rt-shimmer 1.4s ease-in-out infinite; }' +
       '.rt-drawer-skeleton span:nth-child(2) { width: 82%; animation-delay: 0.15s; }' +
       '.rt-drawer-skeleton span:nth-child(3) { width: 91%; animation-delay: 0.3s; }' +
       '.rt-drawer-skeleton span:nth-child(4) { width: 68%; animation-delay: 0.45s; }';

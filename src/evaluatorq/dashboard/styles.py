@@ -2198,19 +2198,19 @@ _RT_REPORT_CSS = """
 .rt-report .rt-focus-card { display: flex; flex-direction: column; margin-bottom: 22px; padding: 0; overflow: hidden; }
 .rt-report .rt-focus-head {
     display: flex; align-items: center; justify-content: space-between; gap: 20px;
-    padding: 14px 18px; border-bottom: 1px solid var(--border);
+    padding: 14px 18px; border-bottom: 1px solid var(--border-subtle);
 }
 .rt-report .rt-focus-head-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .rt-report .rt-focus-head-stats {
     display: flex; align-items: center; flex: 0 0 auto;
-    background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 9px;
+    background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 9px;
     padding: 6px 0;
 }
 .rt-report .rt-focus-stat {
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 2px; padding: 0 16px; min-width: 64px;
 }
-.rt-report .rt-focus-stat + .rt-focus-stat { border-left: 1px solid var(--border); }
+.rt-report .rt-focus-stat + .rt-focus-stat { border-left: 1px solid var(--border-default); }
 .rt-report .rt-focus-stat--dial { padding: 0 10px; }
 .rt-report .rt-focus-body { display: flex; flex-direction: column; gap: 12px; padding: 14px 18px 16px; }
 .rt-report .rt-focus-tier-row { display: flex; align-items: center; gap: 8px; }
@@ -2244,14 +2244,14 @@ _RT_REPORT_CSS = """
 /* One grouped list, hairline dividers between rows — not a stack of boxes. */
 .rt-report .rt-focus-recs {
     list-style: none; margin: 6px 0 0; padding: 0;
-    border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
+    border: 1px solid var(--border-default); border-radius: 8px; background: var(--surface-card, #fdfcfb);
     overflow: hidden;
 }
 .rt-report .rt-focus-rec {
     font-size: 13px; line-height: 1.5; display: flex; align-items: center; gap: 14px;
     padding: 10px 12px;
 }
-.rt-report .rt-focus-rec + .rt-focus-rec { border-top: 1px solid var(--border); }
+.rt-report .rt-focus-rec + .rt-focus-rec { border-top: 1px solid var(--border-subtle); }
 .rt-report .rt-focus-rec:hover { background: var(--surface-sunken); }
 .rt-report .rt-focus-rec-text { flex: 1 1 auto; min-width: 0; }
 /* The action slot is a fixed-width right rail so every button and applied
@@ -2273,7 +2273,7 @@ _RT_REPORT_CSS = """
 }
 .rt-report .rt-apply-bar {
     display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap;
-    background: var(--surface-sunken); border: 1px solid var(--border);
+    background: var(--surface-sunken); border: 1px solid var(--border-default);
     border-radius: 10px; padding: 14px 18px; margin: 0 0 16px;
 }
 /* Cap the text column so the action side stays on the same row on wide
@@ -2285,11 +2285,11 @@ _RT_REPORT_CSS = """
 .rt-report .rt-apply-form { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; margin-left: auto; }
 .rt-report .rt-apply-agent {
     font-size: 12px; font-family: var(--font-mono); padding: 6px 8px; border-radius: 7px;
-    border: 1px solid var(--border); background: var(--surface); color: var(--text);
+    border: 1px solid var(--border-default); background: var(--surface-card, #fdfcfb); color: inherit;
 }
 .rt-report .rt-apply-agent-name {
     font-family: var(--font-mono); font-size: 12px; color: var(--text-muted);
-    background: var(--surface); border: 1px solid var(--border); border-radius: 999px;
+    background: var(--surface-card, #fdfcfb); border: 1px solid var(--border-default); border-radius: 999px;
     padding: 4px 12px; white-space: nowrap;
 }
 .rt-apply-btn {
@@ -2299,14 +2299,14 @@ _RT_REPORT_CSS = """
 .rt-apply-btn:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
 .rt-apply-btn--confirm { background: var(--green-600, #16a34a); border-color: var(--green-600, #16a34a); }
 .rt-apply-btn--confirm:hover { filter: brightness(0.92); background: var(--green-600, #16a34a); }
-.rt-apply-btn--ghost { background: transparent; color: var(--text); border-color: var(--border); }
-.rt-apply-btn--ghost:hover { background: var(--surface-sunken); border-color: var(--border); }
+.rt-apply-btn--ghost { background: transparent; color: inherit; border-color: var(--border-default); }
+.rt-apply-btn--ghost:hover { background: var(--surface-sunken); border-color: var(--border-default); }
 .rt-drawer-overlay {
     position: fixed; inset: 0; background: rgba(15, 15, 15, 0.42); z-index: 90; cursor: pointer;
 }
 .rt-drawer {
     position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 92vw); z-index: 91;
-    background: var(--surface); border-left: 1px solid var(--border);
+    background: var(--surface-card, #fdfcfb); border-left: 1px solid var(--border-default);
     box-shadow: -18px 0 48px rgba(0, 0, 0, 0.18);
     display: flex; flex-direction: column;
     animation: rt-drawer-in 0.18s ease-out;
@@ -2314,14 +2314,14 @@ _RT_REPORT_CSS = """
 @keyframes rt-drawer-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 .rt-drawer-head {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 16px 20px; border-bottom: 1px solid var(--border); flex: 0 0 auto;
+    padding: 16px 20px; border-bottom: 1px solid var(--border-subtle); flex: 0 0 auto;
 }
 .rt-drawer-title { margin: 0; font-size: 15px; font-weight: 700; }
 .rt-drawer-close {
     border: none; background: transparent; color: var(--text-muted); font-size: 22px; line-height: 1;
     cursor: pointer; padding: 2px 6px; border-radius: 6px;
 }
-.rt-drawer-close:hover { background: var(--surface-sunken); color: var(--text); }
+.rt-drawer-close:hover { background: var(--surface-sunken); color: inherit; }
 .rt-drawer-body { padding: 16px 20px; overflow-y: auto; flex: 1 1 auto; }
 .rt-drawer-section-label {
     font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
@@ -2331,7 +2331,7 @@ _RT_REPORT_CSS = """
 .rt-drawer-agent { font-family: var(--font-mono); font-size: 13px; }
 .rt-drawer-area {
     display: flex; flex-direction: column; gap: 3px;
-    background: var(--surface-sunken); border: 1px solid var(--border);
+    background: var(--surface-sunken); border: 1px solid var(--border-default);
     border-radius: 8px; padding: 10px 12px;
 }
 .rt-drawer-area-tier { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
@@ -2346,7 +2346,7 @@ _RT_REPORT_CSS = """
 .rt-drawer-note { font-size: 12px; color: var(--text-muted); line-height: 1.55; }
 .rt-diff {
     font-family: var(--font-mono); font-size: 11.5px; line-height: 1.5; margin: 0;
-    background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 8px;
+    background: var(--surface-sunken); border: 1px solid var(--border-default); border-radius: 8px;
     padding: 10px 12px; overflow-x: auto; display: flex; flex-direction: column;
 }
 .rt-diff-line { white-space: pre; }
@@ -2356,7 +2356,7 @@ _RT_REPORT_CSS = """
 .rt-diff-file { color: var(--text-faint); }
 .rt-drawer-footer {
     display: flex; align-items: center; gap: 10px; padding: 14px 20px;
-    border-top: 1px solid var(--border); flex: 0 0 auto;
+    border-top: 1px solid var(--border-subtle); flex: 0 0 auto;
 }
 .rt-drawer-footnote { font-size: 11px; color: var(--text-faint); margin-left: auto; text-align: right; }
 /* Loading-drawer styles live in dashboard.js (injected with the markup) so a
