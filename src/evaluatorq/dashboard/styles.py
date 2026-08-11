@@ -2226,35 +2226,58 @@ _RT_REPORT_CSS = """
 .rt-report .rt-focus-mini-value { font-family: var(--font-mono); font-size: 14px; font-weight: 600; }
 
 /* ---- Apply recommendations: bar, bullets, right drawer (RES-1143) ---- */
-.rt-report .rt-focus-recs-label { margin-top: 12px; }
-.rt-report .rt-focus-recs { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
-.rt-report .rt-focus-rec {
-    font-size: 13px; line-height: 1.5; display: flex; align-items: center; gap: 10px;
+.rt-report .rt-focus-recs-label { margin-top: 14px; }
+/* One grouped list, hairline dividers between rows — not a stack of boxes. */
+.rt-report .rt-focus-recs {
+    list-style: none; margin: 6px 0 0; padding: 0;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
+    overflow: hidden;
 }
+.rt-report .rt-focus-rec {
+    font-size: 13px; line-height: 1.5; display: flex; align-items: center; gap: 14px;
+    padding: 10px 12px;
+}
+.rt-report .rt-focus-rec + .rt-focus-rec { border-top: 1px solid var(--border); }
+.rt-report .rt-focus-rec:hover { background: var(--surface-sunken); }
 .rt-report .rt-focus-rec-text { flex: 1 1 auto; min-width: 0; }
-.rt-report .rt-focus-rec-apply { flex: 0 0 auto; margin: 0; }
-.rt-apply-btn--sm { font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 6px; }
-.rt-report .rt-focus-rec--applied { color: var(--text-muted); }
+/* The action slot is a fixed-width right rail so every button and applied
+   pill lines up down the column regardless of text length. */
+.rt-report .rt-focus-rec-apply {
+    flex: 0 0 auto; margin: 0 0 0 auto; width: 76px; display: flex; justify-content: flex-end;
+}
+.rt-apply-btn--sm {
+    font-size: 11px; font-weight: 600; padding: 4px 12px; border-radius: 6px;
+    background: transparent; color: var(--accent); border: 1px solid var(--accent);
+}
+.rt-apply-btn--sm:hover { background: var(--accent); color: #fff; }
+.rt-report .rt-focus-rec--applied .rt-focus-rec-text { color: var(--text-muted); }
 .rt-report .rt-focus-rec-applied {
     font-family: var(--font-mono); font-size: 10px; color: var(--green-600, #16a34a);
     background: color-mix(in srgb, #16a34a 12%, transparent);
-    border-radius: 999px; padding: 1px 8px; margin-left: 8px; white-space: nowrap;
+    border-radius: 999px; padding: 2px 9px; margin-left: auto; white-space: nowrap;
+    flex: 0 0 auto;
 }
 .rt-report .rt-apply-bar {
-    display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+    display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap;
     background: var(--surface-sunken); border: 1px solid var(--border);
-    border-radius: 10px; padding: 14px 16px; margin: 0 0 16px;
+    border-radius: 10px; padding: 14px 18px; margin: 0 0 16px;
 }
-.rt-report .rt-apply-bar-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+/* Cap the text column so the action side stays on the same row on wide
+   screens instead of wrapping underneath. */
+.rt-report .rt-apply-bar-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 320px; max-width: 640px; }
 .rt-report .rt-apply-count { font-size: 13px; font-weight: 600; }
 .rt-report .rt-apply-count--done { color: var(--green-600, #16a34a); }
 .rt-report .rt-apply-hint { font-size: 12px; color: var(--text-muted); }
-.rt-report .rt-apply-form { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+.rt-report .rt-apply-form { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; margin-left: auto; }
 .rt-report .rt-apply-agent {
     font-size: 12px; font-family: var(--font-mono); padding: 6px 8px; border-radius: 7px;
     border: 1px solid var(--border); background: var(--surface); color: var(--text);
 }
-.rt-report .rt-apply-agent-name { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); }
+.rt-report .rt-apply-agent-name {
+    font-family: var(--font-mono); font-size: 12px; color: var(--text-muted);
+    background: var(--surface); border: 1px solid var(--border); border-radius: 999px;
+    padding: 4px 12px; white-space: nowrap;
+}
 .rt-apply-btn {
     font-size: 13px; font-weight: 600; padding: 7px 14px; border-radius: 8px; cursor: pointer;
     border: 1px solid var(--accent); background: var(--accent); color: #fff;

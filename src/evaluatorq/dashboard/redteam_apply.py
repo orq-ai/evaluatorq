@@ -110,7 +110,8 @@ def render_apply_panel(rid: str, report: RedTeamReport) -> str:
         f'<form class="rt-apply-form" hx-post="/r/{safe_rid}/redteam/apply/preview" '
         f'hx-target="#{DRAWER_ID}" hx-swap="innerHTML">'
         f'{agent_field}'
-        f'<button type="submit" class="rt-apply-btn">Preview &amp; apply all {len(pending)}…</button>'
+        f'<button type="submit" class="rt-apply-btn">Preview &amp; apply all '
+        f'{len(pending)} recommendation{"s" if len(pending) != 1 else ""}</button>'
         '</form>'
         '</div>'
         f'<div id="{DRAWER_ID}"></div>'
@@ -129,7 +130,7 @@ def render_rec_apply_button(rid: str, category: str, rec: str) -> str:
         f'hx-target="#{DRAWER_ID}" hx-swap="innerHTML" hx-include="#{AGENT_FIELD_ID}">'
         f'<input type="hidden" name="rec" value="{esc(rec)}">'
         f'<input type="hidden" name="category" value="{esc(category)}">'
-        '<button type="submit" class="rt-apply-btn rt-apply-btn--sm">Apply…</button>'
+        '<button type="submit" class="rt-apply-btn rt-apply-btn--sm">Apply</button>'
         '</form>'
     )
 
