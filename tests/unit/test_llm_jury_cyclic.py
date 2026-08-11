@@ -346,3 +346,15 @@ async def test_result_carries_jury_record_for_audit():
     votes = result.raw_output["jury"]["votes"]
     assert [v["model"] for v in votes] == ["m2"]
     assert votes[0]["value"] == "yes"
+
+
+@pytest.mark.asyncio
+async def test_all_assignment_result_has_no_jury_record():
+    """The jury record is cyclic-only: under 'all' the panel itself is the
+    record, and raw_output stays None so external callers using it as a
+    signal keep the pre-cyclic behavior."""
+    ev = llm_jury(name="x", criteria="c", judges=["m1", "m2", "m3"], client=MagicMock())
+    with patch.object(llm_jury_mod, "run_judge", side_effect=_fake_run_judge([])):
+        result = await ev["scorer"]({"data": _datapoint(), "output": "x"})
+    assert not isinstance(result, dict)
+    assert result.raw_output is None

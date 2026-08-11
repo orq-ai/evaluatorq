@@ -195,6 +195,7 @@ def _to_evaluation_result(
     passing_labels: list[str] | None,
     threshold: float,
     score_range: tuple[float, float],
+    include_jury_record: bool = False,
 ) -> EvaluationResult:
     """Map a :class:`JuryDeliberation` to an :class:`EvaluationResult`.
 
@@ -226,17 +227,22 @@ def _to_evaluation_result(
         value = verdict
         passed = (verdict in passing_labels) if passing_labels else None
 
-    return EvaluationResult.model_validate({
+    result: dict[str, Any] = {
         'value': value,
         'explanation': explanation,
         'pass': passed,
         'token_usage': deliberation.token_usage,
+    }
+    if include_jury_record:
         # Same convention as the redteam bridge: the full JuryResult rides on
         # raw_output under JURY_RAW_OUTPUT_KEY, so per-judge votes (which judge
-        # scored this item, what it said) stay auditable — under cyclic
-        # assignment this is the only record of the item->judge mapping.
-        'raw_output': {JURY_RAW_OUTPUT_KEY: deliberation.jury.model_dump(mode='json')},
-    })
+        # scored this item, what it said) stay auditable. Set for CYCLIC
+        # assignment only: there it is the sole record of the item->judge
+        # mapping, while under 'all' the panel itself is the record and the
+        # payload would be pure redundancy (and a behavior change for callers
+        # treating raw_output is None as a signal).
+        result['raw_output'] = {JURY_RAW_OUTPUT_KEY: deliberation.jury.model_dump(mode='json')}
+    return EvaluationResult.model_validate(result)
 
 
 # ---------------------------------------------------------------------------
@@ -468,7 +474,9 @@ def llm_jury(
     # relative judge bias cancels in expectation at single-judge cost. Shuffle
     # the dataset first if its order is meaningful, so the rotation cannot line
     # up with a latent grouping (the paper's own caveat).
-    cycle = itertools.cycle(deduped) if assignment == 'cyclic' else None
+    # Created unconditionally (itertools.cycle is lazy) and gated on the
+    # assignment mode at the call site, mirroring PairwiseComparator.
+    cycle = itertools.cycle(deduped)
     if temperature == 0.0:
         logger.warning(
             'temperature=0.0: reasoning models (o-series, gpt-5, …) often score worse '
@@ -523,7 +531,7 @@ def llm_jury(
                 extra_kwargs=extra_kwargs,
             )
 
-        if cycle is not None:
+        if assignment == 'cyclic':
             # Runner path: key on the dataset row so the mapping is reproducible
             # regardless of parallelism or arrival order. Direct invocation has
             # no row and falls back to the arrival-order cursor; that advance
@@ -549,7 +557,7 @@ def llm_jury(
             # inconclusive instead of killing the whole run.
             propagate_errors=(len(deduped) == 1 and not replacement_judges),
         )
-        if cycle is not None:
+        if assignment == 'cyclic':
             # A cyclic item is scored by one judge, so there is no cross-judge
             # agreement to report: a single vote renders raw_agreement=1.0 and
             # std=0.0, byte-identical to a genuinely unanimous panel. Null both
@@ -564,6 +572,7 @@ def llm_jury(
             passing_labels=passing_labels,
             threshold=threshold,
             score_range=score_range,
+            include_jury_record=assignment == 'cyclic',
         )
 
     return {'name': name, 'scorer': scorer}

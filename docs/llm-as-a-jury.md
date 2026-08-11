@@ -153,9 +153,17 @@ per-item verdict is a single judge's opinion. Practical notes:
   sees which item, and a reused evaluator continues that rotation where it
   left off. The same applies to `PairwiseComparator.compare`, which is always
   arrival-ordered.
-- Which judge scored an item is recorded either way: every result carries the
-  full jury record (per-judge votes, models, verdicts) in
-  `raw_output["jury"]`, so the rotation is auditable after the run.
+- Which judge scored an item is recorded: under cyclic assignment every
+  result carries the full jury record (per-judge votes, models, verdicts) in
+  `raw_output["jury"]`, so the rotation is auditable after the run. This is
+  cyclic-only: under `"all"` the panel itself is the record, `raw_output`
+  stays `None`, and results keep their pre-cyclic shape.
+- In a multi-job run the same datapoint draws the same judge under every job
+  (the mapping is keyed on the dataset row, not the job), so judge identity is
+  never a confound when comparing job A against job B on the same data. One
+  caveat: for dataset-ID runs fetched from the platform, cross-run
+  reproducibility of the mapping rests on the Orq API returning stable
+  pagination order; in-memory datasets are exactly stable.
 - Rotation runs over the deduplicated panel: `judges=["a", "a", "b"]` gives
   `a` two votes per item under `"all"`, but an equal share under `"cyclic"` —
   duplicate entries do not up-weight a judge in cyclic mode.
