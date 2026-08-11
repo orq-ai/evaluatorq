@@ -1794,55 +1794,57 @@ def _rt_focus_recommendation_list(area: dict[str, Any], applied: set[str], rid: 
             cls = ''
         items.append(f'<li class="rt-focus-rec{cls}"><span class="rt-focus-rec-text">{esc(rec_text)}</span>{tail}</li>')
     return (
+        '<div class="rt-focus-recs-section">'
         '<div class="rt-focus-fixbox-label rt-focus-recs-label">Recommendations</div>'
         f'<ul class="rt-focus-recs">{"".join(items)}</ul>'
+        '</div>'
     )
 
 
 def _rt_focus_area_card(area: dict[str, Any], applied: set[str] | None = None, rid: str = '') -> str:
-    """One focus-area panel: tier + category header, pattern chips,
-    remediation box + recommendation bullets with applied ticks (main column)
-    and risk dial + ASR/hits mini-stats (fixed 100px right column). Spec
-    §Focus areas; bullets + ticks are RES-1143."""
+    """One focus-area panel with a contained structure: a header strip
+    (identity left, risk dial + ASR/hits stat group right, hairline below)
+    over a body of labeled sections (patterns, recommended fix,
+    recommendations with per-rec apply). Spec §Focus areas; the header-strip
+    layout and bullets + ticks are RES-1143."""
     from evaluatorq.common.reports.html_helpers import pct
     from evaluatorq.dashboard.report_kit import dial
 
     risk_score = area.get('risk_score', 0.0)
     tier_code, tier_label, color = _rt_focus_tier(risk_score)
 
-    header = (
+    head_main = (
+        '<div class="rt-focus-head-main">'
         '<div class="rt-focus-tier-row">'
         f'<span class="rt-focus-tier-dot" style="background:{color}"></span>'
         f'<span class="rt-focus-tier-label" style="color:{color}">{esc(tier_code)} · {esc(tier_label)}</span>'
         '</div>'
-        f'<div class="rt-focus-category-name">{esc(area.get("category_name", ""))}</div>'
-        f'<div class="rt-focus-category-code">{esc(area.get("category", ""))}</div>'
+        f'<div class="rt-focus-category-name">{esc(area.get("category_name", ""))} '
+        f'<span class="rt-focus-category-code">{esc(area.get("category", ""))}</span></div>'
+        '</div>'
     )
+    vulnerability_rate = area.get('vulnerability_rate', 0.0)
+    vulnerabilities_found = area.get('vulnerabilities_found', 0)
+    risk_dial = dial(f'{risk_score:.1f}', risk_score / _RISK_MAX, radius=26, stroke=7, color=color, sub='RISK')
+    head_stats = (
+        '<div class="rt-focus-head-stats">'
+        f'<div class="rt-focus-stat rt-focus-stat--dial">{risk_dial}</div>'
+        '<div class="rt-focus-stat">'
+        '<span class="rt-focus-mini-key">ASR</span>'
+        f'<span class="rt-focus-mini-value">{pct(vulnerability_rate)}</span></div>'
+        '<div class="rt-focus-stat">'
+        '<span class="rt-focus-mini-key">Hits</span>'
+        f'<span class="rt-focus-mini-value" style="color:{color}">{vulnerabilities_found}</span></div>'
+        '</div>'
+    )
+    head = f'<div class="rt-focus-head">{head_main}{head_stats}</div>'
 
     patterns_html = _rt_focus_pattern_chips(area, color)
     fixbox_html = _rt_focus_remediation_box(area)
     recs_html = _rt_focus_recommendation_list(area, applied or set(), rid)
+    body = f'<div class="rt-focus-body">{patterns_html}{fixbox_html}{recs_html}</div>'
 
-    main_col = f'<div class="rt-focus-main">{header}{patterns_html}{fixbox_html}{recs_html}</div>'
-
-    vulnerability_rate = area.get('vulnerability_rate', 0.0)
-    vulnerabilities_found = area.get('vulnerabilities_found', 0)
-    risk_dial = dial(f'{risk_score:.1f}', risk_score / _RISK_MAX, radius=38, stroke=9, color=color, sub='RISK')
-    right_col = (
-        '<div class="rt-focus-right">'
-        f'{risk_dial}'
-        '<div class="rt-focus-mini-stats">'
-        '<div class="rt-focus-mini-stat">'
-        '<span class="rt-focus-mini-key">ASR</span>'
-        f'<span class="rt-focus-mini-value">{pct(vulnerability_rate)}</span></div>'
-        '<div class="rt-focus-mini-stat">'
-        '<span class="rt-focus-mini-key">Hits</span>'
-        f'<span class="rt-focus-mini-value" style="color:{color}">{vulnerabilities_found}</span></div>'
-        '</div>'
-        '</div>'
-    )
-
-    return f'<div class="rk-panel rt-focus-card">{main_col}{right_col}</div>'
+    return f'<div class="rk-panel rt-focus-card">{head}{body}</div>'
 
 
 def _rt_focus(by_kind: dict[str, Any], rid: str, report: RedTeamReport) -> str:
