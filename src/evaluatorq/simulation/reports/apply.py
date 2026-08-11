@@ -4,15 +4,20 @@ Takes the suggestions produced by ``reports.recommendations`` and folds them
 into the ORQ agent's ``instructions`` with an LLM, then optionally writes the
 revised instructions back as a new agent version.
 
+The flow follows the reviewed design: aggregate the raw suggestions into a
+single revised prompt (the "step in between"), expose a diff of the change for
+the user to approve, and only on approval (``apply=True``) send the update. To
+avoid re-applying the same fix, the caller passes the suggestions already
+applied to the agent (tracked on ``SimulationRun.applied_suggestions``); those
+are skipped, and the newly applied ones come back on the result to append.
+
 Preview by default: nothing is written to the platform unless ``apply=True``.
-The caller inspects ``original_instructions`` / ``new_instructions`` first and
-opts in to the write, so a run report never mutates a live agent as a side
-effect.
 """
 
 from __future__ import annotations
 
 import asyncio
+import difflib
 import functools
 from typing import TYPE_CHECKING, Any
 
@@ -24,6 +29,8 @@ from evaluatorq.simulation.utils.extract_json import extract_json_from_response
 from evaluatorq.simulation.utils.structured_output import generate_structured
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from openai import AsyncOpenAI
 
     from evaluatorq.simulation.types import SimulationRecommendation
@@ -39,20 +46,27 @@ class ApplySuggestionsResult(BaseModel):
     """Outcome of folding suggestions into an agent's instructions.
 
     ``applied`` is False in preview mode (the default): the caller gets the
-    proposed ``new_instructions`` without any platform write. ``new_version``
-    is the agent's version string after a successful write, else None.
+    proposed ``new_instructions`` plus a ``diff`` to show, without any platform
+    write. ``suggestions`` are the ones merged this call (already-applied
+    suggestions excluded); append them to ``SimulationRun.applied_suggestions``
+    after a successful write so they are not applied again. ``new_version`` is
+    the agent's version string after a successful write, else None.
     """
 
     agent_key: str
     suggestions: list[str] = Field(default_factory=list)
     original_instructions: str = ''
     new_instructions: str = ''
+    diff: str = ''
     applied: bool = False
     new_version: str | None = None
 
 
 _MAX_SUGGESTIONS = 20
-_MAX_INSTRUCTIONS_TOKENS = 2000
+# Instructions can be long; the merge returns the WHOLE revised prompt, not a
+# diff, so keep the budget generous. generate_structured raises loudly rather
+# than writing a truncated prompt if this is still hit.
+_MAX_INSTRUCTIONS_TOKENS = 4096
 
 _SYSTEM_PROMPT = """\
 You revise the system instructions of a conversational AI agent. You are given \
@@ -75,9 +89,14 @@ Respond ONLY with valid JSON. No markdown, no explanation outside the JSON."""
 def _collect_suggestions(
     recommendations: list[SimulationRecommendation],
     max_suggestions: int,
+    already_applied: Sequence[str] = (),
 ) -> list[str]:
-    """Flatten recommendations into a deduplicated, order-preserving suggestion list."""
-    seen: set[str] = set()
+    """Flatten recommendations into a deduplicated, order-preserving suggestion list.
+
+    Suggestions in ``already_applied`` are skipped so a previously applied fix is
+    not merged in again.
+    """
+    seen: set[str] = {s.strip() for s in already_applied}
     out: list[str] = []
     for rec in recommendations:
         for raw in rec.suggestions:
@@ -86,6 +105,18 @@ def _collect_suggestions(
                 seen.add(suggestion)
                 out.append(suggestion)
     return out[:max_suggestions]
+
+
+def _unified_diff(original: str, revised: str) -> str:
+    """Line-level unified diff of the instructions change, for the approval view."""
+    return ''.join(
+        difflib.unified_diff(
+            original.splitlines(keepends=True),
+            revised.splitlines(keepends=True),
+            fromfile='instructions (current)',
+            tofile='instructions (proposed)',
+        )
+    )
 
 
 def _build_user_prompt(current_instructions: str, suggestions: list[str]) -> str:
@@ -106,6 +137,7 @@ async def apply_suggestions(
     apply: bool = False,
     temperature: float = 0.0,
     max_suggestions: int = _MAX_SUGGESTIONS,
+    already_applied: Sequence[str] = (),
 ) -> ApplySuggestionsResult:
     """Fold simulation suggestions into an agent's instructions.
 
@@ -118,18 +150,23 @@ async def apply_suggestions(
         llm_client: AsyncOpenAI-compatible client for the merge call.
         model: Model identifier for the merge call.
         apply: When False (default) the agent is only read and the proposed
-            instructions are returned. When True the revised instructions are
-            written back as a new minor agent version.
+            instructions plus a diff are returned. When True the revised
+            instructions are written back as a new minor agent version.
         temperature: Sampling temperature for the merge call.
         max_suggestions: Cap on how many unique suggestions are merged.
+        already_applied: Suggestion strings previously applied to this agent
+            (typically ``SimulationRun.applied_suggestions``); they are skipped
+            so a fix is not applied twice.
 
     Returns:
-        An ``ApplySuggestionsResult``. When there are no suggestions, or the LLM
-        yields no usable text, nothing is written and ``applied`` is False.
+        An ``ApplySuggestionsResult``. When there are no new suggestions, or the
+        LLM yields no usable text, nothing is written and ``applied`` is False.
+        On a successful write, append ``result.suggestions`` to the run's
+        ``applied_suggestions`` so they are not re-applied.
     """
-    suggestions = _collect_suggestions(recommendations, max_suggestions)
+    suggestions = _collect_suggestions(recommendations, max_suggestions, already_applied)
     if not suggestions:
-        logger.info(f'No suggestions to apply for agent {agent_key!r}')
+        logger.info(f'No new suggestions to apply for agent {agent_key!r}')
         return ApplySuggestionsResult(agent_key=agent_key)
 
     agent = await asyncio.to_thread(orq_client.agents.retrieve, agent_key=agent_key)
@@ -169,6 +206,7 @@ async def apply_suggestions(
         suggestions=suggestions,
         original_instructions=original,
         new_instructions=new_instructions,
+        diff=_unified_diff(original, new_instructions),
         applied=False,
     )
     if not apply:

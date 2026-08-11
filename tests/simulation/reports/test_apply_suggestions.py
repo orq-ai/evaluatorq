@@ -52,6 +52,11 @@ def test_collect_suggestions_dedups_and_caps():
     assert _collect_suggestions(recs, max_suggestions=3) == ['a', 'b', 'c']
 
 
+def test_collect_suggestions_skips_already_applied():
+    recs = [_rec(['a', 'b', 'c'])]
+    assert _collect_suggestions(recs, max_suggestions=10, already_applied=[' a ', 'c']) == ['b']
+
+
 @pytest.mark.asyncio
 async def test_preview_does_not_write(monkeypatch: pytest.MonkeyPatch):
     _stub_merge(monkeypatch, 'NEW INSTRUCTIONS')
@@ -70,7 +75,50 @@ async def test_preview_does_not_write(monkeypatch: pytest.MonkeyPatch):
     assert result.new_version is None
     assert result.original_instructions == 'OLD INSTRUCTIONS'
     assert result.new_instructions == 'NEW INSTRUCTIONS'
+    # A diff is surfaced for the approval view.
+    assert '-OLD INSTRUCTIONS' in result.diff
+    assert '+NEW INSTRUCTIONS' in result.diff
     client.agents.retrieve.assert_called_once_with(agent_key='support-bot')
+    client.agents.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_already_applied_suggestions_are_skipped(monkeypatch: pytest.MonkeyPatch):
+    _stub_merge(monkeypatch, 'NEW')
+    client = _orq_client()
+
+    result = await apply_suggestions(
+        [_rec(['Add rule A', 'Add rule B'])],
+        agent_key='support-bot',
+        orq_client=client,
+        llm_client=MagicMock(),
+        model='test-model',
+        already_applied=['Add rule A'],
+    )
+
+    # Only the not-yet-applied suggestion is carried; the caller appends these
+    # to run.applied_suggestions after a write.
+    assert result.suggestions == ['Add rule B']
+
+
+@pytest.mark.asyncio
+async def test_all_suggestions_already_applied_is_a_noop(monkeypatch: pytest.MonkeyPatch):
+    _stub_merge(monkeypatch, 'NEW')
+    client = _orq_client()
+
+    result = await apply_suggestions(
+        [_rec(['Add rule A'])],
+        agent_key='support-bot',
+        orq_client=client,
+        llm_client=MagicMock(),
+        model='test-model',
+        apply=True,
+        already_applied=['Add rule A'],
+    )
+
+    assert result.suggestions == []
+    assert result.applied is False
+    client.agents.retrieve.assert_not_called()
     client.agents.update.assert_not_called()
 
 
