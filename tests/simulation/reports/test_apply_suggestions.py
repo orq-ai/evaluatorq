@@ -11,10 +11,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from evaluatorq.common.apply import collect_recommendations
 from evaluatorq.simulation.reports.apply import (
     ApplySuggestionsResult,
-    _collect_suggestions,
-    _RevisedInstructions,
     apply_suggestions,
 )
 from evaluatorq.simulation.types import SimulationRecommendation
@@ -41,20 +40,17 @@ def _orq_client(*, instructions: str = 'OLD', new_version: str = '1.1.0') -> Mag
 
 def _stub_merge(monkeypatch: pytest.MonkeyPatch, text: str) -> None:
     """Make the LLM merge return ``text`` as the revised instructions."""
-    monkeypatch.setattr(
-        f'{_MODULE}.generate_structured',
-        AsyncMock(return_value=(_RevisedInstructions(instructions=text), '')),
-    )
+    monkeypatch.setattr('evaluatorq.common.apply._merge_instructions', AsyncMock(return_value=text))
 
 
 def test_collect_suggestions_dedups_and_caps():
     recs = [_rec(['  a ', 'b']), _rec(['a', 'c', '']), _rec(['d'])]
-    assert _collect_suggestions(recs, max_suggestions=3) == ['a', 'b', 'c']
+    assert collect_recommendations(recs, max_recommendations=3) == ['a', 'b', 'c']
 
 
 def test_collect_suggestions_skips_already_applied():
     recs = [_rec(['a', 'b', 'c'])]
-    assert _collect_suggestions(recs, max_suggestions=10, already_applied=[' a ', 'c']) == ['b']
+    assert collect_recommendations(recs, max_recommendations=10, already_applied=[' a ', 'c']) == ['b']
 
 
 @pytest.mark.asyncio
@@ -98,7 +94,7 @@ async def test_already_applied_suggestions_are_skipped(monkeypatch: pytest.Monke
 
     # Only the not-yet-applied suggestion is carried; the caller appends these
     # to run.applied_suggestions after a write.
-    assert result.suggestions == ['Add rule B']
+    assert result.recommendations == ['Add rule B']
 
 
 @pytest.mark.asyncio
@@ -116,7 +112,7 @@ async def test_all_suggestions_already_applied_is_a_noop(monkeypatch: pytest.Mon
         already_applied=['Add rule A'],
     )
 
-    assert result.suggestions == []
+    assert result.recommendations == []
     assert result.applied is False
     client.agents.retrieve.assert_not_called()
     client.agents.update.assert_not_called()
@@ -160,7 +156,7 @@ async def test_no_suggestions_is_a_noop(monkeypatch: pytest.MonkeyPatch):
         apply=True,
     )
 
-    assert result.suggestions == []
+    assert result.recommendations == []
     assert result.applied is False
     client.agents.retrieve.assert_not_called()
     client.agents.update.assert_not_called()

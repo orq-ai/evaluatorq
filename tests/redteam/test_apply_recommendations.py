@@ -20,7 +20,7 @@ from evaluatorq.redteam.reports.apply import (
     apply_recommendations,
 )
 
-_MODULE = 'evaluatorq.redteam.reports.apply'
+_MODULE = 'evaluatorq.common.apply'
 
 
 def _area(recommendations: list[str]) -> FocusAreaRecommendation:
@@ -179,29 +179,29 @@ def _llm_client(*payloads: dict[str, object]) -> MagicMock:
 
 class TestApplyEdits:
     def test_exact_replace(self):
-        from evaluatorq.redteam.reports.apply import _apply_edits
+        from evaluatorq.common.apply import _apply_edits
 
         assert _apply_edits("a b c", [{"find": "b", "replace": "X"}]) == "a X c"
 
     def test_whitespace_normalized_fallback(self):
-        from evaluatorq.redteam.reports.apply import _apply_edits
+        from evaluatorq.common.apply import _apply_edits
 
         original = "Rule one.\n  Rule   two applies."
         edits = [{"find": "Rule two applies.", "replace": "Rule two never applies."}]
         assert _apply_edits(original, edits) == "Rule one.\n  Rule two never applies."
 
     def test_ambiguous_find_fails(self):
-        from evaluatorq.redteam.reports.apply import _apply_edits
+        from evaluatorq.common.apply import _apply_edits
 
         assert _apply_edits("dup dup", [{"find": "dup", "replace": "X"}]) is None
 
     def test_missing_find_fails(self):
-        from evaluatorq.redteam.reports.apply import _apply_edits
+        from evaluatorq.common.apply import _apply_edits
 
         assert _apply_edits("abc", [{"find": "zzz", "replace": "X"}]) is None
 
     def test_sequential_edits_see_prior_output(self):
-        from evaluatorq.redteam.reports.apply import _apply_edits
+        from evaluatorq.common.apply import _apply_edits
 
         edits = [{"find": "one", "replace": "two"}, {"find": "two two", "replace": "done"}]
         assert _apply_edits("two one", edits) == "done"
@@ -209,7 +209,7 @@ class TestApplyEdits:
 
 class TestParseEdits:
     def test_valid(self):
-        from evaluatorq.redteam.reports.apply import _parse_edits
+        from evaluatorq.common.apply import _parse_edits
 
         content = json.dumps({"edits": [{"find": "a", "replace": "b"}]})
         assert _parse_edits(content) == [{"find": "a", "replace": "b"}]
@@ -225,17 +225,17 @@ class TestParseEdits:
         ],
     )
     def test_off_contract_shapes(self, payload):
-        from evaluatorq.redteam.reports.apply import _parse_edits
+        from evaluatorq.common.apply import _parse_edits
 
         assert _parse_edits(json.dumps(payload)) is None
 
 
 @pytest.mark.asyncio
 async def test_merge_uses_edits_mode_when_it_lands():
-    from evaluatorq.redteam.reports.apply import _merge_instructions
+    from evaluatorq.common.apply import _merge_instructions
 
     client = _llm_client({"edits": [{"find": "OLD RULE", "replace": "NEW RULE"}]})
-    revised = await _merge_instructions(client, "m", "Intro. OLD RULE. Outro.", ["rec"], PIPELINE_CONFIG)
+    revised = await _merge_instructions(client, "m", "Intro. OLD RULE. Outro.", ["rec"], cfg=PIPELINE_CONFIG)
     assert revised == "Intro. NEW RULE. Outro."
     # One call: the fast path never touched the rewrite prompt.
     assert client.chat.completions.create.await_count == 1
@@ -243,13 +243,13 @@ async def test_merge_uses_edits_mode_when_it_lands():
 
 @pytest.mark.asyncio
 async def test_merge_falls_back_to_rewrite_when_edits_fail():
-    from evaluatorq.redteam.reports.apply import _merge_instructions
+    from evaluatorq.common.apply import _merge_instructions
 
     client = _llm_client(
         {"edits": [{"find": "NOT PRESENT", "replace": "X"}]},
         {"instructions": "FULL REWRITE"},
     )
-    revised = await _merge_instructions(client, "m", "Some instructions.", ["rec"], PIPELINE_CONFIG)
+    revised = await _merge_instructions(client, "m", "Some instructions.", ["rec"], cfg=PIPELINE_CONFIG)
     assert revised == "FULL REWRITE"
     assert client.chat.completions.create.await_count == 2
     # The second call used the rewrite prompt, not the edits prompt.
@@ -261,9 +261,9 @@ async def test_merge_falls_back_to_rewrite_when_edits_fail():
 async def test_merge_falls_back_when_model_returns_rewrite_shape():
     # A model ignoring the edits contract and answering with {"instructions": ...}
     # must not be trusted blindly: the fallback call is the authoritative rewrite.
-    from evaluatorq.redteam.reports.apply import _merge_instructions
+    from evaluatorq.common.apply import _merge_instructions
 
     client = _llm_client({"instructions": "SNEAKY"}, {"instructions": "PROPER REWRITE"})
-    revised = await _merge_instructions(client, "m", "Original.", ["rec"], PIPELINE_CONFIG)
+    revised = await _merge_instructions(client, "m", "Original.", ["rec"], cfg=PIPELINE_CONFIG)
     assert revised == "PROPER REWRITE"
     assert client.chat.completions.create.await_count == 2
