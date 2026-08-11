@@ -145,8 +145,13 @@ def _settings_config(roots: list[Path] | None) -> list[tuple[str, str | list[str
 
     scan_roots = roots if roots is not None else _default_roots()
     store_paths = [str(p) for p in scan_roots] or ['—']
+    from evaluatorq.dashboard.redteam_apply import APPLY_MODEL_ENV, DEFAULT_APPLY_MODEL, apply_model
+
     config: list[tuple[str, str | list[str]]] = [('Run stores', store_paths)]
     config.append(('Default sim model', DEFAULT_MODEL))
+    model = apply_model()
+    source = f'{APPLY_MODEL_ENV}' if model != DEFAULT_APPLY_MODEL else 'default'
+    config.append(('Apply-recommendations model', f'{model} ({source})'))
     for label, var in (('ORQ API key', 'ORQ_API_KEY'), ('OpenAI API key', 'OPENAI_API_KEY')):
         value = os.environ.get(var)
         config.append((label, _mask_key(value) if value else 'not set'))

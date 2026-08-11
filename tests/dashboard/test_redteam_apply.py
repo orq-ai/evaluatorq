@@ -354,3 +354,33 @@ class TestMultiAgentGating:
         r = client.post(f"/r/{rid}/redteam/apply/preview", data={"agent_key": "agent-a"})
         assert "single-agent runs" in r.text
         assert "rt-drawer-error" in r.text
+
+
+# ---------------------------------------------------------------------------
+# Apply-model config setting
+# ---------------------------------------------------------------------------
+
+
+class TestApplyModelSetting:
+    def test_default_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv(apply_mod.APPLY_MODEL_ENV, raising=False)
+        assert apply_mod.apply_model() == "gpt-5.6-luna"
+
+    def test_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(apply_mod.APPLY_MODEL_ENV, "openai/gpt-6")
+        assert apply_mod.apply_model() == "openai/gpt-6"
+        monkeypatch.setenv(apply_mod.APPLY_MODEL_ENV, "   ")
+        assert apply_mod.apply_model() == "gpt-5.6-luna"
+
+    def test_settings_page_shows_the_model(self, apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
+        client, _rid, _path = apply_client
+        monkeypatch.delenv(apply_mod.APPLY_MODEL_ENV, raising=False)
+        html = client.get("/settings").text
+        assert "Apply-recommendations model" in html
+        assert "gpt-5.6-luna (default)" in html
+
+    def test_settings_page_shows_the_override_source(self, apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
+        client, _rid, _path = apply_client
+        monkeypatch.setenv(apply_mod.APPLY_MODEL_ENV, "openai/gpt-6")
+        html = client.get("/settings").text
+        assert "openai/gpt-6 (EVALUATORQ_APPLY_MODEL)" in html

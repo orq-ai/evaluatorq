@@ -246,6 +246,10 @@ exactly what you saw in the diff, no second LLM call — and records the applied
 recommendations on the report, so applied bullets show a ✓ tick and a later
 preview skips them.
 
+The merge model is a dashboard config setting: `EVALUATORQ_APPLY_MODEL`
+(default `gpt-5.6-luna`), shown on the Settings page next to the other
+runtime config.
+
 Requirements: `ORQ_API_KEY` in the dashboard's environment and the `orq`
 extra (`orq-ai-sdk`) installed. Multi-agent runs do not show the flow: they
 are aimed at comparing agents, and the recommendations render as plain

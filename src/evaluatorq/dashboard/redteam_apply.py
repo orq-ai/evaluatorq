@@ -45,6 +45,18 @@ if TYPE_CHECKING:
 DRAWER_ID = 'rt-apply-drawer'
 AGENT_FIELD_ID = 'rt-apply-agent-field'
 
+# Model for the instruction-merge call. A dashboard config setting (shown on
+# the Settings page) rather than the red-team pipeline's evaluator default:
+# the merge rewrites production agent instructions, so it warrants a stronger
+# model than the scoring pipeline needs, independently configurable.
+APPLY_MODEL_ENV = 'EVALUATORQ_APPLY_MODEL'
+DEFAULT_APPLY_MODEL = 'gpt-5.6-luna'
+
+
+def apply_model() -> str:
+    """The model used to merge recommendations into agent instructions."""
+    return os.environ.get(APPLY_MODEL_ENV, '').strip() or DEFAULT_APPLY_MODEL
+
 
 # ---------------------------------------------------------------------------
 # Pending-recommendation accounting
@@ -309,8 +321,10 @@ def record_applied_on_report(path: Path, recommendations: list[str]) -> None:
 def _build_clients() -> tuple[Any, Any, str]:
     """(orq_client, llm_client, model) for the apply flow, or raise ValueError.
 
-    Uses the same evaluator-role config the red-team pipeline used to GENERATE
-    the recommendations, so the merge model matches the analysis model.
+    The call config (temperature, retries) follows the red-team pipeline's
+    evaluator role; the MODEL is the dashboard's apply-model setting
+    (``EVALUATORQ_APPLY_MODEL``, default ``gpt-5.6-luna``), shown on the
+    Settings page.
     """
     api_key = os.environ.get('ORQ_API_KEY', '')
     if not api_key:
@@ -327,8 +341,7 @@ def _build_clients() -> tuple[Any, Any, str]:
     llm_client = create_async_llm_client(
         role_config=PIPELINE_CONFIG.evaluator.as_call_config(), max_retries=PIPELINE_CONFIG.retry_count
     )
-    model = PIPELINE_CONFIG.evaluator.model or PIPELINE_CONFIG.evaluator.judges[0]
-    return orq_client, llm_client, model
+    return orq_client, llm_client, apply_model()
 
 
 # ---------------------------------------------------------------------------
