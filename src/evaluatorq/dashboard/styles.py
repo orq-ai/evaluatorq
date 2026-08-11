@@ -2283,17 +2283,6 @@ _RT_REPORT_CSS = """
 .rt-report .rt-apply-count--done { color: var(--green-600, #16a34a); }
 .rt-report .rt-apply-hint { font-size: 12px; color: var(--text-muted); }
 .rt-report .rt-apply-form { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; margin-left: auto; }
-.rt-report .rt-apply-agent {
-    font-size: 12px; font-family: var(--font-mono); padding: 6px 8px; border-radius: 7px;
-    border: 1px solid var(--border-default); background: var(--surface-card, #fdfcfb); color: inherit;
-}
-.rt-report .rt-apply-agent-name {
-    font-family: var(--font-mono); font-size: 12px; color: var(--text-muted);
-    display: inline-flex; align-items: baseline; gap: 7px; white-space: nowrap;
-}
-.rt-report .rt-apply-agent-label {
-    font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-faint);
-}
 .rt-apply-btn {
     font-size: 13px; font-weight: 600; padding: 7px 14px; border-radius: 8px; cursor: pointer;
     border: 1px solid var(--accent); background: var(--accent); color: #fff;

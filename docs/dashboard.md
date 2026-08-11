@@ -230,8 +230,8 @@ the static report body:
 
 ### Apply recommendations to the agent (red team)
 
-When a run was executed with `generate_recommendations=True`, the **Focus
-areas** tab lists each area's actionable recommendations and an apply bar
+When a **single-agent** run was executed with `generate_recommendations=True`,
+the **Focus areas** tab lists each area's actionable recommendations and an apply bar
 showing how many are still pending. Every pending recommendation carries its
 own **Apply…** button; the bar's **Preview & apply all…** takes the whole
 pending set at once. Either way the recommendations are folded into the tested
@@ -247,7 +247,9 @@ recommendations on the report, so applied bullets show a ✓ tick and a later
 preview skips them.
 
 Requirements: `ORQ_API_KEY` in the dashboard's environment and the `orq`
-extra (`orq-ai-sdk`) installed. Without them the drawer explains what is
+extra (`orq-ai-sdk`) installed. Multi-agent runs do not show the flow: they
+are aimed at comparing agents, and the recommendations render as plain
+bullets there. Without them the drawer explains what is
 missing instead of failing. The same flow is available programmatically via
 `evaluatorq.redteam.reports.apply.apply_recommendations`.
 

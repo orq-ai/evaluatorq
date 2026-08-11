@@ -38,7 +38,9 @@ def apply_client(tmp_path, rt_report_multi):
     rt_dir = tmp_path / "runs"
     rt_dir.mkdir()
     rt_path = rt_dir / "rt_fixture.json"
-    rt_path.write_text(rt_report_multi.model_dump_json())
+    # Apply is a single-agent feature; narrow the multi-agent fixture to one.
+    single = rt_report_multi.model_copy(update={"tested_agents": ["agent-a"]})
+    rt_path.write_text(single.model_dump_json())
     client = _TC(build_app(roots=[rt_dir]), raise_server_exceptions=True)
     return client, report_id(rt_path), rt_path
 
@@ -318,3 +320,37 @@ class TestPerRecommendationApply:
             data={"agent_key": "agent-a", "rec": "made up", "category": "ASI01"},
         )
         assert "no longer on the report" in r.text
+
+# ---------------------------------------------------------------------------
+# Single-agent gating (review decision: multi-agent runs are for comparison)
+# ---------------------------------------------------------------------------
+
+
+class TestMultiAgentGating:
+    @pytest.fixture
+    def multi_client(self, tmp_path, rt_report_multi):
+        from starlette.testclient import TestClient as _TC
+
+        from evaluatorq.dashboard.app import build_app
+        from evaluatorq.dashboard.library import report_id
+
+        rt_dir = tmp_path / "runs"
+        rt_dir.mkdir()
+        rt_path = rt_dir / "rt_fixture.json"
+        rt_path.write_text(rt_report_multi.model_dump_json())
+        client = _TC(build_app(roots=[rt_dir]), raise_server_exceptions=True)
+        return client, report_id(rt_path)
+
+    def test_multi_agent_report_has_no_apply_ui(self, multi_client) -> None:
+        client, rid = multi_client
+        html = client.get(f"/r/{rid}").text
+        assert 'class="rt-apply-bar"' not in html
+        assert 'class="rt-focus-rec-apply' not in html
+        # The recommendations themselves still render as plain bullets.
+        assert "Add stricter goal-boundary checks" in html
+
+    def test_multi_agent_preview_is_rejected(self, multi_client) -> None:
+        client, rid = multi_client
+        r = client.post(f"/r/{rid}/redteam/apply/preview", data={"agent_key": "agent-a"})
+        assert "single-agent runs" in r.text
+        assert "rt-drawer-error" in r.text

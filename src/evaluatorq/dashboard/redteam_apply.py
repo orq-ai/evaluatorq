@@ -67,9 +67,17 @@ def pending_recommendations(report: RedTeamReport) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def is_apply_enabled(report: RedTeamReport) -> bool:
+    """Apply is a single-agent feature (review decision): multi-agent runs are
+    aimed at comparison, so the whole flow is omitted there rather than asking
+    the user to pick a write target mid-report."""
+    return bool(report.focus_area_recommendations) and len(report.tested_agents or []) == 1
+
+
 def render_apply_panel(rid: str, report: RedTeamReport) -> str:
-    """The apply bar + drawer mount. Empty string when there is nothing to show."""
-    if not report.focus_area_recommendations:
+    """The apply bar + drawer mount. Empty string when there is nothing to show
+    (no recommendations, or a multi-agent comparison run)."""
+    if not is_apply_enabled(report):
         return ''
     pending = pending_recommendations(report)
     applied_n = len(report.applied_recommendations)
@@ -83,26 +91,10 @@ def render_apply_panel(rid: str, report: RedTeamReport) -> str:
         )
         return f'<div class="rt-apply-bar">{status}</div><div id="{DRAWER_ID}"></div>'
 
-    agents = report.tested_agents or []
-    # The agent field carries a stable id so the per-recommendation Apply
-    # buttons on the focus cards can hx-include it into their own requests.
-    if len(agents) > 1:
-        options = ''.join(f'<option value="{esc(a)}">{esc(a)}</option>' for a in agents)
-        agent_field = (
-            f'<select id="{AGENT_FIELD_ID}" class="rt-apply-agent" name="agent_key" aria-label="Agent">'
-            f'{options}</select>'
-        )
-    else:
-        # Single (or unknown) agent: fixed value, no chrome.
-        only = agents[0] if agents else ''
-        agent_field = f'<input type="hidden" id="{AGENT_FIELD_ID}" name="agent_key" value="{esc(only)}">'
-        if only:
-            # A LABEL, not a control: single-agent runs have nothing to choose,
-            # so this must not look clickable (review feedback: the pill chip
-            # read as a mystery button).
-            agent_field += (
-                f'<span class="rt-apply-agent-name"><span class="rt-apply-agent-label">Agent</span>{esc(only)}</span>'
-            )
+    # The run's single agent rides along invisibly: showing it as a tag read
+    # like a mystery button in review, and with one agent there is nothing to
+    # choose. The stable id lets the per-recommendation buttons hx-include it.
+    agent_field = f'<input type="hidden" id="{AGENT_FIELD_ID}" name="agent_key" value="{esc(report.tested_agents[0])}">'
 
     applied_note = f' · {applied_n} already applied' if applied_n else ''
     return (
@@ -343,6 +335,13 @@ def register_redteam_apply_routes(app: Any, roots: list[Any] | None = None) -> N
         if report is None:
             return Response(_404(f'Report {rid} not found'), status_code=404, media_type='text/html')
 
+        if len(report.tested_agents or []) > 1:
+            return Response(
+                render_error_drawer(
+                    'Applying recommendations is available for single-agent runs; this run compared several agents.'
+                ),
+                media_type='text/html',
+            )
         form = await req.form()
         agent_key = str(form.get('agent_key') or '').strip()
         if not agent_key:

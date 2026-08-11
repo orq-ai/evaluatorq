@@ -1789,8 +1789,12 @@ def _rt_focus_recommendation_list(area: dict[str, Any], applied: set[str], rid: 
         if done:
             tail = '<span class="rt-focus-rec-applied">✓ applied</span>'
             cls = ' rt-focus-rec--applied'
-        else:
+        elif rid:
             tail = render_rec_apply_button(rid, category, rec_text)
+            cls = ''
+        else:
+            # Apply disabled (multi-agent comparison run): plain bullet.
+            tail = ''
             cls = ''
         items.append(f'<li class="rt-focus-rec{cls}"><span class="rt-focus-rec-text">{esc(rec_text)}</span>{tail}</li>')
     return (
@@ -1858,13 +1862,18 @@ def _rt_focus(by_kind: dict[str, Any], rid: str, report: RedTeamReport) -> str:
     if not areas:
         return ''
 
+    from evaluatorq.dashboard.redteam_apply import is_apply_enabled
+
     apply_bar = render_apply_panel(rid, report)
     intro = (
         '<p class="rt-focus-intro">Prioritized fixes, ranked by '
         '<code>risk = success rate × avg severity</code>. Start at the top — P1 first.</p>'  # noqa: RUF001
     )
     applied = {r.strip() for r in report.applied_recommendations}
-    cards = ''.join(_rt_focus_area_card(area, applied, rid) for area in areas)
+    # Per-rec Apply buttons only when the flow is enabled (single-agent runs);
+    # rid='' renders the bullets without actions.
+    action_rid = rid if is_apply_enabled(report) else ''
+    cards = ''.join(_rt_focus_area_card(area, applied, action_rid) for area in areas)
     return f'{apply_bar}{intro}{cards}'
 
 
