@@ -1850,6 +1850,9 @@ def runs(
                 'total_results': summary.get('total_results'),
                 'scorer_averages': summary.get('scorer_averages', {}),
                 'file': report_path.name if report_path is not None else None,
+                # Which summary shape these stats came from; None on a legacy row
+                # built by reading the report itself (see RUN_SUMMARY_VERSION).
+                'summary_version': manifest.summary_version,
             }
         if report_path is None:
             return None
@@ -1869,6 +1872,7 @@ def runs(
             'total_results': data.get('total_results'),
             'scorer_averages': data.get('scorer_averages', {}),
             'file': report_path.name,
+            'summary_version': None,  # read from the report, not from a stored summary
         }
 
     records: list[dict[str, Any]] = []

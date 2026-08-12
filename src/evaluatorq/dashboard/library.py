@@ -13,14 +13,14 @@ from typing import TYPE_CHECKING, TypeVar
 
 from loguru import logger
 
-from evaluatorq.common.run_manifest import MANIFESTS_DIR_NAME
+from evaluatorq.common.run_manifest import MANIFESTS_DIR_NAME, iter_report_files
+from evaluatorq.contracts import RUN_SUMMARY_VERSION
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
-    from evaluatorq.contracts import RunManifest
+    from evaluatorq.contracts import RunManifest, RunSummary
 
-_ARTIFACT_PREFIXES = ('01_', '02_', '03_')
 _Model = TypeVar('_Model')
 
 
@@ -143,12 +143,13 @@ def default_roots() -> list[Path]:
 
 
 def _iter_report_files(roots: list[Path]) -> Iterator[Path]:
+    """Report files across *roots* — the shared per-dir predicate, flattened.
+
+    Yields:
+        Each report file, root by root, sorted within a root.
+    """
     for root in roots:
-        if not root.is_dir():
-            continue
-        for p in sorted(root.glob('*.json')):
-            if not p.name.startswith(_ARTIFACT_PREFIXES):
-                yield p
+        yield from iter_report_files(root)
 
 
 def _card(path: Path) -> ReportCard | None:
@@ -234,10 +235,14 @@ def fingerprint(roots: list[Path] | None = None) -> tuple[int, int]:
     """``(file count, newest mtime_ns)`` across every run store — a cheap staleness key.
 
     Callers cache expensive whole-store aggregates against this: one stat sweep
-    (~5 ms per 1000 files) instead of re-reading every report. Reports are
-    write-once, so a new run always bumps the count; manifests are *not* (an
-    in-flight run rewrites its own on every stage), so ``.manifests/`` is swept
-    too and the newest mtime catches that stage advance.
+    instead of re-reading every report. Reports are write-once, so a new run
+    always bumps the count; manifests are *not* (an in-flight run rewrites its
+    own on every stage), so ``.manifests/`` is swept too and the newest mtime
+    catches that stage advance.
+
+    The report sweep goes through :func:`_iter_report_files`, the same predicate
+    the aggregate itself reads, so stage artifacts (``01_``/``02_``/``03_``) that
+    no aggregate looks at can't invalidate the cache when they are rewritten.
 
     Unreadable entries are skipped rather than raised on: a fingerprint that
     fails is a dashboard that fails, and a missed file only costs staleness
@@ -247,7 +252,7 @@ def fingerprint(roots: list[Path] | None = None) -> tuple[int, int]:
     count = 0
     newest = 0
     for root in roots:
-        for p in (*root.glob('*.json'), *(root / MANIFESTS_DIR_NAME).glob('*.json')):
+        for p in (*_iter_report_files([root]), *(root / MANIFESTS_DIR_NAME).glob('*.json')):
             count += 1
             try:
                 newest = max(newest, p.stat().st_mtime_ns)
@@ -257,28 +262,45 @@ def fingerprint(roots: list[Path] | None = None) -> tuple[int, int]:
 
 
 def _backfill_manifest(path: Path, card: ReportCard) -> None:
-    """Write a manifest sidecar for a legacy (manifest-less) report.
+    """Write (or re-stamp) a manifest sidecar for a report the run list read in full.
 
     Migration-on-read: the first scan pays the full-report read it already pays
     today, then leaves a tiny ``.manifests/`` sidecar behind so every later scan
     (and ``eq runs``) builds this row from the manifest alone. No separate
-    migration command to run — the runs dir heals itself as it is browsed.
+    migration command to run — the runs dir heals itself as it is browsed. That
+    covers both a legacy manifest-less report and a sidecar whose summary predates
+    the current ``RUN_SUMMARY_VERSION``.
 
-    Best-effort in every direction: an existing sidecar is never overwritten, an
+    The summary comes from the report model's own ``manifest_summary()`` — the
+    same builder the live runners use — so a backfilled row is field-identical
+    to one written by the run itself.
+
+    An existing sidecar is *patched*, never rebuilt: a real run's manifest carries
+    a true ``started_at`` and a stage history that the report cannot reconstruct,
+    and a shape bump must not cost that.
+
+    Best-effort in every direction: a current sidecar is left alone, an
     errored/pairwise report is skipped (pairwise has no ``ManifestSurface``), and
-    a failed write only costs the next scan another full read.
+    a failed read or write only costs the next scan another full read.
     """
-    from evaluatorq.common.run_manifest import ManifestWriter
+    from evaluatorq.common.run_manifest import ManifestWriter, summary_is_current
     from evaluatorq.contracts import ManifestStatus, ManifestSurface, RunManifest
 
     if card.error or card.surface not in (ManifestSurface.SIM, ManifestSurface.REDTEAM):
         return
     mpath = path.parent / MANIFESTS_DIR_NAME / f'{path.stem}.json'
+    existing: RunManifest | None = None
     if mpath.exists():
+        try:
+            existing = RunManifest.model_validate_json(mpath.read_text(encoding='utf-8'))
+        except (ValueError, OSError) as exc:
+            logger.warning(f'Rewriting unreadable run manifest {mpath}: {exc}')
+        if existing is not None and summary_is_current(existing):
+            return
+    summary = _report_summary(path, card.surface)
+    if summary is None:
         return
-    _, data = load_surface(path)  # mtime-keyed LRU hit — _card just read this file
-    total = data.get('total_results')
-    manifest = RunManifest(
+    manifest = existing or RunManifest(
         run_id=path.stem,
         surface=ManifestSurface(card.surface),
         run_name=card.name,
@@ -287,9 +309,27 @@ def _backfill_manifest(path: Path, card: ReportCard) -> None:
         updated_at=card.created_at,
         ended_at=card.created_at,
         report_path=str(path),
-        summary={'total_results': total if isinstance(total, int) else 0},
     )
+    # complete() is a no-op on an already-terminal manifest, so stamp directly —
+    # ManifestWriter.flush() is still the single writer of a sidecar.
+    manifest.summary = summary
+    manifest.summary_version = RUN_SUMMARY_VERSION
     ManifestWriter(manifest, mpath).flush()
+
+
+def _report_summary(path: Path, surface: str) -> RunSummary | None:
+    """``manifest_summary()`` of the report at *path*, or ``None`` if it won't model."""
+    from evaluatorq.dashboard.surfaces import ADAPTERS
+
+    try:
+        # Full model validate (mtime-keyed LRU): the price of one migration read.
+        return ADAPTERS[surface].load(path).manifest_summary()
+    except Exception as exc:
+        # The card already parsed, so a model failure here is a schema mismatch,
+        # not routine noise: warn (as list_manifests does) rather than migrate
+        # silently-never. The run still lists via the full-report path.
+        logger.warning(f'Skipping manifest backfill for {path}: {exc}')
+        return None
 
 
 def scan(roots: list[Path] | None = None) -> list[ReportCard]:
@@ -308,7 +348,7 @@ def scan(roots: list[Path] | None = None) -> list[ReportCard]:
     inside another's expansion — and a duplicated root would double-count every
     report in the landing rollups (jobs, spend, costed runs).
     """
-    from evaluatorq.common.run_manifest import list_manifests
+    from evaluatorq.common.run_manifest import list_run_records
 
     roots = roots or default_roots()
     seen_roots: set[Path] = set()
@@ -318,21 +358,17 @@ def scan(roots: list[Path] | None = None) -> list[ReportCard]:
         if resolved not in seen_roots:
             seen_roots.add(resolved)
             deduped_roots.append(root)
-    roots = deduped_roots
     cards: list[ReportCard] = []
-    covered: set[Path] = set()
-    for root in roots:
-        for m in list_manifests(root):
-            card = _card_from_manifest(m)
-            cards.append(card)
-            if card.path is not None:
-                covered.add(card.path.resolve())
-    for p in _iter_report_files(roots):
-        if p.resolve() in covered:
-            continue
-        if (c := _card(p)) is not None:
-            cards.append(c)
-            _backfill_manifest(p, c)
+    for root in deduped_roots:
+        # list_run_records owns manifest-first ordering, report de-duplication and
+        # the demotion of thin-summary sidecars to a legacy row — the CLI run
+        # tables read the same function, so the two views can't drift apart.
+        for manifest, path in list_run_records(root):
+            if manifest is not None:
+                cards.append(_card_from_manifest(manifest))
+            elif path is not None and (c := _card(path)) is not None:
+                cards.append(c)
+                _backfill_manifest(path, c)
     return sorted(cards, key=lambda c: c.created_at, reverse=True)
 
 
