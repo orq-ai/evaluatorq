@@ -30,9 +30,11 @@ T = TypeVar('T', bound=BaseModel)
 # Structural request fields a caller's extra_kwargs may not replace: they are
 # owned by this helper, and letting extra_kwargs swap them out would silently
 # break the call it rides on (e.g. replacing the response_format schema this
-# helper exists to enforce). Same contract as LLMCallConfig.completion_params.
-# extra_body is deliberately NOT reserved here: it is the documented carrier
-# for provider options like the Orq router retry body.
+# helper exists to enforce). This mirrors the INTENT of
+# LLMCallConfig.completion_params, but the key set is intentionally narrower:
+# that guard also reserves extra_body, whereas here extra_body is deliberately
+# NOT reserved because it is the documented carrier for provider options like
+# the Orq router retry body.
 _STRUCTURAL_KEYS = frozenset({'model', 'messages', 'response_format'})
 
 
@@ -64,6 +66,14 @@ async def generate_structured(
     ``response_format``) are reserved and raise ``ValueError`` — an
     ``extra_kwargs`` entry silently replacing the schema would defeat the
     helper.
+
+    On a length-truncated structured response this raises ``RuntimeError``
+    rather than falling back (a same-budget ``json_object`` retry would truncate
+    again). "Loud" is scoped to this helper: it surfaces a specific, actionable
+    reason instead of returning cut-off JSON. Both report call sites still wrap
+    the call in a broad ``except`` and skip that one item, so a truncation
+    degrades a single section — but now with a clear log line naming the budget,
+    not the silent drop this migration set out to remove.
     """
     reserved = _STRUCTURAL_KEYS & (extra_kwargs or {}).keys()
     if reserved:
@@ -140,8 +150,8 @@ async def generate_structured(
                 raise
             logger.warning('%s: structured output not supported by model, falling back to json_object', label)
             if span is not None:
-                fallback = True
-                span.set_attribute('orq.structured_output.fallback', fallback)
+                # The literal True is the span attribute's value, not a boolean flag.
+                span.set_attribute('orq.structured_output.fallback', True)  # noqa: FBT003
         except LengthFinishReasonError as exc:
             # Length-truncated structured output is unusable — the JSON is cut
             # off mid-string. Falling back to json_object would truncate at the
@@ -149,8 +159,8 @@ async def generate_structured(
             logger.exception('%s: structured output truncated at the token limit (max_tokens=%s)', label, max_tokens)
             raise RuntimeError(
                 f'{label}: the model hit the token limit (max_tokens={max_tokens}) and the '
-                f'structured output was truncated, so the result is unusable. Raise the budget '
-                f'via EVALUATORQ_LLM_MAX_TOKENS and retry.'
+                f'structured output was truncated, so the result is unusable. Raise the max_tokens '
+                f'budget passed to this call and retry.'
             ) from exc
 
         # 2. Fallback: json_object mode.

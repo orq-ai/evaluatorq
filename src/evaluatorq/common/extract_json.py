@@ -9,13 +9,15 @@ _JSON_BLOCK_PATTERN = re.compile(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', re.IGNOR
 
 
 def coerce_str_list(value: object) -> object:
-    """``BeforeValidator`` for ``list[str]`` fields parsed from fallback JSON.
+    """``BeforeValidator`` for ``list[str]`` fields; tolerates messy fallback JSON.
 
-    The ``json_object`` fallback runs on exactly the models most likely to emit
-    a stray ``1`` or ``null`` in a string array, and a ``ValidationError`` there
-    drops the whole report section. Stringify items and drop falsy ones instead,
-    matching the pre-RES-822 tolerance; non-list values pass through for
-    pydantic to reject normally.
+    Attached to the model field, so it runs on BOTH validation paths: it is a
+    no-op on well-formed structured (``parse()``) output, and it matters on the
+    ``json_object`` fallback, which runs on exactly the models most likely to
+    emit a stray ``1`` or ``null`` in a string array — a ``ValidationError``
+    there drops the whole report section. Stringify items and drop falsy ones
+    instead, matching the pre-RES-822 tolerance; non-list values pass through
+    for pydantic to reject normally.
     """
     if isinstance(value, list):
         return [str(item) for item in value if item]
@@ -23,8 +25,9 @@ def coerce_str_list(value: object) -> object:
 
 
 def coerce_str(value: object) -> object:
-    """``BeforeValidator`` for ``str`` fields parsed from fallback JSON:
-    stringify scalars (``None`` becomes ``''``) instead of failing validation."""
+    """``BeforeValidator`` for ``str`` fields; runs on both the ``parse()`` and
+    the fallback path (no-op on clean output). Stringifies scalars (``None``
+    becomes ``''``) instead of failing validation on messy fallback JSON."""
     if value is None:
         return ''
     if isinstance(value, (int, float, bool)):
