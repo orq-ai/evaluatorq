@@ -23,7 +23,7 @@ from evaluatorq.pairwise import (
     run_pairwise,
 )
 
-_Vote = Literal["A", "B", "tie"]
+_Vote = Literal['A', 'B', 'tie']
 
 
 def _obs(ordering: str, repetition: int, verdict: str | None) -> RepetitionObservation:
@@ -97,9 +97,7 @@ def test_failed_and_abstained_repetitions_are_recorded_as_none() -> None:
 def test_consistency_groups_are_per_datapoint_and_per_ordering() -> None:
     """Position bias must not read as inconsistency: all-'A' in ab and
     all-'B' (canonicalized) in ba is perfectly consistent within each group."""
-    votes = [
-        _vote('biased', None, [_obs('ab', 0, 'A'), _obs('ab', 1, 'A'), _obs('ba', 0, 'B'), _obs('ba', 1, 'B')])
-    ]
+    votes = [_vote('biased', None, [_obs('ab', 0, 'A'), _obs('ab', 1, 'A'), _obs('ba', 0, 'B'), _obs('ba', 1, 'B')])]
     consistency = repetition_consistency([_comparison(votes)])
     assert consistency == {'biased': 1.0}
 
@@ -187,3 +185,81 @@ def test_legacy_serialized_vote_deserializes_with_empty_observations() -> None:
     vote = PairwiseVote.model_validate({'model': 'j', 'vote': 'A'})
     assert vote.observations == []
     assert vote.repetition_failures == 0
+
+
+def test_nonconverged_fit_still_uses_consistency_weights(monkeypatch) -> None:
+    """The repetition path must not depend on the pooled fit's health: a
+    non-converged fit loses only the run-level headline."""
+    import evaluatorq.ranking as ranking
+
+    real_fit = ranking.fit_bt
+
+    def broken_fit(*args, **kwargs):
+        fit = real_fit(*args, **kwargs)
+        try:
+            fit.converged = False
+        except (AttributeError, TypeError, ValueError):  # frozen model
+            fit = fit.model_copy(update={'converged': False})
+        return fit
+
+    monkeypatch.setattr(ranking, 'fit_bt', broken_fit)
+    block = bt_sigma_aggregation(_run_with_repeats())
+    assert block.converged is False
+    assert block.p_a_beats_b == 0.5
+    assert block.skill_gap == 0.0
+    assert block.repetition_consistency == {'coin': 0.0, 'steady': 1.0}
+    # Winners still come from consistency weights, not uniform plurality.
+    assert block.winners == ['A' if k != 1 else 'B' for k in range(12)]
+    assert any('non-converged' in w for w in block.fit_warnings)
+
+
+def test_comparison_with_observations_round_trips_through_json() -> None:
+    rows = _run_with_repeats()
+    dumped = rows[0].model_dump_json()
+    restored = PairwiseComparison.model_validate_json(dumped)
+    assert restored == rows[0]
+    assert restored.votes[0].observations[0].ordering == 'ab'
+
+
+def test_end_to_end_pipeline_with_repetitions() -> None:
+    """Full path: run_pairwise (repetitions=3, both orderings) over several
+    comparisons, then bt_sigma_aggregation. A deterministic judge and a
+    call-order coin-flipper; the deterministic judge must carry the vote."""
+    flip = {'n': 0}
+
+    async def judge(a: object, b: object, model: str) -> Prediction:
+        if model == 'steady':
+            return Prediction(value='A' if str(a) == 'good' else 'B', explanation='ok')
+        flip['n'] += 1
+        return Prediction(value='A' if flip['n'] % 2 else 'B', explanation='hmm')
+
+    async def run_rows() -> list[PairwiseComparison]:
+        return [
+            await run_pairwise(
+                judge_fn=judge, panel=['steady', 'coin'], response_a='good', response_b='bad', repetitions=3
+            )
+            for _ in range(4)
+        ]
+
+    rows = asyncio.run(run_rows())
+    for row in rows:
+        steady_vote = next(v for v in row.votes if v.model == 'steady')
+        assert len(steady_vote.observations) == 6  # 3 reps x 2 orderings
+        assert {o.verdict for o in steady_vote.observations} == {'A'}  # canonicalized both orderings
+    block = bt_sigma_aggregation(rows)
+    assert block.repetition_consistency['steady'] == 1.0
+    assert block.repetition_consistency['coin'] < 1.0
+    assert set(block.winners) == {'A'}
+
+
+def test_cost_model_calls_scale_linearly_with_repetitions() -> None:
+    """The feasibility claim on the ticket: judge calls = judges x orderings x R."""
+    for reps, expected in ((1, 2), (2, 4), (3, 6)):
+        calls = {'n': 0}
+
+        async def judge(a: object, b: object, model: str) -> Prediction:
+            calls['n'] += 1
+            return Prediction(value='A', explanation='ok')
+
+        asyncio.run(run_pairwise(judge_fn=judge, panel=['j'], response_a='x', response_b='y', repetitions=reps))
+        assert calls['n'] == expected

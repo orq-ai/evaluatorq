@@ -341,16 +341,25 @@ def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAg
 
     fit = fit_bt(records, judge_sigma=True, hard=True)
     fit_warnings = list(fit.warnings)
+    # Consistency weights do not depend on the pooled fit, so a non-converged
+    # fit only loses the run-level headline - repetition evidence still weights
+    # the winners (RES-1251). Without repeats, fall back as before.
+    rep_consistency = repetition_consistency(comparisons)
     if not fit.converged:
-        fit_warnings.append('non-converged fit: used uniform plurality winners instead')
-        return _uniform_plurality_aggregation(comparisons, fit_warnings, converged=False)
+        if not rep_consistency:
+            fit_warnings.append('non-converged fit: used uniform plurality winners instead')
+            return _uniform_plurality_aggregation(comparisons, fit_warnings, converged=False)
+        fit_warnings.append(
+            'non-converged fit: p_a_beats_b/skill_gap unavailable (reported neutral); winners still '
+            'weighted by repetition consistency'
+        )
 
     # Two-item degeneracy guard: a unanimous judge's sigma is a closed-form
     # function of its own one-sidedness (its marginal pins the fit), so 1/sigma
     # would hand the most degenerate judge on the panel an unbounded weight.
     one_sided = {judge for judge, counts in vote_counts.items() if len(counts) == 1}
     # Single-judge fallback leaves sigmas empty; weight uniformly then.
-    sigmas = {judge: sigma for judge, sigma in fit.sigmas.items() if judge not in one_sided}
+    sigmas = {judge: sigma for judge, sigma in fit.sigmas.items() if fit.converged and judge not in one_sided}
     weights = {judge: fit.reliability(judge) for judge in sigmas}
     if fit.sigmas and one_sided:
         neutral = statistics.median(weights.values()) if weights else 1.0
@@ -373,7 +382,6 @@ def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAg
     # datapoint heterogeneity structurally cannot masquerade as judge noise.
     # The pooled fit still supplies the run-level headline (p_a_beats_b) - two
     # different questions, two different estimators.
-    rep_consistency = repetition_consistency(comparisons)
     if rep_consistency:
         weights = {judge: max(c, _MIN_CONSISTENCY_WEIGHT) for judge, c in rep_consistency.items()}
         voted = {v.model for c in comparisons for v in c.votes if v.vote is not None}
@@ -413,8 +421,8 @@ def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAg
     decisive = counts['A'] + counts['B']
     total = len(comparisons)
     return BTSigmaAggregation(
-        p_a_beats_b=1.0 / (1.0 + math.exp(-(fit.skills['A'] - fit.skills['B']))),
-        skill_gap=fit.skills['A'] - fit.skills['B'],
+        p_a_beats_b=1.0 / (1.0 + math.exp(-(fit.skills['A'] - fit.skills['B']))) if fit.converged else 0.5,
+        skill_gap=fit.skills['A'] - fit.skills['B'] if fit.converged else 0.0,
         judge_sigmas=sigmas,
         winners=winners,
         a_win_rate=_rate(counts['A'], decisive),
