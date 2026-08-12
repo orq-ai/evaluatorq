@@ -420,7 +420,7 @@ def vl_stacked_bar(
 ) -> dict[str, Any]:
     """Stacked horizontal bar chart for multi-series breakdowns.
 
-    Mirrors :func:`vl_bar_h`'s layered shape but adds a ``color``/series field
+    Mirrors `vl_bar_h`'s layered shape but adds a ``color``/series field
     and ``stack='zero'`` on the quantitative x axis.  The qualitative palette
     from ``ORQ_VL_CONFIG`` handles series colours automatically.
 

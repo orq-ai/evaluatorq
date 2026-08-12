@@ -98,7 +98,7 @@ def _coerce_to_agent_response(raw: Any) -> AgentResponse:
 
 @dataclass(slots=True)
 class TargetCallResult:
-    """In-process control-flow value returned by :func:`call_target_with_retry`.
+    """In-process control-flow value returned by `call_target_with_retry`.
 
     ``response`` is always populated: the target's real ``AgentResponse`` on
     success or a returned-error attempt, or a synthetic one on timeout/exception.
@@ -139,7 +139,7 @@ async def call_target_with_retry(
     caller-supplied span (0-based index). ``on_attempt_response`` receives the
     caller-supplied context value and each returned response while that context
     is still open, so callers can annotate per-attempt spans. Returns a uniform
-    :class:`TargetCallResult`.
+    `TargetCallResult`.
     """
     timeout_s = target_agent_timeout_ms / 1000.0
     max_attempts = max(1, max_target_retries + 1)

@@ -46,7 +46,7 @@ def delimit(text: str, *, tag: str = 'data') -> str:
 def xml_escape(text: str) -> str:
     """Escape text for safe embedding inside XML tags.
 
-    Wraps :func:`xml.sax.saxutils.escape` for convenience and
+    Wraps `xml.sax.saxutils.escape` for convenience and
     discoverability.
     """
     return xml.sax.saxutils.escape(text)

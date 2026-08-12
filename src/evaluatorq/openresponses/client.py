@@ -17,7 +17,7 @@ def build_simulation_client(
     """Build AsyncOpenAI client.
 
     Thin simulation wrapper over
-    :func:`evaluatorq.common.llm_client.resolve_llm_client` (the single source of
+    `evaluatorq.common.llm_client.resolve_llm_client` (the single source of
     truth for env-var precedence). Returns (client, owned) where owned=False means
     the caller must not close it.
 

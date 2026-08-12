@@ -163,9 +163,9 @@ class LangGraphTarget(AgentTarget):
             config: Optional extra LangGraph RunnableConfig keys
                 (e.g. ``{"recursion_limit": 50}``). The ``thread_id``
                 is managed automatically — do not pass it here.
-            agent_context: Optional :class:`AgentContext` override. When
+            agent_context: Optional `AgentContext` override. When
                 provided, this context is returned from
-                :meth:`get_agent_context` verbatim. When omitted, the target
+                `get_agent_context` verbatim. When omitted, the target
                 introspects the compiled graph (tools from a ``ToolNode``,
                 checkpointer presence) on a best-effort basis.
         """

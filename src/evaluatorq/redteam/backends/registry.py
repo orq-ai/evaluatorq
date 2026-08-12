@@ -25,7 +25,7 @@ ORQ_DEFAULT_BASE_URL = 'https://my.orq.ai'
 def create_async_llm_client(role_config: LLMCallConfig | None = None) -> AsyncOpenAI:
     """Create an OpenAI-compatible async client.
 
-    Thin red-team wrapper over :func:`evaluatorq.common.llm_client.resolve_llm_client`
+    Thin red-team wrapper over `evaluatorq.common.llm_client.resolve_llm_client`
     (the single source of truth for env-var precedence). If ``role_config.client``
     is set it is returned directly; otherwise the client is auto-detected.
 

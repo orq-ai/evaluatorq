@@ -73,7 +73,7 @@ def content_to_text(content: str | list[ContentPart] | None) -> str:
 
     For targets that accept only text: a string (or ``None``) passes through; a
     multi-part list is concatenated from its text parts (no separator), but a
-    non-text part (image or file) raises :class:`NotImplementedError` with a clear
+    non-text part (image or file) raises `NotImplementedError` with a clear
     message rather than silently dropping content.
     """
     if content is None:
@@ -254,7 +254,7 @@ class StrategyToolCall(BaseModel):
     function: FunctionCall = Field(description='Function call details')
     # Responses-API item id (e.g. ``fc_abc123``), distinct from ``id`` (which maps to
     # the chat-completions / Responses ``call_id``). Preserved through transcript
-    # replay so :class:`OpenAIAgentTarget` can echo the original ``function_call``
+    # replay so `OpenAIAgentTarget` can echo the original ``function_call``
     # item back to the Responses API on subsequent turns. ``None`` for tool calls
     # that did not originate from a Responses-API turn.
     item_id: str | None = Field(default=None, description='Responses-API function_call item id (fc_*)')
@@ -487,17 +487,17 @@ class Usage(BaseModel):
 
     @property
     def prompt_tokens(self) -> int:
-        """Deprecated alias for :attr:`input_tokens`."""
+        """Deprecated alias for `input_tokens`."""
         return self.input_tokens
 
     @property
     def completion_tokens(self) -> int:
-        """Deprecated alias for :attr:`output_tokens`."""
+        """Deprecated alias for `output_tokens`."""
         return self.output_tokens
 
     @property
     def cost_usd(self) -> float | None:
-        """Deprecated alias for :attr:`total_cost`."""
+        """Deprecated alias for `total_cost`."""
         return self.total_cost
 
     @property
@@ -517,12 +517,12 @@ class Usage(BaseModel):
         return self.total_cost is not None and 0 < self.priced_calls < self.calls
 
     def with_calls(self, calls: int) -> Usage:
-        """Stamp the call count, keeping :attr:`priced_calls` consistent.
+        """Stamp the call count, keeping `priced_calls` consistent.
 
         ``from_openresponses`` parses with ``calls=0`` and leaves the real count to
         the caller that knows the call was billed. A bare
         ``model_copy(update={'calls': 1})`` would leave ``priced_calls`` at 0, which
-        :attr:`cost_is_partial` reads as legacy untracked data — use this instead.
+        `cost_is_partial` reads as legacy untracked data — use this instead.
         """
         return self.model_copy(update={'calls': calls, 'priced_calls': calls if self.total_cost is not None else 0})
 
@@ -838,7 +838,7 @@ class JuryResult(BaseModel):
 
 
 class AgentResponseError(BaseModel):
-    """A per-response error marker on :class:`AgentResponse`.
+    """A per-response error marker on `AgentResponse`.
 
     Set when a target (or simulation agent) failed to produce a real response,
     e.g. a timeout or backend exception. The orchestrator uses its presence to
@@ -850,13 +850,13 @@ class AgentResponseError(BaseModel):
     error's *presence*, not its value, so the field is intentionally not an
     enum. The orchestrator sets ``"timeout"`` on the timeout path and otherwise
     classifies the failure via
-    :func:`evaluatorq.common.target_call.classify_error_type`, which yields one
+    `evaluatorq.common.target_call.classify_error_type`, which yields one
     of ``content_filter``, ``rate_limit``, ``timeout``, ``network_error``,
     ``server_error``, ``client_error``, or ``target_error`` (fallback for an
     unmatched error). Other producers may set their own values.
 
     This is the leaf, per-response error. The whole-run rollup is
-    :class:`evaluatorq.redteam.contracts.RunError`.
+    `evaluatorq.redteam.contracts.RunError`.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -891,15 +891,15 @@ class ResponseTrace(BaseModel):
 class AgentResponse(BaseModel):
     """Structured response from a target agent as an ordered list of output messages.
 
-    Each item in ``output`` is a :class:`TextOutputItem`, :class:`ToolCallOutputItem`,
-    or :class:`ReasoningOutputItem`, preserving the order in which they were produced.
+    Each item in ``output`` is a `TextOutputItem`, `ToolCallOutputItem`,
+    or `ReasoningOutputItem`, preserving the order in which they were produced.
     Item ``type`` discriminators align with the OpenResponses intermediate data format
     (``output_text``, ``function_call``, ``reasoning``).
 
     Accessors:
         ``.text``       — all ``TextOutputItem`` contents concatenated, or ``""`` if none
-        ``.tool_calls`` — list of :class:`ToolCallOutputItem` filtered from
-        :attr:`output` in order
+        ``.tool_calls`` — list of `ToolCallOutputItem` filtered from
+        `output` in order
     """
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)

@@ -120,7 +120,7 @@ def _save_stage(output_dir: Path | None, filename: str, content: str) -> None:
 def _save_report(output_dir: Path | None, filename: str, report: RedTeamReport) -> None:
     """Write a summary report to *output_dir* as flat JSON with ``saved_at``.
 
-    Unlike :func:`_save_stage`, the report is written without an extra
+    Unlike `_save_stage`, the report is written without an extra
     envelope layer — ``saved_at`` is injected directly into the top-level
     dict alongside the existing report fields.
     """
@@ -156,7 +156,7 @@ def _auto_save_run(
     ``run_config`` the execution knobs they don't encode (turn budget, attacker
     steering). Both are stored alongside the report (not part of the report
     model) so the run can later be replayed verbatim via ``previous_run=`` —
-    see :mod:`evaluatorq.redteam.replay`.
+    see `evaluatorq.redteam.replay`.
     """
     try:
         runs_dir = get_runs_dir()
@@ -403,8 +403,8 @@ if TYPE_CHECKING:
 class PreparedTarget:
     """Typed container for all per-target state prepared before a run.
 
-    Returned by :func:`_prepare_target` and consumed by
-    :func:`_run_dynamic_or_hybrid`.
+    Returned by `_prepare_target` and consumed by
+    `_run_dynamic_or_hybrid`.
     """
 
     target: str
@@ -521,7 +521,7 @@ async def red_team(
 
     Args:
         target: Target identifier(s). A single string like ``"agent:<key>"``,
-            an :class:`AgentTarget` instance, or a list of either for multi-target runs.
+            an `AgentTarget` instance, or a list of either for multi-target runs.
         mode: Execution mode — ``"dynamic"``, ``"static"``, or ``"hybrid"``.
         categories: OWASP categories to test (e.g., ``["ASI01", "ASI03"]``).
             Defaults to all available categories. Ignored if ``vulnerabilities`` is set.
@@ -547,7 +547,7 @@ async def red_team(
             ``vulnerabilities``, ``strategies`` and ``delivery_methods``:
             ``None`` means "no filter", and an empty list means "match nothing"
             — never "match everything". Since an empty selection leaves zero
-            datapoints, ``red_team`` raises :class:`RedTeamError` rather than
+            datapoints, ``red_team`` raises `RedTeamError` rather than
             silently running nothing (or, worse, running the full sweep the
             caller meant to filter down). This is reachable from the SDK only:
             the CLI maps blank/empty input back to ``None`` (``_split_csv``), so
@@ -1262,7 +1262,7 @@ def _create_static_job_for_agent_target(
     *,
     run_id: str | None = None,
 ) -> Any:
-    """Create an evaluatorq static job that drives an :class:`AgentTarget`.
+    """Create an evaluatorq static job that drives an `AgentTarget`.
 
     ``target_factory`` mints a fresh, isolated target per attack; the job closes
     it afterwards (a no-op for externally-injected, caller-owned clients). Callers
@@ -1360,11 +1360,11 @@ def _create_job_for_target(
 
     Dispatches on the target kind (``agent``, ``deployment``, or fallback to
     model) and returns the appropriate
-    :func:`~evaluatorq.redteam.runtime.jobs.create_model_job` result.
+    `create_model_job` result.
 
     Args:
         target:        Full target string, e.g. ``"agent:my-key"``.
-        llm_client:    Optional pre-configured :class:`openai.AsyncOpenAI`
+        llm_client:    Optional pre-configured `openai.AsyncOpenAI`
                        client.
         system_prompt: Optional system prompt to pass to the job.
         pipeline_config: Optional ``LLMConfig`` for ``target_max_tokens``.
@@ -1403,7 +1403,7 @@ def _check_filter_results(
     """Surface strategy/delivery-method filter mismatches; fail on an empty run.
 
     Warns for any requested strategy name or delivery method that matched no
-    datapoint, then raises :class:`RedTeamError` when a user-supplied filter
+    datapoint, then raises `RedTeamError` when a user-supplied filter
     leaves zero datapoints to run — a silent zero-attack run that still exits 0
     is the worst outcome for an attack tool. Called on the *final* per-target
     datapoint set (dynamic + static combined) so warnings and the empty-run
@@ -1536,7 +1536,7 @@ async def _prepare_target(
     dynamic job wrapper.
 
     Returns:
-        A :class:`PreparedTarget` instance with all per-target state.
+        A `PreparedTarget` instance with all per-target state.
     """
     target_kind, target_value = parse_target(target)
     safe_target = _make_safe_target(target_value)
@@ -1815,7 +1815,7 @@ async def _run_dynamic_or_hybrid(
 ) -> tuple[RedTeamReport, RedTeamRunMetrics]:
     """Run dynamic or hybrid red teaming for multiple targets in a single evaluatorq call.
 
-    For each target, :func:`_prepare_target` retrieves agent context, generates
+    For each target, `_prepare_target` retrieves agent context, generates
     agent-specific dynamic datapoints, and produces a job closure.  The first
     target generates shared datapoints; subsequent targets reuse them to avoid
     redundant LLM calls.  For hybrid mode an additional static dataset is loaded
@@ -1823,7 +1823,7 @@ async def _run_dynamic_or_hybrid(
     ``evaluatorq()`` call.
 
     After execution, results are split by ``job_name`` (matching each target's
-    ``safe_target`` slug) and converted to per-target :class:`RedTeamReport`
+    ``safe_target`` slug) and converted to per-target `RedTeamReport`
     instances, which are merged into one unified report.
 
     Args:

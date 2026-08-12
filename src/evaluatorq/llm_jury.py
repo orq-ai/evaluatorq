@@ -110,7 +110,7 @@ def _default_system_prompt(verdict_kind: str, labels: list[str] | None, score_ra
 # Default Mustache-style evaluation prompt template.  Placeholder tokens use the
 # ``{{name}}`` convention expected by the template engine (double-braces), drawn from
 # the red-team template namespace (see
-# :func:`evaluatorq.common.judge.build_eval_replacements`).  ``criteria`` is a
+# `evaluatorq.common.judge.build_eval_replacements`).  ``criteria`` is a
 # substituted variable here, exactly like every other name — see DEFAULT_PAIRWISE_TEMPLATE.
 DEFAULT_TEMPLATE = (
     '# Criteria\n{{criteria}}\n\n'
@@ -126,7 +126,7 @@ DEFAULT_TEMPLATE = (
 
 
 def _outcome_to_prediction(outcome: JudgeOutcome) -> Prediction:
-    """Convert a raw :class:`JudgeOutcome` into a :class:`Prediction`.
+    """Convert a raw `JudgeOutcome` into a `Prediction`.
 
     Maps error / abstain states to the matching Prediction fields so the jury
     runner can aggregate them without knowing about judge internals.
@@ -166,10 +166,10 @@ async def _run_single_judge(
     timeout_ms: int,
     extra_kwargs: dict[str, Any] | None,
 ) -> Prediction:
-    """Run one judge call and map its outcome to a :class:`Prediction`.
+    """Run one judge call and map its outcome to a `Prediction`.
 
-    The single ``run_judge`` call site shared by the pointwise (:func:`llm_jury`)
-    and pairwise (:class:`PairwiseComparator`) juries — only the ``replacements``
+    The single ``run_judge`` call site shared by the pointwise (`llm_jury`)
+    and pairwise (`PairwiseComparator`) juries — only the ``replacements``
     differ between them, so keeping one path stops the two from drifting.
     """
     cfg = LLMCallConfig(model=model, max_tokens=max_tokens, timeout_ms=timeout_ms, extra_kwargs=extra_kwargs or {})
@@ -198,7 +198,7 @@ def _to_evaluation_result(
     threshold: float,
     score_range: tuple[float, float],
 ) -> EvaluationResult:
-    """Map a :class:`JuryDeliberation` to an :class:`EvaluationResult`.
+    """Map a `JuryDeliberation` to an `EvaluationResult`.
 
     Passing logic:
 
@@ -273,7 +273,7 @@ def _resolve_and_validate_panel(
     Returns ``(panel, deduped)``. The quorum floor is bounded by the deduplicated
     panel size by design: ``replacement_judges`` are spillover for failed
     primaries, not extra capacity, so they don't raise the achievable floor.
-    Shared by :func:`llm_jury` and :func:`llm_jury_pairwise`.
+    Shared by `llm_jury` and `llm_jury_pairwise`.
     """
     panel = _resolve_panel(judges=judges, model=model)
     deduped = list(dict.fromkeys(panel))
@@ -546,7 +546,7 @@ def _side_to_namespace(prefix: str, side: Output) -> dict[str, Any]:
 
 
 class PairwiseComparator:
-    """A configured pairwise LLM jury. Call :meth:`compare` on an A/B pair."""
+    """A configured pairwise LLM jury. Call `compare` on an A/B pair."""
 
     def __init__(
         self,
@@ -678,12 +678,12 @@ def llm_jury_pairwise(
 
     Judges compare two responses and pick a winner ('A'/'B'/'tie'). With ``swap``
     on (default) each judge is run in both orderings to correct for position bias
-    (see ADR-24). Panel/orchestration params mirror :func:`llm_jury`. ``prompt``
+    (see ADR-24). Panel/orchestration params mirror `llm_jury`. ``prompt``
     overrides the built-in Mustache-style template (which exposes the
-    ``response_a.*``/``response_b.*`` namespace via :func:`_side_to_namespace`);
-    leave it ``None`` to use the default. Returns a :class:`PairwiseComparator`;
+    ``response_a.*``/``response_b.*`` namespace via `_side_to_namespace`);
+    leave it ``None`` to use the default. Returns a `PairwiseComparator`;
     call ``compare`` per A/B pair, and roll many comparisons up with
-    :func:`evaluatorq.pairwise.build_report`.
+    `evaluatorq.pairwise.build_report`.
 
     ``max_concurrency`` caps TOTAL in-flight judge LLM calls across all
     concurrently running ``compare`` calls on the returned comparator (each

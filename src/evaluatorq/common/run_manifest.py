@@ -47,7 +47,7 @@ def _manifests_dir(runs_dir: Path) -> Path:
 class ManifestWriter:
     """Holds one manifest and flushes it to disk on each transition.
 
-    Construct via :func:`start_manifest`. Every method is best-effort: a disk
+    Construct via `start_manifest`. Every method is best-effort: a disk
     failure is logged, never raised, so manifest bookkeeping can't break a run.
     """
 

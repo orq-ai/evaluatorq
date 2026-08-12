@@ -339,7 +339,7 @@ class SimulationRunner:
         ``thread_id`` binds a deterministic, run-scoped Orq observability thread id
         (``f"{run_id}:{index}"``) so every turn of this conversation groups under one
         id in Orq. When ``None`` a fresh uuid is minted. The resolved id is stamped
-        onto the returned :class:`SimulationResult` so the dashboard can deep-link to it.
+        onto the returned `SimulationResult` so the dashboard can deep-link to it.
         """
         # Resolve datapoint
         if datapoint:
@@ -804,11 +804,11 @@ class SimulationRunner:
         """Terminate the run after the target exhausted its retries.
 
         The failed turn is already appended to ``messages``; this builds the
-        terminal :class:`SimulationResult` (no judge call). Mirrors the judge /
+        terminal `SimulationResult` (no judge call). Mirrors the judge /
         max-turns termination branches: records final token usage + span attrs
         and retains prior ``messages``/``turn_metrics``. A ``timeout`` error type
-        maps to :attr:`TerminatedBy.timeout`, everything else to
-        :attr:`TerminatedBy.error`.
+        maps to `TerminatedBy.timeout`, everything else to
+        `TerminatedBy.error`.
         """
         err = call.error
         error_message = err.message if err else 'target failed'
@@ -849,7 +849,7 @@ class SimulationRunner:
         Stateful targets (e.g. ``ORQAgentTarget`` threading server-side turns
         via ``_task_id``) race when one instance serves parallel conversations,
         so every ``run()`` gets its own ``new()`` clone. Clones are retained on
-        the runner so :meth:`close` can release resources they own.
+        the runner so `close` can release resources they own.
         """
         if self._effective_target is None:
             return None
@@ -866,7 +866,7 @@ class SimulationRunner:
         ``_effective_target`` is only a fallback for direct callers of this
         helper. Both target flavours (rich ``target_agent`` and a plain callback
         wrapped in ``CallableTarget``) route through the same helper. The returned
-        :class:`TargetCallResult` carries ``.response`` (always populated — real
+        `TargetCallResult` carries ``.response`` (always populated — real
         or synthetic), ``.succeeded``, and ``.error``. ``response.model`` is the
         model the target reports (``None`` for plain callbacks, which may call any
         provider); NEVER substitute ``self._model`` — that is the user-simulator /

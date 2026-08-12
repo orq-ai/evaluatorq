@@ -141,7 +141,7 @@ def _cost_usd(usage: object) -> float | None:
 
 def _input_cost(usage: object) -> float | None:
     """Sibling reader for the ``input_cost`` component. Same ``None`` semantics
-    as :func:`_cost_usd`."""
+    as `_cost_usd`."""
     if not isinstance(usage, dict):
         return None
     return _as_float_or_none(usage.get('input_cost'))
@@ -149,7 +149,7 @@ def _input_cost(usage: object) -> float | None:
 
 def _output_cost(usage: object) -> float | None:
     """Sibling reader for the ``output_cost`` component. Same ``None`` semantics
-    as :func:`_cost_usd`."""
+    as `_cost_usd`."""
     if not isinstance(usage, dict):
         return None
     return _as_float_or_none(usage.get('output_cost'))
@@ -162,7 +162,7 @@ def zero_evaluated_attacks(summary: dict[str, object]) -> bool:
     must never render as a perfect score. An absent field (legacy reports
     predating it) is False — those keep their recorded rate.
 
-    Mirrors :attr:`ReportSummary.no_verdict`, including its ``total_attacks > 0``
+    Mirrors `ReportSummary.no_verdict`, including its ``total_attacks > 0``
     guard: a report that ran nothing is empty, not unscored, and the two must not
     disagree just because one side reads a dict and the other a model. The guard
     only applies when ``total_attacks`` is actually recorded — an absent field

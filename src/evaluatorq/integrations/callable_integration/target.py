@@ -20,9 +20,9 @@ from evaluatorq.contracts import (
 )
 
 # Accepted callable signatures — receive the conversation as a list of typed
-# :class:`~evaluatorq.contracts.Message` objects. The list holds one message for
+# `Message` objects. The list holds one message for
 # the opening turn and grows with every turn, so the same callable handles
-# single- and multi-turn red teaming. May return ``str`` or :class:`AgentResponse`.
+# single- and multi-turn red teaming. May return ``str`` or `AgentResponse`.
 AgentCallable = (
     Callable[[list[Message]], Awaitable[AgentResponse]]
     | Callable[[list[Message]], Awaitable[str]]
@@ -48,7 +48,7 @@ class CallableTarget(AgentTarget):
 
     Use this as an escape hatch for frameworks that don't have a dedicated
     integration. You provide a function that takes the conversation (a list of
-    typed :class:`~evaluatorq.contracts.Message` objects) and returns a response
+    typed `Message` objects) and returns a response
     — the wrapper handles the rest. The list contains one message on the opening
     turn and every prior turn on later turns, so a stateless callable still sees
     full context, matching the stateless OpenAI / Vercel / OpenAI-Agents targets
@@ -99,10 +99,10 @@ class CallableTarget(AgentTarget):
         Args:
             fn: A sync or async function taking the conversation as a
                 ``list[Message]`` and returning a ``str`` or an
-                :class:`AgentResponse`. The list grows by one turn each round, so
+                `AgentResponse`. The list grows by one turn each round, so
                 the same callable serves single- and multi-turn runs. Callables
                 that want OpenAI chat-completion dicts can call
-                :meth:`Message.to_chat_completion` on each element themselves.
+                `Message.to_chat_completion` on each element themselves.
             reset_fn: Optional callback invoked on ``new()`` to clear shared callable state between attacks.
             usage_fn: Optional callable taking ``(messages, response) -> TokenUsage | None``,
                 where ``messages`` is the full transcript forwarded to ``fn`` and
@@ -111,7 +111,7 @@ class CallableTarget(AgentTarget):
                 returns a string. The function must be synchronous; async usage
                 extraction is not supported. Exceptions raised by ``usage_fn`` are
                 logged as warnings and result in ``usage=None``.
-            agent_context: Optional :class:`AgentContext` describing the wrapped
+            agent_context: Optional `AgentContext` describing the wrapped
                 callable's tools, memory, system prompt, etc. The red teaming
                 pipeline uses this for capability-aware strategy filtering —
                 without it, all strategies (including nonsensical ones) will be
@@ -129,12 +129,12 @@ class CallableTarget(AgentTarget):
     async def respond(self, messages: list[Message]) -> AgentResponse:
         """Send the full conversation to the wrapped callable; return a structured response.
 
-        Forwards the entire transcript as typed :class:`Message` objects — tool
+        Forwards the entire transcript as typed `Message` objects — tool
         turns included — so a stateless callable sees prior context. The list
         holds a single message on the opening turn and grows each round. Like the
         stateless OpenAI / Vercel targets, no constraint is placed on the last
         turn's role. Callables that return a plain ``str`` are wrapped in an
-        :class:`AgentResponse`; those returning :class:`AgentResponse` pass
+        `AgentResponse`; those returning `AgentResponse` pass
         through. Token usage from ``usage_fn`` (if provided) is attached to the
         returned ``AgentResponse``.
         """

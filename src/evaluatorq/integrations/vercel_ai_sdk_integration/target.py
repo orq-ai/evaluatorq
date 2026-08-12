@@ -32,7 +32,7 @@ from evaluatorq.contracts import (
 
 AISdkMessageFormat = Literal['v4', 'v5']
 """AI SDK tool-message wire format. v5 (current) vs v4 (legacy) differ on tool
-field names — see :func:`_message_to_ai_sdk_message`."""
+field names — see `_message_to_ai_sdk_message`."""
 
 
 class VercelAISdkTarget(AgentTarget):
@@ -80,7 +80,7 @@ class VercelAISdkTarget(AgentTarget):
             extra_body: Optional extra fields merged into the request body
                 alongside ``messages`` (e.g. ``{"model": "gpt-4o"}``).
             timeout: HTTP request timeout in seconds.
-            agent_context: Optional :class:`AgentContext` describing the
+            agent_context: Optional `AgentContext` describing the
                 remote agent's tools, memory, system prompt, etc. The red
                 teaming pipeline uses this for capability-aware strategy
                 filtering — without it, all strategies (including
@@ -111,7 +111,7 @@ class VercelAISdkTarget(AgentTarget):
         The caller owns conversation continuity — the full ``messages`` list is
         sent as-is in the request body. Tool turns are rendered as AI SDK
         CoreMessage ``tool-call`` / ``tool-result`` content parts (via
-        :func:`_message_to_ai_sdk_message`, in the ``message_format`` selected at
+        `_message_to_ai_sdk_message`, in the ``message_format`` selected at
         construction), so endpoints backed by ``streamText`` / ``generateText``
         see prior tool context; plain turns keep the simple
         ``{"role", "content"}`` shape.
@@ -196,7 +196,7 @@ class VercelAISdkTarget(AgentTarget):
 
 
 def _message_to_ai_sdk_message(m: Message, *, version: AISdkMessageFormat = 'v5') -> dict[str, Any]:
-    """Render a :class:`Message` as an AI SDK ModelMessage (v5 default, or v4).
+    """Render a `Message` as an AI SDK ModelMessage (v5 default, or v4).
 
     Plain turns stay ``{"role", "content"}`` (structurally equivalent for text
     turns, identical across versions; ``None`` content is coerced to ``""``).

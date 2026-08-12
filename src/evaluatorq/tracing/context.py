@@ -75,7 +75,7 @@ async def tracing_session(run_name: str, *, trace_type: str = 'evaluatorq') -> A
     inherent to any batch exporter.
 
     Yields:
-        The :class:`TracingContext` for the run.
+        The `TracingContext` for the run.
     """
     from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
 

@@ -56,12 +56,12 @@ _ROLE_LABELS = {
 class CrewAITarget(AgentTarget):
     """Wraps a CrewAI ``Crew`` as a unified ``AgentTarget``.
 
-    Each :meth:`respond` flattens the conversation into a single string and runs
+    Each `respond` flattens the conversation into a single string and runs
     a fresh ``kickoff`` (a crew has no built-in turn memory). The crew's task
     description must reference the flattened transcript via ``{conversation}``
     (or whatever ``input_key`` you pass).
 
-    For parallel jobs pass a ``crew_factory`` so :meth:`new` can build an
+    For parallel jobs pass a ``crew_factory`` so `new` can build an
     independent crew; otherwise the same crew instance is reused.
 
     Usage:
@@ -95,13 +95,13 @@ class CrewAITarget(AgentTarget):
         Args:
             crew: A constructed CrewAI ``Crew``.
             crew_factory: Optional zero-arg callable returning a fresh ``Crew``;
-                used by :meth:`new` for parallel-safe instances. When omitted,
-                :meth:`new` reuses the same crew instance.
+                used by `new` for parallel-safe instances. When omitted,
+                `new` reuses the same crew instance.
             input_key: The ``inputs`` key the flattened transcript is passed
                 under; the crew's task description must reference ``{input_key}``.
             extra_inputs: Optional static inputs merged into every ``kickoff``
                 (e.g. interpolated constants the task description references).
-            agent_context: Optional :class:`AgentContext` override.
+            agent_context: Optional `AgentContext` override.
         """
         super().__init__(memory_entity_id=uuid4().hex)
         self._crew = crew
@@ -181,7 +181,7 @@ def _flatten(messages: list[Message]) -> str:
 
 
 def _extract_usage(output: Any) -> TokenUsage | None:
-    """Map ``CrewOutput.token_usage`` onto :class:`TokenUsage`.
+    """Map ``CrewOutput.token_usage`` onto `TokenUsage`.
 
     Returns ``None`` when usage is absent or all-zero so a run never fails over
     token accounting. CrewAI exposes ``successful_requests`` rather than a call

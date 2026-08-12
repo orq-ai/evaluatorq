@@ -28,7 +28,7 @@ Everything is pure Python on purpose: the parameter space is tiny (N items +
 K judges) and evaluatorq's runtime dependency set stays unchanged (no
 scipy/numpy). The cost is O(iterations x records) with iterations growing with
 the data, so collapse repeated identical judgements into one record with a
-``weight`` (see :class:`JudgedComparison`) before fitting large runs — the
+``weight`` (see `JudgedComparison`) before fitting large runs — the
 pairwise ``bt_sigma_aggregation`` does this and stays fast at any run size;
 an uncollapsed fit over thousands of records can take seconds.
 

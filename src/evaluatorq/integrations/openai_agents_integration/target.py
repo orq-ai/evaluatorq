@@ -197,7 +197,7 @@ class OpenAIAgentTarget(AgentTarget):
     async def get_agent_context(self) -> AgentContext:
         """Return agent context derived from the wrapped Agent instance.
 
-        Maps the SDK ``Agent`` fields onto :class:`AgentContext`:
+        Maps the SDK ``Agent`` fields onto `AgentContext`:
         ``name`` → ``key``/``display_name``, ``instructions`` → ``system_prompt``,
         ``model`` → ``model``, ``tools`` → ``tools`` (via duck-typed introspection).
         There is no server-side memory, so ``memory_stores`` stays empty.
@@ -299,7 +299,7 @@ def _extract_function_call_output(raw: Any) -> str:
 
     The SDK may pass the output as a plain string, a JSON-serializable dict, or
     ``None`` (for tool errors that produced no payload). All branches collapse
-    to ``str`` because :attr:`ToolCallOutputItem.result` is typed ``str | None``
+    to ``str`` because `ToolCallOutputItem.result` is typed ``str | None``
     and the Responses API's ``function_call_output`` expects ``output: str``.
     """
     if raw is None:

@@ -2,11 +2,11 @@
 
 Two modes for seeding simulations from a prior Orq experiment run:
 
-- **Direct** (:func:`datapoints_from_experiment`): each exported experiment row
+- **Direct** (`datapoints_from_experiment`): each exported experiment row
   becomes one ``SimulationDatapoint`` via the same shape-tolerant extractor the
   dataset path uses. Rows uploaded by a previous simulation run
   (``inputs['datapoint']``) round-trip as-is.
-- **Extension** (:func:`extend_from_experiment`): the experiment's personas and
+- **Extension** (`extend_from_experiment`): the experiment's personas and
   scenarios seed the standard generators, which produce *new* similar-but-not-
   duplicate datapoints extending the run's coverage.
 
@@ -37,7 +37,7 @@ async def datapoints_from_experiment(
 ) -> list[SimulationDatapoint]:
     """Load an Orq experiment run's rows as simulation datapoints (direct mode).
 
-    Reuses :func:`evaluatorq.fetch_data.fetch_experiment_datapoints` (the core
+    Reuses `evaluatorq.fetch_data.fetch_experiment_datapoints` (the core
     ``evaluate()`` fetcher) and parses each row with the same shape-tolerant
     extractor as the dataset path, so any row whose ``inputs`` match a
     simulation input shape (``datapoint`` / ``persona`` + ``scenario`` / etc.)
@@ -88,7 +88,7 @@ async def extend_from_experiment(
     scenarios to the standard ``DatapointGenerator`` as context, instructing it
     to extend — not duplicate — the seed coverage. Returns only the newly
     generated datapoints (``num_personas x num_scenarios``); combine with
-    :func:`datapoints_from_experiment` to also replay the originals.
+    `datapoints_from_experiment` to also replay the originals.
 
     Args:
         experiment_id: The experiment (sheet) ID to seed from.

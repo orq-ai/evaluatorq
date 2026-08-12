@@ -156,8 +156,8 @@ class OrqResponsesTarget(AgentTarget):
     ) -> AgentResponse:
         """Pure call into ``client.responses.create``; no instance mutation.
 
-        Applies retry (rate-limit / server errors) via :func:`with_retry` and
-        converts :class:`asyncio.TimeoutError` into a descriptive RuntimeError.
+        Applies retry (rate-limit / server errors) via `with_retry` and
+        converts `asyncio.TimeoutError` into a descriptive RuntimeError.
         """
         timeout_s = self.config.timeout_ms / 1000.0 if self.config.timeout_ms else None
 

@@ -1,6 +1,6 @@
 """Section builders for pairwise run reports.
 
-Renderer-agnostic: these produce :class:`~evaluatorq.contracts.ReportSection`
+Renderer-agnostic: these produce `ReportSection`
 objects holding plain data, which ``export_html`` dispatches on. Same split as
 ``simulation.reports.sections`` / ``redteam.reports.sections``.
 """

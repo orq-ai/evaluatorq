@@ -288,7 +288,7 @@ class CompositePipelineHooks:
     """Fan every ``PipelineHooks`` call out to a list of child hooks.
 
     Implements ``PipelineHooks`` structurally. Void methods delegate to the
-    shared :func:`~evaluatorq.common.async_utils.fan_out` policy: run ALL
+    shared `fan_out` policy: run ALL
     children, capture the first exception, re-raise it after the loop. So a
     child that raises never prevents a later child from running.
 
@@ -322,12 +322,12 @@ class CompositePipelineHooks:
 
 
 class ManifestStageHooks:
-    """Record pipeline stage transitions into a :class:`ManifestWriter`.
+    """Record pipeline stage transitions into a `ManifestWriter`.
 
     Implements ``PipelineHooks`` structurally with no-op bodies for every method
     except ``on_stage_start``/``on_stage_end`` (which delegate to the writer) and
     ``on_confirm`` (which always returns ``True`` — the manifest never vetoes the
-    confirm gate). It deliberately does **not** subclass :class:`DefaultHooks`,
+    confirm gate). It deliberately does **not** subclass `DefaultHooks`,
     whose methods log; composing both would double every log line.
 
     Registered *first* in the composite so a stage's status is durable before any
@@ -363,10 +363,10 @@ class RichHooks:
     """Rich terminal hook implementation for the evaluatorq CLI.
 
     Renders stage banners, a detailed confirmation table, and delegates the
-    final report summary to :func:`~evaluatorq.redteam.reports.display.print_report_summary`.
+    final report summary to `print_report_summary`.
 
     Args:
-        console:      A :class:`rich.console.Console` instance.  A new one is
+        console:      A `rich.console.Console` instance.  A new one is
                       created when ``None`` is passed (default).
         skip_confirm: When ``True``, renders the plan but skips the interactive
                       ``typer.confirm`` prompt and returns ``True`` automatically.

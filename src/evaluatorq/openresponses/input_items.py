@@ -1,4 +1,4 @@
-"""Render :class:`Message` transcripts as Responses-API ``input`` items.
+"""Render `Message` transcripts as Responses-API ``input`` items.
 
 The Responses API is not chat-completions: it has no ``role: "tool"`` message and
 ignores a ``tool_calls`` key on a message item. A transcript replayed with the
@@ -26,7 +26,7 @@ def _tool_output(content: str | list[ContentPart] | None) -> str | list[dict[str
     """Render tool-result content for ``function_call_output.output``.
 
     That field takes a string *or* a list of ``input_text``/``input_image``/
-    ``input_file`` parts — exactly the three members of :data:`ContentPart` — so
+    ``input_file`` parts — exactly the three members of `ContentPart` — so
     multi-part content passes straight through instead of being flattened to
     text. Flattening would silently discard an image or file a tool returned.
     """
@@ -38,7 +38,7 @@ def _tool_output(content: str | list[ContentPart] | None) -> str | list[dict[str
 
 
 def message_to_responses_input_items(m: Message) -> list[dict[str, Any]]:
-    """Render a single :class:`Message` as one or more Responses-API input items.
+    """Render a single `Message` as one or more Responses-API input items.
 
     An assistant turn with tool calls becomes a ``function_call`` item per call
     (plus a leading assistant text message when content is present); a ``tool``

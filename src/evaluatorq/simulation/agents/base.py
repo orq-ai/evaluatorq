@@ -95,7 +95,7 @@ class AgentConfig:
     """Configuration options for constructing an agent.
 
     .. deprecated::
-        Use :class:`evaluatorq.contracts.LLMCallConfig` instead.
+        Use `evaluatorq.contracts.LLMCallConfig` instead.
         ``AgentConfig`` is kept for backwards compatibility and will be
         removed in a future release.  Subclasses (``JudgeAgentConfig``,
         ``UserSimulatorAgentConfig``) will be migrated in a subsequent task.
@@ -202,7 +202,7 @@ class BaseAgent(ABC):
     def _build_client(self, api_key: str | None = None) -> AsyncOpenAI:
         """Construct (or reuse) an ``AsyncOpenAI`` client from ``self.config``.
 
-        Delegates to :func:`evaluatorq.openresponses.client.build_simulation_client`.
+        Delegates to `evaluatorq.openresponses.client.build_simulation_client`.
 
         Resolution order:
         1. ``self.config.client`` — injected client, used as-is (not owned).
