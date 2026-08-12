@@ -25,7 +25,7 @@ async def test_generate_structured_raises_when_parse_hits_length_limit() -> None
     client.chat.completions.parse = AsyncMock(side_effect=parse_error)
     client.chat.completions.create = AsyncMock()
 
-    with pytest.raises(RuntimeError, match="max_tokens"):
+    with pytest.raises(RuntimeError, match="Raise the max_tokens budget"):
         await generate_structured(
             client,
             model="local-model",
