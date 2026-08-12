@@ -1336,15 +1336,7 @@ async def _simulate_core(
         # compact summary (the exact fields the `runs` table + dashboard sim card
         # render) so a list row needs zero full-report reads.
         if manifest_writer is not None:
-            manifest_writer.complete(
-                report_path=saved_path,
-                summary={
-                    'mode': run.mode,
-                    'target_kind': run.target_kind,
-                    'total_results': run.total_results,
-                    'scorer_averages': dict(run.scorer_averages),
-                },
-            )
+            manifest_writer.complete(report_path=saved_path, summary=run.manifest_summary())
     except SimulationCancelledError:
         # A declined on_confirm is a clean cancel, not a failure (Dec1): the run
         # is 'cancelled' and any already-completed stage (e.g. GENERATE in the
