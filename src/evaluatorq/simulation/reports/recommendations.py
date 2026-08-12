@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from evaluatorq.common.env_config import env_float, env_int
 from evaluatorq.common.llm_call import apply_pipeline_metadata
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.sanitize import xml_escape
@@ -32,14 +33,14 @@ if TYPE_CHECKING:
     from evaluatorq.simulation.types import SimulationResult
 
 # Metric thresholds on the judge's 0-1 scales. A conversation-average beyond
-# these marks the result as remediable.
-# Fixed thresholds; make them parameters if teams need tuning.
-FACTUAL_ACCURACY_BELOW = 0.5
-HALLUCINATION_RISK_ABOVE = 0.5
-TONE_APPROPRIATENESS_BELOW = 0.5
+# these marks the result as remediable. Defaults preserve prior behaviour; override any of them via
+# the EVALUATORQ_RECOMMENDATION_* env vars so teams can tune without code changes.
+FACTUAL_ACCURACY_BELOW = env_float('EVALUATORQ_RECOMMENDATION_FACTUAL_ACCURACY_BELOW', 0.5)
+HALLUCINATION_RISK_ABOVE = env_float('EVALUATORQ_RECOMMENDATION_HALLUCINATION_RISK_ABOVE', 0.5)
+TONE_APPROPRIATENESS_BELOW = env_float('EVALUATORQ_RECOMMENDATION_TONE_APPROPRIATENESS_BELOW', 0.5)
 
-_MAX_TRANSCRIPT_CHARS = 3000
-_MAX_SUGGESTIONS = 3
+_MAX_TRANSCRIPT_CHARS = env_int('EVALUATORQ_RECOMMENDATION_MAX_TRANSCRIPT_CHARS', 3000)
+_MAX_SUGGESTIONS = env_int('EVALUATORQ_RECOMMENDATION_MAX_SUGGESTIONS', 3)
 
 
 def _truncate(text: str, max_chars: int = 500) -> str:
