@@ -73,8 +73,15 @@ class _Client:
             client.models.append(kwargs['model'])
             return _chat_reply()
 
+        async def chat_create(**kwargs: Any) -> Any:
+            client.calls.append('chat')
+            client.models.append(kwargs['model'])
+            reply = _chat_reply()
+            reply.choices[0].message = SimpleNamespace(content='{"value": true, "explanation": "resisted"}')
+            return reply
+
         self.responses = SimpleNamespace(parse=responses_parse)
-        self.chat = SimpleNamespace(completions=SimpleNamespace(parse=chat_parse))
+        self.chat = SimpleNamespace(completions=SimpleNamespace(parse=chat_parse, create=chat_create))
 
 
 def _bad_request(message: str) -> BadRequestError:
@@ -85,7 +92,13 @@ def _bad_request(message: str) -> BadRequestError:
     )
 
 
-async def _judge(client: Any, api: str = 'responses') -> Any:
+async def _judge(
+    client: Any,
+    api: str = 'responses',
+    *,
+    response_model: type[BaseModel] | None = Verdict,
+    structured_output: bool = True,
+) -> Any:
     cfg = LLMCallConfig(model='gpt-5-mini', api=api, max_tokens=256)  # pyright: ignore[reportArgumentType]
     return await run_judge(
         client=client,
@@ -93,7 +106,8 @@ async def _judge(client: Any, api: str = 'responses') -> Any:
         cfg=cfg,
         prompt_template='judge this',
         replacements={},
-        response_model=Verdict,
+        response_model=response_model,
+        structured_output=structured_output,
     )
 
 
@@ -105,6 +119,32 @@ async def test_orq_client_uses_responses_and_qualifies_the_model():
     assert client.models == ['openai/gpt-5-mini']
     assert outcome.payload is not None and outcome.payload.value is True
     assert outcome.token_usage is not None and outcome.token_usage.total_cost == 0.25
+
+
+@pytest.mark.asyncio
+async def test_without_a_response_model_the_verdict_schema_is_enforced():
+    """No caller model — the payload schema is sent rather than a bare json_object."""
+    client = _Client()
+    seen: dict[str, Any] = {}
+
+    async def responses_parse(**kwargs: Any) -> Any:
+        seen.update(kwargs)
+        client.calls.append('responses')
+        return _responses_reply()
+
+    client.responses = SimpleNamespace(parse=responses_parse)
+    await _judge(client, response_model=None)
+    assert client.calls == ['responses']
+    assert seen['text_format'] is judge_mod.EvaluatorResponsePayload
+    assert 'text' not in seen
+
+
+@pytest.mark.asyncio
+async def test_structured_output_opt_out_stays_on_chat_completions():
+    """The Responses path is schema-only, so a caller that cannot do schemas skips it."""
+    client = _Client()
+    await _judge(client, structured_output=False)
+    assert client.calls == ['chat']
 
 
 @pytest.mark.asyncio

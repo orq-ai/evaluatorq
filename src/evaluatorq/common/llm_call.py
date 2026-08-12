@@ -46,23 +46,11 @@ _REASONING_EFFORT_REJECTORS: set[tuple[str, bool]] = set()
 # Kept as a separate memo so the two param shapes never cross-strip.
 _RESPONSES_REASONING_REJECTORS: set[tuple[str, bool]] = set()
 
-# Models whose Responses endpoint rejects `text={'format': {'type': 'json_object'}}`
-# (the Orq router does, for all of them). Keyed on the model alone: the format
-# param has nothing to do with tools.
-_RESPONSES_JSON_FORMAT_REJECTORS: set[str] = set()
-
 
 def reset_reasoning_rejectors() -> None:
     """Clear the process-lifetime rejection memos; exists for test isolation."""
     _REASONING_EFFORT_REJECTORS.clear()
     _RESPONSES_REASONING_REJECTORS.clear()
-    _RESPONSES_JSON_FORMAT_REJECTORS.clear()
-
-
-def _is_json_format_rejection(params: dict[str, Any], exc: BadRequestError) -> bool:
-    """True if ``exc`` is the json_object-format-unsupported 400 for this call."""
-    err_body = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
-    return 'text' in params and 'format' in err_body
 
 
 def _reasoning_key(model: str, params: dict[str, Any]) -> tuple[str, bool]:
@@ -253,7 +241,6 @@ async def execute_response(
     span: Span | None,
     timeout_s: float,
     response_model: type[BaseModel] | None = None,
-    json_object: bool = False,
     temperature: float | None = None,
     max_output_tokens: int | None = None,
     inject_trace_headers: bool = True,
@@ -275,8 +262,6 @@ async def execute_response(
         params['temperature'] = temperature
     if max_output_tokens is not None:
         params['max_output_tokens'] = max_output_tokens
-    if json_object and model not in _RESPONSES_JSON_FORMAT_REJECTORS:
-        params['text'] = {'format': {'type': 'json_object'}}
     if extra_kwargs:
         params.update(extra_kwargs)
 
@@ -301,23 +286,13 @@ async def execute_response(
     try:
         response = await _call()
     except BadRequestError as exc:
-        # Same drop-and-retry-once contract as the chat path, for the two Responses
-        # params an endpoint may reject: the `reasoning` block, and the `text.format`
-        # json_object mode (the Orq router answers "unknown text format type").
-        # An unrelated 400 propagates to the caller.
-        if is_responses_reasoning_rejection(params, exc):
-            remember_responses_reasoning_rejection(model, params)
-            logger.warning('Model %s rejected the reasoning block; dropping it and retrying once', model)
-            params.pop('reasoning', None)
-        elif _is_json_format_rejection(params, exc):
-            # The system prompt already demands a bare JSON object, so dropping the
-            # format hint keeps the call on the priced endpoint instead of sending
-            # the judge back to unpriced chat completions.
-            _RESPONSES_JSON_FORMAT_REJECTORS.add(model)
-            logger.warning('Model %s rejected text.format=json_object; dropping it and retrying once', model)
-            params.pop('text', None)
-        else:
+        # Same drop-and-retry-once contract as the chat path, for the Responses
+        # `reasoning` block. An unrelated 400 propagates to the caller.
+        if not is_responses_reasoning_rejection(params, exc):
             raise
+        remember_responses_reasoning_rejection(model, params)
+        logger.warning('Model %s rejected the reasoning block; dropping it and retrying once', model)
+        params.pop('reasoning', None)
         response = await _call()
     record_llm_response(span, response)
     # Priced by the router; price_usage is a no-op unless it came back unpriced

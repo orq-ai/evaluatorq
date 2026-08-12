@@ -172,7 +172,8 @@ is a floor rather than the whole bill.
 
 Judges call the Orq router's Responses endpoint by default, because that is the
 endpoint the router prices; a judge on Chat Completions comes back with tokens
-and no cost. Pass `EvaluatorConfig(api='chat_completions')` to opt out, and cost
+and no cost. Verdicts there are schema-enforced (`json_schema`), so the provider
+produces the verdict's own keys rather than merely some JSON object. Pass `EvaluatorConfig(api='chat_completions')` to opt out, and cost
 for those calls is filled in from Orq's model catalogue instead. Both fall back
 on their own: a model the router will not accept on Responses moves to Chat
 Completions for the rest of the run, and a model missing from the catalogue

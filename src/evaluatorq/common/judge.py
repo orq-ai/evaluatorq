@@ -263,9 +263,14 @@ async def _responses_judge(
 ) -> tuple[EvaluatorResponsePayload, TokenUsage | None, str]:
     """Judge via the Responses API — the priced endpoint on the Orq router.
 
-    Structured when ``response_model`` is set (``responses.parse``), otherwise a
-    ``json_object`` completion parsed the same way the chat path parses it.
+    Always schema-enforced (``responses.parse`` → ``text.format`` ``json_schema``):
+    the caller's ``response_model`` when it has one, otherwise
+    :class:`EvaluatorResponsePayload`, which is the verdict shape the prompt asks
+    for anyway. ``json_object`` only constrains the reply to *some* JSON object,
+    so a verdict that came back with the wrong keys still had to fail parsing
+    downstream; the schema makes the provider produce the right ones.
     """
+    verdict_model = response_model or EvaluatorResponsePayload
     messages = [
         {'role': 'system', 'content': system_prompt},
         {'role': 'user', 'content': user_prompt},
@@ -276,31 +281,21 @@ async def _responses_judge(
         messages=messages,
         span=span,
         timeout_s=cfg.timeout_ms / 1000.0,
-        response_model=response_model,
-        json_object=response_model is None,
+        response_model=verdict_model,
         temperature=temp,
         max_output_tokens=cfg.max_tokens,
         extra_kwargs=cfg.extra_kwargs or None,
     )
-    if response_model is not None:
-        parsed = response.output_parsed
-        if parsed is None:
-            # No parsed object: surface the refusal text (or whatever came back) and
-            # let the caller's ValidationError path classify it as a PARSE failure.
-            raise ValidationError.from_exception_data(
-                'EvaluatorResponsePayload',
-                [
-                    {
-                        'type': 'missing',
-                        'loc': ('value',),
-                        'input': getattr(response, 'output_text', ''),
-                    }
-                ],
-            )
-        raw = parsed.model_dump_json()
-        return EvaluatorResponsePayload(value=parsed.value, explanation=parsed.explanation), usage, raw  # pyright: ignore[reportAttributeAccessIssue]
-    raw = response.output_text or '{}'
-    return EvaluatorResponsePayload.model_validate_json(_strip_code_fences(raw)), usage, raw
+    parsed = response.output_parsed
+    if parsed is None:
+        # No parsed object (refusal, truncation, content filter). Surface what did
+        # come back and let run_judge's ValidationError path classify it as PARSE.
+        raise ValidationError.from_exception_data(
+            'EvaluatorResponsePayload',
+            [{'type': 'missing', 'loc': ('value',), 'input': getattr(response, 'output_text', '')}],
+        )
+    raw = parsed.model_dump_json()
+    return EvaluatorResponsePayload(value=parsed.value, explanation=parsed.explanation), usage, raw  # pyright: ignore[reportAttributeAccessIssue]
 
 
 async def _json_object_judge(
@@ -378,7 +373,10 @@ async def run_judge(
     raw_content = '{}'
     try:
         async with with_llm_span(model=model, attributes=span_attributes or {}) as span:
-            if cfg.api == 'responses':
+            # `structured_output=False` is a caller saying this model cannot do
+            # schema-enforced output, and the Responses path is schema-only — so that
+            # opt-out keeps the judge on chat completions too.
+            if cfg.api == 'responses' and structured_output:
                 # Default for judges: the Responses endpoint is the one the Orq router
                 # prices, so a judge call records cost like a target call does (RES-1295).
                 # Set `api='chat_completions'` on the evaluator config to opt out.
@@ -395,7 +393,7 @@ async def run_judge(
                             user_prompt=user_prompt,
                             span=span,
                             temp=temp,
-                            response_model=response_model if structured_output else None,
+                            response_model=response_model,
                         )
                     except BadRequestError as exc:
                         # The endpoint or one of its params was rejected. Remember the
