@@ -18,10 +18,14 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "docs"))
-
-gen_pages = pytest.importorskip(
-    "gen_pages", reason="docs dependency group not installed"
-)
+try:
+    gen_pages = pytest.importorskip(
+        "gen_pages", reason="docs dependency group not installed"
+    )
+finally:
+    # Don't leave a generically-named docs/ ahead of everything for the rest of
+    # the session — docs/hooks.py would shadow any other `hooks` module.
+    sys.path.remove(str(REPO / "docs"))
 
 
 @pytest.mark.parametrize(

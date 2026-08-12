@@ -95,10 +95,11 @@ def _canonical_owner(module_name: str) -> str | None:
 def _safe_getattr(mod: object, name: str, parent_dotted: str) -> object | None:
     """Get a member from a module without triggering recursive __getattr__.
 
-    Some packages (e.g. ``evaluatorq.integrations``) use a lazy-loader
-    ``__getattr__`` that does ``from . import <submod>``. On CPython 3.13 this
-    causes infinite recursion because ``_handle_fromlist`` calls ``__getattr__``
-    again before the attribute is bound. We work around it by:
+    A lazy-loader ``__getattr__`` that does ``from . import <submod>`` recurses
+    forever on CPython 3.13: ``_handle_fromlist`` calls ``__getattr__`` again
+    before the attribute is bound. Every such loader in this repo now uses
+    ``importlib.import_module`` instead, but this stays defensive so a new one
+    written the naive way cannot hang the docs build. We avoid it by:
 
     1. Checking ``mod.__dict__`` directly (no attribute protocol).
     2. Falling back to ``importlib.import_module`` with the full dotted path so
@@ -139,6 +140,12 @@ def _submodule_shadowed(mod: object, dotted: str, name: str) -> str | None:
     then emits nothing for it, silently, even when the name is pinned in
     ``members:``. That left ``evaluatorq()``, ``deployment()`` and ``llm_jury()``
     with no reference entry at all.
+
+    Only griffe is confused: at runtime the function wins permanently (the import
+    machinery binds the sub-module on the package first, then the ``from`` import
+    rebinds the name over it, and a later ``import_module`` hits ``sys.modules``
+    without re-binding), and basedpyright resolves all three to functions too. So
+    the fix belongs here rather than in a rename of the three modules.
 
     Detect it by asking where the runtime object is actually defined: a hit means
     the defining module is named exactly like the symbol. Returns the unambiguous
@@ -380,6 +387,10 @@ def write_example_pages() -> None:
         fd.writelines(lines)
 
 
-write_api_pages()
-write_example_pages()
-ingest_markdown()
+# mkdocs-gen-files executes this file with runpy.run_path, which names it
+# "<run_path>". Gate on that so `import gen_pages` (tests reaching in for one
+# helper) does not regenerate the whole site as a side effect.
+if __name__ in ("<run_path>", "__main__"):
+    write_api_pages()
+    write_example_pages()
+    ingest_markdown()
