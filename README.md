@@ -27,7 +27,7 @@ Shipping an agent means answering three questions no test suite answers: does it
 
 It runs locally against any agent — LangChain, LangGraph, OpenAI Agents SDK, PydanticAI, CrewAI, a plain async function, or an Orq-hosted agent. Nothing leaves your machine unless you opt into the [Orq](https://orq.ai) platform.
 
-![Red team report: attack success rate, vulnerabilities found, and per-finding remediation guidance](docs/assets/readme-hero-redteam.png)
+![Red team report: 40 attacks across 10 OWASP categories, 78% resistance, 9 vulnerabilities of which 3 critical, broken down by outcome, severity and agent](docs/assets/dashboard/redteam-03-overview.png)
 
 ## Install
 
@@ -150,7 +150,9 @@ asyncio.run(main())
 
 Targets can be an Orq agent (`"agent:<key>"`), an Orq deployment (`"deployment:<key>"`), a raw model (`OpenAIModelTarget("openai/gpt-5.4-mini")`), or an agent from an external framework. Every attack, response and verdict is browsable afterwards:
 
-![Conversation viewer showing an indirect prompt injection and the judge's verdict](docs/assets/readme-redteam-transcript.png)
+![Attack detail: a memory-poisoning attack that got the agent to store an "UNRESTRICTED System Administrator" directive, with the judge's verdict above the transcript](docs/assets/dashboard/redteam-08-attack-detail.png)
+
+Findings come back ranked by `risk = attack success rate × average severity`, each with a recommended fix — see [Focus areas](docs/assets/dashboard/redteam-05-focus-areas.png).
 
 ### What a run costs
 
@@ -170,7 +172,11 @@ Across those runs that works out to a cent or two, and roughly a minute, per att
 
 ## Agent simulation
 
-The non-adversarial counterpart: a user-simulator LLM plays a persona pursuing a goal across a multi-turn conversation, and a judge LLM scores each run against your criteria. Fix what the transcripts show you, re-run the frozen set, and the difference is the point:
+The non-adversarial counterpart: a user-simulator LLM plays a persona pursuing a goal across a multi-turn conversation, and a judge LLM scores each run against your criteria. Cross every persona with every scenario and the weak spot names itself:
+
+![Goal completion heatmap, 10 personas by 5 scenarios: every persona clears the straightforward refund paths, and the "never received, unverified evidence" column collapses to 0–40%](docs/assets/dashboard/sim-04-breakdown-heatmap.png)
+
+A refund agent that looks fine on four scenarios falls over on the fifth — the one where the claim cannot be verified. Fix that, re-run the frozen set, and the difference is the point:
 
 ![58% of scenarios passed before, 88% after re-running the frozen set against the improved agent](docs/assets/readme-sim-payoff.png)
 
@@ -217,7 +223,7 @@ Every red team and simulation run is saved locally. `eq dashboard` serves them a
 eq dashboard
 ```
 
-![Dashboard overview: runs by type, attack resistance, findings by severity, token usage](docs/assets/readme-dashboard.png)
+![Dashboard landing: 21 jobs run, average cost per job, total spend and tokens, runs split by type, and findings by severity](docs/assets/dashboard/redteam-01-landing.png)
 
 → [Dashboard guide](https://orq-ai.github.io/evaluatorq/dashboard/)
 
