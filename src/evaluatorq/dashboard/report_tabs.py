@@ -102,7 +102,7 @@ def _stable_entries(run: SimulationRun, rows: list[Any]) -> list[Any]:
 def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = None, compare_html: str = '') -> str:
     """Render the Agent Sim report body as Streamlit-aligned tabs.
 
-    Tabs: Overview · Breakdown · Transcripts · Turn quality · Config — each
+    Tabs: Overview · Breakdown · Recommendations · Transcripts · Turn quality · Config — each
     populated from the precomputed report sections (empty tabs drop out; Turn
     quality drops when a run carries no ``turn_metrics``). Config folds job-level
     metadata (run configuration, personas, scenarios) plus the kept token_usage
@@ -159,11 +159,19 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
     # Folded 7→5 to curb tab sprawl: Evaluators + Judge & errors → Transcripts
     # (all per-conversation verdicts); Tokens → Config. Turn quality is its own
     # tab (unfolded from Breakdown) and drops out when a run has no turn_metrics.
+    recs_body = _sim_recommendations(rid, run)
+    n_sim_recs = sum(len(r.suggestions) for r in run.recommendations or [])
+
     tabs = _tabs(
         'simtab',
         [
             ('Overview', _sim_overview(rid, by_kind, entity_by_kind, rows, run, filtered=results is not None)),
             ('Breakdown', breakdown_body),
+            (
+                'Recommendations',
+                recs_body,
+                f'Recommendations <span class="tab-count">{n_sim_recs}</span>',
+            ),
             (
                 'Transcripts',
                 transcripts_body,
@@ -174,6 +182,67 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
         ],
     )
     return f'<div class="report-aligned sim-report">{hero}{tabs}{_sim_entity_modal(entity_context)}</div>'
+
+
+def _sim_recommendations(rid: str, run: SimulationRun) -> str:
+    """Recommendations tab body: apply bar (RES-1143) + one card per
+    simulation recommendation (persona/scenario context, trigger chips, and
+    suggestion bullets with per-suggestion Apply buttons). Empty string (tab
+    drops out) when the run generated no recommendations."""
+    from evaluatorq.dashboard.apply_ui import (
+        is_sim_apply_enabled,
+        render_sim_apply_panel,
+        render_sim_rec_apply_button,
+    )
+
+    if not run.recommendations:
+        return ''
+    apply_on = is_sim_apply_enabled(run)
+    apply_bar = render_sim_apply_panel(rid, run)
+    applied = {s.strip() for s in run.applied_suggestions}
+
+    intro = (
+        '<p class="rt-focus-intro">Remediation suggestions generated from the simulated '
+        'conversations, grouped by the persona and scenario that surfaced them.</p>'
+    )
+    cards: list[str] = []
+    for rec in run.recommendations:
+        items = []
+        for s in rec.suggestions:
+            done = s.strip() in applied
+            if done:
+                tail = '<span class="rt-focus-rec-applied">✓ applied</span>'
+                cls = ' rt-focus-rec--applied'
+            elif apply_on:
+                tail = render_sim_rec_apply_button(rid, rec.result_index, s)
+                cls = ''
+            else:
+                # Apply disabled (non-agent target): plain bullet.
+                tail = ''
+                cls = ''
+            items.append(f'<li class="rt-focus-rec{cls}"><span class="rt-focus-rec-text">{esc(s)}</span>{tail}</li>')
+        triggers_html = (
+            '<div class="rt-focus-patterns">'
+            '<span class="rt-focus-pattern-dot" style="background:var(--accent)"></span>'
+            f'<span>{esc("; ".join(rec.triggers))}</span></div>'
+            if rec.triggers
+            else ''
+        )
+        head = (
+            '<div class="rt-focus-head"><div class="rt-focus-head-main">'
+            f'<div class="rt-focus-category-name">{esc(rec.persona)}</div>'
+            f'<div class="rt-focus-tier-row"><span class="rt-focus-tier-label">{esc(rec.scenario)}</span></div>'
+            '</div></div>'
+        )
+        body = (
+            f'<div class="rt-focus-body">{triggers_html}'
+            '<div class="rt-focus-recs-section">'
+            '<div class="rt-focus-fixbox-label rt-focus-recs-label">Suggestions</div>'
+            f'<ul class="rt-focus-recs">{"".join(items)}</ul>'
+            '</div></div>'
+        )
+        cards.append(f'<div class="rk-panel rt-focus-card">{head}{body}</div>')
+    return f'{apply_bar}{intro}{"".join(cards)}'
 
 
 def _section_rows(by_kind: dict[str, Any], section_kind: str, key: str) -> list[dict[str, Any]]:
@@ -1737,15 +1806,9 @@ def _rt_overview(by_kind: dict[str, Any], report: RedTeamReport) -> str:
 _RISK_MAX = 8  # risk_score = vulnerability_rate x avg_severity_weight; SEVERITY_WEIGHTS tops out at critical=8
 
 
-def _rt_focus_tier(risk_score: float) -> tuple[str, str, str]:
-    """Tier code/label/color from ``risk_score`` (spec §Focus areas): >=2 -> P1
-    Critical priority (red-600); >=1 -> P2 High priority (orange-600); else P3
-    Medium priority (amber-600)."""
-    if risk_score >= 2:
-        return 'P1', 'Critical priority', 'var(--red-600)'
-    if risk_score >= 1:
-        return 'P2', 'High priority', 'var(--orange-600)'
-    return 'P3', 'Medium priority', 'var(--amber-600)'
+# Tier logic lives in report_kit.focus_tier so the focus cards and the apply
+# drawer share one source (review). Kept under the old name for local callers.
+from evaluatorq.dashboard.report_kit import focus_tier as _rt_focus_tier
 
 
 def _rt_focus_pattern_chips(area: dict[str, Any], color: str) -> str:
@@ -1772,65 +1835,110 @@ def _rt_focus_remediation_box(area: dict[str, Any]) -> str:
     )
 
 
-def _rt_focus_area_card(area: dict[str, Any]) -> str:
-    """One focus-area panel: tier + category header, pattern chips,
-    remediation box (main column) and risk dial + ASR/hits mini-stats
-    (fixed 100px right column). Spec §Focus areas."""
+def _rt_focus_recommendation_list(area: dict[str, Any], applied: set[str], rid: str) -> str:
+    """Bulleted ``llm_recommendations.recommendations``, each pending bullet
+    with its own Apply button (opens the breakdown drawer for exactly that
+    recommendation), applied bullets with a tick (RES-1143). Empty when the
+    pipeline generated none (static runs; never subscript)."""
+    from evaluatorq.dashboard.apply_ui import render_rec_apply_button
+
+    recs = area.get('llm_recommendations', {}).get('recommendations') or []
+    if not recs:
+        return ''
+    category = str(area.get('category', ''))
+    items = []
+    for rec in recs:
+        rec_text = str(rec)
+        done = rec_text.strip() in applied
+        if done:
+            tail = '<span class="rt-focus-rec-applied">✓ applied</span>'
+            cls = ' rt-focus-rec--applied'
+        elif rid:
+            tail = render_rec_apply_button(rid, category, rec_text)
+            cls = ''
+        else:
+            # Apply disabled (multi-agent comparison run): plain bullet.
+            tail = ''
+            cls = ''
+        items.append(f'<li class="rt-focus-rec{cls}"><span class="rt-focus-rec-text">{esc(rec_text)}</span>{tail}</li>')
+    return (
+        '<div class="rt-focus-recs-section">'
+        '<div class="rt-focus-fixbox-label rt-focus-recs-label">Recommendations</div>'
+        f'<ul class="rt-focus-recs">{"".join(items)}</ul>'
+        '</div>'
+    )
+
+
+def _rt_focus_area_card(area: dict[str, Any], applied: set[str] | None = None, rid: str = '') -> str:
+    """One focus-area panel with a contained structure: a header strip
+    (identity left, risk dial + ASR/hits stat group right, hairline below)
+    over a body of labeled sections (patterns, recommended fix,
+    recommendations with per-rec apply). Spec §Focus areas; the header-strip
+    layout and bullets + ticks are RES-1143."""
     from evaluatorq.common.reports.html_helpers import pct
     from evaluatorq.dashboard.report_kit import dial
 
     risk_score = area.get('risk_score', 0.0)
     tier_code, tier_label, color = _rt_focus_tier(risk_score)
 
-    header = (
+    head_main = (
+        '<div class="rt-focus-head-main">'
         '<div class="rt-focus-tier-row">'
         f'<span class="rt-focus-tier-dot" style="background:{color}"></span>'
         f'<span class="rt-focus-tier-label" style="color:{color}">{esc(tier_code)} · {esc(tier_label)}</span>'
         '</div>'
-        f'<div class="rt-focus-category-name">{esc(area.get("category_name", ""))}</div>'
-        f'<div class="rt-focus-category-code">{esc(area.get("category", ""))}</div>'
+        f'<div class="rt-focus-category-name">{esc(area.get("category_name", ""))} '
+        f'<span class="rt-focus-category-code">{esc(area.get("category", ""))}</span></div>'
+        '</div>'
     )
-
-    patterns_html = _rt_focus_pattern_chips(area, color)
-    fixbox_html = _rt_focus_remediation_box(area)
-
-    main_col = f'<div class="rt-focus-main">{header}{patterns_html}{fixbox_html}</div>'
-
     vulnerability_rate = area.get('vulnerability_rate', 0.0)
     vulnerabilities_found = area.get('vulnerabilities_found', 0)
-    risk_dial = dial(f'{risk_score:.1f}', risk_score / _RISK_MAX, radius=38, stroke=9, color=color, sub='RISK')
-    right_col = (
-        '<div class="rt-focus-right">'
-        f'{risk_dial}'
-        '<div class="rt-focus-mini-stats">'
-        '<div class="rt-focus-mini-stat">'
+    risk_dial = dial(f'{risk_score:.1f}', risk_score / _RISK_MAX, radius=26, stroke=7, color=color, sub='RISK')
+    head_stats = (
+        '<div class="rt-focus-head-stats">'
+        f'<div class="rt-focus-stat rt-focus-stat--dial">{risk_dial}</div>'
+        '<div class="rt-focus-stat">'
         '<span class="rt-focus-mini-key">ASR</span>'
         f'<span class="rt-focus-mini-value">{pct(vulnerability_rate)}</span></div>'
-        '<div class="rt-focus-mini-stat">'
+        '<div class="rt-focus-stat">'
         '<span class="rt-focus-mini-key">Hits</span>'
         f'<span class="rt-focus-mini-value" style="color:{color}">{vulnerabilities_found}</span></div>'
         '</div>'
-        '</div>'
     )
+    head = f'<div class="rt-focus-head">{head_main}{head_stats}</div>'
 
-    return f'<div class="rk-panel rt-focus-card">{main_col}{right_col}</div>'
+    patterns_html = _rt_focus_pattern_chips(area, color)
+    fixbox_html = _rt_focus_remediation_box(area)
+    recs_html = _rt_focus_recommendation_list(area, applied or set(), rid)
+    body = f'<div class="rt-focus-body">{patterns_html}{fixbox_html}{recs_html}</div>'
+
+    return f'<div class="rk-panel rt-focus-card">{head}{body}</div>'
 
 
-def _rt_focus(by_kind: dict[str, Any]) -> str:
-    """Focus areas tab body: intro copy + one card per top-risk area (worst
-    first, section list is already top-5). Empty list (clean run) -> ``''``
-    so the tab drops entirely (spec §Focus areas)."""
+def _rt_focus(by_kind: dict[str, Any], rid: str, report: RedTeamReport) -> str:
+    """Focus areas tab body: apply bar (RES-1143), intro copy + one card per
+    top-risk area (worst first, section list is already top-5). Empty list
+    (clean run) -> ``''`` so the tab drops entirely (spec §Focus areas)."""
+    from evaluatorq.dashboard.apply_ui import render_apply_panel
+
     section = by_kind.get('focus_areas')
     areas: list[dict[str, Any]] = section.data.get('focus_areas', []) if section is not None else []
     if not areas:
         return ''
 
+    from evaluatorq.dashboard.apply_ui import is_apply_enabled
+
+    apply_bar = render_apply_panel(rid, report)
     intro = (
         '<p class="rt-focus-intro">Prioritized fixes, ranked by '
         '<code>risk = success rate × avg severity</code>. Start at the top — P1 first.</p>'  # noqa: RUF001
     )
-    cards = ''.join(_rt_focus_area_card(area) for area in areas)
-    return f'{intro}{cards}'
+    applied = {r.strip() for r in report.applied_recommendations}
+    # Per-rec Apply buttons only when the flow is enabled (single-agent runs);
+    # rid='' renders the bullets without actions.
+    action_rid = rid if is_apply_enabled(report) else ''
+    cards = ''.join(_rt_focus_area_card(area, applied, action_rid) for area in areas)
+    return f'{apply_bar}{intro}{cards}'
 
 
 def _rt_agent_card_chip_row(label: str, items: list[str]) -> str:
@@ -2374,7 +2482,7 @@ def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
 
     agents_tab = _rt_agents(by_kind, report, rid)
 
-    focus_tab = _rt_focus(by_kind)
+    focus_tab = _rt_focus(by_kind, rid, report)
 
     breakdowns_tab = _rt_breakdowns(by_kind) + render('framework_breakdown', 'vulnerability_breakdown')
 

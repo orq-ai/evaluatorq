@@ -506,7 +506,7 @@ async def red_team(
     hooks: PipelineHooks | None = None,
     artifacts_dir: Path | str | None = None,
     target_config: TargetConfig | None = None,
-    generate_recommendations: bool = False,
+    generate_recommendations: bool = True,
     generate_executive_summary: bool = True,
     attacker_instructions: str | None = None,
     verbosity: int = 0,
@@ -599,7 +599,8 @@ async def red_team(
         generate_recommendations: Whether to generate LLM-based actionable
             recommendations for the top focus areas by analyzing failed traces.
             Requires an LLM client (explicit or via environment credentials).
-            Defaults to ``False``.
+            Best-effort: failures are swallowed into a pipeline warning.
+            Defaults to ``True``.
         generate_executive_summary: Whether to generate an LLM narrative
             executive summary at the top of the report. Best-effort: silently
             skipped (with a pipeline warning) when no LLM credentials are
@@ -1023,7 +1024,7 @@ async def red_team(
                     'prompt-based red teaming (requires live-system testing).',
                 )
 
-            # Generate LLM-based recommendations for focus areas (opt-in)
+            # Generate LLM-based recommendations for focus areas (on by default)
             if generate_recommendations:
                 try:
                     rec_client = llm_client or config.evaluator.client
