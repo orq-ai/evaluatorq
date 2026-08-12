@@ -569,7 +569,10 @@ async def _confirm_response(
 
     # Record on the report so a later preview skips these. A write-back
     # failure must not hide that the agent WAS updated - report it as a
-    # warning inside the success drawer instead of failing the request.
+    # warning inside the success drawer instead of failing the request. The
+    # note names the actual consequence (review): unrecorded bullets come back
+    # as pending, and applying again folds them in a second time.
+    unrecorded = ' They will show as pending again, and applying them again would merge them into the agent twice.'
     path = library.resolve(rid, roots)
     record_note = ''
     if path is not None:
@@ -577,10 +580,10 @@ async def _confirm_response(
             await asyncio.to_thread(record_applied_on_report, path, recommendations, field)
         except Exception:
             logger.opt(exception=True).warning('apply_ui: could not record applied recs on {}', path)
-            record_note = ' (warning: the report file could not be updated, so these may show as pending again)'
+            record_note = f' The agent was updated, but the report file could not be written.{unrecorded}'
     else:
         logger.warning('apply_ui: could not resolve report path for {}; applied recs not recorded', rid)
-        record_note = ' (warning: the report file could not be located, so these may show as pending again)'
+        record_note = f' The agent was updated, but the report file could not be located.{unrecorded}'
 
     html = render_applied_drawer(agent_key, len(recommendations), new_version)
     if record_note:
