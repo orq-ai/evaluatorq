@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from openai import BadRequestError
 
-from evaluatorq.common.pricing import price_usage
+from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.thread_context import pipeline_metadata
 from evaluatorq.common.tracing import (
     get_trace_context_headers,
@@ -46,11 +46,23 @@ _REASONING_EFFORT_REJECTORS: set[tuple[str, bool]] = set()
 # Kept as a separate memo so the two param shapes never cross-strip.
 _RESPONSES_REASONING_REJECTORS: set[tuple[str, bool]] = set()
 
+# Models whose Responses endpoint rejects `text={'format': {'type': 'json_object'}}`
+# (the Orq router does, for all of them). Keyed on the model alone: the format
+# param has nothing to do with tools.
+_RESPONSES_JSON_FORMAT_REJECTORS: set[str] = set()
+
 
 def reset_reasoning_rejectors() -> None:
     """Clear the process-lifetime rejection memos; exists for test isolation."""
     _REASONING_EFFORT_REJECTORS.clear()
     _RESPONSES_REASONING_REJECTORS.clear()
+    _RESPONSES_JSON_FORMAT_REJECTORS.clear()
+
+
+def _is_json_format_rejection(params: dict[str, Any], exc: BadRequestError) -> bool:
+    """True if ``exc`` is the json_object-format-unsupported 400 for this call."""
+    err_body = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
+    return 'text' in params and 'format' in err_body
 
 
 def _reasoning_key(model: str, params: dict[str, Any]) -> tuple[str, bool]:
@@ -231,3 +243,83 @@ async def execute_chat_parse(
         response = await asyncio.wait_for(client.chat.completions.parse(**params), timeout=timeout_s)
     record_llm_response(span, response)
     return response, await price_usage(TokenUsage.from_completion(response), model)
+
+
+async def execute_response(
+    *,
+    client: AsyncOpenAI,
+    model: str,
+    messages: list[dict[str, Any]],
+    span: Span | None,
+    timeout_s: float,
+    response_model: type[BaseModel] | None = None,
+    json_object: bool = False,
+    temperature: float | None = None,
+    max_output_tokens: int | None = None,
+    inject_trace_headers: bool = True,
+    extra_kwargs: dict[str, Any] | None = None,
+) -> tuple[Any, TokenUsage | None]:
+    """Execute one Responses API call — ``.parse`` with a ``response_model``, else ``.create``.
+
+    The Responses counterpart of :func:`execute_chat_completion`. Preferred for
+    judges because the Orq router prices this endpoint and not Chat Completions:
+    ``usage`` comes back with ``input_cost``/``output_cost``/``total_cost``
+    already filled in, so no client-side pricing is needed (RES-1295).
+
+    ``messages`` are passed straight through as Responses ``input`` items; the
+    system entry rides along as a message rather than as ``instructions``, which
+    keeps the judge prompt assembly identical across both endpoints.
+    """
+    params: dict[str, Any] = {'model': model, 'input': messages}
+    if temperature is not None:
+        params['temperature'] = temperature
+    if max_output_tokens is not None:
+        params['max_output_tokens'] = max_output_tokens
+    if json_object and model not in _RESPONSES_JSON_FORMAT_REJECTORS:
+        params['text'] = {'format': {'type': 'json_object'}}
+    if extra_kwargs:
+        params.update(extra_kwargs)
+
+    strip_known_rejected_responses_reasoning(model, params)
+    apply_pipeline_metadata(params)
+
+    record_llm_input(span, messages)
+
+    if inject_trace_headers:
+        headers = await get_trace_context_headers()
+        if headers:
+            existing = params.get('extra_headers') or {}
+            params['extra_headers'] = {**existing, **headers}
+
+    async def _call() -> Any:
+        if response_model is not None:
+            return await asyncio.wait_for(
+                client.responses.parse(text_format=response_model, **params), timeout=timeout_s
+            )
+        return await asyncio.wait_for(client.responses.create(**params), timeout=timeout_s)
+
+    try:
+        response = await _call()
+    except BadRequestError as exc:
+        # Same drop-and-retry-once contract as the chat path, for the two Responses
+        # params an endpoint may reject: the `reasoning` block, and the `text.format`
+        # json_object mode (the Orq router answers "unknown text format type").
+        # An unrelated 400 propagates to the caller.
+        if is_responses_reasoning_rejection(params, exc):
+            remember_responses_reasoning_rejection(model, params)
+            logger.warning('Model %s rejected the reasoning block; dropping it and retrying once', model)
+            params.pop('reasoning', None)
+        elif _is_json_format_rejection(params, exc):
+            # The system prompt already demands a bare JSON object, so dropping the
+            # format hint keeps the call on the priced endpoint instead of sending
+            # the judge back to unpriced chat completions.
+            _RESPONSES_JSON_FORMAT_REJECTORS.add(model)
+            logger.warning('Model %s rejected text.format=json_object; dropping it and retrying once', model)
+            params.pop('text', None)
+        else:
+            raise
+        response = await _call()
+    record_llm_response(span, response)
+    # Priced by the router; price_usage is a no-op unless it came back unpriced
+    # (a non-Orq endpoint, or a model the router does not price).
+    return response, await price_usage(TokenUsage.extract(getattr(response, 'usage', None), calls=1), model)

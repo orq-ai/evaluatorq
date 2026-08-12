@@ -163,6 +163,21 @@ roll up into `report.summary.errors_by_type`, where judge failures appear under
 systematically blocked judge shows up as one named cause (`evaluation/api_status:
 40 attacks`) instead of vanishing into forty individual results.
 
+### What a run costs
+
+`report.summary.token_usage_total` covers both halves of a run — the target's
+calls and the judge's — with `calls` and `priced_calls` alongside the dollar
+figure. When those two counts differ, some call carries no price and the total
+is a floor rather than the whole bill.
+
+Judges call the Orq router's Responses endpoint by default, because that is the
+endpoint the router prices; a judge on Chat Completions comes back with tokens
+and no cost. Pass `EvaluatorConfig(api='chat_completions')` to opt out, and cost
+for those calls is filled in from Orq's model catalogue instead. Both fall back
+on their own: a model the router will not accept on Responses moves to Chat
+Completions for the rest of the run, and a model missing from the catalogue
+stays honestly unpriced rather than reporting `$0.00`.
+
 ## In CI
 
 For a fast gate, run a small fixed set of attacks and assert a minimum

@@ -590,7 +590,13 @@ class EvaluatorConfig(BaseModel):
         min_length=1,
         description='Judge model IDs. judges[0] is the primary evaluator model.',
     )
-    api: Literal['chat_completions', 'responses'] = 'chat_completions'
+    api: Literal['chat_completions', 'responses'] = Field(
+        default='responses',
+        description='Endpoint judges call. Defaults to responses: it is the endpoint the Orq '
+        'router prices, so judge calls record cost like target calls do. Set to '
+        'chat_completions to opt out; a model the router cannot resolve on responses falls '
+        'back to chat completions on its own.',
+    )
     temperature: float = Field(default=1.0, ge=0.0, le=2.0)
     max_tokens: int = Field(default=DEFAULT_TARGET_MAX_TOKENS, gt=0)
     timeout_ms: int = Field(default=90_000, gt=0)

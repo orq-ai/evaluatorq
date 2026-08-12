@@ -15,8 +15,10 @@ from loguru import logger
 from openai import APIConnectionError, APIStatusError, APITimeoutError, BadRequestError
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from evaluatorq.common.llm_call import execute_chat_completion, execute_chat_parse
+from evaluatorq.common.llm_call import execute_chat_completion, execute_chat_parse, execute_response
+from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.messages import coerce_content_text
+from evaluatorq.common.model_catalogue import qualified_model
 from evaluatorq.common.template_engine import render_template
 from evaluatorq.common.tracing import with_llm_span
 from evaluatorq.contracts import (
@@ -219,6 +221,88 @@ def _classify(exc: Exception) -> JudgeError:
     return JudgeError.UNKNOWN
 
 
+# Models that 400'd on the Responses endpoint; they stay on Chat Completions for
+# the rest of the process instead of re-paying a failed call per judgement.
+# ponytail: process-lifetime set, fine for a CLI run; not persisted across processes.
+_RESPONSES_REJECTORS: set[str] = set()
+
+
+def reset_responses_rejectors() -> None:
+    """Clear the Responses-rejection memo; exists for test isolation."""
+    _RESPONSES_REJECTORS.clear()
+
+
+async def _resolve_responses_model(client: AsyncOpenAI, model: str) -> str | None:
+    """The model id to send to the Responses endpoint, or None to stay on chat.
+
+    Only the Orq router is targeted: Responses is what it prices, whereas an
+    arbitrary OpenAI-compatible endpoint (vLLM, OpenRouter, a proxy) may not
+    serve the endpoint at all, and Chat Completions is the one they all speak.
+
+    The router's Responses endpoint also only accepts ``provider/model``, while
+    judge configs are written with a bare id (``gpt-5-mini``); the model
+    catalogue supplies the provider. A model the catalogue does not know cannot
+    be qualified, so that judge stays on Chat Completions rather than eating a
+    400 per attack.
+    """
+    if model in _RESPONSES_REJECTORS or not client_routes_through_orq(client):
+        return None
+    return await qualified_model(model)
+
+
+async def _responses_judge(
+    *,
+    client: AsyncOpenAI,
+    model: str,
+    cfg: LLMCallConfig,
+    system_prompt: str,
+    user_prompt: str,
+    span: Any,
+    temp: float | None,
+    response_model: type[_BaseModel] | None,
+) -> tuple[EvaluatorResponsePayload, TokenUsage | None, str]:
+    """Judge via the Responses API — the priced endpoint on the Orq router.
+
+    Structured when ``response_model`` is set (``responses.parse``), otherwise a
+    ``json_object`` completion parsed the same way the chat path parses it.
+    """
+    messages = [
+        {'role': 'system', 'content': system_prompt},
+        {'role': 'user', 'content': user_prompt},
+    ]
+    response, usage = await execute_response(
+        client=client,
+        model=model,
+        messages=messages,
+        span=span,
+        timeout_s=cfg.timeout_ms / 1000.0,
+        response_model=response_model,
+        json_object=response_model is None,
+        temperature=temp,
+        max_output_tokens=cfg.max_tokens,
+        extra_kwargs=cfg.extra_kwargs or None,
+    )
+    if response_model is not None:
+        parsed = response.output_parsed
+        if parsed is None:
+            # No parsed object: surface the refusal text (or whatever came back) and
+            # let the caller's ValidationError path classify it as a PARSE failure.
+            raise ValidationError.from_exception_data(
+                'EvaluatorResponsePayload',
+                [
+                    {
+                        'type': 'missing',
+                        'loc': ('value',),
+                        'input': getattr(response, 'output_text', ''),
+                    }
+                ],
+            )
+        raw = parsed.model_dump_json()
+        return EvaluatorResponsePayload(value=parsed.value, explanation=parsed.explanation), usage, raw  # pyright: ignore[reportAttributeAccessIssue]
+    raw = response.output_text or '{}'
+    return EvaluatorResponsePayload.model_validate_json(_strip_code_fences(raw)), usage, raw
+
+
 async def _json_object_judge(
     *,
     client: AsyncOpenAI,
@@ -294,6 +378,34 @@ async def run_judge(
     raw_content = '{}'
     try:
         async with with_llm_span(model=model, attributes=span_attributes or {}) as span:
+            if cfg.api == 'responses':
+                # Default for judges: the Responses endpoint is the one the Orq router
+                # prices, so a judge call records cost like a target call does (RES-1295).
+                # Set `api='chat_completions'` on the evaluator config to opt out.
+                responses_model = await _resolve_responses_model(client, model)
+                if responses_model is None:
+                    logger.debug('Judge [{}] cannot use the Responses endpoint; using chat completions', model)
+                else:
+                    try:
+                        payload, usage, raw_content = await _responses_judge(
+                            client=client,
+                            model=responses_model,
+                            cfg=cfg,
+                            system_prompt=system_prompt,
+                            user_prompt=user_prompt,
+                            span=span,
+                            temp=temp,
+                            response_model=response_model if structured_output else None,
+                        )
+                    except BadRequestError as exc:
+                        # The endpoint or one of its params was rejected. Remember the
+                        # model and fall through to the chat path for the rest of the run.
+                        _RESPONSES_REJECTORS.add(model)
+                        logger.warning(
+                            'Model {} rejected the Responses endpoint ({}); using chat completions', model, exc
+                        )
+                    else:
+                        return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
             if structured_output and response_model is not None:
                 messages = [
                     {'role': 'system', 'content': system_prompt},

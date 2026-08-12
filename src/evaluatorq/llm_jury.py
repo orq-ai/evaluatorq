@@ -173,7 +173,12 @@ async def _run_single_judge(
     and pairwise (:class:`PairwiseComparator`) juries — only the ``replacements``
     differ between them, so keeping one path stops the two from drifting.
     """
-    cfg = LLMCallConfig(model=model, max_tokens=max_tokens, timeout_ms=timeout_ms, extra_kwargs=extra_kwargs or {})
+    # api='responses': the priced endpoint on the Orq router, so a jury verdict
+    # records cost like the call it judges (RES-1295). run_judge falls back to chat
+    # completions on its own for a model the Responses endpoint will not take.
+    cfg = LLMCallConfig(
+        model=model, api='responses', max_tokens=max_tokens, timeout_ms=timeout_ms, extra_kwargs=extra_kwargs or {}
+    )
     outcome = await run_judge(
         client=client,
         model=model,
