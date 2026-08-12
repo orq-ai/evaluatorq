@@ -23,17 +23,9 @@
   <a href="https://orq-ai.github.io/evaluatorq/dashboard/">Dashboard</a>
 </p>
 
-Shipping an agent means answering three questions no test suite answers: does it
-give good answers, can it be talked into doing something it shouldn't, and does
-it hold up over a real conversation with an impatient human? evaluatorq answers
-all three from Python. It scores your agent's outputs against your data, attacks
-it the way a bad actor would — jailbreaks, prompt injection, tool abuse, data
-exfiltration — and puts a simulated user in front of it for a few dozen turns.
-Then it hands you a report naming what broke and what to do about it.
+Shipping an agent means answering three questions no test suite answers: does it give good answers, can it be talked into doing something it shouldn't, and does it hold up over a real conversation with an impatient human? evaluatorq answers all three from Python. It scores your agent's outputs against your data, attacks it the way a bad actor would — jailbreaks, prompt injection, tool abuse, data exfiltration — and puts a simulated user in front of it for a few dozen turns. Then it hands you a report naming what broke and what to do about it.
 
-It runs locally against any agent — LangChain, LangGraph, OpenAI Agents SDK,
-PydanticAI, CrewAI, a plain async function, or an Orq-hosted agent. Nothing
-leaves your machine unless you opt into the [Orq](https://orq.ai) platform.
+It runs locally against any agent — LangChain, LangGraph, OpenAI Agents SDK, PydanticAI, CrewAI, a plain async function, or an Orq-hosted agent. Nothing leaves your machine unless you opt into the [Orq](https://orq.ai) platform.
 
 ![Red team report: attack success rate, vulnerabilities found, and per-finding remediation guidance](docs/assets/readme-hero-redteam.png)
 
@@ -43,16 +35,14 @@ leaves your machine unless you opt into the [Orq](https://orq.ai) platform.
 uv add evaluatorq                     # core evaluation
 uv add "evaluatorq[redteam]"          # + adversarial red teaming
 uv add "evaluatorq[simulation]"       # + multi-turn agent simulation
+uv add "evaluatorq[all]"              # everything, including the dashboard
 ```
 
-New here? Take the first line — it and the quick start below need no API key and
-no account (set `ORQ_API_KEY` and results also upload to Orq). On pip:
-`python -m pip install evaluatorq`.
+New here? Take the first line — it and the quick start below need no API key and no account (set `ORQ_API_KEY` and results also upload to Orq). On pip: `python -m pip install evaluatorq`.
 
 ## Quick start
 
-Two versions of a support agent, the same questions, one table telling you which
-one to ship:
+Two versions of a support agent, the same questions, one table telling you which one to ship:
 
 ```python
 import asyncio
@@ -109,12 +99,9 @@ uv run support_agent_eval.py
 
 <img src="docs/assets/readme-eval-terminal.svg" alt="Terminal output: summary table and a Detailed Results table scoring agent-v1 at 0.33 against agent-v2 at 1.00 on the string-contains evaluator" width="720">
 
-Every job runs against every data point, so adding a variant adds a column.
-Swap the two function bodies for real model or agent calls and nothing else
-changes. Any evaluator that returns `pass_=False` exits the process non-zero,
-so the same script gates CI.
+Every job runs against every data point, so adding a variant adds a column. Swap the two function bodies for real model or agent calls and nothing else changes. Any evaluator that returns `pass_=False` exits the process non-zero, so the same script gates CI — which is why this run ends with status 1.
 
-This example is in the repo — [`examples/lib/basics/support_agent_eval.py`](examples/lib/basics/support_agent_eval.py).
+This is the repo's [`examples/lib/basics/support_agent_eval.py`](examples/lib/basics/support_agent_eval.py), minus its `__main__` guard.
 
 → [Getting Started](https://orq-ai.github.io/evaluatorq/guides/getting-started/) ·
 [Evaluation reference](https://orq-ai.github.io/evaluatorq/evaluation-reference/) ·
@@ -123,11 +110,7 @@ This example is in the repo — [`examples/lib/basics/support_agent_eval.py`](ex
 
 ## Red teaming
 
-**19 OWASP categories · 18 vulnerabilities · 45 curated attack strategies ·
-16 delivery methods · 18 LLM judges.** evaluatorq inspects the target, picks
-attack strategies per vulnerability, generates the prompts, runs them (single-
-or multi-turn), and judges each response with an evaluator written for that
-specific vulnerability.
+**19 OWASP categories · 18 vulnerabilities · 45 curated attack strategies · 16 delivery methods · 18 LLM judges.** evaluatorq inspects the target, picks attack strategies per vulnerability, generates the prompts, runs them (single- or multi-turn), and judges each response with an evaluator written for that specific vulnerability.
 
 | OWASP Agentic Security Initiative | OWASP LLM Top 10 |
 |---|---|
@@ -142,10 +125,7 @@ specific vulnerability.
 | ASI09 Human-Agent Trust Exploitation | LLM09 Misinformation |
 | ASI10 Rogue Agents | |
 
-Each category maps to a vulnerability with its own judge. Categories without
-curated strategies get them generated per-run against the target's actual tools
-and system prompt — see the [strategy coverage
-table](https://orq-ai.github.io/evaluatorq/guides/red-teaming/#coverage).
+Each category maps to a vulnerability with its own judge. Categories without curated strategies get them generated per-run against the target's actual tools and system prompt — see the [strategy coverage table](https://orq-ai.github.io/evaluatorq/guides/red-teaming/#coverage).
 
 ```python
 import asyncio
@@ -167,17 +147,13 @@ async def main():
 asyncio.run(main())
 ```
 
-Targets can be an Orq agent (`"agent:<key>"`), an Orq deployment
-(`"deployment:<key>"`), a raw model (`OpenAIModelTarget("openai/gpt-5.4-mini")`),
-or an agent from an external framework. Every attack, response and verdict is
-browsable afterwards:
+Targets can be an Orq agent (`"agent:<key>"`), an Orq deployment (`"deployment:<key>"`), a raw model (`OpenAIModelTarget("openai/gpt-5.4-mini")`), or an agent from an external framework. Every attack, response and verdict is browsable afterwards:
 
 ![Conversation viewer showing an indirect prompt injection and the judge's verdict](docs/assets/readme-redteam-transcript.png)
 
 ### What a run costs
 
-Measured from real runs against an Orq-hosted agent, judged by `gpt-5-mini`
-(numbers are that workspace's billed cost and wall clock, not estimates):
+Measured from real runs against an Orq-hosted agent, judged by `gpt-5-mini` (numbers are that workspace's billed cost and wall clock, not estimates):
 
 | Run | Wall clock | Tokens | Cost |
 |---|---|---|---|
@@ -185,11 +161,7 @@ Measured from real runs against an Orq-hosted agent, judged by `gpt-5-mini`
 | Same shape, second run | 3m 47s | 48k | $0.065 |
 | Short dynamic runs (1–2 categories) | 9s – 1m 26s | 6k – 26k | $0.004 – $0.031 |
 
-Across those runs that works out to a cent or two, and roughly a minute, per
-attack — dominated by the judge's reasoning tokens. It is a handful of runs, not
-a benchmark, so treat it as an order of magnitude. Attacks run concurrently
-(`parallelism`), so a 40-attack sweep is minutes, not hours. Attacker and judge models are both configurable — point
-them at a cheaper model and the whole run gets cheaper.
+Across those runs that works out to a cent or two, and roughly a minute, per attack — dominated by the judge's reasoning tokens. It is a handful of runs, not a benchmark, so treat it as an order of magnitude. Attacks run concurrently (`parallelism`), so a 40-attack sweep is minutes, not hours. Attacker and judge models are both configurable — point them at a cheaper model and the whole run gets cheaper.
 
 → [Red teaming guide](https://orq-ai.github.io/evaluatorq/guides/red-teaming/) ·
 [Intro notebook](examples/red_teaming_intro.ipynb) ·
@@ -197,9 +169,11 @@ them at a cheaper model and the whole run gets cheaper.
 
 ## Agent simulation
 
-The non-adversarial counterpart: a user-simulator LLM plays a persona pursuing a
-goal across a multi-turn conversation, and a judge LLM scores each run against
-your criteria.
+The non-adversarial counterpart: a user-simulator LLM plays a persona pursuing a goal across a multi-turn conversation, and a judge LLM scores each run against your criteria. Fix what the transcripts show you, re-run the frozen set, and the difference is the point:
+
+![58% of scenarios passed before, 88% after re-running the frozen set against the improved agent](docs/assets/readme-sim-payoff.png)
+
+From the [webinar demo](examples/agent_simulation/webinar_demo/) against Sterling, a credit-card support agent: every one of the 10 original failures showed up past turn 4, where single-prompt testing never looks.
 
 ```mermaid
 flowchart LR
@@ -224,8 +198,7 @@ results = await simulate(
 print(results[0].goal_achieved, results[0].goal_completion_score)
 ```
 
-Runs exit non-zero on failure by default (`exit_on_failure=True`), so they drop
-straight into CI. Recordings of simulations driving real agents:
+Runs exit non-zero on failure by default (`exit_on_failure=True`), so they drop straight into CI. Recordings of simulations driving real agents:
 [OpenAI Agents SDK](docs/assets/sim-openai-agents.mp4) ·
 [LangGraph](docs/assets/sim-langgraph.mp4) ·
 [CrewAI](docs/assets/sim-crewai.mp4) ·
@@ -237,8 +210,7 @@ straight into CI. Recordings of simulations driving real agents:
 
 ## Dashboard
 
-Every red team and simulation run is saved locally. `eq dashboard` serves them
-all — filter findings, read transcripts, compare runs, export HTML/CSV/JSON.
+Every red team and simulation run is saved locally. `eq dashboard` serves them all — filter findings, read transcripts, compare runs, export HTML/CSV/JSON.
 
 ```bash
 eq dashboard
@@ -263,14 +235,11 @@ eq --help
 
 ## Configuration
 
-Everything is environment variables; none are required for local evaluation.
-`ORQ_API_KEY` unlocks Orq datasets, result upload and automatic tracing;
-`OPENAI_API_KEY` backs red teaming and simulation without Orq.
+Everything is environment variables; none are required for local evaluation. `ORQ_API_KEY` unlocks Orq datasets, result upload and automatic tracing; `OPENAI_API_KEY` backs red teaming and simulation without Orq.
 
 → [Configuration](https://orq-ai.github.io/evaluatorq/configuration/) ·
 [Tracing](https://orq-ai.github.io/evaluatorq/tracing/)
 
 ## Development
 
-`uv sync --all-extras --all-groups`, then `uv run pytest -m 'not integration'`.
-Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). MIT licensed.
+`uv sync --all-extras --all-groups`, then `uv run pytest -m 'not integration'`. Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). MIT licensed.

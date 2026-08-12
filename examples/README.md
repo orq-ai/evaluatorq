@@ -12,6 +12,7 @@ examples/lib/
 │   ├── pass_fail_simple.py          # Simple pass/fail evaluation
 │   ├── eval_reuse.py                # Reusable jobs and evaluators
 │   ├── simple_local_eval.py         # Simple local evaluation
+│   ├── support_agent_eval.py        # Two agent versions compared (README quick start)
 │   └── llm_eval_with_results.py     # LLM-based evaluation
 ├── datasets/                        # Dataset-based evaluations
 │   ├── dataset_example.py           # Orq platform dataset evaluation
