@@ -22,7 +22,7 @@ from pydantic import (
 from typing_extensions import NotRequired, TypedDict
 
 from evaluatorq.common.target_call import classify_error_type as classify_error_type
-from evaluatorq.contracts import StrEnum
+from evaluatorq.contracts import RunSummary, StrEnum
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -1680,6 +1680,23 @@ class RedTeamReport(BaseModel):
         'Explorer sample count. None when the upload failed or was skipped (uploaded_count then records the '
         'attempt) or the report predates this field — None with a set uploaded_count means "not confirmed".',
     )
+
+    def manifest_summary(self) -> RunSummary:
+        """Compact run-list summary stored on this run's ``RunManifest``.
+
+        Single source of truth for the shape: the runner writes it on completion
+        and the dashboard's backfill writes it for legacy reports. `eq redteam
+        runs` reads every field here, so a second hand-rolled shape silently
+        blanks columns.
+        """
+        return {
+            'pipeline': self.pipeline.value,
+            'total_results': self.total_results,
+            'total_attacks': self.summary.total_attacks,
+            'vulnerability_rate': self.summary.vulnerability_rate,
+            'resistance_rate': self.summary.resistance_rate,
+            'tested_agents': list(self.tested_agents),
+        }
 
     @field_validator('pipeline', mode='before')
     @classmethod

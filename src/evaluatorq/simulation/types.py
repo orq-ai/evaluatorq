@@ -11,7 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
-from evaluatorq.contracts import Message, ResponseTrace, StrEnum, TokenUsage
+from evaluatorq.contracts import Message, ResponseTrace, RunSummary, StrEnum, TokenUsage
 
 DEFAULT_MODEL = 'openai/gpt-5.4-mini'
 
@@ -457,6 +457,21 @@ class SimulationRun(BaseModel):
     recommendations: list[SimulationRecommendation] | None = None
     """LLM-generated remediation suggestions for remediable failures
     (see ``reports.recommendations``). None when never generated."""
+
+    def manifest_summary(self) -> RunSummary:
+        """Compact run-list summary stored on this run's ``RunManifest``.
+
+        Single source of truth for the shape: the runner writes it on completion
+        and the dashboard's backfill writes it for legacy runs. `eq sim runs`
+        reads every field here, so a second hand-rolled shape silently blanks
+        columns.
+        """
+        return {
+            'mode': self.mode,
+            'target_kind': self.target_kind,
+            'total_results': self.total_results,
+            'scorer_averages': dict(self.scorer_averages),
+        }
 
 
 # ---------------------------------------------------------------------------
