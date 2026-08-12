@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import secrets
 import threading
 from typing import TYPE_CHECKING, Any
 
@@ -53,6 +54,53 @@ if TYPE_CHECKING:
 
 DRAWER_ID = 'rt-apply-drawer'
 AGENT_FIELD_ID = 'rt-apply-agent-field'
+
+# One process-wide CSRF token, minted into every apply form. A cross-origin page
+# cannot read this dashboard's HTML, so it cannot supply the token - which closes
+# the form-POST CSRF hole on the dashboard's state-changing routes (review).
+CSRF_FIELD = 'csrf'
+_CSRF_TOKEN = secrets.token_urlsafe(32)
+
+# Server-side previews keyed by a SINGLE-USE token. Confirm accepts only the
+# token, so the write is exactly what this server previewed - "what you saw is
+# what is written" becomes an invariant instead of a UI convention (review).
+_PREVIEWS: dict[str, dict[str, Any]] = {}
+_PREVIEWS_LOCK = threading.Lock()
+_PREVIEWS_CAP = 32  # FIFO evict: a dashboard session never has this many live drawers
+
+
+def _store_preview(entry: dict[str, Any]) -> str:
+    token = secrets.token_urlsafe(16)
+    with _PREVIEWS_LOCK:
+        while len(_PREVIEWS) >= _PREVIEWS_CAP:
+            _PREVIEWS.pop(next(iter(_PREVIEWS)))
+        _PREVIEWS[token] = entry
+    return token
+
+
+def _pop_preview(token: str) -> dict[str, Any] | None:
+    with _PREVIEWS_LOCK:
+        return _PREVIEWS.pop(token, None)
+
+
+def _csrf_field() -> str:
+    return f'<input type="hidden" name="{CSRF_FIELD}" value="{_CSRF_TOKEN}">'
+
+
+def _request_rejected(req: Request, form: Any) -> str | None:
+    """CSRF/origin gate for the apply routes. Returns an error message or None.
+
+    Two independent checks: the form must echo the per-process token (unreadable
+    cross-origin), and when the browser sends Sec-Fetch-Site it must be a
+    same-origin (or direct) request. Absent headers pass - test clients and
+    older browsers do not send them; the token check still holds then."""
+    sec_fetch = req.headers.get('sec-fetch-site', '')
+    if sec_fetch and sec_fetch not in ('same-origin', 'none'):
+        return 'Cross-origin request rejected.'
+    if str(form.get(CSRF_FIELD) or '') != _CSRF_TOKEN:
+        return 'Stale or missing form token; reload the page and try again.'
+    return None
+
 
 # Model for the instruction-merge call. A dashboard config setting (shown on
 # the Settings page) rather than the red-team pipeline's evaluator default:
@@ -123,7 +171,7 @@ def _panel_html(rid: str, surface: str, agent_key: str, pending: list[str], appl
         '</div>'
         f'<form class="rt-apply-form" hx-post="/r/{safe_rid}/{surface}/apply/preview" '
         f'hx-target="#{DRAWER_ID}" hx-swap="innerHTML">'
-        f'{agent_field}'
+        f'{agent_field}{_csrf_field()}'
         f'<button type="submit" class="rt-apply-btn">Preview &amp; apply all '
         f'{len(pending)} recommendation{"s" if len(pending) != 1 else ""}</button>'
         '</form>'
@@ -181,7 +229,7 @@ def _rec_apply_button(rid: str, surface: str, narrow_field: str, narrow_value: s
     return (
         f'<form class="rt-focus-rec-apply" hx-post="/r/{esc(rid)}/{surface}/apply/preview" '
         f'hx-target="#{DRAWER_ID}" hx-swap="innerHTML" hx-include="#{AGENT_FIELD_ID}">'
-        f'<input type="hidden" name="rec" value="{esc(rec)}">'
+        f'<input type="hidden" name="rec" value="{esc(rec)}">{_csrf_field()}'
         f'<input type="hidden" name="{narrow_field}" value="{esc(narrow_value)}">'
         '<button type="submit" class="rt-apply-btn rt-apply-btn--sm">Apply</button>'
         '</form>'
@@ -286,10 +334,13 @@ def render_preview_drawer(
     *,
     surface: str = 'redteam',
     breakdown: str = '',
+    confirm_token: str | None = None,
 ) -> str:
     """Breakdown drawer for a preview: where the recommendation(s) came from
     (single-rec applies carry their focus area or, for sim, a pre-rendered
-    *breakdown* block), what will be merged, and the exact instructions diff."""
+    *breakdown* block), what will be merged, and the exact instructions diff.
+    The confirm form posts only *confirm_token* - the previewed content lives
+    server-side, keyed by that single-use token."""
     recs = ''.join(f'<li>{esc(r)}</li>' for r in result.recommendations)
     unchanged = result.new_instructions.strip() == result.original_instructions.strip()
     rec_label = (
@@ -313,15 +364,10 @@ def render_preview_drawer(
     if unchanged:
         return _drawer('Preview: no change', body)
 
-    payload = {
-        'agent_key': result.agent_key,
-        'new_instructions': result.new_instructions,
-        'recommendations': result.recommendations,
-    }
     safe_rid = esc(rid)
     footer = (
         f'<form hx-post="/r/{safe_rid}/{surface}/apply/confirm" hx-target="#{DRAWER_ID}" hx-swap="innerHTML">'
-        f'<input type="hidden" name="payload" value="{esc(json.dumps(payload))}">'
+        f'<input type="hidden" name="confirm_token" value="{esc(confirm_token or "")}">{_csrf_field()}'
         '<button type="submit" class="rt-apply-btn rt-apply-btn--confirm">Apply to agent</button>'
         '</form>'
         f'<button class="rt-apply-btn rt-apply-btn--ghost" hx-get="/apply/dismiss" '
@@ -434,37 +480,48 @@ async def _confirm_response(
     req: Request,
     roots: list[Any] | None,
     *,
+    surface: str,
     field: str,
     version_note: str,
     expected_agent: str | None,
     already_applied: list[str],
 ) -> Response:
-    """Shared confirm handler: write the previewed instructions to the agent,
+    """Shared confirm handler: write a SERVER-STORED preview to the agent and
     record the applied recommendations on the report JSON under *field*.
 
-    The report has already been reloaded by the caller (so a stale drawer or a
-    replayed POST is validated against current state, not the posted JSON):
-    *expected_agent* is the agent the report says was tested, and
-    *already_applied* is what is already recorded. A payload that names a
-    different agent is rejected, and bullets already applied are dropped before
-    the write so a replay cannot re-merge them.
+    The request carries only a single-use token (plus the CSRF field); the
+    instructions and recommendations come from this server's preview store, so
+    a hand-crafted POST cannot choose what gets written. The stored preview is
+    validated against the reloaded report (*expected_agent*, *already_applied*)
+    and against the agent's CURRENT instructions - if they changed since the
+    preview, the write is refused instead of silently clobbering the change.
     """
-    from evaluatorq.common.apply import write_instructions
+    from evaluatorq.common.apply import read_instructions, write_instructions
     from evaluatorq.dashboard import library
 
     form = await req.form()
-    try:
-        payload = json.loads(str(form.get('payload') or '{}'))
-        agent_key = str(payload['agent_key'])
-        new_instructions = str(payload['new_instructions'])
-        recommendations = [str(r) for r in payload['recommendations']]
-    except (KeyError, ValueError, TypeError):
-        return Response(render_error_drawer('Malformed apply payload; re-run the preview.'), media_type='text/html')
-    if not agent_key or not new_instructions or not recommendations:
-        return Response(render_error_drawer('Nothing to apply; re-run the preview.'), media_type='text/html')
+    rejected = _request_rejected(req, form)
+    if rejected:
+        return Response(render_error_drawer(rejected), media_type='text/html')
 
-    # Trust the reloaded report, not the posted payload: a preview built against
-    # a different agent (stale drawer, hand-crafted POST) must not write here.
+    token = str(form.get('confirm_token') or '')
+    entry = _pop_preview(token) if token else None
+    if entry is None:
+        return Response(
+            render_error_drawer('This preview has expired or was already applied; run the preview again.'),
+            media_type='text/html',
+        )
+    if entry['rid'] != rid or entry['surface'] != surface:
+        return Response(
+            render_error_drawer('This preview belongs to a different report; run the preview again.'),
+            media_type='text/html',
+        )
+    agent_key = str(entry['agent_key'])
+    new_instructions = str(entry['new_instructions'])
+    recommendations = [str(r) for r in entry['recommendations']]
+
+    # Validate against the reloaded report, not the drawer: a preview built when
+    # the report said something else must not write now.
     if expected_agent and agent_key != expected_agent:
         return Response(
             render_error_drawer('This preview was for a different agent; reload the page and preview again.'),
@@ -482,6 +539,22 @@ async def _confirm_response(
         orq_client, _llm_client, _model = _build_clients()
     except ValueError as e:
         return Response(render_error_drawer(str(e)), media_type='text/html')
+
+    # Lost-update guard: the preview merged into the instructions as they were
+    # at preview time. If the agent changed since, refuse rather than clobber.
+    try:
+        current = await read_instructions(orq_client, agent_key)
+    except Exception as e:
+        logger.opt(exception=True).warning('apply_ui: pre-write read failed for {}', agent_key)
+        return Response(render_error_drawer(f'Could not re-read the agent before writing: {e}'), media_type='text/html')
+    if current.strip() != str(entry['original_instructions']).strip():
+        return Response(
+            render_error_drawer(
+                'The agent instructions changed after this preview was made; run the preview again '
+                'so the diff reflects the current instructions.'
+            ),
+            media_type='text/html',
+        )
 
     try:
         new_version = await write_instructions(
@@ -587,6 +660,9 @@ async def _preview_response(
         return Response(render_error_drawer(enable_error), media_type='text/html')
 
     form = await req.form()
+    rejected = _request_rejected(req, form)
+    if rejected:
+        return Response(render_error_drawer(rejected), media_type='text/html')
     agent_key = str(form.get('agent_key') or '').strip() or agent_default
     if not agent_key:
         return Response(
@@ -616,8 +692,17 @@ async def _preview_response(
         )
     if not result.recommendations:
         return Response(render_error_drawer(empty_msg), media_type='text/html')
+    token = _store_preview({
+        'rid': rid,
+        'surface': surface,
+        'agent_key': result.agent_key,
+        'original_instructions': result.original_instructions,
+        'new_instructions': result.new_instructions,
+        'recommendations': list(result.recommendations),
+    })
     return Response(
-        render_preview_drawer(rid, result, area, surface=surface, breakdown=breakdown), media_type='text/html'
+        render_preview_drawer(rid, result, area, surface=surface, breakdown=breakdown, confirm_token=token),
+        media_type='text/html',
     )
 
 
@@ -668,6 +753,7 @@ def register_apply_routes(app: Any, roots: list[Any] | None = None) -> None:
             rid,
             req,
             roots,
+            surface='redteam',
             field='applied_recommendations',
             version_note='red-team remediation recommendation(s)',
             expected_agent=expected,
@@ -710,6 +796,7 @@ def register_apply_routes(app: Any, roots: list[Any] | None = None) -> None:
             rid,
             req,
             roots,
+            surface='sim',
             field='applied_suggestions',
             version_note='simulation remediation suggestion(s)',
             expected_agent=expected,

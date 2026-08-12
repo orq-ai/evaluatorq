@@ -328,6 +328,13 @@ async def _merge_instructions(
         return ''
 
 
+async def read_instructions(orq_client: Any, agent_key: str) -> str:
+    """Current instructions of *agent_key*: the engine's read side, public so the
+    dashboard confirm route can detect drift between preview and write."""
+    agent = await asyncio.to_thread(orq_client.agents.retrieve, agent_key=agent_key)
+    return str(getattr(agent, 'instructions', '') or '')
+
+
 async def write_instructions(
     orq_client: Any,
     agent_key: str,
@@ -408,8 +415,7 @@ async def apply_recommendations(
         logger.info(f'No new recommendations to apply for agent {agent_key!r}')
         return ApplyRecommendationsResult(agent_key=agent_key)
 
-    agent = await asyncio.to_thread(orq_client.agents.retrieve, agent_key=agent_key)
-    original = str(getattr(agent, 'instructions', '') or '')
+    original = await read_instructions(orq_client, agent_key)
 
     new_instructions = (
         await _merge_instructions(

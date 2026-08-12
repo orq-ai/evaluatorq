@@ -241,11 +241,17 @@ right-hand drawer opens with the breakdown: for a single recommendation, its
 focus area (priority tier, risk score, traces analyzed, observed patterns),
 the recommendation being merged, and a colorized diff of the instructions
 change.
-Nothing is written until you click **Apply to agent** in the drawer, which
-writes the previewed instructions back as a new **minor agent version** —
-exactly what you saw in the diff, no second LLM call — and records the applied
-recommendations on the report, so applied bullets show a ✓ tick and a later
-preview skips them.
+Nothing is written until you click **Apply to agent** in the drawer. The
+previewed instructions live server-side, keyed by a single-use token that the
+confirm button posts back — so what lands on the agent is exactly what this
+server previewed, a hand-crafted request cannot choose its own content or
+target, and a replayed confirm is refused. Before writing, the agent's current
+instructions are re-read and compared to the preview's baseline: if the agent
+changed in between, the write is refused and you re-preview against the
+current state. The write is a new **minor agent version**, and the applied
+recommendations are recorded on the report, so applied bullets show a ✓ tick
+and a later preview skips them. All apply forms carry a per-process token as
+a cross-origin defense.
 
 The merge asks the model for targeted search/replace edits first (output is
 proportional to the change, so previews are fast); if any edit fails to apply
