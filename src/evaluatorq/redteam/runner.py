@@ -1239,9 +1239,18 @@ async def _run_static_target_call(
     if active_progress is not None:
         await active_progress.finish_attack(None)
 
+    # Flatten the error the way the dynamic paths do (orchestrator/pipeline): the job
+    # payload is validated as JobOutputPayload downstream, whose ``error`` is a string.
+    # Handing back the AgentResponseError itself fails that validation and takes the
+    # whole report down with it — after every attack has already run.
+    err = call.error
     return {
         'response': result.text,
-        'error': call.error,
+        'error': f'Target agent failed after {call.attempts} attempt(s): {err.message}' if err else None,
+        'error_type': err.error_type if err else None,
+        'error_stage': 'target_call' if err else None,
+        'error_code': (err.code or 'target_error') if err else None,
+        'error_details': call.error_details,
         'tool_calls': result.tool_calls,
         'token_usage': result.usage,
         'finish_reason': result.finish_reason,
@@ -1301,11 +1310,10 @@ def _create_static_job_for_agent_target(
                             target_agent_timeout_ms=cfg.target_agent_timeout_ms,
                             max_target_retries=cfg.max_target_retries,
                         )
-                        error = output['error']
-                        if error is not None:
+                        if output['error'] is not None:
                             error_attrs: AttrMap = {
-                                'orq.redteam.error_type': error.error_type,
-                                'orq.redteam.error_code': error.code,
+                                'orq.redteam.error_type': output['error_type'],
+                                'orq.redteam.error_code': output['error_code'],
                             }
                             set_span_attrs(target_span, error_attrs)
                             set_span_attrs(agent_span, error_attrs)
