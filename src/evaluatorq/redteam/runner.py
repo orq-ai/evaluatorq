@@ -621,6 +621,39 @@ async def red_team(
         ValueError: If mode is invalid, required arguments are missing, or
             ``save='detail'`` is passed without ``artifacts_dir``.
         CancelledError: If hooks.on_confirm returns False.
+
+    Usage:
+
+    ```python
+    import asyncio
+
+    from evaluatorq.redteam import red_team
+
+
+    async def main() -> None:
+        # Dynamic run against an ORQ platform agent
+        report = await red_team("agent:YOUR_AGENT_KEY", mode="dynamic", categories=["LLM01", "LLM07"])
+        print(report.summary.resistance_rate)
+
+
+    asyncio.run(main())
+    ```
+
+    ```python
+    import asyncio
+
+    from evaluatorq.redteam import OpenAIModelTarget, red_team
+
+
+    async def main() -> None:
+        # Dynamic run against a direct model target
+        target = OpenAIModelTarget("gpt-5-mini", system_prompt="You are a helpful assistant.")
+        report = await red_team(target, mode="dynamic", categories=["LLM01", "LLM07"])
+        print(report.summary.resistance_rate)
+
+
+    asyncio.run(main())
+    ```
     """
     if config is not None:
         if llm_config is not None:

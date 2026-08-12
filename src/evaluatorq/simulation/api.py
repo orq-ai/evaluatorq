@@ -258,6 +258,48 @@ async def simulate(
             saved file — so the dashboard shows saved prose instead of the
             computed fallback sentence. Best-effort: no-op without LLM creds.
             Set ``False`` to skip the extra LLM call.
+
+    Usage:
+
+    ```python
+    import asyncio
+
+    from evaluatorq.simulation import CommunicationStyle, Criterion, Persona, Scenario, simulate
+
+    persona = Persona(
+        name='Impatient Customer',
+        patience=0.2,
+        assertiveness=0.8,
+        politeness=0.4,
+        technical_level=0.3,
+        communication_style=CommunicationStyle.terse,
+        background='Wants a refund urgently',
+    )
+    scenario = Scenario(
+        name='Refund',
+        goal='Get a full refund',
+        criteria=[Criterion(description='Agent asks for order details', type='must_happen')],
+    )
+
+
+    async def support_agent(messages: list) -> str:
+        return 'Thanks for reaching out. How can I assist you today?'
+
+
+    async def main() -> None:
+        results = await simulate(
+            evaluation_name='basic-simulation-example',
+            target=support_agent,
+            personas=[persona],
+            scenarios=[scenario],
+            max_turns=6,
+            evaluator_names=['goal_achieved', 'criteria_met'],
+        )
+        print(f'{sum(r.goal_achieved for r in results)}/{len(results)} reached the goal')
+
+
+    asyncio.run(main())
+    ```
     """
     run = await _simulate_run(
         evaluation_name=evaluation_name,
@@ -486,6 +528,33 @@ async def generate_and_simulate(
     ``executive_summary``: When ``True`` (the default), generate the LLM
     narrative summary and store it on the returned run — and in any saved file.
     Best-effort: no-op without LLM creds. Set ``False`` to skip the LLM call.
+
+    Usage:
+
+    ```python
+    import asyncio
+
+    from evaluatorq.simulation import generate_and_simulate
+
+
+    async def main() -> None:
+        results = await generate_and_simulate(
+            evaluation_name='support-agent-sim',
+            target='agent:my-support-agent',  # hosted Orq agent, routed via ORQ_API_KEY
+            agent_description=(
+                'Customer support agent for an e-commerce store; handles refunds, orders, and product questions.'
+            ),
+            num_personas=3,
+            num_scenarios=4,  # -> 12 persona x scenario simulations
+            max_turns=6,
+            evaluator_names=['goal_achieved', 'criteria_met'],
+        )
+        passed = sum(r.goal_achieved for r in results)
+        print(f'Pass rate: {passed}/{len(results)}')
+
+
+    asyncio.run(main())
+    ```
     """
     run = await _generate_and_simulate_run(
         evaluation_name=evaluation_name,

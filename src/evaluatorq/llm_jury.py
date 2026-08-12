@@ -689,6 +689,23 @@ def llm_jury_pairwise(
     concurrently running ``compare`` calls on the returned comparator (each
     pair fans out judges x orderings x repetitions). ``None`` (default) keeps
     the fan-out unbounded.
+
+    Usage:
+
+    ```python
+    from evaluatorq import llm_jury_pairwise
+
+    comparator = llm_jury_pairwise(
+        criteria="The answer is accurate, complete, and directly addresses the question.",
+        judges=["anthropic/claude-sonnet-4-6", "openai/gpt-5.4-mini"],
+    )
+    comparison = await comparator.compare(
+        question="What is the capital of France?",
+        response_a="The capital of France is Paris.",
+        response_b="The capital of France is Berlin.",
+    )
+    print(comparison.winner)
+    ```
     """
     if repetitions < 1:
         raise ValueError(f'repetitions ({repetitions}) must be >= 1.')

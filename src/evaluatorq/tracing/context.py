@@ -76,6 +76,25 @@ async def tracing_session(run_name: str, *, trace_type: str = 'evaluatorq') -> A
 
     Yields:
         The `TracingContext` for the run.
+
+    Usage:
+
+    ```python
+    import asyncio
+
+    from evaluatorq.tracing import get_tracer, tracing_session
+
+
+    async def main() -> None:
+        async with tracing_session('my-custom-run') as ctx:
+            tracer = get_tracer()  # None when tracing is disabled
+            if tracer is not None:
+                with tracer.start_as_current_span('my-step') as span:
+                    span.set_attribute('run_id', ctx.run_id)
+
+
+    asyncio.run(main())
+    ```
     """
     from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
 

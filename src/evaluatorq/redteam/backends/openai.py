@@ -64,7 +64,25 @@ def _openai_map_error(exc: Exception) -> tuple[str, str]:
 
 
 class OpenAIModelTarget(AgentTarget):
-    """Target adapter that treats ``agent_key`` as an OpenAI model identifier."""
+    """Target adapter that treats ``agent_key`` as an OpenAI model identifier.
+
+    Usage:
+
+    ```python
+    import asyncio
+
+    from evaluatorq.redteam import OpenAIModelTarget, red_team
+
+
+    async def main() -> None:
+        target = OpenAIModelTarget("gpt-5-mini", system_prompt="You are a customer support assistant.")
+        report = await red_team(target, mode="dynamic", categories=["LLM01", "LLM07"])
+        print(report.summary.resistance_rate)
+
+
+    asyncio.run(main())
+    ```
+    """
 
     def __init__(
         self,

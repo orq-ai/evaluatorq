@@ -156,6 +156,25 @@ async def evaluatorq(
     Raises:
         ValidationError: If parameters fail validation.
         ValueError: If neither params nor required kwargs are provided.
+
+    Example:
+        ```python
+        from evaluatorq import DataPoint, EvaluationResult, evaluatorq, job
+
+        @job("uppercase")
+        async def uppercase_job(data: DataPoint, row: int):
+            return data.inputs["text"].upper()
+
+        async def matches_expected(params):
+            return EvaluationResult(value=1 if params["output"] == params["data"].expected_output else 0)
+
+        await evaluatorq(
+            "uppercase-eval",
+            data=[DataPoint(inputs={"text": "hi"}, expected_output="HI")],
+            jobs=[uppercase_job],
+            evaluators=[{"name": "matches-expected", "scorer": matches_expected}],
+        )
+        ```
     """
     # Handle params dict/object vs kwargs
     if params is not None:

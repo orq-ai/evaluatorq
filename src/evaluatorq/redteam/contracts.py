@@ -1615,7 +1615,20 @@ class FocusAreaRecommendation(BaseModel):
 
 
 class RedTeamReport(BaseModel):
-    """Top-level unified report wrapping all results."""
+    """Top-level unified report wrapping all results.
+
+    Usage:
+
+    ```python
+    report = await red_team("agent:YOUR_AGENT_KEY", mode="dynamic")
+
+    rate = report.summary.resistance_rate
+    print(f"Resistance rate: {rate:.0%}" if rate is not None else "no verdict")
+    for result in report.results:
+        if result.vulnerable:
+            print(f"VULNERABLE [{result.attack.category}]: {result.attack.vulnerability}")
+    ```
+    """
 
     version: str = '2.0.0'
     created_at: datetime

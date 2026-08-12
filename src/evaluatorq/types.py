@@ -33,6 +33,18 @@ def _json_default(obj: Any) -> Any:
 
 
 class EvaluationResult(BaseModel):
+    """The score a scorer function returns for one job output.
+
+    Example:
+        ```python
+        from evaluatorq import EvaluationResult
+
+        async def length_check_scorer(params):
+            output = params["output"]
+            return EvaluationResult(value=1 if len(output) > 10 else 0)
+        ```
+    """
+
     model_config: ClassVar[ConfigDict] = {'populate_by_name': True}
 
     value: str | int | float | bool | EvaluationResultCell | dict[str, Any]
@@ -98,6 +110,13 @@ class DataPoint(BaseModel):
         inputs: The inputs to pass to the job.
         expected_output: The expected output of the data point.
                         Used for evaluation and comparing the output of the job.
+
+    Example:
+        ```python
+        from evaluatorq import DataPoint
+
+        DataPoint(inputs={"text": "Hello world"}, expected_output="HELLO WORLD")
+        ```
     """
 
     inputs: dict[str, Any]
@@ -145,6 +164,19 @@ Scorer = Callable[[ScorerParameter], Awaitable[EvaluationResult | dict[str, Any]
 
 
 class Evaluator(TypedDict):
+    """A named scorer passed to `evaluatorq`'s ``evaluators`` list.
+
+    Example:
+        ```python
+        from evaluatorq import EvaluationResult
+
+        async def length_check_scorer(params):
+            return EvaluationResult(value=1 if len(params["output"]) > 10 else 0)
+
+        evaluator = {"name": "length-check", "scorer": length_check_scorer}
+        ```
+    """
+
     name: str
     scorer: Scorer
     # Optional evaluator kind (e.g. "code_eval"). When set, the tracing layer

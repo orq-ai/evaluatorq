@@ -78,10 +78,30 @@ plugins:
       handlers:
         python:
           options:
+            # Strips `_`-prefixed parameters from rendered signatures — see the
+            # module docstring for why `filters` cannot do this.
+            extensions:
+              - docs/griffe_extensions.py:DropPrivateParameters
             docstring_style: google
             show_source: false
             show_root_heading: false
             members_order: source
+            # Signatures: render below the heading as a formatted code block instead
+            # of inline in the heading, where a 12-param function wrapped into a
+            # seven-line wall of un-highlighted text. Formatting needs black or ruff
+            # importable at build time (ruff is a dev dep, present in CI's uv sync);
+            # without one, signatures degrade to a single long line.
+            separate_signature: true
+            show_signature_annotations: true
+            # NOT signature_crossrefs: it links every annotation to the symbol's page
+            # anchor, and symbols deduped onto another package page (TokenUsage, and
+            # anything else _canonical_owner moves) get an anchor that does not exist
+            # there — htmlproofer fails the build on it.
+            line_length: 88
+            # Coloured func/class/attr chip on each heading and ToC entry — the pages
+            # are long lists of mixed member kinds.
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
             # Off so the pinned `members:` list in gen_pages.py is the final order.
             # Left on, mkdocstrings re-groups attributes → classes → functions inside
             # it, which buried `red_team()` and `simulate()` below every dataclass.
