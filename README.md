@@ -156,15 +156,14 @@ Findings come back ranked by `risk = attack success rate × average severity`, e
 
 ### What a run costs
 
-Measured from real runs against an Orq-hosted agent, judged by `gpt-5-mini` (numbers are that workspace's billed cost and wall clock, not estimates):
+Measured wall clock and token counts from two runs against Orq-hosted agents, attacked and judged by `gpt-5-mini` at `parallelism=10`:
 
-| Run | Wall clock | Tokens | Cost |
-|---|---|---|---|
-| Hybrid, 4 attacks against one agent | 3m 53s | 51k | $0.063 |
-| Same shape, second run | 3m 47s | 48k | $0.065 |
-| Short dynamic runs (1–2 categories) | 9s – 1m 26s | 6k – 26k | $0.004 – $0.031 |
+| Run | Attacks | Wall clock | Tokens | Tokens per attack |
+|---|---|---|---|---|
+| Hybrid, 10 categories, 2 agents | 40 | 2m 26s | 481k | 12k |
+| Dynamic, 3 categories, 1 agent | 10 | 2m 12s | 88k | 9k |
 
-Across those runs that works out to a cent or two, and roughly a minute, per attack — dominated by the judge's reasoning tokens. It is a handful of runs, not a benchmark, so treat it as an order of magnitude. Attacks run concurrently (`parallelism`), so a 40-attack sweep is minutes, not hours. Attacker and judge models are both configurable — point them at a cheaper model and the whole run gets cheaper.
+Attacks run concurrently, so wall clock tracks the slowest attack far more than the attack count — quadrupling the sweep cost twelve seconds. Budget a few cents for a run this size at `gpt-5-mini` prices; roughly 40% of the tokens are the judge's, and both the attacker and judge models are configurable, so pointing them at a cheaper model moves the bill directly. Two runs is not a benchmark — treat these as an order of magnitude.
 
 → [Red teaming guide](https://orq-ai.github.io/evaluatorq/guides/red-teaming/) ·
 [Intro notebook](examples/red_teaming_intro.ipynb) ·
@@ -176,11 +175,7 @@ The non-adversarial counterpart: a user-simulator LLM plays a persona pursuing a
 
 ![Goal completion heatmap, 10 personas by 5 scenarios: every persona clears the straightforward refund paths, and the "never received, unverified evidence" column collapses to 0–40%](docs/assets/dashboard/sim-04-breakdown-heatmap.png)
 
-A refund agent that looks fine on four scenarios falls over on the fifth — the one where the claim cannot be verified. Fix that, re-run the frozen set, and the difference is the point:
-
-![58% of scenarios passed before, 88% after re-running the frozen set against the improved agent](docs/assets/readme-sim-payoff.png)
-
-From the [webinar demo](examples/agent_simulation/webinar_demo/) against Sterling, a credit-card support agent: every one of the 10 original failures showed up past turn 4, where single-prompt testing never looks.
+An agent that looks fine on four scenarios falls over on the fifth. Fix it, re-run the same frozen set, and the difference is the point — and because the conversation runs to eight turns, it catches the failures that only appear deep in a dialogue, where single-prompt testing never looks.
 
 ```mermaid
 flowchart LR
@@ -205,11 +200,7 @@ results = await simulate(
 print(results[0].goal_achieved, results[0].goal_completion_score)
 ```
 
-Runs exit non-zero on failure by default (`exit_on_failure=True`), so they drop straight into CI. Recordings of simulations driving real agents:
-[OpenAI Agents SDK](docs/assets/sim-openai-agents.mp4) ·
-[LangGraph](docs/assets/sim-langgraph.mp4) ·
-[CrewAI](docs/assets/sim-crewai.mp4) ·
-[PydanticAI](docs/assets/sim-pydantic-ai.mp4)
+Runs exit non-zero on failure by default (`exit_on_failure=True`), so they drop straight into CI. The target can be an Orq agent or any local async callable, including agents built with the OpenAI Agents SDK, LangGraph, CrewAI or PydanticAI — [the examples](examples/agent_simulation/) cover each, with screen recordings.
 
 → [Agent simulation guide](https://orq-ai.github.io/evaluatorq/guides/agent-simulation/) ·
 [Intro notebook](examples/agent_simulation_intro.ipynb) ·
@@ -232,9 +223,9 @@ eq dashboard
 The package installs `eq` (and its longer alias `evaluatorq`):
 
 ```bash
-eq redteam run -t agent:my-agent     # red team an agent
-eq sim run --target agent:my-agent   # generate personas/scenarios and simulate
-eq dashboard                         # browse saved runs
+eq redteam run --target agent:my-agent   # red team an agent
+eq sim run --target agent:my-agent       # generate personas/scenarios and simulate
+eq dashboard                             # browse saved runs
 eq --help
 ```
 
@@ -249,4 +240,15 @@ Everything is environment variables; none are required for local evaluation. `OR
 
 ## Development
 
-`uv sync --all-extras --all-groups`, then `uv run pytest -m 'not integration'`. Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). MIT licensed.
+[uv](https://docs.astral.sh/uv/) manages the environment, [ruff](https://docs.astral.sh/ruff/) lints and formats, [basedpyright](https://docs.basedpyright.com/) type-checks, and pytest runs the suite:
+
+```bash
+uv sync --all-extras --all-groups   # every extra plus the dev tooling
+uv run pytest -m 'not integration'  # the unit suite; integration tests need ORQ_API_KEY
+uv run ruff check src && uv run ruff format src
+uv run basedpyright                 # the whole repo, tests included
+```
+
+CI runs exactly those four commands, so a clean local run is a clean PR. The package supports Python 3.10 and up, and releases are cut from git tags — commit messages follow [Conventional Commits](https://www.conventionalcommits.org) and decide the next version, so `feat:` and `fix:` ship and `docs:` does not.
+
+Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). MIT licensed.
