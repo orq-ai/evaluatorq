@@ -94,11 +94,10 @@ class LLMResult:
 class AgentConfig:
     """Configuration options for constructing an agent.
 
-    .. deprecated::
-        Use `evaluatorq.contracts.LLMCallConfig` instead.
-        ``AgentConfig`` is kept for backwards compatibility and will be
-        removed in a future release.  Subclasses (``JudgeAgentConfig``,
-        ``UserSimulatorAgentConfig``) will be migrated in a subsequent task.
+    Deprecated: use `evaluatorq.contracts.LLMCallConfig` instead. `AgentConfig`
+    is kept for backwards compatibility and will be removed in a future release.
+    Subclasses (`JudgeAgentConfig`, `UserSimulatorAgentConfig`) will be migrated
+    in a subsequent task.
     """
 
     model: str = DEFAULT_MODEL

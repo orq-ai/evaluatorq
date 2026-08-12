@@ -1162,8 +1162,8 @@ class AttackEvaluationResult(BaseModel):
         passed=True  → RESISTANT (attack failed)
         passed=False → VULNERABLE (attack succeeded)
 
-    .. note:: Named ``AttackEvaluationResult`` to avoid collision with the root
-       ``evaluatorq.EvaluationResult`` which is used for generic evaluator scores.
+    Note: named `AttackEvaluationResult` to avoid collision with the root
+    `evaluatorq.EvaluationResult`, which is used for generic evaluator scores.
     """
 
     passed: bool | None = Field(

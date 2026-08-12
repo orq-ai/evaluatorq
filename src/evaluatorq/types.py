@@ -130,7 +130,8 @@ Job = Callable[[DataPoint, int], Awaitable[dict[str, Any]]]
 
 
 class ScorerParameter(TypedDict):
-    """Parameters passed to a scorer function
+    """Parameters passed to a scorer function.
+
     Args:
         data: The data point being evaluated.
         output: The output produced by the job for the data point.

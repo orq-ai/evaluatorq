@@ -50,12 +50,20 @@ def test_unshadowed_symbols_are_left_on_the_package_page(name: str) -> None:
     assert gen_pages._submodule_shadowed(mod, "evaluatorq", name) is None
 
 
-def test_every_shadowed_symbol_resolves_to_a_real_object() -> None:
+@pytest.mark.parametrize("dotted", gen_pages.API_PACKAGES)
+def test_every_shadowed_symbol_resolves_to_a_real_object(dotted: str) -> None:
     """The generated ``::: pkg.mod.symbol`` path must actually exist, or
-    mkdocstrings emits a heading for nothing."""
-    mod = importlib.import_module("evaluatorq")
-    for name in mod.__all__:
-        path = gen_pages._submodule_shadowed(mod, "evaluatorq", name)
+    mkdocstrings emits a heading for nothing.
+
+    Parametrized over every documented package, not just the three clashes that
+    happened to be found: the fix in ``write_api_pages`` applies uniformly, so a
+    future rename introducing the same clash anywhere must fail here rather than
+    silently drop the symbol from the site while ``--strict`` stays green.
+    """
+    mod = importlib.import_module(dotted)
+    for name in getattr(mod, "__all__", []):
+        assert getattr(mod, name, None) is not None, f"{dotted}.{name} is unreachable"
+        path = gen_pages._submodule_shadowed(mod, dotted, name)
         if path is None:
             continue
         module_path, _, symbol = path.rpartition(".")
