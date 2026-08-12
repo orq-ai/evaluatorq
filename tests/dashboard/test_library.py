@@ -176,6 +176,39 @@ def test_scan_legacy_reports_only_lists_as_before(tmp_path):
     assert cards[0].path is not None
 
 
+def test_scan_backfills_manifest_for_legacy_report(tmp_path):
+    # Second scan must serve the same card from the sidecar, without the report.
+    rt = tmp_path / 'runs'
+    rt.mkdir()
+    report = rt / 'redteam_20260101_000000.json'
+    payload = _redteam_payload()
+    payload['total_results'] = 4
+    _write(report, payload)
+
+    first = scan([rt])
+    assert (rt / '.manifests' / 'redteam_20260101_000000.json').exists()
+
+    report.unlink()  # proves the second scan reads only the manifest
+    second = scan([rt])
+    assert len(second) == 1
+    assert second[0].id == first[0].id
+    assert second[0].name == first[0].name
+    assert second[0].headline == first[0].headline == '4 attacks'
+    assert second[0].status == 'completed'
+
+
+def test_scan_backfill_skips_broken_report(tmp_path):
+    rt = tmp_path / 'runs'
+    rt.mkdir()
+    payload = _redteam_payload()
+    del payload['summary']  # missing required field -> card carries an error
+    _write(rt / 'redteam_20260101_000000.json', payload)
+
+    cards = scan([rt])
+    assert cards[0].error
+    assert not (rt / '.manifests').exists()
+
+
 def test_scan_mixed_dir_dedups_by_report_path(tmp_path):
     rt = tmp_path / 'runs'
     rt.mkdir()
@@ -226,3 +259,26 @@ def test_scan_errored_manifest_without_report_is_listed(tmp_path):
     assert len(cards) == 1
     assert cards[0].status == 'error'
     assert cards[0].path is None
+
+
+def test_fingerprint_changes_when_an_in_flight_manifest_advances(tmp_path):
+    """Reports are write-once, but an in-flight run rewrites its manifest in
+    place — the fingerprint must see that or a running run's row would freeze."""
+    from evaluatorq.dashboard.library import fingerprint
+
+    rt = tmp_path / 'runs'
+    rt.mkdir()
+    w = _start_manifest(rt, 'live', 'sim', 'in-flight')
+    before = fingerprint([rt])
+    w.start_stage('generating')
+    assert fingerprint([rt]) != before
+
+
+def test_fingerprint_changes_when_a_report_lands(tmp_path):
+    from evaluatorq.dashboard.library import fingerprint
+
+    rt = tmp_path / 'runs'
+    rt.mkdir()
+    before = fingerprint([rt])
+    _write(rt / 'redteam_20260101_000000.json', _redteam_payload())
+    assert fingerprint([rt]) != before

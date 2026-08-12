@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, TypeVar
 
 from loguru import logger
 
+from evaluatorq.common.run_manifest import MANIFESTS_DIR_NAME
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
@@ -132,7 +134,7 @@ class ReportCard:
     stage: str | None = None
 
 
-def _default_roots() -> list[Path]:
+def default_roots() -> list[Path]:
     from evaluatorq.pairwise_run import get_pairwise_runs_dir
     from evaluatorq.redteam.runner import get_runs_dir
     from evaluatorq.simulation.utils.run_store import get_sim_runs_dir
@@ -228,6 +230,68 @@ def _card_from_manifest(m: RunManifest) -> ReportCard:
     )
 
 
+def fingerprint(roots: list[Path] | None = None) -> tuple[int, int]:
+    """``(file count, newest mtime_ns)`` across every run store — a cheap staleness key.
+
+    Callers cache expensive whole-store aggregates against this: one stat sweep
+    (~5 ms per 1000 files) instead of re-reading every report. Reports are
+    write-once, so a new run always bumps the count; manifests are *not* (an
+    in-flight run rewrites its own on every stage), so ``.manifests/`` is swept
+    too and the newest mtime catches that stage advance.
+
+    Unreadable entries are skipped rather than raised on: a fingerprint that
+    fails is a dashboard that fails, and a missed file only costs staleness
+    until the next change.
+    """
+    roots = roots or default_roots()
+    count = 0
+    newest = 0
+    for root in roots:
+        for p in (*root.glob('*.json'), *(root / MANIFESTS_DIR_NAME).glob('*.json')):
+            count += 1
+            try:
+                newest = max(newest, p.stat().st_mtime_ns)
+            except OSError:  # a stat failure must not sink the whole sweep
+                continue
+    return (count, newest)
+
+
+def _backfill_manifest(path: Path, card: ReportCard) -> None:
+    """Write a manifest sidecar for a legacy (manifest-less) report.
+
+    Migration-on-read: the first scan pays the full-report read it already pays
+    today, then leaves a tiny ``.manifests/`` sidecar behind so every later scan
+    (and ``eq runs``) builds this row from the manifest alone. No separate
+    migration command to run — the runs dir heals itself as it is browsed.
+
+    Best-effort in every direction: an existing sidecar is never overwritten, an
+    errored/pairwise report is skipped (pairwise has no ``ManifestSurface``), and
+    a failed write only costs the next scan another full read.
+    """
+    from evaluatorq.common.run_manifest import ManifestWriter
+    from evaluatorq.contracts import ManifestStatus, ManifestSurface, RunManifest
+
+    if card.error or card.surface not in (ManifestSurface.SIM, ManifestSurface.REDTEAM):
+        return
+    mpath = path.parent / MANIFESTS_DIR_NAME / f'{path.stem}.json'
+    if mpath.exists():
+        return
+    _, data = load_surface(path)  # mtime-keyed LRU hit — _card just read this file
+    total = data.get('total_results')
+    manifest = RunManifest(
+        run_id=path.stem,
+        surface=ManifestSurface(card.surface),
+        run_name=card.name,
+        status=ManifestStatus.COMPLETED,
+        started_at=card.created_at,
+        updated_at=card.created_at,
+        ended_at=card.created_at,
+        report_path=str(path),
+        summary={'total_results': total if isinstance(total, int) else 0},
+    )
+    ManifestWriter(manifest, mpath).flush()
+
+
 def scan(roots: list[Path] | None = None) -> list[ReportCard]:
     """Discover run cards, manifest-first with a legacy full-report fallback.
 
@@ -246,7 +310,7 @@ def scan(roots: list[Path] | None = None) -> list[ReportCard]:
     """
     from evaluatorq.common.run_manifest import list_manifests
 
-    roots = roots or _default_roots()
+    roots = roots or default_roots()
     seen_roots: set[Path] = set()
     deduped_roots: list[Path] = []
     for root in roots:
@@ -268,11 +332,12 @@ def scan(roots: list[Path] | None = None) -> list[ReportCard]:
             continue
         if (c := _card(p)) is not None:
             cards.append(c)
+            _backfill_manifest(p, c)
     return sorted(cards, key=lambda c: c.created_at, reverse=True)
 
 
 def resolve(rid: str, roots: list[Path] | None = None) -> Path | None:
-    roots = roots or _default_roots()
+    roots = roots or default_roots()
     for p in _iter_report_files(roots):
         if report_id(p) == rid:
             return p
@@ -292,7 +357,7 @@ def resolve_manifest(rid: str, roots: list[Path] | None = None) -> RunManifest |
     """
     from evaluatorq.common.run_manifest import list_manifests
 
-    roots = roots or _default_roots()
+    roots = roots or default_roots()
     for root in roots:
         for m in list_manifests(root):
             if m.report_path is None and _manifest_card_id(m.run_id) == rid:
