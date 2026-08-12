@@ -1,10 +1,10 @@
 # Red Teaming
 
 Probe an agent or model with adversarial attacks mapped to the OWASP **LLM Top
-10** and **Agentic Security Initiative (ASI)** frameworks, then read off the
+10** and **Agentic Top 10 (ASI)** frameworks, then read off the
 resistance rate.
 
-*[ASI]: OWASP Agentic Security Initiative
+*[ASI]: OWASP Agentic Top 10
 *[LLM01]: Prompt Injection
 
 ```mermaid

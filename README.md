@@ -112,7 +112,7 @@ This is the repo's [`examples/lib/basics/support_agent_eval.py`](examples/lib/ba
 
 **19 OWASP categories · 18 vulnerabilities · 45 curated attack strategies · 16 delivery methods · 18 LLM judges.** evaluatorq inspects the target, picks attack strategies per vulnerability, generates the prompts, runs them (single- or multi-turn), and judges each response with an evaluator written for that specific vulnerability.
 
-| OWASP Agentic Security Initiative | OWASP LLM Top 10 |
+| OWASP Agentic Top 10 | OWASP LLM Top 10 |
 |---|---|
 | ASI01 Agent Goal Hijacking | LLM01 Prompt Injection |
 | ASI02 Tool Misuse & Exploitation | LLM02 Sensitive Information Disclosure |
