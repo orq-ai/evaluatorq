@@ -82,6 +82,10 @@ plugins:
             show_source: false
             show_root_heading: false
             members_order: source
+            # Off so the pinned `members:` list in gen_pages.py is the final order.
+            # Left on, mkdocstrings re-groups attributes → classes → functions inside
+            # it, which buried `red_team()` and `simulate()` below every dataclass.
+            group_by_category: false
             docstring_options:
               warn_unknown_params: false
               warn_missing_types: false
@@ -174,7 +178,6 @@ plugins:
           # against both. Anchors verified present in the built HTML.
           - "../#evaluatorq.DataPoint"
           - "../openresponses/#evaluatorq.openresponses.ResponseResourceDict"
-          - "../integrations/#evaluatorq.integrations.vercel_ai_sdk_integration.target.AISdkMessageFormat"
 
 markdown_extensions:
   - tables

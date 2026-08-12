@@ -167,6 +167,96 @@ def _submodule_shadowed(mod: object, dotted: str, name: str) -> str | None:
     return f"{defining}.{name}" if defining == f"{dotted}.{name}" else None
 
 
+# Entry points first. `__all__` is alphabetical (ruff RUF022 keeps it that way), so
+# left alone a package page opens on whatever dataclass sorts first — `evaluatorq`
+# led with `AgentResponse`, `redteam` with `AgentCapability`. mkdocstrings treats an
+# explicit `members:` list as manual ordering (rendering.do_order_members), so the
+# order written below is the order rendered. Names not listed keep alphabetical
+# order after the headline block. Unknown names raise — see _ordered().
+#
+# Ranked by real `from evaluatorq[...] import` sites in README/docs/examples, not by
+# how central a symbol looks from inside the package: symbols with zero import sites
+# (`run_pairwise`, `exact_match_evaluator`, `ORQAgentTarget`, `SimulationRunner`) are
+# deliberately absent even though they read as headline material.
+HEADLINE = {
+    "evaluatorq": [
+        "evaluatorq",
+        "job",
+        "DataPoint",
+        "Evaluator",
+        "EvaluationResult",
+        "EvaluationResultCell",
+        "string_contains_evaluator",
+        "DatasetIdInput",
+        "invoke",
+        "deployment",
+        # Only pairwise symbol with import sites; without it a reader who came for
+        # the pairwise workflow lands on the alphabetical wall.
+        "llm_jury_pairwise",
+    ],
+    "evaluatorq.redteam": [
+        "red_team",
+        "RedTeamReport",  # what red_team() returns
+        "OpenAIModelTarget",
+        "AgentTarget",  # the ABC every custom target implements
+        "LLMConfig",
+        "EvaluatorConfig",
+        "LLMCallConfig",
+        "RedTeamResult",
+    ],
+    "evaluatorq.simulation": [
+        "simulate",
+        "generate_and_simulate",
+        "generate",
+        "wrap_simulation_agent",
+        "Persona",
+        "Scenario",
+        "Criterion",
+        "SimulationDatapoint",
+        "SimulationResult",
+        # The ABC stands in for the five framework targets — no single one of
+        # LangGraph/CrewAI/PydanticAI/OpenAIAgents/Vercel is representative.
+        "AgentTarget",
+        "CallableTarget",
+        "OrqResponsesTarget",
+    ],
+    # Mostly redteam/simulation-internal glue; these four are the dataset-authoring
+    # surface a reader would ever call, followed by the two payload shapes.
+    "evaluatorq.openresponses": [
+        "load_openresponses_dataset",
+        "build_openresponses_request",
+        "turns_to_openresponses_input",
+        "redteam_sample_from_openresponses",
+        "Message",
+        "ResponseResource",
+    ],
+    # Enable/inspect/flush first — the `with_*_span` helpers are framework plumbing
+    # called by evaluatorq() itself, not by readers.
+    "evaluatorq.tracing": [
+        "tracing_session",
+        "init_tracing_if_needed",
+        "is_tracing_enabled",
+        "get_tracer",
+        "flush_tracing",
+        "with_evaluation_span",
+    ],
+}
+
+
+def _ordered(dotted: str, names: list[str]) -> list[str]:
+    """Sort names headline-first, everything else keeping its incoming order.
+
+    Raises on a headline name the package no longer exports, so a rename cannot
+    silently drop a symbol back into the alphabetical pile.
+    """
+    headline = HEADLINE.get(dotted, [])
+    exported = set(getattr(importlib.import_module(dotted), "__all__", []))
+    if missing := [n for n in headline if n not in exported]:
+        raise ValueError(f"HEADLINE[{dotted!r}] names non-exported symbols: {missing}")
+    rank = {n: i for i, n in enumerate(headline)}
+    return sorted(names, key=lambda n: rank.get(n, len(headline)))
+
+
 def write_api_pages() -> None:
     nav_lines = []
     index_rows = []
@@ -187,29 +277,43 @@ def write_api_pages() -> None:
         ]
         # Names a same-named sub-module hides from griffe; documented separately
         # below, since mkdocstrings drops them from the package's `members:`.
+        members = _ordered(dotted, members)
         shadowed = {n: p for n in members if (p := _submodule_shadowed(mod, dotted, n))}
         members = [n for n in members if n not in shadowed]
         page_path = Path("reference", *dotted.split(".")).with_suffix(".md")
         with mkdocs_gen_files.open(page_path, "w") as fd:
             fd.write(f"# `{dotted}`\n\n")
-            fd.write(f"::: {dotted}\n")
-            if 0 < len(members) < len(names):
-                # Only some members are canonical here — pin the member list.
-                fd.write("    options:\n      members:\n")
-                for n in members:
-                    fd.write(f"        - {n}\n")
-            elif dotted in RECURSE_INTO_SUBMODULES:
-                fd.write("    options:\n      show_submodules: true\n")
             for full_path in shadowed.values():
                 # Address the symbol by its defining module so griffe cannot
                 # resolve the name to the sub-module. `show_root_full_path: false`
-                # keeps the heading reading as the bare symbol name.
+                # keeps the heading reading as the bare symbol name. Written before
+                # the package block: these are entry points (`evaluatorq()`,
+                # `deployment()`, `llm_jury()`), and no `members:` ordering can lift
+                # them into it.
                 fd.write(
-                    f"\n::: {full_path}\n"
+                    f"::: {full_path}\n"
                     "    options:\n"
                     "      show_root_heading: true\n"
-                    "      show_root_full_path: false\n"
+                    "      show_root_full_path: false\n\n"
                 )
+            # `show_root_toc_entry: false`: the package block renders no heading of
+            # its own (show_root_heading is false globally), but it still puts a
+            # bare "evaluatorq" line in the page ToC pointing at an invisible
+            # anchor — a ToC entry with nothing to show for it.
+            fd.write(f"::: {dotted}\n    options:\n      show_root_toc_entry: false\n")
+            if dotted in RECURSE_INTO_SUBMODULES:
+                # One block per sub-package rather than `show_submodules: true` on
+                # the parent: that recurses two levels, so every target rendered
+                # twice — once as the sub-package's re-export and again under its
+                # `.target` module. Each sub-package's own `__all__` is exactly the
+                # public surface, so this documents each symbol once.
+                for sub in names:
+                    fd.write(f"\n::: {dotted}.{sub}\n    options:\n      show_root_heading: true\n")
+            elif members:
+                # Pin the member list: drops non-canonical names AND fixes the order.
+                fd.write("      members:\n")
+                for n in members:
+                    fd.write(f"        - {n}\n")
         mkdocs_gen_files.set_edit_path(page_path, "gen_pages.py")
         title = dotted.replace("evaluatorq.integrations.", "integrations/").replace("evaluatorq.", "") or "evaluatorq"
         href = page_path.relative_to("reference").as_posix()
