@@ -1239,10 +1239,8 @@ async def _run_static_target_call(
     if active_progress is not None:
         await active_progress.finish_attack(None)
 
-    # Flatten the error the way the dynamic paths do (orchestrator/pipeline): the job
-    # payload is validated as JobOutputPayload downstream, whose ``error`` is a string.
-    # Handing back the AgentResponseError itself fails that validation and takes the
-    # whole report down with it — after every attack has already run.
+    # Flatten the error the way the dynamic paths do (orchestrator/pipeline):
+    # JobOutputPayload.error is a string, and the object fails that validation.
     err = call.error
     return {
         'response': result.text,
@@ -1250,6 +1248,7 @@ async def _run_static_target_call(
         'error_type': err.error_type if err else None,
         'error_stage': 'target_call' if err else None,
         'error_code': (err.code or 'target_error') if err else None,
+        'error_turn': 1 if err else None,
         'error_details': call.error_details,
         'tool_calls': result.tool_calls,
         'token_usage': result.usage,

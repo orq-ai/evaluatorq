@@ -77,9 +77,15 @@ async def test_static_job_error_payload_survives_report_conversion() -> None:
     assert payload.error is not None
     assert 'boom' in payload.error
     assert payload.error_code == 'x'
+    assert payload.error_turn == 1
+    # error_details is the only field the old object-shaped payload dropped outright;
+    # without it the dashboard's error-details column is blank for every static failure.
+    assert payload.error_details is not None
+    assert payload.error_details['raw_message'] == 'boom'
 
 
 async def test_static_job_success_has_none_error() -> None:
+    from evaluatorq.redteam.reports.converters import _coerce_job_output_payload
     from evaluatorq.redteam.runner import _create_static_job_for_agent_target
 
     ok = AgentResponse(text='hello')
@@ -90,6 +96,15 @@ async def test_static_job_success_has_none_error() -> None:
 
     assert out['error'] is None
     assert out['response'] == 'hello'
+
+    # The success payload has to survive the same validation the failure payload does —
+    # a type slip on token_usage/finish_reason/model kills the report just as dead.
+    payload = _coerce_job_output_payload(out)
+    assert payload.response == 'hello'
+    # A leaked error_stage on a clean attack makes the dashboard count resistant
+    # attacks as failures.
+    assert (payload.error_type, payload.error_stage, payload.error_code) == (None, None, None)
+    assert (payload.error_turn, payload.error_details) == (None, None)
 
 
 async def test_shared_static_target_call_uses_the_supplied_error_mapper() -> None:
