@@ -97,6 +97,7 @@ unavailable (no second ordering to disagree with).
 | `criteria` | a general quality rubric | What "better" means. An empty string falls back to the default rubric. |
 | `swap` | `True` | Run both orderings and reconcile. Turn off to skip position-bias correction. |
 | `repetitions` | `1` | How many times each judge is asked per ordering; the judge takes its own majority first. |
+| `assignment` | `"all"` | `"cyclic"` gives each comparison exactly one judge, rotating through the panel ([CyclicJudge](cyclic-judge.md)). Judge bias cancels in expectation across the run at single-judge cost; the assigned judge still runs both orderings when `swap` is on. Rotation is over the deduplicated panel, `repetitions` still applies to the one assigned judge, and the cursor lives on the comparator: a reused comparator continues where the previous run stopped. |
 | `replacement_judges` | `None` | Stand-ins for judges that fail mechanically. Promoted per pair and run in **both** orderings, so a stand-in casts a real reconciled vote. |
 | `min_successful_judges` | `1` | Minimum decisive reconciled votes, otherwise the comparison is **inconclusive**. Must not exceed the panel size. |
 | `max_concurrency` | `None` | Cap on total in-flight judge LLM calls across all concurrently running `compare()` calls (each pair fans out judges × orderings × repetitions). Unbounded when unset. |
