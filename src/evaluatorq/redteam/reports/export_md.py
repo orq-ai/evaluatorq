@@ -667,7 +667,8 @@ def _render_token_usage_section(section: ReportSection) -> str:
             ]
             if any_cost:
                 agent_total_cost = a.get('total_cost')
-                row.append(_fmt_cost(agent_total_cost) if agent_total_cost is not None else '—')
+                agent_coverage = _cost_coverage(a.get('priced_calls', 0), a.get('calls', 0))
+                row.append(f'{_fmt_cost(agent_total_cost)}{agent_coverage}' if agent_total_cost is not None else '—')
             agent_rows.append(row)
         lines.extend((
             _md_table(headers, agent_rows, right_align=right_align),

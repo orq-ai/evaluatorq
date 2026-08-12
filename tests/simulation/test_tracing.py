@@ -667,11 +667,13 @@ async def test_end_to_end_simulation_produces_full_span_tree(
     for tc in [s for s in span_collector.spans if s.name == 'orq.simulation.target_call']:
         assert any(tc.parent.span_id == t.context.span_id for t in turn_spans)  # pyright: ignore[reportOptionalMemberAccess]
 
-    # Run span carries termination + token usage attrs
+    # Run span carries termination attrs but NO token usage: usage lives on the
+    # per-call LLM spans, and the sink aggregates. Emitting a rolled-up total here
+    # too would double-count it against the children it was summed from.
     run_attrs = _attrs(run)
     assert run_attrs['orq.simulation.terminated_by'] == 'judge'
     assert run_attrs['orq.simulation.turn_count'] == 2
-    assert 'gen_ai.usage.total_tokens' in run_attrs
+    assert not [k for k in run_attrs if k.startswith('gen_ai.usage.')]
 
     # Pretty-print the span tree for visual inspection
     print('\n=== Captured span tree (smoke test) ===')
@@ -702,16 +704,15 @@ async def test_end_to_end_simulation_produces_full_span_tree(
 
 
 @pytest.mark.asyncio
-async def test_run_span_carries_aggregate_call_count(
+async def test_run_span_carries_no_usage_and_result_carries_the_aggregate(
     span_collector: _CollectingExporter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The `orq.simulation.run` span's `gen_ai.usage.calls` is a deliberate
-    aggregate call count (record_token_usage(run_span, usage=...) at the
-    end-of-run call sites in SimulationRunner), not an accidental leak of the
-    `calls` sentinel fix. Pins the value to the true sum of judge + user
-    simulator + target call counts, so a regression that drops or
-    miscomputes it is caught here rather than only in the generic
-    record_token_usage unit tests."""
+    """Usage belongs on the per-call LLM spans; the sink aggregates from those.
+
+    The run span deliberately carries none, so a rolled-up total is never
+    double-counted against the children it was summed from. The aggregate is
+    still computed — it lives on the SimulationResult, which is what the
+    reports read. Pins both halves: absent on the span, exact on the result."""
     from unittest.mock import AsyncMock, MagicMock
 
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
@@ -769,11 +770,11 @@ async def test_run_span_carries_aggregate_call_count(
     result = await runner.run(datapoint=dp)
     assert result.terminated_by.value == 'judge'
 
-    run = _find(span_collector, 'orq.simulation.run')
-    run_attrs = _attrs(run)
+    run_attrs = _attrs(_find(span_collector, 'orq.simulation.run'))
+    assert not [k for k in run_attrs if k.startswith('gen_ai.usage.')]
     # target_cb has no usage_fn, so it contributes no usage; the run's total
     # calls is judge.get_usage().calls + user_sim.get_usage().calls == 2 + 1 == 3.
-    assert run_attrs['gen_ai.usage.calls'] == 3
+    assert result.token_usage.calls == 3
 
 
 @pytest.mark.asyncio
@@ -1096,7 +1097,7 @@ async def test_run_span_records_error_metadata_and_usage(
     attrs = _attrs(run)
     assert attrs['orq.simulation.terminated_by'] == 'error'
     assert attrs['orq.simulation.turn_count'] == 1
-    assert attrs['gen_ai.usage.total_tokens'] == 17
+    assert not [k for k in attrs if k.startswith('gen_ai.usage.')]
 
 
 @pytest.mark.asyncio
@@ -1222,18 +1223,11 @@ async def test_target_agent_usage_aggregated_into_run_result(
     assert result.token_usage.total_tokens == expected_total
     assert result.token_usage.calls == expected_calls
 
-    run = _find(span_collector, 'orq.simulation.run')
-    attrs = _attrs(run)
-    assert attrs['gen_ai.usage.total_tokens'] == expected_total
-
-    target_span = _find(span_collector, 'orq.simulation.target_call')
-    target_attrs = _attrs(target_span)
-    assert target_attrs['gen_ai.usage.input_tokens'] == 9
-    assert target_attrs['gen_ai.usage.output_tokens'] == 11
-    assert target_attrs['gen_ai.usage.total_tokens'] == 20
-    assert target_attrs['gen_ai.usage.calls'] == 1
-    assert target_attrs['gen_ai.usage.cache_read.input_tokens'] == 2
-    assert target_attrs['gen_ai.usage.reasoning.output_tokens'] == 3
+    # Neither the run span nor the target_call wrapper carries usage — both are
+    # aggregates over the per-call LLM spans beneath them.
+    for name in ('orq.simulation.run', 'orq.simulation.target_call'):
+        attrs = _attrs(_find(span_collector, name))
+        assert not [k for k in attrs if k.startswith('gen_ai.usage.')]
 
 
 @pytest.mark.asyncio
@@ -1302,7 +1296,7 @@ async def test_run_span_records_cancellation_metadata_and_usage(
     attrs = _attrs(run)
     assert attrs['orq.simulation.terminated_by'] == 'error'
     assert attrs['orq.simulation.turn_count'] == 1
-    assert attrs['gen_ai.usage.total_tokens'] == 17
+    assert not [k for k in attrs if k.startswith('gen_ai.usage.')]
     assert attrs['error.type'] == 'CancelledError'
 
 

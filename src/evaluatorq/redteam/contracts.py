@@ -22,7 +22,7 @@ from pydantic import (
 from typing_extensions import NotRequired, TypedDict
 
 from evaluatorq.common.target_call import classify_error_type as classify_error_type
-from evaluatorq.contracts import StrEnum
+from evaluatorq.contracts import RunSummary, StrEnum
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -681,7 +681,12 @@ class LLMConfig(BaseModel):
     evaluator: EvaluatorConfig = Field(default_factory=EvaluatorConfig)
 
     # --- Retry configuration --------------------------------------------------
-    retry_count: int = 3
+    # Client-side retries per LLM call (OpenAI SDK ``max_retries``), and — on the
+    # Orq router path only — also the router-side budget via ``retry_extra_body``.
+    # The two layers multiply only during sustained outages: worst case per call
+    # is (retry_count + 1) HTTP requests, each asking the router for up to
+    # retry_count provider retries.
+    retry_count: int = Field(default=3, ge=0, le=10)
     retry_on_codes: list[int] = Field(default=[429, 500, 502, 503, 504])
     # How many times to regenerate an attacker turn that the attack model
     # content-filtered or self-censored (a refusal/safety disclaimer) before
@@ -729,6 +734,11 @@ class LLMConfig(BaseModel):
         if not client_routes_through_orq(client):
             return {}
         return {'retry': {'count': self.retry_count, 'on_codes': self.retry_on_codes}}
+
+    @property
+    def retry_attempts(self) -> int:
+        """Total attempts for ``with_retry``-style callers: initial call + retries."""
+        return self.retry_count + 1
 
 
 # Module-level default used by internal pipeline components.
@@ -1685,6 +1695,23 @@ class RedTeamReport(BaseModel):
         'Explorer sample count. None when the upload failed or was skipped (uploaded_count then records the '
         'attempt) or the report predates this field — None with a set uploaded_count means "not confirmed".',
     )
+
+    def manifest_summary(self) -> RunSummary:
+        """Compact run-list summary stored on this run's ``RunManifest``.
+
+        Single source of truth for the shape: the runner writes it on completion
+        and the dashboard's backfill writes it for legacy reports. `eq redteam
+        runs` reads every field here, so a second hand-rolled shape silently
+        blanks columns.
+        """
+        return {
+            'pipeline': self.pipeline.value,
+            'total_results': self.total_results,
+            'total_attacks': self.summary.total_attacks,
+            'vulnerability_rate': self.summary.vulnerability_rate,
+            'resistance_rate': self.summary.resistance_rate,
+            'tested_agents': list(self.tested_agents),
+        }
 
     @field_validator('pipeline', mode='before')
     @classmethod

@@ -79,7 +79,12 @@ class OrqResponsesTarget(AgentTarget):
             self._client = client
             self._client_owned = False
         else:
-            self._client, self._client_owned = build_simulation_client(config.client, require_orq=require_orq)
+            # max_retries=0: this target owns retry via with_retry in
+            # _call_responses_api, so the SDK layer must not stack a second
+            # backoff loop under it (up to 4 x 3 HTTP attempts otherwise).
+            self._client, self._client_owned = build_simulation_client(
+                config.client, require_orq=require_orq, max_retries=0
+            )
 
     @property
     def memory_entity_id(self) -> str | None:

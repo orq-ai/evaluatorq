@@ -424,6 +424,11 @@ def _build_token_usage_section(results: list[SimulationResult]) -> ReportSection
             'input_cost': usage_total.input_cost,
             'output_cost': usage_total.output_cost,
             'total_cost': usage_total.total_cost,
+            # Cost coverage: without these the renderer's cost_coverage() call
+            # always sees 0 and silently drops the "(N of M calls)" qualifier,
+            # so a partial total reads as authoritative.
+            'calls': usage_total.calls,
+            'priced_calls': usage_total.priced_calls,
         },
     )
 

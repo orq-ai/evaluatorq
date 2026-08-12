@@ -109,10 +109,35 @@ of `labels`; omit it and the verdict is still recorded but `passed` is `None`.
 | `judges` | — | Judge model IDs. Two or more makes it a jury. Mutually exclusive with `model`. |
 | `model` | — | Single-judge shorthand for `judges=[model]`. |
 | `repetitions` | `1` | How many times each judge is asked. The judge takes its own majority before the panel votes, which smooths per-call noise. |
+| `assignment` | `"all"` | How judges are allocated across datapoints. `"all"` runs every judge on every datapoint. `"cyclic"` runs exactly one judge per datapoint, rotating through the panel (see below). |
 | `replacement_judges` | `None` | Stand-in models called only when a configured judge fails mechanically. |
 | `min_successful_judges` | `1` | Minimum decisive judges required, otherwise the verdict is **inconclusive**. Must not exceed the panel size. |
 | `threshold` | `0.5` | Numeric mode: `passed` when `score >= threshold`. |
 | `structured_output` | `True` | Use the provider's structured-output API; falls back to a schema-injected `json_object` call for models that reject it. |
+
+### Cyclic assignment (CyclicJudge)
+
+`assignment="cyclic"` gives each datapoint exactly one judge, rotating through
+the panel so every judge covers an equal share of the run. Judge bias still
+cancels in expectation across the dataset, but the run costs the same as a
+single-judge evaluation instead of `len(panel)` times as much.
+
+```python
+jury = llm_jury(
+    name="quality",
+    criteria="Is the answer helpful and correct?",
+    judges=["openai/gpt-5.4-mini", "openai/gpt-5.4-nano", "deepseek/deepseek-v4-flash"],
+    assignment="cyclic",
+)
+```
+
+Use it for run-level scores (a benchmark mean, a pass rate); keep the default
+`"all"` when an individual verdict has to stand on its own, since each per-item
+verdict under `"cyclic"` is one judge's opinion and `stats`/`raw_agreement` come
+back `None`.
+
+See [Cyclic judge assignment](cyclic-judge.md) for how items map to judges,
+auditing the rotation via `raw_output["jury"]`, and the failure semantics.
 
 ## How the verdict is decided
 

@@ -154,10 +154,15 @@ class ScorerParameter(TypedDict):
     Args:
         data: The data point being evaluated.
         output: The output produced by the job for the data point.
+        row: Zero-based dataset index of the data point. Present when the
+            scorer runs inside ``evaluatorq()``; absent on direct invocation.
+            Lets evaluators key per-item decisions (e.g. cyclic judge
+            assignment) on the dataset position rather than call-arrival order.
     """
 
     data: DataPoint
     output: Output
+    row: NotRequired[int]
 
 
 Scorer = Callable[[ScorerParameter], Awaitable[EvaluationResult | dict[str, Any]]]

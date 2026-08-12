@@ -1405,15 +1405,7 @@ async def _simulate_core(
         # compact summary (the exact fields the `runs` table + dashboard sim card
         # render) so a list row needs zero full-report reads.
         if manifest_writer is not None:
-            manifest_writer.complete(
-                report_path=saved_path,
-                summary={
-                    'mode': run.mode,
-                    'target_kind': run.target_kind,
-                    'total_results': run.total_results,
-                    'scorer_averages': dict(run.scorer_averages),
-                },
-            )
+            manifest_writer.complete(report_path=saved_path, summary=run.manifest_summary())
     except SimulationCancelledError:
         # A declined on_confirm is a clean cancel, not a failure (Dec1): the run
         # is 'cancelled' and any already-completed stage (e.g. GENERATE in the
@@ -1899,7 +1891,7 @@ async def _simulate_via_evaluatorq(
     """
     from datetime import datetime, timezone
 
-    from evaluatorq.common.tracing import record_token_usage, set_span_attrs
+    from evaluatorq.common.tracing import set_span_attrs
     from evaluatorq.evaluatorq import evaluatorq
     from evaluatorq.simulation.evaluators import get_evaluator
     from evaluatorq.types import DataPoint
@@ -2017,13 +2009,6 @@ async def _simulate_via_evaluatorq(
             raise SimulationDroppedError(msg, partial_results=results)
         logger.warning(msg)
 
-    # Aggregate token usage (including cost breakdown) onto the pipeline span.
-    # This also sets `gen_ai.usage.calls` to the summed per-datapoint call count —
-    # intended: a call count on this pipeline-level aggregate span is genuine
-    # observability richness, not an accidental leak.
-    from evaluatorq.contracts import Usage
-
-    record_token_usage(pipeline_span, usage=sum((r.token_usage for r in results), Usage()))
     set_span_attrs(
         pipeline_span,
         {

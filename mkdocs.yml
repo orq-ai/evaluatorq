@@ -134,6 +134,7 @@ plugins:
           - guides/red-teaming.md: Adaptive OWASP-mapped adversarial security testing for agents.
           - custom-evaluators-and-frameworks.md: Define custom evaluators and frameworks.
           - llm-as-a-jury.md: Multi-judge panel (jury) evaluation.
+          - cyclic-judge.md: Round-robin (CyclicJudge) judge assignment at single-judge cost.
           - pairwise-judging.md: Pairwise comparison judging.
           - evaluator-template-variables.md: Reference for pointwise and pairwise jury template variables.
           - dashboard.md: Browse red team and simulation reports in a local web dashboard.
@@ -246,6 +247,7 @@ nav:
           - Overview: guides/red-teaming.md
           - Custom Evaluators & Frameworks: custom-evaluators-and-frameworks.md
       - LLM as a Jury: llm-as-a-jury.md
+      - Cyclic Judge Assignment: cyclic-judge.md
       - Pairwise Judging: pairwise-judging.md
       - Evaluator Template Variables: evaluator-template-variables.md
   - Examples: examples/

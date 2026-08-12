@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -334,10 +335,23 @@ def _usage_first_int(usage: Any, keys: tuple[str, ...]) -> int:
 
     Only genuine ``int``/``float`` values count; ``None`` and non-numeric stand-ins
     (e.g. a bare ``MagicMock`` attribute) are skipped so the next alias is tried.
+
+    Unusable numbers — negative, NaN, ±inf — are skipped the same way rather than
+    raising. ``Usage.extract`` runs from ``record_llm_response`` on the *success*
+    path of every LLM call, so a hostile payload must degrade to 0, never turn a
+    good response into a failure: ``int(nan)`` raises ValueError, ``int(-inf)``
+    raises OverflowError, and a negative would trip the ``ge=0`` field constraint.
+    Skipping (rather than clamping in place) also lets a valid later alias win, so
+    ``{'input_tokens': -1, 'prompt_tokens': 10}`` still reads 10.
     """
     for key in keys:
         val = _usage_get(usage, key)
         if isinstance(val, (int, float)) and not isinstance(val, bool):
+            if not math.isfinite(val) or val < 0:
+                # debug, not warning: a provider that reports something unusable does so on
+                # every call, and one line per LLM call drowns the log it belongs to.
+                logger.debug('Usage.extract: ignoring unusable {} value {!r}', key, val)
+                continue
             return int(val)
     return 0
 
@@ -360,10 +374,18 @@ def _usage_detail_int(usage: Any, containers: tuple[str, ...], keys: tuple[str, 
 
 
 def _usage_first_float(usage: Any, keys: tuple[str, ...]) -> float | None:
-    """First numeric value across ``keys`` coerced to float, or None if absent."""
+    """First numeric value across ``keys`` coerced to float, or None if absent.
+
+    Non-finite values are skipped: NaN fails the ``ge=0`` cost constraint (``nan >= 0``
+    is False) and ``_clamped_cost`` cannot catch it (``nan < 0`` is False either), so
+    it would raise out of the telemetry path. See ``_usage_first_int``.
+    """
     for key in keys:
         val = _usage_get(usage, key)
         if isinstance(val, (int, float)) and not isinstance(val, bool):
+            if not math.isfinite(val):
+                logger.debug('Usage.extract: ignoring non-finite {} value {!r}', key, val)
+                continue
             return float(val)
     return None
 
@@ -378,7 +400,7 @@ def _clamped_cost(usage: Any, keys: tuple[str, ...]) -> float | None:
     """
     raw = _usage_first_float(usage, keys)
     if raw is not None and raw < 0:
-        logger.warning('Usage.extract: provider reported negative cost {!r} for {}; clamping to 0.0', raw, keys[0])
+        logger.debug('Usage.extract: provider reported negative cost {!r} for {}; clamping to 0.0', raw, keys[0])
         return 0.0
     return raw
 
@@ -1411,6 +1433,17 @@ class ManifestStatus(StrEnum):
 # populate — a typo here can't silently read back as 0.
 RUN_SUMMARY_TOTAL_KEY = 'total_results'
 
+RUN_SUMMARY_VERSION = 1
+"""Format version of ``RunManifest.summary``, stamped by ``ManifestWriter.complete()``.
+
+**Bump this whenever a surface's ``manifest_summary()`` changes shape** (a key
+added, renamed, or dropped). Readers compare the stamp instead of guessing
+whether a stored summary is current: an older or unstamped summary is re-read
+from the full report rather than rendered with blank columns. Without it a
+partially-populated summary reads as complete forever, which is how a thin
+backfill silently blanked the ``runs`` tables (RES-1276).
+"""
+
 
 class RunSummary(TypedDict, total=False):
     """Compact headline stats stashed on ``RunManifest.summary`` at completion.
@@ -1476,6 +1509,15 @@ class RunManifest(BaseModel):
             'without reading the full report. Small scalars / short lists only — never full results.'
         ),
     )
+    summary_version: int | None = Field(
+        default=None,
+        description=(
+            'Format version of the summary above (see RUN_SUMMARY_VERSION), stamped when it is '
+            'written. None for manifests saved before versioning, and for a manifest with no '
+            'summary at all; either way a reader treats the summary as not current and falls back '
+            'to the full report.'
+        ),
+    )
 
     @property
     def duration_seconds(self) -> float | None:
@@ -1490,6 +1532,7 @@ __all__ = [
     'DEFAULT_TARGET_TIMEOUT_MS',
     'JURY_RAW_OUTPUT_KEY',
     'RUN_SUMMARY_TOTAL_KEY',
+    'RUN_SUMMARY_VERSION',
     'AgentContext',
     'AgentResponse',
     'AgentResponseError',

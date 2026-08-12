@@ -13,6 +13,7 @@ panels are slotted into the tab they belong to.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any, cast
 
 from evaluatorq.common.reports import esc
@@ -2399,11 +2400,18 @@ def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
 
 def _rt_agent_pill(stats: dict[str, Any]) -> str:
     """One hero agent pill: dot (critical→red/vuln→orange/clean→green) + name
-    + mono faint ``{n} vuln`` / ``clean`` (spec §Run header)."""
+    + mono faint ``{model} · {n} vuln`` / ``clean`` (spec §Run header). The
+    model rides in the sub so "what was tested" is readable without opening
+    the Config tab — the run name alone never said which model answered. It
+    is dropped from the sub when the results carry no model (custom
+    ``AgentTarget`` backends don't report one)."""
     vulns = stats.get('vulns', 0)
     critical = stats.get('critical', 0)
     dot_cls = 'rt-hero-dot--critical' if critical else ('rt-hero-dot--vuln' if vulns else 'rt-hero-dot--clean')
     sub = f'{vulns} vuln' if vulns else 'clean'
+    model = stats.get('model') or ''
+    if model:
+        sub = f'{model} · {sub}'
     return (
         '<span class="rt-hero-pill">'
         f'<span class="rt-hero-dot {dot_cls}"></span>'
@@ -2413,23 +2421,62 @@ def _rt_agent_pill(stats: dict[str, Any]) -> str:
     )
 
 
+_RT_TRAILING_PAREN = re.compile(r'\s*\(([^()]*)\)\s*$')
+
+
+def _rt_run_name(report: RedTeamReport) -> str:
+    """The run name on its own, with the runner's trailing ``(target)`` /
+    ``(dynamic)`` / ``(2 targets)`` parentheticals removed.
+
+    ``runner`` builds sub-report descriptions as
+    ``f'{description} ({target}) (dynamic)'``, so the hero title used to carry
+    the run name, the agent and the pipeline welded into one string. Each of
+    those now has its own slot (title / agent pill / kicker), so the suffixes
+    are stripped here rather than shown three times. Only suffixes we
+    recognise are dropped — a user-written ``"Q3 sweep (post-patch)"`` keeps
+    its parenthetical.
+
+    The suffix carries ``PreparedTarget.target``, which is the *full* target
+    string (``"agent:my-key"``), while ``tested_agents`` holds bare keys
+    (``"my-key"``) — so both sides are compared with any ``kind:`` prefix
+    dropped, or ``(agent:my-key)`` would survive into the title.
+    """
+
+    def _bare(s: str) -> str:
+        return s.rsplit(':', 1)[-1].strip().lower()
+
+    name = (report.description or '').strip()
+    known = {'static', 'dynamic', 'hybrid'} | {_bare(a) for a in report.tested_agents}
+    while (m := _RT_TRAILING_PAREN.search(name)) is not None:
+        inner = _bare(m.group(1))
+        if inner in known or re.fullmatch(r'\d+ targets?', inner):
+            name = name[: m.start()].rstrip()
+        else:
+            break
+    return name or 'Red teaming report'
+
+
 def _redteam_hero(summary_section: Any, report: RedTeamReport) -> str:
-    """Title row + `N agents` pill (multi only) + per-agent pill row (multi
-    only). The 5-card KPI band moves to the Overview tab (spec §Run header) —
-    no double KPI band."""
+    """Kicker (`Red Team · {pipeline}`) + run-name title + `N agents` pill
+    (multi only) + per-agent pill row carrying agent name and, when the
+    results report one, model. The
+    5-card KPI band moves to the Overview tab (spec §Run header) — no double
+    KPI band."""
     multi_agent = len(report.tested_agents) > 1
     agents_pill = f'<span class="rt-hero-agents-pill">{len(report.tested_agents)} agents</span>' if multi_agent else ''
-    agent_pills_html = ''
-    if multi_agent:
-        agent_stats = _rt_agent_stats(report)
-        pills = ''.join(_rt_agent_pill(stats) for stats in agent_stats.values())
-        agent_pills_html = f'<div class="rt-hero-agent-row">{pills}</div>'
+    # Rendered for single-agent runs too: the pill is where the agent name and
+    # model live now that the title is the run name alone.
+    agent_stats = _rt_agent_stats(report)
+    pills = ''.join(_rt_agent_pill(stats) for stats in agent_stats.values())
+    agent_pills_html = f'<div class="rt-hero-agent-row">{pills}</div>' if pills else ''
+    pipeline = str(getattr(report.pipeline, 'value', report.pipeline) or '').strip()
+    kicker = f'Red Team · {pipeline.capitalize()}' if pipeline else 'Red Team'
     run_btn = trace_link_button(run_trace_url(report.run_id, report.experiment_url), 'View all run traces ↗')
     actions = f'<div class="report-hero-actions">{run_btn}</div>' if run_btn else ''
     return (
         '<header class="report-hero rt-hero">'
-        '<p class="report-hero-kicker">Red Team</p>'
-        f'<h2 class="report-hero-title rt-hero-title">{esc(report.description or "Red teaming report")}{agents_pill}</h2>'
+        f'<p class="report-hero-kicker">{esc(kicker)}</p>'
+        f'<h2 class="report-hero-title rt-hero-title">{esc(_rt_run_name(report))}{agents_pill}</h2>'
         f'{agent_pills_html}'
         f'{actions}'
         '</header>'

@@ -19,6 +19,16 @@ def _fake_report() -> MagicMock:
     # A stand-in report: only the attributes red_team touches post-pipeline.
     report = MagicMock()
     report.pipeline_warnings = []
+    # The runner stores this on the manifest, which validates it as a dict. Full
+    # production shape, so a runner that stopped forwarding it would be visible.
+    report.manifest_summary.return_value = {
+        'pipeline': 'dynamic',
+        'total_results': 0,
+        'total_attacks': 0,
+        'vulnerability_rate': None,
+        'resistance_rate': None,
+        'tested_agents': [],
+    }
     return report
 
 

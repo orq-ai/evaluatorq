@@ -1072,7 +1072,10 @@ def _render_token_usage_html(section: ReportSection) -> str:
             ]
             if any_cost:
                 agent_total_cost = r.get('total_cost')
-                row.append(_esc(_fmt_cost(agent_total_cost)) if agent_total_cost is not None else '—')
+                agent_coverage = _cost_coverage(r.get('priced_calls', 0), r.get('calls', 0))
+                row.append(
+                    _esc(f'{_fmt_cost(agent_total_cost)}{agent_coverage}') if agent_total_cost is not None else '—'
+                )
             table_rows.append(row)
         table = _html_table(headers, table_rows)
         parts.extend(('<h3>Per-Agent Breakdown</h3>', table))
