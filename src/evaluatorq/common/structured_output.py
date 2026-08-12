@@ -27,6 +27,14 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar('T', bound=BaseModel)
 
+# Structural request fields a caller's extra_kwargs may not replace: they are
+# owned by this helper, and letting extra_kwargs swap them out would silently
+# break the call it rides on (e.g. replacing the response_format schema this
+# helper exists to enforce). Same contract as LLMCallConfig.completion_params.
+# extra_body is deliberately NOT reserved here: it is the documented carrier
+# for provider options like the Orq router retry body.
+_STRUCTURAL_KEYS = frozenset({'model', 'messages', 'response_format'})
+
 
 async def generate_structured(
     client: AsyncOpenAI,
@@ -52,8 +60,18 @@ async def generate_structured(
     caller can carry provider options (``extra_body`` for the Orq router retry,
     a reasoning-model ``temperature`` override, user ``llm_kwargs``) and those
     win over the base fields without ever tripping a "multiple values for
-    keyword" error.
+    keyword" error. Structural fields (``model``, ``messages``,
+    ``response_format``) are reserved and raise ``ValueError`` — an
+    ``extra_kwargs`` entry silently replacing the schema would defeat the
+    helper.
     """
+    reserved = _STRUCTURAL_KEYS & (extra_kwargs or {}).keys()
+    if reserved:
+        raise ValueError(
+            f'extra_kwargs cannot override structural request field(s) {sorted(reserved)}; '
+            'these are owned by generate_structured.'
+        )
+
     # Cast once — the OpenAI SDK accepts dict literals at runtime; the TypedDict
     # union just doesn't type-narrow from dict[str, Any].
     typed_messages = cast('Any', messages)
@@ -72,7 +90,10 @@ async def generate_structured(
             base: dict[str, Any] = {
                 'model': model,
                 'messages': typed_messages,
-                'max_tokens': max_tokens,
+                # max_completion_tokens, not max_tokens: OpenAI rejects
+                # max_tokens outright for the o-series and gpt-5 families, and
+                # every other chat call in the repo already sends this key.
+                'max_completion_tokens': max_tokens,
                 **response_kwargs,
             }
             if temperature is not None:
@@ -82,11 +103,12 @@ async def generate_structured(
             # base fields without a "multiple values for keyword" error.
             if extra_kwargs:
                 base.update(extra_kwargs)
-            # Trace headers and run metadata are applied LAST so they stay
-            # authoritative: the active span's traceparent must propagate even
-            # when a caller passed its own headers (merge, don't replace, so
-            # other caller headers survive), and run metadata is not something a
-            # caller kwarg should silently override.
+            # Trace headers are applied LAST so the active span's traceparent
+            # propagates even when a caller passed its own headers (merge, not
+            # replace, so other caller headers survive). Run metadata fills in
+            # defaults only: apply_pipeline_metadata spreads any caller-supplied
+            # metadata (merged from extra_kwargs above) last, so a caller key
+            # wins on conflict — by that helper's contract.
             if trace_headers:
                 base['extra_headers'] = {**(base.get('extra_headers') or {}), **trace_headers}
             apply_pipeline_metadata(base)

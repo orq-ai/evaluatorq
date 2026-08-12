@@ -329,3 +329,19 @@ def test_find_triggers_resolves_rule_ids_and_dedupes():
     descs = [evidence for _, evidence in triggers]
     assert descs.count('No internal identifiers leak.') == 1
     assert 'criteria_0' not in descs
+
+
+@pytest.mark.asyncio
+async def test_fallback_tolerates_non_string_suggestions():
+    """A stray number/null in the fallback payload is coerced or dropped instead
+    of dropping the whole suggestion (review fix: keep the old tolerance)."""
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(side_effect=_schema_400())
+    sloppy = '{"suggestions": [1, "Add a guardrail", null]}'
+    client.chat.completions.create = AsyncMock(return_value=_fallback_response(sloppy))
+    result = _make_result(goal_achieved=False, rules_broken=['leaked data'])
+
+    recs = await generate_recommendations([result], client, 'some/legacy-model')
+
+    assert len(recs) == 1
+    assert recs[0].suggestions == ['1', 'Add a guardrail']

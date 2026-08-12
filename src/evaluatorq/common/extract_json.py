@@ -8,6 +8,30 @@ import re
 _JSON_BLOCK_PATTERN = re.compile(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', re.IGNORECASE)
 
 
+def coerce_str_list(value: object) -> object:
+    """``BeforeValidator`` for ``list[str]`` fields parsed from fallback JSON.
+
+    The ``json_object`` fallback runs on exactly the models most likely to emit
+    a stray ``1`` or ``null`` in a string array, and a ``ValidationError`` there
+    drops the whole report section. Stringify items and drop falsy ones instead,
+    matching the pre-RES-822 tolerance; non-list values pass through for
+    pydantic to reject normally.
+    """
+    if isinstance(value, list):
+        return [str(item) for item in value if item]
+    return value
+
+
+def coerce_str(value: object) -> object:
+    """``BeforeValidator`` for ``str`` fields parsed from fallback JSON:
+    stringify scalars (``None`` becomes ``''``) instead of failing validation."""
+    if value is None:
+        return ''
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    return value
+
+
 def extract_json_from_response(content: str) -> str:
     """Extract JSON from LLM response, handling markdown code blocks.
 
@@ -25,14 +49,18 @@ def extract_json_from_response(content: str) -> str:
     if match and match.group(1):
         return match.group(1).strip()
 
-    # No code block found — try to find the outermost JSON array or object
-    array_json = _extract_balanced(content, '[', ']')
-    if array_json is not None:
-        return array_json
-
-    object_json = _extract_balanced(content, '{', '}')
-    if object_json is not None:
-        return object_json
+    # No code block found — extract the outermost JSON structure. Whichever
+    # opener appears FIRST wins: trying arrays unconditionally before objects
+    # would pull the inner array out of '{"recommendations": [...]}' and hand
+    # the caller a list where it validates an object.
+    first_obj = content.find('{')
+    first_arr = content.find('[')
+    object_starts_first = first_obj != -1 and (first_arr == -1 or first_obj < first_arr)
+    order = ('{}', '[]') if object_starts_first else ('[]', '{}')
+    for open_ch, close_ch in order:
+        extracted = _extract_balanced(content, open_ch, close_ch)
+        if extracted is not None:
+            return extracted
 
     # Fallback: return trimmed content as-is
     return content.strip()

@@ -72,3 +72,18 @@ def test_extracts_first_valid_json():
     content = 'start {"a": 1} middle {"b": 2} end'
     result = extract_json_from_response(content)
     assert result == '{"a": 1}'
+
+
+def test_object_containing_array_extracts_the_object():
+    # Array-before-object precedence used to pull the inner array out of an
+    # unfenced object payload — the exact shape of a json_object fallback
+    # response like {"recommendations": [...]}.
+    content = 'Here you go: {"recommendations": [1, "ok"], "patterns_observed": "x"}'
+    result = extract_json_from_response(content)
+    assert result == '{"recommendations": [1, "ok"], "patterns_observed": "x"}'
+
+
+def test_array_before_object_still_extracts_the_array():
+    content = '[{"a": 1}, {"b": 2}] trailing {"c": 3}'
+    result = extract_json_from_response(content)
+    assert result == '[{"a": 1}, {"b": 2}]'

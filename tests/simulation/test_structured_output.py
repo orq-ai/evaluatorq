@@ -38,3 +38,23 @@ async def test_generate_structured_raises_when_parse_hits_length_limit() -> None
 
     # No json_object fallback call — the truncated result is not salvaged.
     client.chat.completions.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_structural_extra_kwargs_are_rejected() -> None:
+    # extra_kwargs silently replacing response_format would defeat the schema
+    # the helper exists to enforce — reserved keys raise instead (review fix).
+    client = MagicMock()
+
+    with pytest.raises(ValueError, match="structural"):
+        await generate_structured(
+            client,
+            model="local-model",
+            messages=[{"role": "user", "content": "return json"}],
+            response_format=SampleResponse,
+            max_tokens=100,
+            label="Sample.generate",
+            extra_kwargs={"response_format": {"type": "json_object"}},
+        )
+
+    client.chat.completions.parse.assert_not_called()

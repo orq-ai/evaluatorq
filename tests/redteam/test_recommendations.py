@@ -321,3 +321,70 @@ async def test_chat_completion_failure_returns_empty_without_raising(
     recs = await generate_focus_area_recommendations(_empty_report(), client, model='openai/gpt-5-mini')
 
     assert recs == []
+
+
+@pytest.mark.asyncio
+async def test_wire_param_is_max_completion_tokens(
+    mock_client_and_capture: tuple[Any, dict[str, Any]],
+) -> None:
+    """The token budget goes out as ``max_completion_tokens`` — OpenAI rejects
+    ``max_tokens`` outright for the o-series and gpt-5 families, and every other
+    chat call in the repo sends this key (review fix)."""
+    client, captured = mock_client_and_capture
+
+    await generate_focus_area_recommendations(_empty_report(), client, model='openai/gpt-5-mini')
+
+    assert captured['max_completion_tokens'] == 1500
+    assert 'max_tokens' not in captured
+
+
+@pytest.mark.asyncio
+async def test_user_extra_body_merges_with_router_retry(
+    mock_client_and_capture: tuple[Any, dict[str, Any]],
+) -> None:
+    """A caller-supplied ``extra_body`` merges INTO the router retry body instead
+    of silently replacing it (review fix: retry hints must not vanish)."""
+    client, captured = mock_client_and_capture
+    client.base_url = 'https://my.orq.ai/v3/router'
+    cfg = LLMConfig()
+
+    await generate_focus_area_recommendations(
+        _empty_report(),
+        client,
+        model='openai/gpt-5-mini',
+        cfg=cfg,
+        llm_kwargs={'extra_body': {'provider_hint': 'x'}},
+    )
+
+    assert captured['extra_body']['retry'] == {'count': cfg.retry_count, 'on_codes': cfg.retry_on_codes}
+    assert captured['extra_body']['provider_hint'] == 'x'
+
+
+@pytest.mark.asyncio
+async def test_fallback_tolerates_non_string_items(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stray number/null in the fallback payload is coerced or dropped instead
+    of dropping the whole focus area — the fallback runs on exactly the models
+    most likely to emit one (review fix: keep the pre-RES-822 tolerance)."""
+
+    def _fake_compute(_r: RedTeamReport, _n: int) -> list[dict[str, Any]]:
+        return [_fake_area()]
+
+    monkeypatch.setattr(rec_mod, '_compute_top_risk_areas', _fake_compute)
+
+    async def fake_parse(**_kwargs: Any) -> Any:
+        raise _schema_400()
+
+    sloppy = '{"recommendations": [1, "Add an allowlist", null], "patterns_observed": 5}'
+
+    async def fake_create(**_kwargs: Any) -> Any:
+        return _fallback_response(sloppy)
+
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(side_effect=fake_parse)
+    client.chat.completions.create = AsyncMock(side_effect=fake_create)
+
+    recs = await generate_focus_area_recommendations(_empty_report(), client, model='some/legacy-model')
+
+    assert recs, 'one bad item must not drop the section'
+    assert recs[0].recommendations == ['1', 'Add an allowlist']
+    assert recs[0].patterns_observed == '5'

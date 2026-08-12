@@ -9,12 +9,12 @@ never carries noise suggestions.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field
 
-from evaluatorq.common.extract_json import extract_json_from_response
+from evaluatorq.common.extract_json import coerce_str_list, extract_json_from_response
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.sanitize import xml_escape
 from evaluatorq.common.structured_output import generate_structured
@@ -36,10 +36,12 @@ class _SuggestionsLLMResponse(BaseModel):
     """Schema the LLM fills with remediation suggestions for one result (RES-822).
 
     Structured-output-first via ``generate_structured``, with a fence-tolerant
-    ``json_object`` fallback for models that reject structured output.
+    ``json_object`` fallback for models that reject structured output. The
+    coercing validator keeps the fallback as tolerant as the code this
+    replaced: a stray non-string item must not drop the whole suggestion.
     """
 
-    suggestions: list[str] = Field(default_factory=list)
+    suggestions: Annotated[list[str], BeforeValidator(coerce_str_list)] = Field(default_factory=list)
 
 
 # Metric thresholds on the judge's 0-1 scales. A conversation-average beyond

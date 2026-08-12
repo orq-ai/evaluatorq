@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import operator
 import random
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field
 
-from evaluatorq.common.extract_json import extract_json_from_response
+from evaluatorq.common.extract_json import coerce_str, coerce_str_list, extract_json_from_response
 from evaluatorq.common.structured_output import generate_structured
 from evaluatorq.redteam.contracts import (
     OWASP_CATEGORY_NAMES,
@@ -37,10 +37,12 @@ class _FocusAreaLLMResponse(BaseModel):
     Structured-output-first: ``generate_structured`` enforces this via
     ``parse()`` and falls back to ``json_object`` for models that reject it,
     where a fenced payload is recovered with ``extract_json_from_response``.
+    The coercing validators keep the fallback as tolerant as the code this
+    replaced: a stray non-string item must not drop the whole focus area.
     """
 
-    recommendations: list[str] = Field(default_factory=list)
-    patterns_observed: str = ''
+    recommendations: Annotated[list[str], BeforeValidator(coerce_str_list)] = Field(default_factory=list)
+    patterns_observed: Annotated[str, BeforeValidator(coerce_str)] = ''
 
 
 def _truncate(text: str, max_chars: int = 500) -> str:
@@ -205,11 +207,16 @@ async def generate_focus_area_recommendations(
             # temperature=1.0 escape hatch lives), then user llm_kwargs on top.
             # generate_structured splats these LAST over its base params, so an
             # override wins without a "multiple values for keyword" error.
-            extra_kwargs: dict[str, Any] = {
-                'extra_body': cfg.retry_extra_body(llm_client),
-                **cfg.evaluator.extra_kwargs,
-                **(llm_kwargs or {}),
+            # A caller-supplied extra_body merges INTO the router retry body
+            # rather than replacing it, so retry hints cannot vanish silently;
+            # structural keys (model/messages/response_format) are rejected by
+            # generate_structured itself.
+            user_extra: dict[str, Any] = {**cfg.evaluator.extra_kwargs, **(llm_kwargs or {})}
+            extra_body: dict[str, Any] = {
+                **cfg.retry_extra_body(llm_client),
+                **(user_extra.pop('extra_body', None) or {}),
             }
+            extra_kwargs: dict[str, Any] = {'extra_body': extra_body, **user_extra}
             parsed, raw = await generate_structured(
                 client=llm_client,
                 model=model,
