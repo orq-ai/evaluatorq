@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq.contracts import (
-    RUN_SUMMARY_TOTAL_KEY,
+    RUN_SUMMARY_VERSION,
     ManifestStatus,
     RunManifest,
     RunSummary,
@@ -136,9 +136,12 @@ class ManifestWriter:
         if report_path is not None:
             self.manifest.report_path = str(report_path)
         # Compact headline stats so a run-list row can be built from the manifest
-        # alone — no full-report read needed for completed runs.
+        # alone — no full-report read needed for completed runs. Stamped with the
+        # shape's version here, the one place a summary is stored, so no writer
+        # can persist an unversioned (or stale-shaped) one.
         if summary is not None:
             self.manifest.summary = summary
+            self.manifest.summary_version = RUN_SUMMARY_VERSION
         self.flush()
 
     def cancel(self) -> None:
@@ -207,22 +210,18 @@ def list_manifests(runs_dir: Path) -> list[RunManifest]:
     return sorted(out, key=lambda m: m.started_at, reverse=True)
 
 
-def summary_is_complete(summary: RunSummary | None) -> bool:
-    """Whether a manifest ``summary`` carries a full run-list row.
+def summary_is_current(manifest: RunManifest) -> bool:
+    """Whether *manifest* carries a summary of the current shape.
 
-    A summary written by a run writer (``manifest_summary()`` on the report
-    model) always carries more than ``total_results``; an early version of the
-    dashboard's legacy backfill wrote that one field alone, which renders the
-    dashboard card fine but blanks the pipeline / agents / rate columns of
-    ``eq redteam runs``. Such a sidecar reads as incomplete, so callers fall back
-    to the full report (and the dashboard rewrites the sidecar on its next scan).
-
-    ponytail: "more than total_results", not a per-surface required-key list — a
-    second list of the fields each surface writes is exactly the drift this
-    guards against. Tighten to per-surface keys only if a writer summary ever
-    legitimately shrinks.
+    A stamp comparison, not a shape guess: the summary is usable only when it was
+    written by a ``manifest_summary()`` of today's ``RUN_SUMMARY_VERSION``.
+    Anything older — an unstamped sidecar from before versioning, or the thin
+    ``{'total_results': N}`` an early dashboard backfill wrote — is not usable,
+    so callers fall back to the full report (and the dashboard rewrites the
+    sidecar on its next scan). Bumping ``RUN_SUMMARY_VERSION`` when a surface's
+    summary shape changes re-reads every stored run exactly once.
     """
-    return bool(summary) and not set(summary).issubset({RUN_SUMMARY_TOTAL_KEY})
+    return bool(manifest.summary) and manifest.summary_version == RUN_SUMMARY_VERSION
 
 
 def iter_report_files(runs_dir: Path) -> Iterator[Path]:
@@ -256,7 +255,7 @@ def list_run_records(runs_dir: Path) -> list[tuple[RunManifest | None, Path | No
     * A LEGACY report with no manifest yields ``(None, report_path)`` — the
       backwards-compatible path (read the full report for its stats). A completed
       manifest whose ``summary`` is too thin to build a row (see
-      :func:`summary_is_complete`) is demoted to this path rather than listed
+      :func:`summary_is_current`) is demoted to this path rather than listed
       with blank columns.
 
     Reports already covered by a manifest's ``report_path`` are de-duplicated out
@@ -267,7 +266,7 @@ def list_run_records(runs_dir: Path) -> list[tuple[RunManifest | None, Path | No
     covered: set[Path] = set()
     for m in list_manifests(runs_dir):
         report_path = Path(m.report_path) if m.report_path else None
-        if m.status == ManifestStatus.COMPLETED and report_path is not None and not summary_is_complete(m.summary):
+        if m.status == ManifestStatus.COMPLETED and report_path is not None and not summary_is_current(m):
             # Thin sidecar: leave the report uncovered so the legacy full-report
             # row below carries the run instead of a half-blank manifest row.
             continue

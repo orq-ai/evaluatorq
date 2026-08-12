@@ -247,18 +247,37 @@ def test_list_run_records_manifest_first_dedups_and_falls_back(tmp_path: Path) -
     assert live.status == 'running'
 
 
-def test_list_run_records_demotes_a_thin_summary_to_a_full_read(tmp_path: Path) -> None:
-    """A sidecar carrying only ``total_results`` can't fill a runs row, so the
-    record falls back to the report instead of listing with blank columns."""
+def test_list_run_records_demotes_an_unstamped_summary_to_a_full_read(tmp_path: Path) -> None:
+    """A summary written before versioning (or by an older shape) can't be trusted
+    to fill a runs row, so the record falls back to the report instead of listing
+    with blank columns."""
+    import json
+
     from evaluatorq.common.run_manifest import list_run_records
 
     runs = tmp_path / 'runs'
     runs.mkdir()
     report = runs / 'thin_20250101.json'
     report.write_text('{"pipeline": "dynamic", "summary": {}}', encoding='utf-8')
-    start_manifest(run_id='thin', surface='redteam', run_name='thin', runs_dir=runs).complete(
-        report_path=report, summary={'total_results': 1}
-    )
+    w = start_manifest(run_id='thin', surface='redteam', run_name='thin', runs_dir=runs)
+    w.complete(report_path=report, summary={'total_results': 1})
+    aged = json.loads(w.path.read_text())
+    del aged['summary_version']  # as every sidecar written before the stamp is
+    w.path.write_text(json.dumps(aged))
 
     records = list_run_records(runs)
     assert records == [(None, report)]  # listed once, as a legacy full-read row
+
+
+def test_complete_stamps_the_summary_version(tmp_path: Path) -> None:
+    """The stamp is written wherever a summary is, so no writer can persist an
+    unversioned one — that is what makes the reader's check a comparison and not
+    a shape guess."""
+    from evaluatorq.contracts import RUN_SUMMARY_VERSION
+
+    runs = tmp_path / 'runs'
+    w = start_manifest(run_id='r1', surface='sim', run_name='x', runs_dir=runs)
+    w.complete(summary={'total_results': 2, 'mode': 'run'})
+
+    m = list_manifests(runs)[0]
+    assert m.summary_version == RUN_SUMMARY_VERSION

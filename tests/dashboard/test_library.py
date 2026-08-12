@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from evaluatorq.contracts import RUN_SUMMARY_VERSION
 from evaluatorq.dashboard.library import ReportCard, report_id, resolve, scan, sniff_kind
 
 
@@ -143,6 +144,14 @@ def _start_manifest(runs_dir: Path, run_id: str, surface: str, name: str):
     from evaluatorq.common.run_manifest import start_manifest
 
     return start_manifest(run_id=run_id, surface=surface, run_name=name, runs_dir=runs_dir)
+
+
+def _strip_summary_version(mpath: Path) -> Path:
+    """Age a sidecar to pre-stamp format, as everything written before versioning is."""
+    data = json.loads(mpath.read_text())
+    data.pop('summary_version', None)
+    mpath.write_text(json.dumps(data))
+    return mpath
 
 
 def _rt_summary(total: int) -> dict:
@@ -333,8 +342,8 @@ def test_backfilled_manifest_carries_the_full_writer_summary(tmp_path):
 
 
 def test_scan_rewrites_a_thin_sidecar(tmp_path):
-    """A sidecar written by the first backfill version holds only total_results;
-    it must be re-read and upgraded rather than served as-is forever."""
+    """A sidecar predating the summary stamp (the thin one the first backfill
+    wrote) must be re-read and upgraded in place, not served as-is forever."""
     rt = tmp_path / 'runs'
     rt.mkdir()
     payload = _redteam_payload()
@@ -345,10 +354,15 @@ def test_scan_rewrites_a_thin_sidecar(tmp_path):
     _start_manifest(rt, report.stem, 'redteam', 'thin').complete(
         report_path=report, summary={'total_results': 4}
     )
+    mpath = _strip_summary_version(rt / '.manifests' / f'{report.stem}.json')
+    started_at = json.loads(mpath.read_text())['started_at']
 
     cards = scan([rt])
 
     assert len(cards) == 1  # not listed twice
-    written = json.loads((rt / '.manifests' / f'{report.stem}.json').read_text())
+    written = json.loads(mpath.read_text())
     assert written['summary']['total_attacks'] == 4
     assert written['summary']['pipeline'] == 'static'
+    assert written['summary_version'] == RUN_SUMMARY_VERSION
+    # Patched in place: the run's real start time survives the shape upgrade.
+    assert written['started_at'] == started_at
