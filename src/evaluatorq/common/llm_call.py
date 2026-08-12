@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from openai import BadRequestError
 
+from evaluatorq.common.pricing import price_usage
 from evaluatorq.common.thread_context import pipeline_metadata
 from evaluatorq.common.tracing import (
     get_trace_context_headers,
@@ -175,7 +176,9 @@ async def execute_chat_completion(
         params.pop('reasoning_effort', None)
         response = await asyncio.wait_for(client.chat.completions.create(**params), timeout=timeout_s)
     record_llm_response(span, response)
-    return response, TokenUsage.from_completion(response)
+    # The Orq router prices Responses but not Chat Completions, so usage here carries
+    # tokens only; price it from the model catalogue (RES-1295).
+    return response, await price_usage(TokenUsage.from_completion(response), model)
 
 
 async def execute_chat_parse(
@@ -227,4 +230,4 @@ async def execute_chat_parse(
         params.pop('reasoning_effort', None)
         response = await asyncio.wait_for(client.chat.completions.parse(**params), timeout=timeout_s)
     record_llm_response(span, response)
-    return response, TokenUsage.from_completion(response)
+    return response, await price_usage(TokenUsage.from_completion(response), model)
