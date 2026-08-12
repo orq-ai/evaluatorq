@@ -201,6 +201,50 @@ Notes worth knowing:
   majority of judges sharing the same systematic bias will still carry the
   vote; it protects against noisy judges, not coordinated ones.
 
+### Repetition-aware reliability
+
+Run comparisons with `repetitions=2` (or more) and the reliability weights stop
+coming from the global two-item fit and start coming from **within-datapoint
+repetition consistency**: how often a judge agrees with itself on repeated
+passes of the same prompt. Every raw pass is preserved and canonicalized on
+`PairwiseVote.observations` (a swapped-ordering 'B' is recorded as 'A', so
+entries are comparable across orderings), including abstained and failed
+passes as `None`.
+
+Why this exists: with a single pass per judge, the fitted sigma of the global
+two-item collapse mixes judge noise with datapoint heterogeneity when the run
+spans different questions or response pairs. Repeated passes of the same
+prompt are the one setting where disagreement is unambiguously judge noise, so
+consistency is computed per (judge, comparison, ordering) group, averaged to
+at most ONE observation per judge per datapoint, then averaged across
+datapoints. Consequences by construction:
+
+- Different datapoints are never compared to each other, so heterogeneity
+  cannot masquerade as unreliability.
+- Position bias does not read as inconsistency (orderings are separate
+  groups); the swap/reconcile machinery already handles bias.
+- Extra repetitions refine a judge's weight but never multiply its panel
+  weight: each judge still casts exactly one weighted vote per comparison.
+
+Read `bt_sigma.repetition_consistency` for the per-judge values (1.0 = always
+agrees with itself). When it is non-empty, the winner weights came from these;
+`p_a_beats_b` still comes from the pooled fit (a run-level headline, not a
+per-judge reliability). Judges without repeated decisive passes vote with the
+median weight and are named in `fit_warnings`. Legacy runs saved before
+repetition capture load fine and keep the previous global-fit behaviour.
+
+What consistency estimates - and what it must not be read as: it measures a
+judge's self-agreement under fixed conditions. It is NOT task difficulty, NOT
+overall judge quality (a judge can be consistently wrong), and NOT accuracy
+against any ground truth.
+
+Cost: repetitions multiply judge calls linearly (calls = judges x orderings x
+R), so R=2 doubles spend per comparison; wall-clock barely moves because
+passes fan out concurrently. Storage adds one small observation record per
+pass. R=2 is the recommended default when reliability weighting matters - it
+is the minimum that produces consistency evidence; R=3 only refines the
+per-group agreement scale and costs 50% more.
+
 For ranking more than two candidates (leaderboard-style), the underlying
 `evaluatorq.ranking.fit_bt()` accepts arbitrary item pairs from any number of
 judges and returns skills, a ranking, and per-judge reliability; `cycle_rate()`

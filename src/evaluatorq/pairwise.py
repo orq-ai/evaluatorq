@@ -74,6 +74,23 @@ def pairwise_consensus(votes: Sequence[VerdictValue | None]) -> str:
     return str(winner)
 
 
+class RepetitionObservation(BaseModel):
+    """One raw repetition pass of one judge in one ordering, canonicalized.
+
+    ``verdict`` is in the ORIGINAL A/B orientation regardless of ordering: a
+    'B' returned under the swapped ordering is recorded as 'A' here, so the
+    observations are directly comparable across orderings. ``None`` preserves
+    an abstained or errored pass (the per-vote ``repetition_failures`` count
+    says how many were errors); nothing is silently collapsed (RES-1251).
+    """
+
+    ordering: Literal['ab', 'ba'] = Field(description="'ab' = original slots, 'ba' = swapped ordering")
+    repetition: int = Field(ge=0, description='Call order within the ordering, 0-based')
+    verdict: Literal['A', 'B', 'tie'] | None = Field(
+        default=None, description='Canonicalized verdict; None = abstained or failed pass'
+    )
+
+
 class PairwiseVote(BaseModel):
     """One judge's reconciled verdict for a single A-vs-B comparison."""
 
@@ -88,6 +105,14 @@ class PairwiseVote(BaseModel):
     )
     replacement: bool = Field(default=False, description='True if this judge stood in for a failed configured judge')
     explanation: str = Field(default='', description='Explanation from the reconciled decisive ordering')
+    observations: list[RepetitionObservation] = Field(
+        default_factory=list,
+        description='Canonicalized per-repetition votes across both orderings (RES-1251); empty on '
+        'runs saved before repetition capture existed',
+    )
+    repetition_failures: int = Field(
+        default=0, ge=0, description='Repetition passes that raised an error, summed over both orderings'
+    )
 
 
 class PairwiseComparison(BaseModel):
@@ -177,6 +202,13 @@ class BTSigmaAggregation(BaseModel):
         default_factory=dict,
         description='Per-judge discriminator; smaller = sharper/more reliable. Empty on single-judge fallback.',
     )
+    repetition_consistency: dict[str, float] = Field(
+        default_factory=dict,
+        description='Per-judge within-datapoint repetition consistency in [0, 1] (RES-1251); when non-empty, '
+        'the winner weights came from THESE, not from the global-fit sigmas. Measures how often a judge '
+        'agrees with itself on repeated passes of the same prompt - NOT task difficulty and NOT overall '
+        'judge quality.',
+    )
     winners: list[str] = Field(
         default_factory=list,
         description='Reliability-weighted winner per comparison, aligned with the input order',
@@ -217,6 +249,42 @@ def _uniform_plurality_aggregation(
         converged=converged,
         fit_warnings=warnings,
     )
+
+
+def repetition_consistency(comparisons: Sequence[PairwiseComparison]) -> dict[str, float]:
+    """Per-judge within-datapoint repetition consistency, in [0, 1] (RES-1251).
+
+    The unit of analysis is one (judge, comparison, ordering) group: repeated
+    passes of the SAME prompt. A group needs >= 2 decisive repetitions;
+    its consistency is the mean pairwise agreement among them. A comparison
+    contributes at most ONE observation per judge (its groups averaged), so
+    repetition count never multiplies a judge's evidence, and different
+    datapoints are never compared to each other - which is exactly why this is
+    interpretable as judge noise where the global two-item fit was not.
+
+    Empty dict when no judge has any qualifying group (e.g. repetitions=1 or a
+    legacy run without observations).
+    """
+    per_judge: dict[str, list[float]] = {}
+    for c in comparisons:
+        for v in c.votes:
+            groups: dict[str, list[str]] = {}
+            for o in v.observations:
+                if o.verdict is not None:
+                    groups.setdefault(o.ordering, []).append(o.verdict)
+            group_scores = []
+            for vals in groups.values():
+                if len(vals) >= 2:
+                    pairs = [a == b for i, a in enumerate(vals) for b in vals[i + 1 :]]
+                    group_scores.append(sum(pairs) / len(pairs))
+            if group_scores:
+                per_judge.setdefault(v.model, []).append(sum(group_scores) / len(group_scores))
+    return {judge: sum(xs) / len(xs) for judge, xs in sorted(per_judge.items())}
+
+
+# Floor for consistency-derived weights: a judge that never agreed with itself
+# still casts a (heavily discounted) vote rather than being erased outright.
+_MIN_CONSISTENCY_WEIGHT = 0.05
 
 
 def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAggregation:
@@ -300,6 +368,29 @@ def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAg
                     f"judge '{judge}' has only {int(n)} decisive vote(s); its sigma is mostly prior, not evidence"
                 )
 
+    # RES-1251: when per-repetition observations exist, reliability weights come
+    # from within-datapoint consistency instead of the global two-item fit, so
+    # datapoint heterogeneity structurally cannot masquerade as judge noise.
+    # The pooled fit still supplies the run-level headline (p_a_beats_b) - two
+    # different questions, two different estimators.
+    rep_consistency = repetition_consistency(comparisons)
+    if rep_consistency:
+        weights = {judge: max(c, _MIN_CONSISTENCY_WEIGHT) for judge, c in rep_consistency.items()}
+        voted = {v.model for c in comparisons for v in c.votes if v.vote is not None}
+        neutral = statistics.median(weights.values()) if weights else 1.0
+        for judge in sorted(voted - set(weights)):
+            weights[judge] = neutral
+            fit_warnings.append(f"judge '{judge}' has no repeated decisive observations; weighted neutrally")
+        n_dp = sum(
+            1
+            for c in comparisons
+            if any(len([o for o in v.observations if o.verdict is not None]) >= 2 for v in c.votes)
+        )
+        fit_warnings.append(
+            f'reliability weights from within-datapoint repetition consistency '
+            f'({len(rep_consistency)} judge(s), {n_dp} datapoint(s) with repeats)'
+        )
+
     winners: list[str] = []
     for c in comparisons:
         w: dict[str, float] = {'A': 0.0, 'B': 0.0, 'tie': 0.0}
@@ -331,6 +422,7 @@ def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAg
         tie_rate=counts['tie'] / total if total else 0.0,
         inconclusive_rate=counts['inconclusive'] / total if total else 0.0,
         converged=fit.converged,
+        repetition_consistency=rep_consistency,
         fit_warnings=fit_warnings,
     )
 
@@ -543,6 +635,33 @@ async def run_pairwise(
             second_votes.update(rep_second)
             usages.extend(rep_usages)
 
+        def _observations(model: str) -> tuple[list[RepetitionObservation], int]:
+            """Canonicalized per-repetition votes from both orderings' JuryVotes.
+
+            The jury already retains raw per-repetition verdicts; this keeps
+            them on the PairwiseVote (swapped-ordering entries un-swapped) so
+            reliability estimation can use repeated observations instead of
+            only the collapsed vote (RES-1251)."""
+            out: list[RepetitionObservation] = []
+            failures = 0
+            for ordering, jv, swapped in (
+                ('ab', first_votes.get(model), False),
+                ('ba', second_votes.get(model), True),
+            ):
+                if jv is None:
+                    continue
+                failures += jv.repetitions_failed
+                for i, raw in enumerate(jv.repetitions):
+                    value = raw if not swapped else _unswap(raw)
+                    raw_verdict = str(value) if value is not None and str(value) in _PAIRWISE_VALUES else None
+                    verdict = cast("Literal['A', 'B', 'tie'] | None", raw_verdict)
+                    out.append(
+                        RepetitionObservation(
+                            ordering=cast("Literal['ab', 'ba']", ordering), repetition=i, verdict=verdict
+                        )
+                    )
+            return out, failures
+
         votes: list[PairwiseVote] = []
         for model in (*resolved_panel, *stand_ins):
             first_vote = first_votes.get(model)
@@ -554,6 +673,7 @@ async def run_pairwise(
                 completed = first_value is not None and second_value is not None
             else:
                 vote, flipped, completed = first_value, False, False
+            observations, repetition_failures = _observations(model)
             votes.append(
                 PairwiseVote(
                     model=model,
@@ -562,6 +682,8 @@ async def run_pairwise(
                     completed=completed,
                     replacement=model in stand_in_set,
                     explanation=_reconciled_explanation(vote, first_vote, second_vote),
+                    observations=observations,
+                    repetition_failures=repetition_failures,
                 )
             )
 
