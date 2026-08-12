@@ -90,7 +90,7 @@
 | src/evaluatorq/integrations/vercel\_ai\_sdk\_integration/\_\_init\_\_.py |        2 |        0 |    100% |           |
 | src/evaluatorq/integrations/vercel\_ai\_sdk\_integration/target.py       |      121 |        8 |     93% |229, 258, 261, 266-267, 271-272, 330 |
 | src/evaluatorq/job\_helper.py                                            |       25 |        2 |     92% |    81, 98 |
-| src/evaluatorq/llm\_jury.py                                              |      185 |        4 |     98% |141, 256, 618, 688 |
+| src/evaluatorq/llm\_jury.py                                              |      206 |        4 |     98% |142, 268, 706, 794 |
 | src/evaluatorq/openresponses/\_\_init\_\_.py                             |        4 |        0 |    100% |           |
 | src/evaluatorq/openresponses/client.py                                   |        7 |        0 |    100% |           |
 | src/evaluatorq/openresponses/convert\_models.py                          |      121 |        3 |     98% |   168-175 |
@@ -104,7 +104,7 @@
 | src/evaluatorq/pairwise\_reports/export\_html.py                         |      114 |        6 |     95% |93-98, 135, 146 |
 | src/evaluatorq/pairwise\_reports/sections.py                             |       56 |        0 |    100% |           |
 | src/evaluatorq/pairwise\_run.py                                          |       85 |        4 |     95% |145-149, 152 |
-| src/evaluatorq/processings.py                                            |       64 |        5 |     92% |51, 87-89, 270-272 |
+| src/evaluatorq/processings.py                                            |       66 |        5 |     92% |51, 87-89, 280-282 |
 | src/evaluatorq/progress.py                                               |      101 |       53 |     48% |55-95, 99-104, 137, 141-148, 152-157, 166-180, 213-231 |
 | src/evaluatorq/ranking.py                                                |      195 |        0 |    100% |           |
 | src/evaluatorq/redteam/\_\_init\_\_.py                                   |       33 |        5 |     85% |   249-258 |
@@ -218,8 +218,8 @@
 | src/evaluatorq/tracing/context.py                                        |       34 |        2 |     94% |     50-51 |
 | src/evaluatorq/tracing/setup.py                                          |      136 |       39 |     71% |103-113, 134-137, 142, 171, 177-183, 191-201, 235-243, 292-293, 314 |
 | src/evaluatorq/tracing/spans.py                                          |      112 |       13 |     88% |138, 149-156, 203-210 |
-| src/evaluatorq/types.py                                                  |       85 |        2 |     98% |   32, 225 |
-| **TOTAL**                                                                | **24706** | **4575** | **81%** |           |
+| src/evaluatorq/types.py                                                  |       85 |        2 |     98% |   32, 230 |
+| **TOTAL**                                                                | **24729** | **4575** | **81%** |           |
 
 
 ## Setup coverage badge
