@@ -121,14 +121,16 @@ async def evaluatorq(
 
     Can be called with either a params dict/object or keyword arguments:
 
-        # Using keyword arguments (recommended):
-        await evaluatorq("name", data=[...], jobs=[...], parallelism=5)
+    ```python
+    # Using keyword arguments (recommended):
+    await evaluatorq("name", data=[...], jobs=[...], parallelism=5)
 
-        # Using a dict:
-        await evaluatorq("name", {"data": [...], "jobs": [...], "parallelism": 5})
+    # Using a dict:
+    await evaluatorq("name", {"data": [...], "jobs": [...], "parallelism": 5})
 
-        # Using EvaluatorParams:
-        await evaluatorq("name", EvaluatorParams(data=[...], jobs=[...]))
+    # Using EvaluatorParams:
+    await evaluatorq("name", EvaluatorParams(data=[...], jobs=[...]))
+    ```
 
     Args:
         name: Name of the evaluation run
