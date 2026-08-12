@@ -1433,6 +1433,17 @@ class ManifestStatus(StrEnum):
 # populate — a typo here can't silently read back as 0.
 RUN_SUMMARY_TOTAL_KEY = 'total_results'
 
+RUN_SUMMARY_VERSION = 1
+"""Format version of ``RunManifest.summary``, stamped by ``ManifestWriter.complete()``.
+
+**Bump this whenever a surface's ``manifest_summary()`` changes shape** (a key
+added, renamed, or dropped). Readers compare the stamp instead of guessing
+whether a stored summary is current: an older or unstamped summary is re-read
+from the full report rather than rendered with blank columns. Without it a
+partially-populated summary reads as complete forever, which is how a thin
+backfill silently blanked the ``runs`` tables (RES-1276).
+"""
+
 
 class RunSummary(TypedDict, total=False):
     """Compact headline stats stashed on ``RunManifest.summary`` at completion.
@@ -1498,6 +1509,15 @@ class RunManifest(BaseModel):
             'without reading the full report. Small scalars / short lists only — never full results.'
         ),
     )
+    summary_version: int | None = Field(
+        default=None,
+        description=(
+            'Format version of the summary above (see RUN_SUMMARY_VERSION), stamped when it is '
+            'written. None for manifests saved before versioning, and for a manifest with no '
+            'summary at all; either way a reader treats the summary as not current and falls back '
+            'to the full report.'
+        ),
+    )
 
     @property
     def duration_seconds(self) -> float | None:
@@ -1512,6 +1532,7 @@ __all__ = [
     'DEFAULT_TARGET_TIMEOUT_MS',
     'JURY_RAW_OUTPUT_KEY',
     'RUN_SUMMARY_TOTAL_KEY',
+    'RUN_SUMMARY_VERSION',
     'AgentContext',
     'AgentResponse',
     'AgentResponseError',

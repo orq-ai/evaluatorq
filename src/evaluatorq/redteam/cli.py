@@ -841,6 +841,9 @@ def runs(
                 'total_attacks': summary.get('total_attacks', summary.get('total_results')),
                 'vulnerability_rate': summary.get('vulnerability_rate'),
                 'file': report_path.name if report_path is not None else None,
+                # Which summary shape these stats came from; None on a legacy row
+                # built by reading the report itself (see RUN_SUMMARY_VERSION).
+                'summary_version': manifest.summary_version,
             }
         # Legacy report with no manifest — read the full report for its stats.
         if report_path is None:
@@ -864,6 +867,7 @@ def runs(
             'total_attacks': summary.get('total_attacks', data.get('total_results')),
             'vulnerability_rate': summary.get('vulnerability_rate'),
             'file': report_path.name,
+            'summary_version': None,  # read from the report, not from a stored summary
         }
 
     rows: list[dict[str, Any]] = []
