@@ -25,6 +25,12 @@ BLOB = "https://github.com/orq-ai/evaluatorq/blob/main"
 # __all__ appear there and are documented once. Empty-__init__ subpackages
 # (redteam/backends, redteam/frameworks, redteam/runtime) have no __all__
 # and are covered by prose guides (Task 4), not API pages.
+# UPPER_SNAKE module attributes. mkdocstrings renders an attribute's whole value,
+# so exporting a multi-paragraph prompt or a registry dict dumps it verbatim onto
+# the reference page — `evaluatorq.redteam` had three prompt blobs and four
+# registries doing exactly that. Still exported and importable; just not printed.
+CONSTANT = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
 # Packages whose ``__all__`` names sub-modules rather than symbols. Without this
 # mkdocstrings renders only the package docstring and the page is a dead end —
 # it does not recurse into sub-modules on its own.
@@ -177,6 +183,7 @@ def write_api_pages() -> None:
                 getattr(_safe_getattr(mod, n, dotted), "__module__", "") or ""
             )
             in (dotted, None)
+            and not CONSTANT.match(n)
         ]
         # Names a same-named sub-module hides from griffe; documented separately
         # below, since mkdocstrings drops them from the package's `members:`.
