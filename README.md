@@ -46,7 +46,8 @@ uv add "evaluatorq[simulation]"       # + multi-turn agent simulation
 ```
 
 New here? Take the first line — it and the quick start below need no API key and
-no account. On pip: `python -m pip install evaluatorq`.
+no account (set `ORQ_API_KEY` and results also upload to Orq). On pip:
+`python -m pip install evaluatorq`.
 
 ## Quick start
 
@@ -184,9 +185,10 @@ Measured from real runs against an Orq-hosted agent, judged by `gpt-5-mini`
 | Same shape, second run | 3m 47s | 48k | $0.065 |
 | Short dynamic runs (1–2 categories) | 9s – 1m 26s | 6k – 26k | $0.004 – $0.031 |
 
-Roughly **$0.015 and under a minute per attack**, dominated by the judge's
-reasoning tokens. Attacks run concurrently (`parallelism`), so a 40-attack sweep
-is minutes, not hours. Attacker and judge models are both configurable — point
+Across those runs that works out to a cent or two, and roughly a minute, per
+attack — dominated by the judge's reasoning tokens. It is a handful of runs, not
+a benchmark, so treat it as an order of magnitude. Attacks run concurrently
+(`parallelism`), so a 40-attack sweep is minutes, not hours. Attacker and judge models are both configurable — point
 them at a cheaper model and the whole run gets cheaper.
 
 → [Red teaming guide](https://orq-ai.github.io/evaluatorq/guides/red-teaming/) ·
@@ -252,7 +254,7 @@ The package installs `eq` (and its longer alias `evaluatorq`):
 
 ```bash
 eq redteam run -t agent:my-agent     # red team an agent
-eq sim run -t agent:my-agent         # generate personas/scenarios and simulate
+eq sim run --target agent:my-agent   # generate personas/scenarios and simulate
 eq dashboard                         # browse saved runs
 eq --help
 ```

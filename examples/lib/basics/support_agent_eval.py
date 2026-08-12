@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Example: compare two versions of a support agent on the same questions.
 
-Runs entirely offline — no API key, no account. The two "agents" are stand-ins
+Needs no API key and no account. (If `ORQ_API_KEY` happens to be set, the run
+also uploads its results to Orq — unset it for a purely local run.) The two
+"agents" are stand-ins
 for whatever you actually ship: swap the bodies for a model call, a LangChain
 agent, or an HTTP request to your service, and the evaluation loop is unchanged.
 

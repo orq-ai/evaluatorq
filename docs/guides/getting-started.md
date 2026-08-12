@@ -87,7 +87,8 @@ uv run support_agent_eval.py
 `print_results=True` renders a pass/fail table in the terminal.
 `string_contains_evaluator()` checks whether the job output contains the
 `expected_output`, so the refund answer scores and the other two do not — the
-stand-in agent only knows about refunds. Replace `support_agent` with your own
+stand-in agent only knows about refunds. Because two rows fail, the script exits
+with status 1: that is the CI gate firing, not a crash. Replace `support_agent` with your own
 model or agent call and wire that pass/fail signal into CI to gate on quality
 regressions.
 

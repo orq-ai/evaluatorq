@@ -11,25 +11,27 @@ async def evaluatorq(
     name: str,
     params: EvaluatorParams | dict[str, Any] | None = None,
     *,
-    data: DatasetIdInput | Sequence[Awaitable[DataPoint] | DataPoint] | None = None,
+    data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None = None,
     jobs: list[Job] | None = None,
     evaluators: list[Evaluator] | None = None,
     parallelism: int = 1,
     print_results: bool = True,
     description: str | None = None,
     path: str | None = None,
+    inference: bool = True,
 ) -> EvaluatorqResult
 ```
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `data` | `list[DataPoint]` \| `list[Awaitable[DataPoint]]` \| `DatasetIdInput` | **required** | Data to evaluate |
+| `data` | `list[DataPoint \| dict]` \| `list[Awaitable[DataPoint]]` \| `DatasetIdInput` \| `ExperimentInput` | **required** | Data to evaluate — local rows (a `DataPoint` or a plain dict with the same keys), an Orq dataset, or an existing experiment |
 | `jobs` | `list[Job]` | **required** | Jobs to run on each data point |
 | `evaluators` | `list[Evaluator]` \| `None` | `None` | Evaluators that score job outputs |
 | `parallelism` | `int` (≥1) | `1` | Number of concurrent jobs |
 | `print_results` | `bool` | `True` | Display the progress and results table |
 | `description` | `str` \| `None` | `None` | Optional evaluation description |
 | `path` | `str` \| `None` | `None` | Path for organizing results on the Orq dashboard (e.g. `"Project/Category"`) |
+| `inference` | `bool` | `True` | Run the jobs; set `False` to score data that already has outputs |
 
 Parameters can also be passed positionally as an `EvaluatorParams` model or a
 plain dict — the three forms below are equivalent:
