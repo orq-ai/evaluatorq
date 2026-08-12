@@ -24,6 +24,7 @@ from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.replay import REPLAY_VERSION, REPLAY_VERSION_KEY
+from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.common.target_call import call_target_with_retry, default_map_error
 from evaluatorq.common.thread_context import (
@@ -309,6 +310,46 @@ def _datapoint_breakdown(datapoints: list[Any]) -> dict[str, int]:
         'template_dynamic': template_dynamic,
         'generated_dynamic': generated_dynamic,
     }
+
+
+def _apply_coverage_policy(report: RedTeamReport, pipeline_config: LLMConfig | None) -> None:
+    """Stamp the coverage floor onto the report and warn when it is not met.
+
+    Every pipeline must go through here, not just the dynamic one. The floor is
+    what ``ReportSummary.coverage_below_minimum`` compares against, and that
+    property returns False when the floor is None — so a leg that forgets to
+    stamp does not merely lose a warning, it silently disables the CLI exit gate
+    for its whole mode. Static ran that way until this was extracted.
+
+    Stamping also records on the saved run *what it was judged against*, so a
+    report re-read months later still knows the policy, and every consumer (exit
+    code, warnings, dashboards) reads one value instead of each holding its own
+    idea of "enough".
+    """
+    summary = report.summary
+    summary.min_evaluation_coverage = pipeline_config.evaluator.min_evaluation_coverage if pipeline_config else None
+
+    total_attacks = summary.total_attacks
+    if summary.no_verdict:
+        report.pipeline_warnings.append(
+            f'NO VERDICT: 0/{total_attacks} attacks could be evaluated — the target was not tested. '
+            'Check evaluator model configuration, credentials, and any gateway guardrails rejecting '
+            'judge or target calls.'
+        )
+        logger.error(f'No verdict: 0/{total_attacks} attacks could be evaluated — the target was not tested.')
+    elif summary.coverage_below_minimum:
+        floor = summary.min_evaluation_coverage
+        report.pipeline_warnings.append(
+            f'Evaluation coverage below the configured minimum: '
+            f'{summary.evaluated_attacks}/{total_attacks} attacks scored '
+            f'({pct(summary.evaluation_coverage)} < {pct(floor)}). The rates below are '
+            'computed over that subset only. Check evaluator model configuration and credentials.'
+        )
+        logger.warning(
+            f'Evaluation coverage {pct(summary.evaluation_coverage)} is below the configured '
+            f'minimum {pct(floor)}: {summary.unevaluated_attacks}/{total_attacks} attacks returned '
+            'inconclusive results.'
+        )
 
 
 def _cap_datapoints_balanced(datapoints: list[Any], cap: int) -> list[Any]:
@@ -802,8 +843,8 @@ async def red_team(
     # registered automated evaluator can be *attacked* but not *scored* by prompt-based
     # red teaming. Without this gate the dynamic leg would burn attacker and target
     # tokens generating attacks that always return inconclusive, and the summary could
-    # not distinguish "unmeasured" from "resisted" (resistance_rate defaults to 0.0 at
-    # zero evaluation coverage, which reads as fully vulnerable). Such vulnerabilities
+    # not distinguish "unmeasured" from "resisted" (every rate is None at zero evaluation
+    # coverage, so the report reads "no verdict" rather than a score). Such vulnerabilities
     # are pruned up front; if NONE of the requested ones are scorable, we raise.
     #
     # As of this writing every vulnerability in the registry HAS an evaluator (all ten
@@ -987,7 +1028,9 @@ async def red_team(
                 try:
                     rec_client = llm_client or config.evaluator.client
                     if rec_client is None:
-                        rec_client = create_async_llm_client(role_config=config.evaluator.as_call_config())
+                        rec_client = create_async_llm_client(
+                            role_config=config.evaluator.as_call_config(), max_retries=config.retry_count
+                        )
 
                     async with with_redteam_span(
                         'orq.redteam.recommendations',
@@ -1018,7 +1061,9 @@ async def red_team(
                 try:
                     es_client = llm_client or config.evaluator.client
                     if es_client is None:
-                        es_client = create_async_llm_client(role_config=config.evaluator.as_call_config())
+                        es_client = create_async_llm_client(
+                            role_config=config.evaluator.as_call_config(), max_retries=config.retry_count
+                        )
                     async with with_redteam_span(
                         'orq.redteam.executive_summary',
                         {'orq.redteam.model': evaluator_model},
@@ -1085,17 +1130,7 @@ async def red_team(
             # Only mark completion after the user completion hook succeeds.  If
             # it raises, the lifecycle context above records the surfaced error.
             if manifest_writer is not None:
-                manifest_writer.complete(
-                    report_path=run_path,
-                    summary={
-                        'pipeline': report.pipeline.value,
-                        'total_results': report.total_results,
-                        'total_attacks': report.summary.total_attacks,
-                        'vulnerability_rate': report.summary.vulnerability_rate,
-                        'resistance_rate': report.summary.resistance_rate,
-                        'tested_agents': list(report.tested_agents),
-                    },
-                )
+                manifest_writer.complete(report_path=run_path, summary=report.manifest_summary())
 
             return report
 
@@ -1304,7 +1339,10 @@ def _resolve_attacker_llm_client(
     if pipeline_config is not None and pipeline_config.attacker.client is not None:
         return pipeline_config.attacker.client
     if create_if_missing:
-        return create_async_llm_client(role_config=pipeline_config.attacker if pipeline_config is not None else None)
+        return create_async_llm_client(
+            role_config=pipeline_config.attacker if pipeline_config is not None else None,
+            max_retries=pipeline_config.retry_count if pipeline_config is not None else None,
+        )
     return None
 
 
@@ -1888,7 +1926,9 @@ async def _run_dynamic_or_hybrid(
             cap_llm_client = pipeline_config.attacker.client
         if cap_llm_client is None:
             try:
-                cap_llm_client = create_async_llm_client()
+                cap_llm_client = create_async_llm_client(
+                    max_retries=pipeline_config.retry_count if pipeline_config is not None else None,
+                )
             except Exception as exc:
                 logger.debug(f'No LLM client available for capability classification: {exc}')
                 cap_llm_client = None
@@ -2737,16 +2777,7 @@ async def _run_dynamic_or_hybrid(
                         f'Category {cat_key!r}: zero strategies selected — no applicable strategies found for this agent.'
                     )
 
-    total_attacks = merged.summary.total_attacks
-    unevaluated_attacks = merged.summary.unevaluated_attacks
-    if total_attacks > 0 and unevaluated_attacks / total_attacks > 0.5:
-        merged.pipeline_warnings.append(
-            f'High evaluation failure rate: {unevaluated_attacks}/{total_attacks} attacks could not be evaluated. '
-            'Check evaluator model configuration and credentials.'
-        )
-        logger.warning(
-            f'High evaluation failure rate: {unevaluated_attacks}/{total_attacks} attacks returned inconclusive results.'
-        )
+    _apply_coverage_policy(merged, pipeline_config)
 
     await await_maybe(
         resolved_hooks.on_stage_end(
@@ -3114,6 +3145,8 @@ async def _run_static(
     merged.run_id = run_id
     if agent_contexts:
         merged.agent_contexts = agent_contexts
+    # Before the report is persisted below, so the saved JSON records the policy too.
+    _apply_coverage_policy(merged, pipeline_config)
     await await_maybe(
         resolved_hooks.on_stage_end(
             PipelineStage.REPORT_GENERATION,

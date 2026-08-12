@@ -13,6 +13,7 @@ def build_simulation_client(
     *,
     extra_api_key: str | None = None,
     require_orq: bool = False,
+    max_retries: int | None = None,
 ) -> tuple[AsyncOpenAI, bool]:
     """Build AsyncOpenAI client.
 
@@ -33,6 +34,12 @@ def build_simulation_client(
     When ``require_orq`` is True, step 4 is disabled: the client must route
     through Orq (used by ORQ-agent targets whose ``agent/<key>`` model id only
     resolves on the Orq router).
+
+    ``max_retries`` feeds the SDK's client-side retry budget; ``None`` keeps the
+    SDK default. A caller that wraps its calls in ``with_retry`` must pass ``0``
+    so there is exactly one client-side retry layer (see
+    ``common.llm_client.resolve_llm_client``). Ignored for an injected
+    ``config_client``.
     """
     from evaluatorq.common.llm_client import resolve_llm_client
 
@@ -41,6 +48,7 @@ def build_simulation_client(
         extra_api_key=extra_api_key,
         honor_openai_base_url=False,
         require_orq=require_orq,
+        max_retries=max_retries,
     )
     return resolved.client, resolved.owned
 

@@ -134,10 +134,15 @@ class ScorerParameter(TypedDict):
     Args:
         data: The data point being evaluated.
         output: The output produced by the job for the data point.
+        row: Zero-based dataset index of the data point. Present when the
+            scorer runs inside ``evaluatorq()``; absent on direct invocation.
+            Lets evaluators key per-item decisions (e.g. cyclic judge
+            assignment) on the dataset position rather than call-arrival order.
     """
 
     data: DataPoint
     output: Output
+    row: NotRequired[int]
 
 
 Scorer = Callable[[ScorerParameter], Awaitable[EvaluationResult | dict[str, Any]]]
@@ -193,6 +198,9 @@ class EvaluatorParams(BaseModel):
         description: Optional description for the evaluation run.
         path: Optional path (e.g. "MyProject/MyFolder") to place the experiment
               in a specific project and folder on the Orq platform.
+        single_trace: Group every row of the run under one ``evaluatorq.run``
+              span, so the whole evaluation is a single trace. Off by default:
+              each row's ``orq.job`` is its own root, i.e. one trace per row.
     """
 
     model_config: ClassVar[ConfigDict] = {
@@ -210,6 +218,9 @@ class EvaluatorParams(BaseModel):
     inference: bool = True
     """When False, skip generation and evaluate the pre-recorded response in each
     row's ``messages`` column instead of running ``jobs``."""
+    single_trace: bool = False
+    """When True, open one ``evaluatorq.run`` span for the whole run so every row
+    shares a trace. Default False keeps each row's ``orq.job`` as its own root."""
 
     @model_validator(mode='after')
     def _require_jobs_when_inferring(self) -> 'EvaluatorParams':

@@ -59,8 +59,14 @@ class _TapProcessor:
         self._record(span)
 
     def _on_ending(self, span: Any) -> None:
-        """Support the OpenTelemetry SDK's current internal processor hook."""
-        self._record(span)
+        """SDK-required hook — deliberately does not record.
+
+        The SDK calls both `_on_ending` (with the live span) and `on_end` (with
+        a fresh ReadableSpan snapshot) for every span. Recording in both stored
+        each span twice as two distinct objects, which `_seen` — keyed on
+        `id()` — could not dedupe, doubling the reported span count.
+        """
+        return
 
     def _record(self, span: Any) -> None:
         span_identity = id(span)

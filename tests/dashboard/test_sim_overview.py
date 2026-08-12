@@ -4,6 +4,7 @@ the outcomes donut on the report Overview tab (RES-1022)."""
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -277,3 +278,40 @@ class TestOutcomesDonut:
         assert 'Outcomes' in html
         assert 'donut-legend' in html
         assert 'Achieved' in html
+
+
+def test_sim_overview_stats_cache_invalidates_on_rewrite(tmp_path: Path) -> None:
+    """The per-run stats cache is mtime-keyed: a rewritten report must re-read.
+
+    Without this, a re-run that overwrites its report in place would keep
+    showing the previous run's numbers for the life of the dashboard process.
+    """
+    sim = tmp_path / 'sim-runs'
+    sim.mkdir()
+    report = sim / 'cached_20260625_140000.json'
+    one = _result(persona='a', scenario='s', model='m', goal=True, score=1.0, turns=2, tokens=100)
+    report.write_text(json.dumps(_sim_payload('Cached', created='2026-06-25T14:00:00', results=[one])))
+    assert metrics.sim_overview([sim]).simulations_run == 1
+
+    report.write_text(json.dumps(_sim_payload('Cached', created='2026-06-25T14:00:00', results=[one, one])))
+    os.utime(report, ns=(0, report.stat().st_mtime_ns + 1_000_000))
+    assert metrics.sim_overview([sim]).simulations_run == 2
+
+
+def test_sim_overview_picks_up_a_new_run_without_restart(tmp_path: Path) -> None:
+    """The aggregate cache is keyed on a store fingerprint, not on time — a run
+    that lands after the first page load must appear on the next one."""
+    sim = tmp_path / 'sim-runs'
+    sim.mkdir()
+    one = _result(persona='a', scenario='s', model='m', goal=True, score=1.0, turns=2, tokens=100)
+    (sim / 'first_20260625_140000.json').write_text(
+        json.dumps(_sim_payload('First', created='2026-06-25T14:00:00', results=[one]))
+    )
+    assert metrics.sim_overview([sim]).total_runs == 1
+
+    (sim / 'second_20260626_140000.json').write_text(
+        json.dumps(_sim_payload('Second', created='2026-06-26T14:00:00', results=[one]))
+    )
+    after = metrics.sim_overview([sim])
+    assert after.total_runs == 2
+    assert after.recent[0].name == 'Second'

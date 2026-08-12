@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from typer.testing import CliRunner
 
 from evaluatorq.redteam.cli import app
+from evaluatorq.redteam.contracts import ReportSummary
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -20,6 +21,9 @@ runner = CliRunner()
 def test_from_run_is_forwarded_as_previous_run() -> None:
     report = MagicMock()
     report.model_dump.return_value = {}
+    # Real summary, not a MagicMock: the CLI branches on the derived ``no_verdict``
+    # property, and a MagicMock attribute is truthy — it would fake a zero-coverage run.
+    report.summary = ReportSummary(total_attacks=5, evaluated_attacks=5, resistance_rate=0.8)
 
     with patch('evaluatorq.redteam.red_team', new=AsyncMock(return_value=report)) as mock_rt:
         result = runner.invoke(

@@ -19,6 +19,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.redteam.contracts import (
     OWASP_CATEGORY_NAMES,
     AgentContext,
@@ -374,7 +375,7 @@ def _render_sidebar_filters(results: list[RedTeamResult]) -> list[RedTeamResult]
         # Result type
         result_filter = st.radio(
             'Result',
-            options=['All', 'Vulnerable', 'Resistant', 'Error'],
+            options=['All', 'Vulnerable', 'Resistant', 'Not evaluated', 'Error'],
             index=0,
             horizontal=True,
             key='filter_result',
@@ -458,7 +459,9 @@ def _render_sidebar_filters(results: list[RedTeamResult]) -> list[RedTeamResult]
     if result_filter == 'Vulnerable':
         filtered = [r for r in filtered if r.vulnerable]
     elif result_filter == 'Resistant':
-        filtered = [r for r in filtered if not r.vulnerable and not r.error]
+        filtered = [r for r in filtered if r.vulnerable is False and not r.error]
+    elif result_filter == 'Not evaluated':
+        filtered = [r for r in filtered if r.vulnerable is None and not r.error]
     elif result_filter == 'Error':
         filtered = [r for r in filtered if r.error]
 
@@ -700,10 +703,15 @@ def _render_focus_areas(report: RedTeamReport) -> None:
         for rec in report.focus_area_recommendations:
             rec_lookup[rec.category] = rec
 
-    # Compute risk scores per vulnerability
+    # Compute risk scores per vulnerability. Vulnerabilities with no verdict (resistance_rate
+    # is None) cannot be scored and must never rank — surface them separately instead.
     risk_items = []
+    unevaluated_vulns = []
     for vuln_id, vuln_summary in summary.by_vulnerability.items():
         if vuln_summary.total_attacks == 0:
+            continue
+        if vuln_summary.resistance_rate is None:
+            unevaluated_vulns.append(vuln_summary)
             continue
         vuln_rate = 1.0 - vuln_summary.resistance_rate
         dominant_sev = _dominant_severity_for_vulnerability(report.results, vuln_id)
@@ -715,11 +723,17 @@ def _render_focus_areas(report: RedTeamReport) -> None:
     risk_items.sort(key=operator.itemgetter(2), reverse=True)
     top_items = risk_items[:5]
 
-    if not top_items:
+    if not top_items and not unevaluated_vulns:
         return
 
     st.subheader('Focus Areas')
-    st.caption('Top-5 vulnerabilities by risk score (ASR × severity weight). Prioritize these for remediation.')  # noqa: RUF001
+    if top_items:
+        st.caption('Top-5 vulnerabilities by risk score (ASR × severity weight). Prioritize these for remediation.')  # noqa: RUF001
+    if unevaluated_vulns:
+        names = ', '.join(
+            _esc_html(v.vulnerability_name or _fmt_vulnerability(v.vulnerability)) for v in unevaluated_vulns
+        )
+        st.caption(f'Not evaluated (no verdict, excluded from risk ranking): {names}')
 
     for vuln_summary, dominant_sev, risk_score in top_items:
         vuln_name = _esc_html(vuln_summary.vulnerability_name or _fmt_vulnerability(vuln_summary.vulnerability))
@@ -820,7 +834,7 @@ def _render_executive_summary(report: RedTeamReport, summary: ReportSummary, fra
         f'## Executive Summary\n\n'
         f'This dashboard analyzes the security posture of AI agents against the **{framework_name}** '
         f'vulnerability framework. Based on **{summary.total_attacks:,}** attack simulations, your agent '
-        f'demonstrates a **{summary.vulnerability_rate:.1%} attack success rate (ASR)**. {critical_msg}'
+        f'demonstrates a **{pct(summary.vulnerability_rate)} attack success rate (ASR)**. {critical_msg}'
     )
 
     # KPI Cards
@@ -833,7 +847,7 @@ def _render_executive_summary(report: RedTeamReport, summary: ReportSummary, fra
     if num_agents > 1:
         kpi_cols[col_idx].metric('Agents Tested', str(num_agents))
         col_idx += 1
-    kpi_cols[col_idx].metric('ASR', f'{summary.vulnerability_rate:.1%}', help='Attack Success Rate — target is 0%')
+    kpi_cols[col_idx].metric('ASR', pct(summary.vulnerability_rate), help='Attack Success Rate — target is 0%')
     col_idx += 1
     kpi_cols[col_idx].metric(
         'Critical Exposure',
@@ -955,16 +969,25 @@ def _render_executive_summary(report: RedTeamReport, summary: ReportSummary, fra
                 '<th style="text-align:right;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.1);width:110px">ASR</th>'
                 '</tr></thead><tbody>'
             )
-            for vs in sorted(summary.by_vulnerability.values(), key=lambda v: v.resistance_rate):
-                asr = 1 - vs.resistance_rate
-                color = _asr_color(asr)
+            # Unevaluated vulnerabilities (resistance_rate is None) sort last, never as if 0.0.
+            for vs in sorted(
+                summary.by_vulnerability.values(),
+                key=lambda v: (v.resistance_rate is None, v.resistance_rate if v.resistance_rate is not None else 0),
+            ):
+                if vs.resistance_rate is None:
+                    asr_str = 'n/a'
+                    color = COLORS['sand_400']
+                else:
+                    asr = 1 - vs.resistance_rate
+                    color = _asr_color(asr)
+                    asr_str = f'{asr:.1%}'
                 vuln_table_html += (
                     f'<tr style="border-bottom:1px solid rgba(255,255,255,0.05)">'
                     f'<td style="padding:6px 10px">{vs.vulnerability_name or vs.vulnerability}</td>'
                     f'<td style="text-align:right;padding:6px 10px">'
                     f'<span style="background:{color}18;color:{color};border:1px solid {color}40;'
                     f'border-radius:12px;padding:2px 10px;font-weight:600;font-size:0.82rem">'
-                    f'{asr:.1%}</span></td>'
+                    f'{asr_str}</span></td>'
                     f'</tr>'
                 )
             vuln_table_html += '</tbody></table>'
@@ -1030,12 +1053,12 @@ def _render_methodology_tab(
             with cat_cols[i % len(cat_cols)]:
                 if cat_summary:
                     asr = cat_summary.vulnerability_rate
-                    color = _asr_color(asr)
+                    color = _asr_color(asr) if asr is not None else COLORS['sand_400']
                     st.markdown(
                         f'<span style="color:{color};font-weight:600">{cat}</span> '
                         f'— {cat_name}<br/>'
                         f'<span style="font-size:0.85rem;color:#888">'
-                        f'{cat_summary.total_attacks} attacks, {asr:.0%} ASR</span>',
+                        f'{cat_summary.total_attacks} attacks, {pct(asr)} ASR</span>',
                         unsafe_allow_html=True,
                     )
                 else:
@@ -1103,7 +1126,7 @@ def _render_technical_analysis(report: RedTeamReport, summary: ReportSummary) ->
     col1, col2, col3 = st.columns(3)
     col1.metric(
         'Attack Success Rate (ASR)',
-        f'{summary.vulnerability_rate:.1%}',
+        pct(summary.vulnerability_rate),
         delta_color='inverse',
         help='Lower is better. Measures how often attacks succeed against defenses.',
     )
@@ -1128,8 +1151,10 @@ def _render_technical_analysis(report: RedTeamReport, summary: ReportSummary) ->
 
     with col_left:
         st.subheader('ASR by Technique')
-        if summary.by_technique:
-            items = sorted(summary.by_technique.items(), key=lambda t: t[1].vulnerability_rate, reverse=True)
+        # Unevaluated techniques (vulnerability_rate is None) have no ASR to rank by — excluded.
+        rankable_technique = {k: v for k, v in summary.by_technique.items() if v.vulnerability_rate is not None}
+        if rankable_technique:
+            items = sorted(rankable_technique.items(), key=lambda t: t[1].vulnerability_rate, reverse=True)
             names = [k for k, _ in items]
             vuln_rates = [v.vulnerability_rate * 100 for _, v in items]
             totals = [v.total_attacks for _, v in items]
@@ -1157,8 +1182,10 @@ def _render_technical_analysis(report: RedTeamReport, summary: ReportSummary) ->
 
     with col_right:
         st.subheader('ASR by Delivery Method')
-        if summary.by_delivery_method:
-            items = sorted(summary.by_delivery_method.items(), key=lambda t: t[1].vulnerability_rate, reverse=True)
+        # Unevaluated delivery methods (vulnerability_rate is None) have no ASR to rank by — excluded.
+        rankable_delivery = {k: v for k, v in summary.by_delivery_method.items() if v.vulnerability_rate is not None}
+        if rankable_delivery:
+            items = sorted(rankable_delivery.items(), key=lambda t: t[1].vulnerability_rate, reverse=True)
             names = [k for k, _ in items]
             vuln_rates = [v.vulnerability_rate * 100 for _, v in items]
             totals = [v.total_attacks for _, v in items]
@@ -1185,10 +1212,12 @@ def _render_technical_analysis(report: RedTeamReport, summary: ReportSummary) ->
             st.info('No delivery method breakdown available.')
 
     # Vulnerability breakdown
-    if summary.by_vulnerability:
+    # Unevaluated vulnerabilities (resistance_rate is None) have no ASR to rank by — excluded.
+    rankable_vuln = {k: v for k, v in summary.by_vulnerability.items() if v.resistance_rate is not None}
+    if rankable_vuln:
         st.divider()
         st.subheader('ASR by Vulnerability')
-        v_items = sorted(summary.by_vulnerability.items(), key=lambda t: 1.0 - t[1].resistance_rate, reverse=True)
+        v_items = sorted(rankable_vuln.items(), key=lambda t: 1.0 - t[1].resistance_rate, reverse=True)
         v_names = [v.vulnerability_name or k for k, v in v_items]
         v_vuln_rates = [(1.0 - v.resistance_rate) * 100 for _, v in v_items]
         v_totals = [v.total_attacks for _, v in v_items]
@@ -1231,16 +1260,28 @@ def _render_technical_analysis(report: RedTeamReport, summary: ReportSummary) ->
                     st.subheader('By Severity')
                     items = [(k, summary.by_severity[k]) for k in SEVERITY_ORDER if k in summary.by_severity]
                     names = [k for k, _ in items]
-                    vuln_rates = [v.vulnerability_rate * 100 for _, v in items]
+                    # Unevaluated severities (vulnerability_rate is None) plot as 0 height but are
+                    # labeled 'n/a' and colored neutral so they never read as "fully safe".
+                    vuln_rates = [
+                        v.vulnerability_rate * 100 if v.vulnerability_rate is not None else 0 for _, v in items
+                    ]
                     totals = [v.total_attacks for _, v in items]
-                    colors = [SEVERITY_COLORS.get(k, COLORS['sand_400']) for k in names]
+                    colors = [
+                        SEVERITY_COLORS.get(k, COLORS['sand_400'])
+                        if v.vulnerability_rate is not None
+                        else COLORS['sand_400']
+                        for k, v in items
+                    ]
 
                     fig = go.Figure(
                         go.Bar(
                             x=names,
                             y=vuln_rates,
                             marker_color=colors,
-                            text=[f'{r:.1f}%<br>n={n}' for r, n in zip(vuln_rates, totals, strict=False)],
+                            text=[
+                                f'{pct(v.vulnerability_rate)}<br>n={n}'
+                                for (_, v), n in zip(items, totals, strict=False)
+                            ],
                             textposition='outside',
                         )
                     )
@@ -1268,7 +1309,7 @@ def _render_technical_analysis(report: RedTeamReport, summary: ReportSummary) ->
                     fig.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10), showlegend=False)
                     st.plotly_chart(fig, width='stretch')
                     for name, tt in summary.by_turn_type.items():
-                        st.caption(f'{name}: {tt.vulnerability_rate:.1%} vuln rate')
+                        st.caption(f'{name}: {pct(tt.vulnerability_rate)} vuln rate')
 
                 elif bd_key == 'domain':
                     st.subheader('By Domain')
@@ -1286,13 +1327,15 @@ def _render_technical_analysis(report: RedTeamReport, summary: ReportSummary) ->
                     fig.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10), showlegend=False)
                     st.plotly_chart(fig, width='stretch')
                     for name, sc in summary.by_domain.items():
-                        st.caption(f'{name}: {sc.vulnerability_rate:.1%} vuln rate')
+                        st.caption(f'{name}: {pct(sc.vulnerability_rate)} vuln rate')
 
     # Framework breakdown (for mixed reports)
-    if summary.by_framework and len(summary.by_framework) > 1:
+    # Unevaluated frameworks (vulnerability_rate is None) have no ASR to rank by — excluded.
+    rankable_framework = {k: v for k, v in summary.by_framework.items() if v.vulnerability_rate is not None}
+    if rankable_framework and len(rankable_framework) > 1:
         st.divider()
         st.subheader('By Framework')
-        items = sorted(summary.by_framework.items(), key=lambda t: t[1].vulnerability_rate, reverse=True)
+        items = sorted(rankable_framework.items(), key=lambda t: t[1].vulnerability_rate, reverse=True)
         names = [k for k, _ in items]
         vuln_rates = [v.vulnerability_rate * 100 for _, v in items]
         totals = [v.total_attacks for _, v in items]
@@ -1492,10 +1535,17 @@ def _render_interactive_breakdown(results: list[RedTeamResult], summary: ReportS
                     'Domain': v.domain,
                     'Attacks': v.total_attacks,
                     'Vulnerable': v.vulnerabilities_found,
-                    'ASR': f'{1 - v.resistance_rate:.1%}',
+                    'ASR': pct(1 - v.resistance_rate) if v.resistance_rate is not None else 'n/a',
                     'Strategies': ', '.join(v.strategies_used) if v.strategies_used else '-',
                 }
-                for v in sorted(summary.by_vulnerability.values(), key=lambda v: v.resistance_rate)
+                # Unevaluated vulnerabilities (resistance_rate is None) sort last, never as if 0.0.
+                for v in sorted(
+                    summary.by_vulnerability.values(),
+                    key=lambda v: (
+                        v.resistance_rate is None,
+                        v.resistance_rate if v.resistance_rate is not None else 0,
+                    ),
+                )
             ]
             st.dataframe(rows, width='stretch', hide_index=True)
 
@@ -1878,7 +1928,7 @@ def _render_data_explorer(report: RedTeamReport, summary: ReportSummary) -> None
             'Turn Type': r.attack.turn_type.value if r.attack.turn_type else '-',
             'Domain': domain_val,
             'Severity': r.attack.severity.value,
-            'Result': 'VULNERABLE' if r.vulnerable else 'RESISTANT',
+            'Result': 'VULNERABLE' if r.vulnerable else ('RESISTANT' if r.vulnerable is False else 'NOT EVALUATED'),
             'Source': r.attack.source,
         })
 
@@ -1944,7 +1994,7 @@ def _render_data_explorer(report: RedTeamReport, summary: ReportSummary) -> None
 
     options = []
     for r in filtered:
-        status = 'VULN' if r.vulnerable else 'SAFE'
+        status = 'VULN' if r.vulnerable else ('SAFE' if r.vulnerable is False else 'N/A')
         label = f'[{status}] {r.attack.id} / {r.attack.category} / {r.attack.attack_technique.value}'
         options.append(label)
 
@@ -2250,7 +2300,7 @@ def _render_errors_tab(summary: ReportSummary, report: RedTeamReport) -> None:
     st.subheader('Error Impact on Metrics')
     col1, col2 = st.columns(2)
     with col1:
-        st.metric('ASR (including errors)', f'{summary.vulnerability_rate:.1%}')
+        st.metric('ASR (including errors)', pct(summary.vulnerability_rate))
     with col2:
         evaluated = summary.evaluated_attacks
         if evaluated > 0:
@@ -2434,7 +2484,7 @@ def _render_agent_comparison(report: RedTeamReport, summary: ReportSummary, agen
     st.subheader('Agent Agreement')
 
     # Build attack-id -> {agent: vulnerable} map
-    attack_verdicts: dict[str, dict[str, bool]] = {}
+    attack_verdicts: dict[str, dict[str, bool | None]] = {}
     for r in report.results:
         aid = r.attack.id
         agent_key = r.agent.key or r.agent.display_name or 'unknown'
@@ -2453,8 +2503,12 @@ def _render_agent_comparison(report: RedTeamReport, summary: ReportSummary, agen
 
         for verdicts in attack_verdicts.values():
             if a1 in verdicts and a2 in verdicts:
-                shared += 1
                 v1, v2 = verdicts[a1], verdicts[a2]
+                if v1 is None or v2 is None:
+                    # Missing verdict for at least one agent — not comparable, not agreement
+                    # or disagreement.
+                    continue
+                shared += 1
                 if not v1 and not v2:
                     both_pass += 1
                 elif v1 and v2:
@@ -2535,6 +2589,9 @@ def _render_disagreement_viewer(results: list[RedTeamResult], agents: list[str])
         if a1 not in agent_map or a2 not in agent_map:
             continue
         r1, r2 = agent_map[a1], agent_map[a2]
+        if r1.vulnerable is None or r2.vulnerable is None:
+            # Missing verdict for at least one agent — missing data, not a disagreement.
+            continue
         if r1.vulnerable != r2.vulnerable:
             disagreements.append((r1, r2))
 
@@ -2582,8 +2639,16 @@ def _render_disagreement_viewer(results: list[RedTeamResult], agents: list[str])
 
             for col, r, agent_name in [(col_a, r1, a1), (col_b, r2, a2)]:
                 with col:
-                    verdict = 'VULNERABLE' if r.vulnerable else 'RESISTANT'
-                    verdict_color = COLORS['red_400'] if r.vulnerable else COLORS['success_400']
+                    # Disagreements are built from confirmed (non-None) verdict pairs only, but
+                    # branch defensively rather than assume.
+                    verdict = (
+                        'VULNERABLE' if r.vulnerable else ('RESISTANT' if r.vulnerable is False else 'NOT EVALUATED')
+                    )
+                    verdict_color = (
+                        COLORS['red_400']
+                        if r.vulnerable
+                        else (COLORS['success_400'] if r.vulnerable is False else COLORS['sand_400'])
+                    )
                     st.markdown(
                         f'**{_esc_html(agent_name)}** '
                         f"<span style='color:{verdict_color}; font-weight:bold;'>[{verdict}]</span>",

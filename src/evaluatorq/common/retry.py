@@ -7,7 +7,7 @@ import random
 from typing import TYPE_CHECKING, TypeVar
 
 from loguru import logger
-from openai import APIStatusError
+from openai import APIConnectionError, APIStatusError
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable
@@ -18,7 +18,10 @@ RETRY_MAX_WAIT_S = 60.0
 
 T = TypeVar('T')
 
-# httpx connection errors that mirror TS network error retry
+# httpx connection-error class names, kept only as a defensive fallback for a
+# raw httpx error raised outside the OpenAI SDK. SDK calls surface every
+# transport failure as APIConnectionError (see _is_retryable_error), so this
+# list is not the primary matcher and must not be relied on to enumerate httpx.
 _RETRYABLE_NETWORK_ERRORS = (
     'ConnectError',
     'ConnectTimeout',
@@ -43,23 +46,28 @@ def _is_retryable_error(
     err: Exception,
     retry_statuses: set[int] | None = None,
 ) -> bool:
-    """Check if an error is retryable (API status or network error)."""
-    # API errors with retryable status codes
+    """Check if an error is retryable (API status or transport failure)."""
+    # API errors with retryable status codes.
     if isinstance(err, APIStatusError):
         return _is_retryable_status(err.status_code, retry_statuses)
 
-    # Network/connection errors from httpx (used by openai SDK)
-    err_type = type(err).__name__
-    if err_type in _RETRYABLE_NETWORK_ERRORS:
+    # Transport failures. The OpenAI SDK raises APIConnectionError (and its
+    # APITimeoutError subclass) ONLY for transport-level failures — connection
+    # reset, read/write error, proxy error, DNS, timeout, and a server that
+    # disconnects mid-response (httpx.RemoteProtocolError) — wrapping the
+    # underlying httpx error as __cause__. Retrying on the SDK class covers
+    # every one of them at once, where an httpx class-name allowlist silently
+    # drops the next error type the SDK wraps (e.g. RemoteProtocolError, the
+    # ordinary way a long router call dies mid-flight).
+    if isinstance(err, APIConnectionError):
         return True
 
-    # Check wrapped cause for connection errors
-    if err.__cause__ is not None:
-        cause_type = type(err.__cause__).__name__
-        if cause_type in _RETRYABLE_NETWORK_ERRORS:
-            return True
-
-    return False
+    # Defensive fallback for a raw httpx error raised outside the SDK: match the
+    # connection-error class names directly, or through a single __cause__ hop.
+    if type(err).__name__ in _RETRYABLE_NETWORK_ERRORS:
+        return True
+    cause = err.__cause__
+    return cause is not None and type(cause).__name__ in _RETRYABLE_NETWORK_ERRORS
 
 
 async def with_retry(

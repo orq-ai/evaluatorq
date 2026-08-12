@@ -22,7 +22,7 @@ from pydantic import (
 from typing_extensions import NotRequired, TypedDict
 
 from evaluatorq.common.target_call import classify_error_type as classify_error_type
-from evaluatorq.contracts import StrEnum
+from evaluatorq.contracts import RunSummary, StrEnum
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -289,6 +289,9 @@ class PipelineStage(StrEnum):
     CLEANUP = 'cleanup'
     TARGET_START = 'target_start'
     TARGET_COMPLETE = 'target_complete'
+    # The judge call, as distinct from ATTACK_EXECUTION: a failure here means the
+    # attack ran and we have the transcript, but no verdict was produced.
+    EVALUATION = 'evaluation'
 
 
 class AgentCapability(StrEnum):
@@ -596,6 +599,16 @@ class EvaluatorConfig(BaseModel):
     repetitions: int = Field(default=1, ge=1)
     replacement_judges: list[str] = Field(default_factory=list)
     min_successful_judges: int = Field(default=1, ge=1)
+    min_evaluation_coverage: float | None = Field(
+        default=0.8,
+        ge=0.0,
+        le=1.0,
+        description='Fraction of attacks that must produce a verdict for the run to be trusted. '
+        'Distinct from min_successful_judges, which is a per-attack quorum and is what *creates* '
+        'unevaluated attacks; this is the run-level floor on how many of them are tolerable. '
+        'The CLI exits non-zero below it. None disables the gate (warning only); zero coverage '
+        'always fails regardless — see ReportSummary.no_verdict.',
+    )
     strict_panel: bool = False
 
     @model_validator(mode='before')
@@ -666,7 +679,12 @@ class LLMConfig(BaseModel):
     evaluator: EvaluatorConfig = Field(default_factory=EvaluatorConfig)
 
     # --- Retry configuration --------------------------------------------------
-    retry_count: int = 3
+    # Client-side retries per LLM call (OpenAI SDK ``max_retries``), and — on the
+    # Orq router path only — also the router-side budget via ``retry_extra_body``.
+    # The two layers multiply only during sustained outages: worst case per call
+    # is (retry_count + 1) HTTP requests, each asking the router for up to
+    # retry_count provider retries.
+    retry_count: int = Field(default=3, ge=0, le=10)
     retry_on_codes: list[int] = Field(default=[429, 500, 502, 503, 504])
     # How many times to regenerate an attacker turn that the attack model
     # content-filtered or self-censored (a refusal/safety disclaimer) before
@@ -714,6 +732,11 @@ class LLMConfig(BaseModel):
         if not client_routes_through_orq(client):
             return {}
         return {'retry': {'count': self.retry_count, 'on_codes': self.retry_on_codes}}
+
+    @property
+    def retry_attempts(self) -> int:
+        """Total attempts for ``with_retry``-style callers: initial call + retries."""
+        return self.retry_count + 1
 
 
 # Module-level default used by internal pipeline components.
@@ -1351,8 +1374,20 @@ class RedTeamResult(BaseModel):
     messages: list[Message] = Field(description='OpenAI-format conversation')
     response: str | None = None
     evaluation: UnifiedEvaluationResult | None = None
-    vulnerable: bool
+    vulnerable: bool | None = Field(
+        default=None,
+        description='True if the attack succeeded, False if the target resisted, None if the attack '
+        'could not be evaluated (target or judge call failed). None is not "resistant" — never treat '
+        'it as a passing result.',
+    )
     execution: ExecutionDetails | None = Field(default=None, description='Null for static pipeline')
+    evaluation_error: RunError | None = Field(
+        default=None,
+        description='Why the judge could not return a verdict, when it could not. Deliberately '
+        'separate from ``error``, which means the attack itself failed to run: here the attack '
+        'ran and the transcript exists, so collapsing the two would make an unscored result look '
+        'like an execution failure. Always accompanies vulnerable=None.',
+    )
     error: str | None = None
     error_type: str | None = None
     error_stage: str | None = None
@@ -1391,6 +1426,13 @@ class RedTeamResult(BaseModel):
         )
 
 
+_RATE_NONE_DOC = (
+    'Fraction over *evaluated* attacks only. None when nothing in this slice could be evaluated — '
+    'a 0.0 resistance rate reads as "fully compromised" and a 0.0 vulnerability rate reads as '
+    '"fully safe", and neither is true when no verdict exists. Never render None as a number.'
+)
+
+
 class VulnerabilitySummary(BaseModel):
     """Per-vulnerability summary statistics."""
 
@@ -1398,8 +1440,13 @@ class VulnerabilitySummary(BaseModel):
     vulnerability_name: str
     domain: str
     total_attacks: int
+    evaluated_attacks: int = Field(
+        default=0,
+        description='Attacks that produced a verdict. Without this, a "passed" count can only be '
+        'derived as total - found, which reports every unevaluated attack as resisted.',
+    )
     vulnerabilities_found: int
-    resistance_rate: float = Field(ge=0.0, le=1.0)
+    resistance_rate: float | None = Field(default=None, ge=0.0, le=1.0, description=_RATE_NONE_DOC)
     strategies_used: list[str] = Field(default_factory=list)
     framework_categories: dict[str, list[str]] = Field(
         default_factory=dict,
@@ -1419,8 +1466,8 @@ class CategorySummary(BaseModel):
     total_conversations: int = 0
     total_turns: int = 0
     vulnerabilities_found: int
-    vulnerability_rate: float = Field(default=0.0, ge=0.0, le=1.0)
-    resistance_rate: float = Field(ge=0.0, le=1.0)
+    vulnerability_rate: float | None = Field(default=None, ge=0.0, le=1.0, description=_RATE_NONE_DOC)
+    resistance_rate: float | None = Field(default=None, ge=0.0, le=1.0, description=_RATE_NONE_DOC)
     total_errors: int = 0
     strategies_used: list[str] = Field(default_factory=list)
 
@@ -1430,8 +1477,8 @@ class DimensionSummary(BaseModel):
 
     total_attacks: int = 0
     vulnerabilities_found: int = 0
-    resistance_rate: float = Field(default=1.0, ge=0.0, le=1.0)
-    vulnerability_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    resistance_rate: float | None = Field(default=None, ge=0.0, le=1.0, description=_RATE_NONE_DOC)
+    vulnerability_rate: float | None = Field(default=None, ge=0.0, le=1.0, description=_RATE_NONE_DOC)
 
 
 class TechniqueSummary(DimensionSummary):
@@ -1505,8 +1552,8 @@ class ReportSummary(BaseModel):
     total_turns: int = 0
     average_turns_per_attack: float = 0.0
     vulnerabilities_found: int = 0
-    vulnerability_rate: float = Field(default=0.0, ge=0.0, le=1.0)
-    resistance_rate: float = Field(default=1.0, ge=0.0, le=1.0)
+    vulnerability_rate: float | None = Field(default=None, ge=0.0, le=1.0, description=_RATE_NONE_DOC)
+    resistance_rate: float | None = Field(default=None, ge=0.0, le=1.0, description=_RATE_NONE_DOC)
     total_errors: int = 0
     errors_by_type: dict[str, int] = Field(default_factory=dict, description='Error counts grouped by type')
     token_usage_total: TokenUsage | None = Field(default=None, description='Aggregated token usage across all results')
@@ -1531,6 +1578,37 @@ class ReportSummary(BaseModel):
         default=None,
         description='Datapoint counts by source: static, template_dynamic, generated_dynamic (hybrid runs only)',
     )
+
+    min_evaluation_coverage: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description='The coverage floor that was in effect for this run, copied from '
+        'EvaluatorConfig so the report is self-describing — a saved run records the policy '
+        'it was judged against. None when no gate was configured.',
+    )
+
+    @property
+    def no_verdict(self) -> bool:
+        """True when attacks were run but none could be scored — the target was never tested.
+
+        The single definition of the condition. Consumers must branch on this rather
+        than re-deriving it from ``resistance_rate``/``evaluated_attacks``, so the CLI
+        exit code, the hooks log line, the reports and the dashboards cannot drift.
+        """
+        return self.total_attacks > 0 and self.evaluated_attacks == 0
+
+    @property
+    def coverage_below_minimum(self) -> bool:
+        """True when too few attacks were scored to trust the rates computed from them.
+
+        Distinct from :attr:`no_verdict`: here a verdict *does* exist, but it rests on
+        a sample small enough to be misleading — the realistic shape of a flaky gateway,
+        as opposed to a wholly blocked one.
+        """
+        if self.min_evaluation_coverage is None or self.total_attacks == 0:
+            return False
+        return self.evaluation_coverage < self.min_evaluation_coverage
 
 
 class FocusAreaRecommendation(BaseModel):
@@ -1602,6 +1680,23 @@ class RedTeamReport(BaseModel):
         'Explorer sample count. None when the upload failed or was skipped (uploaded_count then records the '
         'attempt) or the report predates this field — None with a set uploaded_count means "not confirmed".',
     )
+
+    def manifest_summary(self) -> RunSummary:
+        """Compact run-list summary stored on this run's ``RunManifest``.
+
+        Single source of truth for the shape: the runner writes it on completion
+        and the dashboard's backfill writes it for legacy reports. `eq redteam
+        runs` reads every field here, so a second hand-rolled shape silently
+        blanks columns.
+        """
+        return {
+            'pipeline': self.pipeline.value,
+            'total_results': self.total_results,
+            'total_attacks': self.summary.total_attacks,
+            'vulnerability_rate': self.summary.vulnerability_rate,
+            'resistance_rate': self.summary.resistance_rate,
+            'tested_agents': list(self.tested_agents),
+        }
 
     @field_validator('pipeline', mode='before')
     @classmethod
@@ -1797,7 +1892,7 @@ class ReportSnapshot(BaseModel):
     framework: Framework | None = None
     total_results: int
     categories_tested: list[str]
-    resistance_rate: float
+    resistance_rate: float | None = Field(default=None, ge=0.0, le=1.0, description=_RATE_NONE_DOC)
     vulnerabilities_found: int
     top_techniques: dict[str, int] = Field(default_factory=dict)
 

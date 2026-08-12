@@ -29,6 +29,7 @@ from .spans import (
     set_job_name_attribute,
     with_evaluation_span,
     with_job_span,
+    with_run_span,
 )
 
 __all__ = [
@@ -48,4 +49,5 @@ __all__ = [
     'with_evaluation_span',
     # Span functions
     'with_job_span',
+    'with_run_span',
 ]

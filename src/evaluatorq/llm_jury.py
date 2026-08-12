@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import typing
 from typing import Any, Literal
 
@@ -25,7 +26,7 @@ from evaluatorq.common.output_adapters import (
     output_to_messages,
     output_to_text,
 )
-from evaluatorq.contracts import LLMCallConfig
+from evaluatorq.contracts import JURY_RAW_OUTPUT_KEY, LLMCallConfig
 from evaluatorq.pairwise import PairwiseComparison, run_pairwise
 from evaluatorq.types import DataPoint, EvaluationResult, Evaluator, Output, ScorerParameter
 
@@ -183,6 +184,9 @@ async def _run_single_judge(
         response_model=verdict_model,
         structured_output=structured_output,
         temperature=temperature,
+        # Cross-domain purpose tag (same key redteam/simulation use) so the
+        # platform can query every judge call in a run, not just walk the tree.
+        span_attributes={'orq.llm.purpose': 'judge'},
     )
     return _outcome_to_prediction(outcome=outcome)
 
@@ -194,6 +198,7 @@ def _to_evaluation_result(
     passing_labels: list[str] | None,
     threshold: float,
     score_range: tuple[float, float],
+    include_jury_record: bool = False,
 ) -> EvaluationResult:
     """Map a :class:`JuryDeliberation` to an :class:`EvaluationResult`.
 
@@ -225,12 +230,22 @@ def _to_evaluation_result(
         value = verdict
         passed = (verdict in passing_labels) if passing_labels else None
 
-    return EvaluationResult.model_validate({
+    result: dict[str, Any] = {
         'value': value,
         'explanation': explanation,
         'pass': passed,
         'token_usage': deliberation.token_usage,
-    })
+    }
+    if include_jury_record:
+        # Same convention as the redteam bridge: the full JuryResult rides on
+        # raw_output under JURY_RAW_OUTPUT_KEY, so per-judge votes (which judge
+        # scored this item, what it said) stay auditable. Set for CYCLIC
+        # assignment only: there it is the sole record of the item->judge
+        # mapping, while under 'all' the panel itself is the record and the
+        # payload would be pure redundancy (and a behavior change for callers
+        # treating raw_output is None as a signal).
+        result['raw_output'] = {JURY_RAW_OUTPUT_KEY: deliberation.jury.model_dump(mode='json')}
+    return EvaluationResult.model_validate(result)
 
 
 # ---------------------------------------------------------------------------
@@ -282,6 +297,17 @@ def _resolve_and_validate_panel(
     return panel, deduped
 
 
+def _validate_assignment(assignment: str, *, min_successful_judges: int) -> None:
+    """Validate the judge-assignment strategy shared by both jury factories."""
+    if assignment not in ('all', 'cyclic'):
+        raise ValueError(f"unknown assignment: {assignment!r}. Use 'all' or 'cyclic'.")
+    if assignment == 'cyclic' and min_successful_judges > 1:
+        raise ValueError(
+            f'assignment="cyclic" runs exactly one judge per item, so '
+            f'min_successful_judges ({min_successful_judges}) must be 1.'
+        )
+
+
 # ---------------------------------------------------------------------------
 # Public factory
 # ---------------------------------------------------------------------------
@@ -296,6 +322,7 @@ def llm_jury(
     judges: list[str] | None = None,
     model: str | None = None,
     repetitions: int = 1,
+    assignment: Literal['all', 'cyclic'] = 'all',
     replacement_judges: list[str] | None = None,
     min_successful_judges: int = 1,
     verdict_kind: Literal['categorical', 'numeric'] = 'categorical',
@@ -360,6 +387,28 @@ def llm_jury(
       * a custom ``Callable[[list[JuryVote]], bool | float | str | None]`` for
         either kind (return ``None`` for "no consensus" / inconclusive). The
         same numeric keyword also collapses a single judge's ``repetitions``.
+    - ``assignment`` picks how judges are allocated across datapoints:
+
+      * ``"all"`` (default): every judge scores every datapoint — per-item
+        consensus at K times single-judge cost.
+      * ``"cyclic"``: round-robin (CyclicJudge, arXiv:2603.01865) — each
+        datapoint is scored by exactly one judge, cycling through the panel so
+        every judge covers an equal share. Panel-relative judge bias cancels in
+        expectation over the run at single-judge cost; per-item verdicts are
+        single-judge opinions, so use it for benchmark/run-level scores, not
+        when each individual verdict must be trustworthy. Per-item ``stats``
+        and ``raw_agreement`` are ``None``: one vote has no cross-judge
+        agreement to report. The rotation runs over the *deduplicated* panel,
+        so listing a judge twice to up-weight it only works under ``"all"``.
+        ``repetitions`` still applies to the single assigned judge — N calls
+        to one judge, never N judges. Inside ``evaluatorq()`` the assignment is
+        keyed on the dataset row (datapoint ``i`` goes to judge
+        ``i % len(panel)``), deterministic at any ``parallelism`` and across
+        evaluator reuse. A direct scorer call carries no row and rotates in
+        arrival order on a cursor that lives on the evaluator — only the equal
+        share balance is guaranteed there. Shuffle the dataset first if its
+        order is meaningful. Requires ``min_successful_judges=1``; a failed
+        item degrades to inconclusive unless ``replacement_judges`` is set.
 
     Examples
     --------
@@ -417,6 +466,20 @@ def llm_jury(
     panel, deduped = _resolve_and_validate_panel(
         judges=judges, model=model, min_successful_judges=min_successful_judges
     )
+    _validate_assignment(assignment, min_successful_judges=min_successful_judges)
+    # Round-robin assignment (CyclicJudge, arXiv:2603.01865): each datapoint is
+    # scored by exactly one judge over the deduplicated panel. Inside
+    # evaluatorq() the runner passes the dataset row, so the item->judge
+    # mapping is `deduped[row % len(deduped)]` — deterministic at any
+    # parallelism. A direct scorer call carries no row and falls back to this
+    # arrival-order cycle, where only the equal share balance is guaranteed.
+    # Either way every judge covers an equal share of the run, so panel-
+    # relative judge bias cancels in expectation at single-judge cost. Shuffle
+    # the dataset first if its order is meaningful, so the rotation cannot line
+    # up with a latent grouping (the paper's own caveat).
+    # Created unconditionally (itertools.cycle is lazy) and gated on the
+    # assignment mode at the call site, mirroring PairwiseComparator.
+    cycle = itertools.cycle(deduped)
     if temperature == 0.0:
         logger.warning(
             'temperature=0.0: reasoning models (o-series, gpt-5, …) often score worse '
@@ -471,9 +534,19 @@ def llm_jury(
                 extra_kwargs=extra_kwargs,
             )
 
+        if assignment == 'cyclic':
+            # Runner path: key on the dataset row so the mapping is reproducible
+            # regardless of parallelism or arrival order. Direct invocation has
+            # no row and falls back to the arrival-order cursor; that advance
+            # happens before any await, so concurrent calls still hand out
+            # exactly balanced judge shares.
+            row = params.get('row')
+            run_panel = [deduped[row % len(deduped)]] if row is not None else [next(cycle)]
+        else:
+            run_panel = panel
         deliberation = await run_jury(
             judge_fn=judge_fn,
-            panel=panel,
+            panel=run_panel,
             repetitions=repetitions,
             replacement_judges=replacement_judges or [],
             min_successful_judges=min_successful_judges,
@@ -482,14 +555,27 @@ def llm_jury(
             tie_break=tie_break,
             # A lone judge with no stand-ins has no redundancy: re-raise an outage
             # loudly instead of silently returning inconclusive on every datapoint.
+            # Cyclic assignment over a multi-judge panel keeps run-level redundancy
+            # (other items get other judges), so a failed item degrades to
+            # inconclusive instead of killing the whole run.
             propagate_errors=(len(deduped) == 1 and not replacement_judges),
         )
+        if assignment == 'cyclic':
+            # A cyclic item is scored by one judge, so there is no cross-judge
+            # agreement to report: a single vote renders raw_agreement=1.0 and
+            # std=0.0, byte-identical to a genuinely unanimous panel. Null both
+            # so downstream filters cannot read a cyclic run as uniformly
+            # confident (mirrors build_report's None mean_agreement).
+            deliberation = deliberation.model_copy(
+                update={'jury': deliberation.jury.model_copy(update={'stats': None, 'raw_agreement': None})}
+            )
         return _to_evaluation_result(
             deliberation=deliberation,
             verdict_kind=verdict_kind,
             passing_labels=passing_labels,
             threshold=threshold,
             score_range=score_range,
+            include_jury_record=assignment == 'cyclic',
         )
 
     return {'name': name, 'scorer': scorer}
@@ -548,6 +634,7 @@ class PairwiseComparator:
         system_prompt: str,
         swap: bool,
         repetitions: int,
+        assignment: Literal['all', 'cyclic'] = 'all',
         replacement_judges: list[str] | None,
         min_successful_judges: int,
         max_tokens: int,
@@ -563,6 +650,10 @@ class PairwiseComparator:
         self._system_prompt = system_prompt
         self._swap = swap
         self._repetitions = repetitions
+        self._assignment = assignment
+        # Round-robin cursor for assignment='cyclic'; advanced synchronously at
+        # compare() entry, so concurrent compares still balance judge shares.
+        self._cycle = itertools.cycle(panel)
         self._replacement_judges = replacement_judges
         self._min_successful_judges = min_successful_judges
         self._max_tokens = max_tokens
@@ -632,9 +723,13 @@ class PairwiseComparator:
                 extra_kwargs=self._extra_kwargs,
             )
 
+        # CyclicJudge: one judge per comparison, cycling through the panel.
+        # The assigned judge still runs both orderings when swap is on, so
+        # position-bias reconciliation is preserved per pair.
+        run_panel = [next(self._cycle)] if self._assignment == 'cyclic' else self._panel
         return await run_pairwise(
             judge_fn=judge_fn,
-            panel=self._panel,
+            panel=run_panel,
             response_a=response_a,
             response_b=response_b,
             swap=self._swap,
@@ -655,6 +750,7 @@ def llm_jury_pairwise(
     system_prompt: str | None = None,
     swap: bool = True,
     repetitions: int = 1,
+    assignment: Literal['all', 'cyclic'] = 'all',
     replacement_judges: list[str] | None = None,
     min_successful_judges: int = 1,
     max_tokens: int = 8000,
@@ -680,6 +776,19 @@ def llm_jury_pairwise(
     concurrently running ``compare`` calls on the returned comparator (each
     pair fans out judges x orderings x repetitions). ``None`` (default) keeps
     the fan-out unbounded.
+
+    ``assignment="cyclic"`` (CyclicJudge, arXiv:2603.01865) gives each
+    comparison exactly one judge, cycling through the panel so every judge
+    covers an equal share of the run. Judge bias cancels in expectation over
+    many comparisons at single-judge cost, and the assigned judge still runs
+    both orderings when ``swap`` is on. Per-pair winners are single-judge
+    opinions — roll them up with ``build_report`` and read run-level rates.
+    The rotation runs over the deduplicated panel (duplicate judge entries add
+    weight only under ``"all"``), ``repetitions`` still applies to the single
+    assigned judge, and the cursor lives on the comparator: a reused
+    comparator continues where the previous run stopped, so exact balance
+    holds per freshly built comparator, not per run. Shuffle your pairs first
+    if their order is meaningful. Requires ``min_successful_judges=1``.
     """
     if repetitions < 1:
         raise ValueError(f'repetitions ({repetitions}) must be >= 1.')
@@ -687,6 +796,7 @@ def llm_jury_pairwise(
         judges=judges, model=model, min_successful_judges=min_successful_judges
     )
     resolved_criteria = criteria or DEFAULT_PAIRWISE_CRITERIA
+    _validate_assignment(assignment, min_successful_judges=min_successful_judges)
     return PairwiseComparator(
         # Pass the deduped panel so the comparator's no-redundancy check
         # (`len(panel) == 1`) matches the panel run_jury actually runs, keeping
@@ -697,6 +807,7 @@ def llm_jury_pairwise(
         system_prompt=system_prompt if system_prompt is not None else _pairwise_system_prompt(),
         swap=swap,
         repetitions=repetitions,
+        assignment=assignment,
         replacement_judges=replacement_judges,
         min_successful_judges=min_successful_judges,
         max_tokens=max_tokens,

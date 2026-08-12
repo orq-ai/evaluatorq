@@ -136,12 +136,13 @@ from evaluatorq.redteam import red_team
 async def main():
     report = await red_team(
         "agent:my-agent-key",
-        categories=["LLM01", "ASI01", "ASI02"],
+        categories=["LLM01", "ASI01", "ASI02"],  # injection + agentic tool/memory abuse
         max_dynamic_datapoints=5,
         max_turns=3,
     )
-    print(f"Resistance rate: {report.summary.resistance_rate:.0%}")
-    print(f"Vulnerabilities: {report.summary.vulnerabilities_found}")
+    rate = report.summary.resistance_rate  # None when no attack could be evaluated
+    print(f"Resistance rate: {rate:.0%}" if rate is not None else "Resistance rate: no verdict")
+    print(f"Vulnerabilities found: {report.summary.vulnerabilities_found}")
 
 
 asyncio.run(main())

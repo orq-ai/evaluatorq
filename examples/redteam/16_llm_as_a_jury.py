@@ -65,8 +65,8 @@ async def main() -> None:
         generate_strategies=False,
     )
 
-    print(f"Resistance rate: {report.summary.resistance_rate:.0%}")
-
+    rate = report.summary.resistance_rate
+    print(f"Resistance rate: {rate:.0%}" if rate is not None else "Resistance rate: no verdict")
     # Run-level, chance-corrected agreement across every multi-judge sample.
     # None for single-judge runs.
     reliability = report.summary.jury_reliability

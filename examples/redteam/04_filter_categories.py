@@ -52,7 +52,8 @@ async def main() -> None:
     )
 
     print(f"\nCategories tested: {', '.join(report.categories_tested)}")
-    print(f"Resistance rate: {report.summary.resistance_rate:.0%}")
+    rate = report.summary.resistance_rate
+    print(f"Resistance rate: {rate:.0%}" if rate is not None else "Resistance rate: no verdict")
 
 
 if __name__ == "__main__":
