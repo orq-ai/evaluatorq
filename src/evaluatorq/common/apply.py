@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from evaluatorq.common.llm_call import apply_pipeline_metadata
+from evaluatorq.common.llm_call import execute_chat_completion
 from evaluatorq.common.sanitize import xml_escape
 
 if TYPE_CHECKING:
@@ -74,9 +74,16 @@ class ApplyRecommendationsResult(BaseModel):
     diff: str = ''
     applied: bool = False
     new_version: str | None = None
+    # True when the LLM merge yielded no usable text (empty / off-contract /
+    # unparseable). Distinct from a legitimate no-op where the model returned
+    # the instructions unchanged: the surface renders an error, not "no change".
+    merge_failed: bool = False
 
 
 _MAX_RECOMMENDATIONS = 20
+# The merge is a single interactive call from the dashboard; cap it so a stuck
+# provider surfaces as an error drawer instead of a hung request.
+_MERGE_TIMEOUT_S = 120.0
 # The rewrite fallback returns the WHOLE revised prompt; keep that budget
 # generous. Edits mode returns only the changed passages, so a much smaller
 # budget keeps latency down - which is the point of the mode.
@@ -234,37 +241,48 @@ async def _merge_call(
     cfg: Any,
     temperature: float | None,
 ) -> str:
-    """One JSON-mode completion.
+    """One JSON-mode completion, through the shared ``execute_chat_completion``
+    wrapper so both surfaces get the request timeout, trace-header injection,
+    pipeline metadata, and reasoning-effort handling the ad-hoc call skipped.
 
     With a pipeline ``cfg`` (duck-typed: ``evaluator.as_call_config()`` and
-    ``retry_extra_body``), the call uses that role config so reasoning models
-    that require ``temperature=1.0`` are not broken by a hardcoded value.
-    Without one (the simulation path), a plain call with the optional explicit
-    ``temperature`` is used.
+    ``retry_extra_body``), the role config supplies sampling and provider
+    extras so reasoning models that require ``temperature=1.0`` are not broken
+    by a hardcoded value; the wrapper still owns the structural request fields.
+    Without one (the simulation path), the optional explicit ``temperature`` is
+    used.
     """
-    messages = [
+    messages: list[dict[str, Any]] = [
         {'role': 'system', 'content': system_prompt},
         {'role': 'user', 'content': user_prompt},
     ]
+    call_temperature = temperature
+    extra_kwargs: dict[str, Any] = {}
     if cfg is not None:
-        merged_kwargs: Any = cfg.evaluator.as_call_config().completion_params(
+        role_kwargs: dict[str, Any] = cfg.evaluator.as_call_config().completion_params(
             model=model,
             messages=messages,
             max_completion_tokens=max_tokens,
             response_format={'type': 'json_object'},
             extra_body=cfg.retry_extra_body(llm_client),
         )
-    else:
-        merged_kwargs = {
-            'model': model,
-            'messages': messages,
-            'max_completion_tokens': max_tokens,
-            'response_format': {'type': 'json_object'},
-        }
-        if temperature is not None:
-            merged_kwargs['temperature'] = temperature
-    apply_pipeline_metadata(merged_kwargs)
-    response = await llm_client.chat.completions.create(**merged_kwargs)
+        # The wrapper owns the structural fields; hand it only the sampling and
+        # provider extras (temperature, extra_body, reasoning_effort, ...).
+        for structural in ('model', 'messages', 'max_completion_tokens', 'response_format'):
+            role_kwargs.pop(structural, None)
+        call_temperature = role_kwargs.pop('temperature', None)
+        extra_kwargs = role_kwargs
+    response, _usage = await execute_chat_completion(
+        client=llm_client,
+        model=model,
+        messages=messages,
+        span=None,
+        timeout_s=_MERGE_TIMEOUT_S,
+        temperature=call_temperature,
+        max_completion_tokens=max_tokens,
+        response_format={'type': 'json_object'},
+        extra_kwargs=extra_kwargs or None,
+    )
     return response.choices[0].message.content or '{}'
 
 
@@ -301,7 +319,40 @@ async def _merge_instructions(
     content = await _merge_call(
         llm_client, model, rewrite_system, user_prompt, _MAX_INSTRUCTIONS_TOKENS, cfg, temperature
     )
-    return str(json.loads(content).get('instructions', '')).strip()
+    try:
+        return str(json.loads(content).get('instructions', '')).strip()
+    except (ValueError, AttributeError):
+        # Off-contract rewrite response (not JSON, or not an object). Treated as
+        # an empty merge by the caller, which reports it rather than writing.
+        logger.info('apply_recommendations: rewrite response was not valid JSON; treating as empty merge')
+        return ''
+
+
+async def write_instructions(
+    orq_client: Any,
+    agent_key: str,
+    new_instructions: str,
+    *,
+    version_description: str,
+) -> str | None:
+    """Write ``new_instructions`` back as a new minor agent version.
+
+    The single platform-write path, shared by the engine's ``apply=True`` and
+    the dashboard confirm handler (which writes previously previewed text
+    without re-merging). Returns the new version string, or None when the
+    platform did not report one. Blocking SDK call, offloaded to a thread.
+    """
+    updated = await asyncio.to_thread(
+        functools.partial(
+            orq_client.agents.update,
+            agent_key=agent_key,
+            instructions=new_instructions,
+            version_increment='minor',
+            version_description=version_description,
+        )
+    )
+    version = getattr(updated, 'version', None)
+    return str(version) if version is not None else None
 
 
 async def apply_recommendations(
@@ -373,6 +424,7 @@ async def apply_recommendations(
             original_instructions=original,
             new_instructions=original,
             applied=False,
+            merge_failed=True,
         )
 
     result = ApplyRecommendationsResult(
@@ -386,16 +438,11 @@ async def apply_recommendations(
     if not apply:
         return result
 
-    updated = await asyncio.to_thread(
-        functools.partial(
-            orq_client.agents.update,
-            agent_key=agent_key,
-            instructions=new_instructions,
-            version_increment='minor',
-            version_description=version_description or f'Applied {len(recommendations)} remediation recommendation(s)',
-        )
+    result.new_version = await write_instructions(
+        orq_client,
+        agent_key,
+        new_instructions,
+        version_description=version_description or f'Applied {len(recommendations)} remediation recommendation(s)',
     )
-    version = getattr(updated, 'version', None)
     result.applied = True
-    result.new_version = str(version) if version is not None else None
     return result

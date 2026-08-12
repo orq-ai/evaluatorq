@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.apply import ApplyRecommendationsResult
 from evaluatorq.common.apply import apply_recommendations as _apply_common
-from evaluatorq.common.apply import collect_recommendations as _collect_common
 from evaluatorq.redteam.contracts import PIPELINE_CONFIG
 
 if TYPE_CHECKING:
@@ -33,15 +32,6 @@ _MAX_RECOMMENDATIONS = 20
 
 _INTRO = 'You are an AI security expert. '
 _CONTEXT = 'security-remediation recommendations from a red-team assessment of the agent'
-
-
-def _collect_recommendations(
-    focus_area_recommendations: list[FocusAreaRecommendation],
-    max_recommendations: int,
-    already_applied: Sequence[str] = (),
-) -> list[str]:
-    """Flatten focus-area recommendations, skipping the already-applied ones."""
-    return _collect_common(focus_area_recommendations, max_recommendations, already_applied)
 
 
 async def apply_recommendations(

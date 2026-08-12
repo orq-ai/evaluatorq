@@ -1805,15 +1805,9 @@ def _rt_overview(by_kind: dict[str, Any], report: RedTeamReport) -> str:
 _RISK_MAX = 8  # risk_score = vulnerability_rate x avg_severity_weight; SEVERITY_WEIGHTS tops out at critical=8
 
 
-def _rt_focus_tier(risk_score: float) -> tuple[str, str, str]:
-    """Tier code/label/color from ``risk_score`` (spec §Focus areas): >=2 -> P1
-    Critical priority (red-600); >=1 -> P2 High priority (orange-600); else P3
-    Medium priority (amber-600)."""
-    if risk_score >= 2:
-        return 'P1', 'Critical priority', 'var(--red-600)'
-    if risk_score >= 1:
-        return 'P2', 'High priority', 'var(--orange-600)'
-    return 'P3', 'Medium priority', 'var(--amber-600)'
+# Tier logic lives in report_kit.focus_tier so the focus cards and the apply
+# drawer share one source (review). Kept under the old name for local callers.
+from evaluatorq.dashboard.report_kit import focus_tier as _rt_focus_tier
 
 
 def _rt_focus_pattern_chips(area: dict[str, Any], color: str) -> str:

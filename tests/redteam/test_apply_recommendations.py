@@ -13,10 +13,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from evaluatorq.common.apply import collect_recommendations as _collect_recommendations
 from evaluatorq.redteam.contracts import PIPELINE_CONFIG, FocusAreaRecommendation
 from evaluatorq.redteam.reports.apply import (
     ApplyRecommendationsResult,
-    _collect_recommendations,
     apply_recommendations,
 )
 
@@ -181,47 +181,47 @@ class TestApplyEdits:
     def test_exact_replace(self):
         from evaluatorq.common.apply import _apply_edits
 
-        assert _apply_edits("a b c", [{"find": "b", "replace": "X"}]) == "a X c"
+        assert _apply_edits('a b c', [{'find': 'b', 'replace': 'X'}]) == 'a X c'
 
     def test_whitespace_normalized_fallback(self):
         from evaluatorq.common.apply import _apply_edits
 
-        original = "Rule one.\n  Rule   two applies."
-        edits = [{"find": "Rule two applies.", "replace": "Rule two never applies."}]
-        assert _apply_edits(original, edits) == "Rule one.\n  Rule two never applies."
+        original = 'Rule one.\n  Rule   two applies.'
+        edits = [{'find': 'Rule two applies.', 'replace': 'Rule two never applies.'}]
+        assert _apply_edits(original, edits) == 'Rule one.\n  Rule two never applies.'
 
     def test_ambiguous_find_fails(self):
         from evaluatorq.common.apply import _apply_edits
 
-        assert _apply_edits("dup dup", [{"find": "dup", "replace": "X"}]) is None
+        assert _apply_edits('dup dup', [{'find': 'dup', 'replace': 'X'}]) is None
 
     def test_missing_find_fails(self):
         from evaluatorq.common.apply import _apply_edits
 
-        assert _apply_edits("abc", [{"find": "zzz", "replace": "X"}]) is None
+        assert _apply_edits('abc', [{'find': 'zzz', 'replace': 'X'}]) is None
 
     def test_sequential_edits_see_prior_output(self):
         from evaluatorq.common.apply import _apply_edits
 
-        edits = [{"find": "one", "replace": "two"}, {"find": "two two", "replace": "done"}]
-        assert _apply_edits("two one", edits) == "done"
+        edits = [{'find': 'one', 'replace': 'two'}, {'find': 'two two', 'replace': 'done'}]
+        assert _apply_edits('two one', edits) == 'done'
 
 
 class TestParseEdits:
     def test_valid(self):
         from evaluatorq.common.apply import _parse_edits
 
-        content = json.dumps({"edits": [{"find": "a", "replace": "b"}]})
-        assert _parse_edits(content) == [{"find": "a", "replace": "b"}]
+        content = json.dumps({'edits': [{'find': 'a', 'replace': 'b'}]})
+        assert _parse_edits(content) == [{'find': 'a', 'replace': 'b'}]
 
     @pytest.mark.parametrize(
-        "payload",
+        'payload',
         [
-            {"instructions": "whole rewrite"},
-            {"edits": []},
-            {"edits": [{"find": "", "replace": "b"}]},
-            {"edits": [{"find": "a"}]},
-            {"edits": "not a list"},
+            {'instructions': 'whole rewrite'},
+            {'edits': []},
+            {'edits': [{'find': '', 'replace': 'b'}]},
+            {'edits': [{'find': 'a'}]},
+            {'edits': 'not a list'},
         ],
     )
     def test_off_contract_shapes(self, payload):
@@ -234,9 +234,9 @@ class TestParseEdits:
 async def test_merge_uses_edits_mode_when_it_lands():
     from evaluatorq.common.apply import _merge_instructions
 
-    client = _llm_client({"edits": [{"find": "OLD RULE", "replace": "NEW RULE"}]})
-    revised = await _merge_instructions(client, "m", "Intro. OLD RULE. Outro.", ["rec"], cfg=PIPELINE_CONFIG)
-    assert revised == "Intro. NEW RULE. Outro."
+    client = _llm_client({'edits': [{'find': 'OLD RULE', 'replace': 'NEW RULE'}]})
+    revised = await _merge_instructions(client, 'm', 'Intro. OLD RULE. Outro.', ['rec'], cfg=PIPELINE_CONFIG)
+    assert revised == 'Intro. NEW RULE. Outro.'
     # One call: the fast path never touched the rewrite prompt.
     assert client.chat.completions.create.await_count == 1
 
@@ -246,15 +246,15 @@ async def test_merge_falls_back_to_rewrite_when_edits_fail():
     from evaluatorq.common.apply import _merge_instructions
 
     client = _llm_client(
-        {"edits": [{"find": "NOT PRESENT", "replace": "X"}]},
-        {"instructions": "FULL REWRITE"},
+        {'edits': [{'find': 'NOT PRESENT', 'replace': 'X'}]},
+        {'instructions': 'FULL REWRITE'},
     )
-    revised = await _merge_instructions(client, "m", "Some instructions.", ["rec"], cfg=PIPELINE_CONFIG)
-    assert revised == "FULL REWRITE"
+    revised = await _merge_instructions(client, 'm', 'Some instructions.', ['rec'], cfg=PIPELINE_CONFIG)
+    assert revised == 'FULL REWRITE'
     assert client.chat.completions.create.await_count == 2
     # The second call used the rewrite prompt, not the edits prompt.
     second_kwargs = client.chat.completions.create.await_args_list[1].kwargs
-    assert "search/replace" not in second_kwargs["messages"][0]["content"]
+    assert 'search/replace' not in second_kwargs['messages'][0]['content']
 
 
 @pytest.mark.asyncio
@@ -263,7 +263,7 @@ async def test_merge_falls_back_when_model_returns_rewrite_shape():
     # must not be trusted blindly: the fallback call is the authoritative rewrite.
     from evaluatorq.common.apply import _merge_instructions
 
-    client = _llm_client({"instructions": "SNEAKY"}, {"instructions": "PROPER REWRITE"})
-    revised = await _merge_instructions(client, "m", "Original.", ["rec"], cfg=PIPELINE_CONFIG)
-    assert revised == "PROPER REWRITE"
+    client = _llm_client({'instructions': 'SNEAKY'}, {'instructions': 'PROPER REWRITE'})
+    revised = await _merge_instructions(client, 'm', 'Original.', ['rec'], cfg=PIPELINE_CONFIG)
+    assert revised == 'PROPER REWRITE'
     assert client.chat.completions.create.await_count == 2

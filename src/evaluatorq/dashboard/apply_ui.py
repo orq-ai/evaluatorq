@@ -32,8 +32,10 @@ Public entry points:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import threading
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -72,9 +74,9 @@ def apply_model() -> str:
 
 def pending_recommendations(report: RedTeamReport) -> list[str]:
     """Recommendation strings not yet recorded as applied, order-preserving."""
-    from evaluatorq.redteam.reports.apply import _collect_recommendations
+    from evaluatorq.common.apply import collect_recommendations
 
-    return _collect_recommendations(
+    return collect_recommendations(
         report.focus_area_recommendations or [],
         max_recommendations=10_000,
         already_applied=report.applied_recommendations,
@@ -168,38 +170,32 @@ def render_sim_apply_panel(rid: str, run: SimulationRun) -> str:
     return _panel_html(rid, 'sim', run.target or '', pending, len(run.applied_suggestions))
 
 
-def render_sim_rec_apply_button(rid: str, result_index: int, rec: str) -> str:
-    """Per-suggestion Apply button for a simulation recommendation card.
+def _rec_apply_button(rid: str, surface: str, narrow_field: str, narrow_value: str, rec: str) -> str:
+    """Per-recommendation Apply button, shared by both surfaces.
 
-    Posts the single suggestion (plus its card's ``result_index``, so the
-    drawer can show that card's persona/scenario breakdown) to the sim preview
-    route; the agent comes from the apply bar's field via ``hx-include``.
+    Posts the single bullet plus one narrowing field (red team: ``category``;
+    simulation: ``result_index``) to the surface's preview route so the drawer
+    can show that finding's breakdown; the agent rides along from the apply
+    bar's hidden field via ``hx-include``.
     """
     return (
-        f'<form class="rt-focus-rec-apply" hx-post="/r/{esc(rid)}/sim/apply/preview" '
+        f'<form class="rt-focus-rec-apply" hx-post="/r/{esc(rid)}/{surface}/apply/preview" '
         f'hx-target="#{DRAWER_ID}" hx-swap="innerHTML" hx-include="#{AGENT_FIELD_ID}">'
         f'<input type="hidden" name="rec" value="{esc(rec)}">'
-        f'<input type="hidden" name="result_index" value="{result_index}">'
+        f'<input type="hidden" name="{narrow_field}" value="{esc(narrow_value)}">'
         '<button type="submit" class="rt-apply-btn rt-apply-btn--sm">Apply</button>'
         '</form>'
     )
+
+
+def render_sim_rec_apply_button(rid: str, result_index: int, rec: str) -> str:
+    """Per-suggestion Apply button for a simulation recommendation card."""
+    return _rec_apply_button(rid, 'sim', 'result_index', str(result_index), rec)
 
 
 def render_rec_apply_button(rid: str, category: str, rec: str) -> str:
-    """Per-recommendation Apply button for a focus-card bullet.
-
-    Posts the single recommendation (plus its area category, so the drawer can
-    show that area's breakdown) to the preview route; the agent comes from the
-    apply bar's field via ``hx-include``.
-    """
-    return (
-        f'<form class="rt-focus-rec-apply" hx-post="/r/{esc(rid)}/redteam/apply/preview" '
-        f'hx-target="#{DRAWER_ID}" hx-swap="innerHTML" hx-include="#{AGENT_FIELD_ID}">'
-        f'<input type="hidden" name="rec" value="{esc(rec)}">'
-        f'<input type="hidden" name="category" value="{esc(category)}">'
-        '<button type="submit" class="rt-apply-btn rt-apply-btn--sm">Apply</button>'
-        '</form>'
-    )
+    """Per-recommendation Apply button for a red-team focus-card bullet."""
+    return _rec_apply_button(rid, 'redteam', 'category', category, rec)
 
 
 # ---------------------------------------------------------------------------
@@ -211,11 +207,10 @@ def _drawer(title: str, body: str, footer: str = '') -> str:
     """Right-hand drawer shell: overlay + panel; the close button empties the mount."""
     close = (
         f'<button class="rt-drawer-close" aria-label="Close" '
-        f'hx-get="/redteam/apply/dismiss" hx-target="#{DRAWER_ID}" hx-swap="innerHTML">&times;</button>'
+        f'hx-get="/apply/dismiss" hx-target="#{DRAWER_ID}" hx-swap="innerHTML">&times;</button>'
     )
     overlay = (
-        f'<div class="rt-drawer-overlay" hx-get="/redteam/apply/dismiss" '
-        f'hx-target="#{DRAWER_ID}" hx-swap="innerHTML"></div>'
+        f'<div class="rt-drawer-overlay" hx-get="/apply/dismiss" hx-target="#{DRAWER_ID}" hx-swap="innerHTML"></div>'
     )
     footer_html = f'<div class="rt-drawer-footer">{footer}</div>' if footer else ''
     return (
@@ -252,14 +247,10 @@ def _diff_html(diff: str) -> str:
 def _area_breakdown_html(area: FocusAreaRecommendation) -> str:
     """Focus-area context block for a single-recommendation preview: where the
     finding came from and what the analysis saw."""
-    # Same tier thresholds as the focus cards (report_tabs._rt_focus_tier);
-    # duplicated here because report_tabs imports this module.
-    if area.risk_score >= 2:
-        tier, color = 'P1 · Critical priority', 'var(--red-600)'
-    elif area.risk_score >= 1:
-        tier, color = 'P2 · High priority', 'var(--orange-600)'
-    else:
-        tier, color = 'P3 · Medium priority', 'var(--amber-600)'
+    from evaluatorq.dashboard.report_kit import focus_tier
+
+    code, label, color = focus_tier(area.risk_score)
+    tier = f'{code} · {label}'
     patterns = f'<div class="rt-drawer-patterns">{esc(area.patterns_observed)}</div>' if area.patterns_observed else ''
     return (
         '<div class="rt-drawer-section-label">Focus area</div>'
@@ -333,7 +324,7 @@ def render_preview_drawer(
         f'<input type="hidden" name="payload" value="{esc(json.dumps(payload))}">'
         '<button type="submit" class="rt-apply-btn rt-apply-btn--confirm">Apply to agent</button>'
         '</form>'
-        f'<button class="rt-apply-btn rt-apply-btn--ghost" hx-get="/redteam/apply/dismiss" '
+        f'<button class="rt-apply-btn rt-apply-btn--ghost" hx-get="/apply/dismiss" '
         f'hx-target="#{DRAWER_ID}" hx-swap="innerHTML">Cancel</button>'
         '<span class="rt-drawer-footnote">Writes a new minor version of the agent.</span>'
     )
@@ -371,24 +362,35 @@ def render_applied_drawer(agent_key: str, applied_count: int, new_version: str |
 # ---------------------------------------------------------------------------
 
 
+# ponytail: process-global lock. The read-modify-write below is not atomic, so
+# two concurrent confirms could each read the old list and drop one another's
+# bookkeeping. One lock serializes all report writes in this process, which is
+# all a single dashboard needs; move to per-path locks only if it contends.
+_RECORD_LOCK = threading.Lock()
+
+
 def record_applied_on_report(path: Path, recommendations: list[str], field: str = 'applied_recommendations') -> None:
     """Append newly applied recommendations to the report JSON, atomically.
 
     *field* is the surface's tracking field (``applied_recommendations`` for
     red team, ``applied_suggestions`` for simulation). Deduplicates against
-    what is already recorded so a double-click cannot inflate the list.
+    what is already recorded so a double-click cannot inflate the list. Blocking
+    file IO guarded by a process lock; call it off the event loop (``to_thread``).
     """
-    raw = json.loads(path.read_text(encoding='utf-8'))
-    existing = raw.get(field) or []
-    seen = {str(r).strip() for r in existing}
-    for rec in recommendations:
-        if rec.strip() not in seen:
-            existing.append(rec)
-            seen.add(rec.strip())
-    raw[field] = existing
-    tmp = path.with_suffix(path.suffix + '.tmp')
-    tmp.write_text(json.dumps(raw, indent=2, default=str), encoding='utf-8')
-    tmp.replace(path)
+    with _RECORD_LOCK:
+        raw = json.loads(path.read_text(encoding='utf-8'))
+        existing = raw.get(field) or []
+        seen = {str(r).strip() for r in existing}
+        for rec in recommendations:
+            if rec.strip() not in seen:
+                existing.append(rec)
+                seen.add(rec.strip())
+        raw[field] = existing
+        # Unique temp name so concurrent writers never share (and clobber) one
+        # scratch file; os.replace is atomic on the same filesystem.
+        tmp = path.with_suffix(path.suffix + f'.tmp.{os.getpid()}.{threading.get_ident()}')
+        tmp.write_text(json.dumps(raw, indent=2, default=str), encoding='utf-8')
+        tmp.replace(path)
 
 
 # ---------------------------------------------------------------------------
@@ -428,10 +430,26 @@ def _build_clients() -> tuple[Any, Any, str]:
 
 
 async def _confirm_response(
-    rid: str, req: Request, roots: list[Any] | None, *, field: str, version_note: str
+    rid: str,
+    req: Request,
+    roots: list[Any] | None,
+    *,
+    field: str,
+    version_note: str,
+    expected_agent: str | None,
+    already_applied: list[str],
 ) -> Response:
     """Shared confirm handler: write the previewed instructions to the agent,
-    record the applied recommendations on the report JSON under *field*."""
+    record the applied recommendations on the report JSON under *field*.
+
+    The report has already been reloaded by the caller (so a stale drawer or a
+    replayed POST is validated against current state, not the posted JSON):
+    *expected_agent* is the agent the report says was tested, and
+    *already_applied* is what is already recorded. A payload that names a
+    different agent is rejected, and bullets already applied are dropped before
+    the write so a replay cannot re-merge them.
+    """
+    from evaluatorq.common.apply import write_instructions
     from evaluatorq.dashboard import library
 
     form = await req.form()
@@ -445,23 +463,32 @@ async def _confirm_response(
     if not agent_key or not new_instructions or not recommendations:
         return Response(render_error_drawer('Nothing to apply; re-run the preview.'), media_type='text/html')
 
+    # Trust the reloaded report, not the posted payload: a preview built against
+    # a different agent (stale drawer, hand-crafted POST) must not write here.
+    if expected_agent and agent_key != expected_agent:
+        return Response(
+            render_error_drawer('This preview was for a different agent; reload the page and preview again.'),
+            media_type='text/html',
+        )
+    seen = {r.strip() for r in already_applied}
+    recommendations = [r for r in recommendations if r.strip() not in seen]
+    if not recommendations:
+        return Response(
+            render_error_drawer('These recommendations were already applied; reload the page.'),
+            media_type='text/html',
+        )
+
     try:
         orq_client, _llm_client, _model = _build_clients()
     except ValueError as e:
         return Response(render_error_drawer(str(e)), media_type='text/html')
 
-    import asyncio
-    import functools
-
     try:
-        updated = await asyncio.to_thread(
-            functools.partial(
-                orq_client.agents.update,
-                agent_key=agent_key,
-                instructions=new_instructions,
-                version_increment='minor',
-                version_description=f'Applied {len(recommendations)} {version_note}',
-            )
+        new_version = await write_instructions(
+            orq_client,
+            agent_key,
+            new_instructions,
+            version_description=f'Applied {len(recommendations)} {version_note}',
         )
     except Exception as e:
         logger.opt(exception=True).warning('apply_ui: agent update failed for {}', agent_key)
@@ -474,16 +501,124 @@ async def _confirm_response(
     record_note = ''
     if path is not None:
         try:
-            record_applied_on_report(path, recommendations, field)
+            await asyncio.to_thread(record_applied_on_report, path, recommendations, field)
         except Exception:
             logger.opt(exception=True).warning('apply_ui: could not record applied recs on {}', path)
             record_note = ' (warning: the report file could not be updated, so these may show as pending again)'
+    else:
+        logger.warning('apply_ui: could not resolve report path for {}; applied recs not recorded', rid)
+        record_note = ' (warning: the report file could not be located, so these may show as pending again)'
 
-    version = getattr(updated, 'version', None)
-    html = render_applied_drawer(agent_key, len(recommendations), str(version) if version is not None else None)
+    html = render_applied_drawer(agent_key, len(recommendations), new_version)
     if record_note:
         html = html.replace('</p>', esc(record_note) + '</p>', 1)
     return Response(html, media_type='text/html')
+
+
+def _rt_narrow(form: Any, report: RedTeamReport) -> tuple[list[Any], FocusAreaRecommendation | None, str, str | None]:
+    """Narrow the red-team preview to a single bullet when `rec` is posted.
+
+    Returns ``(items, area, breakdown, error)``: the focus areas to merge, the
+    single area for the drawer breakdown (None for apply-all), an empty
+    breakdown (red team uses *area* instead), and an error message or None.
+    """
+    areas = list(report.focus_area_recommendations or [])
+    single_rec = str(form.get('rec') or '').strip()
+    if not single_rec:
+        return areas, None, '', None
+    category = str(form.get('category') or '').strip()
+    area = next(
+        (a for a in areas if a.category == category and single_rec in [r.strip() for r in a.recommendations]),
+        None,
+    )
+    if area is None:
+        return [], None, '', 'That recommendation is no longer on the report; reload the page.'
+    if single_rec in {r.strip() for r in report.applied_recommendations}:
+        return [], None, '', 'That recommendation is already applied to the agent.'
+    return [area.model_copy(update={'recommendations': [single_rec]})], area, '', None
+
+
+def _sim_narrow(form: Any, run: SimulationRun) -> tuple[list[Any], None, str, str | None]:
+    """Narrow the simulation preview to a single suggestion when `rec` is posted.
+
+    Returns ``(items, None, breakdown, error)``: the recommendations to merge,
+    no focus area (sim renders its own *breakdown* block), and an error or None.
+    """
+    recs = list(run.recommendations)
+    single_rec = str(form.get('rec') or '').strip()
+    if not single_rec:
+        return recs, None, '', None
+    try:
+        idx = int(str(form.get('result_index') or ''))
+    except ValueError:
+        idx = -1
+    card = next(
+        (r for r in recs if r.result_index == idx and single_rec in [s.strip() for s in r.suggestions]),
+        None,
+    )
+    if card is None:
+        return [], None, '', 'That suggestion is no longer on the report; reload the page.'
+    if single_rec in {s.strip() for s in run.applied_suggestions}:
+        return [], None, '', 'That suggestion is already applied to the agent.'
+    return [card.model_copy(update={'suggestions': [single_rec]})], None, sim_breakdown_html(card), None
+
+
+async def _preview_response(
+    rid: str,
+    req: Request,
+    *,
+    surface: str,
+    obj: Any,
+    not_found_html: str,
+    enable_error: str | None,
+    agent_default: str,
+    narrow: Any,
+    apply_fn: Any,
+    already_applied: list[str],
+    empty_msg: str,
+) -> Response:
+    """Shared preview handler: resolve the agent, narrow to the requested
+    bullet(s), run ``apply(apply=False)``, and render the drawer. Only the
+    loader, enable gate, narrowing, and apply wrapper differ between surfaces.
+    """
+    if obj is None:
+        return Response(not_found_html, status_code=404, media_type='text/html')
+    if enable_error:
+        return Response(render_error_drawer(enable_error), media_type='text/html')
+
+    form = await req.form()
+    agent_key = str(form.get('agent_key') or '').strip() or agent_default
+    if not agent_key:
+        return Response(
+            render_error_drawer('This run does not record which agent it tested, so there is nothing to apply to.'),
+            media_type='text/html',
+        )
+
+    items, area, breakdown, narrow_error = narrow(form, obj)
+    if narrow_error:
+        return Response(render_error_drawer(narrow_error), media_type='text/html')
+
+    try:
+        orq_client, llm_client, model = _build_clients()
+    except ValueError as e:
+        return Response(render_error_drawer(str(e)), media_type='text/html')
+
+    try:
+        result = await apply_fn(items, agent_key, orq_client, llm_client, model, already_applied)
+    except Exception as e:
+        logger.opt(exception=True).warning('apply_ui: preview failed for {}', agent_key)
+        return Response(render_error_drawer(f'Preview failed: {e}'), media_type='text/html')
+
+    if result.merge_failed:
+        return Response(
+            render_error_drawer('The merge did not produce usable instructions; please try the preview again.'),
+            media_type='text/html',
+        )
+    if not result.recommendations:
+        return Response(render_error_drawer(empty_msg), media_type='text/html')
+    return Response(
+        render_preview_drawer(rid, result, area, surface=surface, breakdown=breakdown), media_type='text/html'
+    )
 
 
 def register_apply_routes(app: Any, roots: list[Any] | None = None) -> None:
@@ -491,164 +626,92 @@ def register_apply_routes(app: Any, roots: list[Any] | None = None) -> None:
     from evaluatorq.dashboard.redteam_views import _404, _load_report
     from evaluatorq.dashboard.sim_views import _load_run
 
-    @app.get('/redteam/apply/dismiss')
+    @app.get('/apply/dismiss')
     def apply_dismiss() -> Response:
         return Response('', media_type='text/html')
 
     @app.post('/r/{rid}/redteam/apply/preview')
     async def apply_preview(rid: str, req: Request) -> Response:
         report = _load_report(rid, roots)
-        if report is None:
-            return Response(_404(f'Report {rid} not found'), status_code=404, media_type='text/html')
+        multi = report is not None and len(report.tested_agents or []) > 1
 
-        if len(report.tested_agents or []) > 1:
-            return Response(
-                render_error_drawer(
-                    'Applying recommendations is available for single-agent runs; this run compared several agents.'
-                ),
-                media_type='text/html',
-            )
-        form = await req.form()
-        agent_key = str(form.get('agent_key') or '').strip()
-        if not agent_key:
-            return Response(
-                render_error_drawer('This run does not record which agent it tested, so there is nothing to apply to.'),
-                media_type='text/html',
-            )
+        async def _apply(items: Any, ak: str, orq: Any, llm: Any, model: str, applied: list[str]) -> Any:
+            from evaluatorq.redteam.reports.apply import apply_recommendations
 
-        # Per-recommendation apply: `rec` (+ its area `category`) narrows the
-        # merge to that single bullet, and the drawer shows the area breakdown.
-        # Without `rec` the whole pending set is merged (the apply-all bar).
-        areas = list(report.focus_area_recommendations or [])
-        single_rec = str(form.get('rec') or '').strip()
-        area: FocusAreaRecommendation | None = None
-        if single_rec:
-            category = str(form.get('category') or '').strip()
-            area = next(
-                (a for a in areas if a.category == category and single_rec in [r.strip() for r in a.recommendations]),
-                None,
-            )
-            if area is None:
-                return Response(
-                    render_error_drawer('That recommendation is no longer on the report; reload the page.'),
-                    media_type='text/html',
-                )
-            if single_rec in {r.strip() for r in report.applied_recommendations}:
-                return Response(
-                    render_error_drawer('That recommendation is already applied to the agent.'),
-                    media_type='text/html',
-                )
-            areas = [area.model_copy(update={'recommendations': [single_rec]})]
+            return await apply_recommendations(items, ak, orq, llm, model, apply=False, already_applied=applied)
 
-        try:
-            orq_client, llm_client, model = _build_clients()
-        except ValueError as e:
-            return Response(render_error_drawer(str(e)), media_type='text/html')
-
-        from evaluatorq.redteam.reports.apply import apply_recommendations
-
-        try:
-            result = await apply_recommendations(
-                areas,
-                agent_key,
-                orq_client,
-                llm_client,
-                model,
-                apply=False,
-                already_applied=report.applied_recommendations,
-            )
-        except Exception as e:
-            logger.opt(exception=True).warning('apply_ui: preview failed for {}', agent_key)
-            return Response(render_error_drawer(f'Preview failed: {e}'), media_type='text/html')
-
-        if not result.recommendations:
-            return Response(
-                render_error_drawer('No new recommendations to apply — everything is already applied.'),
-                media_type='text/html',
-            )
-        return Response(render_preview_drawer(rid, result, area), media_type='text/html')
+        return await _preview_response(
+            rid,
+            req,
+            surface='redteam',
+            obj=report,
+            not_found_html=_404(f'Report {rid} not found'),
+            enable_error='Applying recommendations is available for single-agent runs; this run compared several agents.'
+            if multi
+            else None,
+            agent_default='',
+            narrow=_rt_narrow,
+            apply_fn=_apply,
+            already_applied=list(report.applied_recommendations) if report else [],
+            empty_msg='No new recommendations to apply — everything is already applied.',
+        )
 
     @app.post('/r/{rid}/redteam/apply/confirm')
     async def apply_confirm(rid: str, req: Request) -> Response:
+        report = _load_report(rid, roots)
+        if report is None:
+            return Response(
+                render_error_drawer('That report is no longer available; reload the page.'), media_type='text/html'
+            )
+        expected = report.tested_agents[0] if len(report.tested_agents or []) == 1 else None
         return await _confirm_response(
-            rid, req, roots, field='applied_recommendations', version_note='red-team remediation recommendation(s)'
+            rid,
+            req,
+            roots,
+            field='applied_recommendations',
+            version_note='red-team remediation recommendation(s)',
+            expected_agent=expected,
+            already_applied=list(report.applied_recommendations),
         )
 
     @app.post('/r/{rid}/sim/apply/preview')
     async def sim_apply_preview(rid: str, req: Request) -> Response:
         run = _load_run(rid, roots)
-        if run is None:
-            return Response(_404(f'Report {rid} not found'), status_code=404, media_type='text/html')
-        if not is_sim_apply_enabled(run):
-            return Response(
-                render_error_drawer('Applying suggestions needs a run that targeted an orq agent.'),
-                media_type='text/html',
-            )
-        form = await req.form()
-        agent_key = str(form.get('agent_key') or '').strip() or str(run.target or '')
-        if not agent_key:
-            return Response(
-                render_error_drawer('This run does not record which agent it tested, so there is nothing to apply to.'),
-                media_type='text/html',
-            )
+        enabled = run is not None and is_sim_apply_enabled(run)
 
-        # Per-suggestion apply: `rec` (+ its card's `result_index`) narrows the
-        # merge to that single bullet, and the drawer shows the card breakdown.
-        recs = list(run.recommendations)
-        single_rec = str(form.get('rec') or '').strip()
-        breakdown = ''
-        if single_rec:
-            try:
-                idx = int(str(form.get('result_index') or ''))
-            except ValueError:
-                idx = -1
-            card = next(
-                (r for r in recs if r.result_index == idx and single_rec in [s.strip() for s in r.suggestions]),
-                None,
-            )
-            if card is None:
-                return Response(
-                    render_error_drawer('That suggestion is no longer on the report; reload the page.'),
-                    media_type='text/html',
-                )
-            if single_rec in {s.strip() for s in run.applied_suggestions}:
-                return Response(
-                    render_error_drawer('That suggestion is already applied to the agent.'),
-                    media_type='text/html',
-                )
-            breakdown = sim_breakdown_html(card)
-            recs = [card.model_copy(update={'suggestions': [single_rec]})]
+        async def _apply(items: Any, ak: str, orq: Any, llm: Any, model: str, applied: list[str]) -> Any:
+            from evaluatorq.simulation.reports.apply import apply_suggestions
 
-        try:
-            orq_client, llm_client, model = _build_clients()
-        except ValueError as e:
-            return Response(render_error_drawer(str(e)), media_type='text/html')
+            return await apply_suggestions(items, ak, orq, llm, model, apply=False, already_applied=applied)
 
-        from evaluatorq.simulation.reports.apply import apply_suggestions
-
-        try:
-            result = await apply_suggestions(
-                recs,
-                agent_key,
-                orq_client,
-                llm_client,
-                model,
-                apply=False,
-                already_applied=run.applied_suggestions,
-            )
-        except Exception as e:
-            logger.opt(exception=True).warning('apply_ui: sim preview failed for {}', agent_key)
-            return Response(render_error_drawer(f'Preview failed: {e}'), media_type='text/html')
-
-        if not result.recommendations:
-            return Response(
-                render_error_drawer('No new suggestions to apply — everything is already applied.'),
-                media_type='text/html',
-            )
-        return Response(render_preview_drawer(rid, result, surface='sim', breakdown=breakdown), media_type='text/html')
+        return await _preview_response(
+            rid,
+            req,
+            surface='sim',
+            obj=run,
+            not_found_html=_404(f'Report {rid} not found'),
+            enable_error=None if enabled else 'Applying suggestions needs a run that targeted an orq agent.',
+            agent_default=str(run.target or '') if run else '',
+            narrow=_sim_narrow,
+            apply_fn=_apply,
+            already_applied=list(run.applied_suggestions) if run else [],
+            empty_msg='No new suggestions to apply — everything is already applied.',
+        )
 
     @app.post('/r/{rid}/sim/apply/confirm')
     async def sim_apply_confirm(rid: str, req: Request) -> Response:
+        run = _load_run(rid, roots)
+        if run is None:
+            return Response(
+                render_error_drawer('That report is no longer available; reload the page.'), media_type='text/html'
+            )
+        expected = run.target if is_sim_apply_enabled(run) else None
         return await _confirm_response(
-            rid, req, roots, field='applied_suggestions', version_note='simulation remediation suggestion(s)'
+            rid,
+            req,
+            roots,
+            field='applied_suggestions',
+            version_note='simulation remediation suggestion(s)',
+            expected_agent=expected,
+            already_applied=list(run.applied_suggestions),
         )
