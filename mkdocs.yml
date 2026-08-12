@@ -167,6 +167,14 @@ plugins:
         404:
           - "../#evaluatorq.EvaluationResultCell"
           - "../simulation/#evaluatorq.simulation.AgentTarget"
+          # These two resolve fine in a browser; htmlproofer maps `../` back to a
+          # `reference/evaluatorq/index.md` source that does not exist, because
+          # section-index serves `reference/evaluatorq.md` at that URL. Raised by
+          # `show_submodules` on the integrations page, whose signatures annotate
+          # against both. Anchors verified present in the built HTML.
+          - "../#evaluatorq.DataPoint"
+          - "../openresponses/#evaluatorq.openresponses.ResponseResourceDict"
+          - "../integrations/#evaluatorq.integrations.vercel_ai_sdk_integration.target.AISdkMessageFormat"
 
 markdown_extensions:
   - tables

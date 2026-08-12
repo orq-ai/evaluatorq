@@ -25,6 +25,11 @@ BLOB = "https://github.com/orq-ai/evaluatorq/blob/main"
 # __all__ appear there and are documented once. Empty-__init__ subpackages
 # (redteam/backends, redteam/frameworks, redteam/runtime) have no __all__
 # and are covered by prose guides (Task 4), not API pages.
+# Packages whose ``__all__`` names sub-modules rather than symbols. Without this
+# mkdocstrings renders only the package docstring and the page is a dead end —
+# it does not recurse into sub-modules on its own.
+RECURSE_INTO_SUBMODULES = {"evaluatorq.integrations"}
+
 API_PACKAGES = [
     "evaluatorq",
     "evaluatorq.redteam",
@@ -180,14 +185,14 @@ def write_api_pages() -> None:
         page_path = Path("reference", *dotted.split(".")).with_suffix(".md")
         with mkdocs_gen_files.open(page_path, "w") as fd:
             fd.write(f"# `{dotted}`\n\n")
+            fd.write(f"::: {dotted}\n")
             if 0 < len(members) < len(names):
                 # Only some members are canonical here — pin the member list.
-                fd.write(f"::: {dotted}\n    options:\n      members:\n")
+                fd.write("    options:\n      members:\n")
                 for n in members:
                     fd.write(f"        - {n}\n")
-            else:
-                # All members canonical here (or filter would empty the page) — document all.
-                fd.write(f"::: {dotted}\n")
+            elif dotted in RECURSE_INTO_SUBMODULES:
+                fd.write("    options:\n      show_submodules: true\n")
             for full_path in shadowed.values():
                 # Address the symbol by its defining module so griffe cannot
                 # resolve the name to the sub-module. `show_root_full_path: false`
