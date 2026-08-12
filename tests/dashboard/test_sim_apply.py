@@ -141,6 +141,7 @@ class TestSimPreview:
         )
         assert r.status_code == 200
         assert 'rt-diff' in r.text
+        assert 'Read this diff before applying.' in r.text
         assert f'/r/{rid}/sim/apply/confirm' in r.text
         # Preview must not have touched the run file.
         assert json.loads(path.read_text()).get('applied_suggestions', []) == []

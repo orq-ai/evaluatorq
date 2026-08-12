@@ -119,6 +119,11 @@ class TestPreview:
         assert 'New guard.' in r.text
         assert f'/r/{rid}/redteam/apply/confirm' in r.text
         assert 'Apply to agent' in r.text
+        # The diff is the only review gate before a live prompt changes, so the
+        # drawer must say so above the diff (RES-1143 review).
+        assert 'rt-drawer-review' in r.text
+        assert 'Read this diff before applying.' in r.text
+        assert r.text.index('rt-drawer-review') < r.text.index('rt-diff')
         # Preview must not have touched the report file.
         raw = json.loads(path.read_text())
         assert raw.get('applied_recommendations', []) == []

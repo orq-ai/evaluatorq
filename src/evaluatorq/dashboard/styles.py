@@ -2342,6 +2342,17 @@ _RT_REPORT_CSS = """
 .rt-drawer-recs { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px; }
 .rt-drawer-recs li { font-size: 13px; line-height: 1.5; }
 .rt-drawer-error { color: var(--sev-high, #dc2626); font-size: 13px; line-height: 1.55; }
+/* Read-the-diff callout above the preview diff: the merge is an LLM rewrite of a
+   live prompt, and the diff is the only thing standing between it and the agent. */
+.rt-drawer-review {
+    display: flex; gap: 9px; align-items: flex-start;
+    background: var(--surface-sunken); border: 1px solid var(--border-default);
+    border-left: 3px solid var(--sev-medium, #d97706);
+    border-radius: 8px; padding: 10px 12px; margin-bottom: 10px;
+}
+.rt-drawer-review-icon { font-size: 14px; line-height: 1.4; }
+.rt-drawer-review-text { font-size: 12px; line-height: 1.55; color: var(--text-default); }
+.rt-drawer-review-text b { font-weight: 600; }
 .rt-drawer-success { font-size: 14px; line-height: 1.6; }
 /* Applied celebration screen: centered, green check drawn in (RES-1143). */
 .rt-drawer-body--applied {

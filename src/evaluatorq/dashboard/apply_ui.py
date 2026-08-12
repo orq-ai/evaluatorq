@@ -327,6 +327,20 @@ def sim_breakdown_html(rec: SimulationRecommendation) -> str:
     )
 
 
+# The merge is an LLM rewrite of a live prompt, so it can reword or drop lines
+# the recommendations never mentioned. The diff is the only review gate before
+# the agent changes - say that where the reader cannot miss it.
+_REVIEW_CALLOUT = (
+    '<div class="rt-drawer-review">'
+    '<span class="rt-drawer-review-icon" aria-hidden="true">&#9888;</span>'
+    '<div class="rt-drawer-review-text">'
+    '<b>Read this diff before applying.</b> An LLM rewrote the instructions, so it may also '
+    'reword or remove lines the recommendations never mentioned. Applying replaces the whole '
+    'instructions field with the right-hand side.'
+    '</div></div>'
+)
+
+
 def render_preview_drawer(
     rid: str,
     result: ApplyRecommendationsResult,
@@ -358,7 +372,7 @@ def render_preview_drawer(
         + (
             '<p class="rt-drawer-note">The merge produced no change to the instructions.</p>'
             if unchanged
-            else _diff_html(result.diff)
+            else _REVIEW_CALLOUT + _diff_html(result.diff)
         )
     )
     if unchanged:
@@ -372,7 +386,7 @@ def render_preview_drawer(
         '</form>'
         f'<button class="rt-apply-btn rt-apply-btn--ghost" hx-get="/apply/dismiss" '
         f'hx-target="#{DRAWER_ID}" hx-swap="innerHTML">Cancel</button>'
-        '<span class="rt-drawer-footnote">Writes a new minor version of the agent.</span>'
+        '<span class="rt-drawer-footnote">Applies the diff above, as a new minor version of the agent.</span>'
     )
     return _drawer('Preview changes', body, footer)
 
