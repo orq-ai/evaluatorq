@@ -86,7 +86,7 @@ class TestRunEvaluatorErrorPaths:
             evaluator_model='test-model',
             llm_client=mock_client,
             # Error classification, not retry behaviour — skip the backoff waits.
-            cfg=EvaluatorConfig(retry_attempts=1),
+            cfg=EvaluatorConfig(retry_count=0),
         )
 
         with contextlib.ExitStack() as es:
@@ -124,7 +124,7 @@ class TestRunEvaluatorErrorPaths:
             evaluator_model='test-model',
             llm_client=mock_client,
             # Error classification, not retry behaviour — skip the backoff waits.
-            cfg=EvaluatorConfig(retry_attempts=1),
+            cfg=EvaluatorConfig(retry_count=0),
         )
 
         with contextlib.ExitStack() as es:
@@ -166,7 +166,7 @@ class TestRunEvaluatorErrorPaths:
             evaluator_model='test-model',
             llm_client=mock_client,
             # Error classification, not retry behaviour — skip the backoff waits.
-            cfg=EvaluatorConfig(retry_attempts=1),
+            cfg=EvaluatorConfig(retry_count=0),
         )
 
         with contextlib.ExitStack() as es:
@@ -201,7 +201,7 @@ class TestRunEvaluatorErrorPaths:
             evaluator_model='test-model',
             llm_client=mock_client,
             # Error classification, not retry behaviour — skip the backoff waits.
-            cfg=EvaluatorConfig(retry_attempts=1),
+            cfg=EvaluatorConfig(retry_count=0),
         )
 
         with contextlib.ExitStack() as es:
@@ -273,7 +273,7 @@ class TestRunEvaluatorErrorPaths:
             evaluator_model='test-model',
             llm_client=mock_client,
             # Error classification, not retry behaviour — skip the backoff waits.
-            cfg=EvaluatorConfig(retry_attempts=1),
+            cfg=EvaluatorConfig(retry_count=0),
         )
 
         # Patch both registry lookups to simulate a fully unknown category.
@@ -315,7 +315,7 @@ class TestRunEvaluatorErrorPaths:
             evaluator_model='test-model',
             llm_client=mock_client,
             # Error classification, not retry behaviour — skip the backoff waits.
-            cfg=EvaluatorConfig(retry_attempts=1),
+            cfg=EvaluatorConfig(retry_count=0),
         )
 
         with contextlib.ExitStack() as es:
@@ -357,7 +357,7 @@ class TestRunEvaluatorErrorPaths:
             evaluator_model='test-model',
             llm_client=mock_client,
             # Error classification, not retry behaviour — skip the backoff waits.
-            cfg=EvaluatorConfig(retry_attempts=1),
+            cfg=EvaluatorConfig(retry_count=0),
         )
 
         with contextlib.ExitStack() as es:

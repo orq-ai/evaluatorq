@@ -161,12 +161,13 @@ class LLMCallConfig(BaseModel):
     timeout_ms: int = Field(default=90_000, gt=0)
     extra_kwargs: dict[str, Any] = Field(default_factory=dict)
     client: _Client = None
-    retry_attempts: int = Field(
-        default=3,
-        ge=1,
-        description='Total attempts (initial call + retries) for callers that own retry via '
-        'with_retry — currently the judge. Set to 1 to disable. The owning caller disarms the '
-        "client's own retry budget for the duration (see run_judge) so the two cannot multiply.",
+    retry_count: int = Field(
+        default=1,
+        ge=0,
+        description='Retries after the initial call, for callers that own retry via with_retry '
+        '— currently the judge. Same semantics as LLMConfig.retry_count: 0 disables retry. The '
+        "owning caller disarms the client's own retry budget for the duration (see run_judge) so "
+        'the two cannot multiply.',
     )
 
     def completion_params(self, **params: Any) -> dict[str, Any]:

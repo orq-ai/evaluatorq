@@ -239,13 +239,13 @@ def reset_responses_rejectors() -> None:
     _RESPONSES_REJECTORS.clear()
 
 
-def _without_client_retries(client: AsyncOpenAI, retry_attempts: int) -> AsyncOpenAI:
+def _without_client_retries(client: AsyncOpenAI, retry_count: int) -> AsyncOpenAI:
     """``client`` with its own retry budget disarmed, when this call owns retry.
 
     ``with_retry`` re-runs the whole judge call and the OpenAI SDK retries inside
     each of those attempts, so the two budgets *multiply*. The shipped red-team
     path injects the attacker client, built with ``max_retries=LLMConfig.retry_count``
-    (default 3): under ``retry_attempts=3`` that is up to 12 requests and ~10
+    (default 3): under ``retry_count=3`` that is up to 12 requests and ~10
     minutes of backoff for one rate-limited judgement. The call sites that build
     their own judge client pass ``max_retries=0`` for exactly this reason, but an
     injected client — the documented, supported pattern — never went through them.
@@ -254,7 +254,7 @@ def _without_client_retries(client: AsyncOpenAI, retry_attempts: int) -> AsyncOp
     the caller's own client object untouched. The ``int`` check keeps test doubles
     (whose every attribute is truthy) on their original object.
     """
-    if retry_attempts <= 1:
+    if retry_count <= 0:
         return client
     max_retries = getattr(client, 'max_retries', 0)
     if not isinstance(max_retries, int) or max_retries <= 0:
@@ -432,7 +432,7 @@ async def run_judge(
     call this function has always made.
 
     **Retry.** The whole attempt — endpoint choice included — runs under
-    :func:`with_retry` for ``cfg.retry_attempts`` attempts, so rate limits, 5xx and
+    :func:`with_retry` for ``cfg.retry_count + 1`` attempts, so rate limits, 5xx and
     transport failures back off and try again while everything else raises straight
     through to the error classification. Clients built by evaluatorq for this path
     are given ``max_retries=0`` so the two retry layers cannot multiply.
@@ -443,7 +443,7 @@ async def run_judge(
     temp: float | None = cfg.temperature if isinstance(temperature, _UseCfg) else temperature
     user_prompt = render_template(prompt_template, replacements)
 
-    client = _without_client_retries(client, cfg.retry_attempts)
+    client = _without_client_retries(client, cfg.retry_count)
     raw_content = '{}'
     # Resolved before the span opens so the span carries the operation and the model
     # id this call actually sends — `responses openai/gpt-5-mini`, not `chat gpt-5-mini`
@@ -616,7 +616,7 @@ async def run_judge(
         # retried judgement shows its failed tries rather than overwriting them.
         return await with_retry(
             _attempt,
-            max_attempts=cfg.retry_attempts,
+            max_attempts=cfg.retry_count + 1,
             label=f'judge[{model}]',
         )
     except (asyncio.TimeoutError, APITimeoutError):

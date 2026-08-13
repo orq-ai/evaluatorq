@@ -187,10 +187,11 @@ Chat Completions for the rest of the run, and a model missing from the catalogue
 stays honestly unpriced rather than reporting `$0.00`.
 
 Judge calls retry on rate limits, 5xx and transport failures —
-`EvaluatorConfig(retry_attempts=...)` sets the budget (3 by default, 1 to
-disable). It is separate from `LLMConfig.retry_count`, which is the target-side
-budget; a client evaluatorq is given for judging has its own SDK-level retry
-disarmed for the duration so the two cannot multiply.
+`EvaluatorConfig(retry_count=...)` sets the budget (1 retry by default, 0 to
+disable), same semantics as `LLMConfig.retry_count`: retries after the initial
+call. It is a separate, judge-side budget from `LLMConfig.retry_count`'s
+target-side one; a client evaluatorq is given for judging has its own
+SDK-level retry disarmed for the duration so the two cannot multiply.
 
 ## In CI
 

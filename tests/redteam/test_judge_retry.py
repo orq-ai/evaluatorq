@@ -1,11 +1,11 @@
 """Retry-path coverage for ``run_judge`` (RES-1295 follow-up).
 
-Every other judge test opts out of retry with ``retry_attempts=1``, so the
+Every other judge test opts out of retry with ``retry_count=0``, so the
 ``with_retry`` wrapper around ``_attempt`` in ``src/evaluatorq/common/judge.py``
 had zero coverage before this file. These tests exercise: a retryable failure
 that recovers, retries exhausted landing in the normal error classification, a
 non-retryable failure consuming exactly one attempt (the expensive regression —
-turning every malformed verdict into N paid calls), the ``retry_attempts=1``
+turning every malformed verdict into N paid calls), the ``retry_count=0``
 opt-out, and the new ``JudgeOutcome.endpoint`` field across the Responses/chat/
 fallback paths.
 """
@@ -127,13 +127,13 @@ async def _judge(
     api: str = 'responses',
     response_model: type[BaseModel] | None = Verdict,
     structured_output: bool = True,
-    retry_attempts: int = 3,
+    retry_count: int = 2,
 ) -> Any:
     cfg = LLMCallConfig(
         model='gpt-5-mini',
         api=api,  # pyright: ignore[reportArgumentType]
         max_tokens=256,
-        retry_attempts=retry_attempts,
+        retry_count=retry_count,
     )
     return await run_judge(
         client=client,
@@ -202,7 +202,7 @@ async def test_exhausted_retries_classify_as_api_status():
         raise _server_error(503)
 
     client.responses = SimpleNamespace(parse=always_fails)
-    outcome = await _judge(client, retry_attempts=3)
+    outcome = await _judge(client, retry_count=2)
 
     assert len(client.calls) == 3
     assert outcome.error_kind is JudgeError.API_STATUS
@@ -225,7 +225,7 @@ async def test_malformed_json_consumes_exactly_one_attempt():
         return reply
 
     client.responses = SimpleNamespace(parse=malformed_responses_parse)
-    outcome = await _judge(client, retry_attempts=3)
+    outcome = await _judge(client, retry_count=2)
 
     # No parsed object surfaces as JudgeError.PARSE directly from _responses_judge,
     # not a raised ValidationError, but it must still not retry.
@@ -245,7 +245,7 @@ async def test_validation_error_from_malformed_chat_json_consumes_one_attempt():
         return reply
 
     client.chat = SimpleNamespace(completions=SimpleNamespace(create=malformed_chat_create))
-    outcome = await _judge(client, retry_attempts=3, response_model=None)
+    outcome = await _judge(client, retry_count=2, response_model=None)
 
     assert len(client.calls) == 1
     assert outcome.error_kind is JudgeError.PARSE
@@ -261,17 +261,17 @@ async def test_bad_request_on_chat_path_consumes_one_attempt():
         raise _bad_request('context_length_exceeded')
 
     client.chat = SimpleNamespace(completions=SimpleNamespace(parse=rejecting_chat_parse))
-    outcome = await _judge(client, retry_attempts=3)
+    outcome = await _judge(client, retry_count=2)
 
     assert len(client.calls) == 1
     assert outcome.error_kind is JudgeError.API_STATUS
 
 
-# --- 4. retry_attempts=1 disables retry -----------------------------------------
+# --- 4. retry_count=0 disables retry -----------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_retry_attempts_one_disables_retry():
+async def test_retry_count_zero_disables_retry():
     client = _Client()
 
     async def always_fails(**kwargs: Any) -> Any:
@@ -279,7 +279,7 @@ async def test_retry_attempts_one_disables_retry():
         raise _rate_limit_error()
 
     client.responses = SimpleNamespace(parse=always_fails)
-    outcome = await _judge(client, retry_attempts=1)
+    outcome = await _judge(client, retry_count=0)
 
     assert len(client.calls) == 1
     assert outcome.error_kind is JudgeError.API_STATUS

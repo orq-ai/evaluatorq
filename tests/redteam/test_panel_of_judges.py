@@ -375,7 +375,7 @@ class TestJury:
             evaluator_model='judge-a',
             llm_client=client,
             # Error classification, not retry behaviour — skip the backoff waits.
-            cfg=EvaluatorConfig(retry_attempts=1),
+            cfg=EvaluatorConfig(retry_count=0),
         )
 
         result = await _evaluate(evaluator)

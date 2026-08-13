@@ -602,13 +602,13 @@ class EvaluatorConfig(BaseModel):
     timeout_ms: int = Field(default=90_000, gt=0)
     extra_kwargs: dict[str, Any] = Field(default_factory=dict)
     client: _Client = None
-    retry_attempts: int = Field(
-        default=3,
-        ge=1,
-        description='Total attempts per judge call (initial + retries) on rate limits, 5xx and '
-        'transport failures. Distinct from LLMConfig.retry_count, which is the target-side '
-        'budget. Set to 1 to disable — a failing judge then falls to the panel machinery '
-        '(replacement_judges / min_successful_judges) immediately.',
+    retry_count: int = Field(
+        default=1,
+        ge=0,
+        description='Retries per judge call (after the initial call) on rate limits, 5xx and '
+        'transport failures. Same semantics as LLMConfig.retry_count, but this is the judge-side '
+        'budget, distinct from that target-side one. 0 disables retry — a failing judge then '
+        'falls to the panel machinery (replacement_judges / min_successful_judges) immediately.',
     )
     repetitions: int = Field(default=1, ge=1)
     replacement_judges: list[str] = Field(default_factory=list)
@@ -652,7 +652,7 @@ class EvaluatorConfig(BaseModel):
             timeout_ms=self.timeout_ms,
             extra_kwargs=self.extra_kwargs,
             client=self.client,
-            retry_attempts=self.retry_attempts,
+            retry_count=self.retry_count,
         )
 
     @model_validator(mode='after')
@@ -699,6 +699,10 @@ class LLMConfig(BaseModel):
     # The two layers multiply only during sustained outages: worst case per call
     # is (retry_count + 1) HTTP requests, each asking the router for up to
     # retry_count provider retries.
+    #
+    # Same semantics as LLMCallConfig.retry_count / EvaluatorConfig.retry_count
+    # (retries after the initial call, 0 disables retry) — this is the target-side
+    # budget, those are the attacker/judge-side ones.
     retry_count: int = Field(default=3, ge=0, le=10)
     retry_on_codes: list[int] = Field(default=[429, 500, 502, 503, 504])
     # How many times to regenerate an attacker turn that the attack model
