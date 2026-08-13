@@ -74,8 +74,8 @@ from evaluatorq.redteam.contracts import (
     Pipeline,
     PipelineStage,
     ReasoningOutputItem,
-    RecommendationConfig,
     RedTeamInput,
+    RedTeamRecommendationConfig,
     RedTeamReport,
     RedTeamResult,
     ReportSnapshot,
@@ -172,10 +172,10 @@ __all__ = [
     'PipelineStage',
     'ReasoningOutputItem',
     # Exceptions
-    'RecommendationConfig',
     'RedTeamError',
     # Input models
     'RedTeamInput',
+    'RedTeamRecommendationConfig',
     # Core public types
     'RedTeamReport',
     'RedTeamResult',

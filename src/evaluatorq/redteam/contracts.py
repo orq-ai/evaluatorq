@@ -21,6 +21,7 @@ from pydantic import (
 )
 from typing_extensions import NotRequired, TypedDict
 
+from evaluatorq.common.recommendations import RecommendationConfigBase
 from evaluatorq.common.target_call import classify_error_type as classify_error_type
 from evaluatorq.contracts import RunSummary, StrEnum
 
@@ -658,22 +659,32 @@ class EvaluatorConfig(BaseModel):
         return self
 
 
-class RecommendationConfig(BaseModel):
+class RedTeamRecommendationConfig(RecommendationConfigBase):
     """Tunable limits for focus-area recommendation generation.
 
-    Pass an instance as ``recommendations=RecommendationConfig(...)`` to :func:`red_team`;
-    ``recommendations=True`` uses these defaults and ``False`` skips the LLM call entirely.
-    Mirrors ``simulation.reports.RecommendationConfig``, which carries the equivalent knobs
-    for agent simulation.
+    Pass an instance as ``recommendations=RedTeamRecommendationConfig(...)`` to
+    :func:`red_team`; ``recommendations=True`` uses these defaults and ``False`` skips the
+    LLM call entirely. ``SimulationRecommendationConfig`` is the agent-simulation twin —
+    both inherit the shared caps from ``RecommendationConfigBase``.
     """
-
-    model_config = ConfigDict(extra='forbid')
 
     max_areas: int = Field(default=5, ge=1)
     """How many top risk areas get analyzed. Each is one LLM call."""
 
     max_traces: int = Field(default=10, ge=1)
     """Failed traces sampled into the prompt per area."""
+
+    max_trace_chars: int = Field(default=500, ge=100)
+    """Per-trace budget for the attack prompt and the target's response."""
+
+    max_explanation_chars: int = Field(default=300, ge=50)
+    """Budget for the evaluator explanation attached to a sampled trace."""
+
+    max_suggestions: int = Field(default=5, ge=1)
+    """Recommendations asked for, and kept, per focus area."""
+
+    max_tokens: int = Field(default=1500, ge=1)
+    """Completion budget for one focus-area analysis call."""
 
 
 class LLMConfig(BaseModel):

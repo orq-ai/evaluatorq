@@ -25,7 +25,7 @@ from evaluatorq.contracts import Message, TokenUsage
 from evaluatorq.simulation.reports import export_html, export_markdown
 from evaluatorq.simulation.reports.recommendations import (
     _SuggestionsLLMResponse,
-    RecommendationConfig,
+    SimulationRecommendationConfig,
     find_triggers,
     generate_recommendations,
 )
@@ -152,15 +152,15 @@ def test_low_factual_accuracy_triggers():
 
 def test_config_threshold_overrides_default():
     result = _make_result(goal_achieved=True, factual_accuracy=0.2)
-    config = RecommendationConfig(factual_accuracy_below=0.1)
+    config = SimulationRecommendationConfig(factual_accuracy_below=0.1)
     assert find_triggers(result, config) == []
 
 
 def test_config_rejects_meaningless_values():
     with pytest.raises(ValidationError):
-        RecommendationConfig(max_suggestions=0)
+        SimulationRecommendationConfig(max_suggestions=0)
     with pytest.raises(ValidationError):
-        RecommendationConfig(hallucination_risk_above=1.5)
+        SimulationRecommendationConfig(hallucination_risk_above=1.5)
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +287,55 @@ async def test_max_results_caps_llm_calls():
     recs = await generate_recommendations(results, client, 'test-model', max_results=2)
     assert len(recs) == 2
     assert client.chat.completions.parse.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_config_max_results_caps_llm_calls():
+    """The cap is a config field now; the keyword is an override on top of it."""
+    client = _mock_client(['fix it'])
+    results = [_make_result(goal_achieved=False, rules_broken=['r']) for _ in range(5)]
+
+    recs = await generate_recommendations(
+        results, client, 'test-model', config=SimulationRecommendationConfig(max_results=2)
+    )
+
+    assert len(recs) == 2
+    assert client.chat.completions.parse.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_config_max_results_is_overridden_by_the_keyword():
+    client = _mock_client(['fix it'])
+    results = [_make_result(goal_achieved=False, rules_broken=['r']) for _ in range(5)]
+
+    recs = await generate_recommendations(
+        results, client, 'test-model', max_results=1, config=SimulationRecommendationConfig(max_results=4)
+    )
+
+    assert len(recs) == 1
+
+
+@pytest.mark.asyncio
+async def test_config_drives_token_budget_and_prompt_budgets():
+    client = _mock_client(['fix it'])
+    result = _make_result(goal_achieved=False, rules_broken=['leaked data'])
+    result.messages = [Message(role='user', content='x' * 5000)]
+
+    await generate_recommendations(
+        [result],
+        client,
+        'test-model',
+        config=SimulationRecommendationConfig(
+            max_tokens=123, max_suggestions=9, max_message_chars=60, max_transcript_chars=200
+        ),
+    )
+
+    kwargs = client.chat.completions.parse.await_args.kwargs
+    assert kwargs['max_completion_tokens'] == 123
+    system, user = kwargs['messages']
+    assert 'a list of 1-9 concise' in system['content']
+    # Per-message budget bites first (60 + the ellipsis), then the transcript cap.
+    assert 'x' * 61 not in user['content']
 
 
 # ---------------------------------------------------------------------------

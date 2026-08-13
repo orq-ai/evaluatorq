@@ -188,7 +188,7 @@ Yes. The target runs its own tools, so a successful attack triggers real side ef
 
 ### The report says my agent is vulnerable — what do I change?
 
-Usually the system prompt. The load-bearing fixes are an explicit instruction hierarchy (data the agent *reads* is never a command), a confirmation gate before risky tools, and refusing authority claims — then rerun and watch the resistance rate climb. Every run attaches LLM-generated focus-area recommendations to the report by default; pass `recommendations=False` (or `--no-recommendations`) to skip that extra LLM call, or `recommendations=RecommendationConfig(max_areas=3, max_traces=20)` to tune how much gets analyzed.
+Usually the system prompt. The load-bearing fixes are an explicit instruction hierarchy (data the agent *reads* is never a command), a confirmation gate before risky tools, and refusing authority claims — then rerun and watch the resistance rate climb. Every run attaches LLM-generated focus-area recommendations to the report by default; pass `recommendations=False` (or `--no-recommendations`) to skip that extra LLM call, or `recommendations=RedTeamRecommendationConfig(max_areas=3, max_traces=20)` (importable from `evaluatorq.redteam`) to tune how much gets analyzed — it also carries the prompt truncation budgets, the per-area suggestion cap and the analysis call's `max_tokens`.
 
 ### What does `passed=True` mean?
 
@@ -229,20 +229,33 @@ See [Agent Simulation](guides/agent-simulation.md).
 
 ### Can I tune when a simulation result gets recommendations?
 
-Yes — pass a `RecommendationConfig`. Only results with a fixable failure signal get an LLM call; the metric thresholds that decide that, plus the prompt's transcript budget and the suggestion cap, are fields on the config. It's the same `recommendations=` flag red teaming uses: `True` for defaults, `False` to skip the LLM call, an instance to tune.
+Yes — pass a `SimulationRecommendationConfig`. Only results with a fixable failure signal get an LLM call; the metric thresholds that decide that, plus the prompt budgets, the result cap and the suggestion cap, are fields on the config. It's the same `recommendations=` flag red teaming uses: `True` for defaults, `False` to skip the LLM call, an instance to tune.
 
-`eq sim run` generates them in-run (`--recommendations` is on by default). From Python, `simulate()` returns bare results — which have nowhere to carry suggestions — so call the generator yourself:
+`eq sim run` generates them in-run (`--recommendations` is on by default). From Python, `simulate()` takes the same flag — it defaults to `False` there because the returned `SimulationResult` list has nowhere to carry suggestions, so they are only observable through `save=True` / `report=`, or the dashboard:
 
 ```python
-from evaluatorq.simulation.reports import RecommendationConfig, generate_recommendations
+from evaluatorq.simulation import simulate
+from evaluatorq.simulation.reports import SimulationRecommendationConfig
 
-recs = await generate_recommendations(
-    results, client, "gpt-5.6-luna",
-    config=RecommendationConfig(factual_accuracy_below=0.7, max_suggestions=5),
+results = await simulate(
+    target="agent:my-support-agent",
+    save=True,
+    recommendations=SimulationRecommendationConfig(factual_accuracy_below=0.7, max_suggestions=5),
 )
 ```
 
-Defaults: thresholds `0.5` on the judge's 0-1 scales, `max_transcript_chars=3000`, `max_suggestions=3`. Values outside the valid range raise at construction rather than silently disabling a trigger.
+To analyze results you already have, call the generator directly with the same config:
+
+```python
+from evaluatorq.simulation.reports import SimulationRecommendationConfig, generate_recommendations
+
+recs = await generate_recommendations(
+    results, client, "gpt-5.6-luna",
+    config=SimulationRecommendationConfig(factual_accuracy_below=0.7, max_suggestions=5),
+)
+```
+
+Defaults: thresholds `0.5` on the judge's 0-1 scales, `max_results=10`, `max_transcript_chars=3000`, `max_message_chars=400`, `max_suggestions=3`, `max_tokens=800`. Values outside the valid range raise at construction, and an unknown field name raises too, rather than silently disabling a trigger.
 
 ### Where do the personas and scenarios come from?
 

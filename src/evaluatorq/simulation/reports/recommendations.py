@@ -16,6 +16,7 @@ from pydantic import BaseModel, BeforeValidator, Field
 
 from evaluatorq.common.extract_json import coerce_str_list, extract_json_from_response
 from evaluatorq.common.messages import coerce_content_text
+from evaluatorq.common.recommendations import RecommendationConfigBase
 from evaluatorq.common.sanitize import xml_escape
 from evaluatorq.common.structured_output import generate_structured
 from evaluatorq.simulation.reports.sections import (
@@ -44,24 +45,30 @@ class _SuggestionsLLMResponse(BaseModel):
     suggestions: Annotated[list[str], BeforeValidator(coerce_str_list)] = Field(default_factory=list)
 
 
-class RecommendationConfig(BaseModel):
-    """Tunable limits for recommendation generation.
+class SimulationRecommendationConfig(RecommendationConfigBase):
+    """Tunable limits for simulation recommendation generation.
 
     Thresholds are on the judge's 0-1 scales: a conversation-average beyond one of them marks the
     result as remediable. Defaults preserve prior behaviour; pass an instance to
-    ``generate_recommendations``/``find_triggers`` to tune. Bounds are enforced because a
-    parseable value is not necessarily a meaningful one - a suggestion cap of 0 pays for the LLM
-    call and then drops every result.
+    ``generate_recommendations``/``find_triggers`` to tune. ``RedTeamRecommendationConfig`` is the
+    red-teaming twin — both inherit the shared caps from ``RecommendationConfigBase``.
     """
 
     factual_accuracy_below: float = Field(default=0.5, ge=0.0, le=1.0)
     hallucination_risk_above: float = Field(default=0.5, ge=0.0, le=1.0)
     tone_appropriateness_below: float = Field(default=0.5, ge=0.0, le=1.0)
+
+    max_results: int = Field(default=10, ge=1)
+    """How many triggered results get an LLM call. The run's total cost bound."""
+
     max_transcript_chars: int = Field(default=3000, ge=100)
-    max_suggestions: int = Field(default=3, ge=1)
+    """Budget for the whole transcript in one prompt."""
+
+    max_message_chars: int = Field(default=400, ge=50)
+    """Per-message budget inside that transcript."""
 
 
-_DEFAULT_CONFIG = RecommendationConfig()
+_DEFAULT_CONFIG = SimulationRecommendationConfig()
 
 
 def _truncate(text: str, max_chars: int = 500) -> str:
@@ -77,15 +84,17 @@ def _avg_metric(result: SimulationResult, field_name: str) -> float | None:
     return sum(values) / len(values)
 
 
-def find_triggers(result: SimulationResult, config: RecommendationConfig | None = None) -> list[tuple[str, str]]:
+def find_triggers(
+    result: SimulationResult, config: SimulationRecommendationConfig | None = None
+) -> list[tuple[str, str]]:
     """Return ``(trigger, evidence)`` pairs for remediable failure signals.
 
     Empty list means the result is clean or failed for benign/non-fixable
     reasons (plain max-turns, runtime error) and gets no suggestion.
 
     Example:
-        >>> from evaluatorq.simulation.reports import RecommendationConfig
-        >>> strict = RecommendationConfig(factual_accuracy_below=0.9, hallucination_risk_above=0.2)
+        >>> from evaluatorq.simulation.reports import SimulationRecommendationConfig
+        >>> strict = SimulationRecommendationConfig(factual_accuracy_below=0.9, hallucination_risk_above=0.2)
         >>> [trigger for trigger, _evidence in find_triggers(results[0], strict)]
         ['low_factual_accuracy']
     """
@@ -137,15 +146,19 @@ rather than "Improve the prompt").
 Respond ONLY with valid JSON. No markdown, no explanation outside the JSON."""
 
 
-def _build_user_prompt(result: SimulationResult, triggers: list[tuple[str, str]], max_transcript_chars: int) -> str:
+def _build_user_prompt(
+    result: SimulationResult, triggers: list[tuple[str, str]], config: SimulationRecommendationConfig
+) -> str:
     issue_lines = '\n'.join(f'- [{trigger}] {xml_escape(evidence)}' for trigger, evidence in triggers)
-    transcript = '\n'.join(f'{m.role}: {_truncate(coerce_content_text(m.content), 400)}' for m in result.messages)
+    transcript = '\n'.join(
+        f'{m.role}: {_truncate(coerce_content_text(m.content), config.max_message_chars)}' for m in result.messages
+    )
     return (
         f'Persona: {xml_escape(_persona_name(result))}\n'
         f'Scenario: {xml_escape(_scenario_name(result))}\n'
         f'Judge verdict: {xml_escape(_truncate(result.reason, 300))}\n'
         f'Flagged issues:\n{issue_lines}\n\n'
-        f'<transcript>\n{xml_escape(_truncate(transcript, max_transcript_chars))}\n</transcript>'
+        f'<transcript>\n{xml_escape(_truncate(transcript, config.max_transcript_chars))}\n</transcript>'
     )
 
 
@@ -154,10 +167,10 @@ async def generate_recommendations(
     llm_client: AsyncOpenAI,
     model: str,
     *,
-    max_results: int = 10,
+    max_results: int | None = None,
     temperature: float | None = None,
     llm_kwargs: dict[str, Any] | None = None,
-    config: RecommendationConfig | None = None,
+    config: SimulationRecommendationConfig | None = None,
 ) -> list[SimulationRecommendation]:
     """Generate remediation suggestions for results with remediable failures.
 
@@ -165,7 +178,8 @@ async def generate_recommendations(
         results: All simulation results; only triggered ones get an LLM call.
         llm_client: AsyncOpenAI-compatible client for the analysis calls.
         model: Model identifier for the analysis calls.
-        max_results: Cap on the number of results analyzed (LLM cost bound).
+        max_results: Overrides ``config.max_results``, the cap on how many results
+            are analyzed (the LLM cost bound). Caller-supplied wins.
         temperature: Optional sampling temperature. Omitted from the request
             when ``None`` so reasoning models that reject non-default values
             keep working.
@@ -179,18 +193,19 @@ async def generate_recommendations(
     Example:
         >>> from openai import AsyncOpenAI
         >>> from evaluatorq.simulation import simulate
-        >>> from evaluatorq.simulation.reports import RecommendationConfig, generate_recommendations
+        >>> from evaluatorq.simulation.reports import SimulationRecommendationConfig, generate_recommendations
         >>> results = await simulate(evaluation_name='support-sim', target='agent:my-support-agent')
         >>> recs = await generate_recommendations(
         ...     results,
         ...     AsyncOpenAI(),
         ...     'gpt-5.6-luna',
-        ...     config=RecommendationConfig(factual_accuracy_below=0.7, max_suggestions=5),
+        ...     config=SimulationRecommendationConfig(factual_accuracy_below=0.7, max_suggestions=5),
         ... )
         >>> for rec in recs:
         ...     print(rec.persona, rec.triggers, rec.suggestions)
     """
     config = config or _DEFAULT_CONFIG
+    max_results = max_results if max_results is not None else config.max_results
     triggered = [
         (idx, result, triggers) for idx, result in enumerate(results) if (triggers := find_triggers(result, config))
     ]
@@ -202,7 +217,7 @@ async def generate_recommendations(
     for idx, result, triggers in triggered:
         messages = [
             {'role': 'system', 'content': _SYSTEM_PROMPT.format(max_suggestions=config.max_suggestions)},
-            {'role': 'user', 'content': _build_user_prompt(result, triggers, config.max_transcript_chars)},
+            {'role': 'user', 'content': _build_user_prompt(result, triggers, config)},
         ]
         try:
             parsed, raw = await generate_structured(
@@ -211,7 +226,7 @@ async def generate_recommendations(
                 messages=messages,
                 response_format=_SuggestionsLLMResponse,
                 temperature=temperature,
-                max_tokens=800,
+                max_tokens=config.max_tokens,
                 label='recommendations',
                 extra_kwargs=dict(llm_kwargs or {}),
             )

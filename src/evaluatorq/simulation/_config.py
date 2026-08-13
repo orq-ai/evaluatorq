@@ -36,7 +36,7 @@ from pydantic import BaseModel, ConfigDict
 # names in this module's namespace and can't live behind `TYPE_CHECKING`.
 from evaluatorq.contracts import AgentTarget  # noqa: TC001
 from evaluatorq.simulation.hooks import SimulationHooks  # noqa: TC001
-from evaluatorq.simulation.reports.recommendations import RecommendationConfig  # noqa: TC001
+from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig  # noqa: TC001
 from evaluatorq.simulation.types import DEFAULT_MODEL, Message, Persona, Scenario, SimulationDatapoint
 
 
@@ -85,7 +85,7 @@ class SimulationConfig(BaseModel):
     exit_on_failure: bool = True
     save: bool = False
     run_output: str | Path | None = None
-    recommendations: RecommendationConfig | None = None
+    recommendations: SimulationRecommendationConfig | None = None
     """Generate remediation suggestions in-core (before save), mirroring red teaming's
     ``recommendations=`` on :func:`red_team`. ``None`` means off. The public
     ``simulate``/``generate_and_simulate`` leave it off (they return bare results, which

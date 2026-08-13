@@ -388,3 +388,81 @@ async def test_fallback_tolerates_non_string_items(monkeypatch: pytest.MonkeyPat
     assert recs, 'one bad item must not drop the section'
     assert recs[0].recommendations == ['1', 'Add an allowlist']
     assert recs[0].patterns_observed == '5'
+
+
+# ---------------------------------------------------------------------------
+# RedTeamRecommendationConfig knobs (RES-1286)
+# ---------------------------------------------------------------------------
+
+
+def _capturing_client(monkeypatch: pytest.MonkeyPatch, recommendations: list[str]) -> tuple[Any, dict[str, Any]]:
+    """Like ``mock_client_and_capture`` but with a caller-chosen reply."""
+    monkeypatch.setattr(rec_mod, '_compute_top_risk_areas', lambda _r, _n: [_fake_area()])
+    captured: dict[str, Any] = {}
+
+    async def fake_parse(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.refusal = None
+        response.choices[0].message.parsed = _FocusAreaLLMResponse(
+            recommendations=recommendations,
+            patterns_observed='Agent acted beyond scope',
+        )
+        return response
+
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(side_effect=fake_parse)
+    return client, captured
+
+
+@pytest.mark.asyncio
+async def test_config_drives_token_budget_and_suggestion_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """max_tokens and max_suggestions reach the call, and the cap is enforced on
+    the reply rather than only requested in the prompt."""
+    from evaluatorq.redteam.contracts import RedTeamRecommendationConfig
+
+    client, captured = _capturing_client(monkeypatch, ['one', 'two', 'three'])
+
+    recs = await generate_focus_area_recommendations(
+        _empty_report(),
+        client,
+        model='openai/gpt-5-mini',
+        recommendations=RedTeamRecommendationConfig(max_tokens=222, max_suggestions=2),
+    )
+
+    assert captured['max_completion_tokens'] == 222
+    assert 'a list of at most 2 concise' in captured['messages'][0]['content']
+    assert recs[0].recommendations == ['one', 'two']
+
+
+@pytest.mark.asyncio
+async def test_config_trace_budget_truncates_the_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The per-trace budget is a config field, not the old 500-char constant."""
+    from evaluatorq.redteam.contracts import RedTeamRecommendationConfig
+
+    long_result = _vulnerable_result()
+    long_result.response = 'z' * 400
+    monkeypatch.setattr(
+        rec_mod, '_compute_top_risk_areas', lambda _r, _n: [{**_fake_area(), 'vulnerable_results': [long_result]}]
+    )
+
+    captured: dict[str, Any] = {}
+
+    async def fake_parse(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return _parsed_response()
+
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(side_effect=fake_parse)
+
+    await generate_focus_area_recommendations(
+        _empty_report(),
+        client,
+        model='openai/gpt-5-mini',
+        recommendations=RedTeamRecommendationConfig(max_trace_chars=100),
+    )
+
+    user_prompt = captured['messages'][1]['content']
+    assert 'z' * 100 + '...' in user_prompt
+    assert 'z' * 101 not in user_prompt

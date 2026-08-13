@@ -23,6 +23,7 @@ from evaluatorq import DataPoint, EvaluationResult, job
 from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.messages import coerce_content_text
+from evaluatorq.common.recommendations import resolve_recommendations
 from evaluatorq.common.replay import REPLAY_VERSION, REPLAY_VERSION_KEY
 from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.common.run_store_dir import get_store_dir
@@ -64,7 +65,7 @@ from evaluatorq.redteam.contracts import (
     LLMConfig,
     Pipeline,
     PipelineStage,
-    RecommendationConfig,
+    RedTeamRecommendationConfig,
     RedTeamReport,
     SaveMode,
     TargetConfig,
@@ -507,7 +508,7 @@ async def red_team(
     hooks: PipelineHooks | None = None,
     artifacts_dir: Path | str | None = None,
     target_config: TargetConfig | None = None,
-    recommendations: bool | RecommendationConfig = True,
+    recommendations: bool | RedTeamRecommendationConfig = True,
     generate_recommendations: bool | None = None,
     generate_executive_summary: bool = True,
     attacker_instructions: str | None = None,
@@ -600,8 +601,8 @@ async def red_team(
             system prompt for OpenAI targets).
         recommendations: Whether to generate LLM-based actionable
             recommendations for the top focus areas by analyzing failed traces.
-            ``True`` (the default) uses ``RecommendationConfig()`` defaults,
-            ``False`` skips the LLM call, and a ``RecommendationConfig``
+            ``True`` (the default) uses ``RedTeamRecommendationConfig()`` defaults,
+            ``False`` skips the LLM call, and a ``RedTeamRecommendationConfig``
             instance tunes how many areas and traces are analyzed. Requires an
             LLM client (explicit or via environment credentials). Best-effort:
             failures are swallowed into a pipeline warning.
@@ -648,7 +649,7 @@ async def red_team(
         recommendations = generate_recommendations
     # True -> defaults, False -> off, instance -> as given. One resolution here so the
     # generation site downstream only has to check for None.
-    recommendation_config = RecommendationConfig() if recommendations is True else recommendations or None
+    recommendation_config = resolve_recommendations(recommendations, RedTeamRecommendationConfig)
 
     if isinstance(save, bool):
         warnings.warn(
@@ -1057,8 +1058,7 @@ async def red_team(
                             report=report,
                             llm_client=rec_client,
                             model=evaluator_model,
-                            max_areas=recommendation_config.max_areas,
-                            max_traces=recommendation_config.max_traces,
+                            recommendations=recommendation_config,
                             cfg=config,
                         )
                 except (TypeError, AttributeError, ImportError, NameError, KeyError):

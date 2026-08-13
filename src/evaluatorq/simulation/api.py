@@ -22,7 +22,7 @@ from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.recommendations import resolve_recommendations
 from evaluatorq.common.thread_context import _evaluatorq_run_scope, build_thread_id, evaluatorq_pipeline
 from evaluatorq.simulation._config import SimulationConfig
-from evaluatorq.simulation.reports.recommendations import RecommendationConfig
+from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig
 from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MAX_TURNS, DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run, build_simulation_run, fetch_agent_info, write_report
 
@@ -58,7 +58,7 @@ logger = logging.getLogger(__name__)
 from evaluatorq.simulation.exceptions import SimulationDroppedError
 
 
-async def _attach_recommendations(run: SimulationRun, config: RecommendationConfig, model: str) -> None:
+async def _attach_recommendations(run: SimulationRun, config: SimulationRecommendationConfig, model: str) -> None:
     """Generate remediation suggestions and attach them to ``run``.
 
     Best-effort, like the executive summary: a simulation without suggestions is still a
@@ -189,6 +189,7 @@ async def simulate(
     save: bool = False,
     report: str | Path | None = None,
     executive_summary: bool = True,
+    recommendations: bool | SimulationRecommendationConfig = False,
 ) -> list[SimulationResult]:
     """Run agent simulations through the evaluatorq() framework.
 
@@ -281,6 +282,13 @@ async def simulate(
             saved file — so the dashboard shows saved prose instead of the
             computed fallback sentence. Best-effort: no-op without LLM creds.
             Set ``False`` to skip the extra LLM call.
+        recommendations: Generate per-result remediation suggestions and store
+            them on the run — and in any saved file. Off by default because the
+            returned ``SimulationResult`` list has nowhere to carry them, so
+            they are only observable via ``save``/``report`` or the dashboard.
+            ``True`` uses ``SimulationRecommendationConfig()`` defaults, a
+            config instance tunes the trigger thresholds and prompt budgets.
+            Best-effort, like the summary: no-op without LLM creds.
     """
     run = await _simulate_run(
         evaluation_name=evaluation_name,
@@ -308,6 +316,7 @@ async def simulate(
         save=save,
         report=report,
         executive_summary=executive_summary,
+        recommendations=recommendations,
     )
     return run.results
 
@@ -339,7 +348,7 @@ async def _simulate_run(
     save: bool = False,
     report: str | Path | None = None,
     executive_summary: bool = False,
-    recommendations: bool | RecommendationConfig = False,
+    recommendations: bool | SimulationRecommendationConfig = False,
 ) -> SimulationRun:
     """Internal counterpart of :func:`simulate` that returns the full ``SimulationRun``.
 
@@ -416,7 +425,7 @@ async def _simulate_run(
                         save=save,
                         run_output=report,
                         executive_summary=executive_summary,
-                        recommendations=resolve_recommendations(recommendations, RecommendationConfig),
+                        recommendations=resolve_recommendations(recommendations, SimulationRecommendationConfig),
                         hooks=composed_hooks,
                     )
                     return await _simulate_core(
@@ -462,6 +471,7 @@ async def generate_and_simulate(
     save: bool = False,
     report: str | Path | None = None,
     executive_summary: bool = True,
+    recommendations: bool | SimulationRecommendationConfig = False,
 ) -> list[SimulationResult]:
     """Generate personas/scenarios, then run simulations via evaluatorq().
 
@@ -509,6 +519,12 @@ async def generate_and_simulate(
     ``executive_summary``: When ``True`` (the default), generate the LLM
     narrative summary and store it on the returned run — and in any saved file.
     Best-effort: no-op without LLM creds. Set ``False`` to skip the LLM call.
+
+    ``recommendations``: Generate per-result remediation suggestions and store
+    them on the run. Off by default because the returned ``SimulationResult``
+    list has nowhere to carry them — they are observable via ``save``/``report``
+    or the dashboard. ``True`` for defaults, a ``SimulationRecommendationConfig``
+    to tune. Best-effort: no-op without LLM creds.
     """
     run = await _generate_and_simulate_run(
         evaluation_name=evaluation_name,
@@ -533,6 +549,7 @@ async def generate_and_simulate(
         save=save,
         report=report,
         executive_summary=executive_summary,
+        recommendations=recommendations,
     )
     return run.results
 
@@ -629,7 +646,7 @@ async def _generate_and_simulate_run(
     save: bool = False,
     report: str | Path | None = None,
     executive_summary: bool = False,
-    recommendations: bool | RecommendationConfig = False,
+    recommendations: bool | SimulationRecommendationConfig = False,
 ) -> SimulationRun:
     """Internal counterpart of :func:`generate_and_simulate` returning the full ``SimulationRun``.
 
@@ -738,7 +755,7 @@ async def _generate_and_simulate_run(
                             save=save,
                             run_output=report,
                             executive_summary=executive_summary,
-                            recommendations=resolve_recommendations(recommendations, RecommendationConfig),
+                            recommendations=resolve_recommendations(recommendations, SimulationRecommendationConfig),
                             hooks=composed_hooks,
                         )
                         return await _simulate_core(

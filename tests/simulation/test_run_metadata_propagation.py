@@ -229,7 +229,7 @@ async def test_recommendation_generation_stays_under_pipeline_root(
     """In-core recommendation work inherits both the root span and its run metadata."""
     from evaluatorq.simulation import api
     from evaluatorq.simulation.api import _simulate_run
-    from evaluatorq.simulation.reports.recommendations import RecommendationConfig
+    from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig
     from evaluatorq.simulation.tracing import with_llm_span
 
     async def fake_core(**kwargs: Any) -> Any:
@@ -261,7 +261,7 @@ async def test_recommendation_generation_stays_under_pipeline_root(
         sim_model='test',
         upload_results=False,
         executive_summary=False,
-        recommendations=RecommendationConfig(),
+        recommendations=SimulationRecommendationConfig(),
     )
 
     root = _find(span_collector, 'Evaluatorq - Agent Simulation')
