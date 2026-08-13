@@ -54,7 +54,6 @@ from evaluatorq.redteam.adaptive.strategy_registry import (
 from evaluatorq.redteam.backends.base import (
     Backend,
     BareTargetBackend,
-    _coerce_to_agent_response,
 )
 from evaluatorq.redteam.backends.registry import create_async_llm_client, make_agent_backend, resolve_backend
 from evaluatorq.redteam.contracts import (
@@ -506,7 +505,7 @@ async def red_team(
     hooks: PipelineHooks | None = None,
     artifacts_dir: Path | str | None = None,
     target_config: TargetConfig | None = None,
-    generate_recommendations: bool = False,
+    generate_recommendations: bool = True,
     generate_executive_summary: bool = True,
     attacker_instructions: str | None = None,
     verbosity: int = 0,
@@ -599,7 +598,8 @@ async def red_team(
         generate_recommendations: Whether to generate LLM-based actionable
             recommendations for the top focus areas by analyzing failed traces.
             Requires an LLM client (explicit or via environment credentials).
-            Defaults to ``False``.
+            Best-effort: failures are swallowed into a pipeline warning.
+            Defaults to ``True``.
         generate_executive_summary: Whether to generate an LLM narrative
             executive summary at the top of the report. Best-effort: silently
             skipped (with a pipeline warning) when no LLM credentials are
@@ -1023,7 +1023,7 @@ async def red_team(
                     'prompt-based red teaming (requires live-system testing).',
                 )
 
-            # Generate LLM-based recommendations for focus areas (opt-in)
+            # Generate LLM-based recommendations for focus areas (on by default)
             if generate_recommendations:
                 try:
                     rec_client = llm_client or config.evaluator.client
@@ -1241,7 +1241,7 @@ async def _run_static_target_call(
 
     return {
         'response': result.text,
-        'error': call.error,
+        **call.error_payload(),
         'tool_calls': result.tool_calls,
         'token_usage': result.usage,
         'finish_reason': result.finish_reason,
@@ -1301,11 +1301,10 @@ def _create_static_job_for_agent_target(
                             target_agent_timeout_ms=cfg.target_agent_timeout_ms,
                             max_target_retries=cfg.max_target_retries,
                         )
-                        error = output['error']
-                        if error is not None:
+                        if output['error'] is not None:
                             error_attrs: AttrMap = {
-                                'orq.redteam.error_type': error.error_type,
-                                'orq.redteam.error_code': error.code,
+                                'orq.redteam.error_type': output['error_type'],
+                                'orq.redteam.error_code': output['error_code'],
                             }
                             set_span_attrs(target_span, error_attrs)
                             set_span_attrs(agent_span, error_attrs)
@@ -2361,6 +2360,7 @@ async def _run_dynamic_or_hybrid(
                     _backend: Any = at_backend,
                     _label: str = at_label,
                     _safe: str = at_safe,
+                    _cfg: LLMConfig = pipeline_config or PIPELINE_CONFIG,
                 ) -> Any:
                     """Send a static datapoint to the AgentTarget via respond."""
                     messages = _build_messages(data)
@@ -2399,29 +2399,34 @@ async def _run_dynamic_or_hybrid(
                                     'orq.redteam.input': target_input,
                                 },
                             ) as agent_span:
-                                raw = await target_instance.respond([Message(role='user', content=prompt)])
-                                result = _coerce_to_agent_response(raw)
-                                if result.error is not None:
+                                # Same shared call as the non-hybrid static path: without it
+                                # this leg had no retry, no timeout and no ``error`` key at
+                                # all, so a failed target reached the judge as a plain
+                                # ``[ERROR: ...]`` string and got scored as a real answer.
+                                output = await _run_static_target_call(
+                                    target_instance,
+                                    prompt,
+                                    target_agent_timeout_ms=_cfg.target_agent_timeout_ms,
+                                    max_target_retries=_cfg.max_target_retries,
+                                    map_error=_backend.map_error,
+                                )
+                                if output['error'] is not None:
                                     error_attrs: AttrMap = {
-                                        'orq.redteam.error_type': result.error.error_type,
-                                        'orq.redteam.error_code': result.error.code,
+                                        'orq.redteam.error_type': output['error_type'],
+                                        'orq.redteam.error_code': output['error_code'],
                                     }
                                     set_span_attrs(target_span, error_attrs)
                                     set_span_attrs(agent_span, error_attrs)
                                 else:
-                                    output = truncate_for_span(result.text)
-                                    output_attrs: AttrMap = {'output': output, 'orq.redteam.output': output}
+                                    response_text = truncate_for_span(output['response'])
+                                    output_attrs: AttrMap = {
+                                        'output': response_text,
+                                        'orq.redteam.output': response_text,
+                                    }
                                     set_span_attrs(target_span, output_attrs)
                                     set_span_attrs(agent_span, output_attrs)
-                    active_progress = _get_active_progress()
-                    if active_progress is not None:
-                        await active_progress.finish_attack(None)
                     return {
-                        'response': result.text,
-                        'tool_calls': result.tool_calls,
-                        'token_usage': result.usage,
-                        'finish_reason': result.finish_reason,
-                        'model': result.model,
+                        **output,
                         'thread_id': thread_id,
                     }
 

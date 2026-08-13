@@ -188,7 +188,7 @@ Yes. The target runs its own tools, so a successful attack triggers real side ef
 
 ### The report says my agent is vulnerable — what do I change?
 
-Usually the system prompt. The load-bearing fixes are an explicit instruction hierarchy (data the agent *reads* is never a command), a confirmation gate before risky tools, and refusing authority claims — then rerun and watch the resistance rate climb. Pass `generate_recommendations=True` to have the run attach LLM-generated focus-area recommendations to the report.
+Usually the system prompt. The load-bearing fixes are an explicit instruction hierarchy (data the agent *reads* is never a command), a confirmation gate before risky tools, and refusing authority claims — then rerun and watch the resistance rate climb. Every run attaches LLM-generated focus-area recommendations to the report by default; pass `generate_recommendations=False` (or `--no-recommendations`) to skip that extra LLM call.
 
 ### What does `passed=True` mean?
 

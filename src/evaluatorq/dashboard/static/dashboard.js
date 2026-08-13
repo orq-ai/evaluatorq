@@ -465,3 +465,104 @@
   // Honor a tab hash on initial load / refresh.
   if (location.hash) selectRadio(location.hash.slice(1));
 })();
+
+/**
+ * Apply-recommendations drawer: instant loading state (RES-1143)
+ * ──────────────────────────────────────────────────────────────
+ * The preview endpoint runs an LLM merge of the agent's full instructions,
+ * which takes tens of seconds. Without this, the click gives no feedback
+ * until the response lands. On beforeRequest for any request targeting the
+ * drawer mount, inject the drawer shell with a spinner immediately; the
+ * HTMX swap then replaces it with the real content (or an error drawer).
+ */
+(function () {
+  var DRAWER = 'rt-apply-drawer';
+
+  // The loading state's styles ride along with the injection instead of the
+  // server-rendered page CSS, so a cached page can never show it unstyled.
+  function ensureLoadingCss() {
+    if (document.getElementById('rt-apply-anim-css')) return;
+    var style = document.createElement('style');
+    style.id = 'rt-apply-anim-css';
+    style.textContent =
+      '@keyframes rt-spin { to { transform: rotate(360deg); } }' +
+      '@keyframes rt-shimmer { 0% { opacity: 0.45; } 50% { opacity: 1; } 100% { opacity: 0.45; } }' +
+      '@keyframes rt-dots { 0%, 20% { content: ""; } 40% { content: "."; } ' +
+      '60% { content: ".."; } 80%, 100% { content: "..."; } }' +
+      '.rt-drawer-body--loading { display: flex; flex-direction: column; align-items: center; ' +
+      'justify-content: center; text-align: center; gap: 14px; padding: 56px 28px 40px; }' +
+      // Literal colors: this theme's --border is a full shorthand (not a
+      // color), which silently invalidated the earlier var()-based border and
+      // background declarations and left the spinner and skeleton invisible.
+      '.rt-drawer-spinner { display: block; width: 30px; height: 30px; border-radius: 999px; ' +
+      'border: 3px solid #dad8d2; border-top-color: var(--accent, #ff8f34); ' +
+      'animation: rt-spin 0.8s linear infinite; }' +
+      '.rt-drawer-loading-title { font-size: 14px; font-weight: 600; margin: 0; }' +
+      '.rt-drawer-loading-title::after { display: inline-block; width: 1.2em; text-align: left; ' +
+      'content: "..."; animation: rt-dots 1.6s steps(1) infinite; }' +
+      '.rt-drawer-skeleton { width: 100%; max-width: 380px; display: flex; flex-direction: column; ' +
+      'gap: 8px; margin-top: 18px; }' +
+      '.rt-drawer-skeleton span { display: block; height: 10px; border-radius: 5px; ' +
+      'background: #dad8d2; animation: rt-shimmer 1.4s ease-in-out infinite; }' +
+      '.rt-drawer-skeleton span:nth-child(2) { width: 82%; animation-delay: 0.15s; }' +
+      '.rt-drawer-skeleton span:nth-child(3) { width: 91%; animation-delay: 0.3s; }' +
+      '.rt-drawer-skeleton span:nth-child(4) { width: 68%; animation-delay: 0.45s; }';
+    document.head.appendChild(style);
+  }
+
+  function loadingDrawer(message) {
+    ensureLoadingCss();
+    return (
+      '<div class="rt-drawer-overlay"></div>' +
+      '<aside class="rt-drawer" role="dialog" aria-modal="true" aria-busy="true">' +
+      '<div class="rt-drawer-head"><h3 class="rt-drawer-title">Preview changes</h3></div>' +
+      '<div class="rt-drawer-body rt-drawer-body--loading">' +
+      '<span class="rt-drawer-spinner" aria-hidden="true"></span>' +
+      '<p class="rt-drawer-loading-title">' + message + '</p>' +
+      '<p class="rt-drawer-note">This rewrites the agent instructions with an LLM and usually ' +
+      'takes 10–30 seconds. This is a read-only preview: the agent on the platform is ' +
+      'not modified unless you click Apply on the next screen.</p>' +
+      '<div class="rt-drawer-skeleton" aria-hidden="true"><span></span><span></span><span></span><span></span></div>' +
+      '</div></aside>'
+    );
+  }
+
+  document.body.addEventListener('htmx:beforeRequest', function (evt) {
+    var src = evt.detail.elt;
+    if (!src || !src.closest) return;
+    var form = src.closest('.rt-apply-form, .rt-focus-rec-apply');
+    if (!form) return;
+    var mount = document.getElementById(DRAWER);
+    if (!mount) return;
+    var single = form.classList.contains('rt-focus-rec-apply');
+    mount.innerHTML = loadingDrawer(
+      single
+        ? 'Merging this recommendation into the agent instructions'
+        : 'Merging the pending recommendations into the agent instructions'
+    );
+  });
+
+  // A transport failure would otherwise leave the spinner up forever.
+  ['htmx:sendError', 'htmx:responseError', 'htmx:timeout'].forEach(function (name) {
+    document.body.addEventListener(name, function (evt) {
+      var src = evt.detail.elt;
+      if (!src || !src.closest || !src.closest('.rt-apply-form, .rt-focus-rec-apply, .rt-drawer')) return;
+      var mount = document.getElementById(DRAWER);
+      if (!mount || !mount.querySelector('.rt-drawer-body--loading')) return;
+      mount.innerHTML =
+        '<div class="rt-drawer-overlay"></div>' +
+        '<aside class="rt-drawer" role="dialog" aria-modal="true">' +
+        '<div class="rt-drawer-head"><h3 class="rt-drawer-title">Apply recommendations</h3></div>' +
+        '<div class="rt-drawer-body"><p class="rt-drawer-error">The request failed before a preview ' +
+        'came back. Check the dashboard terminal for details and try again.</p></div></aside>';
+    });
+  });
+
+  // Clicking the injected overlay (no hx- attributes on the client-side shell)
+  // closes the drawer, matching the server-rendered overlay behavior.
+  document.body.addEventListener('click', function (evt) {
+    if (!evt.target || !evt.target.classList || !evt.target.classList.contains('rt-drawer-overlay')) return;
+    var mount = document.getElementById(DRAWER);
+    if (mount && mount.querySelector('.rt-drawer-body--loading')) mount.innerHTML = '';
+  });
+})();

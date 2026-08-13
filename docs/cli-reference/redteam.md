@@ -38,6 +38,7 @@ eq redteam run --target agent:<key> [OPTIONS]
 | `--report-md` | `Path \| None` / `None` | Directory for an auto-named Markdown report. |
 | `--report-html` | `Path \| None` / `None` | Directory for an auto-named HTML report. |
 | `--executive-summary` / `--no-executive-summary` | `bool` / `--executive-summary` | Generate an LLM narrative executive summary at the top of the report (needs LLM credentials). Pass `--no-executive-summary` to skip the extra LLM call. |
+| `--recommendations` / `--no-recommendations` | `bool` / `--recommendations` | Generate LLM remediation recommendations for the top focus areas (needs LLM credentials). Pass `--no-recommendations` to skip the extra LLM call. |
 | `--system-prompt` | `str \| None` / `None` | System prompt for the target model/agent. |
 | `--yes` / `-y` | `bool` / `False` | Skip confirmation prompt. |
 | `--verbose` / `-v` | count / `0` | Increase verbosity. `-v` per-attack progress + info logs; `-vv` debug logs. |

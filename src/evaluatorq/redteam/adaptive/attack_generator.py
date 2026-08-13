@@ -232,6 +232,6 @@ async def adapt_prompt_to_tools(
 
     except (APIConnectionError, APIStatusError):
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f'Tool adaptation failed, using generic prompt without tool-specific targeting: {e}')
         return base_prompt

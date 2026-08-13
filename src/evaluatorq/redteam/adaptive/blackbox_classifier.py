@@ -242,7 +242,7 @@ async def _run_probes(agent_target: AgentTarget) -> tuple[list[Message], set[str
             response = await (target if target is not None else agent_target).respond(convo)
         except (APIConnectionError, APIStatusError):
             raise
-        except Exception as e:  # one flaky turn must not abort classification
+        except Exception as e:  # one flaky turn must not abort classification  # noqa: BLE001
             logger.warning('Blackbox probe ({}) failed: {}', group, e)
             # Drop the unanswered user turn so it does not pollute the judge
             # transcript with a question that has no paired reply.
@@ -300,7 +300,7 @@ async def _run_probes(agent_target: AgentTarget) -> tuple[list[Message], set[str
                     maybe_coro = closer()
                     if inspect.isawaitable(maybe_coro):
                         await maybe_coro
-                except Exception as close_err:  # cleanup must not mask the probe result
+                except Exception as close_err:  # cleanup must not mask the probe result  # noqa: BLE001
                     logger.debug('Failed to close recall probe target: {}', close_err)
     unprobed_groups = {group for group, n in answered_by_group.items() if n == 0}
     if not (write_ok and recall_ok):
@@ -422,7 +422,7 @@ async def classify_agent_capabilities_blackbox(
         inference = await _judge_transcript(transcript, llm_client, model, cfg)
     except (APIConnectionError, APIStatusError):
         raise
-    except Exception as e:  # degrade to a coverage-gap signal, mirror white-box
+    except Exception as e:  # degrade to a coverage-gap signal, mirror white-box  # noqa: BLE001
         logger.error('Blackbox judge call failed, strategies will be included optimistically: {}', e)
         return BlackboxAgentCapabilities(capabilities={}, classification_failed=True)
 

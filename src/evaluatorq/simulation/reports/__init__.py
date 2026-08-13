@@ -10,12 +10,18 @@ are rendered as static SVGs via Vega-Lite / vl-convert; when
 degrades gracefully to a tables-only layout.
 """
 
+from evaluatorq.simulation.reports.apply import (
+    ApplySuggestionsResult,
+    apply_suggestions,
+)
 from evaluatorq.simulation.reports.export_html import export_html
 from evaluatorq.simulation.reports.export_md import export_markdown
 from evaluatorq.simulation.reports.recommendations import generate_recommendations
 from evaluatorq.simulation.reports.sections import build_report_sections
 
 __all__ = [
+    'ApplySuggestionsResult',
+    'apply_suggestions',
     'build_report_sections',
     'export_html',
     'export_markdown',

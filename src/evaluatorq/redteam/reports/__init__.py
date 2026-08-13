@@ -6,11 +6,17 @@ are rendered as static SVGs via Vega-Lite / vl-convert; when
 degrades gracefully to a tables-only layout.
 """
 
+from evaluatorq.redteam.reports.apply import (
+    ApplyRecommendationsResult,
+    apply_recommendations,
+)
 from evaluatorq.redteam.reports.export_html import export_html
 from evaluatorq.redteam.reports.export_md import export_markdown
 from evaluatorq.redteam.reports.sections import build_report_sections
 
 __all__ = [
+    'ApplyRecommendationsResult',
+    'apply_recommendations',
     'build_report_sections',
     'export_html',
     'export_markdown',

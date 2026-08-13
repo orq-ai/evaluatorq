@@ -253,7 +253,7 @@ async def _call_llm_for_objectives_single(
             )
             return []
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f'Objective generation failed for {log_label!r} ({type(e).__name__}): {e}')
         return []
 

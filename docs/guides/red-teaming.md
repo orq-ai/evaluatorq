@@ -209,11 +209,12 @@ oversight left in place by accident:
   extracts no usage. `classify_agent_capabilities_blackbox` returns
   `BlackboxAgentCapabilities`, which has no usage field, and the function is
   not currently wired into any pipeline (exported but uncalled outside tests).
-- **Structured-output generation** (`simulation/utils/structured_output.py`,
+- **Structured-output generation** (`common/structured_output.py`,
   `simulation/generators/first_message_generator.py`) — persona, scenario, and
   first-message generation for simulated users extract no usage from either
-  the primary `parse()` call or the `json_object` fallback. These helpers are
-  called from 8+ sites across the simulation generators and `traces.py`, none
+  the primary `parse()` call or the `json_object` fallback. The shared
+  `generate_structured` helper is called from 11 sites across the simulation
+  generators, `traces.py`, and both report `recommendations.py` modules, none
   of which track usage today.
 - **LLM-generated recommendations and executive summaries**
   (`redteam/reports/recommendations.py`, `simulation/reports/recommendations.py`,

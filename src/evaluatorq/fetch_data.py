@@ -12,6 +12,7 @@ import httpx
 from loguru import logger
 
 from .common.llm_client import ORQ_DEFAULT_HOST
+from .common.orq_client import resolve_orq_client
 from .types import DataPoint
 
 if TYPE_CHECKING:
@@ -31,6 +32,9 @@ def setup_orq_client(api_key: str) -> 'Orq':
     """
     Setup and return an Orq client instance.
 
+    Thin alias for ``common.orq_client.resolve_orq_client``; kept because callers
+    and tests patch this name.
+
     Args:
         api_key: Orq API key for authentication
 
@@ -38,21 +42,10 @@ def setup_orq_client(api_key: str) -> 'Orq':
         Orq client instance
 
     Raises:
-        ModuleNotFoundError: If orq_ai_sdk is not installed
-        Exception: If client setup fails
+        ImportError: If orq_ai_sdk is not installed
+        ValueError: If no API key is available
     """
-    try:
-        # lazy import for orq integration
-        from orq_ai_sdk import Orq
-
-        server_url = os.environ.get('ORQ_BASE_URL', 'https://my.orq.ai')
-        return Orq(api_key=api_key, server_url=server_url)
-    except ModuleNotFoundError as e:
-        raise Exception(
-            'orq_ai_sdk is not installed. Install with: uv add orq-ai-sdk (or: python -m pip install orq-ai-sdk)'
-        ) from e
-    except Exception as e:
-        raise Exception(f'Error setting up Orq client: {e}')
+    return resolve_orq_client(api_key)
 
 
 async def fetch_dataset_batches(

@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from evaluatorq import DataPoint, EvaluationResult
 from evaluatorq.common.judge import JudgeError, build_eval_replacements, run_judge
 from evaluatorq.common.jury import Prediction, VerdictKind, _panel_composition_messages, append_jury_summary, run_jury
-from evaluatorq.common.llm_client import orq_base_url
+from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.common.output_adapters import output_error_text, output_to_messages
 from evaluatorq.common.tracing import set_span_attrs
 from evaluatorq.contracts import JURY_RAW_OUTPUT_KEY
@@ -418,15 +418,6 @@ def _validate_platform_datapoint(inputs: dict[str, Any]) -> None:
 
 def _fetch_all_datapoints(dataset_id: str) -> list[DataPoint]:
     """Fetch all datapoints from an ORQ dataset, handling pagination."""
-    try:
-        from orq_ai_sdk import Orq
-    except ImportError as e:
-        msg = (
-            'Fetching datasets from the ORQ platform requires the orq-ai-sdk package. '
-            'Install it with: uv add "evaluatorq[orq]" (or: python -m pip install "evaluatorq[orq]")'
-        )
-        raise ImportError(msg) from e
-
     orq_api_key = os.environ.get('ORQ_API_KEY')
     if not orq_api_key:
         msg = (
@@ -434,9 +425,9 @@ def _fetch_all_datapoints(dataset_id: str) -> list[DataPoint]:
             'Alternatively, pass a local file path as the dataset argument.'
         )
         raise ValueError(msg)
-    # server_url, not the SDK default: a dataset must come from the host the run
-    # is pointed at (ORQ_BASE_URL), not always prod.
-    client = Orq(api_key=orq_api_key, server_url=orq_base_url())
+    # resolve_orq_client, not a bare Orq(...): a dataset must come from the host
+    # the run is pointed at (ORQ_BASE_URL), not always prod.
+    client = resolve_orq_client(orq_api_key)
     all_datapoints: list[DataPoint] = []
     skipped = 0
     cursor: str | None = None

@@ -19,8 +19,11 @@ role-labeled message list as a series of ``<div>`` elements.  Shared by
 
 from __future__ import annotations
 
+import functools
+import hashlib
 from datetime import datetime
 from itertools import starmap
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fasthtml.common import Script
@@ -44,6 +47,23 @@ SURFACE_LABELS: dict[str, str] = {'redteam': 'Red Team', 'sim': 'Agent Sim', 'pa
 RUN_PAGE_SIZES: tuple[int, ...] = (8, 15, 25)
 
 
+@functools.lru_cache(maxsize=1)
+def _dashboard_js_version() -> str:
+    """Content hash of dashboard.js for cache busting.
+
+    dashboard.js evolves with the pages that depend on it (a swapped fragment
+    and its handler must match), but browsers cache ``/static/`` aggressively:
+    a stale cached copy against a fresh page produced dead UI (the apply
+    drawer's loading state rendered unstyled). A content-derived query string
+    makes every change its own URL, so a plain refresh always gets the pair.
+    """
+    path = Path(__file__).parent / 'static' / 'dashboard.js'
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+    except OSError:  # pragma: no cover - packaging anomaly; fall back to no busting
+        return '0'
+
+
 def head_assets() -> tuple[Script, ...]:
     """Return FastHTML header elements for vendored JS assets.
 
@@ -59,7 +79,7 @@ def head_assets() -> tuple[Script, ...]:
         # defer it executes during <head> parse when document.body is still null and
         # throws, aborting all its handlers (incl. the sim-entity modal). vega stays
         # non-deferred: inline body scripts call vegaEmbed during parse.
-        Script(src='/static/dashboard.js', defer=True),
+        Script(src=f'/static/dashboard.js?v={_dashboard_js_version()}', defer=True),
     )
 
 

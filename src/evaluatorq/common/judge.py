@@ -1,4 +1,4 @@
-"""Generic Orq-format LLM judge.
+"""Generic Orq-format LLM judge — canonical, do not write another judge loop.
 
 Renders an evaluator template, calls an OpenAI-compatible chat completion, and
 parses a structured ``{"value", "explanation"}`` verdict. Domain callers own
