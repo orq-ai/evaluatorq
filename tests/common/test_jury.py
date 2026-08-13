@@ -470,3 +470,19 @@ async def test_deliberation_endpoint_recorded_from_failed_prediction() -> None:
     result = await run_jury(judge_fn=judge, panel=['a', 'b'], min_successful_judges=1)
 
     assert result.endpoint == 'responses'
+
+
+@pytest.mark.asyncio
+async def test_deliberation_endpoint_mixed_from_failed_and_decisive() -> None:
+    """One judge fails on 'chat', the other succeeds on 'responses': the panel
+    endpoint aggregates to 'mixed' — both a failed and a decisive prediction
+    contribute an endpoint, and they disagree."""
+
+    async def judge(model: str) -> Prediction:
+        if model == 'chat-judge':
+            return Prediction(error='blocked', endpoint='chat')
+        return Prediction(value=True, explanation='ok', endpoint='responses')
+
+    result = await run_jury(judge_fn=judge, panel=['chat-judge', 'responses-judge'], min_successful_judges=1)
+
+    assert result.endpoint == 'mixed'

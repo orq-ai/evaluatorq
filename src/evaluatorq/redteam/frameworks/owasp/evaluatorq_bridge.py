@@ -281,7 +281,9 @@ def create_owasp_evaluator(
                     'explanation': outcome.payload.explanation,
                     'pass': passed,
                     'token_usage': outcome.token_usage,
-                    'raw_output': {'raw_content': outcome.raw_content},
+                    # Same key/meaning as adaptive/evaluator.py's
+                    # _single_outcome_to_result (see its docstring comment).
+                    'raw_output': {'raw_content': outcome.raw_content, 'endpoint': outcome.endpoint},
                 })
 
             async def judge_fn(model: str) -> Prediction:
@@ -327,6 +329,9 @@ def create_owasp_evaluator(
                     'value': passed,
                     'explanation': deliberation.explanation,
                     JURY_RAW_OUTPUT_KEY: deliberation.jury.model_dump(mode='json'),
+                    # Same key/meaning as adaptive/evaluator.py's panel path (see
+                    # its docstring comment).
+                    'endpoint': deliberation.endpoint,
                 },
             })
 
