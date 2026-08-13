@@ -174,7 +174,7 @@ class ProgressDisplay:
             if task_id is not None:
                 try:
                     self._progress.remove_task(task_id)
-                except Exception:
+                except Exception:  # noqa: BLE001
                     logger.debug('Failed to update progress display', exc_info=True)
                 self._bar_task_ids.discard(task_id)
             self._finished += 1
@@ -529,7 +529,7 @@ class MultiTurnOrchestrator:
                     logger.debug(f'Tool-chaining: capping {len(valid_steps)} steps to max_turns={max_turns}')
                     valid_steps = valid_steps[:max_turns]
                 return format_plan_for_prompt(valid_steps), planner_usage
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # repr-style detail: str(asyncio.TimeoutError()) is '' on 3.10+, so log
             # the type to keep timeouts/cancellations identifiable in the fallback.
             logger.warning(
@@ -611,7 +611,7 @@ class MultiTurnOrchestrator:
                     _progress_label(strategy.category, strategy.name),
                     max_turns,
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001
                 logger.debug('Failed to update progress display', exc_info=True)
 
         try:
@@ -742,7 +742,7 @@ class MultiTurnOrchestrator:
                             error_turn = turn + 1
                             break
                         continue
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         # A provider can block the attacker prompt at the moderation layer
                         # and raise (e.g. Azure → HTTP 400 code='content_filter') instead
                         # of returning finish_reason='content_filter'. Classify that as a

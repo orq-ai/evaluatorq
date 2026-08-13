@@ -1,5 +1,7 @@
 """Run lifecycle manifests: track a run's stage + status while it executes.
 
+Canonical run-state record for both surfaces — no sidecar status dict of your own.
+
 Reports only land on disk when a run *completes* — a run that is still running
 or that crashed leaves no artifact. The manifest fills that gap: a tiny record
 written when a run starts (``status='running'``), patched as stages advance, and
