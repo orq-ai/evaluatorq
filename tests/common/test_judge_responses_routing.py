@@ -6,12 +6,12 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from openai import BadRequestError
+from openai import APIConnectionError, BadRequestError
 from pydantic import BaseModel
 
 from evaluatorq.common import judge as judge_mod
 from evaluatorq.common import model_catalogue
-from evaluatorq.common.judge import run_judge
+from evaluatorq.common.judge import JudgeError, run_judge
 from evaluatorq.contracts import LLMCallConfig
 
 
@@ -181,4 +181,54 @@ async def test_rejected_responses_endpoint_falls_back_and_is_remembered():
 
     await _judge(client)
     # Second judgement skips the endpoint that already 400'd.
+    assert client.calls == ['responses', 'chat', 'chat']
+
+
+@pytest.mark.asyncio
+async def test_unparsed_response_keeps_its_usage():
+    """A billed call that produced no verdict still reports its tokens and cost."""
+    client = _Client()
+
+    async def responses_parse(**_kwargs: Any) -> Any:
+        client.calls.append('responses')
+        reply = _responses_reply()
+        reply.output_parsed = None
+        return reply
+
+    client.responses = SimpleNamespace(parse=responses_parse)
+    outcome = await _judge(client)
+    assert outcome.error_kind is JudgeError.PARSE
+    assert outcome.token_usage is not None and outcome.token_usage.total_cost == 0.25
+    assert outcome.raw_content == '{"value": true, "explanation": "resisted"}'
+
+
+@pytest.mark.asyncio
+async def test_unrelated_bad_request_does_not_downgrade_the_model():
+    """A content-policy 400 is not evidence the endpoint is unavailable."""
+    client = _Client(responses_error=_bad_request('content management policy violation'))
+    await _judge(client)
+    assert client.calls == ['responses', 'chat']
+
+    await _judge(client)
+    # Still tries the priced endpoint: only an endpoint/param 400 is remembered.
+    assert client.calls == ['responses', 'chat', 'responses', 'chat']
+
+
+@pytest.mark.asyncio
+async def test_a_retry_does_not_re_pay_the_rejected_endpoint():
+    """The chat fallback failing retryably must not send the 400 again."""
+    attempts = {'n': 0}
+    client = _Client(responses_error=_bad_request('endpoint not supported for this model'))
+
+    async def chat_parse(**kwargs: Any) -> Any:
+        client.calls.append('chat')
+        client.models.append(kwargs['model'])
+        attempts['n'] += 1
+        if attempts['n'] == 1:
+            raise APIConnectionError(request=None)  # pyright: ignore[reportArgumentType]
+        return _chat_reply()
+
+    client.chat = SimpleNamespace(completions=SimpleNamespace(parse=chat_parse))
+    outcome = await _judge(client)
+    assert outcome.payload is not None and outcome.payload.value is True
     assert client.calls == ['responses', 'chat', 'chat']

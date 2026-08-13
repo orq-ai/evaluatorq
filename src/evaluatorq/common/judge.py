@@ -261,7 +261,7 @@ async def _responses_judge(
     span: Any,
     temp: float | None,
     response_model: type[_BaseModel] | None,
-) -> tuple[EvaluatorResponsePayload, TokenUsage | None, str]:
+) -> JudgeOutcome:
     """Judge via the Responses API — the priced endpoint on the Orq router.
 
     Always schema-enforced (``responses.parse`` → ``text.format`` ``json_schema``):
@@ -289,14 +289,21 @@ async def _responses_judge(
     )
     parsed = response.output_parsed
     if parsed is None:
-        # No parsed object (refusal, truncation, content filter). Surface what did
-        # come back and let run_judge's ValidationError path classify it as PARSE.
-        raise ValidationError.from_exception_data(
-            'EvaluatorResponsePayload',
-            [{'type': 'missing', 'loc': ('value',), 'input': getattr(response, 'output_text', '')}],
+        # No parsed object (refusal, truncation, content filter). Report it the way
+        # the chat-parse path does — a PARSE error that still carries the usage,
+        # because those tokens were billed whether or not the verdict parsed.
+        raw = getattr(response, 'output_text', '') or ''
+        status = getattr(response, 'status', None)
+        logger.error('Judge [{}] responses parse produced no object (status={})', model, status)
+        return JudgeOutcome(
+            error_kind=JudgeError.PARSE,
+            error_message=f'structured output produced no parsed object (status={status})',
+            token_usage=usage,
+            raw_content=raw,
         )
     raw = parsed.model_dump_json()
-    return EvaluatorResponsePayload(value=parsed.value, explanation=parsed.explanation), usage, raw  # pyright: ignore[reportAttributeAccessIssue]
+    payload = EvaluatorResponsePayload(value=parsed.value, explanation=parsed.explanation)  # pyright: ignore[reportAttributeAccessIssue]
+    return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw)
 
 
 async def _json_object_judge(
@@ -384,7 +391,7 @@ async def run_judge(
         logger.debug('Judge [{}] cannot use the Responses endpoint; using chat completions', model)
 
     async def _attempt() -> JudgeOutcome:
-        nonlocal raw_content
+        nonlocal raw_content, responses_model
         async with with_llm_span(
             model=responses_model or model,
             operation='responses' if responses_model else 'chat',
@@ -397,7 +404,7 @@ async def run_judge(
             # Set `api='chat_completions'` on the evaluator config to opt out.
             if responses_model is not None:
                 try:
-                    payload, usage, raw_content = await _responses_judge(
+                    outcome = await _responses_judge(
                         client=client,
                         model=responses_model,
                         cfg=cfg,
@@ -408,12 +415,19 @@ async def run_judge(
                         response_model=response_model,
                     )
                 except BadRequestError as exc:
-                    # The endpoint or one of its params was rejected. Remember the model
-                    # and fall through to the chat path for the rest of the run.
-                    _RESPONSES_REJECTORS.add(model)
+                    # The endpoint or one of its params was rejected: degrade to chat for
+                    # the rest of *this* judgement (a retry must not re-pay the same 400).
+                    # Only a 400 that names the endpoint or its params downgrades the model
+                    # process-wide — a one-off 400 (content policy, a bad extra_kwargs)
+                    # must not cost every later judge call its router-reported cost.
+                    responses_model = None
+                    err = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
+                    if any(k in err for k in ('response', 'text_format', 'unsupported', 'not supported', 'parameter')):
+                        _RESPONSES_REJECTORS.add(model)
                     logger.warning('Model {} rejected the Responses endpoint ({}); using chat completions', model, exc)
                 else:
-                    return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
+                    raw_content = outcome.raw_content or raw_content
+                    return outcome
             if structured_output and response_model is not None:
                 messages = [
                     {'role': 'system', 'content': system_prompt},

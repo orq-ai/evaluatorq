@@ -113,6 +113,17 @@ def apply_pipeline_metadata(params: dict[str, Any]) -> None:
         params['metadata'] = {**md, **(params.get('metadata') or {})}
 
 
+async def apply_trace_headers(params: dict[str, Any]) -> None:
+    """Merge the active trace context into ``params['extra_headers']`` in place.
+
+    Merge, don't overwrite: a caller may have supplied extra_headers via
+    extra_kwargs. Trace headers win on conflict. No-op when no trace is bound.
+    """
+    headers = await get_trace_context_headers()
+    if headers:
+        params['extra_headers'] = {**(params.get('extra_headers') or {}), **headers}
+
+
 async def execute_chat_completion(
     *,
     client: AsyncOpenAI,
@@ -154,12 +165,7 @@ async def execute_chat_completion(
     record_llm_input(span, messages)
 
     if inject_trace_headers:
-        headers = await get_trace_context_headers()
-        if headers:
-            # Merge, don't overwrite: a caller may have supplied extra_headers via
-            # extra_kwargs. Trace headers win on conflict.
-            existing = params.get('extra_headers') or {}
-            params['extra_headers'] = {**existing, **headers}
+        await apply_trace_headers(params)
 
     try:
         response = await asyncio.wait_for(client.chat.completions.create(**params), timeout=timeout_s)
@@ -215,10 +221,7 @@ async def execute_chat_parse(
     record_llm_input(span, messages)
 
     if inject_trace_headers:
-        headers = await get_trace_context_headers()
-        if headers:
-            existing = params.get('extra_headers') or {}
-            params['extra_headers'] = {**existing, **headers}
+        await apply_trace_headers(params)
 
     try:
         response = await asyncio.wait_for(client.chat.completions.parse(**params), timeout=timeout_s)
@@ -271,10 +274,7 @@ async def execute_response(
     record_llm_input(span, messages)
 
     if inject_trace_headers:
-        headers = await get_trace_context_headers()
-        if headers:
-            existing = params.get('extra_headers') or {}
-            params['extra_headers'] = {**existing, **headers}
+        await apply_trace_headers(params)
 
     async def _call() -> Any:
         if response_model is not None:
