@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_e8127396d768e5df_evaluatorq_bridge_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.15.4">coverage.py v7.15.4</a>,
-            created at 2026-08-13 07:50 +0000
+            created at 2026-08-13 11:36 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -1036,22 +1036,24 @@
     <p class="pln"><span class="n"><a id="t954" href="#t954">954</a></span><span class="t"><span class="str">        List of OWASP ASI evaluator entities suitable for static testing</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t955" href="#t955">955</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t956" href="#t956">956</a></span><span class="t"><span class="str">    Example:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="pln"><span class="n"><a id="t957" href="#t957">957</a></span><span class="t"><span class="str">        &gt;&gt;&gt; evaluators = get_all_owasp_evaluators(&quot;azure/gpt-5-mini&quot;)</span>&nbsp;</span><span class="r"></span></p>
-    <p class="pln"><span class="n"><a id="t958" href="#t958">958</a></span><span class="t"><span class="str">        &gt;&gt;&gt; for evaluator in evaluators:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="pln"><span class="n"><a id="t959" href="#t959">959</a></span><span class="t"><span class="str">        ...     print(evaluator.display_name)</span>&nbsp;</span><span class="r"></span></p>
-    <p class="pln"><span class="n"><a id="t960" href="#t960">960</a></span><span class="t"><span class="str">    &quot;&quot;&quot;</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis show_mis"><span class="n"><a id="t961" href="#t961">961</a></span><span class="t">    <span class="key">return</span> <span class="op">[</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis mis2 show_mis"><span class="n"><a id="t962" href="#t962">962</a></span><span class="t">        <span class="nam">get_asi01_goal_hijacking_evaluator</span><span class="op">(</span><span class="nam">model_id</span><span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis mis2 show_mis"><span class="n"><a id="t963" href="#t963">963</a></span><span class="t">        <span class="com"># get_asi02_tool_misuse_evaluator(model_id),  # Excluded: tool-dependent</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis mis2 show_mis"><span class="n"><a id="t964" href="#t964">964</a></span><span class="t">        <span class="com"># get_asi03_privilege_abuse_evaluator(model_id),  # Excluded: requires auth systems</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis mis2 show_mis"><span class="n"><a id="t965" href="#t965">965</a></span><span class="t">        <span class="com"># get_asi04_supply_chain_evaluator(model_id),  # Excluded: requires component integration</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis mis2 show_mis"><span class="n"><a id="t966" href="#t966">966</a></span><span class="t">        <span class="nam">get_asi05_code_execution_evaluator</span><span class="op">(</span><span class="nam">model_id</span><span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis mis2 show_mis"><span class="n"><a id="t967" href="#t967">967</a></span><span class="t">        <span class="nam">get_asi06_memory_poisoning_evaluator</span><span class="op">(</span><span class="nam">model_id</span><span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis mis2 show_mis"><span class="n"><a id="t968" href="#t968">968</a></span><span class="t">        <span class="com"># get_asi07_interagent_comm_evaluator(model_id),  # Excluded: requires multi-agent arch</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis mis2 show_mis"><span class="n"><a id="t969" href="#t969">969</a></span><span class="t">        <span class="com"># get_asi08_cascading_failures_evaluator(model_id),  # Excluded: requires runtime observation</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis mis2 show_mis"><span class="n"><a id="t970" href="#t970">970</a></span><span class="t">        <span class="com"># get_asi09_trust_exploitation_evaluator(model_id),  # Excluded: requires runtime observation</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis mis2 show_mis"><span class="n"><a id="t971" href="#t971">971</a></span><span class="t">        <span class="com"># get_asi10_rogue_agents_evaluator(model_id),  # Excluded: requires runtime observation</span>&nbsp;</span><span class="r"></span></p>
-    <p class="mis mis2 show_mis"><span class="n"><a id="t972" href="#t972">972</a></span><span class="t">    <span class="op">]</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t957" href="#t957">957</a></span><span class="t"><span class="str">        ```pycon</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t958" href="#t958">958</a></span><span class="t"><span class="str">        &gt;&gt;&gt; evaluators = get_all_owasp_evaluators(&quot;azure/gpt-5-mini&quot;)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t959" href="#t959">959</a></span><span class="t"><span class="str">        &gt;&gt;&gt; for evaluator in evaluators:</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t960" href="#t960">960</a></span><span class="t"><span class="str">        ...     print(evaluator.display_name)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t961" href="#t961">961</a></span><span class="t"><span class="str">        ```</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t962" href="#t962">962</a></span><span class="t"><span class="str">    &quot;&quot;&quot;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="mis show_mis"><span class="n"><a id="t963" href="#t963">963</a></span><span class="t">    <span class="key">return</span> <span class="op">[</span>&nbsp;</span><span class="r"></span></p>
+    <p class="mis mis2 show_mis"><span class="n"><a id="t964" href="#t964">964</a></span><span class="t">        <span class="nam">get_asi01_goal_hijacking_evaluator</span><span class="op">(</span><span class="nam">model_id</span><span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="mis mis2 show_mis"><span class="n"><a id="t965" href="#t965">965</a></span><span class="t">        <span class="com"># get_asi02_tool_misuse_evaluator(model_id),  # Excluded: tool-dependent</span>&nbsp;</span><span class="r"></span></p>
+    <p class="mis mis2 show_mis"><span class="n"><a id="t966" href="#t966">966</a></span><span class="t">        <span class="com"># get_asi03_privilege_abuse_evaluator(model_id),  # Excluded: requires auth systems</span>&nbsp;</span><span class="r"></span></p>
+    <p class="mis mis2 show_mis"><span class="n"><a id="t967" href="#t967">967</a></span><span class="t">        <span class="com"># get_asi04_supply_chain_evaluator(model_id),  # Excluded: requires component integration</span>&nbsp;</span><span class="r"></span></p>
+    <p class="mis mis2 show_mis"><span class="n"><a id="t968" href="#t968">968</a></span><span class="t">        <span class="nam">get_asi05_code_execution_evaluator</span><span class="op">(</span><span class="nam">model_id</span><span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="mis mis2 show_mis"><span class="n"><a id="t969" href="#t969">969</a></span><span class="t">        <span class="nam">get_asi06_memory_poisoning_evaluator</span><span class="op">(</span><span class="nam">model_id</span><span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="mis mis2 show_mis"><span class="n"><a id="t970" href="#t970">970</a></span><span class="t">        <span class="com"># get_asi07_interagent_comm_evaluator(model_id),  # Excluded: requires multi-agent arch</span>&nbsp;</span><span class="r"></span></p>
+    <p class="mis mis2 show_mis"><span class="n"><a id="t971" href="#t971">971</a></span><span class="t">        <span class="com"># get_asi08_cascading_failures_evaluator(model_id),  # Excluded: requires runtime observation</span>&nbsp;</span><span class="r"></span></p>
+    <p class="mis mis2 show_mis"><span class="n"><a id="t972" href="#t972">972</a></span><span class="t">        <span class="com"># get_asi09_trust_exploitation_evaluator(model_id),  # Excluded: requires runtime observation</span>&nbsp;</span><span class="r"></span></p>
+    <p class="mis mis2 show_mis"><span class="n"><a id="t973" href="#t973">973</a></span><span class="t">        <span class="com"># get_asi10_rogue_agents_evaluator(model_id),  # Excluded: requires runtime observation</span>&nbsp;</span><span class="r"></span></p>
+    <p class="mis mis2 show_mis"><span class="n"><a id="t974" href="#t974">974</a></span><span class="t">    <span class="op">]</span>&nbsp;</span><span class="r"></span></p>
 </main>
 <footer>
     <div class="content">
@@ -1061,7 +1063,7 @@
             <a class="nav" href="z_e8127396d768e5df_evaluatorq_bridge_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.15.4">coverage.py v7.15.4</a>,
-            created at 2026-08-13 07:50 +0000
+            created at 2026-08-13 11:36 +0000
         </p>
     </div>
 </footer>

@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_e1834eb40d17dfb7_llm_client_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.15.4">coverage.py v7.15.4</a>,
-            created at 2026-08-13 07:50 +0000
+            created at 2026-08-13 11:36 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -180,7 +180,7 @@
     <p class="pln"><span class="n"><a id="t98" href="#t98">98</a></span><span class="t"><span class="str">    metadata (via ``extra_kwargs``) wins on key conflict. Public: direct</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t99" href="#t99">99</a></span><span class="t"><span class="str">    ``create()`` sites that build their own kwargs dict (structured output,</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t100" href="#t100">100</a></span><span class="t"><span class="str">    first-message generation) call this instead of routing through</span>&nbsp;</span><span class="r"></span></p>
-    <p class="pln"><span class="n"><a id="t101" href="#t101">101</a></span><span class="t"><span class="str">    :func:`execute_chat_completion`.</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t101" href="#t101">101</a></span><span class="t"><span class="str">    `execute_chat_completion`.</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t102" href="#t102">102</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t103" href="#t103">103</a></span><span class="t"><span class="str">    Sent regardless of endpoint. ``metadata`` is a first-class field on OpenAI&#x27;s</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t104" href="#t104">104</a></span><span class="t"><span class="str">    own Chat Completions / Responses APIs, so it is safe off-Orq &#8212; unlike the</span>&nbsp;</span><span class="r"></span></p>
@@ -275,7 +275,7 @@
     <p class="run run2"><span class="n"><a id="t193" href="#t193">193</a></span><span class="t"><span class="op">)</span> <span class="op">-&gt;</span> <span class="nam">tuple</span><span class="op">[</span><span class="nam">ParsedChatCompletion</span><span class="op">[</span><span class="nam">Any</span><span class="op">]</span><span class="op">,</span> <span class="nam">TokenUsage</span> <span class="op">|</span> <span class="key">None</span><span class="op">]</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t194" href="#t194">194</a></span><span class="t">    <span class="str">&quot;&quot;&quot;Execute one structured Chat Completions call via ``.parse``.</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t195" href="#t195">195</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
-    <p class="pln"><span class="n"><a id="t196" href="#t196">196</a></span><span class="t"><span class="str">    Mirrors :func:`execute_chat_completion` (span recording, trace headers,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t196" href="#t196">196</a></span><span class="t"><span class="str">    Mirrors `execute_chat_completion` (span recording, trace headers,</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t197" href="#t197">197</a></span><span class="t"><span class="str">    reasoning_effort drop-retry) but routes through ``client.chat.completions.parse``</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t198" href="#t198">198</a></span><span class="t"><span class="str">    with a Pydantic ``response_model``. The parsed object is available on</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t199" href="#t199">199</a></span><span class="t"><span class="str">    ``response.choices[0].message.parsed`` (or ``.refusal``).</span>&nbsp;</span><span class="r"></span></p>
@@ -319,7 +319,7 @@
             <a class="nav" href="z_e1834eb40d17dfb7_llm_client_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.15.4">coverage.py v7.15.4</a>,
-            created at 2026-08-13 07:50 +0000
+            created at 2026-08-13 11:36 +0000
         </p>
     </div>
 </footer>

@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_90b5d372ad712735_display_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.15.4">coverage.py v7.15.4</a>,
-            created at 2026-08-13 07:50 +0000
+            created at 2026-08-13 11:36 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -167,7 +167,7 @@
     <p class="run"><span class="n"><a id="t85" href="#t85">85</a></span><span class="t"><span class="key">def</span> <span class="nam">_extract_evaluation_error</span><span class="op">(</span><span class="nam">raw_output</span><span class="op">:</span> <span class="nam">Any</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="nam">RunError</span> <span class="op">|</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t86" href="#t86">86</a></span><span class="t">    <span class="str">&quot;&quot;&quot;Lift the judge&#x27;s own failure out of the scorer&#x27;s ``raw_output``.</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t87" href="#t87">87</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
-    <p class="pln"><span class="n"><a id="t88" href="#t88">88</a></span><span class="t"><span class="str">    Mirrors :func:`_extract_jury`: the evaluator stashes a structured reason under</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t88" href="#t88">88</a></span><span class="t"><span class="str">    Mirrors `_extract_jury`: the evaluator stashes a structured reason under</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t89" href="#t89">89</a></span><span class="t"><span class="str">    ``EVAL_ERROR_RAW_OUTPUT_KEY`` when it cannot produce a verdict, and it is</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t90" href="#t90">90</a></span><span class="t"><span class="str">    reconstructed here onto the typed result so it reaches the run&#x27;s error rollup.</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t91" href="#t91">91</a></span><span class="t"><span class="str">    &quot;&quot;&quot;</span>&nbsp;</span><span class="r"></span></p>
@@ -840,7 +840,7 @@
     <p class="run"><span class="n"><a id="t758" href="#t758">758</a></span><span class="t"><span class="key">def</span> <span class="nam">_verdict_rate</span><span class="op">(</span><span class="nam">numerator</span><span class="op">:</span> <span class="nam">int</span><span class="op">,</span> <span class="nam">denominator</span><span class="op">:</span> <span class="nam">int</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="nam">float</span> <span class="op">|</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t759" href="#t759">759</a></span><span class="t">    <span class="str">&quot;&quot;&quot;Rate over *evaluated* attacks, or None when nothing in the slice was evaluated.</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t760" href="#t760">760</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
-    <p class="pln"><span class="n"><a id="t761" href="#t761">761</a></span><span class="t"><span class="str">    Distinct from :func:`_rate` because there is no honest numeric fallback here: 0.0</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t761" href="#t761">761</a></span><span class="t"><span class="str">    Distinct from `_rate` because there is no honest numeric fallback here: 0.0</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t762" href="#t762">762</a></span><span class="t"><span class="str">    resistance reads as &quot;fully compromised&quot; and 0.0 vulnerability reads as &quot;fully safe&quot;,</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t763" href="#t763">763</a></span><span class="t"><span class="str">    and neither is true when no verdict exists. Coverage rates keep using ``_rate`` &#8212;</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t764" href="#t764">764</a></span><span class="t"><span class="str">    zero coverage really is 0.0.</span>&nbsp;</span><span class="r"></span></p>
@@ -881,7 +881,7 @@
     <p class="pln"><span class="n"><a id="t799" href="#t799">799</a></span><span class="t">    <span class="str">&quot;&quot;&quot;Group token usage by datapoint source (static/template_dynamic/...).</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t800" href="#t800">800</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t801" href="#t801">801</a></span><span class="t"><span class="str">    Each result&#x27;s execution + evaluation usage is attributed to ``attack.source``,</span>&nbsp;</span><span class="r"></span></p>
-    <p class="pln"><span class="n"><a id="t802" href="#t802">802</a></span><span class="t"><span class="str">    so the per-source values sum exactly to :func:`_aggregate_token_usage`.</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t802" href="#t802">802</a></span><span class="t"><span class="str">    so the per-source values sum exactly to `_aggregate_token_usage`.</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t803" href="#t803">803</a></span><span class="t"><span class="str">    &quot;&quot;&quot;</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t804" href="#t804">804</a></span><span class="t">    <span class="nam">by_source</span><span class="op">:</span> <span class="nam">dict</span><span class="op">[</span><span class="nam">str</span><span class="op">,</span> <span class="nam">TokenUsage</span><span class="op">]</span> <span class="op">=</span> <span class="op">{</span><span class="op">}</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t805" href="#t805">805</a></span><span class="t">    <span class="key">for</span> <span class="nam">r</span> <span class="key">in</span> <span class="nam">results</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
@@ -1372,7 +1372,7 @@
             <a class="nav" href="z_90b5d372ad712735_display_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.15.4">coverage.py v7.15.4</a>,
-            created at 2026-08-13 07:50 +0000
+            created at 2026-08-13 11:36 +0000
         </p>
     </div>
 </footer>
