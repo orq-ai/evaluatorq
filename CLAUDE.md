@@ -234,6 +234,25 @@ src/evaluatorq/
 - Framework categories (ASI01, LLM01) are a derived mapping layer via `VulnerabilityDef.framework_mappings`
 - `passed=True` means RESISTANT (attack failed), `passed=False` means VULNERABLE (attack succeeded)
 
+### Target calls and error payloads
+
+**Every target call goes through `call_target_with_retry`** (`common/target_call.py`).
+Calling `target.respond()` directly skips retry, the per-call timeout, and backend
+error mapping — and, worse, tends to skip the error payload with it.
+
+**Never hand an `AgentResponseError` object to the report layer.** `JobOutputPayload.error`
+and `AttackOutput.error` are `str`; the object fails validation and takes down report
+generation for the **entire run**, after every attack has been executed, judged and
+billed. Flatten with `TargetCallResult.error_payload()` — it is the single source for
+the six `error*` fields, so the format can't drift between the static, hybrid, pipeline
+and orchestrator paths (it did, three ways, before it was consolidated).
+
+The reverse failure is quieter and worse: a job that returns **no** `error` key at all
+makes `output_error_text` return `None`, so the judge scores the literal `[ERROR: ...]`
+marker as a genuine agent reply and a dead target comes back RESISTANT. Both static legs
+now emit the key unconditionally (`None` on success). A new job that calls a target must
+do the same.
+
 ### Adding New Features
 
 - New vulnerabilities: see `docs/custom-evaluators-and-frameworks.md`
