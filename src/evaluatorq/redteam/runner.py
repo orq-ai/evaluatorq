@@ -64,6 +64,7 @@ from evaluatorq.redteam.contracts import (
     LLMConfig,
     Pipeline,
     PipelineStage,
+    RecommendationConfig,
     RedTeamReport,
     SaveMode,
     TargetConfig,
@@ -506,7 +507,8 @@ async def red_team(
     hooks: PipelineHooks | None = None,
     artifacts_dir: Path | str | None = None,
     target_config: TargetConfig | None = None,
-    generate_recommendations: bool = True,
+    recommendations: bool | RecommendationConfig = True,
+    generate_recommendations: bool | None = None,
     generate_executive_summary: bool = True,
     attacker_instructions: str | None = None,
     verbosity: int = 0,
@@ -596,11 +598,14 @@ async def red_team(
             ``02_attack_results.json``, and ``03_summary_report.json`` here.
         target_config: Optional backend-agnostic target configuration (e.g.
             system prompt for OpenAI targets).
-        generate_recommendations: Whether to generate LLM-based actionable
+        recommendations: Whether to generate LLM-based actionable
             recommendations for the top focus areas by analyzing failed traces.
-            Requires an LLM client (explicit or via environment credentials).
-            Best-effort: failures are swallowed into a pipeline warning.
-            Defaults to ``True``.
+            ``True`` (the default) uses ``RecommendationConfig()`` defaults,
+            ``False`` skips the LLM call, and a ``RecommendationConfig``
+            instance tunes how many areas and traces are analyzed. Requires an
+            LLM client (explicit or via environment credentials). Best-effort:
+            failures are swallowed into a pipeline warning.
+        generate_recommendations: Deprecated alias for ``recommendations``.
         generate_executive_summary: Whether to generate an LLM narrative
             executive summary at the top of the report. Best-effort: silently
             skipped (with a pipeline warning) when no LLM credentials are
@@ -633,6 +638,17 @@ async def red_team(
             stacklevel=2,
         )
         llm_config = config
+
+    if generate_recommendations is not None:
+        warnings.warn(
+            'generate_recommendations= is deprecated. Use recommendations= instead.',
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        recommendations = generate_recommendations
+    # True -> defaults, False -> off, instance -> as given. One resolution here so the
+    # generation site downstream only has to check for None.
+    recommendation_config = RecommendationConfig() if recommendations is True else recommendations or None
 
     if isinstance(save, bool):
         warnings.warn(
@@ -1025,7 +1041,7 @@ async def red_team(
                 )
 
             # Generate LLM-based recommendations for focus areas (on by default)
-            if generate_recommendations:
+            if recommendation_config is not None:
                 try:
                     rec_client = llm_client or config.evaluator.client
                     if rec_client is None:
@@ -1041,6 +1057,8 @@ async def red_team(
                             report=report,
                             llm_client=rec_client,
                             model=evaluator_model,
+                            max_areas=recommendation_config.max_areas,
+                            max_traces=recommendation_config.max_traces,
                             cfg=config,
                         )
                 except (TypeError, AttributeError, ImportError, NameError, KeyError):

@@ -269,15 +269,6 @@ def _maybe_generate_recommendations(results: list[Any], model: str) -> list[Any]
     return asyncio.run(_generate_recommendations_async(results, model))
 
 
-def _recommendation_postprocessor(model: str) -> Any:
-    """Build a post-run hook that attaches recommendations under the root span."""
-
-    async def _attach(run: Any) -> None:
-        run.recommendations = await _generate_recommendations_async(run.results, model)
-
-    return _attach
-
-
 # ---------------------------------------------------------------------------
 # Evaluator resolution
 # ---------------------------------------------------------------------------
@@ -853,7 +844,7 @@ async def _simulate_impl(
         evaluator_names=evaluator_names,
         evaluation_name=evaluation_name,
         hooks=hooks,
-        post_run=_recommendation_postprocessor(sim_model) if recommendations else None,
+        recommendations=recommendations,
     )
 
 
@@ -1174,7 +1165,7 @@ async def _run_impl(
         evaluation_name=evaluation_name,
         emit_datapoints=emit,
         hooks=hooks,
-        post_run=_recommendation_postprocessor(sim_model) if recommendations else None,
+        recommendations=recommendations,
     )
 
 

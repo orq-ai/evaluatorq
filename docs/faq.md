@@ -188,7 +188,7 @@ Yes. The target runs its own tools, so a successful attack triggers real side ef
 
 ### The report says my agent is vulnerable — what do I change?
 
-Usually the system prompt. The load-bearing fixes are an explicit instruction hierarchy (data the agent *reads* is never a command), a confirmation gate before risky tools, and refusing authority claims — then rerun and watch the resistance rate climb. Every run attaches LLM-generated focus-area recommendations to the report by default; pass `generate_recommendations=False` (or `--no-recommendations`) to skip that extra LLM call.
+Usually the system prompt. The load-bearing fixes are an explicit instruction hierarchy (data the agent *reads* is never a command), a confirmation gate before risky tools, and refusing authority claims — then rerun and watch the resistance rate climb. Every run attaches LLM-generated focus-area recommendations to the report by default; pass `recommendations=False` (or `--no-recommendations`) to skip that extra LLM call, or `recommendations=RecommendationConfig(max_areas=3, max_traces=20)` to tune how much gets analyzed.
 
 ### What does `passed=True` mean?
 
@@ -226,6 +226,23 @@ print(f"pass rate: {sum(r.goal_achieved for r in results)}/{len(results)}")
 ```
 
 See [Agent Simulation](guides/agent-simulation.md).
+
+### Can I tune when a simulation result gets recommendations?
+
+Yes — pass a `RecommendationConfig`. Only results with a fixable failure signal get an LLM call; the metric thresholds that decide that, plus the prompt's transcript budget and the suggestion cap, are fields on the config. It's the same `recommendations=` flag red teaming uses: `True` for defaults, `False` to skip the LLM call, an instance to tune.
+
+`eq sim run` generates them in-run (`--recommendations` is on by default). From Python, `simulate()` returns bare results — which have nowhere to carry suggestions — so call the generator yourself:
+
+```python
+from evaluatorq.simulation.reports import RecommendationConfig, generate_recommendations
+
+recs = await generate_recommendations(
+    results, client, "gpt-5.6-luna",
+    config=RecommendationConfig(factual_accuracy_below=0.7, max_suggestions=5),
+)
+```
+
+Defaults: thresholds `0.5` on the judge's 0-1 scales, `max_transcript_chars=3000`, `max_suggestions=3`. Values outside the valid range raise at construction rather than silently disabling a trigger.
 
 ### Where do the personas and scenarios come from?
 

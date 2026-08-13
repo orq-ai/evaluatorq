@@ -556,7 +556,7 @@ def run(
                 save=save,
                 target_config=target_config,
                 generate_executive_summary=executive_summary,
-                generate_recommendations=recommendations,
+                recommendations=recommendations,
                 attacker_instructions=attacker_instructions,
                 verbosity=verbose + 1,
             )

@@ -19,8 +19,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.llm_client import resolve_results_base_url
+from evaluatorq.common.recommendations import resolve_recommendations
 from evaluatorq.common.thread_context import _evaluatorq_run_scope, build_thread_id, evaluatorq_pipeline
 from evaluatorq.simulation._config import SimulationConfig
+from evaluatorq.simulation.reports.recommendations import RecommendationConfig
 from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MAX_TURNS, DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run, build_simulation_run, fetch_agent_info, write_report
 
@@ -48,13 +50,34 @@ if TYPE_CHECKING:
     from evaluatorq.types import DataPoint, DataPointResult, Evaluator
 
     EmitDatapoints = Callable[[list[SimulationDatapoint]], None]
-    RunPostProcessor = Callable[[SimulationRun], Awaitable[None]]
 
 logger = logging.getLogger(__name__)
 
 # Re-exported from here for back-compat (``simulation.__init__`` imports it from
 # api); the canonical definition lives in ``simulation.exceptions``.
 from evaluatorq.simulation.exceptions import SimulationDroppedError
+
+
+async def _attach_recommendations(run: SimulationRun, config: RecommendationConfig, model: str) -> None:
+    """Generate remediation suggestions and attach them to ``run``.
+
+    Best-effort, like the executive summary: a simulation without suggestions is still a
+    useful simulation, so credential and LLM failures degrade to a warning. Called from
+    inside the pipeline span so the analysis spans nest under the simulation root and
+    carry the same run metadata.
+    """
+    from evaluatorq.common.llm_client import resolve_llm_client
+    from evaluatorq.simulation.reports.recommendations import generate_recommendations
+
+    resolved = None
+    try:
+        resolved = resolve_llm_client()
+        run.recommendations = await generate_recommendations(run.results, resolved.client, model, config=config) or None
+    except Exception:
+        logger.warning('Failed to generate remediation suggestions (results still returned)', exc_info=True)
+    finally:
+        if resolved is not None and resolved.owned:
+            await resolved.client.close()
 
 
 def _agent_key_of(target: object) -> str | None:
@@ -316,7 +339,7 @@ async def _simulate_run(
     save: bool = False,
     report: str | Path | None = None,
     executive_summary: bool = False,
-    post_run: RunPostProcessor | None = None,
+    recommendations: bool | RecommendationConfig = False,
 ) -> SimulationRun:
     """Internal counterpart of :func:`simulate` that returns the full ``SimulationRun``.
 
@@ -393,6 +416,7 @@ async def _simulate_run(
                         save=save,
                         run_output=report,
                         executive_summary=executive_summary,
+                        recommendations=resolve_recommendations(recommendations, RecommendationConfig),
                         hooks=composed_hooks,
                     )
                     return await _simulate_core(
@@ -401,7 +425,6 @@ async def _simulate_run(
                         pipeline_span=pipeline_span,
                         run_id=run_id,
                         manifest_writer=manifest_writer,
-                        post_run=post_run,
                     )
                 except SimulationCancelledError:
                     if manifest_writer is not None:
@@ -606,7 +629,7 @@ async def _generate_and_simulate_run(
     save: bool = False,
     report: str | Path | None = None,
     executive_summary: bool = False,
-    post_run: RunPostProcessor | None = None,
+    recommendations: bool | RecommendationConfig = False,
 ) -> SimulationRun:
     """Internal counterpart of :func:`generate_and_simulate` returning the full ``SimulationRun``.
 
@@ -715,6 +738,7 @@ async def _generate_and_simulate_run(
                             save=save,
                             run_output=report,
                             executive_summary=executive_summary,
+                            recommendations=resolve_recommendations(recommendations, RecommendationConfig),
                             hooks=composed_hooks,
                         )
                         return await _simulate_core(
@@ -723,7 +747,6 @@ async def _generate_and_simulate_run(
                             pipeline_span=pipeline_span,
                             run_id=run_id,
                             manifest_writer=manifest_writer,
-                            post_run=post_run,
                         )
                     finally:
                         if gen_owned and gen_client is not None:
@@ -1092,7 +1115,6 @@ async def _simulate_core(
     pipeline_span: Span | None,
     run_id: str,
     manifest_writer: ManifestWriter | None = None,
-    post_run: RunPostProcessor | None = None,
 ) -> SimulationRun:
     """Core simulation logic (runs inside the Evaluatorq - Agent Simulation span).
 
@@ -1292,6 +1314,11 @@ async def _simulate_core(
             datapoints=sim_datapoints,
         )
 
+        # Remediation suggestions, generated before persistence so a saved run carries
+        # them, and inside the pipeline span so their LLM calls bind the run metadata.
+        if config.recommendations is not None:
+            await _attach_recommendations(run, config.recommendations, model)
+
         # Generate the LLM narrative before persistence so a saved report carries
         # it. This is best-effort: simulations remain useful without LLM creds or
         # if summary generation itself fails.
@@ -1306,9 +1333,6 @@ async def _simulate_core(
         # CLI-only report enrichments run before persistence while the pipeline
         # span and evaluatorq run context are still active. This keeps their LLM
         # spans under the main simulation root and binds the same run metadata.
-        if post_run is not None:
-            await post_run(run)
-
         # Persist only when the caller opts in (save=True).
         # TODO(RES-963): inline because on_run_complete carries no run metadata and
         # hooks aren't yet composable; move to a save hook once that lands.

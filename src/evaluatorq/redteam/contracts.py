@@ -658,6 +658,24 @@ class EvaluatorConfig(BaseModel):
         return self
 
 
+class RecommendationConfig(BaseModel):
+    """Tunable limits for focus-area recommendation generation.
+
+    Pass an instance as ``recommendations=RecommendationConfig(...)`` to :func:`red_team`;
+    ``recommendations=True`` uses these defaults and ``False`` skips the LLM call entirely.
+    Mirrors ``simulation.reports.RecommendationConfig``, which carries the equivalent knobs
+    for agent simulation.
+    """
+
+    model_config = ConfigDict(extra='forbid')
+
+    max_areas: int = Field(default=5, ge=1)
+    """How many top risk areas get analyzed. Each is one LLM call."""
+
+    max_traces: int = Field(default=10, ge=1)
+    """Failed traces sampled into the prompt per area."""
+
+
 class LLMConfig(BaseModel):
     """Unified LLM configuration for the red teaming pipeline.
 
@@ -1645,7 +1663,7 @@ class RedTeamReport(BaseModel):
 
     focus_area_recommendations: list[FocusAreaRecommendation] | None = Field(
         default=None,
-        description='LLM-generated actionable recommendations for top risk areas (populated when generate_recommendations=True)',
+        description='LLM-generated actionable recommendations for top risk areas (populated when recommendations is enabled)',
     )
 
     applied_recommendations: list[str] = Field(

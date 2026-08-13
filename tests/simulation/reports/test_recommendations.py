@@ -18,12 +18,14 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 from openai import APIStatusError
+from pydantic import ValidationError
 
 from evaluatorq.common.thread_context import evaluatorq_pipeline, evaluatorq_run_id
 from evaluatorq.contracts import Message, TokenUsage
 from evaluatorq.simulation.reports import export_html, export_markdown
 from evaluatorq.simulation.reports.recommendations import (
     _SuggestionsLLMResponse,
+    RecommendationConfig,
     find_triggers,
     generate_recommendations,
 )
@@ -146,6 +148,19 @@ def test_low_factual_accuracy_triggers():
     result = _make_result(goal_achieved=True, factual_accuracy=0.2)
     triggers = find_triggers(result)
     assert any(kind == 'low_factual_accuracy' for kind, _ in triggers)
+
+
+def test_config_threshold_overrides_default():
+    result = _make_result(goal_achieved=True, factual_accuracy=0.2)
+    config = RecommendationConfig(factual_accuracy_below=0.1)
+    assert find_triggers(result, config) == []
+
+
+def test_config_rejects_meaningless_values():
+    with pytest.raises(ValidationError):
+        RecommendationConfig(max_suggestions=0)
+    with pytest.raises(ValidationError):
+        RecommendationConfig(hallucination_risk_above=1.5)
 
 
 # ---------------------------------------------------------------------------

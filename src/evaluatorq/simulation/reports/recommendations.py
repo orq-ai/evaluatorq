@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, Annotated, Any
 from loguru import logger
 from pydantic import BaseModel, BeforeValidator, Field
 
-from evaluatorq.common.env_config import env_float, env_int
 from evaluatorq.common.extract_json import coerce_str_list, extract_json_from_response
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.sanitize import xml_escape
@@ -45,21 +44,24 @@ class _SuggestionsLLMResponse(BaseModel):
     suggestions: Annotated[list[str], BeforeValidator(coerce_str_list)] = Field(default_factory=list)
 
 
-# Metric thresholds on the judge's 0-1 scales. A conversation-average beyond
-# these marks the result as remediable. Defaults preserve prior behaviour; override any of them via
-# the EVALUATORQ_RECOMMENDATION_* env vars so teams can tune without code changes.
-FACTUAL_ACCURACY_BELOW = env_float(
-    'EVALUATORQ_RECOMMENDATION_FACTUAL_ACCURACY_BELOW', 0.5, min_value=0.0, max_value=1.0
-)
-HALLUCINATION_RISK_ABOVE = env_float(
-    'EVALUATORQ_RECOMMENDATION_HALLUCINATION_RISK_ABOVE', 0.5, min_value=0.0, max_value=1.0
-)
-TONE_APPROPRIATENESS_BELOW = env_float(
-    'EVALUATORQ_RECOMMENDATION_TONE_APPROPRIATENESS_BELOW', 0.5, min_value=0.0, max_value=1.0
-)
+class RecommendationConfig(BaseModel):
+    """Tunable limits for recommendation generation.
 
-_MAX_TRANSCRIPT_CHARS = env_int('EVALUATORQ_RECOMMENDATION_MAX_TRANSCRIPT_CHARS', 3000, min_value=100)
-_MAX_SUGGESTIONS = env_int('EVALUATORQ_RECOMMENDATION_MAX_SUGGESTIONS', 3, min_value=1)
+    Thresholds are on the judge's 0-1 scales: a conversation-average beyond one of them marks the
+    result as remediable. Defaults preserve prior behaviour; pass an instance to
+    ``generate_recommendations``/``find_triggers`` to tune. Bounds are enforced because a
+    parseable value is not necessarily a meaningful one - a suggestion cap of 0 pays for the LLM
+    call and then drops every result.
+    """
+
+    factual_accuracy_below: float = Field(default=0.5, ge=0.0, le=1.0)
+    hallucination_risk_above: float = Field(default=0.5, ge=0.0, le=1.0)
+    tone_appropriateness_below: float = Field(default=0.5, ge=0.0, le=1.0)
+    max_transcript_chars: int = Field(default=3000, ge=100)
+    max_suggestions: int = Field(default=3, ge=1)
+
+
+_DEFAULT_CONFIG = RecommendationConfig()
 
 
 def _truncate(text: str, max_chars: int = 500) -> str:
@@ -75,14 +77,21 @@ def _avg_metric(result: SimulationResult, field_name: str) -> float | None:
     return sum(values) / len(values)
 
 
-def find_triggers(result: SimulationResult) -> list[tuple[str, str]]:
+def find_triggers(result: SimulationResult, config: RecommendationConfig | None = None) -> list[tuple[str, str]]:
     """Return ``(trigger, evidence)`` pairs for remediable failure signals.
 
     Empty list means the result is clean or failed for benign/non-fixable
     reasons (plain max-turns, runtime error) and gets no suggestion.
+
+    Example:
+        >>> from evaluatorq.simulation.reports import RecommendationConfig
+        >>> strict = RecommendationConfig(factual_accuracy_below=0.9, hallucination_risk_above=0.2)
+        >>> [trigger for trigger, _evidence in find_triggers(results[0], strict)]
+        ['low_factual_accuracy']
     """
     if _is_errored(result):
         return []
+    config = config or _DEFAULT_CONFIG
 
     # Broken rules arrive as internal criteria ids (e.g. 'criteria_4'); resolve
     # them to their human description, and drop ones already reported as a
@@ -98,9 +107,9 @@ def find_triggers(result: SimulationResult) -> list[tuple[str, str]]:
     triggers.extend(('criterion_failed', desc) for desc in failed_descs)
 
     checks = (
-        ('low_factual_accuracy', 'factual_accuracy', lambda v: v < FACTUAL_ACCURACY_BELOW),
-        ('high_hallucination_risk', 'hallucination_risk', lambda v: v > HALLUCINATION_RISK_ABOVE),
-        ('poor_tone', 'tone_appropriateness', lambda v: v < TONE_APPROPRIATENESS_BELOW),
+        ('low_factual_accuracy', 'factual_accuracy', lambda v: v < config.factual_accuracy_below),
+        ('high_hallucination_risk', 'hallucination_risk', lambda v: v > config.hallucination_risk_above),
+        ('poor_tone', 'tone_appropriateness', lambda v: v < config.tone_appropriateness_below),
     )
     for trigger, field_name, is_bad in checks:
         avg = _avg_metric(result, field_name)
@@ -128,7 +137,7 @@ rather than "Improve the prompt").
 Respond ONLY with valid JSON. No markdown, no explanation outside the JSON."""
 
 
-def _build_user_prompt(result: SimulationResult, triggers: list[tuple[str, str]]) -> str:
+def _build_user_prompt(result: SimulationResult, triggers: list[tuple[str, str]], max_transcript_chars: int) -> str:
     issue_lines = '\n'.join(f'- [{trigger}] {xml_escape(evidence)}' for trigger, evidence in triggers)
     transcript = '\n'.join(f'{m.role}: {_truncate(coerce_content_text(m.content), 400)}' for m in result.messages)
     return (
@@ -136,7 +145,7 @@ def _build_user_prompt(result: SimulationResult, triggers: list[tuple[str, str]]
         f'Scenario: {xml_escape(_scenario_name(result))}\n'
         f'Judge verdict: {xml_escape(_truncate(result.reason, 300))}\n'
         f'Flagged issues:\n{issue_lines}\n\n'
-        f'<transcript>\n{xml_escape(_truncate(transcript, _MAX_TRANSCRIPT_CHARS))}\n</transcript>'
+        f'<transcript>\n{xml_escape(_truncate(transcript, max_transcript_chars))}\n</transcript>'
     )
 
 
@@ -148,6 +157,7 @@ async def generate_recommendations(
     max_results: int = 10,
     temperature: float | None = None,
     llm_kwargs: dict[str, Any] | None = None,
+    config: RecommendationConfig | None = None,
 ) -> list[SimulationRecommendation]:
     """Generate remediation suggestions for results with remediable failures.
 
@@ -160,12 +170,30 @@ async def generate_recommendations(
             when ``None`` so reasoning models that reject non-default values
             keep working.
         llm_kwargs: Optional extra kwargs forwarded to the chat completion call.
+        config: Trigger thresholds and prompt/suggestion limits; defaults when omitted.
 
     Returns:
         One ``SimulationRecommendation`` per analyzed result whose call
         succeeded; per-result LLM failures are logged and skipped.
+
+    Example:
+        >>> from openai import AsyncOpenAI
+        >>> from evaluatorq.simulation import simulate
+        >>> from evaluatorq.simulation.reports import RecommendationConfig, generate_recommendations
+        >>> results = await simulate(evaluation_name='support-sim', target='agent:my-support-agent')
+        >>> recs = await generate_recommendations(
+        ...     results,
+        ...     AsyncOpenAI(),
+        ...     'gpt-5.6-luna',
+        ...     config=RecommendationConfig(factual_accuracy_below=0.7, max_suggestions=5),
+        ... )
+        >>> for rec in recs:
+        ...     print(rec.persona, rec.triggers, rec.suggestions)
     """
-    triggered = [(idx, result, triggers) for idx, result in enumerate(results) if (triggers := find_triggers(result))]
+    config = config or _DEFAULT_CONFIG
+    triggered = [
+        (idx, result, triggers) for idx, result in enumerate(results) if (triggers := find_triggers(result, config))
+    ]
     if len(triggered) > max_results:
         logger.warning(f'{len(triggered)} results have remediable failures; analyzing only the first {max_results}')
         triggered = triggered[:max_results]
@@ -173,8 +201,8 @@ async def generate_recommendations(
     recommendations: list[SimulationRecommendation] = []
     for idx, result, triggers in triggered:
         messages = [
-            {'role': 'system', 'content': _SYSTEM_PROMPT.format(max_suggestions=_MAX_SUGGESTIONS)},
-            {'role': 'user', 'content': _build_user_prompt(result, triggers)},
+            {'role': 'system', 'content': _SYSTEM_PROMPT.format(max_suggestions=config.max_suggestions)},
+            {'role': 'user', 'content': _build_user_prompt(result, triggers, config.max_transcript_chars)},
         ]
         try:
             parsed, raw = await generate_structured(
@@ -191,7 +219,7 @@ async def generate_recommendations(
                 # Fallback path: parse the json_object payload, tolerating a
                 # ```json fenced body from providers that ignore response_format.
                 parsed = _SuggestionsLLMResponse.model_validate_json(extract_json_from_response(raw))
-            suggestions = [str(s) for s in parsed.suggestions if s][:_MAX_SUGGESTIONS]
+            suggestions = [str(s) for s in parsed.suggestions if s][: config.max_suggestions]
             if not suggestions:
                 continue
 
