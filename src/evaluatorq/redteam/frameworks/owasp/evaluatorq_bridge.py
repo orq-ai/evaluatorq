@@ -294,13 +294,15 @@ def create_owasp_evaluator(
                 )
                 if outcome.error_kind is not None or outcome.payload is None:
                     return Prediction(
-                        error=outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'error')
+                        error=outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'error'),
+                        endpoint=outcome.endpoint,
                     )
                 return Prediction(
                     value=outcome.payload.value,
                     explanation=outcome.payload.explanation,
                     token_usage=outcome.token_usage,
                     abstained=outcome.payload.abstain,
+                    endpoint=outcome.endpoint,
                 )
 
             deliberation = await run_jury(

@@ -136,20 +136,23 @@ def _outcome_to_prediction(outcome: JudgeOutcome) -> Prediction:
         return Prediction(
             error=outcome.error_message or str(outcome.error_kind),
             token_usage=outcome.token_usage,
+            endpoint=outcome.endpoint,
         )
     payload = outcome.payload
     if payload is None:
-        return Prediction(error='judge returned no payload', token_usage=outcome.token_usage)
+        return Prediction(error='judge returned no payload', token_usage=outcome.token_usage, endpoint=outcome.endpoint)
     if payload.abstain or payload.value is None:
         return Prediction(
             abstained=True,
             explanation=payload.explanation,
             token_usage=outcome.token_usage,
+            endpoint=outcome.endpoint,
         )
     return Prediction(
         value=payload.value,
         explanation=payload.explanation,
         token_usage=outcome.token_usage,
+        endpoint=outcome.endpoint,
     )
 
 

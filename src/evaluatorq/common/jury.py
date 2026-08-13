@@ -72,6 +72,12 @@ class Prediction(BaseModel):
     token_usage: TokenUsage | None = None
     error: str | None = None
     abstained: bool = False
+    # Which endpoint (Orq router Chat Completions vs Responses) actually served
+    # this pass, mirroring `evaluatorq.common.judge.JudgeOutcome.endpoint`. Only
+    # the Responses endpoint returns a priced usage block, so this is what makes
+    # a judge reporting no cost legible. ``None`` when the adapter has no
+    # `JudgeOutcome` to read it from (e.g. the catch-all in `_call_prediction`).
+    endpoint: Literal['chat', 'responses'] | None = None
 
     @property
     def decisive(self) -> bool:
@@ -85,6 +91,11 @@ class JuryDeliberation(BaseModel):
     explanation: str = ''
     jury: JuryResult
     token_usage: TokenUsage | None = None
+    # Aggregated across every decisive-and-failed Prediction the panel produced
+    # (abstained-with-no-error passes carry no endpoint signal, so they are
+    # excluded). ``'mixed'`` when the panel used both endpoints, a single
+    # endpoint when uniform, ``None`` when nothing recorded one.
+    endpoint: Literal['chat', 'responses', 'mixed'] | None = None
 
 
 def _sum_usage(usages: list[TokenUsage]) -> TokenUsage | None:
@@ -296,10 +307,10 @@ async def _judge_vote(
     semaphore: asyncio.Semaphore | None = None,
     parent_context: object | None = None,
     label_swapped: bool | None = None,
-) -> tuple[JuryVote, list[TokenUsage]]:
+) -> tuple[JuryVote, list[TokenUsage], list[str]]:
     """Run one judge (its repetitions) inside a per-judge span, then stamp the
     resolved ``JuryVote`` onto the span (RES-985). The span is a no-op when
-    tracing is disabled; the vote/usages are unchanged either way."""
+    tracing is disabled; the vote/usages/endpoints are unchanged either way."""
     async with with_span('orq.judge', parent_context=parent_context) as span:
         start = time.monotonic()
         # Identity up front so a propagate_errors=True abort still leaves a span
@@ -314,7 +325,7 @@ async def _judge_vote(
                 'judge.label_swapped': label_swapped,
             },
         )
-        vote, usages = await _compute_judge_vote(
+        vote, usages, endpoints = await _compute_judge_vote(
             model=model,
             judge_fn=judge_fn,
             repetitions=repetitions,
@@ -326,7 +337,7 @@ async def _judge_vote(
             semaphore=semaphore,
         )
         _record_judge_span(span, vote, latency_ms=(time.monotonic() - start) * 1000.0, label_swapped=label_swapped)
-    return vote, usages
+    return vote, usages, endpoints
 
 
 def _record_judge_span(span: Span | None, vote: JuryVote, *, latency_ms: float, label_swapped: bool | None) -> None:
@@ -382,7 +393,7 @@ async def _compute_judge_vote(
     numeric_how: NumericAggName,
     propagate_errors: bool = False,
     semaphore: asyncio.Semaphore | None = None,
-) -> tuple[JuryVote, list[TokenUsage]]:
+) -> tuple[JuryVote, list[TokenUsage], list[str]]:
     predictions = await asyncio.gather(*[
         _call_prediction(judge_fn, model, propagate_errors=propagate_errors, semaphore=semaphore)
         for _ in range(max(1, repetitions))
@@ -392,6 +403,10 @@ async def _compute_judge_vote(
     abstained = bool(predictions) and not decisive and any(p.abstained for p in predictions)
     repetitions_raw = [p.value if p.decisive else None for p in predictions]
     failed_count = sum(1 for p in predictions if p.error is not None)
+    # Decisive-and-failed passes alike: an abstained pass with no error carries
+    # no endpoint signal worth aggregating, but a mechanical failure still tells
+    # us which endpoint rejected the call.
+    endpoints = [p.endpoint for p in predictions if p.endpoint is not None and (p.decisive or p.error is not None)]
 
     if failed_count > 0 and failed_count < len(predictions):
         logger.warning('judge {} had {}/{} repetitions fail', model, failed_count, len(predictions))
@@ -410,6 +425,7 @@ async def _compute_judge_vote(
                     repetitions_failed=failed_count,
                 ),
                 usages,
+                endpoints,
             )
         error = next((p.error for p in predictions if p.error), 'no successful prediction')
         return (
@@ -422,6 +438,7 @@ async def _compute_judge_vote(
                 repetitions_failed=failed_count,
             ),
             usages,
+            endpoints,
         )
 
     values = [p.value for p in decisive if p.value is not None]
@@ -444,6 +461,7 @@ async def _compute_judge_vote(
                 repetitions_failed=failed_count,
             ),
             usages,
+            endpoints,
         )
     representative = next(
         (p.explanation for p in decisive if p.value == value and p.explanation), decisive[0].explanation
@@ -459,6 +477,7 @@ async def _compute_judge_vote(
             repetitions_failed=failed_count,
         ),
         usages,
+        endpoints,
     )
 
 
@@ -642,9 +661,11 @@ async def _run_jury_core(
 
     votes: list[JuryVote] = []
     usages: list[TokenUsage] = []
-    for vote, vote_usages in judge_results:
+    endpoints_seen: list[str] = []
+    for vote, vote_usages, vote_endpoints in judge_results:
         votes.append(vote)
         usages.extend(vote_usages)
+        endpoints_seen.extend(vote_endpoints)
 
     failures = sum(1 for vote in votes if not vote.success)
     stand_ins = replacement_pool[:failures]
@@ -664,9 +685,22 @@ async def _run_jury_core(
             )
             for model in stand_ins
         ])
-        for vote, vote_usages in replacement_results:
+        for vote, vote_usages, vote_endpoints in replacement_results:
             votes.append(vote)
             usages.extend(vote_usages)
+            endpoints_seen.extend(vote_endpoints)
+
+    # 'mixed' when the panel used both endpoints, the single endpoint when
+    # uniform, None when nothing recorded one (e.g. every judge failed before
+    # reaching a JudgeOutcome, or the caller's judge_fn never sets Prediction.endpoint).
+    distinct_endpoints = set(endpoints_seen)
+    panel_endpoint: Literal['chat', 'responses', 'mixed'] | None
+    if not distinct_endpoints:
+        panel_endpoint = None
+    elif len(distinct_endpoints) == 1:
+        panel_endpoint = cast('Literal["chat", "responses"]', next(iter(distinct_endpoints)))
+    else:
+        panel_endpoint = 'mixed'
 
     decisive_votes = [v for v in votes if v.success and not v.abstained and v.value is not None]
     decisive_values = [v.value for v in decisive_votes if v.value is not None]
@@ -735,7 +769,9 @@ async def _run_jury_core(
         stats=None if inconclusive else _jury_stats(decisive_values),
         raw_agreement=None if inconclusive else _agreement_rate(decisive_values),
     )
-    return JuryDeliberation(verdict=verdict, explanation=explanation, jury=jury, token_usage=_sum_usage(usages))
+    return JuryDeliberation(
+        verdict=verdict, explanation=explanation, jury=jury, token_usage=_sum_usage(usages), endpoint=panel_endpoint
+    )
 
 
 _FAMILY_MARKERS: tuple[tuple[str, str], ...] = (

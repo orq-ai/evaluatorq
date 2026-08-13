@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 import pytest
 
 from evaluatorq.common.jury import (
@@ -407,3 +409,64 @@ async def test_repetition_collapse_min() -> None:
         judge_fn=judge, panel=['a'], repetitions=3, verdict_kind=VerdictKind.NUMERIC, aggregator='min'
     )
     assert result.verdict == pytest.approx(0.2)
+
+
+@pytest.mark.asyncio
+async def test_deliberation_endpoint_mixed_across_panel() -> None:
+    """One judge served on chat, the other on responses: the panel endpoint is 'mixed'."""
+    endpoints: dict[str, Literal['chat', 'responses']] = {'chat-judge': 'chat', 'responses-judge': 'responses'}
+
+    async def judge(model: str) -> Prediction:
+        return Prediction(value=True, explanation='ok', endpoint=endpoints[model])
+
+    result = await run_jury(judge_fn=judge, panel=['chat-judge', 'responses-judge'])
+
+    assert result.endpoint == 'mixed'
+
+
+@pytest.mark.asyncio
+async def test_deliberation_endpoint_uniform_across_panel() -> None:
+    """Every judge served on the same endpoint: the panel endpoint is that endpoint."""
+
+    async def judge(model: str) -> Prediction:
+        return Prediction(value=True, explanation='ok', endpoint='responses')
+
+    result = await run_jury(judge_fn=judge, panel=['a', 'b'])
+
+    assert result.endpoint == 'responses'
+
+
+@pytest.mark.asyncio
+async def test_deliberation_endpoint_none_when_unrecorded() -> None:
+    """A judge_fn that never sets Prediction.endpoint leaves the panel endpoint None."""
+
+    async def judge(model: str) -> Prediction:
+        return Prediction(value=True, explanation='ok')
+
+    result = await run_jury(judge_fn=judge, panel=['a', 'b'])
+
+    assert result.endpoint is None
+
+
+@pytest.mark.asyncio
+async def test_deliberation_endpoint_ignores_abstained_without_error() -> None:
+    """An abstained pass with no error carries no endpoint signal even if set."""
+
+    async def judge(model: str) -> Prediction:
+        return Prediction(abstained=True, explanation='no opinion', endpoint='chat')
+
+    result = await run_jury(judge_fn=judge, panel=['a', 'b'], min_successful_judges=1)
+
+    assert result.endpoint is None
+
+
+@pytest.mark.asyncio
+async def test_deliberation_endpoint_recorded_from_failed_prediction() -> None:
+    """A mechanical failure still counts toward the aggregated endpoint."""
+
+    async def judge(model: str) -> Prediction:
+        return Prediction(error='blocked', endpoint='responses')
+
+    result = await run_jury(judge_fn=judge, panel=['a', 'b'], min_successful_judges=1)
+
+    assert result.endpoint == 'responses'

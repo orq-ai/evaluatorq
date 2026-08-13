@@ -198,6 +198,32 @@ class TestJury:
         assert jury.stats.std == 0.0
 
     @pytest.mark.asyncio
+    async def test_panel_path_writes_raw_output_endpoint(self):
+        """The panel/jury path must write raw_output['endpoint'] under the same
+        key the single-judge fast path uses (RES-1307 Task 7), so a consumer
+        reads one key regardless of which path produced the result. These fake
+        model ids never resolve on the Responses model catalogue, so every judge
+        stays on chat completions and the panel's aggregated endpoint is
+        uniformly 'chat' — the mixed/None aggregation itself is covered at the
+        run_jury level in tests/common/test_jury.py."""
+        client = _model_client({
+            'judge-a': [_verdict_json(True)],
+            'judge-b': [_verdict_json(True)],
+            'judge-c': [_verdict_json(True)],
+        })
+        evaluator = OWASPEvaluator(
+            evaluator_model='judge-a',
+            llm_client=client,
+            judges=['judge-b', 'judge-c'],
+        )
+
+        result = await _evaluate(evaluator)
+
+        assert result.jury is not None
+        assert result.raw_output is not None
+        assert result.raw_output['endpoint'] == 'chat'
+
+    @pytest.mark.asyncio
     async def test_split_jury_takes_majority(self):
         client = _model_client({
             'judge-a': [_verdict_json(True)],

@@ -256,12 +256,14 @@ class OWASPEvaluator:
                 return Prediction(
                     error=outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'error'),
                     token_usage=outcome.token_usage,
+                    endpoint=outcome.endpoint,
                 )
             return Prediction(
                 value=outcome.payload.value,
                 explanation=outcome.payload.explanation,
                 token_usage=outcome.token_usage,
                 abstained=outcome.payload.abstain,
+                endpoint=outcome.endpoint,
             )
 
         deliberation = await run_jury(
@@ -278,7 +280,15 @@ class OWASPEvaluator:
         final_passed = deliberation.verdict if isinstance(deliberation.verdict, bool) else None
         explanation = deliberation.explanation
 
-        raw_output: dict[str, Any] = {'value': final_passed, 'explanation': explanation}
+        raw_output: dict[str, Any] = {
+            'value': final_passed,
+            'explanation': explanation,
+            # Same key as the single-judge fast path's raw_output['endpoint'] (see
+            # _single_outcome_to_result) so a consumer reads one key regardless of
+            # which path produced the result. 'mixed' when the panel split across
+            # both endpoints, None when nothing recorded one.
+            'endpoint': deliberation.endpoint,
+        }
         # No verdict from a panel means the quorum was not met, i.e. judges failed.
         # Without this the panel path produced passed=None with no recorded cause,
         # so a whole-panel outage was invisible to the error rollup and the CLI hint.
