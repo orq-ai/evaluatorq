@@ -54,7 +54,7 @@ class MissingLLMCredentialsError(ValueError):
 
 
 class ResolvedClient(NamedTuple):
-    """Result of :func:`resolve_llm_client`."""
+    """Result of `resolve_llm_client`."""
 
     client: AsyncOpenAI
     owned: bool

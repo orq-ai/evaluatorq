@@ -170,7 +170,7 @@ async def plan_strategies_for_vulnerabilities(
                             pipeline_config=cfg,
                         )
                     return vuln, generated, None
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     logger.error(
                         f'Strategy generation failed for {vuln.value}, no strategies will be tested for this vulnerability: {e}'
                     )
@@ -259,7 +259,7 @@ async def plan_strategies_for_categories(
 
     Args:
         agent_capabilities: Pre-classified capabilities; forwarded to
-            :func:`plan_strategies_for_vulnerabilities` to skip a duplicate
+            `plan_strategies_for_vulnerabilities` to skip a duplicate
             classifier call when the runner has already classified pre-confirm.
     """
     # Resolve each category to a Vulnerability, preserving order and mapping back

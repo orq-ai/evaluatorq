@@ -14,7 +14,7 @@ async def evaluatorq(
     data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None = None,
     jobs: list[Job] | None = None,
     evaluators: list[Evaluator] | None = None,
-    parallelism: int = 1,
+    parallelism: int = 10,
     print_results: bool = True,
     description: str | None = None,
     path: str | None = None,
@@ -27,7 +27,7 @@ async def evaluatorq(
 | `data` | `list[DataPoint \| dict]` \| `list[Awaitable[DataPoint]]` \| `DatasetIdInput` \| `ExperimentInput` | **required** | Data to evaluate — local rows (a `DataPoint` or a plain dict with the same keys), an Orq dataset, or an existing experiment |
 | `jobs` | `list[Job]` | **required** | Jobs to run on each data point |
 | `evaluators` | `list[Evaluator]` \| `None` | `None` | Evaluators that score job outputs |
-| `parallelism` | `int` (≥1) | `1` | Number of concurrent jobs |
+| `parallelism` | `int` (≥1) | `10` | Number of concurrent jobs |
 | `print_results` | `bool` | `True` | Display the progress and results table |
 | `description` | `str` \| `None` | `None` | Optional evaluation description |
 | `path` | `str` \| `None` | `None` | Path for organizing results on the Orq dashboard (e.g. `"Project/Category"`) |
@@ -155,13 +155,7 @@ async def quality_scorer(params):
 
 When any evaluator returns `pass_: False`, the process exits with code 1 — drop
 the script into a CI job and it fails the build. The results table gains a pass
-rate row:
-
-```text
-┌──────────────────────┬─────────────────┐
-│ Pass Rate            │ 75% (3/4)       │
-└──────────────────────┴─────────────────┘
-```
+rate row — `Pass Rate | 75% (3/4)`.
 
 ## Controlling the run
 

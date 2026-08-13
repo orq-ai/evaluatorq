@@ -40,6 +40,7 @@ def job(
     even when errors occur during execution.
 
     This wrapper:
+
     - Automatically formats the return value as {"name": ..., "output": ...}
     - Attaches the job name to errors for better error tracking
     - Can be used as a decorator (@job("name")) or function (job("name", fn))

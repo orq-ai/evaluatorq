@@ -12,13 +12,16 @@ capture the exact generated inputs for reproducible re-runs, pass
 ``--datapoints PATH`` (then re-feed that file to ``sim simulate --input``).
 
 Usage:
-    evaluatorq sim generate --agent-description "..." --datapoints dp.jsonl
-    evaluatorq sim simulate --input dp.jsonl --target my-agent
-    evaluatorq sim run --agent-description "..." --openai-model gpt-4o-mini
-    evaluatorq sim run --agent-description "..." --target my-agent --datapoints dp.jsonl
-    evaluatorq sim export --input results.jsonl --output payload.json
-    evaluatorq sim validate-dataset dp.jsonl
-    evaluatorq sim runs
+
+```bash
+evaluatorq sim generate --agent-description "..." --datapoints dp.jsonl
+evaluatorq sim simulate --input dp.jsonl --target my-agent
+evaluatorq sim run --agent-description "..." --openai-model gpt-4o-mini
+evaluatorq sim run --agent-description "..." --target my-agent --datapoints dp.jsonl
+evaluatorq sim export --input results.jsonl --output payload.json
+evaluatorq sim validate-dataset dp.jsonl
+evaluatorq sim runs
+```
 """
 
 from __future__ import annotations
@@ -631,14 +634,15 @@ def simulate(
     recommendations: Annotated[  # noqa: FBT002
         bool,
         typer.Option(
-            '--recommendations',
+            '--recommendations/--no-recommendations',
             help=(
                 'Generate LLM remediation suggestions for failures with a '
                 'concrete cause (broken rules/criteria, poor quality metrics). '
-                'Extra LLM cost; uses --sim-model.'
+                'On by default; --no-recommendations skips the extra LLM cost. '
+                'Uses --sim-model.'
             ),
         ),
-    ] = False,
+    ] = True,
     verbose: Annotated[
         int,
         typer.Option(
@@ -826,7 +830,7 @@ async def _simulate_impl(
     evaluator_names: list[str] | None,
     evaluation_name: str,
     hooks: Any = None,
-    recommendations: bool = False,
+    recommendations: bool = True,
 ) -> SimulationRun:
     from evaluatorq.simulation.api import _simulate_run
     from evaluatorq.simulation.utils.dataset_export import load_datapoints_from_jsonl
@@ -965,14 +969,15 @@ def run(
     recommendations: Annotated[  # noqa: FBT002
         bool,
         typer.Option(
-            '--recommendations',
+            '--recommendations/--no-recommendations',
             help=(
                 'Generate LLM remediation suggestions for failures with a '
                 'concrete cause (broken rules/criteria, poor quality metrics). '
-                'Extra LLM cost; uses --sim-model.'
+                'On by default; --no-recommendations skips the extra LLM cost. '
+                'Uses --sim-model.'
             ),
         ),
-    ] = False,
+    ] = True,
     datapoints_path: Annotated[
         Path | None,
         typer.Option(
@@ -1143,7 +1148,7 @@ async def _run_impl(
     evaluation_name: str,
     save_datapoints: Path | None = None,
     hooks: Any = None,
-    recommendations: bool = False,
+    recommendations: bool = True,
 ) -> SimulationRun:
     from evaluatorq.simulation.api import _generate_and_simulate_run
 

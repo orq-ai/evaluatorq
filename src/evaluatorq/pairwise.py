@@ -234,7 +234,7 @@ def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAg
 
     Judges whose decisive votes are unanimous are excluded from the reliability
     weighting: in the two-item collapse their sigma measures one-sidedness, not
-    reliability (see :class:`BTSigmaAggregation`). They vote with the median
+    reliability (see `BTSigmaAggregation`). They vote with the median
     weight of the remaining judges (or uniformly when no judge remains), and
     ``fit_warnings`` names them.
     """
@@ -441,9 +441,9 @@ async def run_pairwise(
 ) -> PairwiseComparison:
     """Run a panel over one A-vs-B comparison and reconcile it into a verdict.
 
-    Each judge runs through the shared :func:`run_jury`. When ``swap`` is on
+    Each judge runs through the shared `run_jury`. When ``swap`` is on
     (default) every judge is also run with A and B exchanged; the two verdicts
-    are un-swapped and passed through :func:`reconcile_pair`, so a judge that
+    are un-swapped and passed through `reconcile_pair`, so a judge that
     just follows slot order abstains and is recorded as a flip.
 
     Both orderings run concurrently. Replacement judges are promoted at the pair

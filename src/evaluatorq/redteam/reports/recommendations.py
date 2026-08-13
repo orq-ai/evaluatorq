@@ -6,14 +6,15 @@ recommendations that go beyond the static guidance in ``guidance.py``.
 
 from __future__ import annotations
 
-import json
 import operator
 import random
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 from loguru import logger
+from pydantic import BaseModel, BeforeValidator, Field
 
-from evaluatorq.common.llm_call import apply_pipeline_metadata
+from evaluatorq.common.extract_json import coerce_str, coerce_str_list, extract_json_from_response
+from evaluatorq.common.structured_output import generate_structured
 from evaluatorq.redteam.contracts import (
     OWASP_CATEGORY_NAMES,
     PIPELINE_CONFIG,
@@ -28,6 +29,20 @@ from evaluatorq.redteam.utils import xml_escape
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
+
+
+class _FocusAreaLLMResponse(BaseModel):
+    """Schema the analysis LLM fills for one focus area (RES-822).
+
+    Structured-output-first: ``generate_structured`` enforces this via
+    ``parse()`` and falls back to ``json_object`` for models that reject it,
+    where a fenced payload is recovered with ``extract_json_from_response``.
+    The coercing validators keep the fallback as tolerant as the code this
+    replaced: a stray non-string item must not drop the whole focus area.
+    """
+
+    recommendations: Annotated[list[str], BeforeValidator(coerce_str_list)] = Field(default_factory=list)
+    patterns_observed: Annotated[str, BeforeValidator(coerce_str)] = ''
 
 
 def _truncate(text: str, max_chars: int = 500) -> str:
@@ -186,40 +201,41 @@ async def generate_focus_area_recommendations(
         )
 
         try:
-            # completion_params merges extra_kwargs LAST so a user routing
-            # temperature/max_completion_tokens through them overrides instead
-            # of raising TypeError against the explicit keywords; llm_kwargs
-            # keep their historical top precedence on top of that. Typed as
-            # ``Any`` so ``**merged_kwargs`` does not trip the
-            # platform-conditional basedpyright Iterable[Omit] checks on
-            # OpenAI's ``create()`` overload (CI Linux vs local Darwin).
-            merged_kwargs: Any = {
-                **cfg.evaluator.as_call_config().completion_params(
-                    model=model,
-                    messages=[
-                        {'role': 'system', 'content': _SYSTEM_PROMPT},
-                        {'role': 'user', 'content': user_prompt},
-                    ],
-                    max_completion_tokens=1500,
-                    response_format={'type': 'json_object'},
-                    extra_body=cfg.retry_extra_body(llm_client),
-                ),
-                **(llm_kwargs or {}),
+            # extra_kwargs carries the same three things completion_params used
+            # to merge, in the same precedence: the router retry body, then the
+            # evaluator's own extra_kwargs (which is where a reasoning model's
+            # temperature=1.0 escape hatch lives), then user llm_kwargs on top.
+            # generate_structured splats these LAST over its base params, so an
+            # override wins without a "multiple values for keyword" error.
+            # A caller-supplied extra_body merges INTO the router retry body
+            # rather than replacing it, so retry hints cannot vanish silently;
+            # structural keys (model/messages/response_format) are rejected by
+            # generate_structured itself.
+            user_extra: dict[str, Any] = {**cfg.evaluator.extra_kwargs, **(llm_kwargs or {})}
+            extra_body: dict[str, Any] = {
+                **cfg.retry_extra_body(llm_client),
+                **(user_extra.pop('extra_body', None) or {}),
             }
-            apply_pipeline_metadata(merged_kwargs)
-            response = await llm_client.chat.completions.create(  # pyright: ignore[reportCallIssue, reportArgumentType]
-                **merged_kwargs,
+            extra_kwargs: dict[str, Any] = {'extra_body': extra_body, **user_extra}
+            parsed, raw = await generate_structured(
+                client=llm_client,
+                model=model,
+                messages=[
+                    {'role': 'system', 'content': _SYSTEM_PROMPT},
+                    {'role': 'user', 'content': user_prompt},
+                ],
+                response_format=_FocusAreaLLMResponse,
+                temperature=cfg.evaluator.temperature,
+                max_tokens=1500,
+                label='redteam_recommendations',
+                extra_kwargs=extra_kwargs,
             )
+            if parsed is None:
+                # Fallback path: the model rejected structured output, so parse
+                # the json_object payload, tolerating a ```json fenced body.
+                parsed = _FocusAreaLLMResponse.model_validate_json(extract_json_from_response(raw))
 
-            content = response.choices[0].message.content or '{}'
-            parsed = json.loads(content)
-
-            recs = parsed.get('recommendations', [])
-            patterns = parsed.get('patterns_observed', '')
-
-            if not isinstance(recs, list):
-                recs = []
-            recs = [str(r) for r in recs if r]
+            recs = [str(r) for r in parsed.recommendations if r]
 
             recommendations.append(
                 FocusAreaRecommendation(
@@ -228,7 +244,7 @@ async def generate_focus_area_recommendations(
                     risk_score=area['risk_score'],
                     traces_analyzed=len(sampled),
                     recommendations=recs,
-                    patterns_observed=str(patterns),
+                    patterns_observed=parsed.patterns_observed,
                 )
             )
 

@@ -3,7 +3,7 @@
 LLMConfig controls model selection and LLM call tuning for each pipeline role
 (attacker and evaluator). Backend routing is inferred from the target type:
 string targets like ``"agent:<key>"`` route through the ORQ platform, while
-:class:`OpenAIModelTarget` instances call OpenAI directly.
+`OpenAIModelTarget` instances call OpenAI directly.
 
 Key features:
     Role-based config — Use ``attacker`` and ``evaluator`` fields to configure

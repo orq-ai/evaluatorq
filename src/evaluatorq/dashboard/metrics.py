@@ -162,7 +162,7 @@ def _cost_usd(usage: object) -> float | None:
 
 def _input_cost(usage: object) -> float | None:
     """Sibling reader for the ``input_cost`` component. Same ``None`` semantics
-    as :func:`_cost_usd`."""
+    as `_cost_usd`."""
     if not isinstance(usage, dict):
         return None
     return _as_float_or_none(usage.get('input_cost'))
@@ -197,7 +197,7 @@ def _cost_calls(usage: object) -> tuple[int, int, int]:
 
 def _output_cost(usage: object) -> float | None:
     """Sibling reader for the ``output_cost`` component. Same ``None`` semantics
-    as :func:`_cost_usd`."""
+    as `_cost_usd`."""
     if not isinstance(usage, dict):
         return None
     return _as_float_or_none(usage.get('output_cost'))
@@ -210,7 +210,7 @@ def zero_evaluated_attacks(summary: dict[str, object]) -> bool:
     must never render as a perfect score. An absent field (legacy reports
     predating it) is False — those keep their recorded rate.
 
-    Mirrors :attr:`ReportSummary.no_verdict`, including its ``total_attacks > 0``
+    Mirrors `ReportSummary.no_verdict`, including its ``total_attacks > 0``
     guard: a report that ran nothing is empty, not unscored, and the two must not
     disagree just because one side reads a dict and the other a model. The guard
     only applies when ``total_attacks`` is actually recorded — an absent field
@@ -827,7 +827,7 @@ def _sim_run_score(data: dict[str, object]) -> float | None:
 
 @dataclass(frozen=True)
 class _SimRunStats:
-    """One sim run's contribution to :func:`sim_overview`, distilled from its report.
+    """One sim run's contribution to `sim_overview`, distilled from its report.
 
     Every field is a scalar the overview only ever sums or displays — the point
     is that the (large) report JSON can be dropped once this exists.
@@ -926,10 +926,10 @@ def _sim_aggregate(roots_key: tuple[str, ...], fingerprint: tuple[int, int]) -> 
     The KPI band sums over every run, so paging can't shrink the work — but
     nothing in a run store changes between two page clicks, and *that* can be
     checked with one stat sweep instead of redoing the sum. ``fingerprint`` is
-    the key only (see :func:`library.fingerprint`); a new run or an advancing
+    the key only (see `library.fingerprint`); a new run or an advancing
     in-flight stage changes it and this recomputes.
 
-    ``recent`` holds ALL runs here; :func:`sim_overview` slices it. Callers must
+    ``recent`` holds ALL runs here; `sim_overview` slices it. Callers must
     treat the returned object as read-only — it is shared across requests.
     """
     roots = [Path(r) for r in roots_key]
@@ -1096,9 +1096,9 @@ def _redteam_targets(data: dict[str, object]) -> list[tuple[str, str]]:
 
 @dataclass(frozen=True)
 class _RedTeamRunStats:
-    """One red team run's contribution to :func:`redteam_overview`.
+    """One red team run's contribution to `redteam_overview`.
 
-    Same trick as :class:`_SimRunStats`: scalars only, so the report JSON behind
+    Same trick as `_SimRunStats`: scalars only, so the report JSON behind
     them can be dropped.
     """
 
@@ -1120,7 +1120,7 @@ class _RedTeamRunStats:
 
 @functools.lru_cache(maxsize=4096)
 def _redteam_run_stats(path_str: str, mtime_ns: int) -> _RedTeamRunStats | None:  # mtime_ns is only the cache key
-    """Distil one red team report into overview stats. See :func:`_sim_run_stats`."""
+    """Distil one red team report into overview stats. See `_sim_run_stats`."""
     try:
         data = library.read_json_cached(Path(path_str))
     except (OSError, ValueError):
@@ -1155,7 +1155,7 @@ def _redteam_run_stats(path_str: str, mtime_ns: int) -> _RedTeamRunStats | None:
 
 @functools.lru_cache(maxsize=4)
 def _redteam_aggregate(roots_key: tuple[str, ...], fingerprint: tuple[int, int]) -> RedTeamOverview:
-    """Unpaged red team aggregate, cached on fingerprint. See :func:`_sim_aggregate`."""
+    """Unpaged red team aggregate, cached on fingerprint. See `_sim_aggregate`."""
     roots = [Path(r) for r in roots_key]
     runs: list[RedTeamRunRow] = []
     evaluated = 0

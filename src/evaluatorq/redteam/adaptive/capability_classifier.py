@@ -256,7 +256,7 @@ async def _infer_resource_capabilities(
             return parsed
     except (APIConnectionError, APIStatusError):
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         # is_multi_agent defaults False here, so multi-agent-only attacks (ASI07/08) are
         # suppressed for this target. Say so explicitly: a coverage gap caused by an
         # inference error must be distinguishable from a confident single-agent result.
@@ -333,6 +333,6 @@ async def _classify_tools(
 
     except (APIConnectionError, APIStatusError):
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f'Tool classification failed, strategies will be included optimistically: {e}')
         return {}, False

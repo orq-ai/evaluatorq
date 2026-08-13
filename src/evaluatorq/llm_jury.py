@@ -111,7 +111,7 @@ def _default_system_prompt(verdict_kind: str, labels: list[str] | None, score_ra
 # Default Mustache-style evaluation prompt template.  Placeholder tokens use the
 # ``{{name}}`` convention expected by the template engine (double-braces), drawn from
 # the red-team template namespace (see
-# :func:`evaluatorq.common.judge.build_eval_replacements`).  ``criteria`` is a
+# `evaluatorq.common.judge.build_eval_replacements`).  ``criteria`` is a
 # substituted variable here, exactly like every other name — see DEFAULT_PAIRWISE_TEMPLATE.
 DEFAULT_TEMPLATE = (
     '# Criteria\n{{criteria}}\n\n'
@@ -127,7 +127,7 @@ DEFAULT_TEMPLATE = (
 
 
 def _outcome_to_prediction(outcome: JudgeOutcome) -> Prediction:
-    """Convert a raw :class:`JudgeOutcome` into a :class:`Prediction`.
+    """Convert a raw `JudgeOutcome` into a `Prediction`.
 
     Maps error / abstain states to the matching Prediction fields so the jury
     runner can aggregate them without knowing about judge internals.
@@ -167,10 +167,10 @@ async def _run_single_judge(
     timeout_ms: int,
     extra_kwargs: dict[str, Any] | None,
 ) -> Prediction:
-    """Run one judge call and map its outcome to a :class:`Prediction`.
+    """Run one judge call and map its outcome to a `Prediction`.
 
-    The single ``run_judge`` call site shared by the pointwise (:func:`llm_jury`)
-    and pairwise (:class:`PairwiseComparator`) juries — only the ``replacements``
+    The single ``run_judge`` call site shared by the pointwise (`llm_jury`)
+    and pairwise (`PairwiseComparator`) juries — only the ``replacements``
     differ between them, so keeping one path stops the two from drifting.
     """
     cfg = LLMCallConfig(model=model, max_tokens=max_tokens, timeout_ms=timeout_ms, extra_kwargs=extra_kwargs or {})
@@ -200,7 +200,7 @@ def _to_evaluation_result(
     score_range: tuple[float, float],
     include_jury_record: bool = False,
 ) -> EvaluationResult:
-    """Map a :class:`JuryDeliberation` to an :class:`EvaluationResult`.
+    """Map a `JuryDeliberation` to an `EvaluationResult`.
 
     Passing logic:
 
@@ -285,7 +285,7 @@ def _resolve_and_validate_panel(
     Returns ``(panel, deduped)``. The quorum floor is bounded by the deduplicated
     panel size by design: ``replacement_judges`` are spillover for failed
     primaries, not extra capacity, so they don't raise the achievable floor.
-    Shared by :func:`llm_jury` and :func:`llm_jury_pairwise`.
+    Shared by `llm_jury` and `llm_jury_pairwise`.
     """
     panel = _resolve_panel(judges=judges, model=model)
     deduped = list(dict.fromkeys(panel))
@@ -348,22 +348,13 @@ def llm_jury(
     from ``labels`` — it defaults to ``"categorical"`` and you pick the mode
     explicitly. There are three modes:
 
-    +-------------------------------+------------------+--------------------------------+
-    | how you configure it          | judge returns    | ``passed`` is                  |
-    +===============================+==================+================================+
-    | ``verdict_kind="categorical"``| a JSON boolean   | the boolean itself             |
-    | (default), ``labels=None``    | ``true``/``false`` |                              |
-    | — **boolean mode**            |                  |                                |
-    +-------------------------------+------------------+--------------------------------+
-    | ``verdict_kind="categorical"``| one of ``labels``| ``verdict in passing_labels``  |
-    | with ``labels=[...]``         | (a string)       | (``None`` if no                |
-    | — **labeled mode**            |                  | ``passing_labels`` given)      |
-    +-------------------------------+------------------+--------------------------------+
-    | ``verdict_kind="numeric"``    | a float in       | ``score >= threshold``         |
-    | — **numeric mode**            | ``score_range``  |                                |
-    +-------------------------------+------------------+--------------------------------+
+    | how you configure it | judge returns | ``passed`` is |
+    | --- | --- | --- |
+    | **boolean mode** — ``verdict_kind="categorical"`` (default), ``labels=None`` | a JSON boolean ``true``/``false`` | the boolean itself |
+    | **labeled mode** — ``verdict_kind="categorical"`` with ``labels=[...]`` | one of ``labels`` (a string) | ``verdict in passing_labels`` (``None`` if no ``passing_labels`` given) |
+    | **numeric mode** — ``verdict_kind="numeric"`` | a float in ``score_range`` | ``score >= threshold`` |
 
-    Notes:
+    **Notes**
 
     - For a yes/no judge, use **boolean mode** (the default — just omit ``labels``).
       ``passed`` is populated automatically; you do not need ``passing_labels``.
@@ -412,28 +403,34 @@ def llm_jury(
 
     Examples
     --------
-    Boolean — "is the answer correct?" (``verdict_kind="categorical"``, the default)::
+    Boolean — "is the answer correct?" (``verdict_kind="categorical"``, the default):
 
-        llm_jury(name="correct", criteria="Is the answer factually correct?")
+    ```python
+    llm_jury(name="correct", criteria="Is the answer factually correct?")
+    ```
 
-    Labeled categorical (``verdict_kind="categorical"``)::
+    Labeled categorical (``verdict_kind="categorical"``):
 
-        llm_jury(
-            name="grade",
-            criteria="Grade the answer.",
-            labels=["correct", "partially_correct", "incorrect"],
-            passing_labels=["correct", "partially_correct"],
-        )
+    ```python
+    llm_jury(
+        name="grade",
+        criteria="Grade the answer.",
+        labels=["correct", "partially_correct", "incorrect"],
+        passing_labels=["correct", "partially_correct"],
+    )
+    ```
 
-    Numeric (``verdict_kind="numeric"``)::
+    Numeric (``verdict_kind="numeric"``):
 
-        llm_jury(
-            name="helpfulness",
-            criteria="Rate helpfulness from 0 to 1.",
-            verdict_kind="numeric",
-            score_range=(0.0, 1.0),
-            threshold=0.7,
-        )
+    ```python
+    llm_jury(
+        name="helpfulness",
+        criteria="Rate helpfulness from 0 to 1.",
+        verdict_kind="numeric",
+        score_range=(0.0, 1.0),
+        threshold=0.7,
+    )
+    ```
     """
     # --- validation (fail fast) ---
     if bool(criteria) == bool(prompt):
@@ -623,7 +620,7 @@ def _side_to_namespace(prefix: str, side: Output) -> dict[str, Any]:
 
 
 class PairwiseComparator:
-    """A configured pairwise LLM jury. Call :meth:`compare` on an A/B pair."""
+    """A configured pairwise LLM jury. Call `compare` on an A/B pair."""
 
     def __init__(
         self,
@@ -765,12 +762,12 @@ def llm_jury_pairwise(
 
     Judges compare two responses and pick a winner ('A'/'B'/'tie'). With ``swap``
     on (default) each judge is run in both orderings to correct for position bias
-    (see ADR-24). Panel/orchestration params mirror :func:`llm_jury`. ``prompt``
+    (see ADR-24). Panel/orchestration params mirror `llm_jury`. ``prompt``
     overrides the built-in Mustache-style template (which exposes the
-    ``response_a.*``/``response_b.*`` namespace via :func:`_side_to_namespace`);
-    leave it ``None`` to use the default. Returns a :class:`PairwiseComparator`;
+    ``response_a.*``/``response_b.*`` namespace via `_side_to_namespace`);
+    leave it ``None`` to use the default. Returns a `PairwiseComparator`;
     call ``compare`` per A/B pair, and roll many comparisons up with
-    :func:`evaluatorq.pairwise.build_report`.
+    `evaluatorq.pairwise.build_report`.
 
     ``max_concurrency`` caps TOTAL in-flight judge LLM calls across all
     concurrently running ``compare`` calls on the returned comparator (each
@@ -789,6 +786,23 @@ def llm_jury_pairwise(
     comparator continues where the previous run stopped, so exact balance
     holds per freshly built comparator, not per run. Shuffle your pairs first
     if their order is meaningful. Requires ``min_successful_judges=1``.
+
+    Usage:
+
+    ```python
+    from evaluatorq import llm_jury_pairwise
+
+    comparator = llm_jury_pairwise(
+        criteria="The answer is accurate, complete, and directly addresses the question.",
+        judges=["anthropic/claude-sonnet-4-6", "openai/gpt-5.4-mini"],
+    )
+    comparison = await comparator.compare(
+        question="What is the capital of France?",
+        response_a="The capital of France is Paris.",
+        response_b="The capital of France is Berlin.",
+    )
+    print(comparison.winner)
+    ```
     """
     if repetitions < 1:
         raise ValueError(f'repetitions ({repetitions}) must be >= 1.')

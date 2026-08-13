@@ -98,7 +98,7 @@ def _coerce_to_agent_response(raw: Any) -> AgentResponse:
 
 @dataclass(slots=True)
 class TargetCallResult:
-    """In-process control-flow value returned by :func:`call_target_with_retry`.
+    """In-process control-flow value returned by `call_target_with_retry`.
 
     ``response`` is always populated: the target's real ``AgentResponse`` on
     success or a returned-error attempt, or a synthetic one on timeout/exception.
@@ -111,6 +111,34 @@ class TargetCallResult:
     attempts: int
     error: AgentResponseError | None
     error_details: dict[str, object] | None
+
+    def error_payload(self, *, context: str = '', turn: int = 1) -> dict[str, Any]:
+        """Return this result's error as the flat fields the report layer stores.
+
+        ``JobOutputPayload.error`` and ``AttackOutput.error`` are ``str``, so the
+        ``AgentResponseError`` object must be flattened before it leaves the call
+        site — handing back the object fails validation and takes down report
+        generation for the whole run, after every attack has already been billed.
+        Every consumer of a target call needs the same six fields, so they are
+        derived here rather than re-spelled per call site.
+
+        All keys are always present (``None`` on success) so dict consumers can
+        index without guarding. ``context`` is appended to the message before the
+        target's own text, e.g. ``' on turn 2/5'``; ``turn`` sets ``error_turn``.
+        """
+        err = self.error
+        if err is None:
+            return dict.fromkeys(('error', 'error_type', 'error_stage', 'error_code', 'error_turn', 'error_details'))
+        return {
+            'error': f'Target agent failed after {self.attempts} attempt(s){context}: {err.message}',
+            # error_stage = where (target_call); error_type = what
+            # (timeout/network_error/rate_limit/... classified above).
+            'error_type': err.error_type,
+            'error_stage': 'target_call',
+            'error_code': err.code or 'target_error',
+            'error_turn': turn,
+            'error_details': self.error_details,
+        }
 
 
 def _synthetic(text: str, *, error_type: str, code: str) -> AgentResponse:
@@ -139,7 +167,7 @@ async def call_target_with_retry(
     caller-supplied span (0-based index). ``on_attempt_response`` receives the
     caller-supplied context value and each returned response while that context
     is still open, so callers can annotate per-attempt spans. Returns a uniform
-    :class:`TargetCallResult`.
+    `TargetCallResult`.
     """
     timeout_s = target_agent_timeout_ms / 1000.0
     max_attempts = max(1, max_target_retries + 1)
