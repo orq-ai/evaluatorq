@@ -35,6 +35,7 @@ from evaluatorq.contracts import (
     ToolCallOutputItem,
 )
 from evaluatorq.openresponses.client import build_simulation_client
+from evaluatorq.openresponses.input_items import messages_to_responses_input
 from evaluatorq.simulation.tracing import with_llm_span
 from evaluatorq.simulation.types import DEFAULT_MODEL, Message
 
@@ -347,7 +348,10 @@ class BaseAgent(ABC):
         """
         timeout_s = timeout or DEFAULT_TIMEOUT_S
 
-        input_messages = [{'role': m.role, 'content': m.content or ''} for m in messages]
+        # Canonical renderer: an assistant turn must arrive as output_text parts or
+        # the Orq router silently drops it, leaving the judge blind to the agent's
+        # replies (RES-1308). Never hand-build this list.
+        input_messages = messages_to_responses_input(messages)
 
         params: dict[str, Any] = {
             'model': self._model,

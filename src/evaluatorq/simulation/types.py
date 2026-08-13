@@ -357,6 +357,17 @@ class Judgment(BaseModel):
     goal_achieved: bool
     rules_broken: list[str]
     goal_completion_score: float
+    criteria_verdicts: dict[str, bool] | None = None
+    """Per-criterion **occurrence** audit for this turn, keyed by criterion id
+    (``criteria_0``…). ``True`` means the described behaviour has appeared in the
+    conversation so far — regardless of whether the criterion wanted it. Pass/fail is
+    derived from occurrence + `Criterion.type` in code, never asked of the judge:
+    a pass/fail flag inverts between the two types and models get it backwards.
+
+    ``None`` means the judge reported nothing — **unknown, never passed**. Pass/fail
+    used to be inferred from the absence of an id in ``rules_broken``, which made a
+    ``must_happen`` criterion structurally unfailable (never occurring is not a
+    violation the judge is asked to report)."""
     response_quality: float | None = None
     hallucination_risk: float | None = None
     tone_appropriateness: float | None = None

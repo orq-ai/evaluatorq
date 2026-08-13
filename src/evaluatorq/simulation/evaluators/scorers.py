@@ -8,7 +8,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from evaluatorq.simulation.types import SimulationResult
+from loguru import logger
+
+from evaluatorq.simulation.types import SimulationResult, TerminatedBy
+
+# A run that ended this way never reached the judge's criteria audit, so its
+# criteria outcome is unknown — not met.
+_UNEVALUATED = (TerminatedBy.error, TerminatedBy.timeout)
 
 SimulationScorer = Callable[[SimulationResult], float]
 
@@ -24,20 +30,26 @@ def goal_achieved_scorer(result: SimulationResult) -> float:
 
 
 def criteria_met_scorer(result: SimulationResult) -> float:
-    """Evaluate how many criteria were met.
+    """Fraction of the scenario's criteria that were met, 0..1.
 
-    Returns a value between 0 and 1 based on the ratio of met criteria.
-    Uses the criteria_results from metadata if available; otherwise returns 1.0.
+    A run that errored or timed out is scored **0.0**: it terminated before the
+    judge could audit anything, so its criteria outcome is unknown, and scoring an
+    unchecked run 1.0 let a dead target inflate the run average (RES-1308).
+    A run with no criteria at all still scores 1.0 — nothing to fail.
     """
-    criteria_results = result.criteria_results or {}
-    keys = list(criteria_results.keys())
+    if result.terminated_by in _UNEVALUATED:
+        logger.warning(
+            'criteria_met: run terminated by {} before any criteria audit; scoring 0.0 (unknown, not met).',
+            result.terminated_by.value,
+        )
+        return 0.0
 
-    if not keys:
+    criteria_results = result.criteria_results or {}
+    if not criteria_results:
         return 1.0
 
     met = sum(1 for v in criteria_results.values() if v)
-    total = len(keys)
-    return met / total if total > 0 else 1.0
+    return met / len(criteria_results)
 
 
 def turn_efficiency_scorer(result: SimulationResult) -> float:

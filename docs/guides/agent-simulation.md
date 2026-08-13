@@ -320,6 +320,33 @@ One persona × one scenario yields one `SimulationResult` with `goal_achieved`,
 `goal_completion_score`, `turn_count`, `rules_broken`, and the full message
 transcript.
 
+### How criteria are scored
+
+The judge audits every `Criterion` on every turn and the runner folds those
+verdicts over the whole conversation, so a violation on turn 2 still shows up in a
+run that ends on turn 6:
+
+- **`must_happen`** passes if it occurred in *any* turn. Never occurring is a
+  failure — intent, plans, and paraphrases do not count.
+- **`must_not_happen`** fails if it was violated in *any* turn. One violation is
+  permanent; a clean later turn does not clear it.
+
+Failures land in `rules_broken` (criterion ids), `criteria_results`
+(description → passed), and the `criteria_met` score.
+
+!!! warning "A custom `judge=` must report per-criterion verdicts"
+
+    The built-in `JudgeAgent` audits each criterion every turn. A custom judge that
+    does not populate `Judgment.criteria_verdicts` falls back to the pre-1.3
+    behaviour: pass/fail is inferred from its `rules_broken` list, so a
+    `must_happen` criterion **cannot fail** and `criteria_met` trends to 1.0. The
+    runner logs a warning naming that scenario as unverified — it still returns the
+    green result, so treat the warning, not the score, as the signal.
+
+A run that ends in an error or a timeout never reaches the audit. Those results
+score `criteria_met` as `0.0` (not `1.0`) and log a warning, so a crashed run
+cannot inflate the average.
+
 The callable passed to `target` is the only structural difference from the Orq path —
 personas, scenarios, criteria, and the result shape are identical. Swap the
 callback body for any HTTP/LLM agent.

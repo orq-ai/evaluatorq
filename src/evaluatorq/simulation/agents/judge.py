@@ -43,6 +43,51 @@ _QUALITY_SCORE_PROPERTIES: dict[str, dict[str, str]] = {
     },
 }
 
+# Per-criterion audit, required on BOTH tools. Without it pass/fail could only be
+# inferred from the absence of an id in `rules_broken`, which no judge ever emits
+# for a `must_happen` criterion that simply never occurred — so those criteria
+# could not fail. Shared so continue/finish can never drift apart.
+#
+# The audit asks ONLY "did this occur?" — never "did it pass?". A pass/fail flag
+# means the opposite thing for the two criterion types, and gpt-5.4-mini reliably
+# inverted it (marking a satisfied must_happen as unmet while its own `reason`
+# said the opposite). Occurrence is one factual question with one answer for both
+# types; the type-to-verdict mapping is done in code, where it cannot be confused.
+_CRITERIA_VERDICTS_PROPERTY: dict[str, Any] = {
+    'criteria_verdicts': {
+        'type': 'array',
+        'description': (
+            'Occurrence audit. One entry for EVERY criterion listed in EVALUATION CRITERIA, '
+            'no omissions. Report only what literally happened in the conversation so far — '
+            'do NOT judge whether that is good or bad.'
+        ),
+        'items': {
+            'type': 'object',
+            'properties': {
+                'id': {
+                    'type': 'string',
+                    'description': "Criterion ID exactly as listed, e.g. 'criteria_0'",
+                },
+                'occurred': {
+                    'type': 'boolean',
+                    'description': (
+                        'true if the described behaviour has actually appeared in the conversation '
+                        'so far, false if it has not. Answer for the description alone, ignoring '
+                        'whether the criterion is must_happen or must_not_happen.'
+                    ),
+                },
+                'evidence': {
+                    'type': 'string',
+                    'description': (
+                        'Short quote from the conversation showing the behaviour, or empty when occurred is false.'
+                    ),
+                },
+            },
+            'required': ['id', 'occurred', 'evidence'],
+        },
+    },
+}
+
 # ---------------------------------------------------------------------------
 # Judge tools for structured decision making
 # ---------------------------------------------------------------------------
@@ -64,9 +109,10 @@ JUDGE_TOOLS: list[dict[str, Any]] = [
                         'type': 'number',
                         'description': 'How much of the goal is achieved SO FAR, 0.0 (none) to 1.0 (fully). Assess every turn — if the run hits max turns this is the final score.',
                     },
+                    **_CRITERIA_VERDICTS_PROPERTY,
                     **_QUALITY_SCORE_PROPERTIES,
                 },
-                'required': ['reason', 'goal_completion_score'],
+                'required': ['reason', 'goal_completion_score', 'criteria_verdicts'],
             },
         },
     },
@@ -95,6 +141,7 @@ JUDGE_TOOLS: list[dict[str, Any]] = [
                         'type': 'number',
                         'description': 'How much of the goal was achieved, from 0.0 (none) to 1.0 (fully achieved). Use intermediate values for partial completion.',
                     },
+                    **_CRITERIA_VERDICTS_PROPERTY,
                     **_QUALITY_SCORE_PROPERTIES,
                 },
                 'required': [
@@ -102,6 +149,7 @@ JUDGE_TOOLS: list[dict[str, Any]] = [
                     'goal_achieved',
                     'rules_broken',
                     'goal_completion_score',
+                    'criteria_verdicts',
                 ],
             },
         },
@@ -132,6 +180,21 @@ Decision rules:
 2. FINISH if any "must_not_happen" criteria are violated
 3. CONTINUE if the goal is not yet achieved and no rules are broken
 4. CONTINUE if progress is being made toward the goal
+5. An unmet "must_happen" criterion is NOT a reason to finish early — it may still happen later
+
+CRITERIA AUDIT (every evaluation, continue or finish):
+You MUST return criteria_verdicts with exactly one entry for every criterion ID listed
+below — no omissions, even when nothing has changed since the last turn.
+
+This is an OCCURRENCE report, not a verdict. For each criterion answer one question:
+"has the behaviour in this description actually appeared in the conversation so far?"
+- occurred=true if it is there, occurred=false if it is not.
+- Answer identically whether the criterion is must_happen or must_not_happen. Do NOT
+  flip the answer because the behaviour is desired or forbidden — pass/fail is computed
+  from your answer, not by you.
+- Quote the supporting text in `evidence` when occurred=true; leave it empty otherwise.
+- Judge the literal transcript. Do not credit intent, plans, or things the agent looks
+  likely to do next.
 
 For EVERY evaluation (continue or finish), also assess the agent's LAST response:
 - response_quality: How helpful, accurate, and complete was the response? (0.0=poor, 1.0=excellent)
@@ -288,16 +351,27 @@ class JudgeAgent(BaseAgent):
 
         # Extract quality scores (shared by both tools)
         quality_scores = self._extract_quality_scores(args)
+        criteria_verdicts = self._extract_criteria_verdicts(args)
+        if self._criteria and criteria_verdicts is None:
+            logger.warning(
+                'JudgeAgent: no criteria_verdicts returned for %d criteria; this turn '
+                'contributes no criteria evidence and must_happen cannot be scored from it.',
+                len(self._criteria),
+            )
+        violated = self._violated_ids(criteria_verdicts)
 
         if function_name == 'continue_conversation':
             return Judgment(
                 should_terminate=False,
                 reason=str(args.get('reason', '')),
                 goal_achieved=False,
-                rules_broken=[],
+                # Derived from the audit: continue_conversation has no rules_broken
+                # field, and hardcoding [] here erased every mid-conversation violation.
+                rules_broken=violated,
                 # Partial progress, so max_turns runs get a real score instead of a
                 # hardcoded 0 (the judge never reaches finish_conversation there).
                 goal_completion_score=_clamp(_to_number(args.get('goal_completion_score'), 0.0)),
+                criteria_verdicts=criteria_verdicts,
                 **quality_scores,
             )
 
@@ -306,9 +380,12 @@ class JudgeAgent(BaseAgent):
             default_score = 1.0 if goal_achieved else 0.0
             goal_completion_score = _clamp(_to_number(args.get('goal_completion_score'), default_score))
 
-            rules_broken = (
+            reported = (
                 [str(r) for r in args.get('rules_broken', [])] if isinstance(args.get('rules_broken'), list) else []
             )
+            # Union, reported first: the free-text list and the audit disagree often
+            # enough that trusting either alone loses violations.
+            rules_broken = reported + [cid for cid in violated if cid not in reported]
 
             return Judgment(
                 should_terminate=True,
@@ -316,6 +393,7 @@ class JudgeAgent(BaseAgent):
                 goal_achieved=goal_achieved,
                 rules_broken=rules_broken,
                 goal_completion_score=goal_completion_score,
+                criteria_verdicts=criteria_verdicts,
                 **quality_scores,
             )
 
@@ -328,6 +406,52 @@ class JudgeAgent(BaseAgent):
             rules_broken=[],
             goal_completion_score=0.0,
         )
+
+    @staticmethod
+    def _extract_criteria_verdicts(args: dict[str, Any]) -> dict[str, bool] | None:
+        """Normalise the ``criteria_verdicts`` array into ``{criterion_id: occurred}``.
+
+        Returns ``None`` (unknown) rather than ``{}`` when the judge omitted the
+        field or returned nothing usable, so callers can tell "no evidence" from
+        "audited and nothing occurred".
+        """
+        raw = args.get('criteria_verdicts')
+        if not isinstance(raw, list):
+            return None
+        verdicts: dict[str, bool] = {}
+        malformed = 0
+        for entry in raw:
+            cid = entry.get('id') if isinstance(entry, dict) else None
+            occurred = entry.get('occurred') if isinstance(entry, dict) else None
+            if isinstance(cid, str) and isinstance(occurred, bool):
+                verdicts[cid] = occurred
+            else:
+                # A dropped entry is indistinguishable from one the judge never sent,
+                # and the run-level fold only complains about ids missing from EVERY
+                # turn — so a per-turn shape error would otherwise vanish entirely.
+                malformed += 1
+        if malformed:
+            logger.warning(
+                'JudgeAgent: discarded %d malformed criteria_verdicts entr(y/ies) (need a string id '
+                'and a boolean occurred); those criteria carry no evidence from this turn.',
+                malformed,
+            )
+        return verdicts or None
+
+    def _violated_ids(self, verdicts: dict[str, bool] | None) -> list[str]:
+        """Ids of ``must_not_happen`` criteria the audit says already occurred.
+
+        ``must_happen`` is excluded on purpose: not-yet-satisfied is not a
+        violation mid-conversation, so only the run-level fold in the runner
+        turns a never-satisfied one into a failure.
+        """
+        if not verdicts:
+            return []
+        return [
+            f'criteria_{i}'
+            for i, c in enumerate(self._criteria)
+            if c.type == 'must_not_happen' and verdicts.get(f'criteria_{i}') is True
+        ]
 
     @staticmethod
     def _extract_quality_scores(args: dict[str, Any]) -> dict[str, float | None]:

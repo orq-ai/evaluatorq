@@ -143,6 +143,80 @@ def _error_result(
     )
 
 
+class _CriteriaTracker:
+    """Folds the judge's per-turn occurrence audit into one run-level verdict.
+
+    Occurrence is sticky: something that appeared on turn 2 still happened when the
+    run ends on turn 6, so ``occurred`` only ever flips False→True. Pass/fail is
+    then a pure function of occurrence and `Criterion.type` — ``must_happen``
+    passes when it occurred, ``must_not_happen`` when it did not. Reading the final
+    turn's judgment alone (the old behaviour) dropped any violation the judge
+    reported earlier.
+    """
+
+    def __init__(self, scenario: Scenario | None) -> None:
+        self._criteria = list(scenario.criteria or []) if scenario else []
+        self._scenario_name = scenario.name if scenario else '<none>'
+        # Nothing has been observed yet. A criterion the judge never mentions keeps
+        # this default, which is the honest reading for both types: a must_happen
+        # nobody witnessed fails, a must_not_happen nobody witnessed passes.
+        self._occurred: dict[str, bool] = {f'criteria_{i}': False for i in range(len(self._criteria))}
+        self._seen: set[str] = set()
+        self._any_audit = False
+
+    def observe(self, judgment: Judgment) -> None:
+        verdicts = judgment.criteria_verdicts
+        if not verdicts:
+            return
+        self._any_audit = True
+        for cid in self._occurred:
+            occurred = verdicts.get(cid)
+            if occurred is None:
+                continue
+            self._seen.add(cid)
+            self._occurred[cid] = self._occurred[cid] or occurred
+
+    def _passed(self, index: int) -> bool:
+        occurred = self._occurred[f'criteria_{index}']
+        return occurred if self._criteria[index].type == 'must_happen' else not occurred
+
+    def resolve(self, judgment: Judgment) -> Judgment:
+        """Return ``judgment`` with ``rules_broken`` replaced by the run-level verdict.
+
+        Everything downstream (``criteria_results``, ``criteria_meta``,
+        ``SimulationResult.rules_broken``, the ``criteria_met`` scorer) derives from
+        this one list, so they cannot disagree.
+
+        The audit wins wherever it has an answer. The judge's free-text
+        ``rules_broken`` is consulted **only** for criteria it never audited —
+        letting it override an audited verdict would put the unreliable channel
+        (the one this whole design exists to stop trusting) back in charge, and it
+        can only ever add failures, never clear them.
+        """
+        if not self._criteria:
+            return judgment
+        if not self._any_audit:
+            logger.warning(
+                'Judge returned no criteria audit for any turn of scenario %r; falling back to its '
+                'rules_broken list, which cannot fail a must_happen criterion. Treat these %d '
+                'criteria results as unverified.',
+                self._scenario_name,
+                len(self._criteria),
+            )
+            return judgment
+        unaudited = [cid for cid in self._occurred if cid not in self._seen]
+        if unaudited:
+            logger.warning(
+                'Judge never reported an occurrence verdict for %s on scenario %r; treating them as '
+                'not observed (must_happen=failed, must_not_happen=passed).',
+                ', '.join(sorted(unaudited)),
+                self._scenario_name,
+            )
+        broken = [f'criteria_{i}' for i in range(len(self._criteria)) if not self._passed(i)]
+        broken += [r for r in judgment.rules_broken if r in unaudited and r not in broken]
+        return judgment.model_copy(update={'rules_broken': broken})
+
+
 def _build_criteria_results(scenario: Scenario, judgment: Judgment) -> dict[str, bool]:
     """Build a human-readable criteria results dict from scenario and judgment."""
     results: dict[str, bool] = {}
@@ -566,6 +640,9 @@ class SimulationRunner:
         messages.append(Message(role='user', content=first_msg))
 
         last_judgment: Judgment | None = None
+        # Accumulates every turn's criteria audit; a violation seen on turn 2 must
+        # survive to the final result even if turn 5 is the one that terminates.
+        criteria_tracker = _CriteriaTracker(scenario)
 
         for turn in range(effective_max_turns):
             usage_before = _get_total_usage()
@@ -622,6 +699,7 @@ class SimulationRunner:
 
                 async with with_simulation_span('orq.simulation.judge_evaluation', None):
                     judgment = await judge.evaluate(messages)
+                criteria_tracker.observe(judgment)
 
                 turn_metrics_list.append(_build_turn_metrics(turn + 1, judgment, usage_before))
                 try:
@@ -653,41 +731,44 @@ class SimulationRunner:
 
             if last_judgment and last_judgment.should_terminate:
                 final_usage = _get_total_usage()
+                # rules_broken is the run-level fold, not just this turn's judgment.
+                resolved = criteria_tracker.resolve(last_judgment)
                 set_span_attrs(
                     run_span,
                     {
                         'orq.simulation.terminated_by': 'judge',
-                        'orq.simulation.goal_achieved': last_judgment.goal_achieved,
+                        'orq.simulation.goal_achieved': resolved.goal_achieved,
                         'orq.simulation.turn_count': turn + 1,
                     },
                 )
                 judge_metadata = _build_simulation_metadata(
                     persona,
                     scenario,
-                    _build_criteria_meta(scenario, last_judgment) if scenario else None,
+                    _build_criteria_meta(scenario, resolved) if scenario else None,
                     target_model_holder['model'],
                 )
                 return SimulationResult(
                     messages=messages,
                     terminated_by=TerminatedBy.judge,
-                    reason=last_judgment.reason,
-                    goal_achieved=last_judgment.goal_achieved,
-                    goal_completion_score=last_judgment.goal_completion_score,
-                    rules_broken=last_judgment.rules_broken,
+                    reason=resolved.reason,
+                    goal_achieved=resolved.goal_achieved,
+                    goal_completion_score=resolved.goal_completion_score,
+                    rules_broken=resolved.rules_broken,
                     turn_count=turn + 1,
                     turn_metrics=turn_metrics_list,
                     token_usage=final_usage,
-                    criteria_results=self._build_criteria_results(scenario, last_judgment) if scenario else None,  # type: ignore[arg-type]
+                    criteria_results=self._build_criteria_results(scenario, resolved) if scenario else None,  # type: ignore[arg-type]
                     metadata=judge_metadata,  # type: ignore[union-attr]
                 )
 
         # Max turns reached
         final_usage = _get_total_usage()
+        resolved = criteria_tracker.resolve(last_judgment) if last_judgment else None
         set_span_attrs(
             run_span,
             {
                 'orq.simulation.terminated_by': 'max_turns',
-                'orq.simulation.goal_achieved': last_judgment.goal_achieved if last_judgment else False,
+                'orq.simulation.goal_achieved': resolved.goal_achieved if resolved else False,
                 'orq.simulation.turn_count': effective_max_turns,
             },
         )
@@ -698,7 +779,7 @@ class SimulationRunner:
             final_usage,
             persona,
             scenario,
-            last_judgment,
+            resolved,
             target_model=target_model_holder['model'],
         )
 
