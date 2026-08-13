@@ -72,6 +72,26 @@ def test_from_integrations_import_submodule(submodule: str) -> None:
     assert proc.returncode == 0, proc.stderr
 
 
+def test_importing_the_package_pulls_in_no_integration_library() -> None:
+    """`import evaluatorq.integrations` must work on a base install.
+
+    `langchain_integration` was imported eagerly at module top, and its
+    `convert` module imports `langchain_core` — so the package that exists to
+    make optional dependencies optional required one of them to be installed.
+    """
+    code = (
+        "import sys\n"
+        "import evaluatorq.integrations\n"
+        "leaked = sorted({m.split('.')[0] for m in sys.modules} & "
+        "{'langchain', 'langchain_core', 'langgraph', 'agents', 'pydantic_ai', 'crewai'})\n"
+        "assert not leaked, leaked\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=120
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
 @pytest.mark.parametrize(
     ("name", "canonical"),
     [

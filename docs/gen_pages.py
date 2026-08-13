@@ -28,7 +28,10 @@ BLOB = "https://github.com/orq-ai/evaluatorq/blob/main"
 # UPPER_SNAKE module attributes. mkdocstrings renders an attribute's whole value,
 # so exporting a multi-paragraph prompt or a registry dict dumps it verbatim onto
 # the reference page — `evaluatorq.redteam` had three prompt blobs and four
-# registries doing exactly that. Still exported and importable; just not printed.
+# registries doing exactly that. Sorted to the bottom of the page rather than
+# dropped: a blob nobody scrolls to is a fair price for `DEFAULT_MODEL` and
+# `OWASP_LLM_TOP_10` having an entry at all, which they did not when this
+# filtered them out.
 CONSTANT = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 # Packages whose ``__all__`` names sub-modules rather than symbols. Without this
@@ -101,6 +104,32 @@ def _canonical_owner(module_name: str) -> str | None:
     """Return the longest API package that owns where a symbol is defined."""
     cands = [p for p in API_PACKAGES if module_name == p or module_name.startswith(p + ".")]
     return max(cands, key=len) if cands else None
+
+
+def _rendered_by_submodule_page(name: str, dotted: str) -> bool:
+    """True when a RECURSE_INTO_SUBMODULES page other than *dotted* renders *name*.
+
+    Those pages emit one `::: pkg.sub` block per sub-module, so they document
+    everything the sub-modules export — including classes another package lazily
+    re-exports. `_canonical_owner` cannot see that: a lazy re-export is in
+    neither `vars()` nor `sys.modules`, `_safe_getattr` returns None, the owner
+    reads as "" and the symbol is kept here *as well*. That is how
+    `CrewAITarget` and `PydanticAITarget` came to be documented in full on both
+    `evaluatorq/simulation/` and `evaluatorq/integrations/`.
+
+    Deliberately narrow. Ownership alone is not grounds to drop a name — the
+    owner may not export it, and then it is documented nowhere at all
+    (`ReplayError`, `OrqResponsesTarget`). Only a page we know renders the
+    symbol earns the drop.
+    """
+    for pkg in RECURSE_INTO_SUBMODULES:
+        if pkg == dotted:
+            continue
+        mod = importlib.import_module(pkg)
+        for sub in getattr(mod, "__all__", []):
+            if name in getattr(_safe_getattr(mod, sub, pkg), "__all__", []):
+                return True
+    return False
 
 
 def _safe_getattr(mod: object, name: str, parent_dotted: str) -> object | None:
@@ -244,7 +273,7 @@ HEADLINE = {
 
 
 def _ordered(dotted: str, names: list[str]) -> list[str]:
-    """Sort names headline-first, everything else keeping its incoming order.
+    """Sort names headline-first, constants last, everything else in place.
 
     Raises on a headline name the package no longer exports, so a rename cannot
     silently drop a symbol back into the alphabetical pile.
@@ -254,7 +283,7 @@ def _ordered(dotted: str, names: list[str]) -> list[str]:
     if missing := [n for n in headline if n not in exported]:
         raise ValueError(f"HEADLINE[{dotted!r}] names non-exported symbols: {missing}")
     rank = {n: i for i, n in enumerate(headline)}
-    return sorted(names, key=lambda n: rank.get(n, len(headline)))
+    return sorted(names, key=lambda n: (bool(CONSTANT.match(n)), rank.get(n, len(headline))))
 
 
 def write_api_pages() -> None:
@@ -273,7 +302,7 @@ def write_api_pages() -> None:
                 getattr(_safe_getattr(mod, n, dotted), "__module__", "") or ""
             )
             in (dotted, None)
-            and not CONSTANT.match(n)
+            and not _rendered_by_submodule_page(n, dotted)
         ]
         # Names a same-named sub-module hides from griffe; documented separately
         # below, since mkdocstrings drops them from the package's `members:`.

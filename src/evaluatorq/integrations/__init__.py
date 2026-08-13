@@ -10,19 +10,19 @@ Available integrations:
 - vercel_ai_sdk_integration: Vercel AI SDK agent target (HTTP)
 - callable_integration: Custom callable agent target
 
-Integrations with optional dependencies (langgraph, openai-agents, pydantic-ai,
-crewai) use lazy imports so that importing this package does not fail when those
-libraries are not installed.
+Every sub-module is imported lazily, so importing this package does not fail when
+an optional library (langchain, langgraph, openai-agents, pydantic-ai, crewai) is
+not installed. `langchain_integration` used to be imported eagerly here, which
+made `import evaluatorq.integrations` raise ModuleNotFoundError on a base install
+— `langchain_integration.convert` imports `langchain_core` at module level.
 """
 
 import importlib
 
-from . import langchain_integration
-
 __all__ = [
     'callable_integration',  # noqa: F822
     'crewai_integration',  # noqa: F822
-    'langchain_integration',
+    'langchain_integration',  # noqa: F822
     'langgraph_integration',  # noqa: F822
     'openai_agents_integration',  # noqa: F822
     'pydantic_ai_integration',  # noqa: F822
