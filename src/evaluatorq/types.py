@@ -225,7 +225,8 @@ class EvaluatorParams(BaseModel):
               inference=False), or a list of DataPoint instances/awaitables.
         jobs: The jobs to run on the data.
         evaluators: The evaluators to use. If not provided, only jobs will run.
-        parallelism: Number of jobs to run in parallel. Defaults to 1 (sequential).
+        parallelism: Number of jobs to run in parallel. Defaults to 10; set to 1 for
+              sequential execution, or lower it if your provider rate-limits.
         print_results: Whether to print results table to console. Defaults to True.
                        Also accepts "print" as an alias.
         description: Optional description for the evaluation run.
@@ -244,7 +245,7 @@ class EvaluatorParams(BaseModel):
     data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput]
     jobs: list[Job] | None = None
     evaluators: list[Evaluator] | None = None
-    parallelism: int = Field(default=1, ge=1)
+    parallelism: int = Field(default=10, ge=1)
     print_results: bool = Field(default=True, validation_alias='print')
     description: str | None = None
     path: str | None = None

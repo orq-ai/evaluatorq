@@ -877,7 +877,7 @@ async def evaluatorq(
     data: DatasetIdInput | Sequence[Awaitable[DataPoint] | DataPoint] | None = None,
     jobs: list[Job] | None = None,
     evaluators: list[Evaluator] | None = None,
-    parallelism: int = 1,
+    parallelism: int = 10,
     print_results: bool = True,
     description: str | None = None,
     path: str | None = None,
@@ -891,7 +891,7 @@ async def evaluatorq(
 - `data`: List of DataPoint objects, awaitables, or `DatasetIdInput`
 - `jobs`: List of job functions to run on each data point
 - `evaluators`: Optional list of evaluator configurations
-- `parallelism`: Number of concurrent jobs (default: 1, must be ≥1)
+- `parallelism`: Number of concurrent jobs (default: 10, must be ≥1)
 - `print_results`: Whether to display progress and results (default: True)
 - `description`: Optional description for the evaluation run
 
@@ -960,7 +960,7 @@ class EvaluatorParams(BaseModel):
     data: DatasetIdInput | Sequence[Awaitable[DataPoint] | DataPoint]
     jobs: list[Job]
     evaluators: list[Evaluator] | None = None
-    parallelism: int = Field(default=1, ge=1)
+    parallelism: int = Field(default=10, ge=1)
     print_results: bool = True
     description: str | None = None
 

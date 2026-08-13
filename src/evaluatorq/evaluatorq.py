@@ -104,7 +104,7 @@ async def evaluatorq(
     data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None = None,
     jobs: list[Job] | None = None,
     evaluators: list[Evaluator] | None = None,
-    parallelism: int = 1,
+    parallelism: int = 10,
     print_results: bool = True,
     description: str | None = None,
     path: str | None = None,
@@ -140,7 +140,8 @@ async def evaluatorq(
               inference=False), or a list of DataPoint instances/awaitables.
         jobs: The jobs to run on the data.
         evaluators: The evaluators to use. If not provided, only jobs will run.
-        parallelism: Number of jobs to run in parallel. Defaults to 1 (sequential).
+        parallelism: Number of jobs to run in parallel. Defaults to 10; set to 1 for
+              sequential execution, or lower it if your provider rate-limits.
         print_results: Whether to print results table to console. Defaults to True.
         description: Optional description for the evaluation run.
         path: Optional path (e.g. "MyProject/MyFolder") to place the experiment
