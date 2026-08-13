@@ -40,7 +40,7 @@ Targets — provide **exactly one**:
 | `--num-scenarios` | `int` / `5` | Number of scenarios to generate. |
 | `--evaluator` | `str` (repeatable) / API defaults | Evaluator name(s). Repeatable. |
 | `--no-save` | `bool` / `False` | Skip writing to `.evaluatorq/sim-runs/`. |
-| `--recommendations` | `bool` / `False` | Generate LLM remediation suggestions for failures, tied to their concrete cause. Extra LLM cost; uses `--sim-model`. |
+| `--recommendations` / `--no-recommendations` | `bool` / `True` | Generate LLM remediation suggestions for failures, tied to their concrete cause. On by default; `--no-recommendations` skips the extra LLM call. Uses `--sim-model`. |
 | `--datapoints` / `-d` | `Path \| None` / `None` | Write generated datapoints to JSONL for reproducible re-runs. |
 | `--results` / `-r` | `Path \| None` / `None` | Path to write results JSONL (results + scorer averages + metadata). |
 | `--report` | `Path \| None` / `None` | Path to write full SimulationRun report JSON. |
@@ -79,7 +79,7 @@ by `--experiment-run-id`), or `--from-run`.
 | `--parallelism` | `int` / `5` | Concurrent simulations. |
 | `--evaluator` | `str` (repeatable) / API defaults | Evaluator name(s). Repeatable. |
 | `--no-save` | `bool` / `False` | Skip writing to `.evaluatorq/sim-runs/`. |
-| `--recommendations` | `bool` / `False` | Generate LLM remediation suggestions for failures, tied to their concrete cause. Extra LLM cost; uses `--sim-model`. |
+| `--recommendations` / `--no-recommendations` | `bool` / `True` | Generate LLM remediation suggestions for failures, tied to their concrete cause. On by default; `--no-recommendations` skips the extra LLM call. Uses `--sim-model`. |
 | `--results` / `-r` | `Path \| None` / `None` | Path to write results JSONL. |
 | `--report` | `Path \| None` / `None` | Path to write full SimulationRun report JSON. |
 | `--report-md` | `Path \| None` / `None` | Directory for an auto-named Markdown report. |
@@ -178,8 +178,9 @@ eq sim export --input sim-report.json --output report.html --format html --recom
 ```
 
 Markdown/HTML exports include remediation suggestions if the input run JSON
-already carries them (a run executed with `--recommendations`), or if
-`--recommendations` is passed here to generate them at export time.
+already carries them (runs generate them by default — see `--no-recommendations`),
+or if `--recommendations` is passed here to generate them at export time for a run
+that has none stored.
 
 | Flag | Type / Default | Description |
 |---|---|---|

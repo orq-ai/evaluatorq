@@ -267,6 +267,7 @@ src/evaluatorq/
 - `OPENAI_API_KEY` — for direct OpenAI backend or pipeline LLM calls
 - `ORQ_WORKSPACE` (or `ORQ_WORKSPACE_SLUG`) — workspace slug for dashboard→Orq trace deep-links; buttons hidden when unset
 - `ORQ_UI_BASE_URL` — optional Orq UI base for deep-links (defaults to `ORQ_BASE_URL` or `https://my.orq.ai`)
+- `EVALUATORQ_APPLY_MODEL` — model for the dashboard's apply-recommendations merge (default `gpt-5.6-luna`)
 - Simulation recommendation limits (all optional, defaults preserve prior behaviour):
   - `EVALUATORQ_RECOMMENDATION_MAX_SUGGESTIONS`: max suggestions per result (default 3)
   - `EVALUATORQ_RECOMMENDATION_MAX_TRANSCRIPT_CHARS`: transcript char budget in the prompt (default 3000)

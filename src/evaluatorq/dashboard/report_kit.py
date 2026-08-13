@@ -44,6 +44,18 @@ def _confidence_pill(confidence: str | None) -> str:
     )
 
 
+def focus_tier(risk_score: float) -> tuple[str, str, str]:
+    """Tier code/label/color from ``risk_score`` (spec §Focus areas): >=2 -> P1
+    Critical priority (red-600); >=1 -> P2 High priority (orange-600); else P3
+    Medium priority (amber-600). Shared by the focus cards and the apply drawer
+    so the two never drift."""
+    if risk_score >= 2:
+        return 'P1', 'Critical priority', 'var(--red-600)'
+    if risk_score >= 1:
+        return 'P2', 'High priority', 'var(--orange-600)'
+    return 'P3', 'Medium priority', 'var(--amber-600)'
+
+
 def exec_summary(
     *,
     summary_data: dict[str, Any],
