@@ -1,4 +1,9 @@
-"""Shared helpers for normalizing chat-message content."""
+"""Shared helpers for normalizing chat-message content.
+
+Canonical for every surface. Content is typed ``str | list[ContentPart]``:
+never call ``str()`` on it — that renders a Python repr into a transcript a
+judge then scores. Use these helpers or ``contracts.content_to_text``.
+"""
 
 from __future__ import annotations
 

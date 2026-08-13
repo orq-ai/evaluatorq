@@ -170,7 +170,7 @@ async def plan_strategies_for_vulnerabilities(
                             pipeline_config=cfg,
                         )
                     return vuln, generated, None
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     logger.error(
                         f'Strategy generation failed for {vuln.value}, no strategies will be tested for this vulnerability: {e}'
                     )

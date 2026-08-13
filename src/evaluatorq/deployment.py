@@ -7,10 +7,10 @@ from within evaluation jobs.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.contracts import TokenUsage
 
 __all__ = [
@@ -73,26 +73,9 @@ def _get_or_create_client() -> Orq:
     """
     global _cached_client
 
-    if _cached_client is not None:
-        return _cached_client
-
-    api_key = os.environ.get('ORQ_API_KEY')
-    if not api_key:
-        raise ValueError('ORQ_API_KEY environment variable must be set to use the deployment helper.')
-
-    try:
-        from orq_ai_sdk import Orq
-
-        server_url = os.environ.get('ORQ_BASE_URL', 'https://my.orq.ai')
-        _cached_client = Orq(api_key=api_key, server_url=server_url)
-        return _cached_client
-    except ModuleNotFoundError as e:
-        raise ImportError(
-            'The orq_ai_sdk package is not installed. To use deployment features, install it with: '
-            'uv add orq-ai-sdk (or: python -m pip install orq-ai-sdk)'
-        ) from e
-    except Exception as e:
-        raise RuntimeError(f'Failed to setup ORQ client: {e}') from e
+    if _cached_client is None:
+        _cached_client = resolve_orq_client()
+    return _cached_client
 
 
 async def deployment(

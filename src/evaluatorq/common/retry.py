@@ -1,4 +1,14 @@
-"""Shared retry helper for LLM API calls."""
+"""Shared retry helper for LLM API calls.
+
+Canonical retry for every surface — do not add a second layer. An OpenAI/Orq
+client already carries its own ``max_retries``; wrapping such a call in
+``with_retry`` multiplies the two budgets, so the default ``MAX_RETRY_ATTEMPTS``
+of 5 over a client with the SDK default of 2 retries is 15 requests, not 5. The
+SDK's wall-clock guard is measured from before the first attempt, so the outer
+layer can also exhaust it. Per call path, either configure the client's
+``max_retries`` or use ``with_retry`` — not both — and name the choice in the
+caller's docstring.
+"""
 
 from __future__ import annotations
 
