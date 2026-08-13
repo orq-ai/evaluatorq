@@ -207,12 +207,28 @@ generation, the target, and the judge — with `calls` and `priced_calls` alongs
 the dollar figure. When those two counts differ, some call carries no price and
 the total is a floor rather than the whole bill.
 
+`calls` vs `priced_calls` only tells you *how much* of the total is priced, not
+*how* — a dollar figure can be fully covered and still be a client-side guess.
+`Usage.estimated_calls` counts how many of `priced_calls` were priced by
+`common.model_catalogue.price_usage` (token counts × the catalogue's per-1k rate)
+rather than billed by the provider, and `Usage.cost_source` collapses that into
+`'provider'`, `'catalogue'`, `'mixed'`, or `None` (nothing priced). The estimate
+is knowingly approximate: it applies a flat input rate, while cached-read and
+cache-write tokens bill at a discount/premium the catalogue does not publish, so
+a cache-heavy call reads slightly high. Reports built with
+`common.reports.md_helpers.cost_coverage` surface both axes in one label —
+`' (3 of 10 calls)'` for partial coverage, `' (estimated)'` / `' (partly
+estimated)'` for provenance, or `' (3 of 10 calls, estimated)'` /
+`' (3 of 10 calls, partly estimated)'` for both at once.
+
 A judge on the Orq router calls its Responses endpoint by default, because that
 is the endpoint the router prices. Verdicts there are schema-enforced
 (`json_schema`), so the provider produces the verdict's own keys rather than
 merely some JSON object. Pass `EvaluatorConfig(api='chat_completions')` to opt
 out; a judge on Chat Completions comes back with tokens but no price, so
-evaluatorq fills the cost in client-side from Orq's model catalogue.
+evaluatorq fills the cost in client-side from Orq's model catalogue — the same
+`price_usage` path that sets `estimated_calls`, so a Chat Completions judge's
+share of the total reads as `catalogue`-sourced, not `provider`-billed.
 
 Four conditions have to hold for the Responses default to apply: `cfg.api ==
 'responses'` (the evaluator default; `structured_output` — the `llm_jury(...,
