@@ -156,7 +156,22 @@ def _safe_getattr(mod: object, name: str, parent_dotted: str) -> object | None:
         return sys.modules[full]
     try:
         return importlib.import_module(full)
-    except (ImportError, ModuleNotFoundError):
+    except ModuleNotFoundError as exc:
+        if exc.name == full:
+            return None  # `name` is a class or function, not a sub-module. Expected.
+        # A *dependency* is missing, not the member. None reads as "no such member" to
+        # every caller, so `_rendered_by_submodule_page` stops de-duplicating and
+        # `_canonical_owner` stops attributing — both degrade to their pre-fix behaviour.
+        # Docs CI installs --all-extras, so this fires only on a partial local install;
+        # `mkdocs serve` per CLAUDE.md is exactly that.
+        print(
+            f'gen_pages: {full} needs {exc.name!r}, which is not installed — '
+            'its members may be duplicated or mis-attributed on the reference pages',
+            file=sys.stderr,
+        )
+        return None
+    except ImportError as exc:
+        print(f'gen_pages: cannot import {full} ({exc}) — skipping', file=sys.stderr)
         return None
 
 
@@ -473,9 +488,15 @@ def write_example_pages() -> None:
                     "    Contains placeholder IDs (`<your-...>`). Replace them with real\n"
                     "    values from the Orq platform before running.\n\n"
                 )
-            fd.write("```python\n")
+            # The fence must be longer than any backtick run in the source, or an
+            # example whose own docstring fences a snippet closes this fence early
+            # and dumps the rest of the file as prose. `bt_sigma_ranking.py` has a
+            # ```bash block at line 20; before this, its remaining 180 lines
+            # rendered as running text with the comments promoted to headings.
+            fence = "`" * max([3, *(len(run) + 1 for run in re.findall(r"`+", source))])
+            fd.write(f"{fence}python\n")
             fd.write(source if source.endswith("\n") else source + "\n")
-            fd.write("```\n")
+            fd.write(f"{fence}\n")
         mkdocs_gen_files.set_edit_path(page, f.relative_to(REPO).as_posix())
         node = tree
         for part in rel.parts[:-1]:
