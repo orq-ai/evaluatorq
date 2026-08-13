@@ -101,6 +101,7 @@ class TestUsageCostUsdSerialization:
             'total_cost',
             'calls',
             'priced_calls',
+            'estimated_calls',
             # Legacy keys injected by @model_serializer(mode='wrap')
             'prompt_tokens',
             'completion_tokens',

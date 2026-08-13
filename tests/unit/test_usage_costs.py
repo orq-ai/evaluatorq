@@ -170,6 +170,84 @@ def test_subtraction_clamps_priced_calls_at_zero():
     assert (a - b).priced_calls == 0
 
 
+# ---------------------------------------------------------------------------
+# estimated_calls / cost_source — provenance of the priced cost
+# ---------------------------------------------------------------------------
+
+
+def test_cost_source_is_none_when_nothing_priced():
+    u = Usage(input_tokens=1, output_tokens=1, calls=1)
+    assert u.priced_calls == 0
+    assert u.cost_source is None
+
+
+def test_cost_source_is_provider_when_no_calls_are_estimated():
+    u = Usage.extract({'input_tokens': 1, 'output_tokens': 1, 'total_cost': 0.5}, calls=1)
+    assert u is not None
+    assert u.estimated_calls == 0
+    assert u.cost_source == 'provider'
+
+
+def test_cost_source_is_catalogue_when_estimated_calls_covers_all_priced_calls():
+    u = Usage(input_tokens=1, output_tokens=1, total_cost=0.5, calls=1, priced_calls=1, estimated_calls=1)
+    assert u.cost_source == 'catalogue'
+
+
+def test_summing_provider_and_catalogue_priced_usage_is_mixed():
+    provider = Usage.extract({'input_tokens': 1, 'output_tokens': 1, 'total_cost': 0.5}, calls=1)
+    assert provider is not None
+    catalogue = Usage(input_tokens=1, output_tokens=1, total_cost=0.1, calls=1, priced_calls=1, estimated_calls=1)
+
+    total = provider + catalogue
+
+    assert total.priced_calls == 2
+    assert total.estimated_calls == 1
+    assert total.cost_source == 'mixed'
+
+
+def test_legacy_dict_without_estimated_calls_reads_as_provider():
+    """Reports saved before RES-1307 deserialize with estimated_calls=0 — every
+    pre-existing priced call was provider-reported, since client-side catalogue
+    estimation (RES-1295) stamps estimated_calls only from this task onward."""
+    u = Usage.model_validate({'input_tokens': 10, 'output_tokens': 5, 'cost_usd': 1.25, 'calls': 4, 'priced_calls': 4})
+    assert u.estimated_calls == 0
+    assert u.cost_source == 'provider'
+
+
+def test_extract_clamps_estimated_calls_to_priced_calls():
+    """An aggregated dump with a bogus estimated_calls > priced_calls must not
+    leak past the same clamp priced_calls itself gets against calls."""
+    u = Usage.extract(
+        {'input_tokens': 1, 'output_tokens': 1, 'total_cost': 0.5, 'calls': 1, 'priced_calls': 1, 'estimated_calls': 5},
+        calls=1,
+    )
+    assert u is not None
+    assert u.priced_calls == 1
+    assert u.estimated_calls == 1
+
+
+def test_estimated_calls_survives_round_trip():
+    original = Usage(input_tokens=1, output_tokens=1, total_cost=0.5, calls=3, priced_calls=1, estimated_calls=1)
+    assert Usage.model_validate(original.model_dump()) == original
+
+
+def test_subtraction_clamps_estimated_calls_at_zero():
+    a = Usage(input_tokens=2, output_tokens=2, total_cost=0.5, calls=1, priced_calls=1, estimated_calls=1)
+    b = Usage(input_tokens=1, output_tokens=1, total_cost=0.2, calls=3, priced_calls=3, estimated_calls=3)
+    assert (a - b).estimated_calls == 0
+
+
+def test_with_calls_leaves_estimated_calls_at_zero():
+    """`with_calls` is the Responses/provider path — it must never mark a call as
+    client-side estimated."""
+    parsed = Usage.extract({'input_tokens': 1, 'output_tokens': 1, 'total_cost': 0.5}, calls=0)
+    assert parsed is not None
+
+    stamped = parsed.with_calls(1)
+
+    assert stamped.estimated_calls == 0
+
+
 def test_v3_responses_cost_survives_openai_sdk_parsing():
     """Orq's cost fields ride the v3/router path as pydantic *extras*.
 
