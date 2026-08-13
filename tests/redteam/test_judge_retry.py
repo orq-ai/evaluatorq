@@ -23,6 +23,7 @@ from evaluatorq.common import judge as judge_mod
 from evaluatorq.common import model_catalogue
 from evaluatorq.common.judge import JudgeError, run_judge
 from evaluatorq.contracts import LLMCallConfig
+from evaluatorq.redteam.contracts import EvaluatorConfig
 
 ORQ_URL = 'https://my.orq.ai/v3/router'
 OPENAI_URL = 'https://api.openai.com/v1'
@@ -188,6 +189,45 @@ async def test_retryable_503_on_chat_recovers_on_second_attempt():
     assert attempts['n'] == 2
     assert outcome.payload is not None and outcome.payload.value is True
     assert outcome.endpoint == 'chat'
+
+
+# --- 0. Default retry_count -----------------------------------------------------
+
+
+def test_llm_call_config_default_retry_count_is_one():
+    assert LLMCallConfig().retry_count == 1
+
+
+def test_evaluator_config_default_retry_count_is_one():
+    assert EvaluatorConfig().retry_count == 1
+
+
+@pytest.mark.asyncio
+async def test_default_retry_count_issues_exactly_two_requests():
+    """One retry after the initial call: a permanently-failing judge with the
+    default ``LLMCallConfig`` issues exactly 2 requests, not 3 (the old
+    total-attempts default) and not 1 (no retry at all)."""
+    client = _Client()
+
+    async def always_fails(**kwargs: Any) -> Any:
+        client.calls.append('responses')
+        raise _server_error(503)
+
+    client.responses = SimpleNamespace(parse=always_fails)
+    cfg = LLMCallConfig(model='gpt-5-mini', api='responses', max_tokens=256)
+    assert cfg.retry_count == 1
+    outcome = await run_judge(
+        client=client,  # pyright: ignore[reportArgumentType]
+        model='gpt-5-mini',
+        cfg=cfg,
+        prompt_template='judge this',
+        replacements={},
+        response_model=Verdict,
+        structured_output=True,
+    )
+
+    assert len(client.calls) == 2
+    assert outcome.error_kind is JudgeError.API_STATUS
 
 
 # --- 2. Retries exhausted -> normal error classification, not an unhandled raise --

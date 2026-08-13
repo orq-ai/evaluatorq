@@ -245,10 +245,12 @@ def _without_client_retries(client: AsyncOpenAI, retry_count: int) -> AsyncOpenA
     ``with_retry`` re-runs the whole judge call and the OpenAI SDK retries inside
     each of those attempts, so the two budgets *multiply*. The shipped red-team
     path injects the attacker client, built with ``max_retries=LLMConfig.retry_count``
-    (default 3): under ``retry_count=3`` that is up to 12 requests and ~10
-    minutes of backoff for one rate-limited judgement. The call sites that build
-    their own judge client pass ``max_retries=0`` for exactly this reason, but an
-    injected client — the documented, supported pattern — never went through them.
+    (default 3, i.e. up to 4 requests per attempt): under a judge-side
+    ``EvaluatorConfig.retry_count=3`` (4 ``with_retry`` attempts) that is up to
+    16 requests and ~10 minutes of backoff for one rate-limited judgement. The
+    call sites that build their own judge client pass ``max_retries=0`` for
+    exactly this reason, but an injected client — the documented, supported
+    pattern — never went through them.
 
     ``with_options`` shares the underlying transport, so this is cheap and leaves
     the caller's own client object untouched. The ``int`` check keeps test doubles
