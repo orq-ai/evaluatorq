@@ -88,15 +88,21 @@ def head_assets() -> tuple[Script, ...]:
 # ---------------------------------------------------------------------------
 
 
-def _coverage(priced_calls: int, calls: int, unknown_calls: int) -> str:
+def _coverage(priced_calls: int, calls: int, unknown_calls: int, estimated_calls: int = 0) -> str:
     """Coverage label for a spend figure the dashboard summed across reports.
 
     Same "(N of M calls)" qualifier the reports render, plus the case only the
     dashboard has: reports predating ``priced_calls`` contribute cost whose
     coverage is unknown. Without naming them an empty label would mean both
     "every call was priced" and "we have no idea" — opposite claims.
+
+    ``estimated_calls`` adds the same provenance qualifier
+    (``cost_coverage``'s "estimated"/"partly estimated") beside the unknown-calls
+    wording, which stays untouched — the two describe different things (billed
+    vs. client-side-estimated, and priced vs. coverage-unknown) and must not be
+    collapsed into one clause.
     """
-    known = _cost_coverage(priced_calls, calls)
+    known = _cost_coverage(priced_calls, calls, estimated_calls=estimated_calls)
     if not unknown_calls:
         return known
     unknown = f'{unknown_calls:,} call{"" if unknown_calls == 1 else "s"} of unknown coverage'
@@ -333,7 +339,11 @@ def landing_body(data: Landing) -> str:
     # matching the "(N of M calls)" qualifier the markdown/HTML reports render.
     # Only qualifies a figure that exists — an em dash "no cost recorded" tile
     # with "(1 of 2 calls)" under it would label a total that was never shown.
-    coverage = _coverage(data.priced_calls, data.cost_calls, data.unknown_calls) if data.total_cost is not None else ''
+    coverage = (
+        _coverage(data.priced_calls, data.cost_calls, data.unknown_calls, data.estimated_calls)
+        if data.total_cost is not None
+        else ''
+    )
     if coverage:
         spend_sub = f'{spend_sub} ·{coverage}' if spend_sub else coverage.strip()
     band = (
@@ -622,7 +632,7 @@ def sim_overview_body(data: SimOverview, compare_choices: list[tuple[str, str]] 
         cost_label, cost_value = 'Avg cost/sim', _fmt_cost(data.avg_cost)
         if data.avg_input_cost is not None or data.avg_output_cost is not None:
             cost_value += f' (in {_fmt_cost(data.avg_input_cost)} / out {_fmt_cost(data.avg_output_cost)})'
-        cost_value += _coverage(data.priced_calls, data.cost_calls, data.unknown_calls)
+        cost_value += _coverage(data.priced_calls, data.cost_calls, data.unknown_calls, data.estimated_calls)
     else:
         cost_label = 'Avg tokens/sim'
         cost_value = '—' if data.avg_tokens is None else f'{data.avg_tokens:,.0f}'
@@ -680,7 +690,7 @@ def redteam_overview_body(data: RedTeamOverview) -> str:
     if data.total_input_cost is not None or data.total_output_cost is not None:
         spend_value += f' (in {_fmt_cost(data.total_input_cost)} / out {_fmt_cost(data.total_output_cost)})'
     if data.total_cost is not None:
-        spend_value += _coverage(data.priced_calls, data.cost_calls, data.unknown_calls)
+        spend_value += _coverage(data.priced_calls, data.cost_calls, data.unknown_calls, data.estimated_calls)
     band = kpi_cards([
         {'label': 'Attacks run', 'value': str(data.attacks_run)},
         {'label': 'ASR', 'value': asr, 'status': asr_status},

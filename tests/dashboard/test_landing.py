@@ -810,7 +810,7 @@ class TestDashboardCostCoverage:
     the markdown/HTML reports render. A total summed over calls where only some
     reported a cost is a lower bound; showing it bare reads as authoritative."""
 
-    def _redteam_payload(self, name: str, *, created: str, priced: int, calls: int) -> dict:
+    def _redteam_payload(self, name: str, *, created: str, priced: int, calls: int, estimated: int = 0) -> dict:
         return {
             'pipeline': {'mode': 'adaptive'},
             'created_at': created,
@@ -833,6 +833,7 @@ class TestDashboardCostCoverage:
                     'cost_usd': 0.5,
                     'calls': calls,
                     'priced_calls': priced,
+                    'estimated_calls': estimated,
                 },
                 'by_severity': {},
             },
@@ -856,6 +857,47 @@ class TestDashboardCostCoverage:
         ov = metrics.redteam_overview([rt, sim])
         assert (ov.priced_calls, ov.cost_calls) == (3, 10)
         assert '(3 of 10 calls)' in view.redteam_overview_body(ov)
+
+    def test_all_estimated_store_labels_estimated(self, tmp_path: Path) -> None:
+        """A store of catalogue-estimated runs (every priced call client-side)
+        must aggregate to the "(estimated)" provenance label, not read as
+        billed just because ``estimated_calls`` defaults to 0 on an unrelated
+        code path."""
+        rt, sim = self._roots(
+            tmp_path,
+            self._redteam_payload('P', created='2026-06-29T10:00:00', priced=10, calls=10, estimated=10),
+        )
+
+        data = metrics.landing([rt, sim])
+        assert data.priced_calls == data.estimated_calls == 10
+        assert '(estimated)' in view.landing_body(data)
+
+        ov = metrics.redteam_overview([rt, sim])
+        assert ov.priced_calls == ov.estimated_calls == 10
+        assert '(estimated)' in view.redteam_overview_body(ov)
+
+    def test_mixed_store_labels_partly_estimated(self, tmp_path: Path) -> None:
+        """One fully-billed run beside one fully-estimated run must aggregate to
+        "partly estimated" — neither "estimated" (some priced calls were billed)
+        nor silently "provider" (some were not)."""
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        (rt / 'billed.json').write_text(
+            json.dumps(self._redteam_payload('B', created='2026-06-29T10:00:00', priced=5, calls=5, estimated=0))
+        )
+        (rt / 'estimated.json').write_text(
+            json.dumps(self._redteam_payload('E', created='2026-06-29T11:00:00', priced=5, calls=5, estimated=5))
+        )
+
+        data = metrics.landing([rt, sim])
+        assert (data.priced_calls, data.estimated_calls) == (10, 5)
+        assert '(partly estimated)' in view.landing_body(data)
+
+        ov = metrics.redteam_overview([rt, sim])
+        assert (ov.priced_calls, ov.estimated_calls) == (10, 5)
+        assert '(partly estimated)' in view.redteam_overview_body(ov)
 
     def test_no_label_when_every_call_priced(self, tmp_path: Path) -> None:
         rt, sim = self._roots(tmp_path, self._redteam_payload('P', created='2026-06-29T10:00:00', priced=10, calls=10))
