@@ -27,7 +27,7 @@ from evaluatorq.common.jury import append_jury_summary
 from evaluatorq.common.target_call import call_target_with_retry
 from evaluatorq.common.thread_context import build_thread_id, conversation_thread
 from evaluatorq.common.tracing import set_span_attrs, truncate_for_span
-from evaluatorq.contracts import AgentResponse, AgentResponseError, Message
+from evaluatorq.contracts import AgentResponse, Message
 from evaluatorq.redteam.adaptive.attack_generator import generate_attack_prompt, generate_objective
 from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
 from evaluatorq.redteam.adaptive.orchestrator import MultiTurnOrchestrator, _get_active_progress
@@ -403,11 +403,6 @@ def create_dynamic_redteam_job(
                 # Fixed template: fill and send directly (no adversarial LLM needed)
                 t0 = time.time()
                 prompt = generate_attack_prompt(strategy, agent_context)
-                error = None
-                error_type = None
-                error_stage = None
-                error_code = None
-                error_details = None
                 token_usage = None
 
                 @asynccontextmanager
@@ -449,18 +444,7 @@ def create_dynamic_redteam_job(
                 agent_resp = result.response
                 response = agent_resp.text
                 token_usage = agent_resp.usage if result.succeeded else None
-                if not result.succeeded:
-                    # The helper guarantees a non-None error on the failure path;
-                    # fall back defensively so a None can never crash attribute access.
-                    err = result.error or AgentResponseError(
-                        message='target call failed', error_type='target_error', code='target_error'
-                    )
-                    error = f'Target agent failed after {result.attempts} attempt(s): {err.message}'
-                    # error_stage = where (target_call); error_type = what (timeout/network_error/rate_limit/... classified by the helper)
-                    error_type = err.error_type
-                    error_stage = 'target_call'
-                    error_code = err.code or 'target_error'
-                    error_details = result.error_details
+                error_fields = result.error_payload()
                 result_dict = AttackOutput(
                     turns=[
                         Turn(
@@ -478,12 +462,7 @@ def create_dynamic_redteam_job(
                     token_usage_adversarial=None,
                     token_usage_target=token_usage,
                     system_prompt=None,
-                    error=error,
-                    error_type=error_type,
-                    error_stage=error_stage,
-                    error_code=error_code,
-                    error_details=error_details,
-                    error_turn=1 if error is not None else None,
+                    **error_fields,
                     category=category,
                     vulnerability=vulnerability,
                 )

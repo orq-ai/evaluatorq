@@ -29,7 +29,7 @@ from evaluatorq.common.llm_call import execute_chat_completion
 from evaluatorq.common.sanitize import xml_escape
 from evaluatorq.common.target_call import call_target_with_retry, default_map_error
 from evaluatorq.common.tracing import set_span_attrs, truncate_for_span
-from evaluatorq.contracts import AgentResponse, AgentResponseError, AgentTarget, Message, TextOutputItem
+from evaluatorq.contracts import AgentResponse, AgentTarget, Message, TextOutputItem
 from evaluatorq.redteam.adaptive.tool_chaining import (
     ToolChainingPlanner,
     ToolChainingVerifier,
@@ -965,26 +965,20 @@ class MultiTurnOrchestrator:
                         )
 
                     if not result.succeeded:
-                        # The helper guarantees a non-None error on the failure path;
-                        # fall back defensively so a None can never crash attribute access.
-                        err = result.error or AgentResponseError(
-                            message='target call failed', error_type='target_error', code='target_error'
-                        )
-                        error = (
-                            f'Target agent failed after {result.attempts} attempt(s) '
-                            f'on turn {turn + 1}/{max_turns}, code={err.code or "target_error"}, details={err.message}'
-                        )
-                        # error_stage = where (target_call); error_type = what
-                        # (timeout/network_error/rate_limit/... classified by the helper).
-                        error_type = err.error_type
-                        error_stage = 'target_call'
-                        error_code = err.code or 'target_error'
-                        error_details = result.error_details
-                        error_turn = turn + 1
+                        # The adversarial branches above set these same locals, so unpack
+                        # rather than splat. The code is dropped from the message: it is
+                        # already carried in its own field.
+                        fields = result.error_payload(context=f' on turn {turn + 1}/{max_turns}', turn=turn + 1)
+                        error = fields['error']
+                        error_type = fields['error_type']
+                        error_stage = fields['error_stage']
+                        error_code = fields['error_code']
+                        error_details = fields['error_details']
+                        error_turn = fields['error_turn']
                         turns_record.append(Turn(attacker=current_attacker, target=tgt_result))
                         if progress is not None and task_id is not None:
                             await progress.update_attack(task_id, completed=turn + 1)
-                        finish_reason = 'target_timeout' if err.error_type == 'timeout' else 'target_error'
+                        finish_reason = 'target_timeout' if error_type == 'timeout' else 'target_error'
                         set_span_attrs(
                             turn_span,
                             {
