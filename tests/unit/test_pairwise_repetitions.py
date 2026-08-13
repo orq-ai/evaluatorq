@@ -18,6 +18,7 @@ from evaluatorq.pairwise import (
     PairwiseVote,
     RepetitionObservation,
     bt_sigma_aggregation,
+    build_report,
     pairwise_consensus,
     repetition_consistency,
     run_pairwise,
@@ -34,11 +35,17 @@ def _obs(ordering: str, repetition: int, verdict: str | None) -> RepetitionObser
     )
 
 
-def _vote(model: str, value: str | None, observations: list[RepetitionObservation] | None = None) -> PairwiseVote:
+def _vote(
+    model: str,
+    value: str | None,
+    observations: list[RepetitionObservation] | None = None,
+    repetition_failures: int = 0,
+) -> PairwiseVote:
     return PairwiseVote(
         model=model,
         vote=cast("Literal['A', 'B', 'tie'] | None", value),
         observations=observations or [],
+        repetition_failures=repetition_failures,
     )
 
 
@@ -86,6 +93,25 @@ def test_failed_and_abstained_repetitions_are_recorded_as_none() -> None:
     )
     (vote,) = comparison.votes
     assert [o.verdict for o in vote.observations] == ['A', None]
+    assert vote.repetition_failures == 1
+
+
+def test_off_contract_repetition_counts_as_a_failure_not_a_silent_none() -> None:
+    # A decisive aggregate ('A') with one off-contract pass ('banana'): the bad
+    # pass records as None AND is counted, so it lowers reliability rather than
+    # silently passing as a free abstention (RES-1251 review).
+    calls = {'n': 0}
+
+    async def judge(a: object, b: object, model: str) -> Prediction:
+        calls['n'] += 1
+        return Prediction(value=['A', 'banana', 'A'][(calls['n'] - 1) % 3], explanation='ok')
+
+    comparison = asyncio.run(
+        run_pairwise(judge_fn=judge, panel=['weird'], response_a='x', response_b='y', repetitions=3, swap=False)
+    )
+    (vote,) = comparison.votes
+    assert vote.vote == 'A'
+    assert [o.verdict for o in vote.observations] == ['A', None, 'A']
     assert vote.repetition_failures == 1
 
 
@@ -146,6 +172,16 @@ def test_weights_come_from_consistency_and_decide_winners() -> None:
     assert any('repetition consistency' in w for w in block.fit_warnings)
 
 
+def test_judge_stats_surface_repetition_consistency() -> None:
+    # The judges table must show the reliability that decided the winners, not
+    # only the pooled sigma (RES-1251 review). build_report carries consistency
+    # onto each JudgeStats.
+    report = build_report(_run_with_repeats(), aggregation='bt-sigma')
+    by_model = {j.model: j for j in report.per_judge}
+    assert by_model['steady'].consistency == 1.0
+    assert by_model['coin'].consistency == 0.0
+
+
 def test_repetition_count_does_not_multiply_panel_weight() -> None:
     """A judge with 5 repetitions per row must not outvote two judges with 2:
     each judge still casts exactly one weighted vote per datapoint."""
@@ -160,13 +196,27 @@ def test_repetition_count_does_not_multiply_panel_weight() -> None:
     assert set(block.winners) == {'B'}
 
 
-def test_judge_without_repeats_gets_neutral_weight_and_a_warning() -> None:
+def test_judge_without_repeats_gets_fallback_weight_and_an_honest_warning() -> None:
     rows = _run_with_repeats()
     for row in rows:
         row.votes.append(_vote('legacy-judge', 'A'))
     block = bt_sigma_aggregation(rows)
     assert 'legacy-judge' not in block.repetition_consistency
-    assert any('legacy-judge' in w and 'neutrally' in w for w in block.fit_warnings)
+    # The warning names the fallback (median measured consistency), not "neutral".
+    assert any(
+        'legacy-judge' in w and 'median measured consistency' in w and 'neutrally' not in w for w in block.fit_warnings
+    )
+
+
+def test_failed_pass_lowers_consistency_but_a_clean_abstention_does_not() -> None:
+    # Two judges each agree on their two decisive passes, but 'flaky' errored on a
+    # third pass (repetition_failures=1) while 'careful' cleanly abstained on its
+    # third. The failure discounts reliability; the abstention does not.
+    flaky = _vote('flaky', 'A', [_obs('ab', 0, 'A'), _obs('ab', 1, 'A'), _obs('ab', 2, None)], repetition_failures=1)
+    careful = _vote('careful', 'A', [_obs('ab', 0, 'A'), _obs('ab', 1, 'A'), _obs('ab', 2, None)])
+    consistency = repetition_consistency([_comparison([flaky, careful])])
+    assert consistency['careful'] == 1.0
+    assert consistency['flaky'] == 2 / 3  # agreement 1.0 x completion (2 of 3 passes usable)
 
 
 def test_one_sided_warning_on_repetition_path_matches_actual_weighting() -> None:

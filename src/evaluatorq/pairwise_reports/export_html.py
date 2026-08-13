@@ -132,7 +132,7 @@ def _render_judges_html(section: ReportSection) -> str:
     observed = bool(d.get('observed_swap'))
     headers = ['Judge', f'{d["label_a"]} rate', f'{d["label_b"]} rate', 'Tie rate', 'Position bias']
     if d.get('bt_sigma'):
-        headers.append('Sigma')
+        headers.extend(('Sigma', 'Consistency'))
     rows: list[list[str]] = []
     for r in d.get('rows', []):
         row = [
@@ -143,7 +143,7 @@ def _render_judges_html(section: ReportSection) -> str:
             _bias_cell(r, observed_swap=observed),
         ]
         if d.get('bt_sigma'):
-            row.append(_num(r.get('sigma')))
+            row.extend((_num(r.get('sigma')), _num(r.get('consistency'))))
         rows.append(row)
     if not rows:
         return ''

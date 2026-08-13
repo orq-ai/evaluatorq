@@ -79,9 +79,12 @@ class RepetitionObservation(BaseModel):
 
     ``verdict`` is in the ORIGINAL A/B orientation regardless of ordering: a
     'B' returned under the swapped ordering is recorded as 'A' here, so the
-    observations are directly comparable across orderings. ``None`` preserves
-    an abstained or errored pass (the per-vote ``repetition_failures`` count
-    says how many were errors); nothing is silently collapsed (RES-1251).
+    observations are directly comparable across orderings. ``None`` is a pass
+    that produced no usable verdict: a genuine abstention, an error, or an
+    off-contract value. The per-vote ``repetition_failures`` count says how many
+    of those Nones were errors or off-contract (as opposed to clean
+    abstentions); those two lower reliability while an abstention does not
+    (RES-1251). Nothing is silently collapsed.
     """
 
     ordering: Literal['ab', 'ba'] = Field(description="'ab' = original slots, 'ba' = swapped ordering")
@@ -143,6 +146,13 @@ class JudgeStats(BaseModel):
         default=None,
         description='BT-sigma discriminator (smaller = more reliable); set only when the report was built '
         "with aggregation='bt-sigma'",
+    )
+    consistency: float | None = Field(
+        default=None,
+        description='Within-datapoint repetition consistency in [0, 1] (RES-1251): on a repetition run this '
+        'is the reliability the winner weights actually came from, so surface it next to sigma rather '
+        'than leaving the reader to infer reliability from a pooled sigma that did not decide anything. '
+        'None when the run had no usable repeats for this judge.',
     )
 
 
@@ -256,14 +266,23 @@ def repetition_consistency(comparisons: Sequence[PairwiseComparison]) -> dict[st
 
     The unit of analysis is one (judge, comparison, ordering) group: repeated
     passes of the SAME prompt. A group needs >= 2 decisive repetitions;
-    its consistency is the mean pairwise agreement among them. A comparison
-    contributes at most ONE observation per judge (its groups averaged), so
-    repetition count never multiplies a judge's evidence, and different
-    datapoints are never compared to each other - which is exactly why this is
-    interpretable as judge noise where the global two-item fit was not.
+    its consistency is the mean pairwise agreement among them, then discounted
+    by the share of that vote's passes that errored or came back off-contract
+    (``repetition_failures``) so a flaky judge scores below a clean one; a
+    genuine abstention is not counted as a failure and does not penalise. A
+    comparison contributes at most ONE observation per judge (its groups
+    averaged), so repetition count never multiplies a judge's evidence, and
+    different datapoints are never compared to each other - which is exactly why
+    this is interpretable as judge reliability where the global two-item fit was not.
 
     Empty dict when no judge has any qualifying group (e.g. repetitions=1 or a
     legacy run without observations).
+
+    Known trade-off (RES-1251, for sign-off): the per-judge mean over groups is
+    UNWEIGHTED, so at the recommended R=2 - where a group's agreement is only 0.0
+    or 1.0 - a judge with one lucky group counts the same as a judge with many.
+    Shrinkage toward the panel mean by group count would damp that; deferred as a
+    modelling decision rather than changed unilaterally.
     """
     per_judge: dict[str, list[float]] = {}
     for c in comparisons:
@@ -277,8 +296,18 @@ def repetition_consistency(comparisons: Sequence[PairwiseComparison]) -> dict[st
                 if len(vals) >= 2:
                     pairs = [a == b for i, a in enumerate(vals) for b in vals[i + 1 :]]
                     group_scores.append(sum(pairs) / len(pairs))
-            if group_scores:
-                per_judge.setdefault(v.model, []).append(sum(group_scores) / len(group_scores))
+            if not group_scores:
+                continue
+            agreement = sum(group_scores) / len(group_scores)
+            # A judge that errors or returns off-contract on some passes is less
+            # reliable than one that answers cleanly, so discount agreement by the
+            # share of THIS vote's passes that failed (RES-1251 review). Failures
+            # are the None observations counted in ``repetition_failures``; a
+            # genuine abstention is a None that is NOT a failure, so it is not
+            # penalised - declining honestly should not cost reliability.
+            n_obs = len(v.observations)
+            completion = max(0.0, (n_obs - v.repetition_failures) / n_obs) if n_obs else 1.0
+            per_judge.setdefault(v.model, []).append(agreement * completion)
     return {judge: sum(xs) / len(xs) for judge, xs in sorted(per_judge.items())}
 
 
@@ -395,10 +424,16 @@ def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAg
     if rep_consistency:
         weights = {judge: max(c, _MIN_CONSISTENCY_WEIGHT) for judge, c in rep_consistency.items()}
         voted = {v.model for c in comparisons for v in c.votes if v.vote is not None}
-        neutral = statistics.median(weights.values()) if weights else 1.0
+        fallback = statistics.median(weights.values()) if weights else 1.0
         for judge in sorted(voted - set(weights)):
-            weights[judge] = neutral
-            fit_warnings.append(f"judge '{judge}' has no repeated decisive observations; weighted neutrally")
+            weights[judge] = fallback
+            # Not a fixed neutral: it is the median consistency of the MEASURED
+            # judges, so name the number rather than call it neutral (review). A
+            # lone measured judge makes this the same as that judge's weight.
+            fit_warnings.append(
+                f"judge '{judge}' has no repeated decisive observations; weighted at the median measured "
+                f'consistency ({fallback:.2f})'
+            )
         # Mirrors the estimator's per-ordering-group rule: a vote only has
         # repeats if some single ordering holds >= 2 decisive passes. Two
         # decisive passes split across orderings carry no consistency evidence.
@@ -495,6 +530,7 @@ def build_report(comparisons: Sequence[PairwiseComparison], *, aggregation: str 
         bt_block = bt_sigma_aggregation(comparisons)
         for stats in judge_stats:
             stats.sigma = bt_block.judge_sigmas.get(stats.model)
+            stats.consistency = bt_block.repetition_consistency.get(stats.model)
     elif aggregation != 'plurality':
         msg = f"unknown aggregation {aggregation!r}; expected 'plurality' or 'bt-sigma'"
         raise ValueError(msg)
@@ -677,8 +713,17 @@ async def run_pairwise(
                 failures += jv.repetitions_failed
                 for i, raw in enumerate(jv.repetitions):
                     value = raw if not swapped else _unswap(raw)
-                    raw_verdict = str(value) if value is not None and str(value) in _PAIRWISE_VALUES else None
-                    verdict = cast("Literal['A', 'B', 'tie'] | None", raw_verdict)
+                    if value is None:
+                        verdict: Literal['A', 'B', 'tie'] | None = None  # genuine abstention: a valid no-decision pass
+                    elif str(value) in _PAIRWISE_VALUES:
+                        verdict = cast("Literal['A', 'B', 'tie']", str(value))
+                    else:
+                        # Decisive-looking but off-contract (RES-1251 review): a
+                        # malformed pass, not a silently dropped None. Count it
+                        # like an error so it lowers reliability rather than
+                        # passing as a free abstention.
+                        verdict = None
+                        failures += 1
                     out.append(
                         RepetitionObservation(
                             ordering=cast("Literal['ab', 'ba']", ordering), repetition=i, verdict=verdict

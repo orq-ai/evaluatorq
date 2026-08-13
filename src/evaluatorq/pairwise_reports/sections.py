@@ -134,6 +134,10 @@ def _build_judges_section(run: PairwiseRun) -> ReportSection:
             # what the votes have already settled.
             'position_bias': stat.position_bias if measured[stat.model] else None,
             'sigma': stat.sigma,
+            # The reliability the winner weights actually came from on a
+            # repetition run; shown next to sigma so the reader is not left
+            # inferring reliability from a pooled sigma that decided nothing.
+            'consistency': stat.consistency,
             'biased': measured[stat.model] and stat.position_bias >= POSITION_BIAS_WARN,
             # Carried so the renderer can tell the unmeasurable cases apart:
             # the run never swapped, or it swapped but this judge never landed
