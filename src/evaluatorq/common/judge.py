@@ -371,39 +371,46 @@ async def run_judge(
     user_prompt = render_template(prompt_template, replacements)
 
     raw_content = '{}'
+    # Resolved before the span opens so the span carries the operation and the model
+    # id this call actually sends — `responses openai/gpt-5-mini`, not `chat gpt-5-mini`
+    # — the way every other inference path in the codebase labels its own.
+    # `structured_output=False` is a caller saying this model cannot do schema-enforced
+    # output, and the Responses path is schema-only, so that opt-out stays on chat too.
+    responses_model = (
+        await _resolve_responses_model(client, model) if cfg.api == 'responses' and structured_output else None
+    )
+    if cfg.api == 'responses' and structured_output and responses_model is None:
+        logger.debug('Judge [{}] cannot use the Responses endpoint; using chat completions', model)
     try:
-        async with with_llm_span(model=model, attributes=span_attributes or {}) as span:
-            # `structured_output=False` is a caller saying this model cannot do
-            # schema-enforced output, and the Responses path is schema-only — so that
-            # opt-out keeps the judge on chat completions too.
-            if cfg.api == 'responses' and structured_output:
-                # Default for judges: the Responses endpoint is the one the Orq router
-                # prices, so a judge call records cost like a target call does (RES-1295).
-                # Set `api='chat_completions'` on the evaluator config to opt out.
-                responses_model = await _resolve_responses_model(client, model)
-                if responses_model is None:
-                    logger.debug('Judge [{}] cannot use the Responses endpoint; using chat completions', model)
+        async with with_llm_span(
+            model=responses_model or model,
+            operation='responses' if responses_model else 'chat',
+            temperature=temp,
+            max_tokens=cfg.max_tokens,
+            attributes=span_attributes or {},
+        ) as span:
+            # Default for judges: the Responses endpoint is the one the Orq router
+            # prices, so a judge call records cost like a target call does (RES-1295).
+            # Set `api='chat_completions'` on the evaluator config to opt out.
+            if responses_model is not None:
+                try:
+                    payload, usage, raw_content = await _responses_judge(
+                        client=client,
+                        model=responses_model,
+                        cfg=cfg,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        span=span,
+                        temp=temp,
+                        response_model=response_model,
+                    )
+                except BadRequestError as exc:
+                    # The endpoint or one of its params was rejected. Remember the model
+                    # and fall through to the chat path for the rest of the run.
+                    _RESPONSES_REJECTORS.add(model)
+                    logger.warning('Model {} rejected the Responses endpoint ({}); using chat completions', model, exc)
                 else:
-                    try:
-                        payload, usage, raw_content = await _responses_judge(
-                            client=client,
-                            model=responses_model,
-                            cfg=cfg,
-                            system_prompt=system_prompt,
-                            user_prompt=user_prompt,
-                            span=span,
-                            temp=temp,
-                            response_model=response_model,
-                        )
-                    except BadRequestError as exc:
-                        # The endpoint or one of its params was rejected. Remember the
-                        # model and fall through to the chat path for the rest of the run.
-                        _RESPONSES_REJECTORS.add(model)
-                        logger.warning(
-                            'Model {} rejected the Responses endpoint ({}); using chat completions', model, exc
-                        )
-                    else:
-                        return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
+                    return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
             if structured_output and response_model is not None:
                 messages = [
                     {'role': 'system', 'content': system_prompt},
