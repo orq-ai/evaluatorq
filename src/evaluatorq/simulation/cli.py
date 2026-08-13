@@ -12,13 +12,16 @@ capture the exact generated inputs for reproducible re-runs, pass
 ``--datapoints PATH`` (then re-feed that file to ``sim simulate --input``).
 
 Usage:
-    evaluatorq sim generate --agent-description "..." --datapoints dp.jsonl
-    evaluatorq sim simulate --input dp.jsonl --target my-agent
-    evaluatorq sim run --agent-description "..." --openai-model gpt-4o-mini
-    evaluatorq sim run --agent-description "..." --target my-agent --datapoints dp.jsonl
-    evaluatorq sim export --input results.jsonl --output payload.json
-    evaluatorq sim validate-dataset dp.jsonl
-    evaluatorq sim runs
+
+```bash
+evaluatorq sim generate --agent-description "..." --datapoints dp.jsonl
+evaluatorq sim simulate --input dp.jsonl --target my-agent
+evaluatorq sim run --agent-description "..." --openai-model gpt-4o-mini
+evaluatorq sim run --agent-description "..." --target my-agent --datapoints dp.jsonl
+evaluatorq sim export --input results.jsonl --output payload.json
+evaluatorq sim validate-dataset dp.jsonl
+evaluatorq sim runs
+```
 """
 
 from __future__ import annotations

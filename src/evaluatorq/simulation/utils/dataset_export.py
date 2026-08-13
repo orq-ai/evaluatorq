@@ -31,7 +31,7 @@ def to_orq_dataset_rows(datapoints: list[SimulationDatapoint]) -> list[dict[str,
     The orq datasets API rejects nested objects in ``inputs`` (each value must be
     a scalar), so ``persona``/``scenario`` are JSON-*stringified* here and
     ``expected_output`` is an empty string rather than ``null``. The read side
-    (:func:`load_datapoints_from_jsonl`, ``_extract_single_datapoint``) accepts
+    (`load_datapoints_from_jsonl`, ``_extract_single_datapoint``) accepts
     these stringified fields, so the round-trip holds.
     """
     return [

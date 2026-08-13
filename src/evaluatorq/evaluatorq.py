@@ -104,7 +104,7 @@ async def evaluatorq(
     data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None = None,
     jobs: list[Job] | None = None,
     evaluators: list[Evaluator] | None = None,
-    parallelism: int = 1,
+    parallelism: int = 10,
     print_results: bool = True,
     description: str | None = None,
     path: str | None = None,
@@ -121,14 +121,16 @@ async def evaluatorq(
 
     Can be called with either a params dict/object or keyword arguments:
 
-        # Using keyword arguments (recommended):
-        await evaluatorq("name", data=[...], jobs=[...], parallelism=5)
+    ```python
+    # Using keyword arguments (recommended):
+    await evaluatorq("name", data=[...], jobs=[...], parallelism=5)
 
-        # Using a dict:
-        await evaluatorq("name", {"data": [...], "jobs": [...], "parallelism": 5})
+    # Using a dict:
+    await evaluatorq("name", {"data": [...], "jobs": [...], "parallelism": 5})
 
-        # Using EvaluatorParams:
-        await evaluatorq("name", EvaluatorParams(data=[...], jobs=[...]))
+    # Using EvaluatorParams:
+    await evaluatorq("name", EvaluatorParams(data=[...], jobs=[...]))
+    ```
 
     Args:
         name: Name of the evaluation run
@@ -138,7 +140,8 @@ async def evaluatorq(
               inference=False), or a list of DataPoint instances/awaitables.
         jobs: The jobs to run on the data.
         evaluators: The evaluators to use. If not provided, only jobs will run.
-        parallelism: Number of jobs to run in parallel. Defaults to 1 (sequential).
+        parallelism: Number of jobs to run in parallel. Defaults to 10; set to 1 for
+              sequential execution, or lower it if your provider rate-limits.
         print_results: Whether to print results table to console. Defaults to True.
         description: Optional description for the evaluation run.
         path: Optional path (e.g. "MyProject/MyFolder") to place the experiment
@@ -156,6 +159,25 @@ async def evaluatorq(
     Raises:
         ValidationError: If parameters fail validation.
         ValueError: If neither params nor required kwargs are provided.
+
+    Example:
+        ```python
+        from evaluatorq import DataPoint, EvaluationResult, evaluatorq, job
+
+        @job("uppercase")
+        async def uppercase_job(data: DataPoint, row: int):
+            return data.inputs["text"].upper()
+
+        async def matches_expected(params):
+            return EvaluationResult(value=1 if params["output"] == params["data"].expected_output else 0)
+
+        await evaluatorq(
+            "uppercase-eval",
+            data=[DataPoint(inputs={"text": "hi"}, expected_output="HI")],
+            jobs=[uppercase_job],
+            evaluators=[{"name": "matches-expected", "scorer": matches_expected}],
+        )
+        ```
     """
     # Handle params dict/object vs kwargs
     if params is not None:

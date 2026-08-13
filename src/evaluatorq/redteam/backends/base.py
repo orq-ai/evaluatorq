@@ -30,7 +30,7 @@ def validate_agent_target(obj: object) -> None:
 
     The check fires only when the object has ``clone()`` but neither
     ``respond`` nor ``new()`` — i.e. a clone-only object that cannot be
-    used as an :class:`AgentTarget` at all. Objects that implement the full
+    used as an `AgentTarget` at all. Objects that implement the full
     protocol (``respond`` + ``new``) are accepted regardless of whether
     they also define ``clone``.
     """

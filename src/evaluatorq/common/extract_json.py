@@ -1,4 +1,9 @@
-"""JSON extraction utilities for parsing LLM responses."""
+"""JSON extraction utilities for parsing LLM responses.
+
+Canonical fence-tolerant parser for model output — do not write another
+code-fence regex. ``common.structured_output`` hands its ``json_object``
+fallback content here.
+"""
 
 from __future__ import annotations
 

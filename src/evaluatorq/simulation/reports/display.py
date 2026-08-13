@@ -32,10 +32,10 @@ def print_simulation_summary(
     Parameters
     ----------
     results:
-        The list of :class:`~evaluatorq.simulation.types.SimulationResult`
+        The list of `SimulationResult`
         objects produced by a simulation run.
     console:
-        Rich :class:`~rich.console.Console` to write to.  Defaults to a
+        Rich `Console` to write to.  Defaults to a
         stderr console so the summary does not interfere with piped stdout.
     executive_summary:
         Optional LLM-generated narrative from the persisted simulation run.

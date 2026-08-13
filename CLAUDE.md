@@ -254,7 +254,7 @@ or tag by hand on the normal path** — commit messages drive it.
 - On a release-worthy push the workflow: computes the next version, **pushes the tag `vX.Y.Z`**, builds the wheel/sdist (version derived from the tag), **publishes to PyPI via token auth** (the `PYPI_TOKEN` repo secret, passed to `pypa/gh-action-pypi-publish`), then creates a GitHub Release with PR-based auto-notes (`.github/release.yml` controls the categories — merged PRs + contributor attributions).
 - **Never write a breaking commit without explicit approval.** Do not use `feat!:`/`fix!:` or a `BREAKING CHANGE:` footer unless the user has explicitly approved a major release for that change. A single one halts **all** releases (see next bullet) until a human forces a bump — in July 2026 three `!` commits froze PyPI on `v1.10.1` for 24 days and 317 commits, and the client bug that surfaced it was already fixed in an unreleased commit. If a change is genuinely breaking, ask first; otherwise land it as `feat:`/`fix:`/`refactor:` and describe the break in the PR body.
 - **Accidental majors are refused.** A computed `major` bump is skipped unless you re-run via **workflow_dispatch** with `force_level=major`. Use `force_level=minor`/`patch` to override the computed level (e.g. to ship breaking changes as a minor deliberately). The refusal **fails the run** (`::error::` + `exit 1`) so a blocked release is visible; a genuine no-op (e.g. a `docs:`-only push, nothing to release) still exits 0 and stays green. The `!` commits stay in range until someone releases, so the block is permanent, not transient — a red Release run means act, not retry.
-- There is no committed `CHANGELOG.md`; the human-readable changelog is the GitHub Release notes. Release notes are created last and are non-blocking — a notes failure never blocks the PyPI publish.
+- The GitHub Release notes are generated from merged PRs and are created last, non-blocking — a notes failure never blocks the PyPI publish. The committed `CHANGELOG.md` is hand-written and separate from them: a behaviour change to a public default belongs under its `### Notable defaults` section in the same PR, not only in a docstring.
 - PyPI publishing uses the **`PYPI_TOKEN`** repo secret (an API token). To switch to OIDC trusted publishing later, configure a **Trusted Publisher** on PyPI for this repo + `release.yml` (PyPI → project → Publishing) and delete the `with: password:` block in the publish step — `id-token: write` is already granted.
 
 ### Docs
@@ -274,3 +274,13 @@ Read it when adding anything users choose between; **a new dimension means editi
 that file in the same PR**, or coverage checking silently stops seeing it.
 
 Rules live in the skills, not here. Both are under `.claude/skills/`.
+
+**Fence every code sample in a docstring, with a language.** An indented block or an
+RST `Example::` literal reaches Pygments with no lexer and renders as grey text; nothing
+warns, and `mkdocs build --strict` stays green. Keep the body under `Example:` / `Usage:`
+**un-indented** — griffe only opens a Google section when the body is indented, and an
+indented fence inside a `cleandoc`-ed docstring becomes a literal code block instead.
+In `examples/*.py`, a fence inside the module docstring is embedded in the generated
+page's own fence, so it must stay 3 backticks — `write_example_pages` widens the outer
+one to compensate. `docs/hooks.py` fails the build on any unhighlighted block, on
+**every** page; the two exemptions there are prose diagrams, not an escape hatch.

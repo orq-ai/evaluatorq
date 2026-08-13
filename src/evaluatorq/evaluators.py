@@ -31,6 +31,7 @@ def string_contains_evaluator(
         An Evaluator that checks if output contains expected output
 
     Example:
+        ```python
         # Basic usage
         evaluator = string_contains_evaluator()
 
@@ -39,6 +40,7 @@ def string_contains_evaluator(
 
         # With custom name
         my_evaluator = string_contains_evaluator(name="my-contains-check")
+        ```
     """
 
     async def scorer(params: ScorerParameter) -> dict[str, Any]:  # noqa: RUF029  # scorer signature is async by evaluatorq contract
@@ -99,11 +101,13 @@ def exact_match_evaluator(
         An Evaluator that checks if output exactly matches expected output
 
     Example:
+        ```python
         # Basic usage (case-sensitive)
         evaluator = exact_match_evaluator()
 
         # With case-insensitive matching
         loose_evaluator = exact_match_evaluator(case_insensitive=True)
+        ```
     """
 
     async def scorer(params: ScorerParameter) -> dict[str, Any]:  # noqa: RUF029  # scorer signature is async by evaluatorq contract

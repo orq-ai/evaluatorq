@@ -9,7 +9,7 @@ from evaluatorq.redteam.contracts import AgentContext
 async def retrieve_agent_context(orq_client: Any, agent_key: str) -> AgentContext:
     """Retrieve agent context from ORQ API.
 
-    Delegates to :class:`ORQAgentTarget.get_agent_context`.
+    Delegates to `ORQAgentTarget.get_agent_context`.
 
     Args:
         orq_client: ORQ SDK client instance

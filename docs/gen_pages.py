@@ -25,6 +25,20 @@ BLOB = "https://github.com/orq-ai/evaluatorq/blob/main"
 # __all__ appear there and are documented once. Empty-__init__ subpackages
 # (redteam/backends, redteam/frameworks, redteam/runtime) have no __all__
 # and are covered by prose guides (Task 4), not API pages.
+# UPPER_SNAKE module attributes. mkdocstrings renders an attribute's whole value,
+# so exporting a multi-paragraph prompt or a registry dict dumps it verbatim onto
+# the reference page — `evaluatorq.redteam` had three prompt blobs and four
+# registries doing exactly that. Sorted to the bottom of the page rather than
+# dropped: a blob nobody scrolls to is a fair price for `DEFAULT_MODEL` and
+# `OWASP_LLM_TOP_10` having an entry at all, which they did not when this
+# filtered them out.
+CONSTANT = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+# Packages whose ``__all__`` names sub-modules rather than symbols. Without this
+# mkdocstrings renders only the package docstring and the page is a dead end —
+# it does not recurse into sub-modules on its own.
+RECURSE_INTO_SUBMODULES = {"evaluatorq.integrations"}
+
 API_PACKAGES = [
     "evaluatorq",
     "evaluatorq.redteam",
@@ -92,13 +106,40 @@ def _canonical_owner(module_name: str) -> str | None:
     return max(cands, key=len) if cands else None
 
 
+def _rendered_by_submodule_page(name: str, dotted: str) -> bool:
+    """True when a RECURSE_INTO_SUBMODULES page other than *dotted* renders *name*.
+
+    Those pages emit one `::: pkg.sub` block per sub-module, so they document
+    everything the sub-modules export — including classes another package lazily
+    re-exports. `_canonical_owner` cannot see that: a lazy re-export is in
+    neither `vars()` nor `sys.modules`, `_safe_getattr` returns None, the owner
+    reads as "" and the symbol is kept here *as well*. That is how
+    `CrewAITarget` and `PydanticAITarget` came to be documented in full on both
+    `evaluatorq/simulation/` and `evaluatorq/integrations/`.
+
+    Deliberately narrow. Ownership alone is not grounds to drop a name — the
+    owner may not export it, and then it is documented nowhere at all
+    (`ReplayError`, `OrqResponsesTarget`). Only a page we know renders the
+    symbol earns the drop.
+    """
+    for pkg in RECURSE_INTO_SUBMODULES:
+        if pkg == dotted:
+            continue
+        mod = importlib.import_module(pkg)
+        for sub in getattr(mod, "__all__", []):
+            if name in getattr(_safe_getattr(mod, sub, pkg), "__all__", []):
+                return True
+    return False
+
+
 def _safe_getattr(mod: object, name: str, parent_dotted: str) -> object | None:
     """Get a member from a module without triggering recursive __getattr__.
 
-    Some packages (e.g. ``evaluatorq.integrations``) use a lazy-loader
-    ``__getattr__`` that does ``from . import <submod>``. On CPython 3.13 this
-    causes infinite recursion because ``_handle_fromlist`` calls ``__getattr__``
-    again before the attribute is bound. We work around it by:
+    A lazy-loader ``__getattr__`` that does ``from . import <submod>`` recurses
+    forever on CPython 3.13: ``_handle_fromlist`` calls ``__getattr__`` again
+    before the attribute is bound. Every such loader in this repo now uses
+    ``importlib.import_module`` instead, but this stays defensive so a new one
+    written the naive way cannot hang the docs build. We avoid it by:
 
     1. Checking ``mod.__dict__`` directly (no attribute protocol).
     2. Falling back to ``importlib.import_module`` with the full dotted path so
@@ -115,7 +156,22 @@ def _safe_getattr(mod: object, name: str, parent_dotted: str) -> object | None:
         return sys.modules[full]
     try:
         return importlib.import_module(full)
-    except (ImportError, ModuleNotFoundError):
+    except ModuleNotFoundError as exc:
+        if exc.name == full:
+            return None  # `name` is a class or function, not a sub-module. Expected.
+        # A *dependency* is missing, not the member. None reads as "no such member" to
+        # every caller, so `_rendered_by_submodule_page` stops de-duplicating and
+        # `_canonical_owner` stops attributing — both degrade to their pre-fix behaviour.
+        # Docs CI installs --all-extras, so this fires only on a partial local install;
+        # `mkdocs serve` per CLAUDE.md is exactly that.
+        print(
+            f'gen_pages: {full} needs {exc.name!r}, which is not installed — '
+            'its members may be duplicated or mis-attributed on the reference pages',
+            file=sys.stderr,
+        )
+        return None
+    except ImportError as exc:
+        print(f'gen_pages: cannot import {full} ({exc}) — skipping', file=sys.stderr)
         return None
 
 
@@ -128,6 +184,121 @@ _PACKAGE_DESC = {
     "evaluatorq.tracing": "OpenTelemetry tracing helpers.",
     "evaluatorq.integrations": "Third-party agent integrations (LangChain, LangGraph, …).",
 }
+
+
+def _submodule_shadowed(mod: object, dotted: str, name: str) -> str | None:
+    """Return the full path of a symbol that a same-named sub-module hides.
+
+    ``evaluatorq/__init__.py`` does ``from .evaluatorq import evaluatorq``, so at
+    runtime the name binds to the function. griffe resolves statically, where the
+    sub-module ``evaluatorq.evaluatorq`` wins the name instead — and mkdocstrings
+    then emits nothing for it, silently, even when the name is pinned in
+    ``members:``. That left ``evaluatorq()``, ``deployment()`` and ``llm_jury()``
+    with no reference entry at all.
+
+    Only griffe is confused: at runtime the function wins permanently (the import
+    machinery binds the sub-module on the package first, then the ``from`` import
+    rebinds the name over it, and a later ``import_module`` hits ``sys.modules``
+    without re-binding), and basedpyright resolves all three to functions too. So
+    the fix belongs here rather than in a rename of the three modules.
+
+    Detect it by asking where the runtime object is actually defined: a hit means
+    the defining module is named exactly like the symbol. Returns the unambiguous
+    ``pkg.mod.symbol`` path to document it under, or None when there is no clash.
+    """
+    obj = _safe_getattr(mod, name, dotted)
+    defining = getattr(obj, "__module__", "") or ""
+    return f"{defining}.{name}" if defining == f"{dotted}.{name}" else None
+
+
+# Entry points first. `__all__` is alphabetical (ruff RUF022 keeps it that way), so
+# left alone a package page opens on whatever dataclass sorts first — `evaluatorq`
+# led with `AgentResponse`, `redteam` with `AgentCapability`. mkdocstrings treats an
+# explicit `members:` list as manual ordering (rendering.do_order_members), so the
+# order written below is the order rendered. Names not listed keep alphabetical
+# order after the headline block. Unknown names raise — see _ordered().
+#
+# Ranked by real `from evaluatorq[...] import` sites in README/docs/examples, not by
+# how central a symbol looks from inside the package: symbols with zero import sites
+# (`run_pairwise`, `exact_match_evaluator`, `ORQAgentTarget`, `SimulationRunner`) are
+# deliberately absent even though they read as headline material.
+HEADLINE = {
+    "evaluatorq": [
+        "evaluatorq",
+        "job",
+        "DataPoint",
+        "Evaluator",
+        "EvaluationResult",
+        "EvaluationResultCell",
+        "string_contains_evaluator",
+        "DatasetIdInput",
+        "invoke",
+        "deployment",
+        # Only pairwise symbol with import sites; without it a reader who came for
+        # the pairwise workflow lands on the alphabetical wall.
+        "llm_jury_pairwise",
+    ],
+    "evaluatorq.redteam": [
+        "red_team",
+        "RedTeamReport",  # what red_team() returns
+        "OpenAIModelTarget",
+        "AgentTarget",  # the ABC every custom target implements
+        "LLMConfig",
+        "EvaluatorConfig",
+        "LLMCallConfig",
+        "RedTeamResult",
+    ],
+    "evaluatorq.simulation": [
+        "simulate",
+        "generate_and_simulate",
+        "generate",
+        "wrap_simulation_agent",
+        "Persona",
+        "Scenario",
+        "Criterion",
+        "SimulationDatapoint",
+        "SimulationResult",
+        # The ABC stands in for the five framework targets — no single one of
+        # LangGraph/CrewAI/PydanticAI/OpenAIAgents/Vercel is representative.
+        "AgentTarget",
+        "CallableTarget",
+        "OrqResponsesTarget",
+    ],
+    # Mostly redteam/simulation-internal glue; these four are the dataset-authoring
+    # surface a reader would ever call, followed by the two payload shapes.
+    "evaluatorq.openresponses": [
+        "load_openresponses_dataset",
+        "build_openresponses_request",
+        "turns_to_openresponses_input",
+        "redteam_sample_from_openresponses",
+        "Message",
+        "ResponseResource",
+    ],
+    # Enable/inspect/flush first — the `with_*_span` helpers are framework plumbing
+    # called by evaluatorq() itself, not by readers.
+    "evaluatorq.tracing": [
+        "tracing_session",
+        "init_tracing_if_needed",
+        "is_tracing_enabled",
+        "get_tracer",
+        "flush_tracing",
+        "with_evaluation_span",
+    ],
+}
+
+
+def _ordered(dotted: str, names: list[str]) -> list[str]:
+    """Sort names headline-first, constants last, everything else in place.
+
+    Raises on a headline name the package no longer exports, so a rename cannot
+    silently drop a symbol back into the alphabetical pile.
+    """
+    headline = HEADLINE.get(dotted, [])
+    exported = set(getattr(importlib.import_module(dotted), "__all__", []))
+    if missing := [n for n in headline if n not in exported]:
+        raise ValueError(f"HEADLINE[{dotted!r}] names non-exported symbols: {missing}")
+    rank = {n: i for i, n in enumerate(headline)}
+    return sorted(names, key=lambda n: (bool(CONSTANT.match(n)), rank.get(n, len(headline))))
 
 
 def write_api_pages() -> None:
@@ -146,18 +317,47 @@ def write_api_pages() -> None:
                 getattr(_safe_getattr(mod, n, dotted), "__module__", "") or ""
             )
             in (dotted, None)
+            and not _rendered_by_submodule_page(n, dotted)
         ]
+        # Names a same-named sub-module hides from griffe; documented separately
+        # below, since mkdocstrings drops them from the package's `members:`.
+        members = _ordered(dotted, members)
+        shadowed = {n: p for n in members if (p := _submodule_shadowed(mod, dotted, n))}
+        members = [n for n in members if n not in shadowed]
         page_path = Path("reference", *dotted.split(".")).with_suffix(".md")
         with mkdocs_gen_files.open(page_path, "w") as fd:
             fd.write(f"# `{dotted}`\n\n")
-            if 0 < len(members) < len(names):
-                # Only some members are canonical here — pin the member list.
-                fd.write(f"::: {dotted}\n    options:\n      members:\n")
+            for full_path in shadowed.values():
+                # Address the symbol by its defining module so griffe cannot
+                # resolve the name to the sub-module. `show_root_full_path: false`
+                # keeps the heading reading as the bare symbol name. Written before
+                # the package block: these are entry points (`evaluatorq()`,
+                # `deployment()`, `llm_jury()`), and no `members:` ordering can lift
+                # them into it.
+                fd.write(
+                    f"::: {full_path}\n"
+                    "    options:\n"
+                    "      show_root_heading: true\n"
+                    "      show_root_full_path: false\n\n"
+                )
+            # `show_root_toc_entry: false`: the package block renders no heading of
+            # its own (show_root_heading is false globally), but it still puts a
+            # bare "evaluatorq" line in the page ToC pointing at an invisible
+            # anchor — a ToC entry with nothing to show for it.
+            fd.write(f"::: {dotted}\n    options:\n      show_root_toc_entry: false\n")
+            if dotted in RECURSE_INTO_SUBMODULES:
+                # One block per sub-package rather than `show_submodules: true` on
+                # the parent: that recurses two levels, so every target rendered
+                # twice — once as the sub-package's re-export and again under its
+                # `.target` module. Each sub-package's own `__all__` is exactly the
+                # public surface, so this documents each symbol once.
+                for sub in names:
+                    fd.write(f"\n::: {dotted}.{sub}\n    options:\n      show_root_heading: true\n")
+            elif members:
+                # Pin the member list: drops non-canonical names AND fixes the order.
+                fd.write("      members:\n")
                 for n in members:
                     fd.write(f"        - {n}\n")
-            else:
-                # All members canonical here (or filter would empty the page) — document all.
-                fd.write(f"::: {dotted}\n")
         mkdocs_gen_files.set_edit_path(page_path, "gen_pages.py")
         title = dotted.replace("evaluatorq.integrations.", "integrations/").replace("evaluatorq.", "") or "evaluatorq"
         href = page_path.relative_to("reference").as_posix()
@@ -288,9 +488,15 @@ def write_example_pages() -> None:
                     "    Contains placeholder IDs (`<your-...>`). Replace them with real\n"
                     "    values from the Orq platform before running.\n\n"
                 )
-            fd.write("```python\n")
+            # The fence must be longer than any backtick run in the source, or an
+            # example whose own docstring fences a snippet closes this fence early
+            # and dumps the rest of the file as prose. `bt_sigma_ranking.py` has a
+            # ```bash block at line 20; before this, its remaining 180 lines
+            # rendered as running text with the comments promoted to headings.
+            fence = "`" * max([3, *(len(run) + 1 for run in re.findall(r"`+", source))])
+            fd.write(f"{fence}python\n")
             fd.write(source if source.endswith("\n") else source + "\n")
-            fd.write("```\n")
+            fd.write(f"{fence}\n")
         mkdocs_gen_files.set_edit_path(page, f.relative_to(REPO).as_posix())
         node = tree
         for part in rel.parts[:-1]:
@@ -347,6 +553,10 @@ def write_example_pages() -> None:
         fd.writelines(lines)
 
 
-write_api_pages()
-write_example_pages()
-ingest_markdown()
+# mkdocs-gen-files executes this file with runpy.run_path, which names it
+# "<run_path>". Gate on that so `import gen_pages` (tests reaching in for one
+# helper) does not regenerate the whole site as a side effect.
+if __name__ in ("<run_path>", "__main__"):
+    write_api_pages()
+    write_example_pages()
+    ingest_markdown()

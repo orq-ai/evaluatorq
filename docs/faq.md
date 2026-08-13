@@ -10,7 +10,7 @@ A Python library for testing LLM apps and agents, with three modes:
 
 - **Evaluations** — run jobs over your data in parallel and score them with built-in or custom evaluators; gate CI on pass/fail.
 - **Agent simulation** — a user-simulator LLM drives your agent through multi-turn conversations while a judge scores whether it met its goals.
-- **Red teaming** — adaptive adversarial attacks mapped to the OWASP LLM Top 10 and Agentic Security Initiative.
+- **Red teaming** — adaptive adversarial attacks mapped to the OWASP LLM Top 10 and OWASP Agentic Top 10.
 
 The Orq platform is optional — it stores results and routes LLMs when `ORQ_API_KEY` is set, but you can run entirely on OpenAI.
 
@@ -72,7 +72,7 @@ Simulator/attacker/judge LLM calls go to OpenAI or the Orq router. Results uploa
 
 ### How much does a run cost, and how do I keep it cheap?
 
-Cost and wall-clock scale with cases × turns × LLM calls. The levers are how many cases you run (`max_dynamic_datapoints` / `max_static_datapoints` for red teaming, `num_personas` × `num_scenarios` for simulation), `max_turns`, and `parallelism` (default 10 for red teaming, 5 for simulation — lower it if your provider rate-limits). Red teaming's report tracks spend in `report.summary.token_usage_total`.
+Cost and wall-clock scale with cases × turns × LLM calls. The levers are how many cases you run (`max_dynamic_datapoints` / `max_static_datapoints` for red teaming, `num_personas` × `num_scenarios` for simulation), `max_turns`, and `parallelism` (default 10 for `evaluatorq()` and red teaming, 5 for simulation — lower it if your provider rate-limits). Red teaming's report tracks spend in `report.summary.token_usage_total`.
 
 ### Where do results go, and how do I view a past run?
 
@@ -128,7 +128,7 @@ Red teaming generates multi-turn attacks by default (`max_turns=`) precisely so 
 Attacks and LLM-judge evaluators mapped to three frameworks:
 
 - **OWASP LLM Top 10** — prompt injection, system-prompt leakage, and the rest.
-- **OWASP Agentic Security Initiative (ASI)** — agent-specific risks: tool abuse, excessive agency, trust exploitation.
+- **OWASP Agentic Top 10 (ASI)** — agent-specific risks: tool abuse, excessive agency, trust exploitation.
 - **Responsible AI** — fairness/bias, liability (legal, medical), content policy, harmful content.
 
 Pass the ones you care about via `categories=["LLM01", "ASI01", ...]`. The full list of codes is in the [redteam API reference](reference/evaluatorq/redteam.md).

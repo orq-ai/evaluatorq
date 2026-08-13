@@ -63,7 +63,7 @@ Vulnerabilities map to industry security frameworks via `framework_mappings`:
 
 | Framework | Categories | Description |
 |-----------|-----------|-------------|
-| **OWASP ASI** | ASI01–ASI10 | Agentic Security Initiative — agent-layer risks |
+| **OWASP ASI** | ASI01–ASI10 | Agentic Top 10 — agent-layer risks |
 | **OWASP LLM Top 10** | LLM01–LLM09 | LLM-layer risks (prompt injection, data leakage, etc.) |
 
 Some vulnerabilities map to multiple frameworks (e.g. `supply_chain` → ASI04 + LLM03).

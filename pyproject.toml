@@ -90,7 +90,8 @@ src = [ "src" ]
   "UP",
   "FURB",
   "RUF",
-  "TRY"
+  "TRY",
+  "BLE001"
 ]
   ignore = [
   "G001",
@@ -134,6 +135,54 @@ src = [ "src" ]
   "S311",
   "RUF027"
 ]
+
+    # BLE001 debt register: blind `except Exception` swallowing real errors is a
+    # documented silent-failure source (PR #96 — a TypeError made every evaluation
+    # return passed=None). The rule is on repo-wide; these files predate it. Shrink
+    # this list, never grow it. Tracked for burn-down in RES-1298.
+    [tool.ruff.lint.per-file-ignores]
+    "src/evaluatorq/common/apply.py" = ["BLE001"]
+    "src/evaluatorq/common/async_utils.py" = ["BLE001"]
+    "src/evaluatorq/common/judge.py" = ["BLE001"]
+    "src/evaluatorq/common/output_adapters.py" = ["BLE001"]
+    "src/evaluatorq/common/reports/executive_summary.py" = ["BLE001"]
+    "src/evaluatorq/common/reports/vega.py" = ["BLE001"]
+    "src/evaluatorq/common/target_call.py" = ["BLE001"]
+    "src/evaluatorq/common/tracing.py" = ["BLE001"]
+    "src/evaluatorq/dashboard/app.py" = ["BLE001"]
+    "src/evaluatorq/dashboard/apply_ui.py" = ["BLE001"]
+    "src/evaluatorq/dashboard/library.py" = ["BLE001"]
+    "src/evaluatorq/dashboard/redteam_views.py" = ["BLE001"]
+    "src/evaluatorq/dashboard/report_tabs.py" = ["BLE001"]
+    "src/evaluatorq/dashboard/sim_compare.py" = ["BLE001"]
+    "src/evaluatorq/dashboard/sim_views.py" = ["BLE001"]
+    "src/evaluatorq/fetch_data.py" = ["BLE001"]
+    "src/evaluatorq/integrations/callable_integration/target.py" = ["BLE001"]
+    "src/evaluatorq/integrations/langgraph_integration/target.py" = ["BLE001"]
+    "src/evaluatorq/integrations/pydantic_ai_integration/target.py" = ["BLE001"]
+    "src/evaluatorq/openresponses/tracing.py" = ["BLE001"]
+    "src/evaluatorq/processings.py" = ["BLE001"]
+    "src/evaluatorq/redteam/cli.py" = ["BLE001"]
+    "src/evaluatorq/redteam/reports/recommendations.py" = ["BLE001"]
+    "src/evaluatorq/redteam/runner.py" = ["BLE001"]
+    "src/evaluatorq/redteam/runtime/jobs.py" = ["BLE001"]
+    "src/evaluatorq/redteam/ui/dashboard.py" = ["BLE001"]
+    "src/evaluatorq/simulation/cli.py" = ["BLE001"]
+    "src/evaluatorq/simulation/generators/persona_generator.py" = ["BLE001"]
+    "src/evaluatorq/simulation/generators/scenario_generator.py" = ["BLE001"]
+    "src/evaluatorq/simulation/reports/recommendations.py" = ["BLE001"]
+    "src/evaluatorq/simulation/runner/simulation.py" = ["BLE001"]
+    "src/evaluatorq/simulation/traces.py" = ["BLE001"]
+    "src/evaluatorq/simulation/utils/run_store.py" = ["BLE001"]
+    "src/evaluatorq/tracing/setup.py" = ["BLE001"]
+
+    # Keep competing stacks out. Call-site rules (which module may build a client or
+    # call the API) live in tests/test_reuse_guardrails.py — banning the imports here
+    # would also hit the ~36 modules that import AsyncOpenAI purely for typing.
+    [tool.ruff.lint.flake8-tidy-imports.banned-api]
+    "tenacity".msg = "Use evaluatorq.common.retry.with_retry, or the SDK's own max_retries — one retry layer, not two."
+    "backoff".msg = "Use evaluatorq.common.retry.with_retry."
+    "requests".msg = "Use httpx (already a runtime dependency); async paths need it anyway."
 
 [tool.basedpyright]
 exclude = [ "examples", "scripts", ".venv", "src/evaluatorq/redteam/ui", "src/evaluatorq/simulation/ui" ]
