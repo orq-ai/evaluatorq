@@ -441,6 +441,13 @@ def run(
             help='Generate an LLM narrative executive summary at the top of the report (needs LLM creds).',
         ),
     ] = True,
+    recommendations: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option(
+            '--recommendations/--no-recommendations',
+            help='Generate LLM remediation recommendations for the top focus areas (needs LLM creds).',
+        ),
+    ] = True,
     system_prompt: Annotated[
         str | None,
         typer.Option('--system-prompt', help='System prompt for the target model/agent.'),
@@ -549,6 +556,7 @@ def run(
                 save=save,
                 target_config=target_config,
                 generate_executive_summary=executive_summary,
+                generate_recommendations=recommendations,
                 attacker_instructions=attacker_instructions,
                 verbosity=verbose + 1,
             )

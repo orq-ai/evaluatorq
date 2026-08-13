@@ -455,6 +455,12 @@ class SimulationRecommendation(BaseModel):
     factual_accuracy averaged 0.30 across 4 turns``."""
     suggestions: list[str]
 
+    @property
+    def recommendations(self) -> list[str]:
+        """Harmonized accessor: the shared apply engine (common.apply) reads
+        actionable bullets as ``recommendations`` on every surface."""
+        return self.suggestions
+
 
 # ---------------------------------------------------------------------------
 # SimulationRun  (run-store record)
@@ -510,6 +516,10 @@ class SimulationRun(BaseModel):
     recommendations: list[SimulationRecommendation] | None = None
     """LLM-generated remediation suggestions for remediable failures
     (see ``reports.recommendations``). None when never generated."""
+    applied_suggestions: list[str] = Field(default_factory=list)
+    """Suggestion strings already applied to the agent via ``reports.apply``.
+    Written back onto the run so the dashboard renders them differently and a
+    later apply skips them instead of re-applying the same fix."""
 
     def manifest_summary(self) -> RunSummary:
         """Compact run-list summary stored on this run's ``RunManifest``.
