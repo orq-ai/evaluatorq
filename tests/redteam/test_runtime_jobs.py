@@ -4,11 +4,14 @@
 
 from __future__ import annotations
 
+import sys
+from types import ModuleType
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from evaluatorq.common import model_catalogue
 from evaluatorq.redteam.contracts import Message, TokenUsage
 
 # ===========================================================================
@@ -281,3 +284,51 @@ class TestCreateModelJob:
 
         with pytest.raises(ValueError, match="Provide one of: 'model' or 'deployment_key'"):
             create_model_job()
+
+    @pytest.mark.asyncio
+    async def test_deployment_job_prices_usage_from_catalogue(self, monkeypatch: pytest.MonkeyPatch):
+        """RES-1295: deployments.invoke_async usage comes back priced, keyed on
+        the model the deployment actually ran, with no AsyncOpenAI client
+        available to resolve the catalogue against (falls back to ORQ_BASE_URL)."""
+        from evaluatorq import DataPoint
+        from evaluatorq.redteam.runtime.jobs import create_model_job
+
+        model_catalogue.reset_catalogue_cache()
+
+        async def fake_load(client=None):  # noqa: ANN001, ARG001
+            assert client is None
+            return {'gpt-4o-mini': model_catalogue.ModelInfo(0.00025, 0.002, 'openai', supports_responses=True)}
+
+        monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
+
+        completion = MagicMock()
+        completion.choices = [MagicMock()]
+        completion.choices[0].message.content = 'mock target response'
+        completion.model = 'gpt-4o-mini'
+        completion.usage = MagicMock(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+        deployments = MagicMock()
+        deployments.invoke_async = AsyncMock(return_value=completion)
+        module = ModuleType('orq_ai_sdk')
+        module.Orq = MagicMock(return_value=MagicMock(deployments=deployments))  # pyright: ignore[reportAttributeAccessIssue]
+        monkeypatch.setitem(sys.modules, 'orq_ai_sdk', module)
+        monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+
+        job_fn = create_model_job(deployment_key='test-deployment', run_id='static-run')
+        result = await job_fn(
+            DataPoint(
+                inputs={
+                    'id': 'deployment-1',
+                    'category': 'ASI01',
+                    'messages': [{'role': 'user', 'content': 'hello'}],
+                }
+            ),
+            0,
+        )
+
+        usage = result['output']['token_usage']
+        assert usage is not None
+        assert usage.calls == usage.priced_calls == 1
+        assert usage.total_cost is not None
+        assert usage.total_cost > 0
+
+        model_catalogue.reset_catalogue_cache()

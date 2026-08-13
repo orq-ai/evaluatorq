@@ -27,6 +27,7 @@ from evaluatorq.redteam.adaptive.tool_chaining import (
     _DecompositionSchema,
     format_plan_for_prompt,
 )
+from evaluatorq.common import model_catalogue
 from evaluatorq.common.thread_context import evaluatorq_pipeline, evaluatorq_run_id
 from evaluatorq.redteam.contracts import AgentContext, ToolInfo
 
@@ -143,6 +144,33 @@ class TestToolChainingPlanner:
         assert kwargs['extra_body'] == {
             'retry': {'count': 3, 'on_codes': [429, 500, 502, 503, 504]}
         }
+
+    @pytest.mark.asyncio
+    async def test_decompose_prices_usage_from_catalogue(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """RES-1295: an unpriced planner completion comes back priced, with
+        priced_calls == calls, once a catalogue entry exists for the model."""
+        model_catalogue.reset_catalogue_cache()
+
+        async def fake_load(client=None):  # noqa: ANN001, ARG001
+            return {"gpt-4.1": model_catalogue.ModelInfo(0.00025, 0.002, "openai", supports_responses=True)}
+
+        monkeypatch.setattr(model_catalogue, "_load_catalogue", fake_load)
+
+        parse = AsyncMock(return_value=_parsed_response(_schema()))
+        planner = ToolChainingPlanner(client=_mock_client(parse=parse), model="gpt-4.1")
+        result = await planner.decompose(
+            objective="exfiltrate user data",
+            agent_name="CustomerBot",
+            agent_description="A customer service agent",
+            available_tools=["lookup_tool", "email_tool"],
+        )
+
+        assert result.token_usage is not None
+        assert result.token_usage.calls == result.token_usage.priced_calls == 1
+        assert result.token_usage.total_cost is not None
+        assert result.token_usage.total_cost > 0
+
+        model_catalogue.reset_catalogue_cache()
 
     @pytest.mark.asyncio
     async def test_decompose_raises_when_parsed_none(self) -> None:

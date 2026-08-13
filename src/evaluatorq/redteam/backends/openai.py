@@ -9,6 +9,7 @@ from loguru import logger
 
 from evaluatorq.common.llm_call import apply_pipeline_metadata
 from evaluatorq.common.llm_client import client_routes_through_orq
+from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.thread_context import thread_body_param
 from evaluatorq.common.tracing import record_llm_response
 from evaluatorq.contracts import AgentTarget, Message
@@ -149,7 +150,10 @@ class OpenAIModelTarget(AgentTarget):
                     kwargs['id'] = tc_id
                 tool_call_items.append(ToolCallOutputItem(**kwargs))
 
-            usage = TokenUsage.from_completion(response)
+            # Not routed through execute_chat_completion: this path extracts
+            # tool_calls/response_id/finish_reason the shared executor doesn't
+            # surface, so price this call's usage directly (RES-1295).
+            usage = await price_usage(TokenUsage.from_completion(response), self.model, self.client)
             response_id = getattr(response, 'id', None)
             finish_reason = None
             choices = getattr(response, 'choices', None) or []

@@ -27,6 +27,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from evaluatorq.common.llm_call import apply_pipeline_metadata
+from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.contracts import StrEnum
 from evaluatorq.redteam.contracts import PIPELINE_CONFIG, LLMConfig, TokenUsage
 from evaluatorq.redteam.utils import safe_substitute
@@ -172,11 +173,15 @@ class ToolChainingPlanner:
         # The chain is order-sensitive ("executed in order, achieves T*"). We trust
         # the LLM's emit order rather than the model-supplied step_index, which can
         # be duplicated or gapped (e.g. 0,1,5) and would garble plan numbering.
+        # Not routed through execute_chat_parse: this call has no span, no
+        # reasoning-effort drop-retry, and no trace-header injection — adopting
+        # the shared executor would add all three. Price directly instead (RES-1295).
+        token_usage = await price_usage(TokenUsage.from_completion(response), self._model, self._client)
         result = DecompositionResult(
             objective=parsed.objective,
             steps=parsed.steps,
             reasoning=parsed.reasoning,
-            token_usage=TokenUsage.from_completion(response),
+            token_usage=token_usage,
         )
         logger.info(f'✓ Tool-chaining planner produced {len(result.steps)} steps for: {objective[:60]}...')
         return result
