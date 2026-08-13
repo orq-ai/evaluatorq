@@ -43,6 +43,7 @@ def to_open_responses(
     """Convert a SimulationResult to OpenResponses format.
 
     Mapping:
+
     - messages with role "user"      -> input[] as Message with input_text content
     - messages with role "assistant"  -> output[] as Message with output_text content
     - messages with role "system"     -> input[] as Message with input_text content

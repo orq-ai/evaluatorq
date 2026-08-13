@@ -72,7 +72,7 @@ Simulator/attacker/judge LLM calls go to OpenAI or the Orq router. Results uploa
 
 ### How much does a run cost, and how do I keep it cheap?
 
-Cost and wall-clock scale with cases × turns × LLM calls. The levers are how many cases you run (`max_dynamic_datapoints` / `max_static_datapoints` for red teaming, `num_personas` × `num_scenarios` for simulation), `max_turns`, and `parallelism` (default 10 for red teaming, 5 for simulation — lower it if your provider rate-limits). Red teaming's report tracks spend in `report.summary.token_usage_total`.
+Cost and wall-clock scale with cases × turns × LLM calls. The levers are how many cases you run (`max_dynamic_datapoints` / `max_static_datapoints` for red teaming, `num_personas` × `num_scenarios` for simulation), `max_turns`, and `parallelism` (default 10 for `evaluatorq()` and red teaming, 5 for simulation — lower it if your provider rate-limits). Red teaming's report tracks spend in `report.summary.token_usage_total`.
 
 ### Where do results go, and how do I view a past run?
 

@@ -26,16 +26,19 @@ from evaluatorq.openresponses.input_items import message_to_responses_input_item
 class OpenAIAgentTarget(AgentTarget):
     """Wraps an OpenAI Agents SDK Agent as an AgentTarget.
 
-    Usage::
+    Usage:
 
-        from agents import Agent
-        from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget
+    ```python
+    from agents import Agent
+    from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget
 
-        agent = Agent(name="my-agent", instructions="You are a helpful assistant.")
-        target = OpenAIAgentTarget(agent)
+    agent = Agent(name="my-agent", instructions="You are a helpful assistant.")
+    target = OpenAIAgentTarget(agent)
 
-        # Pass to simulation or red teaming
-        config = DynamicRunConfig(targets=[target])
+    # Pass to simulation or red teaming
+    results = await simulate(target=target, ...)
+    report = await red_team(target)
+    ```
     """
 
     def __init__(self, agent: Agent, *, run_kwargs: dict[str, Any] | None = None) -> None:
@@ -194,7 +197,7 @@ class OpenAIAgentTarget(AgentTarget):
     async def get_agent_context(self) -> AgentContext:
         """Return agent context derived from the wrapped Agent instance.
 
-        Maps the SDK ``Agent`` fields onto :class:`AgentContext`:
+        Maps the SDK ``Agent`` fields onto `AgentContext`:
         ``name`` → ``key``/``display_name``, ``instructions`` → ``system_prompt``,
         ``model`` → ``model``, ``tools`` → ``tools`` (via duck-typed introspection).
         There is no server-side memory, so ``memory_stores`` stays empty.
@@ -296,7 +299,7 @@ def _extract_function_call_output(raw: Any) -> str:
 
     The SDK may pass the output as a plain string, a JSON-serializable dict, or
     ``None`` (for tool errors that produced no payload). All branches collapse
-    to ``str`` because :attr:`ToolCallOutputItem.result` is typed ``str | None``
+    to ``str`` because `ToolCallOutputItem.result` is typed ``str | None``
     and the Responses API's ``function_call_output`` expects ``output: str``.
     """
     if raw is None:

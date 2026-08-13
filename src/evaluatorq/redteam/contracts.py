@@ -48,7 +48,7 @@ class AttackTechnique(StrEnum):
 
     This enum tracks *known* techniques for internal validation and reporting.
     External datasets may contain additional values — use
-    :func:`is_known_attack_technique` to check membership without failing.
+    `is_known_attack_technique` to check membership without failing.
     """
 
     # Injection
@@ -88,14 +88,14 @@ class AttackTechnique(StrEnum):
 
 
 def is_known_attack_technique(value: str) -> bool:
-    """Check whether *value* is a known :class:`AttackTechnique` member."""
+    """Check whether *value* is a known `AttackTechnique` member."""
     return value in AttackTechnique.__members__.values()
 
 
 class DeliveryMethod(StrEnum):
     """Known jailbreak and delivery techniques.
 
-    See :class:`AttackTechnique` — the same open-set policy applies.
+    See `AttackTechnique` — the same open-set policy applies.
     """
 
     # Persona/Role-play
@@ -126,7 +126,7 @@ def is_known_delivery_method(value: str) -> bool:
     """Check whether *value* is a known delivery method (enum plus registered).
 
     Delegates to the delivery-method registry so registered custom methods count
-    as known. Lazy import: the registry imports :class:`DeliveryMethod` from this
+    as known. Lazy import: the registry imports `DeliveryMethod` from this
     module, so importing it at module top level would be a cycle.
     """
     from evaluatorq.redteam.delivery_method_registry import is_known_delivery_method as _is_known
@@ -353,12 +353,14 @@ def normalize_category(category: str) -> str:
     """Strip 'OWASP-' prefix from category codes.
 
     Examples:
+        ```pycon
         >>> normalize_category("OWASP-ASI01")
         'ASI01'
         >>> normalize_category("ASI01")
         'ASI01'
         >>> normalize_category("OWASP-LLM01")
         'LLM01'
+        ```
     """
     return category.removeprefix('OWASP-')
 
@@ -662,14 +664,16 @@ class LLMConfig(BaseModel):
     """Unified LLM configuration for the red teaming pipeline.
 
     Configure per-role LLM behaviour via ``attacker`` and ``evaluator``.
-    Pass an instance as ``llm_config=LLMConfig(...)`` to :func:`red_team`.
+    Pass an instance as ``llm_config=LLMConfig(...)`` to `red_team`.
 
-    Example::
+    Example:
 
-        config = LLMConfig(
-            attacker=LLMCallConfig(model="anthropic/claude-3-5-sonnet", temperature=0.9),
-            evaluator=EvaluatorConfig(model="openai/gpt-4o-mini", temperature=0.0),
-        )
+    ```python
+    config = LLMConfig(
+        attacker=LLMCallConfig(model="anthropic/claude-3-5-sonnet", temperature=0.9),
+        evaluator=EvaluatorConfig(model="openai/gpt-4o-mini", temperature=0.0),
+    )
+    ```
     """
 
     model_config = ConfigDict(extra='forbid')
@@ -878,7 +882,7 @@ SendResult = AgentResponse  # deprecated alias; use AgentResponse directly
 
 
 class RunError(BaseModel):
-    """Structured whole-run error for an attack/evaluation result (the rollup; per-response errors use :class:`evaluatorq.contracts.AgentResponseError`)."""
+    """Structured whole-run error for an attack/evaluation result (the rollup; per-response errors use `evaluatorq.contracts.AgentResponseError`)."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -902,7 +906,7 @@ class RunError(BaseModel):
 
 
 # RES-883: the attacker LLM output was unified onto
-# :class:`evaluatorq.contracts.AgentResponse` — the same response shape used by
+# `evaluatorq.contracts.AgentResponse` — the same response shape used by
 # targets and simulation agents. ``generated_prompt`` is now ``AgentResponse.text``
 # and ``truncated`` is derivable from ``finish_reason == 'length'``. The former
 # ``AttackerResponse`` type is removed outright (a ``feat!`` breaking change) rather
@@ -915,7 +919,7 @@ class RunError(BaseModel):
 class Turn(BaseModel):
     """One attacker→target exchange in a multi-turn attack.
 
-    Both sides are :class:`evaluatorq.contracts.AgentResponse` (RES-883). The
+    Both sides are `evaluatorq.contracts.AgentResponse` (RES-883). The
     attacker's prompt is ``attacker.text``; ``attacker.finish_reason == 'length'``
     means the adversarial LLM was truncated.
     """
@@ -927,7 +931,7 @@ class Turn(BaseModel):
 
     @property
     def errored(self) -> bool:
-        """True when the target side carries an :class:`AgentResponseError`.
+        """True when the target side carries an `AgentResponseError`.
 
         Single source of truth for "this turn is an infra failure, not a real
         reply" — used to skip such turns both when replaying the transcript to
@@ -964,7 +968,7 @@ def turns_to_messages(turns: list[Turn], *, skip_errors: bool = False) -> list[M
     ``assistant`` row so consumers can rely on a user/assistant pair per turn.
 
     When ``skip_errors`` is True, turns whose target carries an
-    :class:`evaluatorq.contracts.AgentResponseError` are omitted entirely — used
+    `evaluatorq.contracts.AgentResponseError` are omitted entirely — used
     to build the transcript replayed to the target so failed turns never
     re-enter its view.
     """
@@ -1022,9 +1026,9 @@ def turns_to_messages(turns: list[Turn], *, skip_errors: bool = False) -> list[M
 class OrchestratorResult(BaseModel):
     """Result from multi-turn attack orchestration.
 
-    The canonical record is :attr:`turns` — a list of :class:`Turn` pairing the
-    attacker prompt with the full target :class:`AgentResponse`. Convenience
-    views (:attr:`conversation`, :attr:`final_response`, :attr:`n_turns`) are
+    The canonical record is `turns` — a list of `Turn` pairing the
+    attacker prompt with the full target `AgentResponse`. Convenience
+    views (`conversation`, `final_response`, `n_turns`) are
     derived properties so they cannot drift from the canonical record.
     """
 
@@ -1094,12 +1098,12 @@ class OrchestratorResult(BaseModel):
         OpenResponses intermediate format to chat-completions wire shape:
 
         - Attacker prompt -> ``user`` message.
-        - Consecutive :class:`TextOutputItem` runs -> single ``assistant`` message
+        - Consecutive `TextOutputItem` runs -> single ``assistant`` message
           with joined ``content``.
-        - Each :class:`ToolCallOutputItem` -> ``assistant`` message with one
+        - Each `ToolCallOutputItem` -> ``assistant`` message with one
           ``tool_calls`` entry; if ``result`` is set, also a following ``tool``
           role message with ``tool_call_id`` + ``content``.
-        - :class:`ReasoningOutputItem` is dropped — chat-completions has no
+        - `ReasoningOutputItem` is dropped — chat-completions has no
           standard role for reasoning. Callers needing it should read
           ``turn.target.output`` directly.
         """
@@ -1108,12 +1112,12 @@ class OrchestratorResult(BaseModel):
     def attacker_input_at(self, turn_index: int) -> list[Message]:
         """Reconstruct the chat messages sent to the adversarial LLM at turn ``turn_index``.
 
-        Pure function of :attr:`system_prompt`, :attr:`max_turns`, and prior
-        :attr:`turns`. Useful for replaying or auditing what the attacker LLM
+        Pure function of `system_prompt`, `max_turns`, and prior
+        `turns`. Useful for replaying or auditing what the attacker LLM
         saw at any point in the conversation.
 
         Raises:
-            IndexError: if ``turn_index`` is out of bounds for :attr:`turns`.
+            IndexError: if ``turn_index`` is out of bounds for `turns`.
         """
         if turn_index < 0 or turn_index > len(self.turns):
             raise IndexError(f'turn_index {turn_index} out of range for {len(self.turns)} turns')
@@ -1170,8 +1174,8 @@ class AttackEvaluationResult(BaseModel):
         passed=True  → RESISTANT (attack failed)
         passed=False → VULNERABLE (attack succeeded)
 
-    .. note:: Named ``AttackEvaluationResult`` to avoid collision with the root
-       ``evaluatorq.EvaluationResult`` which is used for generic evaluator scores.
+    Note: named `AttackEvaluationResult` to avoid collision with the root
+    `evaluatorq.EvaluationResult`, which is used for generic evaluator scores.
     """
 
     passed: bool | None = Field(
@@ -1602,7 +1606,7 @@ class ReportSummary(BaseModel):
     def coverage_below_minimum(self) -> bool:
         """True when too few attacks were scored to trust the rates computed from them.
 
-        Distinct from :attr:`no_verdict`: here a verdict *does* exist, but it rests on
+        Distinct from `no_verdict`: here a verdict *does* exist, but it rests on
         a sample small enough to be misleading — the realistic shape of a flaky gateway,
         as opposed to a wholly blocked one.
         """
@@ -1623,7 +1627,20 @@ class FocusAreaRecommendation(BaseModel):
 
 
 class RedTeamReport(BaseModel):
-    """Top-level unified report wrapping all results."""
+    """Top-level unified report wrapping all results.
+
+    Usage:
+
+    ```python
+    report = await red_team("agent:YOUR_AGENT_KEY", mode="dynamic")
+
+    rate = report.summary.resistance_rate
+    print(f"Resistance rate: {rate:.0%}" if rate is not None else "no verdict")
+    for result in report.results:
+        if result.vulnerable:
+            print(f"VULNERABLE [{result.attack.category}]: {result.attack.vulnerability}")
+    ```
+    """
 
     version: str = '2.0.0'
     created_at: datetime

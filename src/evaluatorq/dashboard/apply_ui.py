@@ -1,7 +1,7 @@
 """Apply-recommendations UI for the dashboard (RES-1143).
 
 Serves both surfaces on top of the shared engine in
-:mod:`evaluatorq.common.apply`: red team surfaces the report's
+`evaluatorq.common.apply`: red team surfaces the report's
 ``focus_area_recommendations`` in the Focus areas tab, agent simulation
 surfaces the run's ``recommendations`` in its Recommendations tab. Same bar,
 drawer, and confirm flow; only the routes, the write-back field

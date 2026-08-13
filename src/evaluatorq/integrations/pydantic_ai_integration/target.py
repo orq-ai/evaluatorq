@@ -34,9 +34,9 @@ class PydanticAITarget(AgentTarget):
 
     Pydantic AI threads multi-turn context through its own typed message objects
     (``message_history=``), not a role/content list. So, like ``LangGraphTarget``,
-    this target owns conversation state internally: each :meth:`respond` forwards
+    this target owns conversation state internally: each `respond` forwards
     only the latest user turn and re-feeds the accumulated history. Use
-    :meth:`new` to get an independent instance for parallel jobs.
+    `new` to get an independent instance for parallel jobs.
 
     Quirks handled here:
     - Message format: simulation passes ``list[Message]``; Pydantic AI wants a
@@ -47,14 +47,16 @@ class PydanticAITarget(AgentTarget):
       total; total is derived. ``usage`` is a property on recent versions and a
       method on older ones, so both are tried.
 
-    Usage::
+    Usage:
 
-        from pydantic_ai import Agent
-        from evaluatorq.integrations.pydantic_ai_integration import PydanticAITarget
+    ```python
+    from pydantic_ai import Agent
+    from evaluatorq.integrations.pydantic_ai_integration import PydanticAITarget
 
-        agent = Agent(model, system_prompt="You are a support agent.")
-        target = PydanticAITarget(agent)
-        results = await simulate(target=target, ...)
+    agent = Agent(model, system_prompt="You are a support agent.")
+    target = PydanticAITarget(agent)
+    results = await simulate(target=target, ...)
+    ```
     """
 
     def __init__(
@@ -70,8 +72,8 @@ class PydanticAITarget(AgentTarget):
             agent: A Pydantic AI ``Agent`` instance.
             run_kwargs: Optional extra keyword arguments forwarded to
                 ``agent.run()`` (e.g. ``{"model_settings": {...}}``).
-            agent_context: Optional :class:`AgentContext` override returned
-                verbatim from :meth:`get_agent_context`.
+            agent_context: Optional `AgentContext` override returned
+                verbatim from `get_agent_context`.
         """
         super().__init__(memory_entity_id=uuid4().hex)
         self._agent = agent
@@ -180,8 +182,8 @@ _classify_part = _make_part_classifier()
 def _build_output(result: Any) -> list[OutputMessage]:
     """Convert a run's new messages into ordered AgentResponse output items.
 
-    Pydantic AI message parts map as: ``TextPart`` -> :class:`TextOutputItem`,
-    ``ToolCallPart`` -> :class:`ToolCallOutputItem` (with its matching
+    Pydantic AI message parts map as: ``TextPart`` -> `TextOutputItem`,
+    ``ToolCallPart`` -> `ToolCallOutputItem` (with its matching
     ``ToolReturnPart`` content merged in by ``tool_call_id``). Order is preserved
     so ReAct-style text/tool interleaving round-trips. Defensive: any unexpected
     shape simply yields no items and the caller falls back to ``result.output``.

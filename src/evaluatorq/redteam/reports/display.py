@@ -37,9 +37,10 @@ def _format_category_label(category: str) -> str:
 
 
 def print_report_summary(report: RedTeamReport, *, console: Console | None = None) -> None:
-    """Print a Rich summary of a :class:`RedTeamReport` to the terminal.
+    """Print a Rich summary of a `RedTeamReport` to the terminal.
 
     Displays:
+
     * High-level stats (total attacks, vulnerabilities, resistance rate, …)
     * Per-category breakdown sorted by vulnerability rate (worst first)
     * Top vulnerable techniques (if any)

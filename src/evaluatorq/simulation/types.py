@@ -254,6 +254,28 @@ INPUT_FORMAT_INSTRUCTIONS: dict[InputFormat, str] = {
 
 
 class Persona(BaseModel):
+    """A simulated user profile driving one side of a conversation.
+
+    Usage:
+
+    ```python
+    from evaluatorq.simulation import CommunicationStyle, EmotionalArc, Persona
+
+    persona = Persona(
+        name="Impatient Customer",
+        patience=0.2,
+        assertiveness=0.8,
+        politeness=0.4,
+        technical_level=0.3,
+        communication_style=CommunicationStyle.terse,
+        background="Received the wrong item and wants a refund urgently",
+        emotional_arc=EmotionalArc.escalating,  # optional: tone escalates each turn
+    )
+    ```
+
+    See `Scenario` for the matching goal/criteria half of a simulation datapoint.
+    """
+
     name: str
     patience: float
     assertiveness: float
@@ -271,6 +293,20 @@ class Persona(BaseModel):
 
 
 class Criterion(BaseModel):
+    """A pass/fail check attached to a `Scenario`, scored by the ``criteria_met`` evaluator.
+
+    Usage:
+
+    ```python
+    from evaluatorq.simulation import Criterion
+
+    criteria = [
+        Criterion(description="Agent asks for order details", type="must_happen"),
+        Criterion(description="Agent blames the customer", type="must_not_happen"),
+    ]
+    ```
+    """
+
     description: str
     type: Literal['must_happen', 'must_not_happen']
     evaluator: str | None = None
@@ -282,6 +318,23 @@ class Criterion(BaseModel):
 
 
 class Scenario(BaseModel):
+    """The goal and success criteria a `Persona` pursues in one simulated conversation.
+
+    Usage:
+
+    ```python
+    from evaluatorq.simulation import Criterion, Scenario, StartingEmotion
+
+    scenario = Scenario(
+        name="Wrong Item Refund",
+        goal="Get a full refund for the wrong item received",
+        context="Customer ordered headphones but received a phone case instead",
+        starting_emotion=StartingEmotion.frustrated,
+        criteria=[Criterion(description="Agent asks for order details", type="must_happen")],
+    )
+    ```
+    """
+
     name: str
     goal: str
     context: str | None = None

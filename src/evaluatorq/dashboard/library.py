@@ -104,7 +104,7 @@ def load_surface(path: Path) -> tuple[str | None, dict[str, object]]:
 
 
 def load_surface_strict(path: Path) -> tuple[str | None, dict[str, object]]:
-    """Like :func:`load_surface`, but lets a corrupt/unreadable file raise instead of
+    """Like `load_surface`, but lets a corrupt/unreadable file raise instead of
     masking it as an unknown surface. Callers resolving a *specific requested* report
     (not scanning a directory) use this so a syntactically corrupt file is reported as
     corrupt rather than "not found".
@@ -240,7 +240,7 @@ def fingerprint(roots: list[Path] | None = None) -> tuple[int, int]:
     own on every stage), so ``.manifests/`` is swept too and the newest mtime
     catches that stage advance.
 
-    The report sweep goes through :func:`_iter_report_files`, the same predicate
+    The report sweep goes through `_iter_report_files`, the same predicate
     the aggregate itself reads, so stage artifacts (``01_``/``02_``/``03_``) that
     no aggregate looks at can't invalidate the cache when they are rewritten.
 
@@ -387,7 +387,7 @@ def resolve_manifest(rid: str, roots: list[Path] | None = None) -> RunManifest |
     Matches any manifest with no ``report_path``. That is usually an in-flight
     run (running/error/cancelled), but a *completed* run can also lack a
     ``report_path`` when its report save failed — such a run has no openable
-    report, so it resolves here (not via :func:`resolve`) and the detail route
+    report, so it resolves here (not via `resolve`) and the detail route
     renders its status page (status 'completed', no transcript). Returns the
     ``RunManifest`` so the detail route can render a minimal status page.
     """

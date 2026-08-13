@@ -405,7 +405,7 @@ async def apply_recommendations(
             bullet count is used when omitted.
 
     Returns:
-        An :class:`ApplyRecommendationsResult`. When there are no new bullets,
+        An `ApplyRecommendationsResult`. When there are no new bullets,
         or the LLM yields no usable text, nothing is written and ``applied``
         is False. On a successful write, append ``result.recommendations`` to
         the surface's applied-tracking field so they are not re-applied.

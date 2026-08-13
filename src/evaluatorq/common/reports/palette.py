@@ -9,7 +9,10 @@ Mirrors the palette defined in the research repository
 (orq_shared.utils.orq_brand_colors) so dashboards share a unified look.
 
 Usage:
-    from evaluatorq.common.reports.palette import COLORS, SEVERITY_COLORS, ORQ_SCALE_HEAT
+
+```python
+from evaluatorq.common.reports.palette import COLORS, SEVERITY_COLORS, ORQ_SCALE_HEAT
+```
 """
 
 from __future__ import annotations

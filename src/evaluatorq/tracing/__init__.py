@@ -2,10 +2,12 @@
 OpenTelemetry tracing support for evaluatorq.
 
 Tracing is automatically enabled when:
+
 1. OTEL_EXPORTER_OTLP_ENDPOINT is set (explicit endpoint)
 2. ORQ_API_KEY is set (traces sent to Orq platform automatically)
 
 Tracing can be explicitly disabled by setting:
+
 - ORQ_DISABLE_TRACING=1 or ORQ_DISABLE_TRACING=true
 
 Set ORQ_DEBUG=1 to enable debug logging for tracing setup.

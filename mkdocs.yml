@@ -4,6 +4,13 @@ site_url: https://orq-ai.github.io/evaluatorq/
 repo_url: https://github.com/orq-ai/evaluatorq
 repo_name: orq-ai/evaluatorq
 docs_dir: docs
+
+# `mkdocs serve` watches docs_dir, the config and the hooks — not src/. Every API
+# reference page is generated from docstrings there, so without this a docstring
+# edit shows nothing until you restart the server, and you end up reviewing a
+# stale build.
+watch:
+  - src
 copyright: "© 2026 Orq AI · MIT License"
 
 # Keep skill scratch (plans/specs) and shared snippet includes out of the built nav.
@@ -78,10 +85,34 @@ plugins:
       handlers:
         python:
           options:
+            # Strips `_`-prefixed parameters from rendered signatures — see the
+            # module docstring for why `filters` cannot do this.
+            extensions:
+              - docs/griffe_extensions.py:DropPrivateParameters
             docstring_style: google
             show_source: false
             show_root_heading: false
             members_order: source
+            # Signatures: render below the heading as a formatted code block instead
+            # of inline in the heading, where a 12-param function wrapped into a
+            # seven-line wall of un-highlighted text. Formatting needs black or ruff
+            # importable at build time (ruff is a dev dep, present in CI's uv sync);
+            # without one, signatures degrade to a single long line.
+            separate_signature: true
+            show_signature_annotations: true
+            # NOT signature_crossrefs: it links every annotation to the symbol's page
+            # anchor, and symbols deduped onto another package page (TokenUsage, and
+            # anything else _canonical_owner moves) get an anchor that does not exist
+            # there — htmlproofer fails the build on it.
+            line_length: 88
+            # Coloured func/class/attr chip on each heading and ToC entry — the pages
+            # are long lists of mixed member kinds.
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            # Off so the pinned `members:` list in gen_pages.py is the final order.
+            # Left on, mkdocstrings re-groups attributes → classes → functions inside
+            # it, which buried `red_team()` and `simulate()` below every dataclass.
+            group_by_category: false
             docstring_options:
               warn_unknown_params: false
               warn_missing_types: false
@@ -168,6 +199,13 @@ plugins:
         404:
           - "../#evaluatorq.EvaluationResultCell"
           - "../simulation/#evaluatorq.simulation.AgentTarget"
+          # These two resolve fine in a browser; htmlproofer maps `../` back to a
+          # `reference/evaluatorq/index.md` source that does not exist, because
+          # section-index serves `reference/evaluatorq.md` at that URL. Raised by
+          # `show_submodules` on the integrations page, whose signatures annotate
+          # against both. Anchors verified present in the built HTML.
+          - "../#evaluatorq.DataPoint"
+          - "../openresponses/#evaluatorq.openresponses.ResponseResourceDict"
 
 markdown_extensions:
   - tables

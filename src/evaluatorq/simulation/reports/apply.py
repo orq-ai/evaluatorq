@@ -1,9 +1,9 @@
 """Apply agent-simulation remediation suggestions back onto the agent.
 
-Thin wrapper over the shared engine in :mod:`evaluatorq.common.apply` (the
+Thin wrapper over the shared engine in `evaluatorq.common.apply` (the
 red-team and simulation apply flows were ~90% identical and are consolidated
 there); this module supplies the simulation prompt framing. The result shape
-is the shared :class:`ApplyRecommendationsResult` - the surfaces returning
+is the shared `ApplyRecommendationsResult` - the surfaces returning
 differently-named fields was review feedback - with ``ApplySuggestionsResult``
 kept as an alias.
 
@@ -54,7 +54,7 @@ async def apply_suggestions(
 ) -> ApplyRecommendationsResult:
     """Fold simulation suggestions into an agent's instructions.
 
-    See :func:`evaluatorq.common.apply.apply_recommendations` for the full
+    See `evaluatorq.common.apply.apply_recommendations` for the full
     contract; this wrapper takes the run's ``recommendations`` directly (their
     ``suggestions`` bullets are exposed via the harmonized ``recommendations``
     property) and keeps simulation's explicit ``temperature`` knob.
