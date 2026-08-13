@@ -251,7 +251,7 @@ async def execute_response(
 ) -> tuple[Any, TokenUsage | None]:
     """Execute one Responses API call — ``.parse`` with a ``response_model``, else ``.create``.
 
-    The Responses counterpart of :func:`execute_chat_completion`. Preferred for
+    The Responses counterpart of `execute_chat_completion`. Preferred for
     judges because the Orq router prices this endpoint and not Chat Completions:
     ``usage`` comes back with ``input_cost``/``output_cost``/``total_cost``
     already filled in, so the ``price_usage`` call below is a no-op on the Orq

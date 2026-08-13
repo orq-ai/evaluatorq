@@ -48,7 +48,7 @@ class ModelInfo(NamedTuple):
     """One catalogue entry.
 
     Costs are USD **per 1000 tokens** — the unit ``/v2/models`` publishes, and the
-    reason :func:`price_usage` divides by 1000. The names carry the unit so the
+    reason `price_usage` divides by 1000. The names carry the unit so the
     arithmetic stays self-checking: ``Usage.input_cost`` is absolute USD for a
     call, 1000x away from this field, and the two meet in one expression.
     """
@@ -244,7 +244,7 @@ async def price_usage(usage: Usage | None, model: str, client: AsyncOpenAI | Non
     than one call, or the model is absent from the catalogue. The multi-call
     guard matters: pricing an aggregate at one model's rate would also set
     ``priced_calls == calls``, asserting full pricing for calls this function
-    never saw and defeating :attr:`Usage.cost_is_partial`.
+    never saw and defeating `Usage.cost_is_partial`.
     """
     if usage is None or usage.total_cost is not None or usage.calls > 1:
         return usage

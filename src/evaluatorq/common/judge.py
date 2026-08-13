@@ -310,7 +310,7 @@ async def _responses_judge(
 
     Always schema-enforced (``responses.parse`` → ``text.format`` ``json_schema``):
     the caller's ``response_model`` when it has one, otherwise
-    :class:`EvaluatorResponsePayload`, which is the verdict shape the prompt asks
+    `EvaluatorResponsePayload`, which is the verdict shape the prompt asks
     for anyway. ``json_object`` only constrains the reply to *some* JSON object,
     so a verdict that came back with the wrong keys still had to fail parsing
     downstream; the schema makes the provider produce the right ones.
@@ -424,7 +424,7 @@ async def run_judge(
     (the Responses path here is schema-only), and the model catalogue can qualify
     the bare model id as a ``provider/model`` that reports Responses support.
     Anything else stays on Chat Completions, as does ``cfg.api='chat_completions'``.
-    :attr:`JudgeOutcome.endpoint` records which one actually served the verdict.
+    `JudgeOutcome.endpoint` records which one actually served the verdict.
 
     **On Chat Completions**, with ``response_model`` set and ``structured_output``
     on, the call routes through tier-1 ``.parse``; a ``BadRequestError`` that names
@@ -434,7 +434,7 @@ async def run_judge(
     call this function has always made.
 
     **Retry.** The whole attempt — endpoint choice included — runs under
-    :func:`with_retry` for ``cfg.retry_count + 1`` attempts, so rate limits, 5xx and
+    `with_retry` for ``cfg.retry_count + 1`` attempts, so rate limits, 5xx and
     transport failures back off and try again while everything else raises straight
     through to the error classification. Clients built by evaluatorq for this path
     are given ``max_retries=0`` so the two retry layers cannot multiply.
