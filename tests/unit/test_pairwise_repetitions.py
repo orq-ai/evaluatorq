@@ -169,6 +169,42 @@ def test_judge_without_repeats_gets_neutral_weight_and_a_warning() -> None:
     assert any('legacy-judge' in w and 'neutrally' in w for w in block.fit_warnings)
 
 
+def test_one_sided_warning_on_repetition_path_matches_actual_weighting() -> None:
+    """When repetition consistency drives the weights, the one-sided guard
+    must not claim the judge was 'weighted neutrally': the neutral assignment
+    is replaced by the consistency weights. Only the sigma exclusion holds."""
+    rows = _run_with_repeats()
+    for row in rows:
+        row.votes.append(_vote('always-a', 'A', [_obs('ab', 0, 'A'), _obs('ab', 1, 'A')]))
+    block = bt_sigma_aggregation(rows)
+    warning = next(w for w in block.fit_warnings if 'always-a' in w and 'one-sidedness' in w)
+    assert 'excluded from judge_sigmas' in warning
+    assert 'weight comes from repetition consistency' in warning
+    assert 'weighted neutrally' not in warning
+    assert 'always-a' not in block.judge_sigmas
+    # And the claim is true: the judge carries its own consistency weight.
+    assert block.repetition_consistency['always-a'] == 1.0
+
+
+def test_repeat_datapoint_count_requires_repeats_within_one_ordering() -> None:
+    """ab=['A', None] plus ba=['A', None] has two decisive observations in
+    total but no ordering group with two, so it yields zero consistency
+    evidence and must not be counted as a datapoint with repeats."""
+    rows = _run_with_repeats()  # 12 rows with genuine within-ordering repeats
+    rows.append(
+        _comparison([
+            _vote(
+                'steady',
+                'A',
+                [_obs('ab', 0, 'A'), _obs('ab', 1, None), _obs('ba', 0, 'A'), _obs('ba', 1, None)],
+            )
+        ])
+    )
+    block = bt_sigma_aggregation(rows)
+    warning = next(w for w in block.fit_warnings if 'datapoint(s) with repeats' in w)
+    assert '12 datapoint(s) with repeats' in warning
+
+
 def test_legacy_runs_without_observations_keep_global_fit_behaviour() -> None:
     """Old saved runs (no observations anywhere) must aggregate exactly as
     before: no consistency block, no repetition warnings."""

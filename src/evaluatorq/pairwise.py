@@ -366,10 +366,20 @@ def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAg
         for judge in sorted(one_sided):
             weights[judge] = neutral
             direction = next(iter(vote_counts[judge]))
-            fit_warnings.append(
-                f"judge '{judge}' voted '{direction}' on every decisive comparison; with two items its sigma "
-                'measures one-sidedness, not reliability - weighted neutrally and excluded from judge_sigmas'
-            )
+            if rep_consistency:
+                # The repetition block below replaces every weight, so the
+                # neutral assignment never survives; only the sigma exclusion
+                # is real on this path.
+                fit_warnings.append(
+                    f"judge '{judge}' voted '{direction}' on every decisive comparison; with two items its sigma "
+                    'measures one-sidedness, not reliability - excluded from judge_sigmas; its weight comes '
+                    'from repetition consistency'
+                )
+            else:
+                fit_warnings.append(
+                    f"judge '{judge}' voted '{direction}' on every decisive comparison; with two items its sigma "
+                    'measures one-sidedness, not reliability - weighted neutrally and excluded from judge_sigmas'
+                )
     if fit.sigmas:
         for judge, n in sorted(comparisons_per_judge(records).items()):
             if n < _MIN_VOTES_FOR_SIGMA and judge not in one_sided:
@@ -389,10 +399,16 @@ def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAg
         for judge in sorted(voted - set(weights)):
             weights[judge] = neutral
             fit_warnings.append(f"judge '{judge}' has no repeated decisive observations; weighted neutrally")
+        # Mirrors the estimator's per-ordering-group rule: a vote only has
+        # repeats if some single ordering holds >= 2 decisive passes. Two
+        # decisive passes split across orderings carry no consistency evidence.
         n_dp = sum(
             1
             for c in comparisons
-            if any(len([o for o in v.observations if o.verdict is not None]) >= 2 for v in c.votes)
+            if any(
+                any(n >= 2 for n in Counter(o.ordering for o in v.observations if o.verdict is not None).values())
+                for v in c.votes
+            )
         )
         fit_warnings.append(
             f'reliability weights from within-datapoint repetition consistency '

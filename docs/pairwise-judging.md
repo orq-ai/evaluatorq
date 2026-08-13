@@ -236,7 +236,9 @@ repetition capture load fine and keep the previous global-fit behaviour.
 What consistency estimates - and what it must not be read as: it measures a
 judge's self-agreement under fixed conditions. It is NOT task difficulty, NOT
 overall judge quality (a judge can be consistently wrong), and NOT accuracy
-against any ground truth.
+against any ground truth. Abstained or failed passes are excluded from
+consistency, so a judge that abstains often is not penalized: `['A', None,
+'A']` scores 1.0.
 
 Cost: repetitions multiply judge calls linearly (calls = judges x orderings x
 R), so R=2 doubles spend per comparison; wall-clock barely moves because
