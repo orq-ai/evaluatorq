@@ -139,6 +139,11 @@ def create_model_job(
             # per-host catalogue from, so price_usage falls back to
             # ORQ_BASE_URL; price against the model the deployment actually
             # ran (completion.model), not the deployment_key alias (RES-1295).
+            # Known gap: `Orq(api_key=...)` above never passes `server_url`, so
+            # this deployment call always talks to my.orq.ai regardless of
+            # ORQ_BASE_URL — a staging deployment run prices against the wrong
+            # host's catalogue. Out of scope here; fixing it means changing the
+            # client construction, not this call.
             priced_usage = await price_usage(
                 TokenUsage.from_completion(completion),
                 getattr(completion, 'model', deployment_key),
@@ -193,7 +198,10 @@ def create_model_job(
                         extra_kwargs['extra_body'] = thread_body_param()
                     # ponytail: fixed 300s ceiling (was unbounded); thread a cfg
                     # target timeout through create_model_job if per-run tuning is needed.
-                    response, _ = await execute_chat_completion(
+                    # execute_chat_completion already prices this call's usage
+                    # (RES-1295); keep its returned Usage rather than re-deriving
+                    # an unpriced one from the raw response below.
+                    response, token_usage = await execute_chat_completion(
                         client=client,
                         model=model,
                         messages=messages,
@@ -219,7 +227,7 @@ def create_model_job(
 
         return {
             'response': content,
-            'token_usage': TokenUsage.from_completion(response),
+            'token_usage': token_usage,
             'finish_reason': response.choices[0].finish_reason,
             'thread_id': thread_id,
         }

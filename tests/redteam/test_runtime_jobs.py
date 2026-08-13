@@ -332,3 +332,47 @@ class TestCreateModelJob:
         assert usage.total_cost > 0
 
         model_catalogue.reset_catalogue_cache()
+
+    @pytest.mark.asyncio
+    async def test_router_job_returns_priced_usage(self, monkeypatch: pytest.MonkeyPatch):
+        """RES-1295: router_job must return the priced Usage execute_chat_completion
+        already computed, not re-derive an unpriced one from the raw response —
+        that re-derivation was the exact counted-but-unpriced defect this task closes."""
+        from evaluatorq import DataPoint
+        from evaluatorq.redteam.runtime.jobs import create_model_job
+
+        model_catalogue.reset_catalogue_cache()
+
+        async def fake_load(client=None):  # noqa: ANN001, ARG001
+            return {'gpt-4o-mini': model_catalogue.ModelInfo(0.00025, 0.002, 'openai', supports_responses=True)}
+
+        monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
+
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.content = 'mock target response'
+        response.choices[0].finish_reason = 'stop'
+        response.usage = MagicMock(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+        client = AsyncMock()
+        client.base_url = 'https://api.openai.com/v1'
+        client.chat.completions.create = AsyncMock(return_value=response)
+
+        job_fn = create_model_job(model='gpt-4o-mini', llm_client=client, run_id='static-run')
+        result = await job_fn(
+            DataPoint(
+                inputs={
+                    'id': 'router-1',
+                    'category': 'ASI01',
+                    'messages': [{'role': 'user', 'content': 'hello'}],
+                }
+            ),
+            0,
+        )
+
+        usage = result['output']['token_usage']
+        assert usage is not None
+        assert usage.calls == usage.priced_calls == 1
+        assert usage.total_cost is not None
+        assert usage.total_cost > 0
+
+        model_catalogue.reset_catalogue_cache()
