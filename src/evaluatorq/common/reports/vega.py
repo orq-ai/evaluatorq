@@ -89,6 +89,13 @@ def render_svg(spec: dict[str, Any]) -> str:
         import vl_convert as vlc
 
         return vlc.vegalite_to_svg(json.dumps(_finalize(spec)))
+    except AssertionError:
+        # A failed render must never cost a report its remaining charts, but an
+        # AssertionError here is not a render failure — it is the test suite's
+        # network guard (or a caller's own assert) firing through this frame.
+        # Swallowing it turned a blocked connection into an empty chart and an
+        # unrelated `assert '<svg' in ''` several layers up.
+        raise
     except Exception:
         logger.opt(exception=True).warning('Vega-Lite SVG render failed; chart omitted.')
         return ''
