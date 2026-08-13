@@ -413,6 +413,25 @@ def _clamped_cost(usage: Any, keys: tuple[str, ...]) -> float | None:
     return raw
 
 
+def resolve_cost_source(priced_calls: int, estimated_calls: int) -> Literal['provider', 'catalogue', 'mixed'] | None:
+    """Derive cost provenance from priced/estimated call counts.
+
+    The single implementation of the three-way rule (``estimated <= 0`` ->
+    provider, ``estimated >= priced`` -> catalogue, else mixed), shared by
+    `Usage.cost_source` and `common.reports.md_helpers.cost_coverage` — the latter
+    only has raw ints in hand (a `priced_calls`/`calls` pair, not a `Usage`), so it
+    cannot call the property directly. Returns ``None`` when ``priced_calls <= 0``
+    (nothing priced, so provenance is undefined).
+    """
+    if priced_calls <= 0:
+        return None
+    if estimated_calls <= 0:
+        return 'provider'
+    if estimated_calls >= priced_calls:
+        return 'catalogue'
+    return 'mixed'
+
+
 class Usage(BaseModel):
     """Token usage and cost for an LLM call or aggregation of calls.
 
@@ -567,11 +586,7 @@ class Usage(BaseModel):
         """
         if self.priced_calls <= 0:
             return None
-        if self.estimated_calls <= 0:
-            return 'provider'
-        if self.estimated_calls >= self.priced_calls:
-            return 'catalogue'
-        return 'mixed'
+        return resolve_cost_source(self.priced_calls, self.estimated_calls)
 
     def with_calls(self, calls: int) -> Usage:
         """Stamp the call count, keeping `priced_calls` consistent.
@@ -581,9 +596,10 @@ class Usage(BaseModel):
         ``model_copy(update={'calls': 1})`` would leave ``priced_calls`` at 0, which
         `cost_is_partial` reads as legacy untracked data — use this instead.
 
-        ``estimated_calls`` is left at 0: this path stamps calls whose cost (if any)
-        came from the provider/Responses payload, never from client-side catalogue
-        pricing.
+        ``estimated_calls`` is preserved as-is (``model_copy`` does not touch it):
+        this path never sets it, and every caller arrives here with it still at 0,
+        so "preserved" and "left at 0" coincide in practice — but preserved is the
+        correct behavior were that ever not the case.
         """
         return self.model_copy(update={'calls': calls, 'priced_calls': calls if self.total_cost is not None else 0})
 
@@ -1612,5 +1628,6 @@ __all__ = [
     'ToolInfo',
     'Usage',
     'content_to_text',
+    'resolve_cost_source',
     'tool_result_to_text',
 ]

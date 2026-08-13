@@ -28,9 +28,9 @@ from typing import TYPE_CHECKING, Any
 
 from fasthtml.common import Script
 
-from evaluatorq.common.reports import cost_coverage as _cost_coverage
 from evaluatorq.common.reports import esc
 from evaluatorq.common.reports import fmt_cost as _fmt_cost
+from evaluatorq.contracts import resolve_cost_source
 from evaluatorq.simulation.metrics import TURN_METRICS
 
 if TYPE_CHECKING:
@@ -101,16 +101,32 @@ def _coverage(priced_calls: int, calls: int, unknown_calls: int, estimated_calls
     wording, which stays untouched — the two describe different things (billed
     vs. client-side-estimated, and priced vs. coverage-unknown) and must not be
     collapsed into one clause.
+
+    Built as an explicit parts list rather than string-splicing ``cost_coverage``'s
+    output: when every known call was priced, ``cost_coverage`` has nothing to
+    qualify and returns just the provenance clause (e.g. ``' (estimated)'``) or
+    ``''``. Splicing that string when ``unknown_calls`` is also present used to
+    drop the priced-count entirely — provenance displaced it instead of joining it.
     """
-    known = _cost_coverage(priced_calls, calls, estimated_calls=estimated_calls)
-    if not unknown_calls:
-        return known
-    unknown = f'{unknown_calls:,} call{"" if unknown_calls == 1 else "s"} of unknown coverage'
-    if known:
-        return f'{known[:-1]}, {unknown})'
-    if 0 < priced_calls == calls:
-        return f' ({priced_calls:,} of {calls:,} calls priced, {unknown})'
-    return f' ({unknown})'
+    parts: list[str] = []
+    if priced_calls > 0:
+        if priced_calls < calls:
+            parts.append(f'{priced_calls:,} of {calls:,} calls')
+        elif unknown_calls:
+            # Every known call was priced, but unknown_calls exist alongside it —
+            # state that explicitly so the reader can tell "the priced count" from
+            # "not stated", rather than folding it into an empty clause.
+            parts.append(f'{priced_calls:,} of {calls:,} calls priced')
+        source = resolve_cost_source(priced_calls, estimated_calls)
+        if source == 'catalogue':
+            parts.append('estimated')
+        elif source == 'mixed':
+            parts.append('partly estimated')
+    if unknown_calls:
+        parts.append(f'{unknown_calls:,} call{"" if unknown_calls == 1 else "s"} of unknown coverage')
+    if not parts:
+        return ''
+    return f' ({", ".join(parts)})'
 
 
 def _score_cls(score: float | None) -> str:

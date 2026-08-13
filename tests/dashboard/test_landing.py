@@ -971,6 +971,36 @@ class TestDashboardCostCoverage:
         # the 11 calls behind it have coverage nobody recorded.
         assert '10 calls of unknown coverage' in body
 
+    def test_legacy_unknown_coverage_beside_fully_estimated_report_keeps_priced_count(
+        self, tmp_path: Path
+    ) -> None:
+        """A pre-``priced_calls`` legacy report (unknown coverage) alongside a
+        report whose known calls were entirely catalogue-estimated must show
+        *both* the priced count and the provenance — not let provenance displace
+        the priced-count clause.
+
+        Regression for the case where ``priced_calls == calls`` (nothing for
+        ``cost_coverage`` to qualify on its own) made the "estimated" provenance
+        clause the only content, silently dropping how many calls were priced.
+        """
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        legacy = self._redteam_payload('L', created='2026-06-29T10:00:00', priced=0, calls=10)
+        del legacy['summary']['token_usage_total']['priced_calls']
+        (rt / 'legacy.json').write_text(json.dumps(legacy))
+        (rt / 'new.json').write_text(
+            json.dumps(self._redteam_payload('N', created='2026-06-29T11:00:00', priced=1, calls=1, estimated=1))
+        )
+
+        data = metrics.landing([rt, sim])
+        assert (data.priced_calls, data.cost_calls, data.unknown_calls, data.estimated_calls) == (1, 1, 10, 1)
+        body = view.landing_body(data)
+        assert '1 of 1 calls priced' in body
+        assert 'estimated' in body
+        assert '10 calls of unknown coverage' in body
+
     def test_legacy_only_totals_are_labelled_unknown_not_complete(self, tmp_path: Path) -> None:
         """With no new report beside it, a legacy total still has unknown coverage.
 

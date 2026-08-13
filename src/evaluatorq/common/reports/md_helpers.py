@@ -11,6 +11,7 @@ import html
 import textwrap
 
 from evaluatorq.common.reports.html_helpers import pct as _html_pct
+from evaluatorq.contracts import resolve_cost_source
 
 # Deliberately the same object as the HTML helper, not a parallel implementation:
 # both are re-exported from evaluatorq.common.reports under the name ``pct``, so a
@@ -60,9 +61,10 @@ def cost_coverage(priced_calls: int, calls: int, *, estimated_calls: int = 0) ->
     if priced_calls <= 0:
         return ''
     coverage = f'{priced_calls:,} of {calls:,} calls' if priced_calls < calls else ''
-    if estimated_calls <= 0:
+    source = resolve_cost_source(priced_calls, estimated_calls)
+    if source in (None, 'provider'):
         provenance = ''
-    elif estimated_calls >= priced_calls:
+    elif source == 'catalogue':
         provenance = 'estimated'
     else:
         provenance = 'partly estimated'

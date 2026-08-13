@@ -252,7 +252,10 @@ def _to_evaluation_result(
         # mapping, while under 'all' the panel itself is the record and the
         # payload would be pure redundancy (and a behavior change for callers
         # treating raw_output is None as a signal).
-        result['raw_output'] = {JURY_RAW_OUTPUT_KEY: deliberation.jury.model_dump(mode='json')}
+        result['raw_output'] = {
+            JURY_RAW_OUTPUT_KEY: deliberation.jury.model_dump(mode='json'),
+            'endpoint': deliberation.endpoint,
+        }
     return EvaluationResult.model_validate(result)
 
 
