@@ -1,5 +1,8 @@
 """Shared sanitization utilities for prompt injection prevention.
 
+Canonical for every surface: untrusted text reaching a prompt goes through
+``delimit`` — do not hand-roll boundary markers.
+
 Two complementary functions are provided:
 
 * ``delimit(text, tag="data")`` — wraps user-controlled text in XML-like

@@ -95,136 +95,84 @@ CI does not run integration tests. Real-API coverage runs weekly via
 `.github/workflows/examples-weekly.yml`, which opens an issue on failure rather
 than blocking a PR.
 
-## Package Structure
+## Package Map
 
 ```
 src/evaluatorq/
-├── __init__.py              # Public API: evaluate(), DataPoint, EvaluationResult
-├── cli.py                   # CLI entry point (evaluatorq / eq commands)
-├── evaluatorq.py            # Core evaluation runner
-├── evaluators.py            # Built-in evaluator definitions
-├── types.py                 # Shared types (ScorerParameter, etc.)
-├── contracts.py             # Cross-subpackage shared data models (RunManifest, StageRecord, ManifestStatus, ManifestSurface, etc.)
-├── deployment.py            # ORQ deployment integration
-├── fetch_data.py            # Dataset fetching
-├── pairwise.py              # Pairwise comparison evaluation entry point
-├── pairwise_run.py          # Pairwise run orchestration
-├── pairwise_reports/        # Pairwise HTML report generation
-│   ├── export_html.py       # HTML report renderer
-│   └── sections.py          # Report section builders
-├── common/                  # Cross-surface shared utilities (redteam + simulation)
-│   ├── run_manifest.py      # Run-lifecycle manifest behavior (create/update/finalize RunManifest)
-│   ├── judge.py             # LLM-as-judge helper shared across surfaces
-│   ├── jury.py              # Multi-judge aggregation
-│   ├── llm_call.py          # Shared LLM invocation wrapper
-│   ├── llm_client.py        # LLM client construction
-│   ├── retry.py             # Retry/backoff helpers
-│   ├── tracing.py           # OTel span helpers shared across surfaces
-│   ├── template_engine.py   # Prompt templating
-│   ├── reports/             # Shared report rendering (console, HTML, vega charts)
-│   │   ├── console.py       # Rich console report rendering
-│   │   ├── executive_summary.py # Executive summary section builder
-│   │   ├── render.py        # HTML/MD render orchestration
-│   │   └── vega.py          # Vega-Lite chart spec builders
-│   └── ui/                  # Shared Streamlit dashboard launch helper
-│       └── launch.py        # Streamlit app launch helper
-├── integrations/            # Third-party integrations (LangChain, etc.)
-├── tracing/                 # OpenTelemetry tracing
+├── evaluatorq.py, evaluators.py, pairwise*.py  # Core evaluation + pairwise entry points
+├── contracts.py, types.py   # Cross-subpackage data models (RunManifest, LLMConfig, …)
+├── cli.py                   # CLI entry point (evaluatorq / eq)
+├── common/                  # SHARED MACHINERY — read the table below before writing anything here or near it
+├── redteam/                 # eq redteam: adaptive/ (pipeline), backends/, frameworks/, reports/
+├── simulation/              # eq simulate: runner/, agents/, generators/, reports/
+├── dashboard/               # FastHTML dashboard (eq dashboard)
 ├── openresponses/           # OpenAI Responses API integration
-├── simulation/              # Agent simulation subpackage (eq simulate) — persona/scenario-driven multi-turn agent testing
-│   ├── api.py               # Public simulate() entry point
-│   ├── cli.py                # Typer CLI for simulation
-│   ├── types.py               # Simulation data models
-│   ├── traces.py              # Trace capture/reconstruction
-│   ├── wrap_agent.py          # Agent wrapping/instrumentation helper
-│   ├── runner/                 # Simulation execution loop
-│   │   └── simulation.py       # Persona x scenario run orchestration
-│   ├── agents/                  # Simulated user + judge agents
-│   │   ├── judge.py             # Judging agent
-│   │   └── user_simulator.py    # Simulated user agent
-│   ├── generators/                # LLM-driven persona/scenario/datapoint generation
-│   ├── reports/                    # Report generation (console, HTML, MD, exec summary)
-│   ├── quality/                     # Robustness checks
-│   │   └── message_perturbation.py  # Message perturbation testing
-│   └── ui/                           # Streamlit dashboard for simulation results
-│       └── dashboard.py
-├── dashboard/               # FastHTML web dashboard (eq dashboard — preview, in dev; ui commands still serve the Streamlit dashboards)
-│   ├── app.py               # build_app(roots) — ASGI app factory + all routes
-│   ├── _compat.py           # Starlette 1.3.x / FastHTML 0.12.x compat shim (applied on import)
-│   ├── shell.py             # page() — full HTML page shell with head assets
-│   ├── view.py              # HTML fragment helpers (index, filter form, downloads)
-│   ├── library.py           # File discovery, sniff_kind(), report_id(), scan(), read_json_cached()
-│   ├── surfaces.py          # SurfaceAdapter registry (redteam + sim adapters)
-│   ├── filters.py           # FilterDef registry (redteam 7-dim, sim 4-dim)
-│   ├── filter_request.py    # parse_selections() — query-string filter parser
-│   ├── styles.py            # Shared CSS constants / class-name helpers
-│   ├── theme.py             # Theme tokens / light-dark styling
-│   ├── metrics.py           # Aggregate metric computation for dashboard views
-│   ├── report_kit.py        # Shared report-card component helpers
-│   ├── report_tabs.py       # Report tab navigation
-│   ├── orq_links.py         # Orq UI deep-link builders
-│   ├── orq_workspace.py     # Orq workspace slug resolution
-│   ├── trace_links.py       # Trace deep-link builders
-│   ├── sim_compare.py       # Simulation run comparison view
-│   ├── redteam_views.py     # HTMX fragment routes for 4 interactive redteam views
-│   ├── redteam_charts.py    # Interactive breakdown chart + agent heatmap fragments
-│   ├── redteam_transcripts.py # Conversation viewer + disagreement viewer fragments
-│   ├── sim_views.py         # HTMX fragment routes: sim row list, transcript viewer, filter plumbing
-│   ├── launch.py            # CLI launch helper (uvicorn entry point)
-│   └── static/              # Vendored JS: htmx, vega trio, dashboard.js
-└── redteam/                 # Red teaming subpackage
-    ├── contracts.py         # Red-team-specific data models, enums, Pydantic schemas (shared cross-subpackage models live in top-level contracts.py)
-    ├── vulnerability_registry.py  # Single source of truth for vulnerabilities
-    ├── delivery_method_registry.py # Canonical + custom delivery methods (register/resolve/is_known)
-    ├── runner.py            # Unified red_team() entry point
-    ├── cli.py               # Typer CLI for red teaming
-    ├── hooks.py             # Pipeline lifecycle hooks (DefaultHooks, RichHooks)
-    ├── tracing.py           # OTel span helpers
-    ├── exceptions.py        # Custom exceptions
-    ├── judge.py             # LLM judge invocation for red-team evaluators
-    ├── replay.py            # Replay a prior red-team run from stored artifacts
-    ├── utils.py             # Misc red-team helpers
-    ├── adaptive/            # Dynamic pipeline components
-    │   ├── pipeline.py      # Datapoint generation pipeline
-    │   ├── orchestrator.py  # Attack execution orchestrator
-    │   ├── evaluator.py     # OWASPEvaluator wrapper
-    │   ├── strategy_planner.py    # Strategy selection + LLM generation
-    │   ├── strategy_registry.py   # Strategy lookup by vulnerability/category
-    │   ├── attack_generator.py    # Adversarial prompt generation
-    │   ├── objective_generator.py # Attack objective generation
-    │   ├── capability_classifier.py # LLM-based agent capability classification
-    │   ├── agent_context.py # Agent context retrieval
-    │   └── tool_chaining.py # Multi-tool attack chaining strategy support
-    ├── backends/            # Target backends (ORQ agents, OpenAI models)
-    │   ├── base.py          # AgentTarget protocol
-    │   ├── orq.py           # ORQ agent backend
-    │   ├── openai.py        # Direct OpenAI backend
-    │   ├── openresponses.py # OpenAI Responses API backend
-    │   ├── registry.py      # Backend/client factory
-    │   └── _errors.py       # Backend error normalization
-    ├── frameworks/          # Framework-specific strategies and evaluators
-    │   ├── owasp_asi.py     # OWASP ASI attack strategies
-    │   ├── owasp_llm.py     # OWASP LLM Top 10 attack strategies
-    │   └── owasp/           # OWASP evaluators
-    │       ├── evaluators.py       # Evaluator registry
-    │       ├── agent_evaluators.py # ASI evaluator prompts
-    │       ├── llm_evaluators.py   # LLM Top 10 evaluator prompts
-    │       ├── models.py           # LlmEvaluatorEntity, etc.
-    │       └── evaluatorq_bridge.py # Static dataset loading + scoring
-    ├── reports/             # Report generation
-    │   ├── converters.py    # Result → report conversion
-    │   ├── display.py       # Rich terminal display
-    │   ├── executive_summary.py # Executive summary section builder
-    │   ├── export_html.py   # HTML report export
-    │   ├── export_md.py     # Markdown report export
-    │   ├── guidance.py      # Remediation guidance text
-    │   ├── recommendations.py # Recommendation generation
-    │   └── sections.py      # Report section builders
-    ├── runtime/             # Job execution
-    │   └── jobs.py          # Async job runner
-    └── ui/                  # Streamlit dashboard for red-team results
-        └── dashboard.py
+├── tracing/                 # OTel setup + evaluation/run/job spans
+└── integrations/            # LangChain, LangGraph, CrewAI, pydantic-ai, openai-agents
 ```
+
+Read the directory itself for the file list — it is always current, this file is not.
+
+## Need X? Use Y. Do not reinvent.
+
+`common/` is the shared layer. Every module there exists because two surfaces
+drifted apart and a review consolidated them. Adding a third copy is the failure
+mode this table exists to prevent.
+
+| Doing | Use | Never |
+|---|---|---|
+| Any chat completion | `common.llm_call.execute_chat_completion` / `execute_chat_parse` | `client.chat.completions.create(...)` at a new call site |
+| Structured / schema output | `common.structured_output` (parse + `json_object` fallback) | hand-rolled `response_format` + `json.loads` |
+| Parsing JSON out of model text | `common.extract_json.extract_json_from_response` | bespoke fence-stripping regex |
+| Building call params | `LLMConfig.completion_params(...)` (`contracts.py`) | hand-built `extra_kwargs` dict — it skips the reserved-key guard |
+| Resolving an LLM client | `common.llm_client.resolve_llm_client` | `AsyncOpenAI(...)` anywhere but that module |
+| Retry / backoff | `common.retry.with_retry`, or the SDK's own `max_retries` — **exactly one of the two** | a second retry layer on a client that already retries (they multiply) |
+| Calling the target under test | `common.target_call.call_target_with_retry` | ad-hoc `respond()` + try/except |
+| LLM-as-judge | `common.judge.run_judge`; multi-judge via `common.jury` | new judge prompt + parse loop |
+| OTel spans, token usage, cost | `common.tracing` (`with_llm_span`, `record_token_usage`, `record_llm_response`) | `get_tracer` / `start_as_current_span` outside a `tracing.py` module |
+| Surface-specific span naming | `redteam/tracing.py`, `simulation/tracing.py` — thin wrappers that delegate | new span vocabulary |
+| Prompt templating | `common.template_engine.render_template` | f-string prompt assembly |
+| Untrusted text into a prompt | `common.sanitize.delimit` | raw interpolation |
+| Run lifecycle state | `common.run_manifest` (`start_manifest`, `list_manifests`) | new status dict / sidecar file |
+| Applying recommendations to an agent | `common.apply.apply_recommendations` | surface-local merge logic |
+| Console / HTML / MD report output | `common/reports/` (`console`, `render`, `vega`, `palette`) | new renderer or colour set |
+| CLI output, errors, JSON, width | `common/cli_*.py` | bespoke `typer.echo` formatting |
+| Normalising agent output shapes | `common.output_adapters`, `common.messages` | per-surface `isinstance` ladders |
+| Turning message content or a tool result into text | `contracts.content_to_text` / `tool_result_to_text` | `str()` on a `str \| list[ContentPart]` — it renders a Python repr that a judge then scores |
+| Building an Orq SDK client | `common.orq_client.resolve_orq_client` | `Orq(...)` anywhere but that module |
+
+
+## House rules
+
+Distilled from review findings that recurred. Each cost a review round.
+
+- **One retry layer.** SDK `max_retries` and `with_retry` compose multiplicatively. Pick one per call path, and say which in the docstring.
+- **No optimistic defaults on unknown shapes.** A result whose schema you cannot read must log and count as unknown — never as passed, resisted, or $0. Silence reads as a clean run.
+- **A degraded path announces itself.** Falling back, skipping, or returning a literal gets a `logger.warning` naming the cause. Two branches next to each other must not differ in whether they log.
+- **Never bypass a wrapper to get at its inner call.** If a helper's signature is in your way, change the helper. Going around it drops its validation — that is how `_RESERVED_COMPLETION_KEYS` got skipped.
+- **Caller-supplied values win merges.** `{**defaults, **caller}`, and the docstring states it.
+- **No drive-by reformatting.** Quote-style and signature re-wrapping in an unrelated file hides the behaviour change and collides with parallel sessions.
+- **Test the failure branch you documented.** If the docstring promises degradation to inconclusive, a test exercises it. All-success fakes prove nothing.
+- **A helper with no caller is a bug.** Either call it or delete it; do not recompute its body inline.
+- **Nothing stateful is shared across concurrent work.** `evaluate()` / `simulate()` / `red_team()` run datapoints concurrently: give each task its own target via `new()` (a shared `ORQAgentTarget` races on `_task_id`), and key per-item assignment on the dataset row, never on an arrival-order cursor. An `asyncio` primitive binds to the loop that first blocks on it — don't reuse one across loops.
+- **A new registry copies `vulnerability_registry.py`.** Assert `set(Enum) == set(registry)` at import time and freeze with `MappingProxyType`; a plain mutable dict drifts silently as the enum grows.
+- **Every filtered UI section renders an empty state.** A section that disappears on zero matches is indistinguishable from a bug.
+- **Provider usage/cost shapes are not interchangeable.** Anthropic reports cache reads top-level where Orq/OpenAI nest them. Build the test fixture from the provider SDK's own models so a schema move fails the test instead of confirming the guess.
+
+Guardrails for the mechanical parts live in `tests/test_reuse_guardrails.py`.
+A failure there names the canonical helper — use it, don't extend the allowlist.
+
+## Keeping this file true
+
+This file only works if it absorbs what review teaches. When a review comment,
+CI failure, or bug traces back to a convention that was not written down:
+
+1. Add it **in the same PR** — one table row or one house rule, not a paragraph.
+2. Add the mechanical check too, if one is possible (`tests/test_reuse_guardrails.py`, a ruff rule).
+3. Delete something stale while you are here. Above ~200 lines this file gets skimmed, and skimmed is the same as absent.
+
+Do not add a directory tree, a file inventory, or anything else the filesystem
+already answers.
 
 ## Key Patterns
 
@@ -251,14 +199,9 @@ src/evaluatorq/
 
 ### Dependencies
 
-- Runtime (required): `pydantic`, `httpx`, `rich`, `loguru`, `typer`, `openai`
-- Red team extra: `huggingface-hub`, `streamlit`, `plotly`, `watchdog`, `vl-convert-python` (install as `evaluatorq[redteam]`)
-- Simulation extra: `orq-ai-sdk`, `streamlit`, `plotly`, `watchdog`, `vl-convert-python` (install as `evaluatorq[simulation]`)
-- Dashboard extra: `python-fasthtml`, `uvicorn`, `vl-convert-python` (install as `evaluatorq[dashboard]`)
-- Other extras: `orq` (`orq-ai-sdk`), `otel` (OpenTelemetry SDK/exporter), `langchain`, `langgraph`, `openai-agents`, `pydantic-ai`, `crewai`; `all` installs every extra
-- Dev: `pytest`, `pytest-asyncio`, `basedpyright`, `ruff`
-- Package manager: `uv` (not pip)
-- Build system: `hatchling`
+- `uv` (not pip), `hatchling` build. Runtime deps and extras are listed in `pyproject.toml` — read it there.
+- Only `pydantic`/`httpx`/`rich`/`loguru`/`typer`/`openai` are always installed. Everything else is behind an extra: a module that imports one at module scope must itself only be imported behind that extra (that is why `redteam/ui/`, `dashboard/` and the integrations can import `streamlit`/`fasthtml`/`langchain` at the top). Anywhere else, import inside the function.
+- Adding a new dependency needs a reason a few lines of stdlib cannot cover.
 
 ### Environment Variables
 
