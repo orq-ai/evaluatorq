@@ -41,6 +41,8 @@ async def test_prices_unpriced_usage():
     assert priced.output_cost == pytest.approx(0.001)
     assert priced.total_cost == pytest.approx(0.00125)
     assert priced.priced_calls == 1
+    assert priced.estimated_calls == 1
+    assert priced.cost_source == 'catalogue'
 
 
 @pytest.mark.asyncio
@@ -54,9 +56,22 @@ async def test_strips_provider_prefix():
 @pytest.mark.asyncio
 @pytest.mark.usefixtures('_catalogue')
 async def test_leaves_provider_reported_cost_alone():
-    priced = await pricing.price_usage(_usage(input_cost=1.0, output_cost=2.0, total_cost=3.0), 'gpt-5-mini')
+    provider_usage = Usage(
+        input_tokens=1000,
+        output_tokens=500,
+        total_tokens=1500,
+        calls=1,
+        priced_calls=1,
+        input_cost=1.0,
+        output_cost=2.0,
+        total_cost=3.0,
+    )
+    priced = await pricing.price_usage(provider_usage, 'gpt-5-mini')
     assert priced is not None
+    assert priced is provider_usage
     assert priced.total_cost == pytest.approx(3.0)
+    assert priced.estimated_calls == 0
+    assert priced.cost_source == 'provider'
 
 
 @pytest.mark.asyncio

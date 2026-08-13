@@ -263,6 +263,7 @@ async def price_usage(usage: Usage | None, model: str, client: AsyncOpenAI | Non
             'output_cost': output_cost,
             'total_cost': input_cost + output_cost,
             'priced_calls': usage.calls,
+            'estimated_calls': usage.calls,
         }
     )
 
