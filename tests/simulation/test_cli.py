@@ -2193,7 +2193,7 @@ def test_run_recommendations_flag_attaches_to_saved_run(
     assert saved["recommendations"][0]["suggestions"] == ["Fix x."]
 
 
-def test_run_without_recommendations_flag_skips_generation(
+def test_run_defaults_to_recommendations_on(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -2210,6 +2210,33 @@ def test_run_without_recommendations_flag_skips_generation(
             [
                 "run", "--agent-description", "bot", "--openai-model", "gpt-4o",
                 "--no-save",
+            ],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    await_args = mock_impl.await_args
+    assert await_args is not None
+    assert await_args.kwargs['recommendations'] is True
+
+
+def test_run_no_recommendations_flag_skips_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with (
+        patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
+        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
+    ):
+        mock_target.return_value = MagicMock()
+        mock_impl.return_value = _stub_run([_make_result()], mode="run")
+
+        result = runner.invoke(
+            app,
+            [
+                "run", "--agent-description", "bot", "--openai-model", "gpt-4o",
+                "--no-save", "--no-recommendations",
             ],
             env={"OPENAI_API_KEY": "test-key"},
         )

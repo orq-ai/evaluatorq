@@ -46,6 +46,7 @@ from starlette.responses import Response
 # to serve().  See evaluatorq/dashboard/_compat.py for the full explanation.
 import evaluatorq.dashboard._compat  # noqa: F401 — side-effect import; must precede FastHTML (intentional sort-order deviation)
 from evaluatorq.dashboard import library, metrics, report_tabs
+from evaluatorq.dashboard.apply_ui import register_apply_routes
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
@@ -144,8 +145,13 @@ def _settings_config(roots: list[Path] | None) -> list[tuple[str, str | list[str
 
     scan_roots = roots if roots is not None else default_roots()
     store_paths = [str(p) for p in scan_roots] or ['—']
+    from evaluatorq.dashboard.apply_ui import APPLY_MODEL_ENV, DEFAULT_APPLY_MODEL, apply_model
+
     config: list[tuple[str, str | list[str]]] = [('Run stores', store_paths)]
     config.append(('Default sim model', DEFAULT_MODEL))
+    model = apply_model()
+    source = f'{APPLY_MODEL_ENV}' if model != DEFAULT_APPLY_MODEL else 'default'
+    config.append(('Apply-recommendations model', f'{model} ({source})'))
     for label, var in (('ORQ API key', 'ORQ_API_KEY'), ('OpenAI API key', 'OPENAI_API_KEY')):
         value = os.environ.get(var)
         config.append((label, _mask_key(value) if value else 'not set'))
@@ -580,6 +586,11 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     # Routes: GET /r/{rid}/view/*  — redteam interactive fragment views
     # ------------------------------------------------------------------
     register_redteam_view_routes(app, roots)
+
+    # ------------------------------------------------------------------
+    # Routes: POST /r/{rid}/redteam/apply/*  — apply recommendations (RES-1143)
+    # ------------------------------------------------------------------
+    register_apply_routes(app, roots)
 
     # ------------------------------------------------------------------
     # Routes: GET /r/{rid}/sim/*  — sim interactive fragment views

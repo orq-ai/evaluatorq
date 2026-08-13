@@ -11,6 +11,7 @@ from evaluatorq import DataPoint, Job, job
 from evaluatorq.common.llm_call import apply_pipeline_metadata, execute_chat_completion
 from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.messages import coerce_content_text
+from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.common.thread_context import build_static_thread_id, conversation_thread, thread_body_param
 from evaluatorq.common.tracing import record_llm_response, set_span_attrs, truncate_for_span
 from evaluatorq.redteam.adaptive.orchestrator import _get_active_progress
@@ -73,19 +74,10 @@ def create_model_job(
     if deployment_key:
         safe_key = _sanitize_job_name(deployment_key)
 
-        try:
-            from orq_ai_sdk import Orq
-        except ImportError as e:
-            msg = (
-                'Deployment jobs require the orq-ai-sdk package. '
-                'Install it with: uv add "evaluatorq[orq]" (or: python -m pip install "evaluatorq[orq]")'
-            )
-            raise ImportError(msg) from e
-
         api_key = os.environ.get('ORQ_API_KEY')
         if not api_key:
             raise CredentialError('ORQ_API_KEY environment variable is not set')
-        deployment_client = Orq(api_key=api_key)
+        deployment_client = resolve_orq_client(api_key)
 
         @job(f'redteam:static:{safe_key}')
         async def deployment_job(data: DataPoint, _row: int) -> dict[str, Any]:
