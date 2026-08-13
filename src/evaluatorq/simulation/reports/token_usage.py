@@ -52,6 +52,10 @@ def build_token_usage_rows(data: Mapping[str, Any]) -> list[list[str]]:
     if total_cost is not None and isinstance(total_cost, int | float) and not isinstance(total_cost, bool):
         # A cost summed across calls where only some reported one is a lower
         # bound, not a total — say so rather than let it read as authoritative.
-        coverage = cost_coverage(int(token_value(data, 'priced_calls')), int(token_value(data, 'calls')))
+        coverage = cost_coverage(
+            int(token_value(data, 'priced_calls')),
+            int(token_value(data, 'calls')),
+            estimated_calls=int(token_value(data, 'estimated_calls')),
+        )
         rows.append(['Total Cost', f'{fmt_cost(total_cost)}{coverage}'])
     return rows

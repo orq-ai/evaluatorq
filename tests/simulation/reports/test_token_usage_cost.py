@@ -179,3 +179,30 @@ def test_section_to_rows_labels_partial_coverage_end_to_end():
     assert section.data['calls'] == 2
     assert section.data['priced_calls'] == 1
     assert ['Total Cost', '$0.5000 (1 of 2 calls)'] in build_token_usage_rows(section.data)
+
+
+def test_section_to_rows_labels_estimated_coverage_end_to_end():
+    """A catalogue-estimated cost must render "(estimated)" through the real
+    section -> renderer path, not just when the dict is hand-built."""
+    results = [
+        _make_result(
+            token_usage=TokenUsage(
+                prompt_tokens=10,
+                completion_tokens=5,
+                total_tokens=15,
+                total_cost=0.5,
+                calls=1,
+                priced_calls=1,
+                estimated_calls=1,
+            )
+        ),
+    ]
+    section = _build_token_usage_section(results)
+    assert section.data['estimated_calls'] == 1
+    assert ['Total Cost', '$0.5000 (estimated)'] in build_token_usage_rows(section.data)
+
+
+def test_total_cost_row_unlabelled_estimated_when_provider_priced():
+    """A fully provider-priced, fully-covered cost carries no qualifier at all."""
+    rows = build_token_usage_rows({'total_cost': 0.5, 'calls': 10, 'priced_calls': 10, 'estimated_calls': 0})
+    assert ['Total Cost', '$0.5000'] in rows

@@ -1043,7 +1043,11 @@ def _render_token_usage_html(section: ReportSection) -> str:
                 )
             if total_cost is not None:
                 # Flag a lower-bound total: some calls in this run reported no cost.
-                coverage = _cost_coverage(overall.get('priced_calls', 0), overall.get('calls', 0))
+                coverage = _cost_coverage(
+                    overall.get('priced_calls', 0),
+                    overall.get('calls', 0),
+                    estimated_calls=overall.get('estimated_calls', 0),
+                )
                 cost_cards.append(
                     '<div class="kpi-card">'
                     f'<div class="kpi-value">{_esc(_fmt_cost(total_cost))}</div>'
@@ -1072,7 +1076,9 @@ def _render_token_usage_html(section: ReportSection) -> str:
             ]
             if any_cost:
                 agent_total_cost = r.get('total_cost')
-                agent_coverage = _cost_coverage(r.get('priced_calls', 0), r.get('calls', 0))
+                agent_coverage = _cost_coverage(
+                    r.get('priced_calls', 0), r.get('calls', 0), estimated_calls=r.get('estimated_calls', 0)
+                )
                 row.append(
                     _esc(f'{_fmt_cost(agent_total_cost)}{agent_coverage}') if agent_total_cost is not None else '—'
                 )

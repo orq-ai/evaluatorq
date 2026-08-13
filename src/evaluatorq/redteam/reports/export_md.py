@@ -641,7 +641,11 @@ def _render_token_usage_section(section: ReportSection) -> str:
             metric_rows.append(['Output Cost', _fmt_cost(output_cost)])
         if total_cost is not None:
             # Flag a lower-bound total: some calls in this run reported no cost.
-            coverage = _cost_coverage(overall.get('priced_calls', 0), overall.get('calls', 0))
+            coverage = _cost_coverage(
+                overall.get('priced_calls', 0),
+                overall.get('calls', 0),
+                estimated_calls=overall.get('estimated_calls', 0),
+            )
             metric_rows.append(['Total Cost', f'{_fmt_cost(total_cost)}{coverage}'])
         lines.extend((
             _md_table(['Metric', 'Value'], metric_rows, right_align={1}),
@@ -667,7 +671,9 @@ def _render_token_usage_section(section: ReportSection) -> str:
             ]
             if any_cost:
                 agent_total_cost = a.get('total_cost')
-                agent_coverage = _cost_coverage(a.get('priced_calls', 0), a.get('calls', 0))
+                agent_coverage = _cost_coverage(
+                    a.get('priced_calls', 0), a.get('calls', 0), estimated_calls=a.get('estimated_calls', 0)
+                )
                 row.append(f'{_fmt_cost(agent_total_cost)}{agent_coverage}' if agent_total_cost is not None else '—')
             agent_rows.append(row)
         lines.extend((
