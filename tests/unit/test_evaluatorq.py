@@ -1,12 +1,13 @@
 """Test that evaluatorq runs correctly with various scenarios."""
 
 import asyncio
+import inspect
 import random
 
 import pytest
 
 from evaluatorq import evaluatorq
-from evaluatorq.types import DataPoint, EvaluationResult, ScorerParameter
+from evaluatorq.types import DataPoint, EvaluationResult, EvaluatorParams, ScorerParameter
 
 # Sample text data
 SAMPLE_TEXTS = [
@@ -145,6 +146,50 @@ async def test_evaluatorq_parallelism_limit():
     assert max_concurrent <= parallelism, (
         f"Max concurrent data points ({max_concurrent}) exceeded parallelism ({parallelism})"
     )
+
+
+@pytest.mark.asyncio
+async def test_evaluatorq_defaults_to_concurrent_execution():
+    """Omitting `parallelism` must run datapoints concurrently, not serially.
+
+    Every other parallelism test passes the value explicitly, so reverting the
+    default from 10 back to 1 used to leave the whole suite green while silently
+    serializing every caller who takes the default — which is most of them.
+    Asserted behaviourally rather than against the literal: a datapoint that
+    starts before an earlier one finishes is the property that matters, and it
+    holds for any default above 1.
+    """
+    data_points = generate_test_data(10)
+
+    concurrent_count = 0
+    max_concurrent = 0
+    lock = asyncio.Lock()
+
+    async def tracking_job(data: DataPoint, _row: int):
+        nonlocal concurrent_count, max_concurrent
+        async with lock:
+            concurrent_count += 1
+            max_concurrent = max(max_concurrent, concurrent_count)
+        await asyncio.sleep(0.05)
+        async with lock:
+            concurrent_count -= 1
+        return {"name": "tracking-job", "output": {"ok": True}}
+
+    await evaluatorq(
+        "test-default-parallelism",
+        data=data_points,
+        jobs=[tracking_job],
+        evaluators=[],
+        print_results=False,
+    )
+
+    assert max_concurrent > 1, (
+        f"bare evaluatorq() ran datapoints serially (max concurrent {max_concurrent})"
+    )
+    # The two surfaces must agree — `evaluatorq()`'s signature default and the
+    # `EvaluatorParams` field are separate declarations of the same contract.
+    assert EvaluatorParams.model_fields["parallelism"].default == 10
+    assert inspect.signature(evaluatorq).parameters["parallelism"].default == 10
 
 
 @pytest.mark.asyncio
