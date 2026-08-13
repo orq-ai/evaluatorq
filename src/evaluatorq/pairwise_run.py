@@ -1,6 +1,6 @@
 """Persisted pairwise (preference) judging runs.
 
-:mod:`evaluatorq.pairwise` returns a :class:`~evaluatorq.pairwise.PairwiseComparison`
+`evaluatorq.pairwise` returns a `PairwiseComparison`
 per A-vs-B pair and rolls a set of them up with ``build_report()``, but keeps
 none of it. A comparison also drops the inputs that produced it, so on its own
 it has no identity: nothing to label a table row with and no text to show

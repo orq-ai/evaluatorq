@@ -22,7 +22,7 @@ MaybeAsync: TypeAlias = _T | Awaitable[_T]
 
 Use as a hook/callback return annotation so both sync and async implementations
 type-check, e.g. ``def on_confirm(self, ...) -> MaybeAsync[bool]: ...``. Drive
-it with :func:`await_maybe`.
+it with `await_maybe`.
 """
 
 
@@ -43,7 +43,7 @@ async def await_maybe(value: MaybeAsync[_T]) -> _T:
 
 
 async def fan_out(children: Iterable[Any], method_name: str, *args: Any, **kwargs: Any) -> None:
-    """Call ``method_name`` on every child (via :func:`await_maybe`).
+    """Call ``method_name`` on every child (via `await_maybe`).
 
     Runs ALL children, captures the FIRST exception, then re-raises it after the
     loop — a uniform run-all-then-reraise policy for every void hook method. No
@@ -75,7 +75,7 @@ async def fan_out(children: Iterable[Any], method_name: str, *args: Any, **kwarg
 async def combine_confirm(children: Iterable[Any], *args: Any, **kwargs: Any) -> bool:
     """Fan an ``on_confirm`` gate out to every child and AND the verdicts.
 
-    Same run-all-then-reraise policy as :func:`fan_out`: call ``on_confirm`` on
+    Same run-all-then-reraise policy as `fan_out`: call ``on_confirm`` on
     every child, capture the FIRST exception and re-raise it after the loop
     (logging any later exceptions so they aren't lost, FIX 6). The run proceeds
     only if **every** child approves (``all(...)``); a single child behaves
@@ -123,7 +123,7 @@ def normalize_to_list(value: Any) -> list[Any]:
 def warn_if_sync_hooks(hooks: object, method_names: tuple[str, ...]) -> None:
     """Emit a one-shot ``DeprecationWarning`` if any hook method is synchronous.
 
-    Sync hooks remain supported (driven via :func:`await_maybe`); this is purely
+    Sync hooks remain supported (driven via `await_maybe`); this is purely
     a nudge toward ``async def``. Inspects the bound methods directly with
     ``iscoroutinefunction`` — we check the method, not a return value.
     """

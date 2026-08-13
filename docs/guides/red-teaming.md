@@ -1,10 +1,10 @@
 # Red Teaming
 
 Probe an agent or model with adversarial attacks mapped to the OWASP **LLM Top
-10** and **Agentic Security Initiative (ASI)** frameworks, then read off the
+10** and **Agentic Top 10 (ASI)** frameworks, then read off the
 resistance rate.
 
-*[ASI]: OWASP Agentic Security Initiative
+*[ASI]: OWASP Agentic Top 10
 *[LLM01]: Prompt Injection
 
 ```mermaid
@@ -136,6 +136,43 @@ report = await red_team(target, mode="static", dataset="hf:my-org/my-attacks")
     The parameter defaults to `True`. On the CLI the equivalent is the
     `--no-generate-strategies` flag; there is no positive form, since generation
     is on by default.
+
+## Coverage
+
+19 framework categories map onto 18 vulnerabilities. Every vulnerability has a
+judge written for it. Categories with a **curated strategy count** ship
+hand-written attack strategies; the rest are marked *generated* — in dynamic and
+hybrid mode the strategy planner writes strategies for them per run, against the
+target's actual tools, memory and system prompt. Pass
+`generate_strategies=False` to run curated strategies only.
+
+| Category | Vulnerability | Curated strategies | Judge |
+|---|---|---|---|
+| `ASI01` | Agent Goal Hijacking | 5 | ✅ |
+| `ASI02` | Tool Misuse & Exploitation | 4 | ✅ |
+| `ASI03` | Identity & Privilege Abuse | generated | ✅ |
+| `ASI04` | Supply Chain Vulnerabilities | generated | ✅ |
+| `ASI05` | Unexpected Code Execution | 4 | ✅ |
+| `ASI06` | Memory & Context Poisoning | 4 | ✅ |
+| `ASI07` | Insecure Inter-Agent Communication | generated | ✅ |
+| `ASI08` | Cascading Failures | generated | ✅ |
+| `ASI09` | Human-Agent Trust Exploitation | 5 | ✅ |
+| `ASI10` | Rogue Agents | generated | ✅ |
+| `LLM01` | Prompt Injection | 4 | ✅ |
+| `LLM02` | Sensitive Information Disclosure | 4 | ✅ |
+| `LLM03` | Supply Chain Vulnerabilities | generated | ✅ |
+| `LLM04` | Data and Model Poisoning | generated | ✅ |
+| `LLM05` | Improper Output Handling | 5 | ✅ |
+| `LLM06` | Excessive Agency | generated | ✅ |
+| `LLM07` | System Prompt Leakage | 5 | ✅ |
+| `LLM08` | Vector and Embedding Weaknesses | generated | ✅ |
+| `LLM09` | Misinformation | 5 | ✅ |
+
+45 curated strategies in total, delivered through 16 delivery methods
+(`direct-request`, `tool-response`, `role-play`, `crescendo`, `many-shot`,
+`base64`, `leetspeak`, `multilingual`, `refusal-suppression`, and more). Add
+your own vulnerabilities, strategies and judges — see
+[Custom Evaluators & Frameworks](../custom-evaluators-and-frameworks.md).
 
 ## Reading the report
 

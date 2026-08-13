@@ -1,5 +1,7 @@
 import logging
 import socket
+import threading
+import traceback
 
 import pytest
 
@@ -49,6 +51,14 @@ def _block_outbound_network(request, monkeypatch):
 
     Loopback is allowed so tests may still spin up a local fake server. Mark a
     test ``@pytest.mark.allow_network`` to opt out.
+
+    The patch is process-wide for the duration of one test, so a connection from
+    a thread an EARLIER test left running is attributed to whichever test happens
+    to be executing — the report then names an innocent test (a pure-string SVG
+    helper, in the case that prompted this) and reproduces on neither a rerun of
+    that test nor of the file. Each leak therefore records its thread and the
+    stack that reached the socket, and the failure prints them: the culprit is
+    identifiable from one CI log instead of a bisect.
     """
     if request.node.get_closest_marker("allow_network") or request.node.get_closest_marker("integration"):
         yield
@@ -64,7 +74,9 @@ def _block_outbound_network(request, monkeypatch):
         # broad ``except Exception``, which swallows this and lets the test pass
         # green while the connection attempt really happened. The teardown
         # assertion below is what actually surfaces it.
-        leaked.append(str(address))
+        thread = threading.current_thread()
+        origin = "".join(traceback.format_stack()[:-1][-6:])
+        leaked.append(f"{address!r} from thread {thread.name!r}\n{origin}")
         raise LeakedNetworkCall(
             f"Test opened a network connection to {address!r}. Unit tests must not "
             f"call real services — mock the client. Use @pytest.mark.allow_network "
@@ -76,8 +88,10 @@ def _block_outbound_network(request, monkeypatch):
     yield
     if leaked:
         raise LeakedNetworkCall(
-            f"Test attempted {len(leaked)} outbound connection(s) to real hosts: "
-            f"{sorted(set(leaked))}. Mock the client so the suite never touches a live service."
+            f"Test attempted {len(leaked)} outbound connection(s) to real hosts. Mock the "
+            f"client so the suite never touches a live service. If the stack below is not "
+            f"this test's own code, an earlier test leaked a background thread — fix that "
+            f"test, not this one.\n\n" + "\n".join(leaked)
         )
 
 

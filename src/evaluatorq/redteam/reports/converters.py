@@ -85,7 +85,7 @@ def _extract_jury(raw_output: Any) -> JuryResult | None:
 def _extract_evaluation_error(raw_output: Any) -> RunError | None:
     """Lift the judge's own failure out of the scorer's ``raw_output``.
 
-    Mirrors :func:`_extract_jury`: the evaluator stashes a structured reason under
+    Mirrors `_extract_jury`: the evaluator stashes a structured reason under
     ``EVAL_ERROR_RAW_OUTPUT_KEY`` when it cannot produce a verdict, and it is
     reconstructed here onto the typed result so it reaches the run's error rollup.
     """
@@ -758,7 +758,7 @@ def _rate(numerator: int, denominator: int, *, default: float = 1.0) -> float:
 def _verdict_rate(numerator: int, denominator: int) -> float | None:
     """Rate over *evaluated* attacks, or None when nothing in the slice was evaluated.
 
-    Distinct from :func:`_rate` because there is no honest numeric fallback here: 0.0
+    Distinct from `_rate` because there is no honest numeric fallback here: 0.0
     resistance reads as "fully compromised" and 0.0 vulnerability reads as "fully safe",
     and neither is true when no verdict exists. Coverage rates keep using ``_rate`` —
     zero coverage really is 0.0.
@@ -799,7 +799,7 @@ def _aggregate_token_usage_by_source(results: list[RedTeamResult]) -> dict[str, 
     """Group token usage by datapoint source (static/template_dynamic/...).
 
     Each result's execution + evaluation usage is attributed to ``attack.source``,
-    so the per-source values sum exactly to :func:`_aggregate_token_usage`.
+    so the per-source values sum exactly to `_aggregate_token_usage`.
     """
     by_source: dict[str, TokenUsage] = {}
     for r in results:

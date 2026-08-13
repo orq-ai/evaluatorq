@@ -101,6 +101,7 @@ async def deployment(
         DeploymentResponse with content and raw response
 
     Example:
+        ```python
         # Simple invocation
         response = await deployment("my-deployment")
         print(response.content)
@@ -118,6 +119,7 @@ async def deployment(
             inputs={"query": "What is AI?"},
             thread={"id": "conversation-123"}
         )
+        ```
     """
     client = _get_or_create_client()
 
@@ -211,10 +213,12 @@ async def invoke(
         The text content of the response
 
     Example:
+        ```python
         # In a job
         @job("my-job")
         async def my_job(data, row):
             return await invoke("summarizer", inputs=data.inputs)
+        ```
     """
     response = await deployment(
         key,

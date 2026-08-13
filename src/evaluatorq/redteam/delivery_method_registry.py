@@ -1,22 +1,22 @@
 """Delivery-method registry — the single source of truth for delivery methods.
 
-Mirrors :mod:`evaluatorq.redteam.vulnerability_registry`: a canonical set (the
-:class:`DeliveryMethod` enum, grouped by technique family) plus a mutable
+Mirrors `evaluatorq.redteam.vulnerability_registry`: a canonical set (the
+`DeliveryMethod` enum, grouped by technique family) plus a mutable
 registry for custom entries, with ``register``/``resolve`` helpers so the CLI
 and API validate against **registry plus enum** rather than a frozen enum.
 
 Strictness policy (RES-966 decision)
 ------------------------------------
 Delivery methods are **coerce-known + passthrough-unknown**: an enum member
-resolves to its canonical :class:`DeliveryMethod` object; anything else passes
+resolves to its canonical `DeliveryMethod` object; anything else passes
 through as a raw string. A *registered custom* is known (it validates without a
 warning) but stays a string — there is no enum member for it to resolve to, so
-registration's observable effect is :func:`is_known_delivery_method` returning
+registration's observable effect is `is_known_delivery_method` returning
 ``True``. This preserves the open set RES-295 deliberately chose (a dataset may
 carry a delivery method the enum does not list), now extensible via
-:func:`register_delivery_method`.
+`register_delivery_method`.
 
-This differs on purpose from :func:`vulnerability_registry.resolve_vulnerabilities`,
+This differs on purpose from `vulnerability_registry.resolve_vulnerabilities`,
 which **rejects** unknown values. The *pattern* is the same (enum plus registered,
 resolve/register); the *strictness* differs because the semantics do. An unknown
 delivery method is a harmless filter/label — it either matches a dataset row
@@ -35,7 +35,7 @@ last-write-wins on its category. Registrations are never persisted to disk, so a
 fresh process starts with only the enum: a value registered in one script is
 *not* known to a separate ``eq redteam`` invocation. Because the set is global,
 tests that register a custom method must call
-:func:`clear_custom_delivery_methods` between cases to stay isolated — the
+`clear_custom_delivery_methods` between cases to stay isolated — the
 ``tests/redteam`` conftest does this automatically.
 """
 
@@ -121,11 +121,11 @@ def register_delivery_method(value: str, *, category: str = 'custom') -> str:
     """Register a custom delivery method so it validates as known.
 
     A registered value stays a plain string — there is no enum member for
-    :func:`resolve_delivery_method` to coerce it to. What registration buys is
-    :func:`is_known_delivery_method` returning ``True``, which suppresses the
+    `resolve_delivery_method` to coerce it to. What registration buys is
+    `is_known_delivery_method` returning ``True``, which suppresses the
     CLI's unknown-method warning; filtering already worked without it.
 
-    A value equal to an existing :class:`DeliveryMethod` member is a no-op (the
+    A value equal to an existing `DeliveryMethod` member is a no-op (the
     enum is already canonical) — it warns and discards the passed ``category``
     rather than storing it. A member *name* that is not also a value is rejected,
     since registering ``'ROLE_PLAY'`` would shadow ``'role-play'`` with a spelling
@@ -175,10 +175,10 @@ def is_known_delivery_method(value: str) -> bool:
 
 def resolve_delivery_method(value: DeliveryMethod | str) -> DeliveryMethod | str:
     """Resolve one value: an enum member (by value) becomes its
-    :class:`DeliveryMethod` object, anything else passes through unchanged (open
+    `DeliveryMethod` object, anything else passes through unchanged (open
     set) — including a registered custom, which is *known* but has no member.
 
-    Already a :class:`DeliveryMethod`? Returned as-is — this is the identity that
+    Already a `DeliveryMethod`? Returned as-is — this is the identity that
     lets registry-backed objects flow through the pipeline without conversion.
     """
     if isinstance(value, DeliveryMethod):

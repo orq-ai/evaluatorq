@@ -113,9 +113,11 @@ async def with_job_span(  # noqa: RUF029
         The span if tracing is enabled, None otherwise
 
     Example:
+        ```python
         async with with_job_span(JobSpanOptions(run_id="abc", row_index=0)) as span:
             # Your job code here
             pass
+        ```
     """
     tracer = get_tracer()
     if tracer is None:
@@ -171,12 +173,14 @@ async def with_evaluation_span(  # noqa: RUF029
         The span if tracing is enabled, None otherwise
 
     Example:
+        ```python
         async with with_evaluation_span(EvaluationSpanOptions(
             run_id="abc",
             evaluator_name="string-contains"
         )) as span:
             # Your evaluator code here
             pass
+        ```
     """
     tracer = get_tracer()
     if tracer is None:

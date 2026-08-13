@@ -47,13 +47,15 @@ def wrap_simulation_agent(
     The returned callable owns a long-lived ``SimulationRunner`` (and its
     underlying HTTP client). Call ``await job_fn.aclose()`` after your
     ``evaluatorq()`` run finishes to release the connection pool — otherwise
-    it leaks until process exit. Example::
+    it leaks until process exit. Example:
 
-        job = wrap_simulation_agent(target=cb)
-        try:
-            await evaluatorq("run", data=[...], jobs=[job], evaluators=[...])
-        finally:
-            await job.aclose()
+    ```python
+    job = wrap_simulation_agent(target=cb)
+    try:
+        await evaluatorq("run", data=[...], jobs=[job], evaluators=[...])
+    finally:
+        await job.aclose()
+    ```
     """
     from evaluatorq.simulation.runner.simulation import SimulationRunner
 

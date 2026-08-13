@@ -109,9 +109,9 @@ def pipeline_metadata() -> dict[str, str]:
 
 
 def pipeline_metadata_param() -> dict[str, dict[str, str]]:
-    """``extra_body``-ready ``{'metadata': {...}}`` form of :func:`pipeline_metadata`.
+    """``extra_body``-ready ``{'metadata': {...}}`` form of `pipeline_metadata`.
 
-    Wraps :func:`pipeline_metadata` (single source of truth) so the two forms stay
+    Wraps `pipeline_metadata` (single source of truth) so the two forms stay
     in sync. The SDK merges ``extra_body`` into the request body, yielding the same
     top-level ``metadata`` property.
     """
@@ -140,7 +140,7 @@ def evaluatorq_run_id(run_id: str) -> Iterator[str]:
     """Bind the run id for a red-team / agent-simulation run.
 
     Restores the previous value on exit so nested/sequential runs don't bleed
-    (mirrors :func:`evaluatorq_pipeline`).
+    (mirrors `evaluatorq_pipeline`).
 
     Yields:
         The bound run id.

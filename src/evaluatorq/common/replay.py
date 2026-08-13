@@ -19,7 +19,7 @@ Resolution order for a reference, first match wins:
    Names are *expected* to repeat across runs, so ambiguity here resolves to the
    most recent (logged) rather than raising.
 
-Anything else raises :class:`ReplayError` naming the runs dir and the most
+Anything else raises `ReplayError` naming the runs dir and the most
 recent runs, so a typo is one line away from being fixed.
 """
 
@@ -61,7 +61,7 @@ def check_replay_version(payload: dict[str, Any], path: Path, *, surface: str) -
     """Reject a run whose replay payload is newer than this build understands.
 
     Raises:
-        ReplayError: The run declares a format version above :data:`REPLAY_VERSION`.
+        ReplayError: The run declares a format version above `REPLAY_VERSION`.
     """
     stored = payload.get(REPLAY_VERSION_KEY)
     if isinstance(stored, int) and stored > REPLAY_VERSION:

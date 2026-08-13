@@ -18,7 +18,7 @@ def coerce_content_text(content: Any) -> str:
     Python ``repr`` of the list. ``None`` becomes ``""``; plain strings (and anything
     else) pass through ``str``.
 
-    Unlike :func:`evaluatorq.contracts.content_to_text`, this best-effort helper
+    Unlike `evaluatorq.contracts.content_to_text`, this best-effort helper
     does not raise on non-text parts (it is used in report/transcript rendering).
     Image and file parts are surfaced as a ``[image]`` / ``[file]`` placeholder,
     and any other (unknown/future) part type as ``[<type>]``, so every part is
