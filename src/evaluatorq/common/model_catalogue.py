@@ -174,7 +174,16 @@ async def _load_catalogue(client: AsyncOpenAI | None = None) -> dict[str, ModelI
         cached = _catalogues.get(host)
         if cached is not None:
             return cached
-        api_key = os.environ.get('ORQ_API_KEY') or getattr(client, 'api_key', None)
+        # When the host came from an injected client, that client's own key is
+        # the credential that matches it — an ambient ORQ_API_KEY for a
+        # different workspace/environment must not take priority, or the
+        # catalogue silently 401s (caching {}) or prices against the wrong
+        # workspace. Only fall back to the env var for the client-less path.
+        api_key = (
+            (getattr(client, 'api_key', None) or os.environ.get('ORQ_API_KEY'))
+            if client is not None
+            else os.environ.get('ORQ_API_KEY')
+        )
         if not api_key:
             logger.debug('No ORQ_API_KEY and no client credential; model catalogue unavailable')
             _catalogues[host] = {}

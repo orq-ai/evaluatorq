@@ -254,7 +254,8 @@ class OWASPEvaluator:
             if outcome.error_kind is not None or outcome.payload is None:
                 last_error = outcome
                 return Prediction(
-                    error=outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'error')
+                    error=outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'error'),
+                    token_usage=outcome.token_usage,
                 )
             return Prediction(
                 value=outcome.payload.value,
@@ -332,6 +333,7 @@ class OWASPEvaluator:
                 passed=None,
                 explanation=f'Evaluation timed out after {outcome.timeout_ms}ms',
                 evaluator_id=evaluator_id,
+                token_usage=outcome.token_usage,
                 raw_output={
                     'error': 'timeout',
                     'timeout_ms': outcome.timeout_ms,
@@ -343,6 +345,7 @@ class OWASPEvaluator:
                 passed=None,
                 explanation=f'Evaluation error: {outcome.error_message}',
                 evaluator_id=evaluator_id,
+                token_usage=outcome.token_usage,
                 raw_output={
                     'error': outcome.error_message,
                     'raw_content': outcome.raw_content,

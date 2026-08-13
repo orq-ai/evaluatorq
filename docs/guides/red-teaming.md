@@ -177,9 +177,13 @@ merely some JSON object. Pass `EvaluatorConfig(api='chat_completions')` to opt
 out; a judge on Chat Completions comes back with tokens but no price, so
 evaluatorq fills the cost in client-side from Orq's model catalogue.
 
-Three conditions have to hold for the Responses default to apply: the judge
-client routes through the Orq router, an `ORQ_API_KEY` is available to read the
-catalogue, and the model appears there and reports Responses support. A judge
+Four conditions have to hold for the Responses default to apply: `cfg.api ==
+'responses'` (the evaluator default; `structured_output` — the `llm_jury(...,
+structured_output=False)` knob — must also be on, since the Responses path here
+is schema-only), the judge client routes through the Orq router, and the model
+appears in the catalogue and reports Responses support. Reading the catalogue
+needs a credential — the client's own `api_key` when the host was resolved from
+an injected client, otherwise `ORQ_API_KEY` from the environment. A judge
 pointed at any other endpoint — a direct OpenAI key, vLLM, a proxy — stays on
 Chat Completions, as does one whose model the catalogue does not list. Both
 layers fall back on their own: a model the router rejects on Responses moves to
@@ -214,7 +218,9 @@ oversight left in place by accident:
 - **LLM-generated recommendations and executive summaries**
   (`redteam/reports/recommendations.py`, `simulation/reports/recommendations.py`,
   `common/reports/executive_summary.py`) — these are opt-in post-processing
-  steps (`generate_recommendations`, `generate_executive_summary`) that run
+  steps (`generate_focus_area_recommendations` on the red-team side,
+  `generate_recommendations` on the simulation side, and
+  `generate_executive_summary`) that run
   after a report's usage summary is already finalized. Folding their usage in
   would mean either widening a public result type or maintaining the
   documented `token_usage_by_source` sums-to `token_usage_total` invariant
@@ -232,6 +238,21 @@ oversight left in place by accident:
   a deployment call always targets `my.orq.ai`, but its usage is priced
   against the host in `ORQ_BASE_URL`. A deployment run against a staging or
   on-prem host prices against the wrong catalogue.
+- **Target-side usage from agent and framework backends** — these feed
+  `token_usage_total` unpriced, so `priced_calls < calls` on a run against any
+  of them is expected, not a bug:
+    - The **ORQ agent target** (`redteam/backends/orq.py`) accumulates usage
+      across pending-tool-call continuations with no `price_usage` call. An
+      agent run can fan out over several models per turn, so client-side
+      pricing may genuinely not be possible here even in principle.
+    - The **LangGraph** (`integrations/langgraph_integration/target.py`),
+      **OpenAI Agents SDK** (`integrations/openai_agents_integration/target.py`),
+      and **Vercel AI SDK** (`integrations/vercel_ai_sdk_integration/target.py`)
+      targets all extract token counts from the framework's own usage metadata
+      but attach no cost fields.
+    - A **custom callable target**'s usage, normalized by
+      `redteam/runtime/jobs.py`'s `_normalize_usage`, passes through
+      `TokenUsage.extract` the same way — counted, unpriced.
 
 ## In CI
 

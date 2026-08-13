@@ -104,6 +104,86 @@ class TestRunEvaluatorErrorPaths:
         assert 'error' in (result.raw_output or {})
 
     # ------------------------------------------------------------------
+    # 1b. Parse failure still carries the billed usage (RES-1295)
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_invalid_json_error_result_still_carries_billed_usage(self):
+        """A judge call that fails to parse was still billed by the provider.
+
+        ``run_judge`` deliberately attaches ``token_usage`` to an error
+        ``JudgeOutcome`` for exactly this reason; the error result built from it
+        must not drop that usage on the floor, or the run's cost total
+        undercounts every failed judge call.
+        """
+        from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
+        from evaluatorq.common.judge import JudgeError, JudgeOutcome
+        from evaluatorq.contracts import Usage
+
+        billed_usage = Usage(input_tokens=42, output_tokens=7, total_tokens=49, calls=1, priced_calls=0)
+
+        async def _parse_error_outcome(*args: Any, **kwargs: Any) -> JudgeOutcome:
+            return JudgeOutcome(
+                error_kind=JudgeError.PARSE,
+                error_message='malformed JSON',
+                token_usage=billed_usage,
+                raw_content='this is not valid json {{{{',
+            )
+
+        mock_client = AsyncMock()
+        evaluator = OWASPEvaluator(
+            evaluator_model='test-model',
+            llm_client=mock_client,
+            cfg=EvaluatorConfig(retry_count=0),
+        )
+
+        with patch('evaluatorq.redteam.adaptive.evaluator.run_judge', side_effect=_parse_error_outcome):
+            result = await evaluator.evaluate_vulnerability(
+                vuln=Vulnerability.GOAL_HIJACKING,
+                messages=[{'role': 'user', 'content': 'attack prompt'}],
+                output_messages=[TextOutputItem(text='agent response', annotations=[])],
+            )
+
+        assert result.passed is None
+        assert result.token_usage is billed_usage
+
+    @pytest.mark.asyncio
+    async def test_timeout_error_result_still_carries_billed_usage(self):
+        """A judge that times out client-side may still have been billed if the
+        provider processed it — ``token_usage`` must survive onto the timeout
+        result the same way it does for a parse error."""
+        from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
+        from evaluatorq.common.judge import JudgeError, JudgeOutcome
+        from evaluatorq.contracts import Usage
+
+        billed_usage = Usage(input_tokens=10, output_tokens=5, total_tokens=15, calls=1, priced_calls=0)
+
+        async def _timeout_outcome(*args: Any, **kwargs: Any) -> JudgeOutcome:
+            return JudgeOutcome(
+                error_kind=JudgeError.TIMEOUT,
+                error_message='timed out',
+                token_usage=billed_usage,
+                timeout_ms=1,
+            )
+
+        mock_client = AsyncMock()
+        evaluator = OWASPEvaluator(
+            evaluator_model='test-model',
+            llm_client=mock_client,
+            cfg=EvaluatorConfig(retry_count=0),
+        )
+
+        with patch('evaluatorq.redteam.adaptive.evaluator.run_judge', side_effect=_timeout_outcome):
+            result = await evaluator.evaluate_vulnerability(
+                vuln=Vulnerability.GOAL_HIJACKING,
+                messages=[{'role': 'user', 'content': 'attack prompt'}],
+                output_messages=[TextOutputItem(text='agent response', annotations=[])],
+            )
+
+        assert result.passed is None
+        assert result.token_usage is billed_usage
+
+    # ------------------------------------------------------------------
     # 2. APIConnectionError — recorded, not raised
     # ------------------------------------------------------------------
 

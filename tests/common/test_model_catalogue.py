@@ -6,6 +6,7 @@ import asyncio
 
 import httpx
 import pytest
+from openai import AsyncOpenAI
 
 from evaluatorq.common import model_catalogue as pricing
 from evaluatorq.common.model_catalogue import ModelInfo
@@ -231,9 +232,10 @@ class _FakeResponse:
 class _FakeAsyncClient:
     """Stand-in for httpx.AsyncClient that records GET calls and returns a canned response."""
 
-    def __init__(self, calls: list[str], response_factory):  # noqa: ANN001
+    def __init__(self, calls: list[str], response_factory, headers: list[dict[str, str]] | None = None):  # noqa: ANN001
         self._calls = calls
         self._response_factory = response_factory
+        self._headers = headers
 
     def __call__(self, *args: object, **kwargs: object) -> _FakeAsyncClient:
         return self
@@ -244,8 +246,10 @@ class _FakeAsyncClient:
     async def __aexit__(self, *exc: object) -> bool:
         return False
 
-    async def get(self, url: str, headers: dict[str, str] | None = None) -> _FakeResponse:  # noqa: ARG002
+    async def get(self, url: str, headers: dict[str, str] | None = None) -> _FakeResponse:
         self._calls.append(url)
+        if self._headers is not None:
+            self._headers.append(headers or {})
         return self._response_factory()
 
 
@@ -314,3 +318,58 @@ async def test_cache_is_keyed_by_host(monkeypatch: pytest.MonkeyPatch):
 
     assert len(calls) == 2
     assert set(pricing._catalogues) == {'https://host-a.example', 'https://host-b.example'}  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.asyncio
+async def test_client_key_preferred_when_host_derived_from_client(monkeypatch: pytest.MonkeyPatch):
+    """A staging client's own key must be used, not an ambient prod ORQ_API_KEY.
+
+    Otherwise the catalogue fetch either 401s against the wrong workspace
+    (caching {} and silently disabling pricing + Responses routing) or reads
+    prices from the wrong workspace entirely.
+    """
+    monkeypatch.setattr(pricing, '_catalogues', {})
+    monkeypatch.setenv('ORQ_API_KEY', 'prod-env-key')
+
+    calls: list[str] = []
+    headers: list[dict[str, str]] = []
+
+    def _respond() -> _FakeResponse:
+        return _FakeResponse(
+            200,
+            [{'model_id': 'gpt-5-mini', 'provider': 'openai', 'input_cost': 0.00025, 'output_cost': 0.002}],
+        )
+
+    fake_client = _FakeAsyncClient(calls, _respond, headers)
+    monkeypatch.setattr(httpx, 'AsyncClient', fake_client)
+
+    staging_client = AsyncOpenAI(api_key='staging-client-key', base_url='https://staging.example/v3/router')
+    await pricing._load_catalogue(staging_client)  # pyright: ignore[reportPrivateUsage]
+
+    assert calls == ['https://staging.example/v2/models']
+    assert headers[0]['Authorization'] == 'Bearer staging-client-key'
+
+
+@pytest.mark.asyncio
+async def test_env_key_used_when_no_client_given(monkeypatch: pytest.MonkeyPatch):
+    """The client-less path (no injected client to derive host or key from) still uses the env var."""
+    monkeypatch.setattr(pricing, '_catalogues', {})
+    monkeypatch.setenv('ORQ_API_KEY', 'env-key')
+    monkeypatch.setenv('ORQ_BASE_URL', 'https://prod.example')
+
+    calls: list[str] = []
+    headers: list[dict[str, str]] = []
+
+    def _respond() -> _FakeResponse:
+        return _FakeResponse(
+            200,
+            [{'model_id': 'gpt-5-mini', 'provider': 'openai', 'input_cost': 0.00025, 'output_cost': 0.002}],
+        )
+
+    fake_client = _FakeAsyncClient(calls, _respond, headers)
+    monkeypatch.setattr(httpx, 'AsyncClient', fake_client)
+
+    await pricing._load_catalogue()  # pyright: ignore[reportPrivateUsage]
+
+    assert calls == ['https://prod.example/v2/models']
+    assert headers[0]['Authorization'] == 'Bearer env-key'

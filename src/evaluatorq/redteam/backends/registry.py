@@ -44,7 +44,8 @@ def create_async_llm_client(
     ``max_retries`` feeds the SDK's client-side retry budget (pass
     ``LLMConfig.retry_count``); ``None`` keeps the SDK default. Callers that own
     retry themselves — the judge via ``with_retry``, ``OrqResponsesTarget`` — must
-    not stack a second budget underneath their own; ``LLMCallConfig`` enforces
+    not stack a second budget underneath their own; ``run_judge``'s
+    ``_without_client_retries`` helper (``evaluatorq.common.judge``) enforces
     that by disarming the client it is given, so a client built here and handed to
     a judge comes back with ``max_retries=0``.
     """

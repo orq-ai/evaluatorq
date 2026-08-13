@@ -232,3 +232,57 @@ async def test_a_retry_does_not_re_pay_the_rejected_endpoint():
     outcome = await _judge(client)
     assert outcome.payload is not None and outcome.payload.value is True
     assert client.calls == ['responses', 'chat', 'chat']
+
+
+# ---------------------------------------------------------------------------
+# _without_client_retries: the only thing preventing with_retry x SDK-retry
+# multiplication when the caller owns retry.
+# ---------------------------------------------------------------------------
+
+
+class _RetryStubClient:
+    """Minimal stand-in exposing only what ``_without_client_retries`` reads."""
+
+    def __init__(self, max_retries: int):
+        self.max_retries = max_retries
+        self.with_options_calls: list[dict[str, Any]] = []
+
+    def with_options(self, **kwargs: Any) -> _RetryStubClient:
+        self.with_options_calls.append(kwargs)
+        disarmed = _RetryStubClient(kwargs.get('max_retries', self.max_retries))
+        disarmed.with_options_calls = self.with_options_calls
+        return disarmed
+
+
+def test_disarms_client_when_caller_owns_retry_and_client_has_a_budget():
+    """``run_judge`` retries the whole attempt via ``with_retry``; a client with
+    its own nonzero SDK retry budget must be disarmed or the two multiply."""
+    client = _RetryStubClient(max_retries=3)
+
+    result = judge_mod._without_client_retries(client, retry_count=1)  # pyright: ignore[reportPrivateUsage, reportArgumentType]
+
+    assert result is not client
+    assert client.with_options_calls == [{'max_retries': 0}]
+    assert result.max_retries == 0
+
+
+def test_client_passed_through_untouched_when_caller_does_not_own_retry():
+    """``retry_count<=0`` means the caller made no retry attempts of its own to
+    protect against multiplication, so the client must be returned as-is."""
+    client = _RetryStubClient(max_retries=3)
+
+    result = judge_mod._without_client_retries(client, retry_count=0)  # pyright: ignore[reportPrivateUsage, reportArgumentType]
+
+    assert result is client
+    assert client.with_options_calls == []
+
+
+def test_client_passed_through_untouched_when_it_has_no_retry_budget():
+    """A client already built with ``max_retries=0`` has nothing to disarm —
+    calling ``with_options`` would be a needless extra client object."""
+    client = _RetryStubClient(max_retries=0)
+
+    result = judge_mod._without_client_retries(client, retry_count=1)  # pyright: ignore[reportPrivateUsage, reportArgumentType]
+
+    assert result is client
+    assert client.with_options_calls == []
