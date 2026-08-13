@@ -348,22 +348,13 @@ def llm_jury(
     from ``labels`` — it defaults to ``"categorical"`` and you pick the mode
     explicitly. There are three modes:
 
-    +-------------------------------+------------------+--------------------------------+
-    | how you configure it          | judge returns    | ``passed`` is                  |
-    +===============================+==================+================================+
-    | ``verdict_kind="categorical"``| a JSON boolean   | the boolean itself             |
-    | (default), ``labels=None``    | ``true``/``false`` |                              |
-    | — **boolean mode**            |                  |                                |
-    +-------------------------------+------------------+--------------------------------+
-    | ``verdict_kind="categorical"``| one of ``labels``| ``verdict in passing_labels``  |
-    | with ``labels=[...]``         | (a string)       | (``None`` if no                |
-    | — **labeled mode**            |                  | ``passing_labels`` given)      |
-    +-------------------------------+------------------+--------------------------------+
-    | ``verdict_kind="numeric"``    | a float in       | ``score >= threshold``         |
-    | — **numeric mode**            | ``score_range``  |                                |
-    +-------------------------------+------------------+--------------------------------+
+    | how you configure it | judge returns | ``passed`` is |
+    | --- | --- | --- |
+    | **boolean mode** — ``verdict_kind="categorical"`` (default), ``labels=None`` | a JSON boolean ``true``/``false`` | the boolean itself |
+    | **labeled mode** — ``verdict_kind="categorical"`` with ``labels=[...]`` | one of ``labels`` (a string) | ``verdict in passing_labels`` (``None`` if no ``passing_labels`` given) |
+    | **numeric mode** — ``verdict_kind="numeric"`` | a float in ``score_range`` | ``score >= threshold`` |
 
-    Notes:
+    **Notes**
 
     - For a yes/no judge, use **boolean mode** (the default — just omit ``labels``).
       ``passed`` is populated automatically; you do not need ``passing_labels``.

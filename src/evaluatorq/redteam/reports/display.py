@@ -40,6 +40,7 @@ def print_report_summary(report: RedTeamReport, *, console: Console | None = Non
     """Print a Rich summary of a `RedTeamReport` to the terminal.
 
     Displays:
+
     * High-level stats (total attacks, vulnerabilities, resistance rate, …)
     * Per-category breakdown sorted by vulnerability rate (worst first)
     * Top vulnerable techniques (if any)

@@ -353,12 +353,14 @@ def normalize_category(category: str) -> str:
     """Strip 'OWASP-' prefix from category codes.
 
     Examples:
+        ```pycon
         >>> normalize_category("OWASP-ASI01")
         'ASI01'
         >>> normalize_category("ASI01")
         'ASI01'
         >>> normalize_category("OWASP-LLM01")
         'LLM01'
+        ```
     """
     return category.removeprefix('OWASP-')
 

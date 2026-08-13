@@ -1387,15 +1387,15 @@ def render_message_list(
 
     Each message produces:
 
-    .. code-block:: html
-
-        <div class="{class_prefix}-msg {class_prefix}-msg-{css_role}">
-          <span class="{class_prefix}-msg-avatar">{label}</span>
-          <div class="{class_prefix}-msg-bubble">
-            <span class="{class_prefix}-msg-role">{label}</span>
-            <pre class="{class_prefix}-msg-content">{esc(content)}</pre>
-          </div>
-        </div>
+    ```html
+    <div class="{class_prefix}-msg {class_prefix}-msg-{css_role}">
+      <span class="{class_prefix}-msg-avatar">{label}</span>
+      <div class="{class_prefix}-msg-bubble">
+        <span class="{class_prefix}-msg-role">{label}</span>
+        <pre class="{class_prefix}-msg-content">{esc(content)}</pre>
+      </div>
+    </div>
+    ```
 
     Where ``{css_role}`` is the raw role value when it is one of
     ``user``, ``assistant``, ``system``, ``tool``; otherwise ``unknown``.

@@ -8,7 +8,9 @@ moment one comes back, which is cheaper than another site-wide sweep.
 
 from __future__ import annotations
 
+import ast
 import re
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -31,3 +33,45 @@ def test_no_sphinx_markup_in_src(pattern: re.Pattern[str]) -> None:
         for m in pattern.finditer(text)
     ]
     assert not offenders, "Sphinx markup renders literally on the docs site: " + ", ".join(offenders)
+
+
+EXAMPLE_HEADING = re.compile(r"^(\s*)Examples?:\s*$")
+
+
+def _unfenced_example_sections(doc: str) -> list[str]:
+    """`Example:` bodies that are indented code instead of a ```python fence.
+
+    An indented body reaches the renderer as prose: multi-line code collapses into
+    one paragraph and a leading `# comment` becomes an <h3> with its own ToC entry.
+    docs/hooks.py cannot see this — it only inspects <pre> elements, and this defect
+    never produces one.
+    """
+    lines = doc.splitlines()
+    offenders = []
+    for i, line in enumerate(lines):
+        heading = EXAMPLE_HEADING.match(line)
+        if not heading:
+            continue
+        indent = len(heading.group(1))
+        body = []
+        for nxt in lines[i + 1 :]:
+            if nxt.strip() and len(nxt) - len(nxt.lstrip()) <= indent:
+                break
+            body.append(nxt)
+        text = textwrap.dedent("\n".join(body)).strip()
+        if text and not text.startswith("```"):
+            offenders.append(text.splitlines()[0])
+    return offenders
+
+
+def test_example_sections_are_fenced() -> None:
+    offenders = [
+        f"{path.relative_to(SRC)}: {first!r}"
+        for path in sorted(SRC.rglob("*.py"))
+        for node in ast.walk(ast.parse(path.read_text()))
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
+        for doc in [ast.get_docstring(node, clean=False)]
+        if doc
+        for first in _unfenced_example_sections(doc)
+    ]
+    assert not offenders, "Example: sections must fence their code as ```python: " + ", ".join(offenders)

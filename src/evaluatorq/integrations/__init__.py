@@ -1,6 +1,7 @@
 """Integration modules for evaluatorq.
 
 Available integrations:
+
 - langchain_integration: LangChain agent wrapper for OpenResponses format
 - langgraph_integration: LangGraph agent target
 - openai_agents_integration: OpenAI Agents SDK agent target
