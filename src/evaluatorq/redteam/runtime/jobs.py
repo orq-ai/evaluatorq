@@ -9,7 +9,7 @@ from loguru import logger
 
 from evaluatorq import DataPoint, Job, job
 from evaluatorq.common.llm_call import apply_pipeline_metadata, execute_chat_completion
-from evaluatorq.common.llm_client import client_routes_through_orq
+from evaluatorq.common.llm_client import client_routes_through_orq, orq_base_url
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.thread_context import build_static_thread_id, conversation_thread, thread_body_param
@@ -86,7 +86,7 @@ def create_model_job(
         api_key = os.environ.get('ORQ_API_KEY')
         if not api_key:
             raise CredentialError('ORQ_API_KEY environment variable is not set')
-        deployment_client = Orq(api_key=api_key)
+        deployment_client = Orq(api_key=api_key, server_url=orq_base_url())
 
         @job(f'redteam:static:{safe_key}')
         async def deployment_job(data: DataPoint, _row: int) -> dict[str, Any]:
@@ -137,13 +137,10 @@ def create_model_job(
 
             # The Orq SDK's deployment client has no AsyncOpenAI to resolve a
             # per-host catalogue from, so price_usage falls back to
-            # ORQ_BASE_URL; price against the model the deployment actually
-            # ran (completion.model), not the deployment_key alias (RES-1295).
-            # Known gap: `Orq(api_key=...)` above never passes `server_url`, so
-            # this deployment call always talks to my.orq.ai regardless of
-            # ORQ_BASE_URL — a staging deployment run prices against the wrong
-            # host's catalogue. Out of scope here; fixing it means changing the
-            # client construction, not this call.
+            # ORQ_BASE_URL — the same host the client above was built with, so
+            # the prices come from the deployment that served the call. Price
+            # against the model the deployment actually ran (completion.model),
+            # not the deployment_key alias (RES-1295).
             priced_usage = await price_usage(
                 TokenUsage.from_completion(completion),
                 getattr(completion, 'model', deployment_key),

@@ -233,11 +233,6 @@ oversight left in place by accident:
   bare parsed model (`ToolAnalysis`, `ResourceCapabilityInference`,
   `ToolCapabilitiesResponse`, `GeneratedObjectives`) with no usage field.
   Real spend, uncounted.
-- **Deployment runs against a non-default Orq host**
-  (`redteam/runtime/jobs.py`'s `deployment_job`) — the Orq SDK client used for
-  a deployment call always targets `my.orq.ai`, but its usage is priced
-  against the host in `ORQ_BASE_URL`. A deployment run against a staging or
-  on-prem host prices against the wrong catalogue.
 - **Target-side usage from agent and framework backends** — these feed
   `token_usage_total` unpriced, so `priced_calls < calls` on a run against any
   of them is expected, not a bug:

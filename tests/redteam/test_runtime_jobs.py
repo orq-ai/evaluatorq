@@ -289,7 +289,8 @@ class TestCreateModelJob:
     async def test_deployment_job_prices_usage_from_catalogue(self, monkeypatch: pytest.MonkeyPatch):
         """RES-1295: deployments.invoke_async usage comes back priced, keyed on
         the model the deployment actually ran, with no AsyncOpenAI client
-        available to resolve the catalogue against (falls back to ORQ_BASE_URL)."""
+        available to resolve the catalogue against (falls back to ORQ_BASE_URL,
+        which is the host the deployment client itself was built with)."""
         from evaluatorq import DataPoint
         from evaluatorq.redteam.runtime.jobs import create_model_job
 
@@ -332,6 +333,25 @@ class TestCreateModelJob:
         assert usage.total_cost > 0
 
         model_catalogue.reset_catalogue_cache()
+
+    @pytest.mark.asyncio
+    async def test_deployment_client_targets_the_configured_host(self, monkeypatch: pytest.MonkeyPatch):
+        """The deployment client must be built with ORQ_BASE_URL, not the SDK's prod default.
+
+        Without server_url the call goes to my.orq.ai while price_usage looks the model
+        up in the ORQ_BASE_URL host's catalogue — a staging run priced off prod (RES-1295).
+        """
+        from evaluatorq.redteam.runtime.jobs import create_model_job
+
+        module = ModuleType('orq_ai_sdk')
+        module.Orq = MagicMock(return_value=MagicMock(deployments=MagicMock()))  # pyright: ignore[reportAttributeAccessIssue]
+        monkeypatch.setitem(sys.modules, 'orq_ai_sdk', module)
+        monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+        monkeypatch.setenv('ORQ_BASE_URL', 'https://staging.orq.ai')
+
+        create_model_job(deployment_key='test-deployment')
+
+        module.Orq.assert_called_once_with(api_key='test-key', server_url='https://staging.orq.ai')  # pyright: ignore[reportAttributeAccessIssue]
 
     @pytest.mark.asyncio
     async def test_router_job_returns_priced_usage(self, monkeypatch: pytest.MonkeyPatch):
