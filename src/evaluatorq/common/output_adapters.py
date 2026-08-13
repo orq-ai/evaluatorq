@@ -1,3 +1,9 @@
+"""Canonical adapters between agent output shapes and messages/text.
+
+Every surface normalises third-party agent output here — a per-surface
+``isinstance`` ladder is how the shapes drifted apart the last time.
+"""
+
 from __future__ import annotations
 
 import json

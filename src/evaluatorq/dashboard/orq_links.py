@@ -2,7 +2,7 @@
 
 Pure string helper — no network, no SDK. The preferred source of a link's host +
 workspace is the run's own ``experiment_url`` (``{host}/{workspace}/experiments/
-{id}``), parsed by :func:`parse_experiment_url`. When a run has no experiment
+{id}``), parsed by `parse_experiment_url`. When a run has no experiment
 (upload skipped/failed), we fall back to the ``ORQ_WORKSPACE`` / ``ORQ_BASE_URL``
 environment. Studio routes use the workspace **key** (slug), never the API's
 UUID-shaped ``workspace_id``: ``{base}/{workspace_key}/{entity}/{id}``.

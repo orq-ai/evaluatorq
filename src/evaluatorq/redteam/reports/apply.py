@@ -1,6 +1,6 @@
 """Apply red-team remediation recommendations back onto the agent.
 
-Thin wrapper over the shared engine in :mod:`evaluatorq.common.apply` (the
+Thin wrapper over the shared engine in `evaluatorq.common.apply` (the
 red-team and simulation apply flows were ~90% identical and are consolidated
 there); this module supplies the red-team prompt framing and pipeline config.
 
@@ -48,7 +48,7 @@ async def apply_recommendations(
 ) -> ApplyRecommendationsResult:
     """Fold red-team recommendations into an agent's instructions.
 
-    See :func:`evaluatorq.common.apply.apply_recommendations` for the full
+    See `evaluatorq.common.apply.apply_recommendations` for the full
     contract; this wrapper takes ``RedTeamReport.focus_area_recommendations``
     directly and defaults ``cfg`` to the red-team pipeline config so reasoning
     models keep their required call parameters.

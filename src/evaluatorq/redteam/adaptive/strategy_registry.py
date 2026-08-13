@@ -211,7 +211,7 @@ def _filter_by_method(
         strategies: Candidate strategies to filter.
         names: Set of accepted `AttackStrategy.name` values. ``None`` disables
             the name filter. Empty set filters out everything.
-        delivery_methods: Set of accepted :class:`DeliveryMethod` values. ``None``
+        delivery_methods: Set of accepted `DeliveryMethod` values. ``None``
             disables the delivery-method filter. A strategy passes if any of
             its `delivery_methods` overlaps the selection. Empty set filters
             out everything.

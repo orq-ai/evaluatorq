@@ -99,10 +99,14 @@ def find_triggers(
     reasons (plain max-turns, runtime error) and gets no suggestion.
 
     Example:
-        >>> from evaluatorq.simulation.reports import SimulationRecommendationConfig
-        >>> strict = SimulationRecommendationConfig(factual_accuracy_below=0.9, hallucination_risk_above=0.2)
-        >>> [trigger for trigger, _evidence in find_triggers(results[0], strict)]
-        ['low_factual_accuracy']
+
+    ```python
+    from evaluatorq.simulation.reports import SimulationRecommendationConfig
+
+    strict = SimulationRecommendationConfig(factual_accuracy_below=0.9, hallucination_risk_above=0.2)
+    [trigger for trigger, _evidence in find_triggers(results[0], strict)]
+    # ['low_factual_accuracy']
+    ```
     """
     if _is_errored(result):
         return []
@@ -197,18 +201,23 @@ async def generate_recommendations(
         succeeded; per-result LLM failures are logged and skipped.
 
     Example:
-        >>> from openai import AsyncOpenAI
-        >>> from evaluatorq.simulation import simulate
-        >>> from evaluatorq.simulation.reports import SimulationRecommendationConfig, generate_recommendations
-        >>> results = await simulate(evaluation_name='support-sim', target='agent:my-support-agent')
-        >>> recs = await generate_recommendations(
-        ...     results,
-        ...     AsyncOpenAI(),
-        ...     'gpt-5.6-luna',
-        ...     config=SimulationRecommendationConfig(factual_accuracy_below=0.7, max_suggestions=5),
-        ... )
-        >>> for rec in recs:
-        ...     print(rec.persona, rec.triggers, rec.suggestions)
+
+    ```python
+    from openai import AsyncOpenAI
+
+    from evaluatorq.simulation import simulate
+    from evaluatorq.simulation.reports import SimulationRecommendationConfig, generate_recommendations
+
+    results = await simulate(evaluation_name='support-sim', target='agent:my-support-agent')
+    recs = await generate_recommendations(
+        results,
+        AsyncOpenAI(),
+        'gpt-5.6-luna',
+        config=SimulationRecommendationConfig(factual_accuracy_below=0.7, max_suggestions=5),
+    )
+    for rec in recs:
+        print(rec.persona, rec.triggers, rec.suggestions)
+    ```
     """
     config = config or _DEFAULT_CONFIG
     max_results = max_results if max_results is not None else config.max_results

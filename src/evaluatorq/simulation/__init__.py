@@ -4,24 +4,27 @@ Provides tools to run multi-turn agent simulations with user simulator
 and judge agents, convert results to OpenResponses format, and integrate
 with the evaluatorq evaluation pipeline.
 
-Example::
+Example:
 
-    from evaluatorq.simulation import simulate, generate_and_simulate
+```python
+from evaluatorq.simulation import simulate, generate_and_simulate
+```
 
 Tracing & PII:
-    Simulation emits OpenTelemetry spans for every LLM call, including the
-    message content (conversation turns) by default so the Orq dashboard can
-    render input/output panels. Two env vars control this (shared with red
-    teaming via ``evaluatorq.common.tracing``):
 
-    - ``EVALUATORQ_CAPTURE_MESSAGE_CONTENT`` (default ``true``) — set to
-      ``false`` / ``0`` to keep raw message text (inputs and outputs) off
-      spans while still recording token usage, model, and latency. Use when
-      exporting to a third-party backend or when content may contain PII.
-    - ``EVALUATORQ_SPAN_MAX_TEXT_CHARS`` (default: capture all) — max
-      characters of message text (inputs and outputs) per span attribute
-      before truncation. Set a positive integer (e.g. ``8192``) to cap;
-      ``-1`` / ``0`` / unset all mean capture all.
+Simulation emits OpenTelemetry spans for every LLM call, including the
+message content (conversation turns) by default so the Orq dashboard can
+render input/output panels. Two env vars control this (shared with red
+teaming via ``evaluatorq.common.tracing``):
+
+- ``EVALUATORQ_CAPTURE_MESSAGE_CONTENT`` (default ``true``) — set to
+  ``false`` / ``0`` to keep raw message text (inputs and outputs) off
+  spans while still recording token usage, model, and latency. Use when
+  exporting to a third-party backend or when content may contain PII.
+- ``EVALUATORQ_SPAN_MAX_TEXT_CHARS`` (default: capture all) — max
+  characters of message text (inputs and outputs) per span attribute
+  before truncation. Set a positive integer (e.g. ``8192``) to cap;
+  ``-1`` / ``0`` / unset all mean capture all.
 """
 
 from __future__ import annotations
@@ -48,8 +51,10 @@ if TYPE_CHECKING:
     from evaluatorq.common.replay import ReplayError
     from evaluatorq.contracts import AgentTarget, LLMCallConfig, TokenUsage
     from evaluatorq.integrations.callable_integration import CallableTarget
+    from evaluatorq.integrations.crewai_integration import CrewAITarget
     from evaluatorq.integrations.langgraph_integration import LangGraphTarget
     from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget
+    from evaluatorq.integrations.pydantic_ai_integration import PydanticAITarget
     from evaluatorq.integrations.vercel_ai_sdk_integration import VercelAISdkTarget
     from evaluatorq.openresponses.target import OrqResponsesTarget
     from evaluatorq.simulation.adapters import (
@@ -202,8 +207,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
     ),
     'AgentTarget': ('evaluatorq.contracts', 'AgentTarget'),
     'CallableTarget': ('evaluatorq.integrations.callable_integration', 'CallableTarget'),
+    'CrewAITarget': ('evaluatorq.integrations.crewai_integration', 'CrewAITarget'),
     'LangGraphTarget': ('evaluatorq.integrations.langgraph_integration', 'LangGraphTarget'),
     'OpenAIAgentTarget': ('evaluatorq.integrations.openai_agents_integration', 'OpenAIAgentTarget'),
+    'PydanticAITarget': ('evaluatorq.integrations.pydantic_ai_integration', 'PydanticAITarget'),
     'VercelAISdkTarget': ('evaluatorq.integrations.vercel_ai_sdk_integration', 'VercelAISdkTarget'),
     'DEFAULT_MODEL': ('evaluatorq.simulation.types', 'DEFAULT_MODEL'),
     'CommunicationStyle': ('evaluatorq.simulation.types', 'CommunicationStyle'),
@@ -316,6 +323,7 @@ __all__ = [
     'CallableTarget',
     'CommunicationStyle',
     'ConversationStrategy',
+    'CrewAITarget',
     'Criterion',
     'CulturalContext',
     # Generators
@@ -338,6 +346,7 @@ __all__ = [
     'PersonaGenerator',
     # Quality
     'PerturbationType',
+    'PydanticAITarget',
     'ReplayError',
     'RichHooks',
     'Scenario',

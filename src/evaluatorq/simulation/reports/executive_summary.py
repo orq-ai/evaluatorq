@@ -91,7 +91,7 @@ async def populate_run_executive_summary(
 
     ``resolve_client`` overrides the credential resolver (the CLI passes its own
     module-level ``resolve_llm_client`` so its test monkeypatch seam still works);
-    defaults to :func:`evaluatorq.common.llm_client.resolve_llm_client`.
+    defaults to `evaluatorq.common.llm_client.resolve_llm_client`.
     """
     if not enabled or not run.results:
         return

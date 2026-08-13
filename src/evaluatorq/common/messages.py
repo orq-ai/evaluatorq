@@ -1,4 +1,9 @@
-"""Shared helpers for normalizing chat-message content."""
+"""Shared helpers for normalizing chat-message content.
+
+Canonical for every surface. Content is typed ``str | list[ContentPart]``:
+never call ``str()`` on it — that renders a Python repr into a transcript a
+judge then scores. Use these helpers or ``contracts.content_to_text``.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +18,7 @@ def coerce_content_text(content: Any) -> str:
     Python ``repr`` of the list. ``None`` becomes ``""``; plain strings (and anything
     else) pass through ``str``.
 
-    Unlike :func:`evaluatorq.contracts.content_to_text`, this best-effort helper
+    Unlike `evaluatorq.contracts.content_to_text`, this best-effort helper
     does not raise on non-text parts (it is used in report/transcript rendering).
     Image and file parts are surfaced as a ``[image]`` / ``[file]`` placeholder,
     and any other (unknown/future) part type as ``[<type>]``, so every part is

@@ -12,7 +12,7 @@ change it (quote it / convert ``\\n`` -> ``<br/>``). To auto-fix, run:
     python3 ~/.claude/skills/mermaid-markdown/harden_mermaid.py docs/**/*.md
 
 Usage:
-    python scripts/validate_mermaid.py [paths...]   # default: docs/**/*.md
+    python scripts/validate_mermaid.py [paths...]   # default: README.md + docs/**/*.md
 Exit 0 = clean, 1 = violations (or unbalanced fences).
 """
 
@@ -122,7 +122,7 @@ def check_file(path: Path) -> list[str]:
 def iter_paths(args: list[str]) -> list[Path]:
     if args:
         return [Path(a) for a in args]
-    return sorted(Path("docs").rglob("*.md"))
+    return [Path("README.md"), *sorted(Path("docs").rglob("*.md"))]
 
 
 def main(argv: list[str]) -> int:

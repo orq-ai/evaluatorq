@@ -20,9 +20,9 @@ from evaluatorq.contracts import (
 )
 
 # Accepted callable signatures — receive the conversation as a list of typed
-# :class:`~evaluatorq.contracts.Message` objects. The list holds one message for
+# `Message` objects. The list holds one message for
 # the opening turn and grows with every turn, so the same callable handles
-# single- and multi-turn red teaming. May return ``str`` or :class:`AgentResponse`.
+# single- and multi-turn red teaming. May return ``str`` or `AgentResponse`.
 AgentCallable = (
     Callable[[list[Message]], Awaitable[AgentResponse]]
     | Callable[[list[Message]], Awaitable[str]]
@@ -48,39 +48,42 @@ class CallableTarget(AgentTarget):
 
     Use this as an escape hatch for frameworks that don't have a dedicated
     integration. You provide a function that takes the conversation (a list of
-    typed :class:`~evaluatorq.contracts.Message` objects) and returns a response
+    typed `Message` objects) and returns a response
     — the wrapper handles the rest. The list contains one message on the opening
     turn and every prior turn on later turns, so a stateless callable still sees
     full context, matching the stateless OpenAI / Vercel / OpenAI-Agents targets
     (which likewise consume the typed ``Message`` list at the boundary).
 
-    Usage::
+    Usage:
 
-        from evaluatorq.contracts import Message
-        from evaluatorq.integrations.callable_integration import CallableTarget
+    ```python
+    from evaluatorq.contracts import Message
+    from evaluatorq.integrations.callable_integration import CallableTarget
 
-        # Async function — receives the whole conversation as Message objects
-        async def my_agent(messages: list[Message]) -> str:
-            result = await some_framework.run(messages[-1].content)
-            return result.text
+    # Async function — receives the whole conversation as Message objects
+    async def my_agent(messages: list[Message]) -> str:
+        result = await some_framework.run(messages[-1].content)
+        return result.text
 
-        target = CallableTarget(my_agent)
+    target = CallableTarget(my_agent)
 
-        # Need OpenAI chat-completion dicts? Convert at the boundary yourself:
-        async def openai_agent(messages: list[Message]) -> str:
-            chat = [m.to_chat_completion() for m in messages]
-            return (await client.chat.completions.create(model="gpt-4o", messages=chat)).choices[0].message.content
+    # Need OpenAI chat-completion dicts? Convert at the boundary yourself:
+    async def openai_agent(messages: list[Message]) -> str:
+        chat = [m.to_chat_completion() for m in messages]
+        return (await client.chat.completions.create(model="gpt-4o", messages=chat)).choices[0].message.content
 
-        target = CallableTarget(openai_agent)
+    target = CallableTarget(openai_agent)
 
-        # Plumb token counts via usage_fn — it sees the full transcript
-        def get_usage(messages: list[Message], response: str) -> TokenUsage:
-            return TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15, calls=1)
+    # Plumb token counts via usage_fn — it sees the full transcript
+    def get_usage(messages: list[Message], response: str) -> TokenUsage:
+        return TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15, calls=1)
 
-        target = CallableTarget(my_agent, usage_fn=get_usage)
+    target = CallableTarget(my_agent, usage_fn=get_usage)
 
-        # Pass to simulation or red teaming
-        config = DynamicRunConfig(targets=[target])
+    # Pass to simulation or red teaming
+    results = await simulate(target=target, ...)
+    report = await red_team(target)
+    ```
     """
 
     def __init__(
@@ -96,10 +99,10 @@ class CallableTarget(AgentTarget):
         Args:
             fn: A sync or async function taking the conversation as a
                 ``list[Message]`` and returning a ``str`` or an
-                :class:`AgentResponse`. The list grows by one turn each round, so
+                `AgentResponse`. The list grows by one turn each round, so
                 the same callable serves single- and multi-turn runs. Callables
                 that want OpenAI chat-completion dicts can call
-                :meth:`Message.to_chat_completion` on each element themselves.
+                `Message.to_chat_completion` on each element themselves.
             reset_fn: Optional callback invoked on ``new()`` to clear shared callable state between attacks.
             usage_fn: Optional callable taking ``(messages, response) -> TokenUsage | None``,
                 where ``messages`` is the full transcript forwarded to ``fn`` and
@@ -108,7 +111,7 @@ class CallableTarget(AgentTarget):
                 returns a string. The function must be synchronous; async usage
                 extraction is not supported. Exceptions raised by ``usage_fn`` are
                 logged as warnings and result in ``usage=None``.
-            agent_context: Optional :class:`AgentContext` describing the wrapped
+            agent_context: Optional `AgentContext` describing the wrapped
                 callable's tools, memory, system prompt, etc. The red teaming
                 pipeline uses this for capability-aware strategy filtering —
                 without it, all strategies (including nonsensical ones) will be
@@ -126,12 +129,12 @@ class CallableTarget(AgentTarget):
     async def respond(self, messages: list[Message]) -> AgentResponse:
         """Send the full conversation to the wrapped callable; return a structured response.
 
-        Forwards the entire transcript as typed :class:`Message` objects — tool
+        Forwards the entire transcript as typed `Message` objects — tool
         turns included — so a stateless callable sees prior context. The list
         holds a single message on the opening turn and grows each round. Like the
         stateless OpenAI / Vercel targets, no constraint is placed on the last
         turn's role. Callables that return a plain ``str`` are wrapped in an
-        :class:`AgentResponse`; those returning :class:`AgentResponse` pass
+        `AgentResponse`; those returning `AgentResponse` pass
         through. Token usage from ``usage_fn`` (if provided) is attached to the
         returned ``AgentResponse``.
         """

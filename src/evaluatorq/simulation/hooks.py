@@ -447,7 +447,7 @@ class CompositeSimulationHooks:
 
     Implements ``SimulationHooks`` structurally so it drops into any
     ``hooks=`` slot. Every void method fans out via
-    :func:`evaluatorq.common.async_utils.fan_out` — run ALL children, capture
+    `evaluatorq.common.async_utils.fan_out` — run ALL children, capture
     the first exception, re-raise it after the loop (uniform run-all-then-
     reraise policy). ``on_confirm`` uses the same policy, then combines with
     ``all(...)`` so the run proceeds only if every child approves.
@@ -494,7 +494,7 @@ class CompositeSimulationHooks:
 
 
 class ManifestStageHooks:
-    """Record pipeline stage transitions into a :class:`ManifestWriter`.
+    """Record pipeline stage transitions into a `ManifestWriter`.
 
     Implements ``SimulationHooks`` structurally as a no-op baseline, overriding
     ONLY ``on_stage_start`` / ``on_stage_end`` to feed the shared writer. It is

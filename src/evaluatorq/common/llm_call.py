@@ -98,7 +98,7 @@ def apply_pipeline_metadata(params: dict[str, Any]) -> None:
     metadata (via ``extra_kwargs``) wins on key conflict. Public: direct
     ``create()`` sites that build their own kwargs dict (structured output,
     first-message generation) call this instead of routing through
-    :func:`execute_chat_completion`.
+    `execute_chat_completion`.
 
     Sent regardless of endpoint. ``metadata`` is a first-class field on OpenAI's
     own Chat Completions / Responses APIs, so it is safe off-Orq — unlike the
@@ -193,7 +193,7 @@ async def execute_chat_parse(
 ) -> tuple[ParsedChatCompletion[Any], TokenUsage | None]:
     """Execute one structured Chat Completions call via ``.parse``.
 
-    Mirrors :func:`execute_chat_completion` (span recording, trace headers,
+    Mirrors `execute_chat_completion` (span recording, trace headers,
     reasoning_effort drop-retry) but routes through ``client.chat.completions.parse``
     with a Pydantic ``response_model``. The parsed object is available on
     ``response.choices[0].message.parsed`` (or ``.refusal``).

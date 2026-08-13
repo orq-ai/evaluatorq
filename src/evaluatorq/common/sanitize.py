@@ -1,5 +1,8 @@
 """Shared sanitization utilities for prompt injection prevention.
 
+Canonical for every surface: untrusted text reaching a prompt goes through
+``delimit`` — do not hand-roll boundary markers.
+
 Two complementary functions are provided:
 
 * ``delimit(text, tag="data")`` — wraps user-controlled text in XML-like
@@ -46,7 +49,7 @@ def delimit(text: str, *, tag: str = 'data') -> str:
 def xml_escape(text: str) -> str:
     """Escape text for safe embedding inside XML tags.
 
-    Wraps :func:`xml.sax.saxutils.escape` for convenience and
+    Wraps `xml.sax.saxutils.escape` for convenience and
     discoverability.
     """
     return xml.sax.saxutils.escape(text)

@@ -20,7 +20,8 @@ An evaluation has three parts:
 
 - **`DataPoint`** — one row of input plus its `expected_output`.
 - **`@job`** — an async function that turns a `DataPoint` into an output (your
-  model call, agent, or — here — a trivial transform).
+  model call, agent, or — here — a stand-in for one). Pass several and each
+  becomes a column in the results table.
 - **Evaluator** — a scorer that compares the output against the expectation and
   returns pass/fail.
 
@@ -40,47 +41,77 @@ flowchart LR
 
 ## A first evaluation
 
+Two versions of a support agent, scored on the same three questions. `agent-v1`
+answers from memory; `agent-v2` looks the answer up in the policy first.
+
 ```python
 import asyncio
 
 from evaluatorq import DataPoint, evaluatorq, job, string_contains_evaluator
 
+POLICY = {
+    "refund": "Refunds are available within 30 days of delivery.",
+    "ship": "Orders ship within 2 business days.",
+    "warranty": "Every device carries a 12 months warranty.",
+}
 
-@job("uppercase-converter")
-async def uppercase_job(data: DataPoint, _row: int) -> str:
-    return str(data.inputs.get("text", "")).upper()
+
+@job("agent-v1")
+async def agent_v1(data: DataPoint, _row: int) -> str:
+    """Answers from memory — so it only really knows about refunds."""
+    question = str(data.inputs["question"]).lower()
+    if "refund" in question:
+        return "Sure — you can request a refund within 30 days of delivery."
+    return "Our support team is happy to help with that."
 
 
-async def run():
+@job("agent-v2")
+async def agent_v2(data: DataPoint, _row: int) -> str:
+    """Looks the answer up in the support policy first."""
+    question = str(data.inputs["question"]).lower()
+    for topic, answer in POLICY.items():
+        if topic in question:
+            return answer
+    return "Our support team is happy to help with that."
+
+
+async def main() -> None:
     data = [
-        DataPoint(inputs={"text": "hello world"}, expected_output="HELLO"),
-        DataPoint(inputs={"text": "python is great"}, expected_output="PYTHON"),
-        DataPoint(inputs={"text": "evaluatorq rocks"}, expected_output="EVALUATORQ"),
+        DataPoint(inputs={"question": "How do I get a refund?"}, expected_output="30 days"),
+        DataPoint(inputs={"question": "When will my order ship?"}, expected_output="2 business days"),
+        DataPoint(inputs={"question": "How long is the warranty?"}, expected_output="12 months"),
     ]
-    return await evaluatorq(
-        "simple-local-eval",
+    await evaluatorq(
+        "support-agent-eval",
         data=data,
-        jobs=[uppercase_job],
+        jobs=[agent_v1, agent_v2],
         evaluators=[string_contains_evaluator()],
         parallelism=3,
-        print_results=True,
     )
 
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    asyncio.run(main())
 ```
+
+This is the repository's
+[`examples/lib/basics/support_agent_eval.py`](https://github.com/orq-ai/evaluatorq/blob/main/examples/lib/basics/support_agent_eval.py) —
+the same script the README quick start uses.
 
 Run it:
 
 ```bash
-uv run simple_local_eval.py
+uv run support_agent_eval.py
 ```
 
-`print_results=True` renders a pass/fail table in the terminal. In this
-example, `string_contains_evaluator()` checks whether the job output contains
-the `expected_output`, so `HELLO WORLD` satisfies an expected output of `HELLO`.
-Wire that pass/fail signal into CI to gate on quality regressions.
+`string_contains_evaluator()` checks whether the job output contains the
+`expected_output`, so `agent-v1` scores 0.33 — it only knows about refunds —
+against `agent-v2`'s 1.00. Every job runs against every data point, so adding a
+third variant adds a column.
+
+Because `agent-v1` fails two rows, the script exits with status 1: that is the
+CI gate firing, not a crash. Swap the two function bodies for your own model or
+agent call and that same pass/fail signal gates quality regressions in CI.
 
 ## Where to next
 

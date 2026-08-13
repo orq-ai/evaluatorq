@@ -218,7 +218,7 @@ async def simulate(
         generation_client: Optional pre-built ``AsyncOpenAI`` used for datapoint
             generation (first-message). When omitted, generation falls back to
             the same env-based provider resolution as
-            :func:`generate_and_simulate` (``ORQ_API_KEY`` → ``OPENAI_API_KEY``).
+            `generate_and_simulate` (``ORQ_API_KEY`` → ``OPENAI_API_KEY``).
         dataset_id: When set, fetch simulation datapoints from the named Orq
             dataset instead of taking them inline. Mutually exclusive with
             ``datapoints``, ``personas``, ``scenarios``. Each dataset row's
@@ -230,7 +230,7 @@ async def simulate(
             rules as ``dataset_id``; rows uploaded by a previous simulation
             run round-trip as-is. Requires ``ORQ_API_KEY``. To generate *new*
             datapoints seeded by an experiment instead, see
-            :func:`evaluatorq.simulation.extend_from_experiment`.
+            `evaluatorq.simulation.extend_from_experiment`.
         experiment_run_id: A specific run (manifest) of ``experiment_id`` to
             load. Latest run when omitted. Only valid with ``experiment_id``.
         memory_entity_id: Memory ``entity_id`` sent with every call to an
@@ -289,6 +289,48 @@ async def simulate(
             ``True`` uses ``SimulationRecommendationConfig()`` defaults, a
             config instance tunes the trigger thresholds and prompt budgets.
             Best-effort, like the summary: no-op without LLM creds.
+
+    Usage:
+
+    ```python
+    import asyncio
+
+    from evaluatorq.simulation import CommunicationStyle, Criterion, Persona, Scenario, simulate
+
+    persona = Persona(
+        name='Impatient Customer',
+        patience=0.2,
+        assertiveness=0.8,
+        politeness=0.4,
+        technical_level=0.3,
+        communication_style=CommunicationStyle.terse,
+        background='Wants a refund urgently',
+    )
+    scenario = Scenario(
+        name='Refund',
+        goal='Get a full refund',
+        criteria=[Criterion(description='Agent asks for order details', type='must_happen')],
+    )
+
+
+    async def support_agent(messages: list) -> str:
+        return 'Thanks for reaching out. How can I assist you today?'
+
+
+    async def main() -> None:
+        results = await simulate(
+            evaluation_name='basic-simulation-example',
+            target=support_agent,
+            personas=[persona],
+            scenarios=[scenario],
+            max_turns=6,
+            evaluator_names=['goal_achieved', 'criteria_met'],
+        )
+        print(f'{sum(r.goal_achieved for r in results)}/{len(results)} reached the goal')
+
+
+    asyncio.run(main())
+    ```
     """
     run = await _simulate_run(
         evaluation_name=evaluation_name,
@@ -350,9 +392,9 @@ async def _simulate_run(
     executive_summary: bool = False,
     recommendations: bool | SimulationRecommendationConfig = False,
 ) -> SimulationRun:
-    """Internal counterpart of :func:`simulate` that returns the full ``SimulationRun``.
+    """Internal counterpart of `simulate` that returns the full ``SimulationRun``.
 
-    Same keyword-only signature as :func:`simulate` (which is a thin
+    Same keyword-only signature as `simulate` (which is a thin
     ``.results`` unwrapper around this). Exists so callers that need the full
     run (e.g. the CLI, for its experiment URL / executive summary / save
     plumbing) don't have to rebuild it from the results list.
@@ -475,10 +517,10 @@ async def generate_and_simulate(
 ) -> list[SimulationResult]:
     """Generate personas/scenarios, then run simulations via evaluatorq().
 
-    Accepts the same ``target`` shapes as :func:`simulate` — a plain callable,
+    Accepts the same ``target`` shapes as `simulate` — a plain callable,
     an ``AgentTarget`` instance, or a string (``"agent:<key>"`` / bare ``"<key>"``
     for a hosted Orq agent, ``"deployment:<key>"`` for the Orq deployment bridge).
-    ``memory_entity_id`` mirrors :func:`simulate` too: it is sent as the memory
+    ``memory_entity_id`` mirrors `simulate` too: it is sent as the memory
     scope with every call to a string agent target (``agent:<key>`` or bare
     ``<key>``), for agents with a memory store attached. When omitted, a fresh
     per-target id is minted so memory-backed agents still work out of the box.
@@ -489,8 +531,8 @@ async def generate_and_simulate(
     ``sim_model`` drives persona/scenario/first-message generation, the
     user-simulator, and the judge. ``upload_results`` defaults to ``True``; set
     it to ``False`` to skip uploading the final experiment. ``exit_on_failure``
-    defaults to ``True``; see :func:`simulate` for the full semantics of the
-    CI-gate behaviour and how to opt out. ``hooks`` mirrors :func:`simulate`;
+    defaults to ``True``; see `simulate` for the full semantics of the
+    CI-gate behaviour and how to opt out. ``hooks`` mirrors `simulate`;
     note the ``on_confirm`` gate fires AFTER persona/scenario/first-message
     generation, so those generation tokens are already spent when the gate is
     consulted. ``agent_description`` takes precedence when supplied. Otherwise,
@@ -525,6 +567,33 @@ async def generate_and_simulate(
     list has nowhere to carry them — they are observable via ``save``/``report``
     or the dashboard. ``True`` for defaults, a ``SimulationRecommendationConfig``
     to tune. Best-effort: no-op without LLM creds.
+
+    Usage:
+
+    ```python
+    import asyncio
+
+    from evaluatorq.simulation import generate_and_simulate
+
+
+    async def main() -> None:
+        results = await generate_and_simulate(
+            evaluation_name='support-agent-sim',
+            target='agent:my-support-agent',  # hosted Orq agent, routed via ORQ_API_KEY
+            agent_description=(
+                'Customer support agent for an e-commerce store; handles refunds, orders, and product questions.'
+            ),
+            num_personas=3,
+            num_scenarios=4,  # -> 12 persona x scenario simulations
+            max_turns=6,
+            evaluator_names=['goal_achieved', 'criteria_met'],
+        )
+        passed = sum(r.goal_achieved for r in results)
+        print(f'Pass rate: {passed}/{len(results)}')
+
+
+    asyncio.run(main())
+    ```
     """
     run = await _generate_and_simulate_run(
         evaluation_name=evaluation_name,
@@ -569,8 +638,8 @@ async def _generate_datapoints_inner(
     """Shared generation trio: personas/scenarios + first-message datapoints.
 
     Builds one shared generation client (mirrors the pattern both callers
-    used inline) and runs the two-step pipeline shared by :func:`generate`
-    and :func:`_generate_and_simulate_run`: ``_generate_personas_scenarios``
+    used inline) and runs the two-step pipeline shared by `generate`
+    and `_generate_and_simulate_run`: ``_generate_personas_scenarios``
     followed by ``_resolve_or_generate_datapoints``, with the
     ``on_generate_inputs_ready`` hook fired in between exactly as both
     callers previously did inline. Must be called from inside the caller's
@@ -578,8 +647,8 @@ async def _generate_datapoints_inner(
     implicit via OTel contextvars).
 
     Returns ``(datapoints, gen_client, gen_owned)``. Callers own closing the
-    client: :func:`generate` has no further use for it and closes it right
-    away, while :func:`_generate_and_simulate_run` keeps it open to pass
+    client: `generate` has no further use for it and closes it right
+    away, while `_generate_and_simulate_run` keeps it open to pass
     into ``SimulationConfig.generation_client`` for the simulate stage and
     closes it only after ``_simulate_core`` returns. On any exception raised
     from within this helper (before the client is handed back to the
@@ -648,10 +717,10 @@ async def _generate_and_simulate_run(
     executive_summary: bool = False,
     recommendations: bool | SimulationRecommendationConfig = False,
 ) -> SimulationRun:
-    """Internal counterpart of :func:`generate_and_simulate` returning the full ``SimulationRun``.
+    """Internal counterpart of `generate_and_simulate` returning the full ``SimulationRun``.
 
-    Same keyword-only signature as :func:`generate_and_simulate` (which is a
-    thin ``.results`` unwrapper around this). See :func:`_simulate_run` for
+    Same keyword-only signature as `generate_and_simulate` (which is a
+    thin ``.results`` unwrapper around this). See `_simulate_run` for
     why this split exists.
     """
     from evaluatorq.common.async_utils import await_maybe
@@ -795,7 +864,7 @@ async def generate(
 
     Produces personas and scenarios, then builds one ``SimulationDatapoint`` per
     persona x scenario pair (each with a generated first message). Returns the
-    datapoints without running any simulation — feed them to :func:`simulate`
+    datapoints without running any simulation — feed them to `simulate`
     via ``datapoints=...``, or persist them (e.g. JSONL) and reuse.
 
     Pass ``persona_seeds`` / ``scenario_seeds`` to steer a dimension: each seed
@@ -805,12 +874,12 @@ async def generate(
     the full persona x scenario grid.
 
     This freezes the simulation *inputs* (personas, scenarios, first messages)
-    so every :func:`simulate` run scores the same fixed dataset — useful for
+    so every `simulate` run scores the same fixed dataset — useful for
     apples-to-apples comparison across agent versions. It does **not** make
     simulation deterministic: the agent under test, the user-simulator, and the
     judge remain stochastic at simulate time, so scores still vary run to run.
 
-    Provider resolution matches :func:`generate_and_simulate`: an injected
+    Provider resolution matches `generate_and_simulate`: an injected
     ``generation_client`` → ``ORQ_API_KEY`` (Orq router) → ``OPENAI_API_KEY``
     (with optional ``OPENAI_BASE_URL`` for an OpenAI-compatible endpoint).
     ``sim_model`` drives persona/scenario/first-message generation.
@@ -887,7 +956,7 @@ async def generate_personas(
     """Generate one ``Persona`` per archetype seed (e.g. ``"angry customer"``).
 
     The intermediate tier between fully-auto generation
-    (:func:`generate_and_simulate`) and hand-built ``Persona`` objects: you name
+    (`generate_and_simulate`) and hand-built ``Persona`` objects: you name
     each archetype, the LLM fills every trait. Provider resolves via the shared
     factory (``ORQ_API_KEY`` → ``OPENAI_API_KEY``) unless ``generation_client``
     is injected.
@@ -934,7 +1003,7 @@ async def generate_persona(
 ) -> Persona:
     """Generate one ``Persona`` from a short archetype seed (e.g. ``"angry customer"``).
 
-    See :func:`generate_personas` for the batch form and provider resolution.
+    See `generate_personas` for the batch form and provider resolution.
     """
     personas = await generate_personas(
         [seed],
@@ -956,7 +1025,7 @@ async def generate_scenarios(
 ) -> list[Scenario]:
     """Generate one ``Scenario`` per situation seed (e.g. ``"disputes a refund denial"``).
 
-    The scenario counterpart to :func:`generate_personas`: you name each
+    The scenario counterpart to `generate_personas`: you name each
     situation, the LLM fills the goal, context, and success/failure criteria.
     """
     from evaluatorq.simulation.exceptions import SimulationError
@@ -998,7 +1067,7 @@ async def generate_scenario(
 ) -> Scenario:
     """Generate one ``Scenario`` from a short situation seed.
 
-    See :func:`generate_scenarios` for the batch form and provider resolution.
+    See `generate_scenarios` for the batch form and provider resolution.
     """
     scenarios = await generate_scenarios(
         [seed],
@@ -1026,7 +1095,7 @@ async def _resolve_generation_agent_description(
     ``agent:<key>`` target (or a bare agent key) can supply that through the
     Orq agent context; a deployment, callable, and direct model cannot. Keep
     this separate from
-    :func:`_resolve_target`: the execution target is a stateless Responses
+    `_resolve_target`: the execution target is a stateless Responses
     target, while the composite red-team backend resolves platform metadata.
     """
     if agent_description and agent_description.strip():
@@ -1069,7 +1138,7 @@ async def _generate_personas_scenarios(
 ) -> tuple[list[Persona], list[Scenario]]:
     """Generate personas and scenarios concurrently from an agent description.
 
-    Shared by :func:`generate` and :func:`generate_and_simulate`. When
+    Shared by `generate` and `generate_and_simulate`. When
     ``persona_seeds`` / ``scenario_seeds`` are given, that dimension is built one
     object per seed — each seed is an archetype the LLM fleshes out (e.g.
     ``"angry retiree"``) — instead of auto-generating ``num_*``; the other
@@ -1772,7 +1841,7 @@ def _adapt_simulation_scorer(
     Note: ``on_evaluator_complete`` is NOT fired here. evaluatorq's
     ``process_evaluator`` wraps this scorer in a try/except, so a hook raising
     inside it would be swallowed (recorded as a scorer error) rather than
-    propagating. The hook is fired from :func:`_stamp_evaluator_scores`, which
+    propagating. The hook is fired from `_stamp_evaluator_scores`, which
     runs outside evaluatorq's guard, preserving the unguarded-propagation
     contract.
     """

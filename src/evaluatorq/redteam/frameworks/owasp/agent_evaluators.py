@@ -954,9 +954,11 @@ def get_all_owasp_evaluators(model_id: str | None = None) -> list[LlmEvaluatorEn
         List of OWASP ASI evaluator entities suitable for static testing
 
     Example:
+        ```pycon
         >>> evaluators = get_all_owasp_evaluators("azure/gpt-5-mini")
         >>> for evaluator in evaluators:
         ...     print(evaluator.display_name)
+        ```
     """
     return [
         get_asi01_goal_hijacking_evaluator(model_id),

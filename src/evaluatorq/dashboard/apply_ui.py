@@ -1,7 +1,7 @@
 """Apply-recommendations UI for the dashboard (RES-1143).
 
 Serves both surfaces on top of the shared engine in
-:mod:`evaluatorq.common.apply`: red team surfaces the report's
+`evaluatorq.common.apply`: red team surfaces the report's
 ``focus_area_recommendations`` in the Focus areas tab, agent simulation
 surfaces the run's ``recommendations`` in its Recommendations tab. Same bar,
 drawer, and confirm flow; only the routes, the write-back field
@@ -43,6 +43,7 @@ from loguru import logger
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import Response
 
+from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.common.reports import esc
 
 if TYPE_CHECKING:
@@ -469,15 +470,13 @@ def _build_clients() -> tuple[Any, Any, str]:
     api_key = os.environ.get('ORQ_API_KEY', '')
     if not api_key:
         raise ValueError('ORQ_API_KEY is not set; the dashboard cannot reach the Orq API to apply recommendations.')
-    try:
-        from orq_ai_sdk import Orq
-    except ModuleNotFoundError as e:  # pragma: no cover - extra not installed
-        raise ValueError("The 'orq-ai-sdk' package is required to apply recommendations (install extra 'orq').") from e
-
     from evaluatorq.redteam.backends.registry import create_async_llm_client
     from evaluatorq.redteam.contracts import PIPELINE_CONFIG
 
-    orq_client = Orq(api_key=api_key, server_url=os.environ.get('ORQ_BASE_URL', 'https://my.orq.ai'))
+    try:
+        orq_client = resolve_orq_client(api_key)
+    except ImportError as e:  # pragma: no cover - extra not installed
+        raise ValueError("The 'orq-ai-sdk' package is required to apply recommendations (install extra 'orq').") from e
     llm_client = create_async_llm_client(
         role_config=PIPELINE_CONFIG.evaluator.as_call_config(), max_retries=PIPELINE_CONFIG.retry_count
     )

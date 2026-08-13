@@ -72,10 +72,10 @@ def write_text_report(
         content: Text content to write.
 
     Returns:
-        Absolute :class:`~pathlib.Path` of the written file.
+        Absolute `Path` of the written file.
 
     Raises:
-        :class:`typer.Exit`: With code 1 if the directory cannot be created.
+        `typer.Exit`: With code 1 if the directory cannot be created.
     """
     import typer
 

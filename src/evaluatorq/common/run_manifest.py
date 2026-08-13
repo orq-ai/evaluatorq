@@ -1,5 +1,7 @@
 """Run lifecycle manifests: track a run's stage + status while it executes.
 
+Canonical run-state record for both surfaces — no sidecar status dict of your own.
+
 Reports only land on disk when a run *completes* — a run that is still running
 or that crashed leaves no artifact. The manifest fills that gap: a tiny record
 written when a run starts (``status='running'``), patched as stages advance, and
@@ -53,7 +55,7 @@ def _manifests_dir(runs_dir: Path) -> Path:
 class ManifestWriter:
     """Holds one manifest and flushes it to disk on each transition.
 
-    Construct via :func:`start_manifest`. Every method is best-effort: a disk
+    Construct via `start_manifest`. Every method is best-effort: a disk
     failure is logged, never raised, so manifest bookkeeping can't break a run.
     """
 
@@ -255,7 +257,7 @@ def list_run_records(runs_dir: Path) -> list[tuple[RunManifest | None, Path | No
     * A LEGACY report with no manifest yields ``(None, report_path)`` — the
       backwards-compatible path (read the full report for its stats). A completed
       manifest whose ``summary`` is too thin to build a row (see
-      :func:`summary_is_current`) is demoted to this path rather than listed
+      `summary_is_current`) is demoted to this path rather than listed
       with blank columns.
 
     Reports already covered by a manifest's ``report_path`` are de-duplicated out

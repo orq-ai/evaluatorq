@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 
 def create_async_llm_client(role_config=None) -> AsyncOpenAI:
-    """Lazy proxy to :func:`~evaluatorq.redteam.backends.registry.create_async_llm_client`.
+    """Lazy proxy to `create_async_llm_client`.
 
     Defined here so that tests can patch
     ``evaluatorq.redteam.backends.openai.create_async_llm_client`` and to avoid
@@ -64,7 +64,25 @@ def _openai_map_error(exc: Exception) -> tuple[str, str]:
 
 
 class OpenAIModelTarget(AgentTarget):
-    """Target adapter that treats ``agent_key`` as an OpenAI model identifier."""
+    """Target adapter that treats ``agent_key`` as an OpenAI model identifier.
+
+    Usage:
+
+    ```python
+    import asyncio
+
+    from evaluatorq.redteam import OpenAIModelTarget, red_team
+
+
+    async def main() -> None:
+        target = OpenAIModelTarget("gpt-5-mini", system_prompt="You are a customer support assistant.")
+        report = await red_team(target, mode="dynamic", categories=["LLM01", "LLM07"])
+        print(report.summary.resistance_rate)
+
+
+    asyncio.run(main())
+    ```
+    """
 
     def __init__(
         self,
@@ -78,7 +96,7 @@ class OpenAIModelTarget(AgentTarget):
         """Initialize the target with a model name, optional async client, and optional system prompt.
 
         If ``client`` is not provided, one is created automatically via
-        :func:`~evaluatorq.redteam.backends.registry.create_async_llm_client`.
+        `create_async_llm_client`.
         OpenAI models are stateless — no server-side memory to isolate.
         """
         super().__init__(memory_entity_id=None)
@@ -95,7 +113,7 @@ class OpenAIModelTarget(AgentTarget):
         prepended, so any leading ``system`` messages in ``messages`` are
         stripped to avoid a double system prompt. Assistant ``tool_calls`` and
         ``tool`` results in the transcript are preserved (rendered as OpenAI
-        chat params via :meth:`~evaluatorq.contracts.Message.to_chat_completion`), so
+        chat params via `to_chat_completion`), so
         multi-turn tool-using transcripts replay faithfully.
         """
         user_visible = [m for m in messages if m.role != 'system']

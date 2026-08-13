@@ -2,10 +2,10 @@
 
 Two modes:
 
-- **direct** (:func:`datapoints_from_traces`): one datapoint per fetched trace
+- **direct** (`datapoints_from_traces`): one datapoint per fetched trace
   conversation. An LLM infers the persona and scenario from the transcript; the
   first message is the real user's opening message, verbatim.
-- **extension** (:func:`extend_from_traces`): an LLM distills the fetched
+- **extension** (`extend_from_traces`): an LLM distills the fetched
   traffic into a distribution profile (topics, tone, technical level, edge
   cases), then the existing ``DatapointGenerator`` produces new
   distribution-matched datapoints with that profile as context.
