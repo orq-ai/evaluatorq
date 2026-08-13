@@ -665,7 +665,7 @@ class RedTeamRecommendationConfig(RecommendationConfigBase):
     """Tunable limits for focus-area recommendation generation.
 
     Pass an instance as ``recommendations=RedTeamRecommendationConfig(...)`` to
-    :func:`red_team`; ``recommendations=True`` uses these defaults and ``False`` skips the
+    ``red_team``; ``recommendations=True`` uses these defaults and ``False`` skips the
     LLM call entirely. ``SimulationRecommendationConfig`` is the agent-simulation twin —
     both inherit the shared caps from ``RecommendationConfigBase``.
     """

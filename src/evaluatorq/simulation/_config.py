@@ -87,7 +87,7 @@ class SimulationConfig(BaseModel):
     run_output: str | Path | None = None
     recommendations: SimulationRecommendationConfig | None = None
     """Generate remediation suggestions in-core (before save), mirroring red teaming's
-    ``recommendations=`` on :func:`red_team`. ``None`` means off. The public
+    ``recommendations=`` on ``red_team``. ``None`` means off. The public
     ``simulate``/``generate_and_simulate`` leave it off (they return bare results, which
     have nowhere to carry suggestions); the CLI resolves its ``--recommendations`` flag
     into a config here."""

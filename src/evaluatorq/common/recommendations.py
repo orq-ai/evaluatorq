@@ -6,7 +6,7 @@ defaults", ``False`` means "skip the LLM call", and a config instance means "on,
 
 The two configs share only what genuinely means the same thing on both surfaces (the
 suggestion cap and the analysis call's token budget), which is what
-:class:`RecommendationConfigBase` holds. Everything else is surface-specific — red
+``RecommendationConfigBase`` holds. Everything else is surface-specific — red
 teaming samples failed traces per risk area, simulation gates on judge metric thresholds
 — so each surface subclasses with its own fields rather than sharing one wide model where
 half the knobs are inert.
