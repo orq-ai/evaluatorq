@@ -135,7 +135,8 @@ def test_every_exported_symbol_is_documented_exactly_once(tmp_path: Path) -> Non
     # Restoring them to `evaluatorq/redteam/` makes autorefs prefer that page for
     # every `AgentTarget`/`AgentContext` cross-reference and emit anchors
     # mkdocstrings never wrote (it anchors re-exports under the defining module),
-    # which fails --strict. Tracked separately; not a highlighting fix.
+    # which fails --strict. Tracked as RES-1303; not a highlighting fix.
+    # Emptying this set is that ticket's acceptance criterion — do not add to it.
     KNOWN_UNDOCUMENTED = {
         "AgentContext",
         "JuryResult",
