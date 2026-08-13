@@ -4,6 +4,13 @@ site_url: https://orq-ai.github.io/evaluatorq/
 repo_url: https://github.com/orq-ai/evaluatorq
 repo_name: orq-ai/evaluatorq
 docs_dir: docs
+
+# `mkdocs serve` watches docs_dir, the config and the hooks — not src/. Every API
+# reference page is generated from docstrings there, so without this a docstring
+# edit shows nothing until you restart the server, and you end up reviewing a
+# stale build.
+watch:
+  - src
 copyright: "© 2026 Orq AI · MIT License"
 
 # Keep skill scratch (plans/specs) and shared snippet includes out of the built nav.
