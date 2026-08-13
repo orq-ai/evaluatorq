@@ -610,10 +610,6 @@ class EvaluatorConfig(BaseModel):
         'budget. Set to 1 to disable — a failing judge then falls to the panel machinery '
         '(replacement_judges / min_successful_judges) immediately.',
     )
-    retry_statuses: list[int] | None = Field(
-        default=None,
-        description='Extra HTTP status codes a judge call retries on top of the default 429/5xx.',
-    )
     repetitions: int = Field(default=1, ge=1)
     replacement_judges: list[str] = Field(default_factory=list)
     min_successful_judges: int = Field(default=1, ge=1)
@@ -657,7 +653,6 @@ class EvaluatorConfig(BaseModel):
             extra_kwargs=self.extra_kwargs,
             client=self.client,
             retry_attempts=self.retry_attempts,
-            retry_statuses=self.retry_statuses,
         )
 
     @model_validator(mode='after')

@@ -165,12 +165,8 @@ class LLMCallConfig(BaseModel):
         default=3,
         ge=1,
         description='Total attempts (initial call + retries) for callers that own retry via '
-        'with_retry — currently the judge. Set to 1 to disable. Clients those callers build '
-        'get max_retries=0 so the two layers cannot multiply.',
-    )
-    retry_statuses: list[int] | None = Field(
-        default=None,
-        description='Extra HTTP status codes to retry on top of the default 429/5xx.',
+        'with_retry — currently the judge. Set to 1 to disable. The owning caller disarms the '
+        "client's own retry budget for the duration (see run_judge) so the two cannot multiply.",
     )
 
     def completion_params(self, **params: Any) -> dict[str, Any]:

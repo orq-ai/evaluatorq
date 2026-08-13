@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
 from openai import APIConnectionError, APIStatusError, APITimeoutError, BadRequestError
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from evaluatorq.common.llm_call import execute_chat_completion, execute_chat_parse, execute_response
 from evaluatorq.common.llm_client import client_routes_through_orq
@@ -88,6 +88,12 @@ class JudgeOutcome(BaseModel):
     error_message: str | None = None
     error_exc: Exception | None = None
     timeout_ms: int | None = None
+    endpoint: Literal['chat', 'responses'] | None = Field(
+        default=None,
+        description='Which endpoint actually served the verdict. Lets a report tell '
+        '"the model is not in the catalogue" apart from "Responses fell back to chat" '
+        'when total_cost is None; None on an outcome that never reached a call.',
+    )
 
 
 def _format_output_message(item: OutputMessage) -> dict[str, Any] | None:
@@ -233,6 +239,29 @@ def reset_responses_rejectors() -> None:
     _RESPONSES_REJECTORS.clear()
 
 
+def _without_client_retries(client: AsyncOpenAI, retry_attempts: int) -> AsyncOpenAI:
+    """``client`` with its own retry budget disarmed, when this call owns retry.
+
+    ``with_retry`` re-runs the whole judge call and the OpenAI SDK retries inside
+    each of those attempts, so the two budgets *multiply*. The shipped red-team
+    path injects the attacker client, built with ``max_retries=LLMConfig.retry_count``
+    (default 3): under ``retry_attempts=3`` that is up to 12 requests and ~10
+    minutes of backoff for one rate-limited judgement. The call sites that build
+    their own judge client pass ``max_retries=0`` for exactly this reason, but an
+    injected client — the documented, supported pattern — never went through them.
+
+    ``with_options`` shares the underlying transport, so this is cheap and leaves
+    the caller's own client object untouched. The ``int`` check keeps test doubles
+    (whose every attribute is truthy) on their original object.
+    """
+    if retry_attempts <= 1:
+        return client
+    max_retries = getattr(client, 'max_retries', 0)
+    if not isinstance(max_retries, int) or max_retries <= 0:
+        return client
+    return client.with_options(max_retries=0)
+
+
 async def _resolve_responses_model(client: AsyncOpenAI, model: str) -> str | None:
     """The model id to send to the Responses endpoint, or None to stay on chat.
 
@@ -242,13 +271,26 @@ async def _resolve_responses_model(client: AsyncOpenAI, model: str) -> str | Non
 
     The router's Responses endpoint also only accepts ``provider/model``, while
     judge configs are written with a bare id (``gpt-5-mini``); the model
-    catalogue supplies the provider. A model the catalogue does not know cannot
-    be qualified, so that judge stays on Chat Completions rather than eating a
-    400 per attack.
+    catalogue supplies the provider. A model the catalogue does not know, or
+    whose entry reports no Responses support, cannot be qualified, so that judge
+    stays on Chat Completions rather than eating a 400 per attack.
     """
     if model in _RESPONSES_REJECTORS or not client_routes_through_orq(client):
         return None
-    return await qualified_model(model)
+    return await qualified_model(model, client)
+
+
+def _first_refusal(response: Any) -> str | None:
+    """The refusal text on a Responses reply, or None if it did not refuse.
+
+    A refusal arrives as a ``refusal`` content part inside an output message
+    rather than as its own field, which is why this walks the output items.
+    """
+    for item in getattr(response, 'output', None) or []:
+        for part in getattr(item, 'content', None) or []:
+            if getattr(part, 'type', None) == 'refusal':
+                return getattr(part, 'refusal', '') or ''
+    return None
 
 
 async def _responses_judge(
@@ -289,15 +331,25 @@ async def _responses_judge(
     )
     parsed = response.output_parsed
     if parsed is None:
-        # No parsed object (refusal, truncation, content filter). Report it the way
-        # the chat-parse path does — a PARSE error that still carries the usage,
-        # because those tokens were billed whether or not the verdict parsed.
         raw = getattr(response, 'output_text', '') or ''
+        # A refusal is a verdict, not a failure: the chat-parse path maps it to an
+        # abstain, and the same judgement must not change classification just
+        # because it went out on a different endpoint.
+        refusal = _first_refusal(response)
+        if refusal is not None:
+            payload = EvaluatorResponsePayload(value=None, abstain=True, explanation=refusal)
+            return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw)
+        # Otherwise: truncation or a content filter. Report it the way the
+        # chat-parse path does — a PARSE error that still carries the usage,
+        # because those tokens were billed whether or not the verdict parsed —
+        # and name the reason, so "your max_tokens was too small" does not get
+        # rolled up to the user as "the model returned malformed JSON".
         status = getattr(response, 'status', None)
-        logger.error('Judge [{}] responses parse produced no object (status={})', model, status)
+        reason = getattr(getattr(response, 'incomplete_details', None), 'reason', None)
+        logger.error('Judge [{}] responses parse produced no object (status={}, reason={})', model, status, reason)
         return JudgeOutcome(
             error_kind=JudgeError.PARSE,
-            error_message=f'structured output produced no parsed object (status={status})',
+            error_message=f'structured output produced no parsed object (status={status}, reason={reason})',
             token_usage=usage,
             raw_content=raw,
         )
@@ -364,13 +416,26 @@ async def run_judge(
 ) -> JudgeOutcome:
     """Render the template, call the judge model, and parse the verdict.
 
-    When ``response_model`` is None (default), behavior is byte-identical to the
-    original implementation: uses ``client.chat.completions.create`` with
-    ``response_format={'type': 'json_object'}`` and ``temperature=cfg.temperature``.
+    **Which endpoint.** ``cfg.api='responses'`` (the default for evaluators) sends
+    the call to the Orq router's Responses endpoint — the one it prices — but only
+    when all of: the client routes through the router, ``structured_output`` is on
+    (the Responses path here is schema-only), and the model catalogue can qualify
+    the bare model id as a ``provider/model`` that reports Responses support.
+    Anything else stays on Chat Completions, as does ``cfg.api='chat_completions'``.
+    :attr:`JudgeOutcome.endpoint` records which one actually served the verdict.
 
-    When ``response_model`` is provided, routes through tier-1 ``.parse`` (structured
-    output). On ``BadRequestError`` related to schema support, falls back to the
-    json_object path with model schema injected into the system prompt.
+    **On Chat Completions**, with ``response_model`` set and ``structured_output``
+    on, the call routes through tier-1 ``.parse``; a ``BadRequestError`` that names
+    a schema/response_format rejection falls back to the ``json_object`` path with
+    the schema injected into the system prompt. Without ``response_model`` it is the
+    plain ``chat.completions.create`` + ``response_format={'type': 'json_object'}``
+    call this function has always made.
+
+    **Retry.** The whole attempt — endpoint choice included — runs under
+    :func:`with_retry` for ``cfg.retry_attempts`` attempts, so rate limits, 5xx and
+    transport failures back off and try again while everything else raises straight
+    through to the error classification. Clients built by evaluatorq for this path
+    are given ``max_retries=0`` so the two retry layers cannot multiply.
 
     ``temperature`` defaults to ``cfg.temperature`` via the ``_USE_CFG`` sentinel;
     pass ``None`` explicitly to omit the param (e.g. for reasoning models).
@@ -378,6 +443,7 @@ async def run_judge(
     temp: float | None = cfg.temperature if isinstance(temperature, _UseCfg) else temperature
     user_prompt = render_template(prompt_template, replacements)
 
+    client = _without_client_retries(client, cfg.retry_attempts)
     raw_content = '{}'
     # Resolved before the span opens so the span carries the operation and the model
     # id this call actually sends — `responses openai/gpt-5-mini`, not `chat gpt-5-mini`
@@ -392,18 +458,23 @@ async def run_judge(
 
     async def _attempt() -> JudgeOutcome:
         nonlocal raw_content, responses_model
-        async with with_llm_span(
-            model=responses_model or model,
-            operation='responses' if responses_model else 'chat',
-            temperature=temp,
-            max_tokens=cfg.max_tokens,
-            attributes=span_attributes or {},
-        ) as span:
-            # Default for judges: the Responses endpoint is the one the Orq router
-            # prices, so a judge call records cost like a target call does (RES-1295).
-            # Set `api='chat_completions'` on the evaluator config to opt out.
-            if responses_model is not None:
-                try:
+        # Default for judges: the Responses endpoint is the one the Orq router
+        # prices, so a judge call records cost like a target call does (RES-1295).
+        # Set `api='chat_completions'` on the evaluator config to opt out.
+        #
+        # The Responses call gets its own span, closed before any fallback opens the
+        # chat one. Sharing a span would label a chat call `responses provider/model`
+        # and let the second record_llm_response overwrite the first, hiding the
+        # billed 400 entirely.
+        if responses_model is not None:
+            try:
+                async with with_llm_span(
+                    model=responses_model,
+                    operation='responses',
+                    temperature=temp,
+                    max_tokens=cfg.max_tokens,
+                    attributes=span_attributes or {},
+                ) as span:
                     outcome = await _responses_judge(
                         client=client,
                         model=responses_model,
@@ -414,20 +485,24 @@ async def run_judge(
                         temp=temp,
                         response_model=response_model,
                     )
-                except BadRequestError as exc:
-                    # The endpoint or one of its params was rejected: degrade to chat for
-                    # the rest of *this* judgement (a retry must not re-pay the same 400).
-                    # Only a 400 that names the endpoint or its params downgrades the model
-                    # process-wide — a one-off 400 (content policy, a bad extra_kwargs)
-                    # must not cost every later judge call its router-reported cost.
-                    responses_model = None
-                    err = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
-                    if any(k in err for k in ('response', 'text_format', 'unsupported', 'not supported', 'parameter')):
-                        _RESPONSES_REJECTORS.add(model)
-                    logger.warning('Model {} rejected the Responses endpoint ({}); using chat completions', model, exc)
-                else:
-                    raw_content = outcome.raw_content or raw_content
-                    return outcome
+            except BadRequestError as exc:
+                # The endpoint or one of its params was rejected: degrade to chat for
+                # the rest of *this* judgement (a retry must not re-pay the same 400).
+                # Only a 400 that names the endpoint or its params downgrades the model
+                # process-wide — a one-off 400 (content policy, a bad extra_kwargs)
+                # must not cost every later judge call its router-reported cost.
+                responses_model = None
+                err = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
+                if any(k in err for k in ('response', 'text_format', 'unsupported', 'not supported', 'parameter')):
+                    _RESPONSES_REJECTORS.add(model)
+                logger.warning('Model {} rejected the Responses endpoint ({}); using chat completions', model, exc)
+            else:
+                raw_content = outcome.raw_content or raw_content
+                return outcome.model_copy(update={'endpoint': 'responses'})
+
+        async def _chat_verdict(span: Any) -> JudgeOutcome:
+            """The Chat Completions half: tier-1 `.parse`, then the json_object paths."""
+            nonlocal raw_content
             if structured_output and response_model is not None:
                 messages = [
                     {'role': 'system', 'content': system_prompt},
@@ -523,6 +598,17 @@ async def run_judge(
             payload = EvaluatorResponsePayload.model_validate_json(_strip_code_fences(raw_content))
             return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
 
+        async with with_llm_span(
+            model=model,
+            operation='chat',
+            temperature=temp,
+            max_tokens=cfg.max_tokens,
+            attributes=span_attributes or {},
+        ) as span:
+            # Stamped here rather than at each return: every path below this span is
+            # a chat call, and the Responses path returned before it opened.
+            return (await _chat_verdict(span)).model_copy(update={'endpoint': 'chat'})
+
     try:
         # Retried like every other inference call in the codebase: rate limits, 5xx
         # and transport failures back off and try again, everything else raises
@@ -531,7 +617,6 @@ async def run_judge(
         return await with_retry(
             _attempt,
             max_attempts=cfg.retry_attempts,
-            retry_statuses=cfg.retry_statuses,
             label=f'judge[{model}]',
         )
     except (asyncio.TimeoutError, APITimeoutError):

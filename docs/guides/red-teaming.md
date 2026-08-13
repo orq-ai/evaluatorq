@@ -165,19 +165,32 @@ systematically blocked judge shows up as one named cause (`evaluation/api_status
 
 ### What a run costs
 
-`report.summary.token_usage_total` covers both halves of a run — the target's
-calls and the judge's — with `calls` and `priced_calls` alongside the dollar
-figure. When those two counts differ, some call carries no price and the total
-is a floor rather than the whole bill.
+`report.summary.token_usage_total` covers every LLM call in a run — attack
+generation, the target, and the judge — with `calls` and `priced_calls` alongside
+the dollar figure. When those two counts differ, some call carries no price and
+the total is a floor rather than the whole bill.
 
-Judges call the Orq router's Responses endpoint by default, because that is the
-endpoint the router prices; a judge on Chat Completions comes back with tokens
-and no cost. Verdicts there are schema-enforced (`json_schema`), so the provider
-produces the verdict's own keys rather than merely some JSON object. Pass `EvaluatorConfig(api='chat_completions')` to opt out, and cost
-for those calls is filled in from Orq's model catalogue instead. Both fall back
-on their own: a model the router will not accept on Responses moves to Chat
-Completions for the rest of the run, and a model missing from the catalogue
+A judge on the Orq router calls its Responses endpoint by default, because that
+is the endpoint the router prices. Verdicts there are schema-enforced
+(`json_schema`), so the provider produces the verdict's own keys rather than
+merely some JSON object. Pass `EvaluatorConfig(api='chat_completions')` to opt
+out; a judge on Chat Completions comes back with tokens but no price, so
+evaluatorq fills the cost in client-side from Orq's model catalogue.
+
+Three conditions have to hold for the Responses default to apply: the judge
+client routes through the Orq router, an `ORQ_API_KEY` is available to read the
+catalogue, and the model appears there and reports Responses support. A judge
+pointed at any other endpoint — a direct OpenAI key, vLLM, a proxy — stays on
+Chat Completions, as does one whose model the catalogue does not list. Both
+layers fall back on their own: a model the router rejects on Responses moves to
+Chat Completions for the rest of the run, and a model missing from the catalogue
 stays honestly unpriced rather than reporting `$0.00`.
+
+Judge calls retry on rate limits, 5xx and transport failures —
+`EvaluatorConfig(retry_attempts=...)` sets the budget (3 by default, 1 to
+disable). It is separate from `LLMConfig.retry_count`, which is the target-side
+budget; a client evaluatorq is given for judging has its own SDK-level retry
+disarmed for the duration so the two cannot multiply.
 
 ## In CI
 

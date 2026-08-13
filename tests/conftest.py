@@ -3,7 +3,9 @@ import socket
 
 import pytest
 
+from evaluatorq.common.judge import reset_responses_rejectors
 from evaluatorq.common.llm_call import reset_reasoning_rejectors
+from evaluatorq.common.model_catalogue import reset_catalogue_cache
 
 
 class LeakedNetworkCall(AssertionError):
@@ -83,6 +85,34 @@ def _block_outbound_network(request, monkeypatch):
 def _reset_reasoning_rejectors():
     """The per-model rejection memo is process-lifetime; isolate each test."""
     reset_reasoning_rejectors()
+    reset_responses_rejectors()
+
+
+class _OfflineCatalogues(dict):  # pyright: ignore[reportMissingTypeArgument]
+    """A catalogue cache that reports every host as already-fetched-and-empty."""
+
+    def get(self, key, default=None):
+        return super().get(key, {})
+
+
+@pytest.fixture(autouse=True)
+def _offline_model_catalogue(request, monkeypatch):
+    """Make the model catalogue a cache hit for every host, so no test fetches it.
+
+    ``price_usage`` now sits on every chat-completion path and lazily GETs
+    ``/v2/models``. With a credential in the environment that is a live, billed
+    request — the network guard above catches it, but only after the call has
+    gone out. Reporting every host as cached means the fetch is never attempted,
+    while leaving ``_load_catalogue`` itself real so its own tests can exercise
+    it (they swap this cache back for a plain dict).
+    """
+    from evaluatorq.common import model_catalogue
+
+    reset_catalogue_cache()
+    if not request.node.get_closest_marker("integration"):
+        monkeypatch.setattr(model_catalogue, "_catalogues", _OfflineCatalogues())
+    yield
+    reset_catalogue_cache()
 
 
 @pytest.fixture(autouse=True)

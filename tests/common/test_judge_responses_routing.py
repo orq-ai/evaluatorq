@@ -27,8 +27,8 @@ ORQ_URL = 'https://my.orq.ai/v3/router'
 def _isolate(monkeypatch: pytest.MonkeyPatch):
     judge_mod.reset_responses_rejectors()
 
-    async def fake_load():
-        return {'gpt-5-mini': model_catalogue.ModelInfo(0.00025, 0.002, 'openai')}
+    async def fake_load(client=None):  # noqa: ANN001, ARG001
+        return {'gpt-5-mini': model_catalogue.ModelInfo(0.00025, 0.002, 'openai', supports_responses=True)}
 
     monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
     yield
@@ -163,7 +163,7 @@ async def test_chat_completions_opt_out_is_honoured():
 
 @pytest.mark.asyncio
 async def test_unknown_model_cannot_be_qualified_so_stays_on_chat(monkeypatch: pytest.MonkeyPatch):
-    async def empty_catalogue():
+    async def empty_catalogue(client=None):  # noqa: ANN001, ARG001
         return {}
 
     monkeypatch.setattr(model_catalogue, '_load_catalogue', empty_catalogue)

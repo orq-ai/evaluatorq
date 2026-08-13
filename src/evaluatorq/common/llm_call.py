@@ -184,7 +184,7 @@ async def execute_chat_completion(
     record_llm_response(span, response)
     # The Orq router prices Responses but not Chat Completions, so usage here carries
     # tokens only; price it from the model catalogue (RES-1295).
-    return response, await price_usage(TokenUsage.from_completion(response), model)
+    return response, await price_usage(TokenUsage.from_completion(response), model, client)
 
 
 async def execute_chat_parse(
@@ -233,7 +233,7 @@ async def execute_chat_parse(
         params.pop('reasoning_effort', None)
         response = await asyncio.wait_for(client.chat.completions.parse(**params), timeout=timeout_s)
     record_llm_response(span, response)
-    return response, await price_usage(TokenUsage.from_completion(response), model)
+    return response, await price_usage(TokenUsage.from_completion(response), model, client)
 
 
 async def execute_response(
@@ -254,7 +254,8 @@ async def execute_response(
     The Responses counterpart of :func:`execute_chat_completion`. Preferred for
     judges because the Orq router prices this endpoint and not Chat Completions:
     ``usage`` comes back with ``input_cost``/``output_cost``/``total_cost``
-    already filled in, so no client-side pricing is needed (RES-1295).
+    already filled in, so the ``price_usage`` call below is a no-op on the Orq
+    path and only covers a non-Orq endpoint or an unpriced model (RES-1295).
 
     ``messages`` are passed straight through as Responses ``input`` items; the
     system entry rides along as a message rather than as ``instructions``, which
@@ -297,4 +298,4 @@ async def execute_response(
     record_llm_response(span, response)
     # Priced by the router; price_usage is a no-op unless it came back unpriced
     # (a non-Orq endpoint, or a model the router does not price).
-    return response, await price_usage(TokenUsage.extract(getattr(response, 'usage', None), calls=1), model)
+    return response, await price_usage(TokenUsage.extract(getattr(response, 'usage', None), calls=1), model, client)
