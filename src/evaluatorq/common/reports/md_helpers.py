@@ -36,16 +36,40 @@ def fmt_cost(cost: float | None) -> str:
     return f'${cost:,.4f}'
 
 
-def cost_coverage(priced_calls: int, calls: int) -> str:
-    """Label a cost total that only some calls contributed to, e.g. ``' (3 of 10 calls)'``.
+def cost_coverage(priced_calls: int, calls: int, *, estimated_calls: int = 0) -> str:
+    """Label a cost total with how many calls contributed and, if any, whether
+    the total is billed or client-side estimated.
 
-    Returns ``''`` when every call was priced, or when ``priced_calls`` is 0 —
-    reports written before this was tracked have no coverage data, and claiming
-    "0 of N" for them would be a lie in the other direction.
+    Returns ``''`` when every call was priced by the provider (nothing to qualify)
+    or when ``priced_calls`` is 0 — reports written before coverage was tracked have
+    no coverage data, and claiming "0 of N" for them would be a lie in the other
+    direction.
+
+    ``estimated_calls`` counts how many of ``priced_calls`` were priced client-side
+    from ``common.model_catalogue`` rather than billed by the provider — the same
+    provenance ``Usage.cost_source`` derives from. Combined with call coverage, the
+    returned string is one of:
+
+    - ``''`` — every call priced, all by the provider (nothing to qualify).
+    - ``' (3 of 10 calls)'`` — only some calls priced, all by the provider.
+    - ``' (estimated)'`` — every call priced, all client-side estimates.
+    - ``' (partly estimated)'`` — every call priced, a mix of provider and estimate.
+    - ``' (3 of 10 calls, estimated)'`` — only some calls priced, all client-side estimates.
+    - ``' (3 of 10 calls, partly estimated)'`` — only some calls priced, a mix of provider and estimate.
     """
-    if 0 < priced_calls < calls:
-        return f' ({priced_calls:,} of {calls:,} calls)'
-    return ''
+    if priced_calls <= 0:
+        return ''
+    coverage = f'{priced_calls:,} of {calls:,} calls' if priced_calls < calls else ''
+    if estimated_calls <= 0:
+        provenance = ''
+    elif estimated_calls >= priced_calls:
+        provenance = 'estimated'
+    else:
+        provenance = 'partly estimated'
+    parts = [part for part in (coverage, provenance) if part]
+    if not parts:
+        return ''
+    return f' ({", ".join(parts)})'
 
 
 def bar(rate: float | None, width: int = 10) -> str:
