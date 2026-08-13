@@ -39,6 +39,15 @@ async def generate_structured(
     Returns ``(parsed_model, "")`` when structured output succeeds, or
     ``(None, raw_content)`` when the model doesn't support it and we fall back
     to json_object mode.
+
+    RES-1295: neither the ``parse()`` call below nor the json_object fallback
+    extracts usage, so their tokens never reach any total. This helper is
+    called from 8 sites across ``persona_generator.py``, ``scenario_generator.py``,
+    and ``traces.py``, none of which track usage today — adding a usage
+    element to this function's return tuple would mean threading it through
+    every one of those callers for a return type nothing else in this codebase
+    currently changes. See "What the totals do not include" in
+    docs/guides/red-teaming.md.
     """
 
     # Cast once — the OpenAI SDK accepts dict literals at runtime; the

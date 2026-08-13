@@ -168,6 +168,12 @@ async def generate_recommendations(
                 trace_headers = await get_trace_context_headers()
                 if trace_headers:
                     extra['extra_headers'] = {**(extra.get('extra_headers') or {}), **trace_headers}
+                # RES-1295: this call extracts no usage, so its tokens never
+                # reach any total. `SimulationRecommendation` has no usage
+                # field and this opt-in post-processing step runs after
+                # per-simulation usage has already been summarized — adding a
+                # sink here would mean widening a public result type. See
+                # "What the totals do not include" in docs/guides/red-teaming.md.
                 response = await llm_client.chat.completions.create(  # pyright: ignore[reportCallIssue, reportArgumentType]
                     model=model,
                     messages=messages,  # pyright: ignore[reportArgumentType]

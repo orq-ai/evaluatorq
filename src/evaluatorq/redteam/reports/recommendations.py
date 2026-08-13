@@ -207,6 +207,14 @@ async def generate_focus_area_recommendations(
                 **(llm_kwargs or {}),
             }
             apply_pipeline_metadata(merged_kwargs)
+            # RES-1295: this call extracts no usage, so its tokens never reach
+            # any total. `report.summary.token_usage_total` is already
+            # finalized by the time this opt-in post-processing step runs, and
+            # `report.summary.token_usage_by_source` is documented to sum to
+            # it — folding this call's usage into either without maintaining
+            # that invariant across all summary breakdowns would be more than
+            # a one-line fix. See "What the totals do not include" in
+            # docs/guides/red-teaming.md.
             response = await llm_client.chat.completions.create(  # pyright: ignore[reportCallIssue, reportArgumentType]
                 **merged_kwargs,
             )

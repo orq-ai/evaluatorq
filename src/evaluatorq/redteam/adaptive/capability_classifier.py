@@ -236,6 +236,11 @@ async def _infer_resource_capabilities(
             input_messages=infer_messages,
             attributes={'orq.redteam.llm_purpose': 'infer_resources'},
         ) as res_span:
+            # RES-1295: `execute_chat_parse` prices this call, but the returned
+            # `Usage` is discarded here — `_infer_resources` returns bare
+            # `ResourceCapabilityInference`, with no sink to carry the usage to
+            # a run total. Real spend, uncounted. See "What the totals do not
+            # include" in docs/guides/red-teaming.md.
             response, _ = await execute_chat_parse(
                 client=llm_client,
                 model=model,
@@ -303,6 +308,11 @@ async def _classify_tools(
                 'orq.redteam.num_tools': len(agent_context.tools),
             },
         ) as cls_span:
+            # RES-1295: `execute_chat_parse` prices this call, but the returned
+            # `Usage` is discarded here — `_classify_tools` returns a bare
+            # capabilities dict, with no sink to carry the usage to a run
+            # total. Real spend, uncounted. See "What the totals do not
+            # include" in docs/guides/red-teaming.md.
             response, _ = await execute_chat_parse(
                 client=llm_client,
                 model=model,

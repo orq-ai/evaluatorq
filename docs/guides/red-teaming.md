@@ -193,6 +193,46 @@ call. It is a separate, judge-side budget from `LLMConfig.retry_count`'s
 target-side one; a client evaluatorq is given for judging has its own
 SDK-level retry disarmed for the duration so the two cannot multiply.
 
+#### What the totals do not include
+
+A handful of LLM calls fall outside `report.summary.token_usage_total` (and
+outside the equivalent simulation-side totals) entirely — real spend that no
+total, floor or otherwise, reflects. Each is a deliberate scope call, not an
+oversight left in place by accident:
+
+- **Blackbox capability classification** (`redteam/adaptive/blackbox_classifier.py`)
+  — the judge call that infers an agent's capabilities from probe transcripts
+  extracts no usage. `classify_agent_capabilities_blackbox` returns
+  `BlackboxAgentCapabilities`, which has no usage field, and the function is
+  not currently wired into any pipeline (exported but uncalled outside tests).
+- **Structured-output generation** (`simulation/utils/structured_output.py`,
+  `simulation/generators/first_message_generator.py`) — persona, scenario, and
+  first-message generation for simulated users extract no usage from either
+  the primary `parse()` call or the `json_object` fallback. These helpers are
+  called from 8+ sites across the simulation generators and `traces.py`, none
+  of which track usage today.
+- **LLM-generated recommendations and executive summaries**
+  (`redteam/reports/recommendations.py`, `simulation/reports/recommendations.py`,
+  `common/reports/executive_summary.py`) — these are opt-in post-processing
+  steps (`generate_recommendations`, `generate_executive_summary`) that run
+  after a report's usage summary is already finalized. Folding their usage in
+  would mean either widening a public result type or maintaining the
+  documented `token_usage_by_source` sums-to `token_usage_total` invariant
+  across a new source category — both out of scope for this pass.
+- **Adversarial generation calls that discard their priced `Usage`**
+  (`redteam/adaptive/attack_generator.py`, `capability_classifier.py`,
+  `objective_generator.py`) — these already call `execute_chat_parse`, so the
+  call itself is priced, but each site discards the returned `Usage` with
+  `response, _ = await execute_chat_parse(...)` because its function returns a
+  bare parsed model (`ToolAnalysis`, `ResourceCapabilityInference`,
+  `ToolCapabilitiesResponse`, `GeneratedObjectives`) with no usage field.
+  Real spend, uncounted.
+- **Deployment runs against a non-default Orq host**
+  (`redteam/runtime/jobs.py`'s `deployment_job`) — the Orq SDK client used for
+  a deployment call always targets `my.orq.ai`, but its usage is priced
+  against the host in `ORQ_BASE_URL`. A deployment run against a staging or
+  on-prem host prices against the wrong catalogue.
+
 ## In CI
 
 For a fast gate, run a small fixed set of attacks and assert a minimum

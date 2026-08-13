@@ -341,6 +341,13 @@ async def _judge_transcript(
         input_messages=judge_messages,
         attributes={'orq.redteam.llm_purpose': 'blackbox_classify'},
     ) as span:
+        # RES-1295: this call extracts no usage, so its tokens never reach any
+        # total. `classify_agent_capabilities_blackbox` returns
+        # `BlackboxCapabilityInference` with no usage field, and the function
+        # is not currently wired into any pipeline (exported but uncalled
+        # outside tests) — adding a sink here would mean widening a public
+        # return type for a path nothing exercises yet. See "What the totals
+        # do not include" in docs/guides/red-teaming.md.
         response = await llm_client.chat.completions.parse(
             model=model,
             messages=judge_messages,
