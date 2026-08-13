@@ -521,7 +521,7 @@ def llm_jury(
                 'pass': None,
             })
         if resolved_client is None:
-            resolved_client = resolve_llm_client(config_client=None).client
+            resolved_client = resolve_llm_client(config_client=None, max_retries=0).client
         replacements = _build_replacements(data=data, output=output, criteria=criteria or '')
 
         async def judge_fn(judge_model: str) -> Prediction:
@@ -708,7 +708,7 @@ class PairwiseComparator:
                 return PairwiseComparison(winner='inconclusive')
 
         if self._client is None:
-            self._client = resolve_llm_client(config_client=None).client
+            self._client = resolve_llm_client(config_client=None, max_retries=0).client
 
         async def judge_fn(first: Output, second: Output, model: str) -> Prediction:
             replacements: dict[str, Any] = {'question': question, 'criteria': self._criteria}

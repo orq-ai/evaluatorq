@@ -79,7 +79,10 @@ class OWASPEvaluator:
         self._cfg = base_cfg.model_copy(update={'extra_kwargs': self.llm_kwargs})
         self._call_cfg = self._cfg.as_call_config() if isinstance(self._cfg, EvaluatorConfig) else self._cfg
         self.evaluator_model = evaluator_model
-        self.client = llm_client or base_cfg.client or create_async_llm_client()
+        # max_retries=0 on a client we build: run_judge owns retry via with_retry, and
+        # the two layers would multiply into 15 requests for one judgement. An injected
+        # client keeps whatever budget its owner gave it.
+        self.client = llm_client or base_cfg.client or create_async_llm_client(max_retries=0)
         # Panel = primary model + extra judges, de-duplicated, primary first.
         panel: list[str] = [evaluator_model]
         for j in judges or []:

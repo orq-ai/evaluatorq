@@ -161,6 +161,17 @@ class LLMCallConfig(BaseModel):
     timeout_ms: int = Field(default=90_000, gt=0)
     extra_kwargs: dict[str, Any] = Field(default_factory=dict)
     client: _Client = None
+    retry_attempts: int = Field(
+        default=3,
+        ge=1,
+        description='Total attempts (initial call + retries) for callers that own retry via '
+        'with_retry — currently the judge. Set to 1 to disable. Clients those callers build '
+        'get max_retries=0 so the two layers cannot multiply.',
+    )
+    retry_statuses: list[int] | None = Field(
+        default=None,
+        description='Extra HTTP status codes to retry on top of the default 429/5xx.',
+    )
 
     def completion_params(self, **params: Any) -> dict[str, Any]:
         """Merged kwargs for a chat-completions call: sampling fields first,

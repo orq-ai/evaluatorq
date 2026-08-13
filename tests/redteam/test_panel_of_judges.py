@@ -40,7 +40,7 @@ def _majority_vote(votes: list[bool | None]) -> tuple[bool | float | str | None,
     if not decisive:
         return None, False
     return _plurality_vote(decisive)
-from evaluatorq.redteam.contracts import AttackEvaluationResult, TextOutputItem, Vulnerability
+from evaluatorq.redteam.contracts import AttackEvaluationResult, EvaluatorConfig, TextOutputItem, Vulnerability
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -371,7 +371,12 @@ class TestJury:
                 body=None,
             )
         )
-        evaluator = OWASPEvaluator(evaluator_model='judge-a', llm_client=client)
+        evaluator = OWASPEvaluator(
+            evaluator_model='judge-a',
+            llm_client=client,
+            # Error classification, not retry behaviour — skip the backoff waits.
+            cfg=EvaluatorConfig(retry_attempts=1),
+        )
 
         result = await _evaluate(evaluator)
 

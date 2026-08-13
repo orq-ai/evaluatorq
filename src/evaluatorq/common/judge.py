@@ -19,6 +19,7 @@ from evaluatorq.common.llm_call import execute_chat_completion, execute_chat_par
 from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.model_catalogue import qualified_model
+from evaluatorq.common.retry import with_retry
 from evaluatorq.common.template_engine import render_template
 from evaluatorq.common.tracing import with_llm_span
 from evaluatorq.contracts import (
@@ -381,7 +382,9 @@ async def run_judge(
     )
     if cfg.api == 'responses' and structured_output and responses_model is None:
         logger.debug('Judge [{}] cannot use the Responses endpoint; using chat completions', model)
-    try:
+
+    async def _attempt() -> JudgeOutcome:
+        nonlocal raw_content
         async with with_llm_span(
             model=responses_model or model,
             operation='responses' if responses_model else 'chat',
@@ -505,6 +508,18 @@ async def run_judge(
             raw_content = response.choices[0].message.content or '{}'
             payload = EvaluatorResponsePayload.model_validate_json(_strip_code_fences(raw_content))
             return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
+
+    try:
+        # Retried like every other inference call in the codebase: rate limits, 5xx
+        # and transport failures back off and try again, everything else raises
+        # straight through to the classification below. One span per attempt, so a
+        # retried judgement shows its failed tries rather than overwriting them.
+        return await with_retry(
+            _attempt,
+            max_attempts=cfg.retry_attempts,
+            retry_statuses=cfg.retry_statuses,
+            label=f'judge[{model}]',
+        )
     except (asyncio.TimeoutError, APITimeoutError):
         logger.error('Judge [{}] timed out after {}ms', model, cfg.timeout_ms)
         return JudgeOutcome(

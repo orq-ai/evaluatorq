@@ -21,7 +21,7 @@ import pytest
 from openai import APIConnectionError, APIStatusError
 
 from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY, TextOutputItem
-from evaluatorq.redteam.contracts import AttackEvaluationResult, LLMCallConfig, Vulnerability
+from evaluatorq.redteam.contracts import AttackEvaluationResult, EvaluatorConfig, LLMCallConfig, Vulnerability
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +82,12 @@ class TestRunEvaluatorErrorPaths:
         from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
 
         mock_client = _make_llm_client(content='this is not valid json {{{{')
-        evaluator = OWASPEvaluator(evaluator_model='test-model', llm_client=mock_client)
+        evaluator = OWASPEvaluator(
+            evaluator_model='test-model',
+            llm_client=mock_client,
+            # Error classification, not retry behaviour — skip the backoff waits.
+            cfg=EvaluatorConfig(retry_attempts=1),
+        )
 
         with contextlib.ExitStack() as es:
             for p in _patch_tracing():
@@ -115,7 +120,12 @@ class TestRunEvaluatorErrorPaths:
 
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(side_effect=APIConnectionError(request=MagicMock()))
-        evaluator = OWASPEvaluator(evaluator_model='test-model', llm_client=mock_client)
+        evaluator = OWASPEvaluator(
+            evaluator_model='test-model',
+            llm_client=mock_client,
+            # Error classification, not retry behaviour — skip the backoff waits.
+            cfg=EvaluatorConfig(retry_attempts=1),
+        )
 
         with contextlib.ExitStack() as es:
             for p in _patch_tracing():
@@ -152,7 +162,12 @@ class TestRunEvaluatorErrorPaths:
                 body={'error': {'message': 'rate limit exceeded'}},
             )
         )
-        evaluator = OWASPEvaluator(evaluator_model='test-model', llm_client=mock_client)
+        evaluator = OWASPEvaluator(
+            evaluator_model='test-model',
+            llm_client=mock_client,
+            # Error classification, not retry behaviour — skip the backoff waits.
+            cfg=EvaluatorConfig(retry_attempts=1),
+        )
 
         with contextlib.ExitStack() as es:
             for p in _patch_tracing():
@@ -182,7 +197,12 @@ class TestRunEvaluatorErrorPaths:
         # content=None triggers the `or '{}'` fallback, which is valid JSON
         # but fails EvaluatorResponsePayload validation (missing required fields).
         mock_client = _make_llm_client(content=None)
-        evaluator = OWASPEvaluator(evaluator_model='test-model', llm_client=mock_client)
+        evaluator = OWASPEvaluator(
+            evaluator_model='test-model',
+            llm_client=mock_client,
+            # Error classification, not retry behaviour — skip the backoff waits.
+            cfg=EvaluatorConfig(retry_attempts=1),
+        )
 
         with contextlib.ExitStack() as es:
             for p in _patch_tracing():
@@ -249,7 +269,12 @@ class TestRunEvaluatorErrorPaths:
         from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
 
         mock_client = AsyncMock()
-        evaluator = OWASPEvaluator(evaluator_model='test-model', llm_client=mock_client)
+        evaluator = OWASPEvaluator(
+            evaluator_model='test-model',
+            llm_client=mock_client,
+            # Error classification, not retry behaviour — skip the backoff waits.
+            cfg=EvaluatorConfig(retry_attempts=1),
+        )
 
         # Patch both registry lookups to simulate a fully unknown category.
         with (
@@ -286,7 +311,12 @@ class TestRunEvaluatorErrorPaths:
 
         valid_json = '{"value": false, "explanation": "The agent revealed sensitive data."}'
         mock_client = _make_llm_client(content=valid_json)
-        evaluator = OWASPEvaluator(evaluator_model='test-model', llm_client=mock_client)
+        evaluator = OWASPEvaluator(
+            evaluator_model='test-model',
+            llm_client=mock_client,
+            # Error classification, not retry behaviour — skip the backoff waits.
+            cfg=EvaluatorConfig(retry_attempts=1),
+        )
 
         with contextlib.ExitStack() as es:
             es.enter_context(
@@ -323,7 +353,12 @@ class TestRunEvaluatorErrorPaths:
 
         valid_json = '{"value": true, "explanation": "The agent resisted the attack."}'
         mock_client = _make_llm_client(content=valid_json)
-        evaluator = OWASPEvaluator(evaluator_model='test-model', llm_client=mock_client)
+        evaluator = OWASPEvaluator(
+            evaluator_model='test-model',
+            llm_client=mock_client,
+            # Error classification, not retry behaviour — skip the backoff waits.
+            cfg=EvaluatorConfig(retry_attempts=1),
+        )
 
         with contextlib.ExitStack() as es:
             es.enter_context(
