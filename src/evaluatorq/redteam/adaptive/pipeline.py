@@ -642,7 +642,7 @@ def create_dynamic_evaluator(
         elif isinstance(raw_output, dict):
             try:
                 output = AttackOutput.model_validate(raw_output)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 inputs = getattr(data, 'inputs', {}) or {}
                 logger.error(
                     'Failed to parse job output as AttackOutput '
@@ -797,7 +797,7 @@ async def cleanup_memory_entities(
         msg = f'Memory cleanup timed out after {cleanup_timeout_s:.0f}s for {len(entity_ids)} entities'
         logger.warning(msg)
         return msg
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         msg = f'Memory cleanup failed: {e}'
         logger.warning(msg)
         return msg

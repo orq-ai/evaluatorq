@@ -118,7 +118,7 @@ async def _orq_cleanup_memory(orq_client: Any, ctx: AgentContext, entity_ids: li
                     memory_entity_id=entity_id,
                 )
                 logger.debug(f'Deleted memory entity {entity_id} from store {ms.key}')
-            except Exception as e:  # noqa: PERF203
+            except Exception as e:  # noqa: BLE001, PERF203
                 if extract_status_code(e) == 404:
                     continue
                 logger.warning(f'Failed to cleanup memory entity {entity_id} from {ms.key}: {e}')
@@ -544,7 +544,7 @@ class ORQAgentTarget(AgentTarget):
                 name=getattr(kb, 'key', None),
                 description=getattr(kb, 'description', None) or None,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f'Failed to enrich knowledge base {kb_id}: {e} — attack strategies will use limited context')
             return KnowledgeBaseInfo(id=kb_id)
 
@@ -560,7 +560,7 @@ class ORQAgentTarget(AgentTarget):
                 key=getattr(ms, 'key', ms_key),
                 description=getattr(ms, 'description', None) or None,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f'Failed to enrich memory store {ms_key}: {e} — attack strategies will use limited context')
             return MemoryStoreInfo(id=ms_key)
 
@@ -597,7 +597,7 @@ class ORQAgentTarget(AgentTarget):
                 # SDK returns parameters/schema as a Pydantic model; ToolInfo wants a plain dict.
                 if raw_params is not None:
                     parameters = raw_params.model_dump() if hasattr(raw_params, 'model_dump') else raw_params
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.warning(f'Failed to enrich tool {tool_id}: {e} — attack strategies will use limited context')
         return ToolInfo(name=name, description=description, parameters=parameters, action_type=action_type)
 
