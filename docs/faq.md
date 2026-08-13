@@ -257,6 +257,8 @@ recs = await generate_recommendations(
 
 Defaults: thresholds `0.5` on the judge's 0-1 scales, `max_results=10`, `max_transcript_chars=3000`, `max_message_chars=400`, `max_suggestions=3`, `max_tokens=800`. Values outside the valid range raise at construction, and an unknown field name raises too, rather than silently disabling a trigger.
 
+The endpoints of each threshold's range disable that one check on purpose: a judge score is never below `0.0` or above `1.0`, so `factual_accuracy_below=0.0`, `tone_appropriateness_below=0.0` and `hallucination_risk_above=1.0` each mean "never trigger on this metric". Use them to narrow which signals produce suggestions; the other triggers (broken rules, failed criteria) are unaffected.
+
 ### Where do the personas and scenarios come from?
 
 Your choice of control: generate them from a one-line description, seed by archetype, hand-build `Persona(...)` / `Scenario(...)` for full control, or ground new cases in your **real production traces** so they mirror how users actually behave. You can also replay stored datapoints to re-run the exact same cases against any target. See [Agent Simulation](guides/agent-simulation.md#from-existing-traces-and-data).

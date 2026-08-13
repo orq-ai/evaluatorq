@@ -55,8 +55,14 @@ class SimulationRecommendationConfig(RecommendationConfigBase):
     """
 
     factual_accuracy_below: float = Field(default=0.5, ge=0.0, le=1.0)
+    """Below this conversation-average, the result is remediable. ``0.0`` turns the check
+    off: a judge score is never below it, so the trigger can never fire."""
+
     hallucination_risk_above: float = Field(default=0.5, ge=0.0, le=1.0)
+    """Above this conversation-average, the result is remediable. ``1.0`` turns the check off."""
+
     tone_appropriateness_below: float = Field(default=0.5, ge=0.0, le=1.0)
+    """Below this conversation-average, the result is remediable. ``0.0`` turns the check off."""
 
     max_results: int = Field(default=10, ge=1)
     """How many triggered results get an LLM call. The run's total cost bound."""

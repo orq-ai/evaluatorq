@@ -156,6 +156,13 @@ def test_config_threshold_overrides_default():
     assert find_triggers(result, config) == []
 
 
+def test_threshold_endpoints_disable_their_check():
+    """0.0 / 1.0 are documented as "never trigger on this metric" — assert they do that."""
+    result = _make_result(goal_achieved=True, factual_accuracy=0.0)
+    off = SimulationRecommendationConfig(factual_accuracy_below=0.0, hallucination_risk_above=1.0)
+    assert not [kind for kind, _ in find_triggers(result, off) if kind == 'low_factual_accuracy']
+
+
 def test_config_rejects_meaningless_values():
     with pytest.raises(ValidationError):
         SimulationRecommendationConfig(max_suggestions=0)
@@ -387,7 +394,12 @@ def test_find_triggers_resolves_rule_ids_and_dedupes():
     r = _make_result()
     r.rules_broken = ['criteria_0']
     r.metadata['criteria_meta'] = [
-        {'id': 'criteria_0', 'description': 'No internal identifiers leak.', 'type': 'must_not_happen', 'passed': False},
+        {
+            'id': 'criteria_0',
+            'description': 'No internal identifiers leak.',
+            'type': 'must_not_happen',
+            'passed': False,
+        },
     ]
     triggers = find_triggers(r)
     descs = [evidence for _, evidence in triggers]
