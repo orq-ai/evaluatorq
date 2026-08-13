@@ -460,6 +460,11 @@ async def run_judge(
 
     async def _attempt() -> JudgeOutcome:
         nonlocal raw_content, responses_model
+        # Each attempt starts from a clean slate: `raw_content` is a closure variable
+        # read by the ValidationError handler below, so without this reset a failure
+        # on attempt 3 gets logged and returned with attempt 2's body — the "raw
+        # (truncated)" line would describe a different call than the one that failed.
+        raw_content = '{}'
         # Default for judges: the Responses endpoint is the one the Orq router
         # prices, so a judge call records cost like a target call does (RES-1295).
         # Set `api='chat_completions'` on the evaluator config to opt out.
@@ -495,7 +500,23 @@ async def run_judge(
                 # must not cost every later judge call its router-reported cost.
                 responses_model = None
                 err = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
-                if any(k in err for k in ('response', 'text_format', 'unsupported', 'not supported', 'parameter')):
+                # Match phrases that name the *endpoint* as unsupported, not bare words.
+                # 'response' alone matches almost any 400 that mentions a response, and
+                # 'parameter' matches "Unknown parameter: reasoning_effort" — a param
+                # rejection this model would otherwise survive. A false positive here
+                # costs every later judge call in the process its router-reported cost,
+                # so the memo only takes phrases that cannot mean anything else.
+                if any(
+                    k in err
+                    for k in (
+                        'not supported',
+                        'unsupported',
+                        'text_format',
+                        'responses api',
+                        'responses endpoint',
+                        '/responses',
+                    )
+                ):
                     _RESPONSES_REJECTORS.add(model)
                 logger.warning('Model {} rejected the Responses endpoint ({}); using chat completions', model, exc)
             else:

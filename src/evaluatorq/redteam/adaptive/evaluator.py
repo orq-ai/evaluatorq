@@ -363,6 +363,11 @@ class OWASPEvaluator:
                 'value': outcome.payload.value,
                 'explanation': outcome.payload.explanation,
                 'raw_content': outcome.raw_content,
+                # Which endpoint actually served this verdict. Recorded here rather
+                # than as a first-class field because it is a diagnostic: when a
+                # judge reports no cost, this is what separates "the model is not in
+                # the catalogue" from "Responses 400'd and fell back to chat".
+                'endpoint': outcome.endpoint,
             },
         )
 
