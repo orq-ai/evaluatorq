@@ -18,8 +18,10 @@ import pytest
 SRC = Path(__file__).resolve().parents[2] / "src"
 
 # `:class:`Thing``, `:func:`~pkg.mod.thing``, etc. Use autorefs (`[Text][path]`)
-# or plain inline code instead.
-ROLE = re.compile(r":(?:class|func|meth|attr|mod|obj|exc|data|ref):`")
+# or plain inline code instead. Matched generically rather than as a fixed keyword
+# list: `:command:`, `:type:` and `:py:class:` render just as literally, and an
+# allowlist only fails once someone reaches for a role that isn't on it.
+ROLE = re.compile(r":[a-z][a-z:+-]*:`")
 # `.. note::`, `.. deprecated::`, `.. versionadded::`, ... Write plain prose.
 DIRECTIVE = re.compile(r"^\s*\.\. [a-z]+::", re.MULTILINE)
 
@@ -35,7 +37,9 @@ def test_no_sphinx_markup_in_src(pattern: re.Pattern[str]) -> None:
     assert not offenders, "Sphinx markup renders literally on the docs site: " + ", ".join(offenders)
 
 
-EXAMPLE_HEADING = re.compile(r"^(\s*)Examples?:\s*$")
+# `Usage:` too — the integration targets spell their samples that way, and an
+# indented body under it renders exactly as badly as one under `Example:`.
+EXAMPLE_HEADING = re.compile(r"^(\s*)(?:Examples?|Usage):\s*$")
 
 
 def _unfenced_example_sections(doc: str) -> list[str]:

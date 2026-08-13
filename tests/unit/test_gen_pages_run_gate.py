@@ -41,6 +41,29 @@ def test_run_path_generates_pages(tmp_path: Path) -> None:
     assert "examples/SUMMARY.md" in written
 
 
+def test_shadowed_entry_points_are_emitted_on_the_package_page(tmp_path: Path) -> None:
+    """The filenames alone prove nothing: `evaluatorq()`, `deployment()` and
+    `llm_jury()` are the symbols a same-named sub-module hides from griffe, and
+    they only reach the site as their own `::: pkg.mod.symbol` blocks. Dropping
+    those blocks leaves every page still generated and `--strict` still green,
+    so assert on the page body, not the page list.
+    """
+    config = mkdocs_config.load_config(str(REPO / "mkdocs.yml"))
+    editor = gen_files_editor.FilesEditor(
+        mkdocs_files.Files([]), config, directory=str(tmp_path)
+    )
+    with editor:
+        runpy.run_path(str(GEN_PAGES))
+
+    page = (tmp_path / "reference" / "evaluatorq.md").read_text()
+    for dotted in (
+        "evaluatorq.evaluatorq.evaluatorq",
+        "evaluatorq.deployment.deployment",
+        "evaluatorq.llm_jury.llm_jury",
+    ):
+        assert f"::: {dotted}\n" in page, f"{dotted} lost its API reference block"
+
+
 def test_plain_import_generates_nothing(tmp_path: Path) -> None:
     """The gate's other half: importing the module for a helper must no-op."""
     config = mkdocs_config.load_config(str(REPO / "mkdocs.yml"))

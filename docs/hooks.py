@@ -71,7 +71,13 @@ def on_nav(nav: Navigation, config: MkDocsConfig, files: Files) -> Navigation:
 # a bare <pre> too, and legitimately so — it is a diagram, not code.
 _PRE = re.compile(r'<pre[^>]*>(.*?)</pre>', re.DOTALL)
 _CLASSED_SPAN = re.compile(r'<span class=')
-_DIAGRAM = re.compile(r'^\s*(graph|flowchart|sequenceDiagram|classDiagram|stateDiagram|erDiagram)\b')
+# Match a mermaid *header line*, not merely a keyword: `graph = {}` in an unfenced
+# Python sample starts with `graph` and would otherwise buy itself an exemption from
+# the very check this hook exists to run.
+_DIAGRAM = re.compile(
+    r'^\s*(?:(?:graph|flowchart)\s+(?:TB|TD|BT|RL|LR)\b'
+    r'|(?:sequenceDiagram|classDiagram|stateDiagram(?:-v2)?|erDiagram)\s*$)'
+)
 
 
 def on_post_page(output: str, page: Page, config: MkDocsConfig) -> str:

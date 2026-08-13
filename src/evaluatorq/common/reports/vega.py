@@ -75,7 +75,8 @@ def render_svg(spec: dict[str, Any]) -> str:
     """Render a Vega-Lite spec to an SVG string.
 
     Returns ``''`` when *spec* is empty or when vl-convert-python is unavailable.
-    On render failure the exception is logged at WARNING level and ``''`` is returned.
+    On render failure the exception is logged at WARNING level and ``''`` is returned —
+    except ``AssertionError``, which propagates (see the handler below).
     """
     if not spec:
         return ''

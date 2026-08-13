@@ -37,6 +37,7 @@ def test_importing_integration_target_does_not_import_redteam(module: str) -> No
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
+        timeout=120,  # a hung optional-SDK import must fail this test, not stall the suite
     )
     assert proc.returncode == 0, proc.stderr
 
@@ -66,26 +67,33 @@ def test_from_integrations_import_submodule(submodule: str) -> None:
         [sys.executable, "-c", f"from evaluatorq.integrations import {submodule}"],
         capture_output=True,
         text=True,
+        timeout=120,  # RecursionError is fast, but a hung import must not stall the suite
     )
     assert proc.returncode == 0, proc.stderr
 
 
 @pytest.mark.parametrize(
-    "name",
+    ("name", "canonical"),
     [
-        "OpenAIAgentTarget",
-        "LangGraphTarget",
-        "VercelAISdkTarget",
-        "CallableTarget",
-        "CrewAITarget",
-        "PydanticAITarget",
+        ("OpenAIAgentTarget", "evaluatorq.integrations.openai_agents_integration"),
+        ("LangGraphTarget", "evaluatorq.integrations.langgraph_integration"),
+        ("VercelAISdkTarget", "evaluatorq.integrations.vercel_ai_sdk_integration"),
+        ("CallableTarget", "evaluatorq.integrations.callable_integration"),
+        ("CrewAITarget", "evaluatorq.integrations.crewai_integration"),
+        ("PydanticAITarget", "evaluatorq.integrations.pydantic_ai_integration"),
     ],
 )
-def test_framework_target_exposed_from_simulation(name: str) -> None:
+def test_framework_target_exposed_from_simulation(name: str, canonical: str) -> None:
+    """Identity, not just presence: a lazy mapping that resolved `CrewAITarget`
+    to `CallableTarget` would satisfy `hasattr` while handing callers the wrong
+    class."""
+    import importlib
+
     import evaluatorq.simulation as sim
 
     assert hasattr(sim, name), f"{name} not exposed from evaluatorq.simulation"
     assert name in sim.__all__
+    assert getattr(sim, name) is getattr(importlib.import_module(canonical), name)
 
 
 @pytest.mark.parametrize(
