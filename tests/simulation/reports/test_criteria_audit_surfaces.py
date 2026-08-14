@@ -174,3 +174,167 @@ def test_markdown_export_names_the_unaudited_criteria(unaudited_result: Simulati
 
     assert 'Criteria not audited' in md
     assert 'unverified' in md
+
+
+class _FakeStreamlit:
+    """Records what the Streamlit dashboard would render."""
+
+    def __init__(self) -> None:
+        self.markdowns: list[str] = []
+        self.captions: list[str] = []
+        self.warnings: list[str] = []
+
+    def markdown(self, body: str) -> None:
+        self.markdowns.append(body)
+
+    def caption(self, body: str) -> None:
+        self.captions.append(body)
+
+    def warning(self, body: str) -> None:
+        self.warnings.append(body)
+
+
+def _render_sim_ui_criteria(result: SimulationResult, monkeypatch: pytest.MonkeyPatch) -> _FakeStreamlit:
+    from evaluatorq.simulation.ui import dashboard as sim_ui
+
+    fake = _FakeStreamlit()
+    monkeypatch.setattr(sim_ui, 'st', fake)
+    (entry,) = individual_entries([result])
+    sim_ui._render_criteria(entry.model_dump(mode='json'))
+    return fake
+
+
+def test_sim_ui_dashboard_does_not_green_tick_an_unaudited_criterion(
+    unaudited_result: SimulationResult, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`eq sim ui` is live (simulation/cli.py -> launch_streamlit) and was the third
+    renderer still keying on `passed`: a ✅ beside `criteria_met = 0.0`."""
+    fake = _render_sim_ui_criteria(unaudited_result, monkeypatch)
+
+    (criterion_line,) = [m for m in fake.markdowns if 'API key' in m]
+    assert '✅' not in criterion_line
+    assert criterion_line.startswith('❓')
+    assert 'not audited' in criterion_line
+    assert fake.captions == ['0/1 criteria met · 1 not audited']
+    assert any('Criteria unverified' in w for w in fake.warnings)
+
+
+def test_sim_ui_dashboard_still_green_ticks_an_audited_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _render_sim_ui_criteria(
+        _result(criteria_meta=_meta(audited=True), criteria_verified=True), monkeypatch
+    )
+
+    (criterion_line,) = [m for m in fake.markdowns if 'API key' in m]
+    assert criterion_line.startswith('✅')
+    assert fake.captions == ['1/1 criteria met']
+    assert fake.warnings == []
+
+
+def test_sim_ui_dashboard_shows_the_evidence_quote(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _render_sim_ui_criteria(
+        _result(
+            criteria_meta=_meta(audited=True, passed=False, evidence='the key is sk-123'),
+            criteria_verified=True,
+        ),
+        monkeypatch,
+    )
+
+    (criterion_line,) = [m for m in fake.markdowns if 'API key' in m]
+    assert criterion_line.startswith('⛔')  # must_not_happen violation
+    assert 'the key is sk-123' in criterion_line
+
+
+def test_sim_ui_dashboard_renders_an_empty_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A section that disappears on zero rows is indistinguishable from a bug."""
+    fake = _render_sim_ui_criteria(_result(criteria_meta=[], criteria_verified=None), monkeypatch)
+
+    assert fake.captions == ['No criteria defined for this scenario.']
+
+
+# ---------------------------------------------------------------------------
+# The tally and the scorer must agree (both count only audited passes)
+# ---------------------------------------------------------------------------
+
+
+def _two_criteria(*, second_audited: bool) -> list[dict[str, object]]:
+    return [
+        {
+            'id': 'criteria_0',
+            'description': 'Agent greets the customer',
+            'type': 'must_happen',
+            'passed': True,
+            'audited': True,
+            'evidence': 'hello there',
+        },
+        {
+            'id': 'criteria_1',
+            'description': 'Agent must not leak the API key',
+            'type': 'must_not_happen',
+            'passed': True,
+            'audited': second_audited,
+            'evidence': '',
+        },
+    ]
+
+
+def test_the_scorer_does_not_count_an_unaudited_criterion_on_a_verified_run() -> None:
+    """A *verified* run whose judge audited A and skipped B: the dashboard printed
+    "1/2 criteria met · 1 not audited" while the evaluator column read
+    `criteria_met 1.00 PASS`. Same rule on both sides now."""
+    result = _result(criteria_meta=_two_criteria(second_audited=False), criteria_verified=True)
+
+    assert criteria_met_scorer(result) == 0.5
+
+    from evaluatorq.dashboard.sim_views import _render_criteria_column
+
+    (entry,) = individual_entries([result])
+    assert '1/2 criteria met' in _render_criteria_column(entry)
+    assert '1 not audited' in _render_criteria_column(entry)
+
+
+def test_the_scorer_counts_an_audited_pass() -> None:
+    result = _result(criteria_meta=_two_criteria(second_audited=True), criteria_verified=True)
+    assert criteria_met_scorer(result) == 1.0
+
+
+def test_a_legacy_run_without_audited_provenance_is_scored_as_before() -> None:
+    """``audited: None`` predates the field — unknown, not "the judge skipped it".
+    Those runs keep the score they had."""
+    meta = _two_criteria(second_audited=True)
+    for c in meta:
+        c['audited'] = None
+    assert criteria_met_scorer(_result(criteria_meta=meta, criteria_verified=None)) == 1.0
+
+
+def test_the_evaluator_explanation_agrees_with_the_scorer() -> None:
+    from evaluatorq.simulation.api import _sim_evaluation_details
+
+    result = _result(criteria_meta=_two_criteria(second_audited=False), criteria_verified=True)
+    explanation, passed = _sim_evaluation_details('criteria_met', result)
+
+    assert passed is False  # was True, beside a score of 0.5
+    assert explanation is not None
+    assert 'UNKNOWN [prohibited]: Agent must not leak the API key (not audited)' in explanation
+    assert 'PASS [required]: Agent greets the customer' in explanation
+
+
+# ---------------------------------------------------------------------------
+# A malformed audit announces itself (CLAUDE.md: a degraded path warns)
+# ---------------------------------------------------------------------------
+
+
+def test_a_malformed_audited_value_degrades_to_unknown_with_a_warning() -> None:
+    from loguru import logger
+
+    messages: list[str] = []
+    sink_id = logger.add(lambda m: messages.append(m), level='WARNING')
+    try:
+        (row,) = _criteria_rows(
+            _result(criteria_meta=_meta(audited='yes'), criteria_verified=True)  # pyright: ignore[reportArgumentType]
+        )
+    finally:
+        logger.remove(sink_id)
+
+    assert row['audited'] is None
+    assert row['state'] == 'pass'  # unknown provenance, so scored as it always was
+    assert any("non-boolean 'audited'" in m for m in messages)

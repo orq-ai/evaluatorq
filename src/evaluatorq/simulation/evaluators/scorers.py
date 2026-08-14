@@ -40,6 +40,16 @@ def criteria_met_scorer(result: SimulationResult) -> float:
     judge never returned an occurrence audit, so the verdicts came from the
     free-text `rules_broken` list, which cannot fail a `must_happen` criterion.
     A run with no criteria at all still scores 1.0 — nothing to fail.
+
+    An individual criterion the judge never audited is **not met** either, even on
+    an otherwise verified run: it is passing only by its not-observed default, and
+    that is the same flattering silence at criterion granularity. This is read from
+    ``metadata['criteria_meta']`` (the only place ``audited`` survives —
+    ``criteria_results`` is keyed by description and carries no provenance), so the
+    score matches the ``N/M criteria met`` tally the reports print, which counts
+    `CriteriaRow.state == 'pass'`. A criterion the judge settled early *is* audited
+    (`_CriteriaTracker` records a verdict before it can become settled), so
+    `JudgeAgent.mark_settled` never costs a run a point.
     """
     if result.terminated_by in UNEVALUATED_TERMINATIONS:
         logger.warning(
@@ -55,6 +65,20 @@ def criteria_met_scorer(result: SimulationResult) -> float:
             'fail a must_happen criterion; scoring 0.0 (unverified, not met).'
         )
         return 0.0
+
+    meta = result.metadata.get('criteria_meta')
+    if isinstance(meta, list) and meta:
+        entries = [c for c in meta if isinstance(c, dict)]
+        unaudited = [c for c in entries if c.get('audited') is False and c.get('passed')]
+        if unaudited:
+            logger.warning(
+                'criteria_met: {} of {} criteria passed only by default (the judge never audited them); '
+                'counting them as not met.',
+                len(unaudited),
+                len(entries),
+            )
+        met = sum(1 for c in entries if c.get('passed') and c.get('audited') is not False)
+        return met / len(entries) if entries else 1.0
 
     criteria_results = result.criteria_results or {}
     if not criteria_results:
