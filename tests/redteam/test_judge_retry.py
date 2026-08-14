@@ -453,9 +453,11 @@ async def test_failure_after_responses_fallback_stamps_chat_not_responses():
 
 
 @pytest.mark.asyncio
-async def test_unknown_failure_leaves_endpoint_unset():
-    """The catch-all also covers failures that never reached a provider, so it
-    names no endpoint: None is the honest answer, not a guess."""
+async def test_unknown_failure_on_responses_stamps_responses_endpoint():
+    """The catch-all also covers failures that never reached a provider (a bad
+    `extra_kwargs`, a client that raises on request construction), but
+    `_failed_endpoint()` names the leg that was in flight regardless of whether
+    it got an HTTP response — same as the APIStatusError branch above it."""
     client = _Client()
 
     async def explodes(**kwargs: Any) -> Any:
@@ -465,4 +467,49 @@ async def test_unknown_failure_leaves_endpoint_unset():
     outcome = await _judge(client, retry_count=0)
 
     assert outcome.error_kind is JudgeError.UNKNOWN
-    assert outcome.endpoint is None
+    assert outcome.endpoint == 'responses'
+
+
+class _OptionalExplanationVerdict(BaseModel):
+    value: bool
+    explanation: str | None = None
+
+
+@pytest.mark.asyncio
+async def test_responses_judge_parse_failure_keeps_token_usage():
+    """RES-1307 audit Task 1 (site 1): a caller-supplied `response_model` whose
+    `explanation` is optional/None parses fine as the caller's model, but
+    `EvaluatorResponsePayload(value=..., explanation=...)` then raises
+    ValidationError because its own `explanation` is required. The Responses
+    endpoint already billed the call by that point; the usage must survive."""
+    client = _Client()
+
+    async def parses_with_none_explanation(**kwargs: Any) -> Any:
+        client.calls.append('responses')
+        reply = _responses_reply()
+        reply.output_parsed = _OptionalExplanationVerdict(value=True, explanation=None)
+        return reply
+
+    client.responses = SimpleNamespace(parse=parses_with_none_explanation)
+    outcome = await _judge(client, retry_count=0, response_model=_OptionalExplanationVerdict)
+
+    assert len(client.calls) == 1
+    assert outcome.error_kind is JudgeError.PARSE
+    assert outcome.payload is None
+    assert outcome.token_usage is not None
+    assert outcome.token_usage.calls == 1
+    assert outcome.endpoint == 'responses'
+
+
+@pytest.mark.asyncio
+async def test_unknown_failure_on_chat_stamps_chat_endpoint():
+    client = _Client(base_url=OPENAI_URL)  # non-Orq -> never leaves chat
+
+    async def explodes(**kwargs: Any) -> Any:
+        raise RuntimeError('something entirely else')
+
+    client.chat = SimpleNamespace(completions=SimpleNamespace(parse=explodes))
+    outcome = await _judge(client, retry_count=0)
+
+    assert outcome.error_kind is JudgeError.UNKNOWN
+    assert outcome.endpoint == 'chat'

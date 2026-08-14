@@ -112,20 +112,14 @@ class TargetCallResult:
     case for the timeout/exception branches — ``_synthetic`` carries
     ``usage=None``, so there is genuinely nothing to record). Callers must add
     this **instead of** ``response.usage``, never in addition to it: on the
-    common single-successful-attempt path the two are the same object's value,
-    so adding both double counts the whole run.
+    common single-successful-attempt path the two carry the same tokens and
+    cost, with normalised counters — adding both double counts the whole run.
 
     Each attempt's usage is normalised by `_attempt_usage` before it is summed,
     so ``billed_usage.calls`` is always >= the number of billed attempts and
     ``priced_calls`` counts only the attempts that actually reported a cost.
     Consumers can therefore read it verbatim — no per-surface `calls == 0`
     fallback, and no risk of widening `priced_calls` along with `calls`.
-
-    ``usage_attempts`` counts the attempts that contributed to ``billed_usage``.
-    It is >= 1 whenever ``billed_usage`` is not None. Diagnostic only — nothing in
-    ``src`` reads it since the per-surface call-count repair was removed, and it
-    carries what ``billed_usage.calls`` cannot recover (a single attempt that
-    reported three continuation rounds gives ``usage_attempts == 1``).
     """
 
     response: AgentResponse
@@ -134,7 +128,6 @@ class TargetCallResult:
     error: AgentResponseError | None
     error_details: dict[str, object] | None
     billed_usage: Usage | None = None
-    usage_attempts: int = 0
 
     def error_payload(self, *, context: str = '', turn: int = 1) -> dict[str, Any]:
         """Return this result's error as the flat fields the report layer stores.
@@ -170,19 +163,21 @@ def _attempt_usage(usage: Usage) -> Usage:
 
     A target that reports its own ``calls`` (orq sums tool-continuation rounds
     into one usage block) is returned **unchanged** — it knows better than we do.
+
     A target that reports ``calls=0`` has simply not tracked the counter, and the
     exchange it just billed us for is one call; ``priced_calls`` is 1 exactly when
-    that attempt reported a cost, and 0 otherwise.
-
-    Normalising here rather than at each consumer is what keeps
-    ``billed_usage.priced_calls`` honest across a retry: summing two ``calls=0``
-    attempts where only one reported a cost must yield ``calls=2,
-    priced_calls=1`` (a partial cost), not ``calls=2, priced_calls=2`` (a cost
-    claiming to be fully billed). ``estimated_calls`` is clamped to the resolved
-    ``priced_calls`` so ``estimated_calls <= priced_calls <= calls`` holds.
-
-    The ``calls=0`` stamp is still a lower bound: an attempt that tracked nothing
-    may have burned several tool-continuation rounds, and we count it as one.
+    that attempt reported a cost, and 0 otherwise. Normalising here rather than at
+    each consumer is what keeps ``billed_usage.priced_calls`` honest across a
+    retry: summing two ``calls=0`` attempts where only one reported a cost must
+    yield ``calls=2, priced_calls=1`` (a partial cost), not ``calls=2,
+    priced_calls=2`` (a cost claiming to be fully billed). ``estimated_calls`` is
+    clamped to the resolved ``priced`` here explicitly: the return uses
+    ``model_copy(update=...)``, which — unlike ``Usage(...)`` — does not run
+    `Usage`'s ``_clamp_call_counts`` validator, so this is the only place the
+    ``estimated_calls <= priced_calls <= calls`` invariant is enforced on this
+    path. The ``calls=0`` stamp is still a lower bound: an attempt that tracked
+    nothing may have burned several tool-continuation rounds, and we count it as
+    one.
     """
     if usage.calls > 0:
         if usage.total_cost is not None and usage.priced_calls == 0:
@@ -232,6 +227,11 @@ async def call_target_with_retry(
     caller-supplied context value and each returned response while that context
     is still open, so callers can annotate per-attempt spans. Returns a uniform
     `TargetCallResult`.
+
+    This is the only retry layer on the target-call path. A target whose own
+    client sets ``max_retries`` (or otherwise retries internally) composes
+    multiplicatively with the retries here and will over-report
+    ``billed_usage``.
     """
     timeout_s = target_agent_timeout_ms / 1000.0
     max_attempts = max(1, max_target_retries + 1)
@@ -240,7 +240,6 @@ async def call_target_with_retry(
     last_details: dict[str, object] | None = None
     # Billed across ALL attempts, not just the surviving one — see TargetCallResult.
     billed_usage: Usage | None = None
-    usage_attempts = 0
 
     attempt = 0  # max_attempts >= 1, but the type checker can't prove the loop runs
     for attempt in range(max_attempts):
@@ -254,7 +253,6 @@ async def call_target_with_retry(
             if resp.usage is not None:
                 attempt_usage = _attempt_usage(resp.usage)
                 billed_usage = attempt_usage if billed_usage is None else billed_usage + attempt_usage
-                usage_attempts += 1
             if resp.error is None:
                 return TargetCallResult(
                     response=resp,
@@ -263,7 +261,6 @@ async def call_target_with_retry(
                     error=None,
                     error_details=None,
                     billed_usage=billed_usage,
-                    usage_attempts=usage_attempts,
                 )
             if resp.usage is not None:
                 logger.warning(
@@ -313,5 +310,4 @@ async def call_target_with_retry(
         error=last_error,
         error_details=last_details,
         billed_usage=billed_usage,
-        usage_attempts=usage_attempts,
     )

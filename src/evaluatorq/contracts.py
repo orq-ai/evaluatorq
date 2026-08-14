@@ -514,6 +514,28 @@ class Usage(BaseModel):
         ),
     )
 
+    @model_validator(mode='before')
+    @classmethod
+    def _clamp_call_counts(cls, data: Any) -> Any:
+        """Enforce ``estimated_calls <= priced_calls <= calls`` by construction.
+
+        Clamps, never raises: legacy report JSON flows through ``model_validate``
+        on load, and a hard validation failure here would take down report
+        loading for the whole run rather than just under-reporting one figure.
+        Runs on every keyword/dict construction path (``Usage(...)``,
+        ``model_validate``); ``model_copy(update=...)`` does not go through
+        validators at all, so it stays outside this guard (see ``with_calls``).
+        """
+        if not isinstance(data, dict):
+            return data
+        calls = data.get('calls') or 0
+        priced_calls = min(data.get('priced_calls') or 0, calls)
+        estimated_calls = min(data.get('estimated_calls') or 0, priced_calls)
+        data = dict(data)
+        data['priced_calls'] = priced_calls
+        data['estimated_calls'] = estimated_calls
+        return data
+
     if TYPE_CHECKING:
         # The legacy ``prompt_tokens``/``completion_tokens`` names are accepted at
         # runtime via the validation aliases above, but a static type checker only
@@ -584,8 +606,6 @@ class Usage(BaseModel):
         client-side estimation did not exist before RES-1295, so every
         pre-existing priced call was provider-reported.
         """
-        if self.priced_calls <= 0:
-            return None
         return resolve_cost_source(self.priced_calls, self.estimated_calls)
 
     def with_calls(self, calls: int) -> Usage:
@@ -596,12 +616,18 @@ class Usage(BaseModel):
         ``model_copy(update={'calls': 1})`` would leave ``priced_calls`` at 0, which
         `cost_is_partial` reads as legacy untracked data — use this instead.
 
-        ``estimated_calls`` is preserved as-is (``model_copy`` does not touch it):
-        this path never sets it, and every caller arrives here with it still at 0,
-        so "preserved" and "left at 0" coincide in practice — but preserved is the
-        correct behavior were that ever not the case.
+        ``estimated_calls`` is preserved, clamped to the resolved ``priced_calls``.
+        ``model_copy(update=...)`` runs no validators, so the class-level clamp does
+        not cover this path — the chain is held here by hand.
         """
-        return self.model_copy(update={'calls': calls, 'priced_calls': calls if self.total_cost is not None else 0})
+        priced_calls = calls if self.total_cost is not None else 0
+        return self.model_copy(
+            update={
+                'calls': calls,
+                'priced_calls': priced_calls,
+                'estimated_calls': min(self.estimated_calls, priced_calls),
+            }
+        )
 
     @model_serializer(mode='wrap')
     def _serialize(self, handler: Any) -> dict[str, Any]:
@@ -703,7 +729,6 @@ class Usage(BaseModel):
             if isinstance(raw_priced, (int, float)) and not isinstance(raw_priced, bool)
             else (resolved_calls if cost is not None else 0)
         )
-        resolved_priced = min(resolved_priced, resolved_calls)
         # An aggregated dump carries its own estimated_calls count; a raw provider
         # payload is by definition provider-priced (client-side catalogue pricing
         # is stamped later, at the pricing site — Task 2), so it defaults to 0.
@@ -725,7 +750,7 @@ class Usage(BaseModel):
             total_cost=cost,
             calls=resolved_calls,
             priced_calls=resolved_priced,
-            estimated_calls=min(resolved_estimated, resolved_priced),
+            estimated_calls=resolved_estimated,
         )
 
     @classmethod
@@ -774,19 +799,15 @@ class Usage(BaseModel):
     def __sub__(self, other: Usage | None) -> Usage:
         """Component-wise difference, clamped at 0 — used for per-turn deltas.
 
-        The whole chain ``estimated_calls <= priced_calls <= calls`` is held:
-        clamping the three axes independently can produce an invalid triple
-        (``Usage(calls=2, priced=2, est=2) - Usage(calls=2, priced=0, est=0)``
-        would leave ``calls=0, priced=2, est=2``). ``extract`` guards both
-        clamps on read-back, but the constructor does not, so hold them here
-        too. The clamps compose top-down — ``priced`` first against ``calls``,
-        then ``estimated`` against the already-clamped ``priced`` — so the
-        result is the same whichever axis the subtraction shrank.
+        The whole chain ``estimated_calls <= priced_calls <= calls`` is held by
+        ``_clamp_call_counts`` on construction, so subtracting each axis
+        independently here (which can transiently produce an invalid triple,
+        e.g. ``Usage(calls=2, priced=2, est=2) - Usage(calls=2, priced=0, est=0)``
+        naively leaves ``calls=0, priced=2, est=2``) is corrected by the
+        validator before the result is returned.
         """
         if other is None:
             return self.model_copy()
-        calls = max(self.calls - other.calls, 0)
-        priced_calls = min(max(self.priced_calls - other.priced_calls, 0), calls)
         return Usage(
             input_tokens=max(self.input_tokens - other.input_tokens, 0),
             output_tokens=max(self.output_tokens - other.output_tokens, 0),
@@ -799,9 +820,9 @@ class Usage(BaseModel):
             input_cost=self._combine_cost(self.input_cost, other.input_cost, sign=-1),
             output_cost=self._combine_cost(self.output_cost, other.output_cost, sign=-1),
             total_cost=self._combine_cost(self.total_cost, other.total_cost, sign=-1),
-            calls=calls,
-            priced_calls=priced_calls,
-            estimated_calls=min(max(self.estimated_calls - other.estimated_calls, 0), priced_calls),
+            calls=max(self.calls - other.calls, 0),
+            priced_calls=max(self.priced_calls - other.priced_calls, 0),
+            estimated_calls=max(self.estimated_calls - other.estimated_calls, 0),
         )
 
 

@@ -333,7 +333,6 @@ async def test_billed_usage_none_when_no_attempt_reported_usage():
     t = _Target([_ok('hi')])
     r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
     assert r.billed_usage is None
-    assert r.usage_attempts == 0
 
 
 @pytest.mark.asyncio
@@ -343,12 +342,15 @@ async def test_billed_usage_matches_response_usage_on_single_success():
     This is what makes it safe for callers to REPLACE the `response.usage` read
     rather than add to it — adding both here would double every run total.
     """
-    t = _Target([AgentResponse(text='hi', usage=_usage(30, calls=1))])
+    single = Usage(input_tokens=30, output_tokens=0, total_tokens=30, total_cost=0.03, calls=1, priced_calls=1)
+    t = _Target([AgentResponse(text='hi', usage=single)])
     r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
     assert r.billed_usage is not None
+    assert r.response.usage is not None
     assert r.billed_usage.total_tokens == 30
-    assert r.billed_usage.total_tokens == r.response.usage.total_tokens  # pyright: ignore[reportOptionalMemberAccess]
-    assert r.usage_attempts == 1
+    assert r.billed_usage.total_tokens == r.response.usage.total_tokens
+    assert r.billed_usage.total_cost == r.response.usage.total_cost == 0.03
+    assert r.billed_usage.priced_calls == r.response.usage.priced_calls == 1
 
 
 @pytest.mark.asyncio
@@ -361,7 +363,6 @@ async def test_billed_usage_sums_failed_attempt_then_success():
     assert r.billed_usage is not None
     assert r.billed_usage.total_tokens == 18
     assert r.billed_usage.calls == 2
-    assert r.usage_attempts == 2
     # `response` still means the surviving response, not the aggregate.
     assert r.response.usage is not None
     assert r.response.usage.total_tokens == 11
@@ -374,7 +375,6 @@ async def test_billed_usage_recorded_when_every_attempt_fails_with_usage():
     assert r.succeeded is False
     assert r.billed_usage is not None
     assert r.billed_usage.total_tokens == 15
-    assert r.usage_attempts == 3
 
 
 @pytest.mark.asyncio
@@ -399,7 +399,6 @@ async def test_synthetic_timeout_and_exception_contribute_no_usage():
     assert t.calls == 3
     assert r.billed_usage is not None
     assert r.billed_usage.total_tokens == 9
-    assert r.usage_attempts == 1
 
 
 # ---------------------------------------------------------------------------
@@ -421,7 +420,6 @@ async def test_untracked_call_count_normalised_to_one_per_attempt():
     assert r.billed_usage.total_tokens == 11
     assert r.billed_usage.calls == 2
     assert r.billed_usage.priced_calls == 0
-    assert r.usage_attempts == 2
 
 
 @pytest.mark.asyncio
@@ -467,7 +465,6 @@ async def test_target_reported_counters_are_left_alone():
     assert r.billed_usage.priced_calls == 2
     assert r.billed_usage.estimated_calls == 1
     assert r.billed_usage.cost_source == 'mixed'
-    assert r.usage_attempts == 1
 
 
 @pytest.mark.asyncio
@@ -486,6 +483,38 @@ async def test_untracked_estimated_calls_clamped_to_priced_calls():
     assert r.billed_usage.priced_calls == 0
     assert r.billed_usage.estimated_calls == 0
     assert r.billed_usage.cost_source is None
+
+
+@pytest.mark.asyncio
+async def test_untracked_estimated_calls_preserved_when_priced():
+    """A `calls=0` block that DOES carry a cost must keep its estimate.
+
+    `_attempt_usage` derives `priced` from `usage.total_cost`, not from
+    `usage.priced_calls` — a naive fix that clamped against the latter (which
+    `Usage`'s own validator forces to 0 whenever `calls == 0`) would zero
+    `estimated_calls` unconditionally and relabel every catalogue-priced,
+    untracked-call-count attempt as provider-billed. Built via
+    `model_construct` because `Usage(...)`'s validator would otherwise clamp
+    this exact shape away before `_attempt_usage` ever sees it — this
+    reproduces a target that hands back a `Usage` without going through that
+    constructor (e.g. built by `model_copy`, which also bypasses it).
+    """
+    priced_and_estimated = Usage.model_construct(
+        input_tokens=2,
+        output_tokens=0,
+        total_tokens=2,
+        total_cost=0.01,
+        calls=0,
+        priced_calls=0,
+        estimated_calls=1,
+    )
+    t = _Target([AgentResponse(text='hi', usage=priced_and_estimated)])
+    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    assert r.billed_usage is not None
+    assert r.billed_usage.calls == 1
+    assert r.billed_usage.priced_calls == 1
+    assert r.billed_usage.estimated_calls == 1
+    assert r.billed_usage.cost_source == 'catalogue'
 
 
 @pytest.mark.asyncio

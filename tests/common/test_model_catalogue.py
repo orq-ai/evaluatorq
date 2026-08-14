@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -218,6 +219,28 @@ async def test_price_usage_leaves_aggregate_usage_unchanged():
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures('_catalogue')
+async def test_price_usage_leaves_zero_call_usage_unpriced_and_warns(monkeypatch: pytest.MonkeyPatch):
+    """A `calls=0` usage must stay unpriced (RES-1307).
+
+    Pricing it would write a real `total_cost` alongside `priced_calls=0`,
+    which `Usage.cost_source` reads back as `None` — a dollar figure with no
+    stated provenance, the exact defect this pricing module exists to prevent.
+    """
+    warnings: list[str] = []
+    monkeypatch.setattr(pricing.logger, 'warning', lambda msg, *a, **kw: warnings.append(msg))  # pyright: ignore[reportUnknownLambdaType]
+    zero_call_usage = Usage(input_tokens=1000, output_tokens=500, total_tokens=1500, calls=0, priced_calls=0)
+
+    priced = await pricing.price_usage(zero_call_usage, 'gpt-5-mini')
+
+    assert priced is zero_call_usage
+    assert priced is not None
+    assert priced.total_cost is None
+    assert priced.priced_calls == 0
+    assert any('calls=0' in w for w in warnings)
+
+
+@pytest.mark.asyncio
 async def test_qualified_model_none_when_model_does_not_support_responses(monkeypatch: pytest.MonkeyPatch):
     async def fake_load(client=None):  # noqa: ANN001, ARG001
         return {'chat-only-model': ModelInfo(0.0001, 0.0002, 'openai', supports_responses=False)}
@@ -388,3 +411,48 @@ async def test_env_key_used_when_no_client_given(monkeypatch: pytest.MonkeyPatch
 
     assert calls == ['https://prod.example/v2/models']
     assert headers[0]['Authorization'] == 'Bearer env-key'
+
+
+# --- catalogue estimate reaching the span (RES-1307) -------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('_catalogue')
+async def test_chat_completion_priced_from_catalogue_stamps_cost_onto_span():
+    """A chat-completions judge call priced client-side from the catalogue must
+    carry that cost — and its `'catalogue'` provenance — on the span it opened,
+    not just on the `Usage` returned to the caller. Before RES-1307 the priced
+    `Usage` never reached `record_token_usage`, so a chat-completions call had
+    dollars in the report but no cost at all on its span."""
+    from evaluatorq.common import llm_call
+
+    span = MagicMock()
+    client = MagicMock()
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.content = 'ok'
+    response.usage = MagicMock(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    client.chat.completions.create = AsyncMock(return_value=response)
+
+    _response, usage = await llm_call.execute_chat_completion(
+        client=client,
+        model='gpt-5-mini',
+        messages=[{'role': 'user', 'content': 'hi'}],
+        span=span,
+        timeout_s=5.0,
+        inject_trace_headers=False,
+    )
+
+    assert usage is not None
+    assert usage.total_cost == pytest.approx(0.00125)
+    assert usage.cost_source == 'catalogue'
+
+    set_attrs = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert set_attrs['gen_ai.usage.cost'] == pytest.approx(0.00125)
+    assert set_attrs['gen_ai.usage.cost_source'] == 'catalogue'
+    # The cost stamp must not double-count the call: both `record_llm_response`
+    # (recording the raw usage) and the pricing stamp pass `calls=0` through to
+    # `record_token_usage`, so `gen_ai.usage.calls` is never written twice for
+    # the one call this span represents.
+    call_writes = [c for c in span.set_attribute.call_args_list if c.args[0] == 'gen_ai.usage.calls']
+    assert len(call_writes) == 0
