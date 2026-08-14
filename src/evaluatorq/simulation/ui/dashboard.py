@@ -311,6 +311,50 @@ def _render_breakdown(sections: list[ReportSection]) -> None:
         st.plotly_chart(fig, width='stretch')
 
 
+def _render_criteria(entry: dict[str, Any]) -> None:
+    """Render one conversation's criteria block.
+
+    Keys on `CriteriaRow.state`, never on ``passed``: a criterion that passed only
+    because the judge never audited it is *unknown*, and painting it green here
+    while `criteria_met` scores the same entry 0.0 is the contradiction RES-1308 is
+    about. Same rule, glyphs and tally the HTML report and the `eq dashboard`
+    sim views apply — three renderers, one verdict.
+    """
+    criteria = entry.get('criteria') or []
+    st.markdown('**Criteria**')
+    if entry.get('criteria_verified') is False:
+        # Run level: no audit arrived at all, so every row below is a default and
+        # `criteria_met` scored this run 0.0. Say so rather than let the ticks imply
+        # otherwise.
+        st.warning(
+            'Criteria unverified — the judge returned no per-criterion audit, so these verdicts are '
+            'defaults and `criteria_met` scored this run 0.0.'
+        )
+    if not criteria:
+        # A section that vanishes on zero rows is indistinguishable from a bug.
+        st.caption('No criteria defined for this scenario.')
+        return
+    for c in criteria:
+        state = _criterion_state(c)
+        icon = {'pass': '✅', 'fail': '⛔' if c.get('safety') else '❌'}.get(state, '❓')
+        ctype = f' _{c["type"]}_' if c.get('type') else ''
+        note = ' — _not audited_' if state == 'unknown' else ''
+        # The judge's own quote for why the criterion is marked occurred; without it
+        # the verdict is unfalsifiable.
+        evidence = f' — “{c["evidence"]}”' if c.get('evidence') else ''
+        st.markdown(f'{icon} {c["description"]}{ctype}{note}{evidence}')
+    met = sum(1 for c in criteria if _criterion_state(c) == 'pass')
+    unknown = sum(1 for c in criteria if _criterion_state(c) == 'unknown')
+    tally = f'{met}/{len(criteria)} criteria met'
+    st.caption(f'{tally} · {unknown} not audited' if unknown else tally)
+
+
+def _criterion_state(c: dict[str, Any]) -> str:
+    """`CriteriaRow.state`, with a fallback for runs saved before it existed."""
+    state = c.get('state')
+    return str(state) if state else ('pass' if c.get('passed') else 'fail')
+
+
 def _render_transcripts(sections: list[ReportSection]) -> None:
     entries = _section(sections, 'individual_results').get('entries', [])
     if not entries:
@@ -366,13 +410,7 @@ def _render_transcripts(sections: list[ReportSection]) -> None:
     if entry.get('error'):
         st.error(entry['error'])
 
-    criteria = entry.get('criteria', [])
-    if criteria:
-        st.markdown('**Criteria**')
-        for c in criteria:
-            icon = '✅' if c['passed'] else ('⛔' if c.get('safety') else '❌')
-            ctype = f' _{c["type"]}_' if c.get('type') else ''
-            st.markdown(f'{icon} {c["description"]}{ctype}')
+    _render_criteria(entry)
 
     scores = entry.get('evaluator_scores') or {}
     if scores:
