@@ -319,3 +319,59 @@ class TestCallLlmDispatch:
             await agent._call_llm(_make_messages())
         # No reasoning-stripped retry — an unrelated 400 is not masked.
         assert client.responses.create.await_count == 1
+
+
+class TestResponsesSpanInput:
+    """The span records the transcript, not the wire payload's Python repr."""
+
+    @pytest.mark.asyncio
+    async def test_span_input_records_plain_assistant_text_not_a_repr(self):
+        """`record_llm_input` gets ``messages``, never ``input_messages``.
+
+        The wire payload renders an assistant turn as
+        ``[{'type': 'output_text', ...}]``; passing that straight to the tracing
+        helper lands ``"[{'type': 'output_text', 'text': 'hello there'}]"`` on the
+        span, because it ``str()``s whatever it is handed. CLAUDE.md's
+        `content_to_text` row exists for exactly this.
+        """
+        client = _make_client()
+        mock_response = MagicMock()
+        mock_response.output = []
+        mock_response.usage = None
+        client.responses.create = AsyncMock(return_value=mock_response)
+
+        config = LLMCallConfig(model="gpt-4o", api="responses", client=client)
+        agent = _ConcreteAgent(config)
+
+        with patch("evaluatorq.simulation.agents.base.record_llm_input") as recorded:
+            await agent._call_llm([
+                Message(role="user", content="hi"),
+                Message(role="assistant", content="hello there"),
+            ])
+
+        recorded.assert_called_once()
+        logged = recorded.call_args.args[1]
+        assert logged == [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello there"},
+        ]
+        # The defect this guards: the wire shape leaking onto the span.
+        assert "output_text" not in repr(logged)
+
+    def test_span_text_degrades_loudly_on_a_non_text_part(self, caplog):
+        """A multi-modal part must not raise out of the tracing path.
+
+        The Responses path legitimately carries image/file parts, which
+        `content_to_text` refuses. Tracing may never break a run, so those degrade
+        to a placeholder — and, per the house rule, say so.
+        """
+        import logging
+
+        from evaluatorq.contracts import InputImageContent
+        from evaluatorq.simulation.agents.base import _span_message_text
+
+        with caplog.at_level(logging.WARNING):
+            text = _span_message_text([InputImageContent(type="input_image", image_url="https://example.com/a.png")])
+
+        assert "input_image" in text
+        assert "input_image" in caplog.text
