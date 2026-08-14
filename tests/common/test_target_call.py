@@ -11,7 +11,7 @@ from evaluatorq.common.target_call import (
     default_map_error,
     extract_status_code,
 )
-from evaluatorq.contracts import AgentResponse, AgentResponseError, Message
+from evaluatorq.contracts import AgentResponse, AgentResponseError, Message, Usage
 
 class _Target:
     """Minimal AgentTarget double: respond() returns queued items or raises them."""
@@ -309,3 +309,94 @@ async def test_implicitly_chained_client_error_is_not_retried():
     assert r.succeeded is False
     assert r.attempts == 1
     assert t.calls == 1
+
+
+# ---------------------------------------------------------------------------
+# billed_usage accumulator (RES-1307 audit task 2)
+# ---------------------------------------------------------------------------
+
+
+def _usage(total: int, *, calls: int = 0) -> Usage:
+    return Usage(input_tokens=total, output_tokens=0, total_tokens=total, calls=calls)
+
+
+def _err_with_usage(msg: str, usage: Usage) -> AgentResponse:
+    """An error marker that still carries a billed usage block — the case the
+    old `usage if succeeded else None` read silently dropped."""
+    return AgentResponse(
+        text=msg, usage=usage, error=AgentResponseError(message=msg, error_type='target_error', code='x')
+    )
+
+
+@pytest.mark.asyncio
+async def test_billed_usage_none_when_no_attempt_reported_usage():
+    t = _Target([_ok('hi')])
+    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    assert r.billed_usage is None
+    assert r.usage_attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_billed_usage_matches_response_usage_on_single_success():
+    """The single-attempt success path: accumulator == response.usage exactly.
+
+    This is what makes it safe for callers to REPLACE the `response.usage` read
+    rather than add to it — adding both here would double every run total.
+    """
+    t = _Target([AgentResponse(text='hi', usage=_usage(30, calls=1))])
+    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    assert r.billed_usage is not None
+    assert r.billed_usage.total_tokens == 30
+    assert r.billed_usage.total_tokens == r.response.usage.total_tokens  # pyright: ignore[reportOptionalMemberAccess]
+    assert r.usage_attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_billed_usage_sums_failed_attempt_then_success():
+    """Tokens burned by a usage-bearing error attempt survive a later success."""
+    t = _Target([_err_with_usage('boom', _usage(7, calls=1)), AgentResponse(text='hi', usage=_usage(11, calls=1))])
+    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    assert r.succeeded is True
+    assert r.attempts == 2
+    assert r.billed_usage is not None
+    assert r.billed_usage.total_tokens == 18
+    assert r.billed_usage.calls == 2
+    assert r.usage_attempts == 2
+    # `response` still means the surviving response, not the aggregate.
+    assert r.response.usage is not None
+    assert r.response.usage.total_tokens == 11
+
+
+@pytest.mark.asyncio
+async def test_billed_usage_recorded_when_every_attempt_fails_with_usage():
+    t = _Target([_err_with_usage('boom', _usage(5)) for _ in range(3)])
+    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    assert r.succeeded is False
+    assert r.billed_usage is not None
+    assert r.billed_usage.total_tokens == 15
+    assert r.usage_attempts == 3
+
+
+@pytest.mark.asyncio
+async def test_synthetic_timeout_and_exception_contribute_no_usage():
+    """`_synthetic()` carries `usage=None`, so those branches stay unknown-not-zero:
+    a usage-bearing attempt before them is still counted, the synthetic ones add
+    nothing rather than a fabricated 0-cost call."""
+
+    class _OnceThenRaise:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def respond(self, messages: list[Message]) -> AgentResponse:
+            self.calls += 1
+            if self.calls == 1:
+                return _err_with_usage('boom', _usage(9, calls=1))
+            raise ConnectionError('connection reset')
+
+    t = _OnceThenRaise()
+    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    assert r.succeeded is False
+    assert t.calls == 3
+    assert r.billed_usage is not None
+    assert r.billed_usage.total_tokens == 9
+    assert r.usage_attempts == 1

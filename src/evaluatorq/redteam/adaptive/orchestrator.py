@@ -951,7 +951,24 @@ class MultiTurnOrchestrator:
 
                     tgt_result = result.response
                     agent_response = tgt_result.text
-                    turn_usage: TokenUsage | None = tgt_result.usage if result.succeeded else None
+                    # Every attempt that reported usage was billed — including a failed
+                    # final turn whose response carried a real usage block, and any
+                    # attempt burned before a successful retry. Read the accumulator
+                    # rather than ``response.usage``, which drops both. It already
+                    # covers the successful attempt, so it REPLACES that read; adding
+                    # both would double count every turn.
+                    turn_usage: TokenUsage | None = result.billed_usage
+
+                    # Accumulate token usage outside the target call, so arithmetic bugs
+                    # are never misattributed to the target. Must stay ahead of the
+                    # failure branch below, which breaks out of the turn loop.
+                    if turn_usage is not None:
+                        # Targets report their own call count (orq sums tool-continuation
+                        # rounds); fall back to the number of billed attempts only when a
+                        # usage-bearing turn forgot to.
+                        if turn_usage.calls == 0:
+                            turn_usage = turn_usage.with_calls(max(result.usage_attempts, 1))
+                        target_usage_acc = target_usage_acc + turn_usage
 
                     if result.succeeded:
                         # The per-attempt span closes inside the helper, so record the
@@ -990,15 +1007,6 @@ class MultiTurnOrchestrator:
                             },
                         )
                         break
-
-                    # Accumulate token usage outside the target call, so arithmetic bugs
-                    # are never misattributed to the target.
-                    if turn_usage is not None:
-                        # Targets report their own call count (orq sums tool-continuation
-                        # rounds); fall back to 1 only when a usage-bearing turn forgot to.
-                        if turn_usage.calls == 0:
-                            turn_usage = turn_usage.with_calls(1)
-                        target_usage_acc = target_usage_acc + turn_usage
 
                     # Record the completed turn (target succeeded)
                     turns_record.append(Turn(attacker=current_attacker, target=tgt_result))

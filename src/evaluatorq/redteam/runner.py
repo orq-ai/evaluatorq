@@ -1276,7 +1276,11 @@ async def _run_static_target_call(
         'response': result.text,
         **call.error_payload(),
         'tool_calls': result.tool_calls,
-        'token_usage': result.usage,
+        # Sum over every billed attempt, not just the surviving response: an
+        # attempt burned before a successful retry was charged too. Replaces
+        # `result.usage`; this dict is the only place the static leg reports
+        # target usage, so there is nothing else for it to be added to.
+        'token_usage': call.billed_usage,
         'finish_reason': result.finish_reason,
         'model': result.model,
     }

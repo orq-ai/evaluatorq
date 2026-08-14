@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from evaluatorq.contracts import AgentResponse, AgentResponseError, Message, TextOutputItem
+from evaluatorq.contracts import AgentResponse, AgentResponseError, Message, TextOutputItem, Usage
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -104,6 +104,20 @@ class TargetCallResult:
     success or a returned-error attempt, or a synthetic one on timeout/exception.
     ``error`` is ``None`` iff ``succeeded``. ``error_details`` carries the raw
     exception info callers persist into ``AttackOutput.error_details``.
+
+    ``billed_usage`` is the sum of **every** attempt's usage, not just the final
+    one: an attempt that returned an ``.error`` marker alongside a real usage
+    block was still billed, and so was a failed attempt that preceded a
+    successful retry. It is ``None`` when no attempt reported usage (the usual
+    case for the timeout/exception branches — ``_synthetic`` carries
+    ``usage=None``, so there is genuinely nothing to record). Callers must add
+    this **instead of** ``response.usage``, never in addition to it: on the
+    common single-successful-attempt path the two are the same object's value,
+    so adding both double counts the whole run.
+
+    ``usage_attempts`` counts the attempts that contributed to ``billed_usage``,
+    so a caller that stamps a call count on usage a target reported without one
+    can stamp the real number of billed exchanges rather than assuming 1.
     """
 
     response: AgentResponse
@@ -111,6 +125,8 @@ class TargetCallResult:
     attempts: int
     error: AgentResponseError | None
     error_details: dict[str, object] | None
+    billed_usage: Usage | None = None
+    usage_attempts: int = 0
 
     def error_payload(self, *, context: str = '', turn: int = 1) -> dict[str, Any]:
         """Return this result's error as the flat fields the report layer stores.
@@ -174,6 +190,9 @@ async def call_target_with_retry(
     last_response: AgentResponse = AgentResponse()
     last_error: AgentResponseError | None = None
     last_details: dict[str, object] | None = None
+    # Billed across ALL attempts, not just the surviving one — see TargetCallResult.
+    billed_usage: Usage | None = None
+    usage_attempts = 0
 
     attempt = 0  # max_attempts >= 1, but the type checker can't prove the loop runs
     for attempt in range(max_attempts):
@@ -184,9 +203,23 @@ async def call_target_with_retry(
                 resp = _coerce_to_agent_response(raw)
                 if on_attempt_response is not None:
                     on_attempt_response(attempt_context, resp)
+            if resp.usage is not None:
+                billed_usage = resp.usage if billed_usage is None else billed_usage + resp.usage
+                usage_attempts += 1
             if resp.error is None:
                 return TargetCallResult(
-                    response=resp, succeeded=True, attempts=attempt + 1, error=None, error_details=None
+                    response=resp,
+                    succeeded=True,
+                    attempts=attempt + 1,
+                    error=None,
+                    error_details=None,
+                    billed_usage=billed_usage,
+                    usage_attempts=usage_attempts,
+                )
+            if resp.usage is not None:
+                logger.warning(
+                    f'Target attempt {attempt + 1} returned an error marker with a billed usage block '
+                    f'({resp.usage.total_tokens} tokens); counting it toward the exchange cost'
                 )
             last_response = resp
             last_error = resp.error
@@ -225,5 +258,11 @@ async def call_target_with_retry(
             logger.warning(f'Target call failed (attempt {attempt + 1}/{max_attempts}); retrying same exchange')
 
     return TargetCallResult(
-        response=last_response, succeeded=False, attempts=attempt + 1, error=last_error, error_details=last_details
+        response=last_response,
+        succeeded=False,
+        attempts=attempt + 1,
+        error=last_error,
+        error_details=last_details,
+        billed_usage=billed_usage,
+        usage_attempts=usage_attempts,
     )
