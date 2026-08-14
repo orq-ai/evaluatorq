@@ -28,6 +28,7 @@
 | src/evaluatorq/common/model\_catalogue.py                                |      101 |        3 |     97% |138, 145, 176 |
 | src/evaluatorq/common/orq\_client.py                                     |       14 |        1 |     93% |        45 |
 | src/evaluatorq/common/output\_adapters.py                                |       99 |        8 |     92% |37-39, 58, 114, 123-125 |
+| src/evaluatorq/common/recommendations.py                                 |       16 |        0 |    100% |           |
 | src/evaluatorq/common/replay.py                                          |       85 |        5 |     94% |81-82, 101, 178, 182 |
 | src/evaluatorq/common/reports/\_\_init\_\_.py                            |        9 |        0 |    100% |           |
 | src/evaluatorq/common/reports/console.py                                 |       27 |        0 |    100% |           |
@@ -42,7 +43,7 @@
 | src/evaluatorq/common/run\_manifest.py                                   |      142 |       11 |     92% |77-80, 109, 120, 208-211, 285-289 |
 | src/evaluatorq/common/run\_store\_dir.py                                 |        8 |        0 |    100% |           |
 | src/evaluatorq/common/sanitize.py                                        |       12 |        0 |    100% |           |
-| src/evaluatorq/common/structured\_output.py                              |       58 |        5 |     91% |146, 150, 153, 158, 162 |
+| src/evaluatorq/common/structured\_output.py                              |       69 |        6 |     91% |156, 163, 168, 172, 203, 213 |
 | src/evaluatorq/common/target\_call.py                                    |       96 |        1 |     99% |        88 |
 | src/evaluatorq/common/template\_engine.py                                |       60 |        2 |     97% |    68, 72 |
 | src/evaluatorq/common/thread\_context.py                                 |       62 |        1 |     98% |        75 |
@@ -113,12 +114,12 @@
 | src/evaluatorq/processings.py                                            |       66 |        5 |     92% |51, 87-89, 280-282 |
 | src/evaluatorq/progress.py                                               |      101 |       53 |     48% |55-95, 99-104, 137, 141-148, 152-157, 166-180, 213-231 |
 | src/evaluatorq/ranking.py                                                |      195 |        0 |    100% |           |
-| src/evaluatorq/redteam/\_\_init\_\_.py                                   |       34 |        5 |     85% |   251-260 |
+| src/evaluatorq/redteam/\_\_init\_\_.py                                   |       34 |        5 |     85% |   253-262 |
 | src/evaluatorq/redteam/adaptive/\_\_init\_\_.py                          |        7 |        0 |    100% |           |
 | src/evaluatorq/redteam/adaptive/agent\_context.py                        |       12 |       12 |      0% |      3-42 |
 | src/evaluatorq/redteam/adaptive/attack\_generator.py                     |       54 |        2 |     96% |  219, 234 |
 | src/evaluatorq/redteam/adaptive/blackbox\_classifier.py                  |      124 |        7 |     94% |299-304, 367 |
-| src/evaluatorq/redteam/adaptive/capability\_classifier.py                |      108 |        6 |     94% |165, 184, 260, 263, 333, 345 |
+| src/evaluatorq/redteam/adaptive/capability\_classifier.py                |      107 |        6 |     94% |165, 184, 255, 258, 328, 340 |
 | src/evaluatorq/redteam/adaptive/evaluator.py                             |       90 |        1 |     99% |       120 |
 | src/evaluatorq/redteam/adaptive/objective\_generator.py                  |      139 |       33 |     76% |54, 142, 166, 289-312, 424-438, 481-485, 500, 550-551, 553-554, 657-691 |
 | src/evaluatorq/redteam/adaptive/orchestrator.py                          |      386 |       70 |     82% |98-125, 131-138, 147-160, 166-167, 173-187, 192-196, 201, 392-393, 459-465, 614-615, 890, 980, 1000, 1038-1048 |
@@ -134,7 +135,7 @@
 | src/evaluatorq/redteam/backends/orq.py                                   |      299 |       42 |     86% |27-28, 109-124, 298-299, 459, 464, 539-549, 553-565, 595-596, 606, 610, 636, 658, 670-682 |
 | src/evaluatorq/redteam/backends/registry.py                              |       53 |        6 |     89% |55, 66-70, 94, 123-124 |
 | src/evaluatorq/redteam/cli.py                                            |      360 |      133 |     63% |78, 84, 98-99, 165-167, 179, 193-195, 207, 234, 458, 481, 565-566, 568-569, 576-580, 583-585, 588-590, 593-595, 645-656, 661-666, 689-788, 811-815, 829-830, 858, 861-862, 933-952 |
-| src/evaluatorq/redteam/contracts.py                                      |      771 |       46 |     94% |92, 132-134, 266-267, 457, 470-471, 484, 510, 634, 642, 646, 667, 1099, 1141-1161, 1167, 1261-1263, 1272, 1358-1364, 1441-1443, 1749, 1948-1957 |
+| src/evaluatorq/redteam/contracts.py                                      |      791 |       46 |     94% |93, 133-135, 267-268, 458, 471-472, 485, 511, 635, 643, 647, 668, 1176, 1218-1238, 1244, 1338-1340, 1349, 1435-1441, 1518-1520, 1826, 2025-2034 |
 | src/evaluatorq/redteam/delivery\_method\_registry.py                     |       59 |        1 |     98% |       110 |
 | src/evaluatorq/redteam/exceptions.py                                     |        5 |        0 |    100% |           |
 | src/evaluatorq/redteam/frameworks/\_\_init\_\_.py                        |        0 |        0 |    100% |           |
@@ -158,9 +159,9 @@
 | src/evaluatorq/redteam/reports/export\_html.py                           |      720 |      111 |     85% |142, 169, 196, 296-299, 336, 338-339, 378, 384-395, 474, 497, 518-538, 543-595, 606, 617, 625-628, 648, 684, 686, 722, 745, 763-767, 769, 771, 776-782, 784-790, 792-798, 800-806, 826, 838, 865, 873, 893-902, 912, 937, 956, 962, 982, 1016, 1089, 1118, 1148, 1185, 1225-1227, 1290, 1333, 1363, 1394, 1397, 1400, 1414, 1417, 1419-1420, 1435-1436, 1503, 1505, 1550, 1555 |
 | src/evaluatorq/redteam/reports/export\_md.py                             |      430 |      142 |     67% |42-44, 52, 55, 101, 138, 142-145, 148-149, 169, 184, 186, 188, 190, 192, 194, 196, 230, 234-242, 249-288, 293-336, 394, 410, 413, 451, 476, 498, 507, 528-576, 581-599, 604-611, 621, 634, 686, 707, 709, 714, 736, 738, 740-741, 753-755, 843 |
 | src/evaluatorq/redteam/reports/guidance.py                               |        2 |        0 |    100% |           |
-| src/evaluatorq/redteam/reports/recommendations.py                        |       76 |        2 |     97% |   51, 186 |
+| src/evaluatorq/redteam/reports/recommendations.py                        |      121 |        4 |     97% |68, 211, 214, 321 |
 | src/evaluatorq/redteam/reports/sections.py                               |      348 |       25 |     93% |81, 96, 110-111, 113-114, 329-357, 451-456, 574, 820, 989 |
-| src/evaluatorq/redteam/runner.py                                         |     1095 |      127 |     88% |177-179, 216, 304, 378, 385, 660-661, 670-675, 677-678, 728-729, 759, 872-873, 952-955, 1036-1037, 1078-1082, 1116-1120, 1151, 1181-1183, 1239, 1415, 1576, 1584-1586, 1695-1700, 1916-1917, 1922-1929, 1937-1938, 1958, 1960-1966, 1991-2001, 2099, 2138, 2144, 2257-2258, 2260-2262, 2323, 2361, 2406-2407, 2480-2490, 2524-2525, 2591-2594, 2625-2651, 2679-2681, 2689, 2736, 2762, 2785, 2801, 2806, 2808-2814, 2876, 2984, 3154-3155, 3164, 3167-3168 |
+| src/evaluatorq/redteam/runner.py                                         |     1091 |      126 |     88% |179-181, 218, 306, 380, 387, 665-670, 672-673, 723-724, 754, 775, 867-868, 947-950, 1031-1032, 1074-1078, 1112-1116, 1147, 1177-1179, 1235, 1411, 1572, 1580-1582, 1691-1696, 1912-1913, 1918-1925, 1933-1934, 1954, 1956-1962, 1987-1997, 2095, 2134, 2140, 2253-2254, 2256-2258, 2319, 2357, 2402-2403, 2476-2486, 2520-2521, 2587-2590, 2621-2647, 2675-2677, 2685, 2732, 2758, 2781, 2797, 2802, 2804-2810, 2872, 2980, 3150-3151, 3160, 3163-3164 |
 | src/evaluatorq/redteam/runtime/\_\_init\_\_.py                           |        0 |        0 |    100% |           |
 | src/evaluatorq/redteam/runtime/jobs.py                                   |      124 |        9 |     93% |80, 128, 160, 206-208, 215, 258-259 |
 | src/evaluatorq/redteam/tracing.py                                        |       51 |        6 |     88% |103-105, 142-144 |
@@ -170,16 +171,16 @@
 | src/evaluatorq/redteam/utils.py                                          |        9 |        1 |     89% |        27 |
 | src/evaluatorq/redteam/vulnerability\_registry.py                        |       73 |        4 |     95% |186, 300, 313, 327 |
 | src/evaluatorq/send\_results.py                                          |       59 |        0 |    100% |           |
-| src/evaluatorq/simulation/\_\_init\_\_.py                                |       23 |        1 |     96% |       313 |
-| src/evaluatorq/simulation/\_config.py                                    |       41 |        0 |    100% |           |
+| src/evaluatorq/simulation/\_\_init\_\_.py                                |       23 |        1 |     96% |       320 |
+| src/evaluatorq/simulation/\_config.py                                    |       44 |        0 |    100% |           |
 | src/evaluatorq/simulation/\_datapoint\_io.py                             |       51 |        2 |     96% |    68, 92 |
 | src/evaluatorq/simulation/adapters.py                                    |       24 |        7 |     71% | 25, 57-63 |
 | src/evaluatorq/simulation/agents/\_\_init\_\_.py                         |        4 |        0 |    100% |           |
 | src/evaluatorq/simulation/agents/base.py                                 |      174 |       15 |     91% |174-183, 191, 195-196, 304, 319-325, 385, 397, 441, 487 |
 | src/evaluatorq/simulation/agents/judge.py                                |      289 |       18 |     94% |207, 228-234, 246, 259, 265, 273, 440-445, 464-470, 665-667, 710, 806-811 |
 | src/evaluatorq/simulation/agents/user\_simulator.py                      |       35 |       13 |     63% |64, 68-70, 74-81, 89-95 |
-| src/evaluatorq/simulation/api.py                                         |      566 |       53 |     91% |450, 649, 897, 951, 1015, 1076, 1127, 1144, 1246-1248, 1347, 1372-1373, 1379, 1494, 1520, 1572-1573, 1583, 1587, 1592, 1656, 1663-1680, 1747, 1817-1823, 1826-1829, 1906-1907, 1909, 2011-2014, 2021-2024 |
-| src/evaluatorq/simulation/cli.py                                         |      667 |      126 |     81% |95-102, 111-112, 141, 145, 147, 156, 160, 165, 168-170, 174, 184, 211, 221, 237-238, 249-267, 272, 279, 712, 749, 751, 779-780, 782-783, 804, 841, 844, 1051, 1098-1099, 1101-1102, 1114, 1329-1330, 1332-1333, 1335, 1446-1506, 1609-1610, 1626, 1657-1658, 1702, 1750, 1761-1762, 1764, 1817-1818, 1832-1836, 1863, 1953-1958, 2049-2050, 2128 |
+| src/evaluatorq/simulation/api.py                                         |      581 |       53 |     91% |492, 699, 947, 1001, 1065, 1126, 1177, 1194, 1295-1297, 1396, 1416, 1431-1432, 1550, 1576, 1628-1629, 1639, 1643, 1648, 1712, 1719-1736, 1803, 1873-1879, 1882-1885, 1962-1963, 1965, 2067-2070, 2077-2080 |
+| src/evaluatorq/simulation/cli.py                                         |      665 |      103 |     85% |95-102, 111-112, 141, 145, 147, 156, 160, 165, 168-170, 174, 184, 211, 221, 237-238, 249-267, 272, 703, 740, 742, 770-771, 773-774, 795, 832, 835, 1042, 1089-1090, 1092-1093, 1105, 1320-1321, 1323-1324, 1326, 1479, 1499-1501, 1508, 1532-1543, 1546-1547, 1657-1658, 1674, 1705-1706, 1750, 1798, 1809-1810, 1812, 1865-1866, 1880-1884, 1911, 2001-2006, 2097-2098, 2176 |
 | src/evaluatorq/simulation/convert.py                                     |       44 |        0 |    100% |           |
 | src/evaluatorq/simulation/evaluators/\_\_init\_\_.py                     |        3 |        0 |    100% |           |
 | src/evaluatorq/simulation/evaluators/scorers.py                          |       59 |        0 |    100% |           |
@@ -201,13 +202,13 @@
 | src/evaluatorq/simulation/reports/executive\_summary.py                  |       35 |        0 |    100% |           |
 | src/evaluatorq/simulation/reports/export\_html.py                        |      313 |        7 |     98% |137, 275, 311, 366, 506, 601, 638 |
 | src/evaluatorq/simulation/reports/export\_md.py                          |      260 |       15 |     94% |103, 207, 232-239, 315, 379-380, 385, 449 |
-| src/evaluatorq/simulation/reports/recommendations.py                     |       67 |        2 |     97% |   61, 195 |
+| src/evaluatorq/simulation/reports/recommendations.py                     |       82 |        1 |     99% |       263 |
 | src/evaluatorq/simulation/reports/sections.py                            |      265 |        2 |     99% |   94, 154 |
 | src/evaluatorq/simulation/reports/token\_usage.py                        |       26 |        0 |    100% |           |
 | src/evaluatorq/simulation/runner/\_\_init\_\_.py                         |        3 |        0 |    100% |           |
 | src/evaluatorq/simulation/runner/simulation.py                           |      396 |       24 |     94% |486, 497, 643-649, 666-672, 744, 851, 991-999, 1017-1018, 1020-1021, 1165, 1187 |
 | src/evaluatorq/simulation/token\_usage.py                                |        7 |        0 |    100% |           |
-| src/evaluatorq/simulation/traces.py                                      |      220 |       13 |     94% |105, 110, 119, 185, 188, 294, 369, 401-405, 415, 461, 488, 492 |
+| src/evaluatorq/simulation/traces.py                                      |      299 |       16 |     95% |263-264, 320, 359, 364, 373, 439, 442, 556, 653, 718, 791, 798, 817, 850, 854 |
 | src/evaluatorq/simulation/tracing.py                                     |       78 |       12 |     85% |95-101, 145-151 |
 | src/evaluatorq/simulation/types.py                                       |      242 |        2 |     99% |   502-503 |
 | src/evaluatorq/simulation/ui/\_\_init\_\_.py                             |        0 |        0 |    100% |           |
@@ -227,7 +228,7 @@
 | src/evaluatorq/tracing/setup.py                                          |      136 |       39 |     71% |103-113, 134-137, 142, 171, 177-183, 191-201, 235-243, 292-293, 314 |
 | src/evaluatorq/tracing/spans.py                                          |      112 |       13 |     88% |140, 151-158, 207-214 |
 | src/evaluatorq/types.py                                                  |       85 |        2 |     98% |   32, 264 |
-| **TOTAL**                                                                | **25847** | **4497** | **83%** |           |
+| **TOTAL**                                                                | **26044** | **4478** | **83%** |           |
 
 
 ## Setup coverage badge
