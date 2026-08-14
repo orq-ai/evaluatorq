@@ -592,12 +592,26 @@ class EvaluatorConfig(BaseModel):
         min_length=1,
         description='Judge model IDs. judges[0] is the primary evaluator model.',
     )
-    api: Literal['chat_completions', 'responses'] = 'chat_completions'
+    api: Literal['chat_completions', 'responses'] = Field(
+        default='responses',
+        description='Endpoint judges call. Defaults to responses: it is the endpoint the Orq '
+        'router prices, so judge calls record cost like target calls do. Set to '
+        'chat_completions to opt out; a model the router cannot resolve on responses falls '
+        'back to chat completions on its own.',
+    )
     temperature: float = Field(default=1.0, ge=0.0, le=2.0)
     max_tokens: int = Field(default=DEFAULT_TARGET_MAX_TOKENS, gt=0)
     timeout_ms: int = Field(default=90_000, gt=0)
     extra_kwargs: dict[str, Any] = Field(default_factory=dict)
     client: _Client = None
+    retry_count: int = Field(
+        default=1,
+        ge=0,
+        description='Retries per judge call (after the initial call) on rate limits, 5xx and '
+        'transport failures. Same semantics as LLMConfig.retry_count, but this is the judge-side '
+        'budget, distinct from that target-side one. 0 disables retry — a failing judge then '
+        'falls to the panel machinery (replacement_judges / min_successful_judges) immediately.',
+    )
     repetitions: int = Field(default=1, ge=1)
     replacement_judges: list[str] = Field(default_factory=list)
     min_successful_judges: int = Field(default=1, ge=1)
@@ -640,6 +654,7 @@ class EvaluatorConfig(BaseModel):
             timeout_ms=self.timeout_ms,
             extra_kwargs=self.extra_kwargs,
             client=self.client,
+            retry_count=self.retry_count,
         )
 
     @model_validator(mode='after')
@@ -688,6 +703,10 @@ class LLMConfig(BaseModel):
     # The two layers multiply only during sustained outages: worst case per call
     # is (retry_count + 1) HTTP requests, each asking the router for up to
     # retry_count provider retries.
+    #
+    # Same semantics as LLMCallConfig.retry_count / EvaluatorConfig.retry_count
+    # (retries after the initial call, 0 disables retry) — this is the target-side
+    # budget, those are the attacker/judge-side ones.
     retry_count: int = Field(default=3, ge=0, le=10)
     retry_on_codes: list[int] = Field(default=[429, 500, 502, 503, 504])
     # How many times to regenerate an attacker turn that the attack model

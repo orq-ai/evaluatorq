@@ -200,6 +200,93 @@ roll up into `report.summary.errors_by_type`, where judge failures appear under
 systematically blocked judge shows up as one named cause (`evaluation/api_status:
 40 attacks`) instead of vanishing into forty individual results.
 
+### What a run costs
+
+`report.summary.token_usage_total` covers every LLM call in a run — attack
+generation, the target, and the judge — with `calls` and `priced_calls` alongside
+the dollar figure. When those two counts differ, some call carries no price and
+the total is a floor rather than the whole bill.
+
+A judge on the Orq router calls its Responses endpoint by default, because that
+is the endpoint the router prices. Verdicts there are schema-enforced
+(`json_schema`), so the provider produces the verdict's own keys rather than
+merely some JSON object. Pass `EvaluatorConfig(api='chat_completions')` to opt
+out; a judge on Chat Completions comes back with tokens but no price, so
+evaluatorq fills the cost in client-side from Orq's model catalogue.
+
+Four conditions have to hold for the Responses default to apply: `cfg.api ==
+'responses'` (the evaluator default; `structured_output` — the `llm_jury(...,
+structured_output=False)` knob — must also be on, since the Responses path here
+is schema-only), the judge client routes through the Orq router, and the model
+appears in the catalogue and reports Responses support. Reading the catalogue
+needs a credential — the client's own `api_key` when the host was resolved from
+an injected client, otherwise `ORQ_API_KEY` from the environment. A judge
+pointed at any other endpoint — a direct OpenAI key, vLLM, a proxy — stays on
+Chat Completions, as does one whose model the catalogue does not list. Both
+layers fall back on their own: a model the router rejects on Responses moves to
+Chat Completions for the rest of the run, and a model missing from the catalogue
+stays honestly unpriced rather than reporting `$0.00`.
+
+Judge calls retry on rate limits, 5xx and transport failures —
+`EvaluatorConfig(retry_count=...)` sets the budget (1 retry by default, 0 to
+disable), same semantics as `LLMConfig.retry_count`: retries after the initial
+call. It is a separate, judge-side budget from `LLMConfig.retry_count`'s
+target-side one; a client evaluatorq is given for judging has its own
+SDK-level retry disarmed for the duration so the two cannot multiply.
+
+#### What the totals do not include
+
+A handful of LLM calls fall outside `report.summary.token_usage_total` (and
+outside the equivalent simulation-side totals) entirely — real spend that no
+total, floor or otherwise, reflects. Each is a deliberate scope call, not an
+oversight left in place by accident:
+
+- **Blackbox capability classification** (`redteam/adaptive/blackbox_classifier.py`)
+  — the judge call that infers an agent's capabilities from probe transcripts
+  extracts no usage. `classify_agent_capabilities_blackbox` returns
+  `BlackboxAgentCapabilities`, which has no usage field, and the function is
+  not currently wired into any pipeline (exported but uncalled outside tests).
+- **Structured-output generation** (`common/structured_output.py`,
+  `simulation/generators/first_message_generator.py`) — persona, scenario, and
+  first-message generation for simulated users extract no usage from either
+  the primary `parse()` call or the `json_object` fallback. The shared
+  `generate_structured` helper is called from 11 sites across the simulation
+  generators, `traces.py`, and both report `recommendations.py` modules, none
+  of which track usage today.
+- **LLM-generated recommendations and executive summaries**
+  (`redteam/reports/recommendations.py`, `simulation/reports/recommendations.py`,
+  `common/reports/executive_summary.py`) — these are opt-in post-processing
+  steps (`generate_focus_area_recommendations` on the red-team side,
+  `generate_recommendations` on the simulation side, and
+  `generate_executive_summary`) that run
+  after a report's usage summary is already finalized. Folding their usage in
+  would mean either widening a public result type or maintaining the
+  documented `token_usage_by_source` sums-to `token_usage_total` invariant
+  across a new source category — both out of scope for this pass.
+- **Adversarial generation calls that discard their priced `Usage`**
+  (`redteam/adaptive/attack_generator.py`, `capability_classifier.py`,
+  `objective_generator.py`) — these already call `execute_chat_parse`, so the
+  call itself is priced, but each site discards the returned `Usage` with
+  `response, _ = await execute_chat_parse(...)` because its function returns a
+  bare parsed model (`ToolAnalysis`, `ResourceCapabilityInference`,
+  `ToolCapabilitiesResponse`, `GeneratedObjectives`) with no usage field.
+  Real spend, uncounted.
+- **Target-side usage from agent and framework backends** — these feed
+  `token_usage_total` unpriced, so `priced_calls < calls` on a run against any
+  of them is expected, not a bug:
+    - The **ORQ agent target** (`redteam/backends/orq.py`) accumulates usage
+      across pending-tool-call continuations with no `price_usage` call. An
+      agent run can fan out over several models per turn, so client-side
+      pricing may genuinely not be possible here even in principle.
+    - The **LangGraph** (`integrations/langgraph_integration/target.py`),
+      **OpenAI Agents SDK** (`integrations/openai_agents_integration/target.py`),
+      and **Vercel AI SDK** (`integrations/vercel_ai_sdk_integration/target.py`)
+      targets all extract token counts from the framework's own usage metadata
+      but attach no cost fields.
+    - A **custom callable target**'s usage, normalized by
+      `redteam/runtime/jobs.py`'s `_normalize_usage`, passes through
+      `TokenUsage.extract` the same way — counted, unpriced.
+
 ## In CI
 
 For a fast gate, run a small fixed set of attacks and assert a minimum

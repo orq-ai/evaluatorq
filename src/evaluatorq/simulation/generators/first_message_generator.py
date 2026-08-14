@@ -134,6 +134,13 @@ Keep it natural - this is how they would actually open a conversation."""
                 trace_headers = await get_trace_context_headers()
                 extra: dict[str, Any] = {'extra_headers': trace_headers} if trace_headers else {}
                 apply_pipeline_metadata(extra)
+                # RES-1295: neither retry attempt below extracts usage, so its
+                # tokens never reach any total. `generate()` returns a bare
+                # `str` and its only caller (`datapoint_generator.py`) tracks
+                # no usage today (same gap as `generate_structured` in
+                # `simulation/utils/structured_output.py`) — adding a sink
+                # would mean widening this public return type. See "What the
+                # totals do not include" in docs/guides/red-teaming.md.
                 for attempt in range(2):
                     response = await with_retry(
                         lambda: self._client.chat.completions.create(  # pyright: ignore[reportUnknownLambdaType]

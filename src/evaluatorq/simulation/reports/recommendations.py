@@ -170,6 +170,12 @@ async def generate_recommendations(
             {'role': 'user', 'content': _build_user_prompt(result, triggers)},
         ]
         try:
+            # RES-1295: generate_structured extracts no usage, so this call's
+            # tokens never reach any total. `SimulationRecommendation` has no
+            # usage field and this opt-in post-processing step runs after
+            # per-simulation usage has already been summarized — adding a sink
+            # here would mean widening a public result type. See "What the
+            # totals do not include" in docs/guides/red-teaming.md.
             parsed, raw = await generate_structured(
                 client=llm_client,
                 model=model,

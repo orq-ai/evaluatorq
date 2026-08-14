@@ -6,8 +6,20 @@ This file provides guidance to Claude Code when working in `packages/evaluatorq-
 
 Parallel agent sessions typically run in their own git worktree, so uncommitted
 changes you did not make may appear in the working tree from concurrent work.
-**Never `git stash` or `git reset`** to clean the tree — you would destroy another
-session's work. When committing, stage only the exact files your task changed.
+**Never run `git stash` (any subcommand) or `git reset`.** Not `stash` to clean
+the tree, and not `stash pop`/`apply` either: the stash holds other sessions'
+autostash entries, and popping one drops a merge into your tree and consumes the
+entry. `git checkout <path>` and `git checkout -- .` are equally destructive to
+uncommitted work you did not write. When committing, stage only the exact files
+your task changed.
+
+The same applies to every subagent you dispatch — say it in the dispatch prompt.
+A reviewer that "just needed a clean tree for a moment" has already popped
+another session's autostash once.
+
+To read a file as it is on HEAD without touching the tree, use
+`git show HEAD:<path>`. To see only your own changes on a shared dirty tree,
+diff the paths you touched: `git diff -- <your paths>`.
 
 ## Quick Reference
 

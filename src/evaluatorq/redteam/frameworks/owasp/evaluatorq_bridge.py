@@ -191,7 +191,9 @@ def create_owasp_evaluator(
     # inside scorer() would spin up a fresh AsyncOpenAI connection pool for every
     # datapoint in a batch, none explicitly closed. Mirrors OWASPEvaluator.__init__.
     resolved_cfg = cfg or PIPELINE_CONFIG.evaluator
-    client = llm_client or resolved_cfg.client or create_async_llm_client()
+    # max_retries=0: run_judge owns retry via with_retry, so the SDK's own budget would
+    # stack on top of it. An injected client keeps the budget its owner chose.
+    client = llm_client or resolved_cfg.client or create_async_llm_client(max_retries=0)
     merged_cfg = resolved_cfg.model_copy(
         update={
             'extra_kwargs': {**resolved_cfg.extra_kwargs, **(llm_kwargs or {})},
@@ -423,6 +425,8 @@ def _fetch_all_datapoints(dataset_id: str) -> list[DataPoint]:
             'Alternatively, pass a local file path as the dataset argument.'
         )
         raise ValueError(msg)
+    # resolve_orq_client, not a bare Orq(...): a dataset must come from the host
+    # the run is pointed at (ORQ_BASE_URL), not always prod.
     client = resolve_orq_client(orq_api_key)
     all_datapoints: list[DataPoint] = []
     skipped = 0
