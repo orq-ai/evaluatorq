@@ -296,12 +296,14 @@ class TestStaticOWASPScorerToolCalls:
         assert result.pass_ is None
         assert result.token_usage is not None
         assert result.token_usage.calls == 1
-        # A ValidationError raised inside run_judge's retry loop escapes before the
-        # endpoint is stamped on the returned JudgeOutcome, so 'endpoint' is present
-        # but None here — the key still exists (unlike the pre-fix bridge, which
-        # dropped raw_output entirely) rather than being a fabricated 'chat'.
+        # A ValidationError raised inside run_judge's retry loop escapes the
+        # per-attempt stamping, but the endpoint is not unknown: only the chat
+        # path can raise it (the Responses leg returns before the chat span opens),
+        # so run_judge's PARSE return names 'chat'. Not a fabricated value — a
+        # derived one; the catch-all UNKNOWN return, which can fire before any
+        # provider call, still leaves it None.
         assert result.raw_output is not None
-        assert result.raw_output['endpoint'] is None
+        assert result.raw_output['endpoint'] == 'chat'
 
     @pytest.mark.asyncio
     async def test_scorer_panel_judge_parse_failure_keeps_token_usage(self) -> None:

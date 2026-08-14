@@ -25,6 +25,7 @@ from evaluatorq.common.jury import (
     _sum_usage,
     _unswap,
     as_semaphore,
+    combine_endpoints,
     resolve_panel,
 )
 from evaluatorq.common.tracing import current_otel_context, set_span_attrs, with_span
@@ -97,6 +98,12 @@ class PairwiseComparison(BaseModel):
     votes: list[PairwiseVote] = Field(default_factory=list, description='Per-judge reconciled votes')
     token_usage: TokenUsage | None = Field(
         default=None, description='Summed token usage across both orderings and any replacements'
+    )
+    endpoint: Literal['chat', 'responses', 'mixed'] | None = Field(
+        default=None,
+        description='Which endpoint served the comparison, folded across both orderings and any '
+        "replacements: 'mixed' when they differed, None when no judge pass recorded one. Only the "
+        'Responses endpoint returns a priced usage block, so this qualifies token_usage.',
     )
 
 
@@ -471,7 +478,7 @@ async def run_pairwise(
 
     async def _ordering(
         models: Sequence[str], *, swapped: bool, replacement: bool
-    ) -> tuple[dict[str, JuryVote], TokenUsage | None]:
+    ) -> tuple[dict[str, JuryVote], TokenUsage | None, str | None]:
         async def _fn(model: str) -> Prediction:
             return await (
                 judge_fn(response_b, response_a, model) if swapped else judge_fn(response_a, response_b, model)
@@ -498,25 +505,35 @@ async def run_pairwise(
             parent_context=jury_ctx,
             replacement=replacement,
         )
-        return {v.model: v for v in deliberation.jury.votes}, deliberation.token_usage
+        # The ordering's endpoint rides alongside its usage: usage without the
+        # endpoint that produced it cannot be told apart from an unpriced call.
+        return {v.model: v for v in deliberation.jury.votes}, deliberation.token_usage, deliberation.endpoint
 
     async def _both(
         models: Sequence[str], *, replacement: bool = False
-    ) -> tuple[dict[str, JuryVote], dict[str, JuryVote], list[TokenUsage]]:
+    ) -> tuple[dict[str, JuryVote], dict[str, JuryVote], list[TokenUsage], list[str | None]]:
         if not swap:
-            first_votes, first_usage = await _ordering(models, swapped=False, replacement=replacement)
-            return first_votes, {}, [u for u in (first_usage,) if u]
-        (first_votes, first_usage), (second_votes, second_usage) = await asyncio.gather(
+            first_votes, first_usage, first_endpoint = await _ordering(models, swapped=False, replacement=replacement)
+            return first_votes, {}, [u for u in (first_usage,) if u], [first_endpoint]
+        (
+            (first_votes, first_usage, first_endpoint),
+            (second_votes, second_usage, second_endpoint),
+        ) = await asyncio.gather(
             _ordering(models, swapped=False, replacement=replacement),
             _ordering(models, swapped=True, replacement=replacement),
         )
-        return first_votes, second_votes, [u for u in (first_usage, second_usage) if u]
+        return (
+            first_votes,
+            second_votes,
+            [u for u in (first_usage, second_usage) if u],
+            [first_endpoint, second_endpoint],
+        )
 
     async with with_span('orq.pairwise_jury') as jury_span:
         # Captured before any judge runs so every judge span (both orderings,
         # replacements included) parents to this one comparison-level span.
         jury_ctx = current_otel_context()
-        first_votes, second_votes, usages = await _both(resolved_panel)
+        first_votes, second_votes, usages, endpoints = await _both(resolved_panel)
 
         def _failed(model: str) -> bool:
             first = first_votes.get(model)
@@ -538,10 +555,11 @@ async def run_pairwise(
 
         stand_in_set = set(stand_ins)
         if stand_ins:
-            rep_first, rep_second, rep_usages = await _both(stand_ins, replacement=True)
+            rep_first, rep_second, rep_usages, rep_endpoints = await _both(stand_ins, replacement=True)
             first_votes.update(rep_first)
             second_votes.update(rep_second)
             usages.extend(rep_usages)
+            endpoints.extend(rep_endpoints)
 
         votes: list[PairwiseVote] = []
         for model in (*resolved_panel, *stand_ins):
@@ -567,7 +585,15 @@ async def run_pairwise(
 
         decisive = [v.vote for v in votes if v.vote is not None]
         winner = 'inconclusive' if len(decisive) < max(1, min_successful_judges) else pairwise_consensus(decisive)
-        comparison = PairwiseComparison(winner=winner, votes=votes, token_usage=_sum_usage(usages))
+        comparison = PairwiseComparison(
+            winner=winner,
+            votes=votes,
+            token_usage=_sum_usage(usages),
+            # Folded the same way the jury folds across judges, so the two
+            # orderings of one comparison read like one panel: 'mixed' when they
+            # disagree, None when neither recorded an endpoint.
+            endpoint=combine_endpoints(endpoints),
+        )
         _record_pairwise_span(
             jury_span,
             comparison,

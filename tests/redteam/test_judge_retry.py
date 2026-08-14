@@ -355,3 +355,114 @@ async def test_endpoint_is_chat_when_responses_400s_and_falls_back():
 
     assert outcome.endpoint == 'chat'
     assert outcome.payload is not None and outcome.payload.value is True
+
+
+# --- JudgeOutcome.endpoint on the terminal error returns ------------------------
+#
+# A panel aggregates endpoints over decisive AND failed predictions
+# (`common.jury._run_jury_core`), so an unstamped failure makes a whole panel's
+# provenance read `None` — "nothing recorded an endpoint" rather than "the
+# Responses call timed out". These pin which endpoint each terminal return names.
+
+
+@pytest.mark.asyncio
+async def test_timeout_on_responses_stamps_responses_endpoint():
+    client = _Client()
+
+    async def times_out(**kwargs: Any) -> Any:
+        client.calls.append('responses')
+        raise TimeoutError
+
+    client.responses = SimpleNamespace(parse=times_out)
+    outcome = await _judge(client, retry_count=0)
+
+    assert outcome.error_kind is JudgeError.TIMEOUT
+    assert outcome.endpoint == 'responses'
+
+
+@pytest.mark.asyncio
+async def test_timeout_on_chat_stamps_chat_endpoint():
+    client = _Client(base_url=OPENAI_URL)  # non-Orq -> never leaves chat
+
+    async def times_out(**kwargs: Any) -> Any:
+        client.calls.append('chat')
+        raise TimeoutError
+
+    client.chat = SimpleNamespace(completions=SimpleNamespace(parse=times_out))
+    outcome = await _judge(client, retry_count=0)
+
+    assert outcome.error_kind is JudgeError.TIMEOUT
+    assert outcome.endpoint == 'chat'
+
+
+@pytest.mark.asyncio
+async def test_exhausted_retries_stamp_the_responses_endpoint():
+    client = _Client()
+
+    async def always_fails(**kwargs: Any) -> Any:
+        client.calls.append('responses')
+        raise _server_error(503)
+
+    client.responses = SimpleNamespace(parse=always_fails)
+    outcome = await _judge(client, retry_count=1)
+
+    assert outcome.error_kind is JudgeError.API_STATUS
+    assert outcome.endpoint == 'responses'
+
+
+@pytest.mark.asyncio
+async def test_parse_error_on_chat_stamps_chat_endpoint():
+    """The legacy json_object path's unparseable verdict: a ValidationError still
+    knows it was chat that served it."""
+    client = _Client(base_url=OPENAI_URL)
+
+    async def malformed_chat_create(**kwargs: Any) -> Any:
+        client.calls.append('chat')
+        reply = _chat_reply()
+        reply.choices[0].message = SimpleNamespace(content='not valid json')
+        return reply
+
+    client.chat = SimpleNamespace(completions=SimpleNamespace(create=malformed_chat_create))
+    outcome = await _judge(client, retry_count=0, response_model=None)
+
+    assert outcome.error_kind is JudgeError.PARSE
+    assert outcome.endpoint == 'chat'
+
+
+@pytest.mark.asyncio
+async def test_failure_after_responses_fallback_stamps_chat_not_responses():
+    """The regression a naive `cfg.api` read would cause: cfg says 'responses',
+    but the Responses call 400'd and it was the chat retry that actually failed."""
+    client = _Client()
+
+    async def rejecting_responses_parse(**kwargs: Any) -> Any:
+        client.calls.append('responses')
+        raise _bad_request('responses endpoint not supported for this model')
+
+    async def failing_chat_parse(**kwargs: Any) -> Any:
+        client.calls.append('chat')
+        raise _server_error(503)
+
+    client.responses = SimpleNamespace(parse=rejecting_responses_parse)
+    client.chat = SimpleNamespace(completions=SimpleNamespace(parse=failing_chat_parse))
+    outcome = await _judge(client, retry_count=0)
+
+    assert client.calls == ['responses', 'chat']
+    assert outcome.error_kind is JudgeError.API_STATUS
+    assert outcome.endpoint == 'chat'
+
+
+@pytest.mark.asyncio
+async def test_unknown_failure_leaves_endpoint_unset():
+    """The catch-all also covers failures that never reached a provider, so it
+    names no endpoint: None is the honest answer, not a guess."""
+    client = _Client()
+
+    async def explodes(**kwargs: Any) -> Any:
+        raise RuntimeError('something entirely else')
+
+    client.responses = SimpleNamespace(parse=explodes)
+    outcome = await _judge(client, retry_count=0)
+
+    assert outcome.error_kind is JudgeError.UNKNOWN
+    assert outcome.endpoint is None

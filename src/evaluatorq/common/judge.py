@@ -666,6 +666,23 @@ async def run_judge(
             # a chat call, and the Responses path returned before it opened.
             return (await _chat_verdict(span)).model_copy(update={'endpoint': 'chat'})
 
+    def _failed_endpoint() -> Literal['chat', 'responses']:
+        """The endpoint that was in flight when the attempt raised.
+
+        Known, not guessed: inside `_attempt` the Responses call runs first and
+        *returns* on success, so control only reaches the chat span once the
+        Responses leg is out of the picture — either it was never available
+        (`responses_model` is `None` from the start) or its `BadRequestError`
+        handler cleared it. A live `responses_model` at the moment an exception
+        escapes therefore means the Responses call is what raised.
+
+        Failed judgements are exactly where this matters: a panel aggregates
+        endpoints over decisive *and failed* predictions (`common.jury`), so
+        dropping it here would report a timed-out Responses judge as endpoint-less
+        and make a whole panel's provenance read `None`.
+        """
+        return 'responses' if responses_model is not None else 'chat'
+
     try:
         # Retried like every other inference call in the codebase: rate limits, 5xx
         # and transport failures back off and try again, everything else raises
@@ -682,6 +699,7 @@ async def run_judge(
             error_kind=JudgeError.TIMEOUT,
             error_message=f'timed out after {cfg.timeout_ms}ms',
             timeout_ms=cfg.timeout_ms,
+            endpoint=_failed_endpoint(),
         )
     except ValidationError as e:
         logger.error('Judge [{}] returned malformed JSON: {} | raw (truncated): {}', model, e, repr(raw_content)[:500])
@@ -689,12 +707,19 @@ async def run_judge(
         # so this branch — the legacy json_object path's unparseable verdict — still
         # reports the tokens the provider already billed for the call.
         return JudgeOutcome(
-            error_kind=JudgeError.PARSE, error_message=str(e), token_usage=usage, raw_content=raw_content
+            error_kind=JudgeError.PARSE,
+            error_message=str(e),
+            token_usage=usage,
+            raw_content=raw_content,
+            endpoint=_failed_endpoint(),
         )
     except (APIConnectionError, APIStatusError) as e:
         kind = _classify(e)
         logger.error('Judge [{}] API error ({}): {}', model, kind.value, e)
-        return JudgeOutcome(error_kind=kind, error_message=str(e), error_exc=e)
+        return JudgeOutcome(error_kind=kind, error_message=str(e), error_exc=e, endpoint=_failed_endpoint())
     except Exception as e:
+        # No endpoint stamped: this catch-all also covers failures that never
+        # reached a provider call (a bad `extra_kwargs`, a client that raises on
+        # construction of the request), so naming one here would be inventing it.
         logger.exception('Judge [{}] failed (unknown): {}', model, e)
         return JudgeOutcome(error_kind=JudgeError.UNKNOWN, error_message=str(e), error_exc=e)

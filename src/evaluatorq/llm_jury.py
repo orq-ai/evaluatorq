@@ -244,18 +244,20 @@ def _to_evaluation_result(
         'pass': passed,
         'token_usage': deliberation.token_usage,
     }
+    # Endpoint provenance is written on BOTH assignments: which endpoint served the
+    # panel is what makes a judge reporting no cost legible, and it is not derivable
+    # from anything else in the result (`None` here means nothing recorded one, which
+    # is itself the signal). Same key the redteam bridge uses.
+    raw_output: dict[str, Any] = {'endpoint': deliberation.endpoint}
     if include_jury_record:
         # Same convention as the redteam bridge: the full JuryResult rides on
         # raw_output under JURY_RAW_OUTPUT_KEY, so per-judge votes (which judge
         # scored this item, what it said) stay auditable. Set for CYCLIC
         # assignment only: there it is the sole record of the item->judge
         # mapping, while under 'all' the panel itself is the record and the
-        # payload would be pure redundancy (and a behavior change for callers
-        # treating raw_output is None as a signal).
-        result['raw_output'] = {
-            JURY_RAW_OUTPUT_KEY: deliberation.jury.model_dump(mode='json'),
-            'endpoint': deliberation.endpoint,
-        }
+        # payload would be pure redundancy.
+        raw_output[JURY_RAW_OUTPUT_KEY] = deliberation.jury.model_dump(mode='json')
+    result['raw_output'] = raw_output
     return EvaluationResult.model_validate(result)
 
 

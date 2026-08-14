@@ -6,7 +6,7 @@ import asyncio
 import re
 import time
 from collections import Counter
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from typing import TYPE_CHECKING, Literal, cast
 
 from loguru import logger
@@ -96,6 +96,28 @@ class JuryDeliberation(BaseModel):
     # excluded). ``'mixed'`` when the panel used both endpoints, a single
     # endpoint when uniform, ``None`` when nothing recorded one.
     endpoint: Literal['chat', 'responses', 'mixed'] | None = None
+
+
+def combine_endpoints(endpoints: Iterable[str | None]) -> Literal['chat', 'responses', 'mixed'] | None:
+    """Reduce the endpoints a set of judge passes used to one provenance label.
+
+    ``'mixed'`` when more than one distinct endpoint is present, the single
+    endpoint when uniform, ``None`` when nothing recorded one (every pass failed
+    before reaching a `JudgeOutcome`, or the caller's judge function never sets
+    `Prediction.endpoint`). ``None`` entries are dropped rather than counted as a
+    distinct value, so one unrecorded pass does not turn a uniform panel
+    ``'mixed'``.
+
+    Accepts an already-aggregated ``'mixed'`` as input, which is what lets a
+    caller fold several `JuryDeliberation.endpoint` values together (pairwise
+    folds its two orderings this way) without a second vocabulary.
+    """
+    distinct = {e for e in endpoints if e is not None}
+    if not distinct:
+        return None
+    if len(distinct) == 1:
+        return cast("Literal['chat', 'responses', 'mixed']", next(iter(distinct)))
+    return 'mixed'
 
 
 def _sum_usage(usages: list[TokenUsage]) -> TokenUsage | None:
@@ -690,17 +712,7 @@ async def _run_jury_core(
             usages.extend(vote_usages)
             endpoints_seen.extend(vote_endpoints)
 
-    # 'mixed' when the panel used both endpoints, the single endpoint when
-    # uniform, None when nothing recorded one (e.g. every judge failed before
-    # reaching a JudgeOutcome, or the caller's judge_fn never sets Prediction.endpoint).
-    distinct_endpoints = set(endpoints_seen)
-    panel_endpoint: Literal['chat', 'responses', 'mixed'] | None
-    if not distinct_endpoints:
-        panel_endpoint = None
-    elif len(distinct_endpoints) == 1:
-        panel_endpoint = cast('Literal["chat", "responses"]', next(iter(distinct_endpoints)))
-    else:
-        panel_endpoint = 'mixed'
+    panel_endpoint = combine_endpoints(endpoints_seen)
 
     decisive_votes = [v for v in votes if v.success and not v.abstained and v.value is not None]
     decisive_values = [v.value for v in decisive_votes if v.value is not None]
