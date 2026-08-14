@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import html
 import textwrap
+from types import MappingProxyType
 
 from evaluatorq.common.reports.html_helpers import pct as _html_pct
 from evaluatorq.contracts import resolve_cost_source
@@ -37,19 +38,59 @@ def fmt_cost(cost: float | None) -> str:
     return f'${cost:,.4f}'
 
 
+# Cost provenance -> the clause it contributes to a coverage label. The single
+# vocabulary both `coverage_parts` and the dashboard's `view._coverage` draw
+# from — a `resolve_cost_source` value with no entry here (a fourth literal
+# added later) renders as an empty clause instead of silently falling into
+# whichever branch happened to be `else`, which is how 'mixed' used to get
+# mislabelled by a plain if/elif/else before this table existed.
+_PROVENANCE_LABELS: MappingProxyType[str, str] = MappingProxyType({
+    'provider': '',
+    'catalogue': 'estimated',
+    'mixed': 'partly estimated',
+})
+
+
+def coverage_parts(priced_calls: int, calls: int, *, estimated_calls: int = 0) -> list[str]:
+    """List the qualifier clauses for a priced-call coverage figure.
+
+    The single vocabulary behind `cost_coverage` (markdown/HTML reports) and
+    the dashboard's ``view._coverage`` — both used to re-derive these strings
+    independently and drifted in clause order; this is the one place they may
+    be spelled out. Returns ``[]`` when ``priced_calls <= 0``: reports written
+    before coverage was tracked have no coverage data, and claiming "0 of N"
+    for them would be a lie in the other direction.
+
+    ``estimated_calls`` defaults to 0, which reads as "every priced call was
+    billed by the provider" — the same optimistic default `cost_coverage` and
+    `view._coverage` carry, and callers that actually know the provenance must
+    pass the real count rather than rely on it.
+
+    The returned list is at most two clauses, in order: the "N of M calls"
+    call-coverage clause (only when ``priced_calls < calls``), then the
+    provenance clause ("estimated" / "partly estimated", omitted for
+    provider-billed). See `cost_coverage` for how they compose into a string.
+    """
+    if priced_calls <= 0:
+        return []
+    parts: list[str] = []
+    if priced_calls < calls:
+        parts.append(f'{priced_calls:,} of {calls:,} calls')
+    source = resolve_cost_source(priced_calls, estimated_calls)
+    label = _PROVENANCE_LABELS.get(source, '') if source else ''
+    if label:
+        parts.append(label)
+    return parts
+
+
 def cost_coverage(priced_calls: int, calls: int, *, estimated_calls: int = 0) -> str:
     """Label a cost total with how many calls contributed and, if any, whether
     the total is billed or client-side estimated.
 
-    Returns ``''`` when every call was priced by the provider (nothing to qualify)
-    or when ``priced_calls`` is 0 — reports written before coverage was tracked have
-    no coverage data, and claiming "0 of N" for them would be a lie in the other
-    direction.
-
-    ``estimated_calls`` counts how many of ``priced_calls`` were priced client-side
-    from ``common.model_catalogue`` rather than billed by the provider — the same
-    provenance ``Usage.cost_source`` derives from. Combined with call coverage, the
-    returned string is one of:
+    A thin join over `coverage_parts` — see it for the clause vocabulary and
+    the ``estimated_calls`` default's meaning. Returns ``''`` when every call
+    was priced by the provider (nothing to qualify) or when ``priced_calls``
+    is 0. Combined with call coverage, the returned string is one of:
 
     - ``''`` — every call priced, all by the provider (nothing to qualify).
     - ``' (3 of 10 calls)'`` — only some calls priced, all by the provider.
@@ -58,17 +99,7 @@ def cost_coverage(priced_calls: int, calls: int, *, estimated_calls: int = 0) ->
     - ``' (3 of 10 calls, estimated)'`` — only some calls priced, all client-side estimates.
     - ``' (3 of 10 calls, partly estimated)'`` — only some calls priced, a mix of provider and estimate.
     """
-    if priced_calls <= 0:
-        return ''
-    coverage = f'{priced_calls:,} of {calls:,} calls' if priced_calls < calls else ''
-    source = resolve_cost_source(priced_calls, estimated_calls)
-    if source in (None, 'provider'):
-        provenance = ''
-    elif source == 'catalogue':
-        provenance = 'estimated'
-    else:
-        provenance = 'partly estimated'
-    parts = [part for part in (coverage, provenance) if part]
+    parts = coverage_parts(priced_calls, calls, estimated_calls=estimated_calls)
     if not parts:
         return ''
     return f' ({", ".join(parts)})'

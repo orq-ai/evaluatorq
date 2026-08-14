@@ -30,14 +30,14 @@ from fasthtml.common import Script
 
 from evaluatorq.common.reports import esc
 from evaluatorq.common.reports import fmt_cost as _fmt_cost
-from evaluatorq.contracts import resolve_cost_source
+from evaluatorq.common.reports.md_helpers import coverage_parts
 from evaluatorq.simulation.metrics import TURN_METRICS
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from evaluatorq.dashboard.library import ReportCard
-    from evaluatorq.dashboard.metrics import Landing, RedTeamOverview, RunRow, SimOverview
+    from evaluatorq.dashboard.metrics import CostCoverage, Landing, RedTeamOverview, RunRow, SimOverview
 
 # Surface key → display label, used for run-list titles + kind badges.
 SURFACE_LABELS: dict[str, str] = {'redteam': 'Red Team', 'sim': 'Agent Sim', 'pairwise': 'Pairwise'}
@@ -88,42 +88,35 @@ def head_assets() -> tuple[Script, ...]:
 # ---------------------------------------------------------------------------
 
 
-def _coverage(priced_calls: int, calls: int, unknown_calls: int, estimated_calls: int = 0) -> str:
+def _coverage(coverage: CostCoverage) -> str:
     """Coverage label for a spend figure the dashboard summed across reports.
 
-    Same "(N of M calls)" qualifier the reports render, plus the case only the
-    dashboard has: reports predating ``priced_calls`` contribute cost whose
-    coverage is unknown. Without naming them an empty label would mean both
-    "every call was priced" and "we have no idea" — opposite claims.
+    Built on `coverage_parts` — the same clause vocabulary `cost_coverage`
+    composes for the markdown/HTML reports, never a second label vocabulary —
+    plus the one case only the dashboard has: reports predating ``priced_calls``
+    contribute cost whose coverage is unknown. Without naming them an empty
+    label would mean both "every call was priced" and "we have no idea" —
+    opposite claims.
 
-    ``estimated_calls`` adds the same provenance qualifier
-    (``cost_coverage``'s "estimated"/"partly estimated") beside the unknown-calls
-    wording, which stays untouched — the two describe different things (billed
-    vs. client-side-estimated, and priced vs. coverage-unknown) and must not be
-    collapsed into one clause.
+    ``coverage.estimated_calls`` defaults to 0 on a `CostCoverage` built without
+    provenance data, which reads as "every priced call was billed by the
+    provider" — see `coverage_parts` for why that default is not a safe
+    stand-in for "unknown provenance".
 
-    Built as an explicit parts list rather than string-splicing ``cost_coverage``'s
-    output: when every known call was priced, ``cost_coverage`` has nothing to
-    qualify and returns just the provenance clause (e.g. ``' (estimated)'``) or
-    ``''``. Splicing that string when ``unknown_calls`` is also present used to
-    drop the priced-count entirely — provenance displaced it instead of joining it.
+    ``coverage.unknown_calls`` adds two things `coverage_parts` alone cannot:
+    when every known call was priced (nothing for its own "N of M" clause to
+    qualify) but unknown calls exist alongside it, the priced count still
+    needs stating explicitly, or it would fold into an empty clause and read
+    as "not stated" rather than "the priced count". And the unknown-coverage
+    clause itself is always appended last, describing a distinct thing
+    (priced vs. coverage-unknown) from the billed/estimated provenance clause.
     """
-    parts: list[str] = []
-    if priced_calls > 0:
-        if priced_calls < calls:
-            parts.append(f'{priced_calls:,} of {calls:,} calls')
-        elif unknown_calls:
-            # Every known call was priced, but unknown_calls exist alongside it —
-            # state that explicitly so the reader can tell "the priced count" from
-            # "not stated", rather than folding it into an empty clause.
-            parts.append(f'{priced_calls:,} of {calls:,} calls priced')
-        source = resolve_cost_source(priced_calls, estimated_calls)
-        if source == 'catalogue':
-            parts.append('estimated')
-        elif source == 'mixed':
-            parts.append('partly estimated')
-    if unknown_calls:
-        parts.append(f'{unknown_calls:,} call{"" if unknown_calls == 1 else "s"} of unknown coverage')
+    parts = coverage_parts(coverage.priced_calls, coverage.cost_calls, estimated_calls=coverage.estimated_calls)
+    if coverage.priced_calls > 0 and coverage.priced_calls >= coverage.cost_calls and coverage.unknown_calls:
+        parts.insert(0, f'{coverage.priced_calls:,} of {coverage.cost_calls:,} calls priced')
+    if coverage.unknown_calls:
+        n = coverage.unknown_calls
+        parts.append(f'{n:,} call{"" if n == 1 else "s"} of unknown coverage')
     if not parts:
         return ''
     return f' ({", ".join(parts)})'
@@ -358,11 +351,7 @@ def landing_body(data: Landing) -> str:
     # The input/output split counts as such a figure: it comes from the same
     # usage as the total, so it is qualified whenever it is shown, even in the
     # (rare) case where a report carries the split but no aggregate cost_usd.
-    coverage = (
-        _coverage(data.priced_calls, data.cost_calls, data.unknown_calls, data.estimated_calls)
-        if data.total_cost is not None or spend_sub
-        else ''
-    )
+    coverage = _coverage(data.coverage) if data.total_cost is not None or spend_sub else ''
     if coverage:
         # Appended directly to the split rather than after a separator: with a
         # ' · ' between them the clause reads as a third item on the line instead
@@ -521,23 +510,22 @@ def _run_cost_cell(row: Any) -> str:
     The KPI band above this table qualifies its spend figure; a bare cost in the
     table would be the one number on the screen claiming to be fully billed.
     There is no room for the full clause in a cell, so it renders as a leading
-    ``~`` — derived from the same counters, never from a second label vocabulary
-    — with `_coverage`'s exact wording in the cell's ``title`` tooltip.
+    ``~`` — derived from the same counters via `_coverage` (itself built on
+    `coverage_parts`, the one label vocabulary shared with the markdown/HTML
+    reports) — with `_coverage`'s exact wording in the cell's ``title`` tooltip.
 
     Rows with no cost (an em dash) and rows whose cost is fully provider-billed
     carry no marker: ``~`` means "qualified", so putting it on everything would
     say nothing.
 
-    Attributes are read directly, not via ``getattr`` defaults: both row types
-    (`SimRunRow`, `RedTeamRunRow`) declare all four counters, and a row that
-    somehow lacks one should raise here rather than silently render its cost
+    ``row.coverage`` is read directly, not via ``getattr`` defaults: both row
+    types (`SimRunRow`, `RedTeamRunRow`) declare the field, and a row that
+    somehow lacks it should raise here rather than silently render its cost
     unqualified — i.e. as fully billed.
     """
     cost = row.cost
     text = esc(_fmt_cost(cost))
-    coverage = (
-        _coverage(row.priced_calls, row.cost_calls, row.unknown_calls, row.estimated_calls) if cost is not None else ''
-    )
+    coverage = _coverage(row.coverage) if cost is not None else ''
     if not coverage:
         return f'<span class="rg-num">{text}</span>'
     label = coverage.strip().strip('()')
@@ -701,7 +689,7 @@ def sim_overview_body(data: SimOverview, compare_choices: list[tuple[str, str]] 
         # The coverage clause is appended last so it trails the split as well as
         # the total: both are the same usage priced the same way, and a split
         # sitting outside the qualifier would read as the exact figure.
-        cost_value += _coverage(data.priced_calls, data.cost_calls, data.unknown_calls, data.estimated_calls)
+        cost_value += _coverage(data.coverage)
     else:
         cost_label = 'Avg tokens/sim'
         cost_value = '—' if data.avg_tokens is None else f'{data.avg_tokens:,.0f}'
@@ -763,7 +751,7 @@ def redteam_overview_body(data: RedTeamOverview) -> str:
     # usage priced the same way, so a bare split beside a qualified total would
     # read as the exact one. Qualified whenever either figure is shown.
     if data.total_cost is not None or has_split:
-        spend_value += _coverage(data.priced_calls, data.cost_calls, data.unknown_calls, data.estimated_calls)
+        spend_value += _coverage(data.coverage)
     band = kpi_cards([
         {'label': 'Attacks run', 'value': str(data.attacks_run)},
         {'label': 'ASR', 'value': asr, 'status': asr_status},
