@@ -347,9 +347,7 @@ async def test_fetch_trace_conversations() -> None:
 
 @pytest.mark.asyncio
 async def test_fetch_pagination_terminates_on_unusable_pages() -> None:
-    """Pages with rows lacking trace_id must not loop forever (hard page cap)."""
-    from evaluatorq.simulation.traces import _MAX_PAGES
-
+    """Pages with rows lacking trace_id must not loop forever: stop on no progress."""
     requests_made = {"n": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -365,7 +363,33 @@ async def test_fetch_pagination_terminates_on_unusable_pages() -> None:
         )
 
     assert conversations == []
-    assert requests_made["n"] == _MAX_PAGES
+    # One page proves the point — a second could not add rows the first didn't.
+    assert requests_made["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_honours_a_limit_beyond_one_page() -> None:
+    """A limit larger than the API page size pages until it is met, not until a page cap."""
+    pages_served = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "v3spans" in str(request.url):
+            return httpx.Response(200, json=[])
+        pages_served["n"] += 1
+        start = (pages_served["n"] - 1) * 200
+        return httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"trace_id": f"t{i}"} for i in range(start, start + 200)],
+                "has_more": True,
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await fetch_trace_conversations(limit=5000, api_key="test-key", http_client=client)
+
+    assert pages_served["n"] == 25  # 5000 / 200, not a fixed ceiling of 20
 
 
 @pytest.mark.asyncio

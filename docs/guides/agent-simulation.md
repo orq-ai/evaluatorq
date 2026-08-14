@@ -460,7 +460,7 @@ flowchart TD
     J --> K["SimulationDatapoint<br/>id = trace-{trace_id}"]
 
     H --> H1["MAP: summarize every conversation<br/>~250 tokens each, 5 in flight"]
-    H1 --> L["REDUCE: 1 call over up to 50 summaries"]
+    H1 --> L["REDUCE: 1 call over up to 50 summaries<br/>repeat intents collapsed, not double-counted"]
     L --> M["Traffic profile prose:<br/>intent mix and shares, tone and<br/>patience ranges, edge cases"]
     M --> N["DatapointGenerator<br/>personas x scenarios<br/>grounded in that profile"]
     N --> O["N new SimulationDatapoints<br/>synthetic, not replayed"]
@@ -471,30 +471,56 @@ function; the fetch-side ones are fixed:
 
 | Limit | Default | Why |
 |---|---|---|
-| Listing pages | 20 x 200 rows | Backstop against a page whose rows all lack `trace_id` looping forever, not a cost bound |
+| Rows per listing page | 200 | The API's own cap; pagination continues until `--limit` is met or a page adds nothing new |
 | Span fetches in flight | 5 | Politeness to the traces API |
 | LLM calls in flight | 5 | Same width the datapoint generator uses |
 | `summarize_above_chars` | 8000 | Above this, direct mode summarizes first — below it, the extra call buys nothing |
-| `summary_max_chars` | 1000 (~250 tokens) | One summary's budget in the reduce prompt; a longer one is truncated with a warning |
+| `summary_target_tokens` | 250 | Roughly how long a summary should be. **Soft** — it goes in the prompt, nothing cuts the result |
 | `max_reduce_summaries` | 50 | How many summaries the profile call carries; the rest are dropped with a warning naming the count |
 | `summary_max_tokens` | 10000 | Completion budget for a summarize call — reasoning headroom, not the length target |
 | `max_tokens` | 10000 | Completion budget for the inference and profile calls |
 | `generate_first_message` | `True` | Write the opening from the persona; `False` replays the recorded one |
 
-The completion budgets are deliberately far above the answers they bound.
-Reasoning models spend most of a budget thinking before emitting anything, so a
-budget sized to the output gets consumed by reasoning tokens and truncates the
-answer to nothing — the prompt bounds the length, the budget bounds the failure.
-Truncation is never silent: `generate_structured` raises on a length-finished
-response on both the structured and the `json_object` path rather than handing
-back a cut-off object.
+`summary_target_tokens` is a target, not a cut, and deliberately so. Truncating a
+summary removes its end, which is exactly where the prompt puts what went wrong
+and what was unusual — the two things the next step most needs. A length the
+model can aim at (models reason in tokens, not characters) buys a soft bound that
+keeps whole sentences. The reduce prompt's expected size is that target times
+`max_reduce_summaries`.
+
+The completion budgets, by contrast, are deliberately far above the answers they
+bound. Reasoning models spend most of a budget thinking before emitting anything,
+so a budget sized to the output gets consumed by reasoning tokens and truncates
+the answer to nothing — the prompt bounds the length, the budget bounds the
+failure. Truncation is never silent: `generate_structured` raises on a
+length-finished response on every path rather than handing back a cut-off object.
+
+Pagination stops when `--limit` is met, when the API says there is no more, or
+when a page returns rows that all lack a `trace_id` — a page that adds nothing
+cannot be followed by one that does, so that is where the loop ends, and it says
+so in a warning. There is no fixed page ceiling, so a large `--limit` is honoured
+for as many pages as it genuinely takes.
 
 A trace that fails its span fetch, returns a non-list payload, or yields no user
 message is dropped with a warning rather than failing the batch — likewise an
-inference call that raises or returns nothing parseable. A failed *summarize*
-call degrades instead of dropping the trace: the head of the raw transcript
-stands in, cut to the same budget, with a warning naming the trace. A run that
+inference or summarize call that raises or returns nothing parseable. Extension
+mode logs how many of the sampled conversations actually reached the profile,
+because that count is the denominator its shares are computed over. A run that
 produced fewer datapoints than traces has those warnings behind it.
+
+##### What lands in the generated dataset
+
+Trace-derived datapoints are built from real conversations, and a persona
+background or scenario context written straight from one carries whatever was in
+it — names, order numbers, emails — into a JSONL that then gets committed and
+shared. Both the summarize and the persona/scenario prompts are instructed to
+redact as they write, replacing identifying values with placeholders
+(`[CUSTOMER_NAME]`, `[ORDER_ID]`) that keep the meaning; the profile prompt is
+told to carry placeholders through rather than invent concrete values.
+
+This is an instruction to a model, not a guarantee. Treat a generated dataset
+from production traffic as needing the same review any export of that traffic
+would.
 
 ##### Why the opening message is generated, not replayed
 
