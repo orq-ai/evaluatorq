@@ -170,5 +170,18 @@ async def generate_structured(
             label=f'{label} (fallback)',
         )
         record_llm_response(span, fallback_response)
-        content = fallback_response.choices[0].message.content if fallback_response.choices else ''
-        return None, content or ''
+        if not fallback_response.choices:
+            return None, ''
+        choice = fallback_response.choices[0]
+        if choice.finish_reason == 'length':
+            # Same defect as the parse() leg above, which the SDK raises for us:
+            # cut-off JSON parses as a validation error two frames away, or worse,
+            # extract_json_from_response salvages a truncated object and the caller
+            # scores a half-answer. Fail with the same actionable message.
+            logger.error('%s: json_object fallback truncated at the token limit (max_tokens=%s)', label, max_tokens)
+            raise RuntimeError(
+                f'{label}: the model hit the token limit (max_tokens={max_tokens}) and the '
+                f'json_object output was truncated, so the result is unusable. Raise the max_tokens '
+                f'budget passed to this call and retry.'
+            )
+        return None, choice.message.content or ''

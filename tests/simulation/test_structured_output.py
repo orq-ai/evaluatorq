@@ -58,3 +58,63 @@ async def test_structural_extra_kwargs_are_rejected() -> None:
         )
 
     client.chat.completions.parse.assert_not_called()
+
+
+def _fallback_completion(content: str, finish_reason: str) -> MagicMock:
+    completion = MagicMock()
+    choice = MagicMock()
+    choice.finish_reason = finish_reason
+    choice.message.content = content
+    completion.choices = [choice]
+    return completion
+
+
+@pytest.mark.asyncio
+async def test_generate_structured_raises_when_the_fallback_hits_the_length_limit() -> None:
+    # The SDK raises LengthFinishReasonError for us on the parse() leg but not on
+    # the json_object one, where a cut-off body comes back looking like ordinary
+    # content — extract_json_from_response salvages half an object and the caller
+    # scores a half-answer. Same budget, same defect, same loud failure.
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(return_value=_no_parsed_completion())
+    client.chat.completions.create = AsyncMock(
+        return_value=_fallback_completion('{"value": "half a str', "length")
+    )
+
+    with pytest.raises(RuntimeError, match="Raise the max_tokens budget"):
+        await generate_structured(
+            client,
+            model="local-model",
+            messages=[{"role": "user", "content": "return json"}],
+            response_format=SampleResponse,
+            max_tokens=64,
+            label="Sample.generate",
+        )
+
+
+@pytest.mark.asyncio
+async def test_complete_fallback_content_is_returned() -> None:
+    """The guard is on finish_reason, not on the content — a normal fallback still works."""
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(return_value=_no_parsed_completion())
+    client.chat.completions.create = AsyncMock(return_value=_fallback_completion('{"value": "ok"}', "stop"))
+
+    parsed, raw = await generate_structured(
+        client,
+        model="local-model",
+        messages=[{"role": "user", "content": "return json"}],
+        response_format=SampleResponse,
+        max_tokens=64,
+        label="Sample.generate",
+    )
+
+    assert parsed is None
+    assert raw == '{"value": "ok"}'
+
+
+def _no_parsed_completion() -> MagicMock:
+    """A parse() response with no validated model, which trips the fallback."""
+    completion = MagicMock()
+    completion.choices[0].message.refusal = None
+    completion.choices[0].message.parsed = None
+    return completion
