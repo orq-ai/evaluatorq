@@ -772,9 +772,17 @@ class Usage(BaseModel):
         return NotImplemented
 
     def __sub__(self, other: Usage | None) -> Usage:
-        """Component-wise difference, clamped at 0 — used for per-turn deltas."""
+        """Component-wise difference, clamped at 0 — used for per-turn deltas.
+
+        ``estimated_calls`` is additionally clamped to the resulting
+        ``priced_calls``: clamping the two independently can produce an invalid
+        triple (``Usage(priced=2, est=2) - Usage(priced=1, est=0)`` would leave
+        ``priced=1, est=2``). ``extract`` guards this on read-back, but the
+        constructor does not, so hold the invariant here too.
+        """
         if other is None:
             return self.model_copy()
+        priced_calls = max(self.priced_calls - other.priced_calls, 0)
         return Usage(
             input_tokens=max(self.input_tokens - other.input_tokens, 0),
             output_tokens=max(self.output_tokens - other.output_tokens, 0),
@@ -788,8 +796,8 @@ class Usage(BaseModel):
             output_cost=self._combine_cost(self.output_cost, other.output_cost, sign=-1),
             total_cost=self._combine_cost(self.total_cost, other.total_cost, sign=-1),
             calls=max(self.calls - other.calls, 0),
-            priced_calls=max(self.priced_calls - other.priced_calls, 0),
-            estimated_calls=max(self.estimated_calls - other.estimated_calls, 0),
+            priced_calls=priced_calls,
+            estimated_calls=min(max(self.estimated_calls - other.estimated_calls, 0), priced_calls),
         )
 
 

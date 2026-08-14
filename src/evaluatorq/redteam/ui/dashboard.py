@@ -20,6 +20,7 @@ import streamlit as st
 from loguru import logger
 
 from evaluatorq.common.reports.html_helpers import pct
+from evaluatorq.contracts import Usage
 from evaluatorq.redteam.contracts import (
     OWASP_CATEGORY_NAMES,
     AgentContext,
@@ -2092,31 +2093,27 @@ def _render_result_detail(result: RedTeamResult) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _aggregate_token_usage(results: list[RedTeamResult]) -> dict[str, dict[str, float | int]]:
-    """Aggregate token usage per agent from results."""
-    agents: dict[str, dict[str, float | int]] = {}
+def _aggregate_token_usage(results: list[RedTeamResult]) -> dict[str, tuple[Usage, int]]:
+    """Aggregate token usage per agent from results.
+
+    Returns ``{agent_key: (summed usage, attack count)}``. Summing through
+    ``Usage.__add__`` rather than a hand-rolled dict keeps `priced_calls` /
+    `estimated_calls` — and so cost provenance — intact for any caller that
+    later renders a cost.
+    """
+    usage_by_agent: dict[str, Usage] = {}
+    attacks_by_agent: dict[str, int] = {}
     for r in results:
         key = r.agent.key or r.agent.display_name or 'unknown'
-        if key not in agents:
-            agents[key] = {'total_tokens': 0, 'prompt_tokens': 0, 'completion_tokens': 0, 'calls': 0, 'attacks': 0}
-        agents[key]['attacks'] += 1
-
-        # Collect from execution-level token usage
+        attacks_by_agent[key] = attacks_by_agent.get(key, 0) + 1
+        total = usage_by_agent.get(key, Usage())
+        # Execution-level and evaluation-level usage are disjoint aggregates.
         if r.execution and r.execution.token_usage:
-            tu = r.execution.token_usage
-            agents[key]['total_tokens'] += tu.total_tokens
-            agents[key]['prompt_tokens'] += tu.prompt_tokens
-            agents[key]['completion_tokens'] += tu.completion_tokens
-            agents[key]['calls'] += tu.calls
-
-        # Also add evaluation token usage
+            total = total + r.execution.token_usage
         if r.evaluation and r.evaluation.token_usage:
-            eu = r.evaluation.token_usage
-            agents[key]['total_tokens'] += eu.total_tokens
-            agents[key]['prompt_tokens'] += eu.prompt_tokens
-            agents[key]['completion_tokens'] += eu.completion_tokens
-            agents[key]['calls'] += eu.calls
-    return agents
+            total = total + r.evaluation.token_usage
+        usage_by_agent[key] = total
+    return {key: (usage, attacks_by_agent[key]) for key, usage in usage_by_agent.items()}
 
 
 def _render_usage_tab(report: RedTeamReport, summary: ReportSummary, agents: list[str]) -> None:
@@ -2143,7 +2140,7 @@ def _render_usage_tab(report: RedTeamReport, summary: ReportSummary, agents: lis
 
         if len(agent_usage) > 1:
             names = list(agent_usage.keys())
-            tokens = [agent_usage[n]['total_tokens'] for n in names]
+            tokens = [agent_usage[n][0].total_tokens for n in names]
 
             fig = go.Figure(
                 go.Bar(
@@ -2165,14 +2162,14 @@ def _render_usage_tab(report: RedTeamReport, summary: ReportSummary, agents: lis
 
         # Detail table
         rows = []
-        for name, usage in agent_usage.items():
+        for name, (usage, attacks) in agent_usage.items():
             rows.append({
                 'Agent': name,
-                'Attacks': int(usage['attacks']),
-                'Total Tokens': f'{int(usage["total_tokens"]):,}',
-                'Prompt Tokens': f'{int(usage["prompt_tokens"]):,}',
-                'Completion Tokens': f'{int(usage["completion_tokens"]):,}',
-                'API Calls': int(usage['calls']),
+                'Attacks': attacks,
+                'Total Tokens': f'{usage.total_tokens:,}',
+                'Prompt Tokens': f'{usage.prompt_tokens:,}',
+                'Completion Tokens': f'{usage.completion_tokens:,}',
+                'API Calls': usage.calls,
             })
         st.dataframe(rows, width='stretch', hide_index=True)
 

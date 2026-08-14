@@ -237,6 +237,25 @@ def test_subtraction_clamps_estimated_calls_at_zero():
     assert (a - b).estimated_calls == 0
 
 
+def test_subtraction_clamps_estimated_calls_to_remaining_priced_calls():
+    """Clamping the two counters independently yields an invalid triple.
+
+    `Usage(priced=2, est=2) - Usage(priced=1, est=0)` must not leave
+    `priced=1, est=2`: `extract` guards this on read-back but the constructor
+    does not, so `__sub__` has to hold the invariant by construction.
+    """
+    a = Usage(input_tokens=4, output_tokens=4, total_cost=1.0, calls=2, priced_calls=2, estimated_calls=2)
+    b = Usage(input_tokens=1, output_tokens=1, total_cost=0.2, calls=1, priced_calls=1, estimated_calls=0)
+
+    delta = a - b
+    assert delta.priced_calls == 1
+    assert delta.estimated_calls == 1
+    assert delta.estimated_calls <= delta.priced_calls
+    # Still fully catalogue-priced, not 'mixed' — the remaining priced call is the
+    # estimated one.
+    assert delta.cost_source == 'catalogue'
+
+
 def test_with_calls_leaves_estimated_calls_at_zero():
     """`with_calls` is the Responses/provider path — it must never mark a call as
     client-side estimated."""

@@ -190,7 +190,14 @@ class OpenAIAgentTarget(AgentTarget):
 
         ctx = getattr(result, 'context_wrapper', None)
         agent_usage = getattr(ctx, 'usage', None) if ctx is not None else None
-        usage = TokenUsage.extract(agent_usage, calls=1)
+        # ``agents.usage.Usage`` is an aggregate over the whole run and carries
+        # ``requests`` ("total requests made to the LLM API"), which sums the
+        # tool-calling and handoff rounds. ``extract`` only honours a field literally
+        # named ``calls``, so pass the count explicitly — otherwise every tool-using
+        # run reports calls=1 and ``priced_calls == calls`` looks complete when it is
+        # not. Mirrors crewai (``successful_requests``) and pydantic-ai (``requests``).
+        requests = int(getattr(agent_usage, 'requests', 0) or 0) or 1
+        usage = TokenUsage.extract(agent_usage, calls=requests)
 
         return AgentResponse(output=output_items, usage=usage)
 

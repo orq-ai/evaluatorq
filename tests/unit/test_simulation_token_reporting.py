@@ -36,12 +36,13 @@ def test_openresponses_conversion_preserves_cached_and_reasoning_tokens() -> Non
                 output_tokens=5,
                 total_tokens=15,
                 cached_tokens=3,
+                cache_creation_tokens=4,
                 reasoning_tokens=2,
             )
         )
     )
 
-    assert response['usage']['input_tokens_details'] == {'cached_tokens': 3}
+    assert response['usage']['input_tokens_details'] == {'cached_tokens': 3, 'cache_creation_tokens': 4}
     assert response['usage']['output_tokens_details'] == {'reasoning_tokens': 2}
 
 

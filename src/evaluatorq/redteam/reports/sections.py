@@ -792,8 +792,7 @@ def _build_token_usage_section(report: RedTeamReport) -> ReportSection | None:
 
     Returns ``None`` when no token usage data is present in the report.
     """
-    # Prefer the canonical summary field; fall back to the legacy field
-    overall = report.summary.token_usage_total or report.token_usage_summary
+    overall = report.summary.token_usage_total
 
     if overall is None:
         has_any = any(r.execution is not None and r.execution.token_usage is not None for r in report.results)

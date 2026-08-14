@@ -252,6 +252,16 @@ class InputTokensDetails(BaseModel):
         int,
         Field(description='The number of input tokens that were served from cache.'),
     ]
+    cache_creation_tokens: Annotated[
+        int,
+        Field(
+            description=(
+                'The number of input tokens that were written to cache. Defaults to 0: not every '
+                'provider reports cache writes, and `contracts.Usage.extract` reads this key off '
+                '`input_tokens_details` (matching the Orq v3 usage shape).'
+            ),
+        ),
+    ] = 0
 
 
 class OutputTokensDetails(BaseModel):

@@ -1696,7 +1696,6 @@ class RedTeamReport(BaseModel):
         description='LLM-generated narrative executive summary (populated when generate_executive_summary=True)',
     )
 
-    token_usage_summary: TokenUsage | None = None
     duration_seconds: float | None = None
     pipeline_warnings: list[str] = Field(default_factory=list)
     orq_base_url: str | None = Field(

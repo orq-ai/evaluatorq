@@ -519,3 +519,65 @@ class TestOpenAIAgentTargetUsage:
 
         assert result.usage is not None
         assert result.usage.total_tokens == 11  # 8 + 3
+
+    @pytest.mark.asyncio
+    async def test_calls_come_from_sdk_requests_count(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Built from the SDK's own aggregate Usage, not a hand-rolled mock.
+
+        ``agents.usage.Usage.requests`` is the number of LLM API requests summed
+        across tool-calling and handoff rounds. A tool-using run makes several;
+        hard-coding ``calls=1`` would make ``priced_calls == calls`` look complete.
+        Constructing the real dataclass means this fails if the field ever moves.
+        """
+        from agents.usage import Usage as SDKUsage
+
+        context_wrapper = MagicMock()
+        context_wrapper.usage = SDKUsage(
+            requests=3,
+            input_tokens=100,
+            output_tokens=20,
+            total_tokens=120,
+        )
+
+        sdk_result = MagicMock()
+        sdk_result.final_output = "done"
+        sdk_result.context_wrapper = context_wrapper
+        sdk_result.to_input_list.return_value = []
+
+        runner = MagicMock()
+        runner.run = AsyncMock(return_value=sdk_result)
+        monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
+
+        target = OpenAIAgentTarget(MagicMock())
+        result = await target.respond([Message(role="user", content="hi")])
+
+        assert result.usage is not None
+        assert result.usage.calls == 3
+        # No cost is reported by the SDK, so nothing may claim to be priced.
+        assert result.usage.priced_calls == 0
+        assert result.usage.total_cost is None
+
+    @pytest.mark.asyncio
+    async def test_calls_falls_back_to_one_when_sdk_reports_no_requests(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A usage block with requests=0 still represents at least one exchange."""
+        from agents.usage import Usage as SDKUsage
+
+        context_wrapper = MagicMock()
+        context_wrapper.usage = SDKUsage(requests=0, input_tokens=7, output_tokens=2, total_tokens=9)
+
+        sdk_result = MagicMock()
+        sdk_result.final_output = "done"
+        sdk_result.context_wrapper = context_wrapper
+        sdk_result.to_input_list.return_value = []
+
+        runner = MagicMock()
+        runner.run = AsyncMock(return_value=sdk_result)
+        monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
+
+        target = OpenAIAgentTarget(MagicMock())
+        result = await target.respond([Message(role="user", content="hi")])
+
+        assert result.usage is not None
+        assert result.usage.calls == 1

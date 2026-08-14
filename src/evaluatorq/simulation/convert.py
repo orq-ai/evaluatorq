@@ -123,7 +123,10 @@ def to_open_responses(
             input_tokens=result.token_usage.input_tokens,
             output_tokens=result.token_usage.output_tokens,
             total_tokens=result.token_usage.total_tokens,
-            input_tokens_details=InputTokensDetails(cached_tokens=result.token_usage.cached_tokens),
+            input_tokens_details=InputTokensDetails(
+                cached_tokens=result.token_usage.cached_tokens,
+                cache_creation_tokens=result.token_usage.cache_creation_tokens,
+            ),
             output_tokens_details=OutputTokensDetails(reasoning_tokens=result.token_usage.reasoning_tokens),
         ).model_dump(mode='json')
 

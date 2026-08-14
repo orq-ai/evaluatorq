@@ -1175,7 +1175,7 @@ def rebuild_filtered_report(
     ``categories_tested`` from *filtered_results*.  Every other field
     (``version``, ``created_at``, ``description``, ``pipeline``,
     ``framework``, ``tested_agents``, ``agent_contexts``,
-    ``focus_area_recommendations``, ``token_usage_summary``,
+    ``focus_area_recommendations``,
     ``duration_seconds``, ``pipeline_warnings``, ``experiment_url``)
     carries through unchanged — so ``agent_comparison`` / ``agent_disagreements``
     still fire for multi-target reports.
