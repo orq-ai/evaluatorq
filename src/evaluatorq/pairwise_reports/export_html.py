@@ -132,7 +132,10 @@ def _render_judges_html(section: ReportSection) -> str:
     observed = bool(d.get('observed_swap'))
     headers = ['Judge', f'{d["label_a"]} rate', f'{d["label_b"]} rate', 'Tie rate', 'Position bias']
     if d.get('bt_sigma'):
-        headers.extend(('Sigma', 'Consistency'))
+        # "Consistency (shrunk)" is the reliability weight (shrunk toward the panel mean);
+        # "Consistency (raw)" is the un-shrunk self-agreement, published beside it so a
+        # reader is not misled into reading the shrunk number as raw self-agreement (RES-1251).
+        headers.extend(('Sigma', 'Consistency (shrunk)', 'Consistency (raw)'))
     rows: list[list[str]] = []
     for r in d.get('rows', []):
         row = [
@@ -143,7 +146,7 @@ def _render_judges_html(section: ReportSection) -> str:
             _bias_cell(r, observed_swap=observed),
         ]
         if d.get('bt_sigma'):
-            row.extend((_num(r.get('sigma')), _num(r.get('consistency'))))
+            row.extend((_num(r.get('sigma')), _num(r.get('consistency')), _num(r.get('consistency_raw'))))
         rows.append(row)
     if not rows:
         return ''

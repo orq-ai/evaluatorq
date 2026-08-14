@@ -177,9 +177,11 @@ fitted `sigma`. The fit is a regularized, unsupervised maximum-likelihood fit on
 the votes the run already collected: no extra LLM calls or training data.
 Identical votes are collapsed into weighted counts before the fit (at most
 three distinct judgements per judge in the A/B setting), so the cost stays flat
-no matter how many comparisons the run holds. The report exposes fit warnings
-and falls back to uniform plurality when the optimizer does not converge; do
-not treat a capped fit as a reliability estimate.
+no matter how many comparisons the run holds. The report exposes fit warnings.
+When the optimizer does not converge it falls back to uniform plurality **only
+without repetition weights**; on a repetition run (below) the winners stay
+consistency-weighted and only the pooled `p_a_beats_b` headline degrades to
+neutral. Do not treat a capped fit as a reliability estimate.
 
 Notes worth knowing:
 
@@ -206,7 +208,20 @@ Notes worth knowing:
 Run comparisons with `repetitions=2` (or more) and the reliability weights stop
 coming from the global two-item fit and start coming from **within-datapoint
 repetition consistency**: how often a judge agrees with itself on repeated
-passes of the same prompt. Every raw pass is preserved and canonicalized on
+passes of the same prompt.
+
+Two conditions gate this path, and it falls back to the pooled two-item fit (and
+says so in `fit_warnings`) when either is unmet:
+
+- **Both orderings (`swap=True`, the default).** Consistency is measured per
+  ordering group, so a single-ordering run (`swap=False`) takes the uniform
+  plurality path before repetition weighting runs. Passing `repetitions>=2` with
+  `swap=False` therefore does not enable consistency weighting.
+- **A quorum of at least two judges with repeated decisive passes.** Below the
+  quorum the borrowed fallback for unmeasured judges is effectively one judge's
+  own value, so the whole panel would be weighted off a single judge.
+
+Every raw pass is preserved and canonicalized on
 `PairwiseVote.observations` (a swapped-ordering 'B' is recorded as 'A', so
 entries are comparable across orderings), including abstained and failed
 passes as `None`.
@@ -226,19 +241,29 @@ datapoints. Consequences by construction:
 - Extra repetitions refine a judge's weight but never multiply its panel
   weight: each judge still casts exactly one weighted vote per comparison.
 
-Read `bt_sigma.repetition_consistency` for the per-judge values (1.0 = always
-agrees with itself). When it is non-empty, the winner weights came from these;
+Read `bt_sigma.repetition_consistency` for the per-judge reliability weights.
+These are **shrunk** toward the panel mean (empirical-Bayes, so a judge with one
+lucky R=2 group cannot dominate the run), which means a perfectly self-consistent
+judge reads *below* 1.0 unless the whole panel is at 1.0. The un-shrunk
+self-agreement (1.0 = always agrees with itself) is published beside it as
+`bt_sigma.repetition_consistency_raw` and the `Consistency (raw)` report column,
+so compare a judge's raw number within one run — not the shrunk weight across two
+runs with different panels, where the same judge can move without changing.
 `p_a_beats_b` still comes from the pooled fit (a run-level headline, not a
 per-judge reliability). Judges without repeated decisive passes vote with the
-median weight and are named in `fit_warnings`. Legacy runs saved before
+median measured weight and are named in `fit_warnings`. Legacy runs saved before
 repetition capture load fine and keep the previous global-fit behaviour.
 
 What consistency estimates - and what it must not be read as: it measures a
 judge's self-agreement under fixed conditions. It is NOT task difficulty, NOT
 overall judge quality (a judge can be consistently wrong), and NOT accuracy
-against any ground truth. Abstained or failed passes are excluded from
-consistency, so a judge that abstains often is not penalized: `['A', None,
-'A']` scores 1.0.
+against any ground truth. A **clean** abstention is excluded from consistency, so
+a judge that declines honestly is not penalized: `['A', <abstention>, 'A']` scores
+1.0. But a pass that **errored or came back off-contract** is a failure, not a free
+abstention: it is counted in `repetition_failures` and discounts the score by the
+failed share, so the same-looking `['A', None, 'A']` scores 2/3 when that middle
+`None` is a failure. The two `None`s are identical in the vote list; only
+`repetition_failures` separates a clean abstention from a broken pass.
 
 Cost: repetitions multiply judge calls linearly (calls = judges x orderings x
 R), so R=2 doubles spend per comparison; wall-clock barely moves because

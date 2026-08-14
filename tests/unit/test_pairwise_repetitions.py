@@ -210,6 +210,12 @@ def test_judge_without_repeats_gets_fallback_weight_and_an_honest_warning() -> N
     assert any(
         'legacy-judge' in w and 'median measured consistency' in w and 'neutrally' not in w for w in block.fit_warnings
     )
+    # The fallback WEIGHT is actually applied, not just warned about (RES-1251 review,
+    # item 10). On row 1 steady (high consistency) votes B while coin and legacy both vote
+    # A: uniform plurality would give A (2-1), but the median fallback keeps legacy below
+    # steady, so steady's weight still wins the row. Only this row separates the two.
+    assert block.winners[1] == 'B'
+    assert block.winners == ['A' if k != 1 else 'B' for k in range(12)]
 
 
 def test_failed_pass_lowers_consistency_but_a_clean_abstention_does_not() -> None:
@@ -377,3 +383,158 @@ def test_cost_model_calls_scale_linearly_with_repetitions() -> None:
 
         asyncio.run(run_pairwise(judge_fn=judge, panel=['j'], response_a='x', response_b='y', repetitions=reps))
         assert calls['n'] == expected
+
+
+def test_failed_pass_penalty_decides_the_winner_through_aggregation() -> None:
+    # The failure penalty must change the WINNER, not just the raw consistency number, and
+    # it must do so through bt_sigma_aggregation (RES-1251 review, item 10). 'careful' cleanly
+    # abstains on its third pass; 'flaky' errors on its third (repetition_failures=1). Both are
+    # otherwise self-consistent, so careful's higher reliability decides every row.
+    rows = []
+    for _ in range(6):
+        careful = _vote('careful', 'A', [_obs('ab', 0, 'A'), _obs('ab', 1, 'A'), _obs('ab', 2, None)])
+        flaky = _vote(
+            'flaky', 'B', [_obs('ab', 0, 'B'), _obs('ab', 1, 'B'), _obs('ab', 2, None)], repetition_failures=1
+        )
+        rows.append(_comparison([careful, flaky]))
+    block = bt_sigma_aggregation(rows)
+    assert block.repetition_consistency['careful'] > block.repetition_consistency['flaky']
+    assert set(block.winners) == {'A'}  # careful's un-penalised reliability wins every row
+
+
+def test_swapped_ordering_failure_is_counted() -> None:
+    # Exercise the SWAPPED ordering's failure path (RES-1251 review, item 11): a judge that
+    # answers on the 'ab' ordering (a='x') but errors on the swapped 'ba' ordering (a='y').
+    # The ba failures must be counted, not only the swap=False path the other tests cover.
+    async def judge(a: object, b: object, model: str) -> Prediction:
+        if str(a) == 'y':  # swapped orientation
+            msg = 'boom on ba'
+            raise RuntimeError(msg)
+        return Prediction(value='A', explanation='ok')
+
+    comparison = asyncio.run(
+        run_pairwise(judge_fn=judge, panel=['j'], response_a='x', response_b='y', repetitions=2, swap=True)
+    )
+    (vote,) = comparison.votes
+    ba = [o for o in vote.observations if o.ordering == 'ba']
+    assert [o.verdict for o in ba] == [None, None]
+    assert vote.repetition_failures == 2
+
+
+def test_single_repetition_through_pipeline_has_no_consistency() -> None:
+    # R=1 has no within-ordering repeats, so the REAL pipeline must yield no consistency
+    # evidence and fall back cleanly (RES-1251 review, item 11 - the cost test only counted calls).
+    async def judge(a: object, b: object, model: str) -> Prediction:
+        return Prediction(value='A', explanation='ok')
+
+    comparison = asyncio.run(
+        run_pairwise(judge_fn=judge, panel=['a', 'b'], response_a='x', response_b='y', repetitions=1)
+    )
+    assert repetition_consistency([comparison]) == {}
+    block = bt_sigma_aggregation([comparison])
+    assert block.repetition_consistency == {}
+    assert block.repetition_consistency_raw == {}
+
+
+def test_html_judges_table_shows_shrunk_and_raw_consistency(tmp_path) -> None:
+    # The new columns must render (RES-1251 review, item 11): removing the header/value
+    # mapping should fail a test, and the shrunk and raw values must be distinct.
+    from evaluatorq.pairwise_reports.export_html import _render_judges_html
+    from evaluatorq.pairwise_reports.sections import build_report_sections
+    from evaluatorq.pairwise_run import new_run
+
+    run = new_run(run_name='reps', judges=['steady', 'coin'])
+    for i, row in enumerate(_run_with_repeats()):
+        run.add(row, question=f'q-{i}', response_a=f'a-{i}', response_b=f'b-{i}')
+    run.save(tmp_path / 'run.json', aggregation='bt-sigma')
+
+    judges = build_report_sections(run)[1]
+    steady = next(r for r in judges.data['rows'] if r['model'] == 'steady')
+    assert steady['consistency_raw'] == 1.0
+    assert steady['consistency'] < 1.0  # shrunk below the raw value
+
+    html = _render_judges_html(judges)
+    assert 'Consistency (shrunk)' in html
+    assert 'Consistency (raw)' in html
+    assert '1.00' in html  # steady's raw self-agreement renders
+
+
+def test_repetition_consistency_raw_is_published_alongside_shrunk() -> None:
+    # The raw self-agreement is published next to the shrunk weight (RES-1251 review, item 12),
+    # so a reader sees the un-shrunk number, not only the reliability weight derived from it.
+    block = bt_sigma_aggregation(_run_with_repeats())
+    assert block.repetition_consistency_raw['steady'] == 1.0
+    assert block.repetition_consistency_raw['coin'] == 0.0
+    assert block.repetition_consistency['steady'] < block.repetition_consistency_raw['steady']
+
+
+def test_observations_without_a_repeated_group_warn() -> None:
+    # Observations exist but no ordering group holds >= 2 decisive passes (ab=[A,None],
+    # ba=[A,None] at R=2), so rep_consistency comes back EMPTY. The run paid for repeats and
+    # fell back to the pooled fit; it must say so rather than stay silent (RES-1251 review, item 8).
+    rows = [
+        _comparison([
+            _vote('j', 'A', [_obs('ab', 0, 'A'), _obs('ab', 1, None), _obs('ba', 0, 'A'), _obs('ba', 1, None)]),
+            _vote('k', 'B', [_obs('ab', 0, 'B'), _obs('ab', 1, None), _obs('ba', 0, 'B'), _obs('ba', 1, None)]),
+        ])
+        for _ in range(4)
+    ]
+    block = bt_sigma_aggregation(rows)
+    assert block.repetition_consistency == {}
+    assert any('repeated passes exist but no single ordering held' in w for w in block.fit_warnings)
+
+
+def test_evidence_weighted_shrinkage_anchor_resists_a_thin_noisy_judge() -> None:
+    # 'strong' agrees with itself across many comparisons (raw 1.0, high evidence); 'thin'
+    # disagrees with itself on its single comparison (raw 0.0). The shrinkage anchor is the
+    # EVIDENCE-WEIGHTED panel mean, so the thin judge cannot drag the anchor down and over-shrink
+    # strong (RES-1251 review, item 13): a plain mean-of-means anchor (0.5) would pull strong to
+    # ~0.95, the evidence-weighted anchor (~0.9) keeps it ~0.99.
+    agree = [_obs('ab', 0, 'A'), _obs('ab', 1, 'A')]
+    disagree = [_obs('ab', 0, 'A'), _obs('ab', 1, 'B')]
+    rows = [_comparison([_vote('strong', 'A', agree)]) for _ in range(8)]
+    rows.append(_comparison([_vote('strong', 'A', agree), _vote('thin', None, disagree)]))
+    consistency = repetition_consistency(rows)
+    assert consistency['strong'] > 0.97
+    assert consistency['thin'] < 0.5
+
+
+def test_valueless_nonabstained_pass_counts_as_a_failure() -> None:
+    # A pass with value=None and abstained=False is neither decisive nor a clean abstention: a
+    # mechanically-unusable pass. It must count as a repetition failure via the shared jury layer,
+    # not slip through as a free abstention keeping consistency at 1.0 (RES-1251 review, item 6).
+    calls = {'n': 0}
+
+    async def judge(a: object, b: object, model: str) -> Prediction:
+        calls['n'] += 1
+        if calls['n'] == 2:
+            return Prediction(value=None, abstained=False)
+        return Prediction(value='A', explanation='ok')
+
+    comparison = asyncio.run(
+        run_pairwise(judge_fn=judge, panel=['j'], response_a='x', response_b='y', repetitions=2, swap=False)
+    )
+    (vote,) = comparison.votes
+    assert vote.repetition_failures == 1
+
+
+def test_off_contract_repetition_logs_a_warning() -> None:
+    # The off-contract collapse must announce itself so a user can find why consistency dropped
+    # (RES-1251 review, item 7).
+    from loguru import logger
+
+    messages: list[str] = []
+    sink = logger.add(lambda m: messages.append(str(m)), level='WARNING')
+    try:
+        calls = {'n': 0}
+
+        async def judge(a: object, b: object, model: str) -> Prediction:
+            calls['n'] += 1
+            return Prediction(value=['A', 'banana', 'A'][(calls['n'] - 1) % 3], explanation='ok')
+
+        asyncio.run(
+            run_pairwise(judge_fn=judge, panel=['weird'], response_a='x', response_b='y', repetitions=3, swap=False)
+        )
+    finally:
+        logger.remove(sink)
+    assert any('off-contract' in m for m in messages)

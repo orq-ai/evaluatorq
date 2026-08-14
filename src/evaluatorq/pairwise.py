@@ -14,6 +14,7 @@ import statistics
 from collections import Counter
 from typing import TYPE_CHECKING, Literal, cast
 
+from loguru import logger
 from pydantic import BaseModel, Field
 
 from evaluatorq.common.jury import (
@@ -114,7 +115,10 @@ class PairwiseVote(BaseModel):
         'runs saved before repetition capture existed',
     )
     repetition_failures: int = Field(
-        default=0, ge=0, description='Repetition passes that raised an error, summed over both orderings'
+        default=0,
+        ge=0,
+        description='Repetition passes that raised an error OR returned an off-contract value, summed over both '
+        'orderings (a clean abstention is not a failure)',
     )
 
 
@@ -149,10 +153,17 @@ class JudgeStats(BaseModel):
     )
     consistency: float | None = Field(
         default=None,
-        description='Within-datapoint repetition consistency in [0, 1] (RES-1251): on a repetition run this '
-        'is the reliability the winner weights actually came from, so surface it next to sigma rather '
-        'than leaving the reader to infer reliability from a pooled sigma that did not decide anything. '
-        'None when the run had no usable repeats for this judge.',
+        description='SHRUNK within-datapoint repetition consistency in [0, 1] (RES-1251): the reliability the '
+        'winner weights actually came from, shrunk toward the panel mean, so surface it next to sigma rather '
+        'than leaving the reader to infer reliability from a pooled sigma that did not decide anything. Because '
+        'it is shrunk, a self-consistent judge reads below 1.0 unless the whole panel is; see consistency_raw '
+        'for the un-shrunk value. None when the run had no usable repeats for this judge.',
+    )
+    consistency_raw: float | None = Field(
+        default=None,
+        description='RAW within-datapoint self-agreement in [0, 1] before shrinkage (RES-1251): 1.0 = this judge '
+        'always agreed with itself on repeated passes. Published beside the shrunk consistency so the reader sees '
+        'the un-shrunk signal, not only the reliability weight derived from it. None when no usable repeats.',
     )
 
 
@@ -189,8 +200,12 @@ class BTSigmaAggregation(BaseModel):
 
     Fitted unsupervised on the run's own reconciled votes: hard BT-sigma jointly
     infers the A-vs-B skill gap and a discriminator per judge, then re-derives
-    each comparison's winner as a reliability-weighted vote (weight ``1/sigma``)
-    instead of uniform plurality. Down-weights noisy judges; needs no labels.
+    each comparison's winner as a reliability-weighted vote instead of uniform
+    plurality. Down-weights noisy judges; needs no labels. The weight depends on
+    the path: on the pooled two-item fit it is ``1/sigma``; on a repetition run
+    (``repetition_consistency`` non-empty and at quorum) it is instead
+    ``max(shrunk_consistency, 0.05)``, since within-datapoint consistency is the
+    better reliability signal there.
 
     Two caveats of the two-item collapse, both handled here:
 
@@ -214,10 +229,17 @@ class BTSigmaAggregation(BaseModel):
     )
     repetition_consistency: dict[str, float] = Field(
         default_factory=dict,
-        description='Per-judge within-datapoint repetition consistency in [0, 1] (RES-1251); when non-empty, '
-        'the winner weights came from THESE, not from the global-fit sigmas. Measures how often a judge '
-        'agrees with itself on repeated passes of the same prompt - NOT task difficulty and NOT overall '
-        'judge quality.',
+        description='Per-judge SHRUNK within-datapoint repetition consistency in [0, 1] (RES-1251); when non-empty '
+        'and at quorum, the winner weights came from THESE, not from the global-fit sigmas. Shrunk toward the '
+        'panel mean, so it is a reliability weight, not raw self-agreement - a self-consistent judge reads below '
+        '1.0 unless the panel is. Measures self-agreement on repeated passes - NOT task difficulty and NOT '
+        'overall judge quality.',
+    )
+    repetition_consistency_raw: dict[str, float] = Field(
+        default_factory=dict,
+        description='Per-judge RAW within-datapoint self-agreement in [0, 1] before shrinkage (RES-1251), '
+        'published alongside repetition_consistency so the un-shrunk signal (1.0 = always agreed with itself) '
+        'stays visible next to the weight derived from it.',
     )
     winners: list[str] = Field(
         default_factory=list,
@@ -278,12 +300,34 @@ def repetition_consistency(comparisons: Sequence[PairwiseComparison]) -> dict[st
     Empty dict when no judge has any qualifying group (e.g. repetitions=1 or a
     legacy run without observations).
 
-    At the recommended R=2 a group's agreement is only 0.0 or 1.0, so a judge with
-    one lucky group would otherwise carry the same weight as a judge with many.
-    Each judge's mean is therefore SHRUNK toward the panel mean by its evidence
-    count (empirical-Bayes, ``_SHRINKAGE_PSEUDO_OBS`` pseudo-observations at the
-    panel mean), so thin evidence is pulled to neutral and cannot dominate a run
-    (RES-1251, signed off in review).
+    This is the SHRUNK reliability weight, not raw self-agreement: at the recommended
+    R=2 a group's agreement is only 0.0 or 1.0, so a judge with one lucky group would
+    otherwise carry the same weight as a judge with many. Each judge's mean is shrunk
+    toward the panel mean by its evidence count (empirical-Bayes, ``_SHRINKAGE_PSEUDO_OBS``
+    pseudo-observations), so thin evidence is pulled to neutral and cannot dominate a run.
+    A perfectly self-consistent judge therefore reads below 1.0 unless the whole panel is;
+    ``repetition_consistency_raw`` publishes the un-shrunk mean beside it (RES-1251).
+    """
+    raw = _repetition_stats(comparisons)
+    if not raw:
+        return {}
+    # Anchor the shrinkage on the EVIDENCE-COUNT-WEIGHTED panel mean, not the plain
+    # mean of per-judge means: otherwise a thin-evidence judge helps set the very anchor
+    # it is then shrunk toward (self-reference), compressing the separation the weights
+    # are derived from (RES-1251 review, item 13).
+    total_n = sum(n for _, n in raw.values())
+    panel_mean = sum(mean * n for mean, n in raw.values()) / total_n
+    k = _SHRINKAGE_PSEUDO_OBS
+    return {judge: (n * mean + k * panel_mean) / (n + k) for judge, (mean, n) in raw.items()}
+
+
+def _repetition_stats(comparisons: Sequence[PairwiseComparison]) -> dict[str, tuple[float, int]]:
+    """Per-judge raw self-agreement mean and its evidence count (RES-1251).
+
+    Shared by ``repetition_consistency`` (which shrinks the mean) and
+    ``repetition_consistency_raw`` (which publishes it un-shrunk), so the group rule is
+    defined once. Returns ``{judge: (mean, n_comparisons_with_a_qualifying_group)}``,
+    sorted by judge.
     """
     per_judge: dict[str, list[float]] = {}
     for c in comparisons:
@@ -309,28 +353,41 @@ def repetition_consistency(comparisons: Sequence[PairwiseComparison]) -> dict[st
             n_obs = len(v.observations)
             completion = max(0.0, (n_obs - v.repetition_failures) / n_obs) if n_obs else 1.0
             per_judge.setdefault(v.model, []).append(agreement * completion)
-    if not per_judge:
-        return {}
-    # Raw per-judge mean and its evidence count (comparisons with a qualifying group).
-    raw = {judge: (sum(xs) / len(xs), len(xs)) for judge, xs in per_judge.items()}
-    panel_mean = sum(mean for mean, _ in raw.values()) / len(raw)
-    # Empirical-Bayes shrinkage toward the panel mean by evidence count, so a judge
-    # with one lucky R=2 group is pulled to neutral instead of carrying full weight.
-    k = _SHRINKAGE_PSEUDO_OBS
-    return {judge: (n * mean + k * panel_mean) / (n + k) for judge, (mean, n) in sorted(raw.items())}
+    return {judge: (sum(xs) / len(xs), len(xs)) for judge, xs in sorted(per_judge.items())}
+
+
+def repetition_consistency_raw(comparisons: Sequence[PairwiseComparison]) -> dict[str, float]:
+    """Per-judge RAW within-datapoint self-agreement mean, before shrinkage (RES-1251).
+
+    This is the number a reader intuitively expects: 1.0 = a judge that always agreed with
+    itself on repeated passes of the same prompt. ``repetition_consistency`` shrinks this
+    toward the panel mean to form the reliability weight; both are published so the raw
+    signal stays visible next to the weight derived from it. Empty dict when no judge has a
+    qualifying group.
+    """
+    return {judge: mean for judge, (mean, _) in _repetition_stats(comparisons).items()}
 
 
 # Floor for consistency-derived weights: a judge that never agreed with itself
 # still casts a (heavily discounted) vote rather than being erased outright.
 _MIN_CONSISTENCY_WEIGHT = 0.05
 
-# Empirical-Bayes shrinkage strength for repetition_consistency: pseudo-observations
-# at the panel mean, so a judge with thin evidence is pulled toward neutral (RES-1251).
+# Empirical-Bayes shrinkage strength for repetition_consistency: pseudo-observations at
+# the panel mean, so a judge with thin evidence is pulled toward neutral (RES-1251).
+# k = 1.0 means one group of evidence and the prior carry equal weight, so at the R=2 the
+# ticket recommends (n = 1 group) a judge is pulled halfway to the panel mean - a
+# deliberately strong prior for the noisy 0/1-per-group regime. Raising k shrinks harder
+# (more judges collapse toward neutral); lowering it lets a single lucky group count for
+# more. 1.0 is the chosen magnitude, not just "shrinkage in principle".
 _SHRINKAGE_PSEUDO_OBS = 1.0
 
 # Reliability weighting from repetition consistency needs a quorum of judges with
 # evidence. Below this the borrowed fallback is effectively one judge's own value,
 # so we skip repetition weighting and keep the pooled fit instead (RES-1251 review).
+# This is a FLOOR, not a sufficiency claim: at exactly two measured judges the median
+# fallback is just those two averaged and is still borrowed by any number of unmeasured
+# judges, so more measured judges is always better - two is only where it stops being
+# one judge deciding the whole panel.
 _MIN_MEASURED_JUDGES = 2
 
 
@@ -392,6 +449,17 @@ def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAg
     # fit only loses the run-level headline - repetition evidence still weights
     # the winners (RES-1251). Without repeats, fall back as before.
     rep_consistency = repetition_consistency(comparisons)
+    rep_raw = repetition_consistency_raw(comparisons)
+    # A run can carry per-repetition observations yet produce no consistency evidence:
+    # if no single ordering held >= 2 decisive passes (e.g. ab=[A, None], ba=[A, None]
+    # at R=2), rep_consistency is empty and we silently fall back to the pooled fit. The
+    # user asked for repetition weighting and paid the extra calls, so say so rather than
+    # leave fit_warnings silent (RES-1251 review, item 8).
+    if not rep_consistency and any(v.observations for c in comparisons for v in c.votes):
+        fit_warnings.append(
+            'repetition weighting skipped: repeated passes exist but no single ordering held >= 2 decisive '
+            'passes to measure consistency; using the pooled two-item fit'
+        )
     # Reliability weighting needs a quorum of judges with repetition evidence; below
     # that the borrowed fallback is one judge's own value, so keep the pooled fit and
     # say so rather than weight the whole panel off a single judge (RES-1251 review).
@@ -509,6 +577,7 @@ def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAg
         inconclusive_rate=counts['inconclusive'] / total if total else 0.0,
         converged=fit.converged,
         repetition_consistency=rep_consistency,
+        repetition_consistency_raw=rep_raw,
         fit_warnings=fit_warnings,
     )
 
@@ -558,6 +627,7 @@ def build_report(comparisons: Sequence[PairwiseComparison], *, aggregation: str 
         for stats in judge_stats:
             stats.sigma = bt_block.judge_sigmas.get(stats.model)
             stats.consistency = bt_block.repetition_consistency.get(stats.model)
+            stats.consistency_raw = bt_block.repetition_consistency_raw.get(stats.model)
     elif aggregation != 'plurality':
         msg = f"unknown aggregation {aggregation!r}; expected 'plurality' or 'bt-sigma'"
         raise ValueError(msg)
@@ -748,7 +818,16 @@ async def run_pairwise(
                         # Decisive-looking but off-contract (RES-1251 review): a
                         # malformed pass, not a silently dropped None. Count it
                         # like an error so it lowers reliability rather than
-                        # passing as a free abstention.
+                        # passing as a free abstention, and name it (review item 7)
+                        # so a user who sees consistency drop can find the cause.
+                        logger.warning(
+                            'pairwise judge {} returned an off-contract repetition value {!r} on the {} '
+                            'ordering (repetition {}); counting it as a failure, not an abstention',
+                            model,
+                            value,
+                            ordering,
+                            i,
+                        )
                         verdict = None
                         failures += 1
                     out.append(
