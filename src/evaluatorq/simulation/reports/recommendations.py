@@ -73,6 +73,9 @@ class SimulationRecommendationConfig(RecommendationConfigBase):
     max_message_chars: int = Field(default=400, ge=50)
     """Per-message budget inside that transcript."""
 
+    max_verdict_chars: int = Field(default=300, ge=50)
+    """Budget for the judge's free-text verdict, which names what actually went wrong."""
+
 
 _DEFAULT_CONFIG = SimulationRecommendationConfig()
 
@@ -166,7 +169,7 @@ def _build_user_prompt(
     return (
         f'Persona: {xml_escape(_persona_name(result))}\n'
         f'Scenario: {xml_escape(_scenario_name(result))}\n'
-        f'Judge verdict: {xml_escape(_truncate(result.reason, 300))}\n'
+        f'Judge verdict: {xml_escape(_truncate(result.reason, config.max_verdict_chars))}\n'
         f'Flagged issues:\n{issue_lines}\n\n'
         f'<transcript>\n{xml_escape(_truncate(transcript, config.max_transcript_chars))}\n</transcript>'
     )

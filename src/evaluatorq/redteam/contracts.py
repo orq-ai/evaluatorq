@@ -702,6 +702,28 @@ class RedTeamRecommendationConfig(RecommendationConfigBase):
     max_explanation_chars: int = Field(default=300, ge=50)
     """Budget for the evaluator explanation attached to a sampled attack."""
 
+    condense_above_chars: int = Field(default=1000, ge=100)
+    """Attacks whose formatted block exceeds this are condensed by their own LLM call
+    before the focus-area call sees them (map, then reduce).
+
+    The focus-area call is a single request carrying every sampled attack, so without
+    this a handful of long agentic transcripts could push it past the analysis model's
+    context and lose the whole area. Condensing is conditional on purpose: a normal
+    short attack goes in verbatim and costs nothing extra, so the map calls track the
+    problem rather than the run. Raise it to condense less, lower it to condense more.
+    """
+
+    condense_max_tokens: int = Field(default=600, ge=1)
+    """Completion budget for one condense call. Bounds what the map step feeds back."""
+
+    max_area_prompt_chars: int = Field(default=400_000, ge=1_000)
+    """Hard ceiling on the assembled focus-area prompt, applied after condensing.
+
+    A backstop, not the main defence: condensing is what should keep the prompt small.
+    Hitting this means the map step did not shrink enough, so it truncates and warns
+    rather than letting the request fail.
+    """
+
     max_suggestions: int = Field(default=5, ge=1)
     """Recommendations asked for, and kept, per focus area."""
 
