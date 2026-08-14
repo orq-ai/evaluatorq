@@ -713,7 +713,7 @@ class RedTeamRecommendationConfig(RecommendationConfigBase):
     problem rather than the run. Raise it to condense less, lower it to condense more.
     """
 
-    condense_max_tokens: int = Field(default=5_000, ge=1)
+    condense_max_tokens: int = Field(default=10_000, ge=1)
     """Completion budget for one condense call.
 
     Generous because reasoning models spend most of it thinking before emitting anything:
