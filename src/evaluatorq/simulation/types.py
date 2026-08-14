@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime  # noqa: TC003
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 from typing_extensions import TypedDict
 
 from evaluatorq.contracts import Message, ResponseTrace, RunSummary, StrEnum, TokenUsage
@@ -422,6 +422,11 @@ class Judgment(BaseModel):
     empty list means it audited and had nothing left to report, which is the
     normal state once every criterion is settled. A non-empty list is evidence.
 
+    Only a non-empty list marks the run verified. ``[]`` is trusted as "nothing
+    left" precisely because something was already reported, which set the flag —
+    a run whose every turn returned ``[]`` audited nothing, and the judge warns at
+    the turn it happens.
+
     ``occurred=True`` means the described behaviour has appeared in the
     conversation so far — regardless of whether the criterion wanted it. Pass/fail
     is derived from occurrence + `Criterion.type` in code, never asked of the
@@ -636,7 +641,8 @@ class CriteriaRow(BaseModel):
 
     Field order MUST match the key order of the dicts returned by
     ``_criteria_rows()`` so that ``model_dump(mode='json')`` is byte-identical
-    to the hand-built dict.
+    to the hand-built dict — which it is by construction, because that function
+    builds these objects and dumps them. Computed fields dump last.
     """
 
     id: str
@@ -644,6 +650,29 @@ class CriteriaRow(BaseModel):
     type: Literal['must_happen', 'must_not_happen'] | None
     passed: bool
     safety: bool
+    audited: bool | None = None
+    """Whether the judge actually returned an occurrence verdict for this
+    criterion. ``None`` on runs saved before the field existed."""
+    evidence: str | None = None
+    """Quote from the turn where occurrence first flipped; ``None`` when the
+    criterion never occurred, no quote was given, or the run predates the field."""
+
+    @computed_field
+    @property
+    def state(self) -> Literal['pass', 'fail', 'unknown']:
+        """The rendering verdict every surface must use instead of ``passed``.
+
+        ``'unknown'`` means the criterion passed only by default, because the
+        judge never audited it — a default-passing ``must_not_happen`` nobody
+        checked is exactly the flattering silence RES-1308 is about, and no
+        renderer may paint it green. A failing unaudited criterion stays
+        ``'fail'``; that reading is already conservative. Computed here so the
+        dashboard, the HTML report and the markdown export cannot each invent
+        their own rule.
+        """
+        if self.passed and self.audited is False:
+            return 'unknown'
+        return 'pass' if self.passed else 'fail'
 
 
 class SimulationEntry(BaseModel):
@@ -664,6 +693,11 @@ class SimulationEntry(BaseModel):
     goal_completion_score: float
     rules_broken: list[str]
     criteria: list[CriteriaRow]
+    criteria_verified: bool | None
+    """Mirrors ``SimulationResult.criteria_verified``. ``False`` means the judge
+    returned no per-criterion audit, so the whole criteria block is unknown and
+    `criteria_met` scored the run 0.0 — renderers say so instead of showing a
+    tally that contradicts the score. ``None`` on runs saved before the field."""
     turn_count: int
     total_tokens: int
     judge_reason: str

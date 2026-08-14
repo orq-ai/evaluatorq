@@ -332,12 +332,19 @@ def _render_criteria_column(entry: SimulationEntry) -> str:
     (the requirement that gives the check its meaning) — no far-right orphan
     label to hunt for. A verdict line above the list answers the reader's
     first question ("did it pass, how many met?") before they scan the rows.
+
+    A criterion the judge never audited renders as ``unknown`` (a neutral ``?``),
+    never as met, and is counted separately in the tally — otherwise this column
+    reads "2/2 criteria met" beside an evaluator column reading
+    ``criteria_met 0.0`` (RES-1308). ``entry.criteria_verified is False`` says the
+    whole audit is missing and gets its own line.
     """
     criteria = entry.criteria or []
     items: list[str] = []
     for c in criteria:
-        state_class = 'sim-criterion-pass' if c.passed else 'sim-criterion-fail'
-        icon = '&#x2713;' if c.passed else '&#x2717;'  # ✓ / ✗
+        state_class = f'sim-criterion-{c.state}'
+        # ✓ / ✗ / ? — "?" is the honest glyph for a criterion nobody checked.
+        icon = {'pass': '&#x2713;', 'fail': '&#x2717;'}.get(c.state, '?')
         prohibited = c.type == 'must_not_happen'
         # The chip carries the requirement's polarity right beside the result
         # icon; keep the unsafe hook so `must_not_happen` reads red.
@@ -347,11 +354,19 @@ def _render_criteria_column(entry: SimulationEntry) -> str:
             chip_class = 'sim-ctype sim-ctype-unsafe' if prohibited else 'sim-ctype'
             chip_html = f'<span class="{chip_class}">{chip_label}</span>'
         desc = esc(c.description)
+        # Evidence is the judge's own quote for why this criterion is marked
+        # occurred; showing the outcome without it makes the verdict unfalsifiable.
+        evidence_html = (
+            f'<span class="sim-criterion-evidence">&ldquo;{esc(c.evidence)}&rdquo;</span>' if c.evidence else ''
+        )
+        unaudited_html = '<span class="sim-criterion-unaudited">not audited</span>' if c.state == 'unknown' else ''
         items.append(
             f'<li class="sim-criterion {state_class}">'
             f'<span class="sim-criterion-icon">{icon}</span>'
             f'{chip_html}'
             f'<span class="sim-criterion-desc">{desc}</span>'
+            f'{unaudited_html}'
+            f'{evidence_html}'
             f'</li>'
         )
 
@@ -361,14 +376,36 @@ def _render_criteria_column(entry: SimulationEntry) -> str:
     # the coloured goal verdict, then a neutral criteria tally.
     verdict_html = ''
     if criteria:
-        met = sum(1 for c in criteria if c.passed)
+        met = sum(1 for c in criteria if c.state == 'pass')
+        unknown = sum(1 for c in criteria if c.state == 'unknown')
         passed = entry.goal_achieved
         verdict_class = 'sim-criteria-verdict--pass' if passed else 'sim-criteria-verdict--fail'
         verdict_word = 'Goal met' if passed else 'Goal missed'
+        unknown_html = f'<span class="sim-criteria-unknown">{unknown} not audited</span>' if unknown else ''
         verdict_html = (
             f'<span class="sim-criteria-verdict {verdict_class}">{verdict_word}</span>'
             f'<span class="sim-criteria-count">{met}/{len(criteria)} criteria met</span>'
+            f'{unknown_html}'
         )
+
+    # Run-level: no audit arrived at all, so every row above is a default and
+    # `criteria_met` scored this run 0.0. Say it here rather than let the tally
+    # imply otherwise.
+    unverified_html = ''
+    if entry.criteria_verified is False:
+        unverified_html = (
+            '<p class="sim-criteria-unverified">Criteria unverified — the judge returned no '
+            'per-criterion audit, so these verdicts are defaults and <code>criteria_met</code> '
+            'scored this run 0.0.</p>'
+        )
+
+    # Empty state: a criteria block that vanishes on zero rows is
+    # indistinguishable from a bug (CLAUDE.md house rule).
+    list_html = (
+        f'<ul class="sim-criteria-list">{"".join(items)}</ul>'
+        if items
+        else '<p class="sim-criteria-empty">No criteria defined for this scenario.</p>'
+    )
 
     # The judge rationale is folded into the criteria block (it explains the
     # verdict above it), not a separate callout — one "outcome" section.
@@ -387,7 +424,8 @@ def _render_criteria_column(entry: SimulationEntry) -> str:
         f'<div class="sim-criteria-head">'
         f'<span class="sim-criteria-header">CRITERIA</span>{verdict_html}'
         f'</div>'
-        f'<ul class="sim-criteria-list">{"".join(items)}</ul>'
+        f'{unverified_html}'
+        f'{list_html}'
         f'{judge_html}'
         f'</div>'
     )

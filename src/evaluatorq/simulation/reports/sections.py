@@ -124,16 +124,30 @@ def _scenario_cohort_id(result: SimulationResult) -> str:
 
 
 def _criteria_rows(result: SimulationResult) -> list[dict[str, Any]]:
+    """One row per criterion, carrying the audit provenance every renderer needs.
+
+    ``audited`` and ``evidence`` come straight from ``criteria_meta`` (``None`` on
+    runs saved before those keys existed). ``state`` — the rendering verdict no
+    surface may recompute — is `CriteriaRow`'s computed field, which is why these
+    rows are built as `CriteriaRow` objects and dumped rather than hand-assembled:
+    the dict and the model then cannot disagree.
+    """
     rows = []
     for c in _criteria_meta(result):
-        is_safety = (c.get('type') == 'must_not_happen') and not c.get('passed', True)
-        rows.append({
-            'id': c['id'],
-            'description': c.get('description', c['id']),
-            'type': c.get('type'),
-            'passed': bool(c.get('passed', True)),
-            'safety': is_safety,
-        })
+        passed = bool(c.get('passed', True))
+        audited = c.get('audited')
+        evidence = c.get('evidence')
+        rows.append(
+            CriteriaRow(
+                id=c['id'],
+                description=c.get('description', c['id']),
+                type=c.get('type'),
+                passed=passed,
+                safety=(c.get('type') == 'must_not_happen') and not passed,
+                audited=audited if isinstance(audited, bool) else None,
+                evidence=str(evidence) if evidence else None,
+            ).model_dump(mode='json')
+        )
     return rows
 
 
@@ -246,7 +260,15 @@ def _build_failures_first_section(results: list[SimulationResult]) -> ReportSect
             # All criteria (pass + fail) for the collapsible dot view; ``violated``
             # is kept for the markdown renderer.
             'criteria': [
-                {'description': c['description'], 'passed': c['passed'], 'safety': c['safety']} for c in rows_c
+                {
+                    'description': c['description'],
+                    'passed': c['passed'],
+                    'safety': c['safety'],
+                    # Carried so the dot view can paint an unaudited criterion
+                    # neutral instead of green (RES-1308).
+                    'state': c['state'],
+                }
+                for c in rows_c
             ],
             'has_safety': any(c['safety'] for c in rows_c),
             'terminated_by': r.terminated_by.value,
@@ -456,6 +478,7 @@ def individual_entries(results: list[SimulationResult]) -> list[SimulationEntry]
                 goal_completion_score=r.goal_completion_score,
                 rules_broken=list(r.rules_broken),
                 criteria=[CriteriaRow(**row) for row in _criteria_rows(r)],
+                criteria_verified=r.criteria_verified,
                 turn_count=r.turn_count,
                 total_tokens=r.token_usage.total_tokens,
                 judge_reason=r.reason,
