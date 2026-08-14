@@ -105,6 +105,7 @@ if TYPE_CHECKING:
         datapoints_from_traces,
         extend_from_traces,
         fetch_trace_conversations,
+        summarize_conversations,
     )
     from evaluatorq.simulation.types import (
         CommunicationStyle,
@@ -276,6 +277,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
         'datapoints_from_traces',
     ),
     'extend_from_traces': ('evaluatorq.simulation.traces', 'extend_from_traces'),
+    'summarize_conversations': (
+        'evaluatorq.simulation.traces',
+        'summarize_conversations',
+    ),
     'wrap_simulation_agent': (
         'evaluatorq.simulation.wrap_agent',
         'wrap_simulation_agent',
@@ -407,6 +412,7 @@ __all__ = [
     'results_to_jsonl',
     # High-level API
     'simulate',
+    'summarize_conversations',
     # Conversion
     'to_open_responses',
     # Job wrapper

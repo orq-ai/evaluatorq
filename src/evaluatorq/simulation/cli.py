@@ -1466,7 +1466,9 @@ def from_traces(
 
     Fetches recent traces from the Orq traces API (requires ``ORQ_API_KEY``)
     and builds one datapoint per trace conversation: the persona and scenario
-    are inferred from the transcript (summarized first when it is long), and the
+    are inferred from a short summary of the conversation — every conversation
+    is summarized once, and that one summary serves both the per-trace
+    datapoints and any ``--extend`` traffic profile — and the
     opening message is written from that persona and scenario — pass
     ``--replay-first-message`` to reuse the recorded one instead. Pass
     ``--extend N`` to additionally generate N new datapoints matching the traffic
@@ -1482,6 +1484,7 @@ def from_traces(
         datapoints_from_traces,
         extend_from_traces,
         fetch_trace_conversations,
+        summarize_conversations,
     )
 
     trace_config = TraceAnalysisConfig(
@@ -1505,7 +1508,13 @@ def from_traces(
             raise RuntimeError(
                 'No traces with a usable conversation found. Widen --lookback-hours, raise --limit, or drop --search.'
             )
-        datapoints = await datapoints_from_traces(conversations, model=sim_model, config=trace_config)
+        summaries = await summarize_conversations(conversations, model=sim_model, config=trace_config)
+        datapoints = await datapoints_from_traces(
+            conversations,
+            model=sim_model,
+            config=trace_config,
+            summaries=summaries,
+        )
         num_direct = len(datapoints)
         if extend > 0:
             datapoints += await extend_from_traces(
@@ -1514,6 +1523,7 @@ def from_traces(
                 agent_description=agent_description,
                 model=sim_model,
                 config=trace_config,
+                summaries=summaries,
             )
         return len(conversations), num_direct, datapoints
 

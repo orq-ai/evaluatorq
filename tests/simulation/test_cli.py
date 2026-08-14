@@ -1851,6 +1851,45 @@ def test_generate_forwards_sim_model(monkeypatch):
     assert captured["sim_model"] == "gpt-5.4-mini"
 
 
+def test_from_traces_summarizes_once_and_reuses_summary(monkeypatch, tmp_path: Path) -> None:
+    from evaluatorq.simulation import traces as traces_mod
+
+    conversation = object()
+    summaries = {"trace-1": "summary"}
+    captured: dict[str, Any] = {"summarize": [], "datapoints": [], "extend": []}
+
+    async def fake_fetch(**kwargs: Any) -> list[Any]:
+        return [conversation]
+
+    async def fake_summarize(conversations: Any, **kwargs: Any) -> dict[str, str]:
+        captured["summarize"].append((conversations, kwargs))
+        return summaries
+
+    async def fake_datapoints(conversations: Any, **kwargs: Any) -> list[Any]:
+        captured["datapoints"].append((conversations, kwargs))
+        return [object()]
+
+    async def fake_extend(conversations: Any, **kwargs: Any) -> list[Any]:
+        captured["extend"].append((conversations, kwargs))
+        return [object()]
+
+    monkeypatch.setattr(traces_mod, "fetch_trace_conversations", fake_fetch)
+    monkeypatch.setattr(traces_mod, "summarize_conversations", fake_summarize)
+    monkeypatch.setattr(traces_mod, "datapoints_from_traces", fake_datapoints)
+    monkeypatch.setattr(traces_mod, "extend_from_traces", fake_extend)
+    monkeypatch.setattr("evaluatorq.simulation.cli._write_datapoints", lambda *args, **kwargs: None)
+
+    result = CliRunner().invoke(
+        app,
+        ["from-traces", "--output", str(tmp_path / "datapoints.jsonl"), "--extend", "1"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(captured["summarize"]) == 1
+    assert captured["datapoints"][0][1]["summaries"] == summaries
+    assert captured["extend"][0][1]["summaries"] == summaries
+
+
 def test_old_model_flag_rejected(monkeypatch):
     from typer.testing import CliRunner
 

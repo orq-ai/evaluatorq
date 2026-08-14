@@ -405,8 +405,8 @@ archetypes and situations your agent actually meets.
 
 The direct route is `eq sim from-traces`, which pulls recent traces from the Orq
 traces API and writes one datapoint per conversation — persona and scenario
-inferred from the transcript, opening message written from that persona and
-scenario:
+inferred from a short summary of it, opening message written from that persona
+and scenario:
 
 ```bash
 eq sim from-traces --output traces_datapoints.jsonl --limit 50 --lookback-hours 24
@@ -419,9 +419,15 @@ than only the recorded ones. The same thing is available from Python as
 `datapoints_from_traces()` and `extend_from_traces()`:
 
 ```python
-from evaluatorq.simulation import datapoints_from_traces
+from evaluatorq.simulation import (
+    datapoints_from_traces,
+    fetch_trace_conversations,
+    summarize_conversations,
+)
 
-datapoints = await datapoints_from_traces(limit=50, lookback_hours=24)
+conversations = await fetch_trace_conversations(limit=50)
+summaries = await summarize_conversations(conversations)
+datapoints = await datapoints_from_traces(conversations, summaries=summaries)
 ```
 
 Full flag list: [`eq sim from-traces`](../cli-reference/simulation.md).
@@ -435,10 +441,12 @@ prompt's size a function of *how many* traces there are rather than how long any
 one of them ran: before it, a single long agentic session crowded out the twenty
 short conversations it should have been weighed against.
 
-The two differ in when they summarize. Direct mode does it only past
-`summarize_above_chars`, since a short trace can go to inference whole and cost
-no extra call. Extension mode always does, because its reduce call carries many
-conversations at once and even short ones compete.
+Both modes summarize unconditionally: every conversation gets exactly one
+summarize call, and nothing downstream reads the raw transcript again — direct
+mode's persona/scenario inference reads the summary, and so does extension
+mode's traffic-profile reduce. A run doing both calls `summarize_conversations`
+once and passes the result as `summaries=` to each, so no conversation is
+summarized twice.
 
 ```mermaid
 flowchart TD
@@ -448,19 +456,16 @@ flowchart TD
     D -- "no" --> E["Dropped, counted in a warning"]
     D -- "yes" --> F["TraceConversation"]
 
-    F --> G["Direct mode<br/>datapoints_from_traces"]
-    F --> H["Extension mode<br/>extend_from_traces"]
+    F --> S["MAP: summarize_conversations<br/>one call per conversation, ~250 tokens,<br/>5 in flight, shared by both modes"]
 
-    G --> G1{"Transcript over<br/>summarize_above_chars?"}
-    G1 -- "yes" --> G2["MAP: summarize this one<br/>~250 tokens"]
-    G1 -- "no" --> G3["Send the transcript whole"]
-    G2 --> I["REDUCE: infer Persona + Scenario<br/>1 call per conversation"]
-    G3 --> I
+    S --> G["Direct mode<br/>datapoints_from_traces"]
+    S --> H["Extension mode<br/>extend_from_traces"]
+
+    G --> I["REDUCE: infer Persona + Scenario<br/>1 call per conversation"]
     I --> J["Write the opening message<br/>from that persona and scenario<br/>--replay-first-message reuses<br/>the recorded one"]
     J --> K["SimulationDatapoint<br/>id = trace-{trace_id}"]
 
-    H --> H1["MAP: summarize every conversation<br/>~250 tokens each, 5 in flight"]
-    H1 --> L["REDUCE: 1 call over up to 50 summaries<br/>repeat intents collapsed, not double-counted"]
+    H --> L["REDUCE: 1 call over up to 50 summaries<br/>repeat intents collapsed, not double-counted"]
     L --> M["Traffic profile prose:<br/>intent mix and shares, tone and<br/>patience ranges, edge cases"]
     M --> N["DatapointGenerator<br/>personas x scenarios<br/>grounded in that profile"]
     N --> O["N new SimulationDatapoints<br/>synthetic, not replayed"]
@@ -474,7 +479,6 @@ function; the fetch-side ones are fixed:
 | Rows per listing page | 200 | The API's own cap; pagination continues until `--limit` is met or a page adds nothing new |
 | Span fetches in flight | 5 | Politeness to the traces API |
 | LLM calls in flight | 5 | Same width the datapoint generator uses |
-| `summarize_above_chars` | 8000 | Above this, direct mode summarizes first — below it, the extra call buys nothing |
 | `summary_target_tokens` | 250 | Roughly how long a summary should be. **Soft** — it goes in the prompt, nothing cuts the result |
 | `max_reduce_summaries` | 50 | How many summaries the profile call carries; the rest are dropped with a warning naming the count |
 | `summary_max_tokens` | 10000 | Completion budget for a summarize call — reasoning headroom, not the length target |
