@@ -539,10 +539,19 @@ class Usage(BaseModel):
         ``model_validate``); ``model_copy(update=...)`` does not go through
         validators at all, so a caller using it holds the chain itself (see
         `common.target_call._attempt_usage`, the one place that does).
+
+        An **omitted** ``calls`` widens to the priced count rather than clamping
+        it away. ``calls`` defaults to 0, so ``Usage(total_cost=0.02,
+        priced_calls=1)`` — the shape a hand-built target usage most plausibly
+        takes — would otherwise silently flip a billed figure to "no coverage
+        data". A caller who states ``calls`` explicitly still wins the clamp.
         """
         if not isinstance(data, dict):
             return data
         calls = data.get('calls') or 0
+        if 'calls' not in data:
+            calls = max(data.get('priced_calls') or 0, data.get('estimated_calls') or 0)
+            data = {**data, 'calls': calls}
         priced_calls = min(data.get('priced_calls') or 0, calls)
         estimated_calls = min(data.get('estimated_calls') or 0, priced_calls)
         data = dict(data)

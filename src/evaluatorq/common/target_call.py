@@ -263,7 +263,11 @@ async def call_target_with_retry(
                     billed_usage=billed_usage,
                 )
             if resp.usage is not None:
-                logger.warning(
+                # Debug, not warning: the error itself is reported by the caller, and
+                # counting a failed attempt's tokens is the correct handling, not a
+                # degraded path. At warning it fired once per attempt on every target
+                # that legitimately retries.
+                logger.debug(
                     f'Target attempt {attempt + 1} returned an error marker with a billed usage block '
                     f'({resp.usage.total_tokens} tokens); counting it toward the exchange cost'
                 )

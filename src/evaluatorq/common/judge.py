@@ -500,6 +500,12 @@ async def run_judge(
         # returned with attempt 2's body — the "raw (truncated)" line would
         # describe a different call than the one that failed, and its tokens
         # would be billed to the wrong attempt.
+        #
+        # The cost of that is real and deliberate: a retried judge reports only the
+        # winning attempt's tokens, so a judge that succeeds on attempt 2 under-reports
+        # the exchange. Accumulating instead (as `call_target_with_retry` does across
+        # target attempts) would mean the outcome's `usage` no longer describes the
+        # call that produced its verdict. Under-report over mis-attribute.
         raw_content = '{}'
         usage = None
 
