@@ -13,8 +13,9 @@ from loguru import logger
 from evaluatorq.simulation.types import SimulationResult, TerminatedBy
 
 # A run that ended this way never reached the judge's criteria audit, so its
-# criteria outcome is unknown — not met.
-_UNEVALUATED = (TerminatedBy.error, TerminatedBy.timeout)
+# criteria outcome is unknown — not met. Shared with `api._sim_evaluation_details`
+# so the reported pass/fail cannot disagree with the score computed here.
+UNEVALUATED_TERMINATIONS = (TerminatedBy.error, TerminatedBy.timeout)
 
 SimulationScorer = Callable[[SimulationResult], float]
 
@@ -40,7 +41,7 @@ def criteria_met_scorer(result: SimulationResult) -> float:
     free-text `rules_broken` list, which cannot fail a `must_happen` criterion.
     A run with no criteria at all still scores 1.0 — nothing to fail.
     """
-    if result.terminated_by in _UNEVALUATED:
+    if result.terminated_by in UNEVALUATED_TERMINATIONS:
         logger.warning(
             'criteria_met: run terminated by {} before any criteria audit; scoring 0.0 (unknown, not met).',
             result.terminated_by.value,
