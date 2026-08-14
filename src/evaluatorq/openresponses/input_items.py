@@ -22,6 +22,39 @@ def _content_parts(content: list[ContentPart]) -> list[dict[str, Any]]:
     return [p.model_dump(mode='json') for p in content]
 
 
+def _assistant_content(content: str | list[ContentPart] | None) -> list[dict[str, Any]]:
+    """Render an assistant turn's content as ``output_text`` parts.
+
+    An assistant item's content MUST be a list of ``output_text`` parts. A bare
+    string, or a list of ``input_text`` parts, is **silently dropped** by the Orq
+    router — the model receives a transcript with no assistant turns in it at all
+    (some backends 400 instead: "cannot unmarshal string into Go struct field
+    messageItemRaw.content"). That drop is why a simulation judge reported "the
+    agent has not yet responded" and no criterion about agent behaviour could
+    fail (RES-1308). Only text is representable here; there is no ``output_image``.
+    """
+    if content is None:
+        return [{'type': 'output_text', 'text': ''}]
+    if isinstance(content, str):
+        return [{'type': 'output_text', 'text': content}]
+    parts: list[dict[str, Any]] = []
+    dropped: list[str] = []
+    for p in content:
+        text = getattr(p, 'text', None)
+        if isinstance(text, str):
+            parts.append({'type': 'output_text', 'text': text})
+        else:
+            dropped.append(p.type)
+    if dropped:
+        # loguru formats with {}, not %s.
+        logger.warning(
+            'Dropping non-text part(s) {} from an assistant turn in the Responses input: '
+            'assistant content only supports output_text. The model will not see them.',
+            ', '.join(dropped),
+        )
+    return parts or [{'type': 'output_text', 'text': ''}]
+
+
 def _tool_output(content: str | list[ContentPart] | None) -> str | list[dict[str, Any]]:
     """Render tool-result content for ``function_call_output.output``.
 
@@ -64,8 +97,7 @@ def message_to_responses_input_items(m: Message) -> list[dict[str, Any]]:
     if m.role == 'assistant' and m.tool_calls:
         items: list[dict[str, Any]] = []
         if m.content:
-            content = m.content if isinstance(m.content, str) else _content_parts(m.content)
-            items.append({'role': 'assistant', 'content': content})
+            items.append({'role': 'assistant', 'content': _assistant_content(m.content)})
         for tc in m.tool_calls:
             fc: dict[str, Any] = {
                 'type': 'function_call',
@@ -79,9 +111,10 @@ def message_to_responses_input_items(m: Message) -> list[dict[str, Any]]:
                 fc['id'] = tc.item_id
             items.append(fc)
         return items
-    # Multi-part content passes straight through as Responses-API content parts.
-    # ``input_text`` parts are accepted under role assistant too (verified against
-    # the live API), so no per-role part remapping is needed here.
+    # Assistant turns need output_text parts; every other role takes input_* parts
+    # (or a bare string) as-is.
+    if m.role == 'assistant':
+        return [{'role': 'assistant', 'content': _assistant_content(m.content)}]
     if isinstance(m.content, list):
         return [{'role': m.role, 'content': _content_parts(m.content)}]
     return [{'role': m.role, 'content': m.content or ''}]

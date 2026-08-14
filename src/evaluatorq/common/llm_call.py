@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from openai import BadRequestError
 
+from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.thread_context import pipeline_metadata
 from evaluatorq.common.tracing import (
     get_trace_context_headers,
@@ -112,6 +113,17 @@ def apply_pipeline_metadata(params: dict[str, Any]) -> None:
         params['metadata'] = {**md, **(params.get('metadata') or {})}
 
 
+async def apply_trace_headers(params: dict[str, Any]) -> None:
+    """Merge the active trace context into ``params['extra_headers']`` in place.
+
+    Merge, don't overwrite: a caller may have supplied extra_headers via
+    extra_kwargs. Trace headers win on conflict. No-op when no trace is bound.
+    """
+    headers = await get_trace_context_headers()
+    if headers:
+        params['extra_headers'] = {**(params.get('extra_headers') or {}), **headers}
+
+
 async def execute_chat_completion(
     *,
     client: AsyncOpenAI,
@@ -153,12 +165,7 @@ async def execute_chat_completion(
     record_llm_input(span, messages)
 
     if inject_trace_headers:
-        headers = await get_trace_context_headers()
-        if headers:
-            # Merge, don't overwrite: a caller may have supplied extra_headers via
-            # extra_kwargs. Trace headers win on conflict.
-            existing = params.get('extra_headers') or {}
-            params['extra_headers'] = {**existing, **headers}
+        await apply_trace_headers(params)
 
     try:
         response = await asyncio.wait_for(client.chat.completions.create(**params), timeout=timeout_s)
@@ -175,7 +182,9 @@ async def execute_chat_completion(
         params.pop('reasoning_effort', None)
         response = await asyncio.wait_for(client.chat.completions.create(**params), timeout=timeout_s)
     record_llm_response(span, response)
-    return response, TokenUsage.from_completion(response)
+    # The Orq router prices Responses but not Chat Completions, so usage here carries
+    # tokens only; price it from the model catalogue (RES-1295).
+    return response, await price_usage(TokenUsage.from_completion(response), model, client)
 
 
 async def execute_chat_parse(
@@ -212,10 +221,7 @@ async def execute_chat_parse(
     record_llm_input(span, messages)
 
     if inject_trace_headers:
-        headers = await get_trace_context_headers()
-        if headers:
-            existing = params.get('extra_headers') or {}
-            params['extra_headers'] = {**existing, **headers}
+        await apply_trace_headers(params)
 
     try:
         response = await asyncio.wait_for(client.chat.completions.parse(**params), timeout=timeout_s)
@@ -227,4 +233,69 @@ async def execute_chat_parse(
         params.pop('reasoning_effort', None)
         response = await asyncio.wait_for(client.chat.completions.parse(**params), timeout=timeout_s)
     record_llm_response(span, response)
-    return response, TokenUsage.from_completion(response)
+    return response, await price_usage(TokenUsage.from_completion(response), model, client)
+
+
+async def execute_response(
+    *,
+    client: AsyncOpenAI,
+    model: str,
+    messages: list[dict[str, Any]],
+    span: Span | None,
+    timeout_s: float,
+    response_model: type[BaseModel] | None = None,
+    temperature: float | None = None,
+    max_output_tokens: int | None = None,
+    inject_trace_headers: bool = True,
+    extra_kwargs: dict[str, Any] | None = None,
+) -> tuple[Any, TokenUsage | None]:
+    """Execute one Responses API call — ``.parse`` with a ``response_model``, else ``.create``.
+
+    The Responses counterpart of `execute_chat_completion`. Preferred for
+    judges because the Orq router prices this endpoint and not Chat Completions:
+    ``usage`` comes back with ``input_cost``/``output_cost``/``total_cost``
+    already filled in, so the ``price_usage`` call below is a no-op on the Orq
+    path and only covers a non-Orq endpoint or an unpriced model (RES-1295).
+
+    ``messages`` are passed straight through as Responses ``input`` items; the
+    system entry rides along as a message rather than as ``instructions``, which
+    keeps the judge prompt assembly identical across both endpoints.
+    """
+    params: dict[str, Any] = {'model': model, 'input': messages}
+    if temperature is not None:
+        params['temperature'] = temperature
+    if max_output_tokens is not None:
+        params['max_output_tokens'] = max_output_tokens
+    if extra_kwargs:
+        params.update(extra_kwargs)
+
+    strip_known_rejected_responses_reasoning(model, params)
+    apply_pipeline_metadata(params)
+
+    record_llm_input(span, messages)
+
+    if inject_trace_headers:
+        await apply_trace_headers(params)
+
+    async def _call() -> Any:
+        if response_model is not None:
+            return await asyncio.wait_for(
+                client.responses.parse(text_format=response_model, **params), timeout=timeout_s
+            )
+        return await asyncio.wait_for(client.responses.create(**params), timeout=timeout_s)
+
+    try:
+        response = await _call()
+    except BadRequestError as exc:
+        # Same drop-and-retry-once contract as the chat path, for the Responses
+        # `reasoning` block. An unrelated 400 propagates to the caller.
+        if not is_responses_reasoning_rejection(params, exc):
+            raise
+        remember_responses_reasoning_rejection(model, params)
+        logger.warning('Model %s rejected the reasoning block; dropping it and retrying once', model)
+        params.pop('reasoning', None)
+        response = await _call()
+    record_llm_response(span, response)
+    # Priced by the router; price_usage is a no-op unless it came back unpriced
+    # (a non-Orq endpoint, or a model the router does not price).
+    return response, await price_usage(TokenUsage.extract(getattr(response, 'usage', None), calls=1), model, client)

@@ -123,6 +123,13 @@ async def generate_executive_summary(
             **(extra_kwargs or {}),
         }
         apply_pipeline_metadata(merged_kwargs)
+        # RES-1295: this call extracts no priced usage. `_record_usage_on_current_span`
+        # below annotates whatever span is active with token *counts* for
+        # tracing, but never calls `price_usage`, so this call's cost never
+        # reaches `report.summary.token_usage_total` — the summary is already
+        # finalized by the time this opt-in narrative step runs for both the
+        # redteam and simulation callers. See "What the totals do not
+        # include" in docs/guides/red-teaming.md.
         response = await llm_client.chat.completions.create(  # pyright: ignore[reportCallIssue, reportArgumentType]
             model=model,
             messages=[  # pyright: ignore[reportArgumentType]

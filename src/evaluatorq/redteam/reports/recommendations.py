@@ -356,6 +356,16 @@ async def generate_focus_area_recommendations(
             user_prompt = _truncate(user_prompt, limits.max_area_prompt_chars)
 
         try:
+            # extra_kwargs is computed once for the whole run above (RES-1286); no per-area
+            # recomputation here.
+            # RES-1295: generate_structured extracts no usage, so this call's
+            # tokens never reach any total. `report.summary.token_usage_total`
+            # is already finalized by the time this opt-in post-processing step
+            # runs, and `report.summary.token_usage_by_source` is documented to
+            # sum to it — folding this call's usage into either without
+            # maintaining that invariant across all summary breakdowns would be
+            # more than a one-line fix. See "What the totals do not include" in
+            # docs/guides/red-teaming.md.
             parsed, raw = await generate_structured(
                 client=llm_client,
                 model=model,

@@ -79,7 +79,10 @@ class OWASPEvaluator:
         self._cfg = base_cfg.model_copy(update={'extra_kwargs': self.llm_kwargs})
         self._call_cfg = self._cfg.as_call_config() if isinstance(self._cfg, EvaluatorConfig) else self._cfg
         self.evaluator_model = evaluator_model
-        self.client = llm_client or base_cfg.client or create_async_llm_client()
+        # max_retries=0 on a client we build: run_judge owns retry via with_retry, and
+        # the two layers would multiply into 15 requests for one judgement. An injected
+        # client keeps whatever budget its owner gave it.
+        self.client = llm_client or base_cfg.client or create_async_llm_client(max_retries=0)
         # Panel = primary model + extra judges, de-duplicated, primary first.
         panel: list[str] = [evaluator_model]
         for j in judges or []:
@@ -251,7 +254,8 @@ class OWASPEvaluator:
             if outcome.error_kind is not None or outcome.payload is None:
                 last_error = outcome
                 return Prediction(
-                    error=outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'error')
+                    error=outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'error'),
+                    token_usage=outcome.token_usage,
                 )
             return Prediction(
                 value=outcome.payload.value,
@@ -329,6 +333,7 @@ class OWASPEvaluator:
                 passed=None,
                 explanation=f'Evaluation timed out after {outcome.timeout_ms}ms',
                 evaluator_id=evaluator_id,
+                token_usage=outcome.token_usage,
                 raw_output={
                     'error': 'timeout',
                     'timeout_ms': outcome.timeout_ms,
@@ -340,6 +345,7 @@ class OWASPEvaluator:
                 passed=None,
                 explanation=f'Evaluation error: {outcome.error_message}',
                 evaluator_id=evaluator_id,
+                token_usage=outcome.token_usage,
                 raw_output={
                     'error': outcome.error_message,
                     'raw_content': outcome.raw_content,
@@ -357,6 +363,11 @@ class OWASPEvaluator:
                 'value': outcome.payload.value,
                 'explanation': outcome.payload.explanation,
                 'raw_content': outcome.raw_content,
+                # Which endpoint actually served this verdict. Recorded here rather
+                # than as a first-class field because it is a diagnostic: when a
+                # judge reports no cost, this is what separates "the model is not in
+                # the catalogue" from "Responses 400'd and fell back to chat".
+                'endpoint': outcome.endpoint,
             },
         )
 

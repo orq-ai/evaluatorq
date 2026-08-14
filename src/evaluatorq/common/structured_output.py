@@ -84,6 +84,14 @@ async def generate_structured(
     the call in a broad ``except`` and skip that one item, so a truncation
     degrades a single section — but now with a clear log line naming the budget,
     not the silent drop this migration set out to remove.
+
+    RES-1295: neither the ``parse()`` call below nor the json_object fallback
+    extracts usage, so their tokens never reach any total. The 11 call sites
+    across ``persona_generator.py``, ``scenario_generator.py``, ``traces.py``,
+    and both ``recommendations.py`` modules track no usage today — adding a
+    usage element to this function's return tuple would mean threading it
+    through every one of them. See "What the totals do not include" in
+    docs/guides/red-teaming.md.
     """
     reserved = _STRUCTURAL_KEYS & (extra_kwargs or {}).keys()
     if reserved:

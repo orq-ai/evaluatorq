@@ -108,9 +108,11 @@ if TYPE_CHECKING:
         summarize_conversations,
     )
     from evaluatorq.simulation.types import (
+        CRITERION_ID_PATTERN,
         CommunicationStyle,
         ConversationStrategy,
         Criterion,
+        CriterionVerdict,
         CulturalContext,
         EmotionalArc,
         InputFormat,
@@ -124,6 +126,7 @@ if TYPE_CHECKING:
         StartingEmotion,
         TerminatedBy,
         TurnMetrics,
+        criterion_id_for,
     )
     from evaluatorq.simulation.utils.dataset_export import (
         export_datapoints_to_jsonl,
@@ -221,6 +224,9 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
         'ConversationStrategy',
     ),
     'Criterion': ('evaluatorq.simulation.types', 'Criterion'),
+    'CriterionVerdict': ('evaluatorq.simulation.types', 'CriterionVerdict'),
+    'CRITERION_ID_PATTERN': ('evaluatorq.simulation.types', 'CRITERION_ID_PATTERN'),
+    'criterion_id_for': ('evaluatorq.simulation.types', 'criterion_id_for'),
     'CulturalContext': ('evaluatorq.simulation.types', 'CulturalContext'),
     'SimulationDatapoint': ('evaluatorq.simulation.types', 'SimulationDatapoint'),
     'EmotionalArc': ('evaluatorq.simulation.types', 'EmotionalArc'),
@@ -318,6 +324,7 @@ def __getattr__(name: str) -> Any:
 
 __all__ = [
     # Types
+    'CRITERION_ID_PATTERN',
     'DEFAULT_MODEL',
     # Evaluators
     'SIMULATION_EVALUATORS',
@@ -332,6 +339,7 @@ __all__ = [
     'ConversationStrategy',
     'CrewAITarget',
     'Criterion',
+    'CriterionVerdict',
     'CulturalContext',
     # Generators
     'DatapointGenerator',
@@ -385,6 +393,7 @@ __all__ = [
     'apply_random_perturbation',
     'auto_save_run',
     'build_simulation_run',
+    'criterion_id_for',
     # Experiments as input
     'datapoints_from_experiment',
     # Traces as input

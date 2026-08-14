@@ -173,7 +173,12 @@ async def _run_single_judge(
     and pairwise (`PairwiseComparator`) juries — only the ``replacements``
     differ between them, so keeping one path stops the two from drifting.
     """
-    cfg = LLMCallConfig(model=model, max_tokens=max_tokens, timeout_ms=timeout_ms, extra_kwargs=extra_kwargs or {})
+    # api='responses': the priced endpoint on the Orq router, so a jury verdict
+    # records cost like the call it judges (RES-1295). run_judge falls back to chat
+    # completions on its own for a model the Responses endpoint will not take.
+    cfg = LLMCallConfig(
+        model=model, api='responses', max_tokens=max_tokens, timeout_ms=timeout_ms, extra_kwargs=extra_kwargs or {}
+    )
     outcome = await run_judge(
         client=client,
         model=model,
@@ -513,7 +518,7 @@ def llm_jury(
                 'pass': None,
             })
         if resolved_client is None:
-            resolved_client = resolve_llm_client(config_client=None).client
+            resolved_client = resolve_llm_client(config_client=None, max_retries=0).client
         replacements = _build_replacements(data=data, output=output, criteria=criteria or '')
 
         async def judge_fn(judge_model: str) -> Prediction:
@@ -700,7 +705,7 @@ class PairwiseComparator:
                 return PairwiseComparison(winner='inconclusive')
 
         if self._client is None:
-            self._client = resolve_llm_client(config_client=None).client
+            self._client = resolve_llm_client(config_client=None, max_retries=0).client
 
         async def judge_fn(first: Output, second: Output, model: str) -> Prediction:
             replacements: dict[str, Any] = {'question': question, 'criteria': self._criteria}

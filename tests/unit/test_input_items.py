@@ -40,12 +40,20 @@ def _tool_call(call_id: str = "call_1", name: str = "search", item_id: str | Non
 
 
 class TestPlainMessages:
-    @pytest.mark.parametrize("role", ["user", "assistant", "system", "developer"])
+    @pytest.mark.parametrize("role", ["user", "system", "developer"])
     def test_string_content_roundtrips_per_role(self, role: MessageRole) -> None:
         items = message_to_responses_input_items(Message(role=role, content="hello"))
         assert items == [{"role": role, "content": "hello"}]
 
-    @pytest.mark.parametrize("role", ["user", "assistant", "system", "developer"])
+    def test_assistant_string_content_becomes_output_text(self) -> None:
+        # A bare string (or any input_* part) under role assistant is SILENTLY
+        # DROPPED by the Orq router — the model sees a transcript with no agent
+        # turns at all, which is how a simulation judge came to report "the agent
+        # has not yet responded" and no criterion could fail (RES-1308).
+        items = message_to_responses_input_items(Message(role="assistant", content="hello"))
+        assert items == [{"role": "assistant", "content": [{"type": "output_text", "text": "hello"}]}]
+
+    @pytest.mark.parametrize("role", ["user", "system", "developer"])
     def test_multipart_content_roundtrips_per_role(self, role: MessageRole) -> None:
         m = Message(
             role=role,
@@ -58,11 +66,27 @@ class TestPlainMessages:
         assert items[0]["role"] == role
         assert [p["type"] for p in items[0]["content"]] == ["input_text", "input_image"]
 
-    def test_none_content_becomes_empty_string(self) -> None:
+    def test_assistant_multipart_remaps_text_and_warns_on_the_rest(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # There is no ``output_image``: an image on an assistant turn cannot be
+        # represented, so it is dropped — but never silently.
+        m = Message(
+            role="assistant",
+            content=[
+                InputTextContent(type="input_text", text="look"),
+                InputImageContent(type="input_image", image_url="https://x/y.png"),
+            ],
+        )
+        items = message_to_responses_input_items(m)
+        assert items[0]["content"] == [{"type": "output_text", "text": "look"}]
+        assert "input_image" in caplog.text
+
+    def test_none_content_becomes_an_empty_output_text_part(self) -> None:
         # An assistant turn with no text and no tool calls still has to be a
         # valid item; ``content: None`` is not accepted by the API.
         assert message_to_responses_input_items(Message(role="assistant", content=None)) == [
-            {"role": "assistant", "content": ""}
+            {"role": "assistant", "content": [{"type": "output_text", "text": ""}]}
         ]
 
 
@@ -76,7 +100,7 @@ class TestToolTurns:
     def test_narration_precedes_the_function_call(self) -> None:
         m = Message(role="assistant", content="let me look", tool_calls=[_tool_call()])
         items = message_to_responses_input_items(m)
-        assert items[0] == {"role": "assistant", "content": "let me look"}
+        assert items[0] == {"role": "assistant", "content": [{"type": "output_text", "text": "let me look"}]}
         assert items[1]["type"] == "function_call"
 
     def test_item_id_is_echoed_so_the_call_roundtrips(self) -> None:

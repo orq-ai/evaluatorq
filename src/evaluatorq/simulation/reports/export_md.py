@@ -363,6 +363,21 @@ def _render_individual_results_section(section: ReportSection) -> str:
         failed_criteria = [c['description'] for c in criteria if not c.get('passed', True)]
         if failed_criteria:
             body_lines.append('- **Criteria violated:** ' + ', '.join(failed_criteria))
+        # An unaudited criterion "passed" only because the judge never reported on
+        # it; listing it beside the violations stops the absence reading as a pass
+        # (RES-1308).
+        unaudited = [c['description'] for c in criteria if c.get('state') == 'unknown']
+        if unaudited:
+            body_lines.append('- **Criteria not audited:** ' + ', '.join(unaudited))
+        if entry.get('criteria_verified') is False:
+            body_lines.append(
+                '- **Criteria audit:** unverified — the judge returned no per-criterion audit, so '
+                'these verdicts are defaults and `criteria_met` scored this run 0.0.'
+            )
+        evidence = [(c['description'], c['evidence']) for c in criteria if c.get('evidence')]
+        if evidence:
+            body_lines.append('- **Evidence:**')
+            body_lines.extend(f'    - {desc}: "{quote}"' for desc, quote in evidence)
         if entry['evaluator_scores']:
             scores_str = ', '.join(f'{k}={v:.2f}' for k, v in entry['evaluator_scores'].items())
             body_lines.append(f'- **Evaluator scores:** {scores_str}')

@@ -320,6 +320,89 @@ One persona × one scenario yields one `SimulationResult` with `goal_achieved`,
 `goal_completion_score`, `turn_count`, `rules_broken`, and the full message
 transcript.
 
+### How criteria are scored
+
+The judge audits every `Criterion` on every turn and the runner folds those
+verdicts over the whole conversation, so a violation on turn 2 still shows up in a
+run that ends on turn 6:
+
+- **`must_happen`** passes if it occurred in *any* turn. Never occurring is a
+  failure — intent, plans, and paraphrases do not count.
+- **`must_not_happen`** fails if it was violated in *any* turn. One violation is
+  permanent; a clean later turn does not clear it.
+
+The judge is only ever asked **what occurred**, never what passed — a pass/fail
+flag means the opposite thing for the two criterion types, and models invert it.
+Occurrence is mapped to pass/fail in code, so `rules_broken` is derived, not
+reported. Failures land in `rules_broken` (criterion ids), `criteria_results`
+(description → passed), and the `criteria_met` score.
+
+Once a criterion is confirmed to have occurred it is settled — stickiness means a
+later turn cannot change it — so the judge is told to stop re-auditing it. It stays
+in the prompt (the judge still needs it to decide whether to stop early) but drops
+out of the per-turn audit payload, which otherwise costs an entry with an evidence
+quote per criterion per turn.
+
+Per-criterion detail is in `metadata['criteria_meta']`, where `audited` says whether
+the judge actually returned a verdict for that criterion:
+
+```python
+for c in result.metadata['criteria_meta']:
+    # `.get('audited') is False` — not `not c['audited']`: `None` (and an absent
+    # key, on a report saved before the field existed) means unknown, not "the
+    # judge skipped it".
+    if not c['passed'] and c.get('audited') is False:
+        print(f"{c['id']} failed by default — the judge never reported on it")
+```
+
+A `must_happen` the judge confirmed never occurred and one it silently skipped both
+show `passed: False`; only `audited` separates them. It is `None` for runs saved
+before the field existed.
+
+Each entry also carries **`evidence`** — the quote from the turn where the
+criterion's occurrence first flipped, taken from the judge's `criteria_verdicts`
+audit. It is `''` when the criterion never occurred (or occurred without a
+tracked quote) and `None` when no tracker was available, same as `audited`.
+
+Both keys reach the reports. A criterion that passed only because nobody audited
+it renders as **not audited** (a neutral `?`, never a green tick) in the dashboard,
+the HTML report and the markdown export, and is counted separately from the
+"N/M criteria met" tally; `evidence` is shown beside the criterion it justifies. A
+run with `criteria_verified = False` says so above the criteria list rather than
+showing a tally that contradicts its `criteria_met` score of `0.0`.
+
+The `criteria_met` score applies the same rule: an unaudited criterion is **not
+met**, so the score and the tally beside it agree. A criterion the judge settled
+early still counts — a verdict is what settles it — and `audited: None` (a run
+saved before the field existed) keeps the score it always had.
+
+!!! warning "A custom `judge=` must report per-criterion verdicts"
+
+    The built-in `JudgeAgent` audits each unsettled criterion every turn. A custom
+    judge that does not populate `Judgment.criteria_verdicts` falls back to the
+    pre-1.3 behaviour: pass/fail is inferred from its `rules_broken` list, so a
+    `must_happen` criterion **cannot fail**.
+
+    That run is marked `SimulationResult.criteria_verified = False`, the runner logs
+    a warning naming the scenario, and `criteria_met` scores it `0.0` — unknown, not
+    met. Check the field, not the transcript:
+
+    ```python
+    if result.criteria_verified is False:
+        print('criteria unverified — the judge returned no per-criterion audit')
+    ```
+
+    `criteria_verified` is `None` on runs saved before the field existed.
+
+A run that ends in an error or a timeout never reaches the audit either. Those
+results also score `criteria_met` as `0.0` (not `1.0`) and log a warning, so neither
+a crashed run nor an unaudited one can inflate the average. A target that dies
+mid-run keeps whatever the judge had already **confirmed** — a `must_not_happen` it
+saw violated stays failed — while a `must_happen` that simply had not happened yet
+is reported as **unknown**, never as failed. The run was cut short before that
+criterion had its chance: it is not the judge's verdict that nothing happened;
+nobody looked.
+
 The callable passed to `target` is the only structural difference from the Orq path —
 personas, scenarios, criteria, and the result shape are identical. Swap the
 callback body for any HTTP/LLM agent.
