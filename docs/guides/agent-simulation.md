@@ -356,6 +356,11 @@ A `must_happen` the judge confirmed never occurred and one it silently skipped b
 show `passed: False`; only `audited` separates them. It is `None` for runs saved
 before the field existed.
 
+Each entry also carries **`evidence`** — the quote from the turn where the
+criterion's occurrence first flipped, taken from the judge's `criteria_verdicts`
+audit. It is `''` when the criterion never occurred (or occurred without a
+tracked quote) and `None` when no tracker was available, same as `audited`.
+
 !!! warning "A custom `judge=` must report per-criterion verdicts"
 
     The built-in `JudgeAgent` audits each unsettled criterion every turn. A custom
