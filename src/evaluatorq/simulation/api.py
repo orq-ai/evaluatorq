@@ -58,14 +58,24 @@ logger = logging.getLogger(__name__)
 from evaluatorq.simulation.exceptions import SimulationDroppedError
 
 
-async def _attach_recommendations(run: SimulationRun, config: SimulationRecommendationConfig, model: str) -> None:
+async def _attach_recommendations(
+    run: SimulationRun, config: SimulationRecommendationConfig, model: str, *, persisted: bool = True
+) -> None:
     """Generate remediation suggestions and attach them to ``run``.
 
     Best-effort, like the executive summary: a simulation without suggestions is still a
     useful simulation, so credential and LLM failures degrade to a warning. Called from
     inside the pipeline span so the analysis spans nest under the simulation root and
     carry the same run metadata.
+
+    ``persisted=False`` means the caller keeps no copy of the run — ``simulate()`` hands
+    back bare results — so the suggestions are generated, paid for and dropped. Cheap next
+    to the simulation itself, but it gets a warning rather than billing in silence.
     """
+    if not persisted:
+        logger.warning(
+            'recommendations= is on but neither save nor report is set; the suggestions will be generated and discarded'
+        )
     from evaluatorq.common.llm_client import resolve_llm_client
     from evaluatorq.simulation.reports.recommendations import generate_recommendations
 
@@ -1403,7 +1413,12 @@ async def _simulate_core(
         # Remediation suggestions, generated before persistence so a saved run carries
         # them, and inside the pipeline span so their LLM calls bind the run metadata.
         if config.recommendations is not None:
-            await _attach_recommendations(run, config.recommendations, model)
+            await _attach_recommendations(
+                run,
+                config.recommendations,
+                model,
+                persisted=config.save or config.run_output is not None,
+            )
 
         # Generate the LLM narrative before persistence so a saved report carries
         # it. This is best-effort: simulations remain useful without LLM creds or

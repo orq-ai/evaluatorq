@@ -35,19 +35,6 @@ def test_unknown_field_rejected(config_cls: type) -> None:
         config_cls(max_are4s=2)
 
 
-@pytest.mark.asyncio
-async def test_red_team_accepts_deprecated_generate_recommendations(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The old spelling still works, and says so. Credentials fail after the shim runs."""
-    from evaluatorq.redteam import red_team
-    from evaluatorq.redteam.exceptions import CredentialError
-
-    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
-    monkeypatch.delenv('ORQ_API_KEY', raising=False)
-
-    with pytest.deprecated_call(match='generate_recommendations= is deprecated'), pytest.raises(CredentialError):
-        await red_team('agent:test', generate_recommendations=False)
-
-
 @pytest.mark.parametrize('entry_point', ['simulate', 'generate_and_simulate'])
 @pytest.mark.asyncio
 async def test_public_simulation_entry_points_forward_recommendations(

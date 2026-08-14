@@ -508,12 +508,10 @@ async def red_team(
     artifacts_dir: Path | str | None = None,
     target_config: TargetConfig | None = None,
     recommendations: bool | RedTeamRecommendationConfig = True,
-    generate_recommendations: bool | None = None,
     generate_executive_summary: bool = True,
     attacker_instructions: str | None = None,
     verbosity: int = 0,
     save: SaveMode = SaveMode.FINAL,
-    config: LLMConfig | None = None,
 ) -> RedTeamReport:
     """Unified entry point for red teaming.
 
@@ -562,7 +560,6 @@ async def red_team(
             evaluator=LLMCallConfig(...))`` to control model, temperature, and other
             per-role settings. Defaults to ``LLMConfig()`` which uses the default model
             for both attacker and evaluator roles.
-        config: Deprecated alias for ``llm_config``. Retained for backward compatibility.
         parallelism: Maximum concurrent evaluatorq jobs.
         generate_strategies: Whether to generate additional LLM-based strategies.
         generated_strategy_count: Number of strategies to generate per category.
@@ -605,7 +602,6 @@ async def red_team(
             instance tunes how many areas and traces are analyzed. Requires an
             LLM client (explicit or via environment credentials). Best-effort:
             failures are swallowed into a pipeline warning.
-        generate_recommendations: Deprecated alias for ``recommendations``.
         generate_executive_summary: Whether to generate an LLM narrative
             executive summary at the top of the report. Best-effort: silently
             skipped (with a pipeline warning) when no LLM credentials are
@@ -661,24 +657,6 @@ async def red_team(
     asyncio.run(main())
     ```
     """
-    if config is not None:
-        if llm_config is not None:
-            msg = "Pass only one of 'config' or 'llm_config'."
-            raise TypeError(msg)
-        warnings.warn(
-            'config= is deprecated and will be removed in 1.4.0. Use llm_config= instead.',
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        llm_config = config
-
-    if generate_recommendations is not None:
-        warnings.warn(
-            'generate_recommendations= is deprecated. Use recommendations= instead.',
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        recommendations = generate_recommendations
     # True -> defaults, False -> off, instance -> as given. One resolution here so the
     # generation site downstream only has to check for None.
     recommendation_config = resolve_recommendations(recommendations, RedTeamRecommendationConfig)
