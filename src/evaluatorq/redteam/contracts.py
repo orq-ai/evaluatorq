@@ -671,16 +671,36 @@ class RedTeamRecommendationConfig(RecommendationConfigBase):
     """
 
     max_areas: int = Field(default=5, ge=1)
-    """How many top risk areas get analyzed. Each is one LLM call."""
+    """How many *focus areas* get analyzed, ranked by risk score, one LLM call each.
 
-    max_traces: int = Field(default=10, ge=1)
-    """Failed traces sampled into the prompt per area."""
+    A focus area is a **framework category the run actually broke on** (``LLM06``,
+    ``ASI01``, …) — not a recommendation. Categories with no vulnerabilities found are
+    never candidates. This is a cost knob, not an output-length knob: lowering it drops
+    the lowest-risk categories from the analysis entirely, so they get no advice at all.
+    ``max_suggestions`` is what controls how much advice each analyzed area produces, so
+    the report carries at most ``max_areas * max_suggestions`` recommendations.
+    """
 
-    max_trace_chars: int = Field(default=500, ge=100)
-    """Per-trace budget for the attack prompt and the target's response."""
+    max_attacks: int = Field(default=10, ge=1)
+    """Failed attacks sampled into the prompt per area, for variety.
+
+    One attack is one ``RedTeamResult``: its conversation, the target's response, and the
+    judge's verdict. Unrelated to ``RedTeamResult.response_traces``, which is the
+    observability sense of the word.
+    """
+
+    max_attack_chars: int = Field(default=200_000, ge=100)
+    """Per-attack budget for the adversarial prompt and for the target's response.
+
+    ~200k chars is ~50k tokens each, so agentic responses carrying tool output survive
+    intact rather than being cut at the interesting part. It is a ceiling, not a
+    reservation — real attacks are far shorter, and only long ones pay. Note it applies
+    **per field per attack**: a full prompt costs ``max_attacks * 2 * max_attack_chars``,
+    so raising ``max_attacks`` alongside it can outgrow the analysis model's context.
+    """
 
     max_explanation_chars: int = Field(default=300, ge=50)
-    """Budget for the evaluator explanation attached to a sampled trace."""
+    """Budget for the evaluator explanation attached to a sampled attack."""
 
     max_suggestions: int = Field(default=5, ge=1)
     """Recommendations asked for, and kept, per focus area."""

@@ -59,8 +59,8 @@ def _format_trace(result: RedTeamResult, config: RedTeamRecommendationConfig) ->
     that the analysis LLM can distinguish untrusted content from instructions.
     """
     attack = result.attack
-    prompt = _truncate(extract_prompt(result), config.max_trace_chars)
-    response = _truncate(extract_response(result), config.max_trace_chars)
+    prompt = _truncate(extract_prompt(result), config.max_attack_chars)
+    response = _truncate(extract_response(result), config.max_attack_chars)
     explanation = _truncate(result.evaluation.explanation if result.evaluation else '', config.max_explanation_chars)
 
     parts = [
@@ -162,8 +162,9 @@ async def generate_focus_area_recommendations(
         report: The completed red team report.
         llm_client: AsyncOpenAI client for LLM calls.
         model: Model identifier for the analysis calls.
-        recommendations: How many areas and traces to analyze, the prompt's
-            truncation budgets, and the suggestion/token caps. Defaults when omitted.
+        recommendations: How many focus areas and failed attacks to analyze, the
+            prompt's truncation budgets, and the suggestion/token caps. Defaults
+            when omitted.
         llm_kwargs: Optional extra kwargs forwarded to the chat completion call.
         cfg: Pipeline LLM config; ``cfg.evaluator`` supplies temperature,
             extra_kwargs, and retry config so reasoning models
@@ -188,8 +189,8 @@ async def generate_focus_area_recommendations(
 
         # Sample traces for variety
         sampled = (
-            random.sample(vulnerable_results, min(limits.max_traces, len(vulnerable_results)))
-            if len(vulnerable_results) > limits.max_traces
+            random.sample(vulnerable_results, min(limits.max_attacks, len(vulnerable_results)))
+            if len(vulnerable_results) > limits.max_attacks
             else vulnerable_results
         )
         formatted_traces = [_format_trace(r, limits) for r in sampled]

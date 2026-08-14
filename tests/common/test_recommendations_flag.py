@@ -21,7 +21,7 @@ def test_false_means_skip(config_cls: type) -> None:
 
 
 def test_instance_passes_through() -> None:
-    tuned = RedTeamRecommendationConfig(max_areas=2, max_traces=3)
+    tuned = RedTeamRecommendationConfig(max_areas=2, max_attacks=3)
     assert resolve_recommendations(tuned, RedTeamRecommendationConfig) is tuned
 
     tuned_sim = SimulationRecommendationConfig(max_suggestions=7)

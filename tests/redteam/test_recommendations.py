@@ -437,8 +437,8 @@ async def test_config_drives_token_budget_and_suggestion_cap(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
-async def test_config_trace_budget_truncates_the_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The per-trace budget is a config field, not the old 500-char constant."""
+async def test_config_attack_budget_truncates_the_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The per-attack budget is a config field, not the old 500-char constant."""
     from evaluatorq.redteam.contracts import RedTeamRecommendationConfig
 
     long_result = _vulnerable_result()
@@ -460,7 +460,7 @@ async def test_config_trace_budget_truncates_the_prompt(monkeypatch: pytest.Monk
         _empty_report(),
         client,
         model='openai/gpt-5-mini',
-        recommendations=RedTeamRecommendationConfig(max_trace_chars=100),
+        recommendations=RedTeamRecommendationConfig(max_attack_chars=100),
     )
 
     user_prompt = captured['messages'][1]['content']
