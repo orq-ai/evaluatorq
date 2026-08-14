@@ -252,9 +252,9 @@ def auto_save_run(*, run: SimulationRun, run_name: str) -> Path:
 def write_report(run: SimulationRun, output: Path) -> None:
     """Write the full ``SimulationRun`` report JSON to an explicit path.
 
-    Unlike :func:`auto_save_run` (auto-named, collision-avoiding, fixed dir),
+    Unlike `auto_save_run` (auto-named, collision-avoiding, fixed dir),
     this honours the user-supplied path verbatim, creating parent dirs and
-    **overwriting** any existing file. Prefer :func:`auto_save_run` for routine
+    **overwriting** any existing file. Prefer `auto_save_run` for routine
     persistence — a fixed path here will clobber a prior run. Intentionally not
     part of the public package API; it backs the explicit ``report``/
     ``--report`` opt-in only.

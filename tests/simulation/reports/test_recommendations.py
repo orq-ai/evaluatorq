@@ -18,12 +18,14 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 from openai import APIStatusError
+from pydantic import ValidationError
 
 from evaluatorq.common.thread_context import evaluatorq_pipeline, evaluatorq_run_id
 from evaluatorq.contracts import Message, TokenUsage
 from evaluatorq.simulation.reports import export_html, export_markdown
 from evaluatorq.simulation.reports.recommendations import (
     _SuggestionsLLMResponse,
+    SimulationRecommendationConfig,
     find_triggers,
     generate_recommendations,
 )
@@ -146,6 +148,26 @@ def test_low_factual_accuracy_triggers():
     result = _make_result(goal_achieved=True, factual_accuracy=0.2)
     triggers = find_triggers(result)
     assert any(kind == 'low_factual_accuracy' for kind, _ in triggers)
+
+
+def test_config_threshold_overrides_default():
+    result = _make_result(goal_achieved=True, factual_accuracy=0.2)
+    config = SimulationRecommendationConfig(factual_accuracy_below=0.1)
+    assert find_triggers(result, config) == []
+
+
+def test_threshold_endpoints_disable_their_check():
+    """0.0 / 1.0 are documented as "never trigger on this metric" — assert they do that."""
+    result = _make_result(goal_achieved=True, factual_accuracy=0.0)
+    off = SimulationRecommendationConfig(factual_accuracy_below=0.0, hallucination_risk_above=1.0)
+    assert not [kind for kind, _ in find_triggers(result, off) if kind == 'low_factual_accuracy']
+
+
+def test_config_rejects_meaningless_values():
+    with pytest.raises(ValidationError):
+        SimulationRecommendationConfig(max_suggestions=0)
+    with pytest.raises(ValidationError):
+        SimulationRecommendationConfig(hallucination_risk_above=1.5)
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +296,55 @@ async def test_max_results_caps_llm_calls():
     assert client.chat.completions.parse.await_count == 2
 
 
+@pytest.mark.asyncio
+async def test_config_max_results_caps_llm_calls():
+    """The cap is a config field now; the keyword is an override on top of it."""
+    client = _mock_client(['fix it'])
+    results = [_make_result(goal_achieved=False, rules_broken=['r']) for _ in range(5)]
+
+    recs = await generate_recommendations(
+        results, client, 'test-model', config=SimulationRecommendationConfig(max_results=2)
+    )
+
+    assert len(recs) == 2
+    assert client.chat.completions.parse.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_config_max_results_is_overridden_by_the_keyword():
+    client = _mock_client(['fix it'])
+    results = [_make_result(goal_achieved=False, rules_broken=['r']) for _ in range(5)]
+
+    recs = await generate_recommendations(
+        results, client, 'test-model', max_results=1, config=SimulationRecommendationConfig(max_results=4)
+    )
+
+    assert len(recs) == 1
+
+
+@pytest.mark.asyncio
+async def test_config_drives_token_budget_and_prompt_budgets():
+    client = _mock_client(['fix it'])
+    result = _make_result(goal_achieved=False, rules_broken=['leaked data'])
+    result.messages = [Message(role='user', content='x' * 5000)]
+
+    await generate_recommendations(
+        [result],
+        client,
+        'test-model',
+        config=SimulationRecommendationConfig(
+            max_tokens=123, max_suggestions=9, max_message_chars=60, max_transcript_chars=200
+        ),
+    )
+
+    kwargs = client.chat.completions.parse.await_args.kwargs
+    assert kwargs['max_completion_tokens'] == 123
+    system, user = kwargs['messages']
+    assert 'a list of 1-9 concise' in system['content']
+    # Per-message budget bites first (60 + the ellipsis), then the transcript cap.
+    assert 'x' * 61 not in user['content']
+
+
 # ---------------------------------------------------------------------------
 # Rendering
 # ---------------------------------------------------------------------------
@@ -323,7 +394,12 @@ def test_find_triggers_resolves_rule_ids_and_dedupes():
     r = _make_result()
     r.rules_broken = ['criteria_0']
     r.metadata['criteria_meta'] = [
-        {'id': 'criteria_0', 'description': 'No internal identifiers leak.', 'type': 'must_not_happen', 'passed': False},
+        {
+            'id': 'criteria_0',
+            'description': 'No internal identifiers leak.',
+            'type': 'must_not_happen',
+            'passed': False,
+        },
     ]
     triggers = find_triggers(r)
     descs = [evidence for _, evidence in triggers]

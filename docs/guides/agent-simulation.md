@@ -320,6 +320,89 @@ One persona × one scenario yields one `SimulationResult` with `goal_achieved`,
 `goal_completion_score`, `turn_count`, `rules_broken`, and the full message
 transcript.
 
+### How criteria are scored
+
+The judge audits every `Criterion` on every turn and the runner folds those
+verdicts over the whole conversation, so a violation on turn 2 still shows up in a
+run that ends on turn 6:
+
+- **`must_happen`** passes if it occurred in *any* turn. Never occurring is a
+  failure — intent, plans, and paraphrases do not count.
+- **`must_not_happen`** fails if it was violated in *any* turn. One violation is
+  permanent; a clean later turn does not clear it.
+
+The judge is only ever asked **what occurred**, never what passed — a pass/fail
+flag means the opposite thing for the two criterion types, and models invert it.
+Occurrence is mapped to pass/fail in code, so `rules_broken` is derived, not
+reported. Failures land in `rules_broken` (criterion ids), `criteria_results`
+(description → passed), and the `criteria_met` score.
+
+Once a criterion is confirmed to have occurred it is settled — stickiness means a
+later turn cannot change it — so the judge is told to stop re-auditing it. It stays
+in the prompt (the judge still needs it to decide whether to stop early) but drops
+out of the per-turn audit payload, which otherwise costs an entry with an evidence
+quote per criterion per turn.
+
+Per-criterion detail is in `metadata['criteria_meta']`, where `audited` says whether
+the judge actually returned a verdict for that criterion:
+
+```python
+for c in result.metadata['criteria_meta']:
+    # `.get('audited') is False` — not `not c['audited']`: `None` (and an absent
+    # key, on a report saved before the field existed) means unknown, not "the
+    # judge skipped it".
+    if not c['passed'] and c.get('audited') is False:
+        print(f"{c['id']} failed by default — the judge never reported on it")
+```
+
+A `must_happen` the judge confirmed never occurred and one it silently skipped both
+show `passed: False`; only `audited` separates them. It is `None` for runs saved
+before the field existed.
+
+Each entry also carries **`evidence`** — the quote from the turn where the
+criterion's occurrence first flipped, taken from the judge's `criteria_verdicts`
+audit. It is `''` when the criterion never occurred (or occurred without a
+tracked quote) and `None` when no tracker was available, same as `audited`.
+
+Both keys reach the reports. A criterion that passed only because nobody audited
+it renders as **not audited** (a neutral `?`, never a green tick) in the dashboard,
+the HTML report and the markdown export, and is counted separately from the
+"N/M criteria met" tally; `evidence` is shown beside the criterion it justifies. A
+run with `criteria_verified = False` says so above the criteria list rather than
+showing a tally that contradicts its `criteria_met` score of `0.0`.
+
+The `criteria_met` score applies the same rule: an unaudited criterion is **not
+met**, so the score and the tally beside it agree. A criterion the judge settled
+early still counts — a verdict is what settles it — and `audited: None` (a run
+saved before the field existed) keeps the score it always had.
+
+!!! warning "A custom `judge=` must report per-criterion verdicts"
+
+    The built-in `JudgeAgent` audits each unsettled criterion every turn. A custom
+    judge that does not populate `Judgment.criteria_verdicts` falls back to the
+    pre-1.3 behaviour: pass/fail is inferred from its `rules_broken` list, so a
+    `must_happen` criterion **cannot fail**.
+
+    That run is marked `SimulationResult.criteria_verified = False`, the runner logs
+    a warning naming the scenario, and `criteria_met` scores it `0.0` — unknown, not
+    met. Check the field, not the transcript:
+
+    ```python
+    if result.criteria_verified is False:
+        print('criteria unverified — the judge returned no per-criterion audit')
+    ```
+
+    `criteria_verified` is `None` on runs saved before the field existed.
+
+A run that ends in an error or a timeout never reaches the audit either. Those
+results also score `criteria_met` as `0.0` (not `1.0`) and log a warning, so neither
+a crashed run nor an unaudited one can inflate the average. A target that dies
+mid-run keeps whatever the judge had already **confirmed** — a `must_not_happen` it
+saw violated stays failed — while a `must_happen` that simply had not happened yet
+is reported as **unknown**, never as failed. The run was cut short before that
+criterion had its chance: it is not the judge's verdict that nothing happened;
+nobody looked.
+
 The callable passed to `target` is the only structural difference from the Orq path —
 personas, scenarios, criteria, and the result shape are identical. Swap the
 callback body for any HTTP/LLM agent.
@@ -405,7 +488,8 @@ archetypes and situations your agent actually meets.
 
 The direct route is `eq sim from-traces`, which pulls recent traces from the Orq
 traces API and writes one datapoint per conversation — persona and scenario
-inferred from the transcript, first message taken from the real user verbatim:
+inferred from a short summary of it, opening message written from that persona
+and scenario:
 
 ```bash
 eq sim from-traces --output traces_datapoints.jsonl --limit 50 --lookback-hours 24
@@ -418,12 +502,134 @@ than only the recorded ones. The same thing is available from Python as
 `datapoints_from_traces()` and `extend_from_traces()`:
 
 ```python
-from evaluatorq.simulation import datapoints_from_traces
+from evaluatorq.simulation import (
+    datapoints_from_traces,
+    fetch_trace_conversations,
+    summarize_conversations,
+)
 
-datapoints = await datapoints_from_traces(limit=50, lookback_hours=24)
+conversations = await fetch_trace_conversations(limit=50)
+summaries = await summarize_conversations(conversations)
+datapoints = await datapoints_from_traces(conversations, summaries=summaries)
 ```
 
 Full flag list: [`eq sim from-traces`](../cli-reference/simulation.md).
+
+#### What happens between a trace and a datapoint
+
+Fetching is shared; both modes are then map-then-reduce. Each conversation is
+summarized on its own (the map), and the summaries — never the raw transcripts —
+go into the call that produces the output (the reduce). That is what keeps a
+prompt's size a function of *how many* traces there are rather than how long any
+one of them ran: before it, a single long agentic session crowded out the twenty
+short conversations it should have been weighed against.
+
+Both modes summarize unconditionally: every conversation gets exactly one
+summarize call, and nothing downstream reads the raw transcript again — direct
+mode's persona/scenario inference reads the summary, and so does extension
+mode's traffic-profile reduce. A run doing both calls `summarize_conversations`
+once and passes the result as `summaries=` to each, so no conversation is
+summarized twice.
+
+```mermaid
+flowchart TD
+    A["POST /v2/traces/v3oql<br/>paged listing"] --> B["GET /v2/traces/{id}/v3spans<br/>per trace, 5 at a time"]
+    B --> C["Reconstruct conversation<br/>root span first, then any span<br/>with messages; gen_ai attributes<br/>JSON-decoded"]
+    C --> D{"Has a usable<br/>user message?"}
+    D -- "no" --> E["Dropped, counted in a warning"]
+    D -- "yes" --> F["TraceConversation"]
+
+    F --> S["MAP: summarize_conversations<br/>one call per conversation, ~250 tokens,<br/>5 in flight, shared by both modes"]
+
+    S --> G["Direct mode<br/>datapoints_from_traces"]
+    S --> H["Extension mode<br/>extend_from_traces"]
+
+    G --> I["REDUCE: infer Persona + Scenario<br/>1 call per conversation"]
+    I --> J["Write the opening message<br/>from that persona and scenario<br/>--replay-first-message reuses<br/>the recorded one"]
+    J --> K["SimulationDatapoint<br/>id = trace-{trace_id}"]
+
+    H --> L["REDUCE: 1 call over up to 50 summaries<br/>repeat intents collapsed, not double-counted"]
+    L --> M["Traffic profile prose:<br/>intent mix and shares, tone and<br/>patience ranges, edge cases"]
+    M --> N["DatapointGenerator<br/>personas x scenarios<br/>grounded in that profile"]
+    N --> O["N new SimulationDatapoints<br/>synthetic, not replayed"]
+```
+
+Every LLM-side limit lives on `TraceAnalysisConfig`, passed as `config=` to either
+function; the fetch-side ones are fixed:
+
+| Limit | Default | Why |
+|---|---|---|
+| Rows per listing page | 200 | The API's own cap; pagination continues until `--limit` is met or a page adds nothing new |
+| Span fetches in flight | 5 | Politeness to the traces API |
+| LLM calls in flight | 5 | Same width the datapoint generator uses |
+| `summary_target_tokens` | 250 | Roughly how long a summary should be. **Soft** — it goes in the prompt, nothing cuts the result |
+| `max_reduce_summaries` | 50 | How many summaries the profile call carries; the rest are dropped with a warning naming the count |
+| `summary_max_tokens` | 10000 | Completion budget for a summarize call — reasoning headroom, not the length target |
+| `max_tokens` | 10000 | Completion budget for the inference and profile calls |
+| `generate_first_message` | `True` | Write the opening from the persona; `False` replays the recorded one |
+| `redact_pii` | `True` | Instruct the model to replace identifying values with placeholders as it writes |
+
+`summary_target_tokens` is a target, not a cut, and deliberately so. Truncating a
+summary removes its end, which is exactly where the prompt puts what went wrong
+and what was unusual — the two things the next step most needs. A length the
+model can aim at (models reason in tokens, not characters) buys a soft bound that
+keeps whole sentences. The reduce prompt's expected size is that target times
+`max_reduce_summaries`.
+
+The completion budgets, by contrast, are deliberately far above the answers they
+bound. Reasoning models spend most of a budget thinking before emitting anything,
+so a budget sized to the output gets consumed by reasoning tokens and truncates
+the answer to nothing — the prompt bounds the length, the budget bounds the
+failure. Truncation is never silent: `generate_structured` raises on a
+length-finished response on every path rather than handing back a cut-off object.
+
+Pagination stops when `--limit` is met, when the API says there is no more, or
+when a page returns rows that all lack a `trace_id` — a page that adds nothing
+cannot be followed by one that does, so that is where the loop ends, and it says
+so in a warning. There is no fixed page ceiling, so a large `--limit` is honoured
+for as many pages as it genuinely takes.
+
+A trace that fails its span fetch, returns a non-list payload, or yields no user
+message is dropped with a warning rather than failing the batch — likewise an
+inference or summarize call that raises or returns nothing parseable. Extension
+mode logs how many of the sampled conversations actually reached the profile,
+because that count is the denominator its shares are computed over. A run that
+produced fewer datapoints than traces has those warnings behind it.
+
+##### What lands in the generated dataset
+
+Trace-derived datapoints are built from real conversations, and a persona
+background or scenario context written straight from one carries whatever was in
+it — names, order numbers, emails — into a JSONL that then gets committed and
+shared. By default both the summarize and the persona/scenario prompts are
+instructed to redact as they write, replacing identifying values with
+placeholders (`[CUSTOMER_NAME]`, `[ORDER_ID]`) that keep the meaning; the profile
+prompt is told to carry placeholders through rather than invent concrete values.
+
+`--no-redact-pii` (or `TraceAnalysisConfig(redact_pii=False)`) turns it off, for
+when the concrete values are the point — reproducing a specific incident, or a
+fixture where a changed order number breaks the comparison — and the dataset
+stays somewhere the raw traffic could already go. With it off the profile prompt
+also drops its "keep the placeholders" line, since telling a model to preserve
+placeholders that were never introduced invites it to invent them, and invented
+placeholders read as redaction that did not happen.
+
+Either way this is an instruction to a model, not a guarantee. Treat a generated
+dataset from production traffic as needing the same review any export of that
+traffic would.
+
+##### Why the opening message is generated, not replayed
+
+Replaying the real user's first message looks like the faithful choice and
+behaves worse. The simulated user is the *persona*; if turn one is production
+text the persona would not have written, the conversation opens in one voice and
+continues in another, and whatever the agent does with that mismatch is not
+evidence about either. Reusing recorded text also carries any PII in it into a
+generated dataset that then gets committed and shared.
+
+`--replay-first-message` (or `TraceAnalysisConfig(generate_first_message=False)`)
+is the opt-out, for when you are reproducing one specific recorded case and want
+the exact opening back.
 
 #### Hand-picked seeds
 

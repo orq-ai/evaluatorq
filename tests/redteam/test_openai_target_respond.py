@@ -14,6 +14,7 @@ import pytest
 
 pytest.importorskip("openai")
 
+from evaluatorq.common import model_catalogue
 from evaluatorq.contracts import AgentResponse, FunctionCall, Message, StrategyToolCall
 from evaluatorq.redteam.backends.openai import OpenAIModelTarget
 
@@ -132,6 +133,32 @@ async def test_respond_preserves_tool_calls_in_replayed_transcript():
     tool_row = next(m for m in sent if m["role"] == "tool")
     assert tool_row["tool_call_id"] == "call_1"
     assert tool_row["content"] == "result-text"
+
+
+@pytest.mark.asyncio
+async def test_respond_prices_unpriced_usage_from_catalogue(monkeypatch: pytest.MonkeyPatch):
+    """RES-1295: an unpriced Chat Completions usage comes back priced, with
+    priced_calls == calls, once a catalogue entry exists for the model."""
+    model_catalogue.reset_catalogue_cache()
+
+    async def fake_load(client=None):  # noqa: ANN001, ARG001
+        return {"gpt-4o-mini": model_catalogue.ModelInfo(0.00025, 0.002, "openai", supports_responses=True)}
+
+    monkeypatch.setattr(model_catalogue, "_load_catalogue", fake_load)
+
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=_make_openai_response())
+    target = _make_target(client)
+
+    with patch("evaluatorq.redteam.tracing.get_tracer", return_value=None):
+        result = await target.respond([Message(role="user", content="hello")])
+
+    assert result.usage is not None
+    assert result.usage.calls == result.usage.priced_calls == 1
+    assert result.usage.total_cost is not None
+    assert result.usage.total_cost > 0
+
+    model_catalogue.reset_catalogue_cache()
 
 
 @pytest.mark.asyncio

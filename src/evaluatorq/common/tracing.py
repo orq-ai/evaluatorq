@@ -267,7 +267,7 @@ def record_token_usage(
     which key is authoritative. Also records the provider-reported cost
     breakdown (Orq Responses v3) when present.
 
-    ``usage`` accepts a :class:`evaluatorq.contracts.Usage` and expands it into
+    ``usage`` accepts a `evaluatorq.contracts.Usage` and expands it into
     the individual parameters; explicitly-passed parameters win over it.
     """
     if span is None:
@@ -508,7 +508,7 @@ async def with_span(  # noqa: RUF029
 ) -> AsyncGenerator[Span | None, None]:
     """Execute code within a generic INTERNAL span (not an LLM call span).
 
-    The neutral counterpart to :func:`with_llm_span` for orchestration spans
+    The neutral counterpart to `with_llm_span` for orchestration spans
     that group work (e.g. a jury deliberation and its per-judge children).
     ``get_tracer()``-gated, so it is a zero-cost no-op when tracing is off.
 

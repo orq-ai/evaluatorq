@@ -12,13 +12,16 @@ capture the exact generated inputs for reproducible re-runs, pass
 ``--datapoints PATH`` (then re-feed that file to ``sim simulate --input``).
 
 Usage:
-    evaluatorq sim generate --agent-description "..." --datapoints dp.jsonl
-    evaluatorq sim simulate --input dp.jsonl --target my-agent
-    evaluatorq sim run --agent-description "..." --openai-model gpt-4o-mini
-    evaluatorq sim run --agent-description "..." --target my-agent --datapoints dp.jsonl
-    evaluatorq sim export --input results.jsonl --output payload.json
-    evaluatorq sim validate-dataset dp.jsonl
-    evaluatorq sim runs
+
+```bash
+evaluatorq sim generate --agent-description "..." --datapoints dp.jsonl
+evaluatorq sim simulate --input dp.jsonl --target my-agent
+evaluatorq sim run --agent-description "..." --openai-model gpt-4o-mini
+evaluatorq sim run --agent-description "..." --target my-agent --datapoints dp.jsonl
+evaluatorq sim export --input results.jsonl --output payload.json
+evaluatorq sim validate-dataset dp.jsonl
+evaluatorq sim runs
+```
 """
 
 from __future__ import annotations
@@ -267,15 +270,6 @@ async def _generate_recommendations_async(results: list[Any], model: str) -> lis
 def _maybe_generate_recommendations(results: list[Any], model: str) -> list[Any] | None:
     """Generate recommendations from a synchronous CLI command such as export."""
     return asyncio.run(_generate_recommendations_async(results, model))
-
-
-def _recommendation_postprocessor(model: str) -> Any:
-    """Build a post-run hook that attaches recommendations under the root span."""
-
-    async def _attach(run: Any) -> None:
-        run.recommendations = await _generate_recommendations_async(run.results, model)
-
-    return _attach
 
 
 # ---------------------------------------------------------------------------
@@ -853,7 +847,7 @@ async def _simulate_impl(
         evaluator_names=evaluator_names,
         evaluation_name=evaluation_name,
         hooks=hooks,
-        post_run=_recommendation_postprocessor(sim_model) if recommendations else None,
+        recommendations=recommendations,
     )
 
 
@@ -1174,7 +1168,7 @@ async def _run_impl(
         evaluation_name=evaluation_name,
         emit_datapoints=emit,
         hooks=hooks,
-        post_run=_recommendation_postprocessor(sim_model) if recommendations else None,
+        recommendations=recommendations,
     )
 
 
@@ -1417,6 +1411,43 @@ def from_traces(
             ),
         ),
     ] = DEFAULT_MODEL,
+    replay_first_message: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option(
+            '--replay-first-message/--generate-first-message',
+            help=(
+                "Open each conversation with the real user's recorded first message "
+                'instead of one written from the inferred persona and scenario. '
+                'Faithful to the recording, but turn one then sounds like production '
+                'and every turn after it like the persona — and recorded text carries '
+                'whatever PII was in it into the dataset.'
+            ),
+        ),
+    ] = False,
+    redact_pii: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option(
+            '--redact-pii/--no-redact-pii',
+            help=(
+                'Instruct the model to replace identifying values (names, emails, '
+                'order numbers) with placeholders as it writes. On by default: these '
+                'datapoints come from real conversations and land in a file that gets '
+                'committed. Pass --no-redact-pii when the concrete values are the '
+                'point. Either way it is a model instruction, not a guarantee.'
+            ),
+        ),
+    ] = True,
+    max_summaries: Annotated[
+        int,
+        typer.Option(
+            '--max-summaries',
+            min=1,
+            help=(
+                'How many trace summaries the --extend traffic-profile call carries. '
+                'Traces beyond this are dropped from the profile with a warning.'
+            ),
+        ),
+    ] = 50,
     verbose: Annotated[
         int,
         typer.Option(
@@ -1435,19 +1466,31 @@ def from_traces(
 
     Fetches recent traces from the Orq traces API (requires ``ORQ_API_KEY``)
     and builds one datapoint per trace conversation: the persona and scenario
-    are inferred from the transcript, the first message is the real user's
-    opening message verbatim. Pass ``--extend N`` to additionally generate N
-    new datapoints matching the traffic distribution of the fetched traces.
-    Feed the output file to ``sim simulate --input`` to run.
+    are inferred from a short summary of the conversation — every conversation
+    is summarized once, and that one summary serves both the per-trace
+    datapoints and any ``--extend`` traffic profile — and the
+    opening message is written from that persona and scenario — pass
+    ``--replay-first-message`` to reuse the recorded one instead. Pass
+    ``--extend N`` to additionally generate N new datapoints matching the traffic
+    distribution of the fetched traces. Feed the output file to
+    ``sim simulate --input`` to run.
     """
     if quiet:
         verbose = -1
     _configure_logging(verbose)
 
     from evaluatorq.simulation.traces import (
+        TraceAnalysisConfig,
         datapoints_from_traces,
         extend_from_traces,
         fetch_trace_conversations,
+        summarize_conversations,
+    )
+
+    trace_config = TraceAnalysisConfig(
+        generate_first_message=not replay_first_message,
+        max_reduce_summaries=max_summaries,
+        redact_pii=redact_pii,
     )
 
     async def _impl() -> tuple[int, int, list[Any]]:
@@ -1465,7 +1508,13 @@ def from_traces(
             raise RuntimeError(
                 'No traces with a usable conversation found. Widen --lookback-hours, raise --limit, or drop --search.'
             )
-        datapoints = await datapoints_from_traces(conversations, model=sim_model)
+        summaries = await summarize_conversations(conversations, model=sim_model, config=trace_config)
+        datapoints = await datapoints_from_traces(
+            conversations,
+            model=sim_model,
+            config=trace_config,
+            summaries=summaries,
+        )
         num_direct = len(datapoints)
         if extend > 0:
             datapoints += await extend_from_traces(
@@ -1473,6 +1522,8 @@ def from_traces(
                 num_datapoints=extend,
                 agent_description=agent_description,
                 model=sim_model,
+                config=trace_config,
+                summaries=summaries,
             )
         return len(conversations), num_direct, datapoints
 

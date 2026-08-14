@@ -247,6 +247,24 @@ they would by chance:
 It is `None` when undefined, for example a single-judge run or fewer than two
 multi-judge samples.
 
+## Endpoint and retries
+
+`llm_jury()` and `PairwiseComparator` always send judge calls to the Orq
+router's `responses` endpoint (`api='responses'`) — the endpoint the router
+prices, so a jury verdict records cost the same way the call it judges does.
+There is no config knob to opt out; `run_judge` handles the cases that cannot
+use it on its own, falling back to Chat Completions for a client that does not
+route through the Orq router, a model the catalogue does not qualify for
+Responses, or a model that 400s on the endpoint.
+
+Retries happen at the `run_judge` layer, not the SDK's: with a default budget
+of one retry (`LLMCallConfig.retry_count=1`, i.e. up to two requests per judge
+call), `run_judge` disarms the SDK-level retry budget (`max_retries=0`) on
+whichever client it is given — the one either helper builds for itself when no
+`client=` is passed in, or a client you pass in yourself — so the two retry
+layers never stack. There is no way to keep an injected client's own SDK
+retries active alongside `run_judge`'s.
+
 ## Full example
 
 A complete red-teaming script covering repetitions, replacements, the

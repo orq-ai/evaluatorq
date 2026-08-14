@@ -1,10 +1,13 @@
 """Top-level CLI for evaluatorq.
 
 Usage:
-    evaluatorq redteam run --target agent:my-agent
-    evaluatorq dashboard .evaluatorq/runs
-    evaluatorq dashboard
-    evaluatorq dashboard /path/to/run.json
+
+```bash
+evaluatorq redteam run --target agent:my-agent
+evaluatorq dashboard .evaluatorq/runs
+evaluatorq dashboard
+evaluatorq dashboard /path/to/run.json
+```
 """
 
 from __future__ import annotations

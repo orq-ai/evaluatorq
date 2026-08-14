@@ -13,8 +13,10 @@ import pytest
     "module",
     [
         "evaluatorq.integrations.callable_integration.target",
+        "evaluatorq.integrations.crewai_integration.target",
         "evaluatorq.integrations.langgraph_integration.target",
         "evaluatorq.integrations.openai_agents_integration.target",
+        "evaluatorq.integrations.pydantic_ai_integration.target",
         "evaluatorq.integrations.vercel_ai_sdk_integration.target",
     ],
 )
@@ -35,24 +37,91 @@ def test_importing_integration_target_does_not_import_redteam(module: str) -> No
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
+        timeout=120,  # a hung optional-SDK import must fail this test, not stall the suite
     )
     assert proc.returncode == 0, proc.stderr
 
 
 @pytest.mark.parametrize(
-    "name",
-    ["OpenAIAgentTarget", "LangGraphTarget", "VercelAISdkTarget", "CallableTarget"],
+    "submodule",
+    [
+        "callable_integration",
+        "crewai_integration",
+        "langchain_integration",
+        "langgraph_integration",
+        "openai_agents_integration",
+        "pydantic_ai_integration",
+        "vercel_ai_sdk_integration",
+    ],
 )
-def test_framework_target_exposed_from_simulation(name: str) -> None:
+def test_from_integrations_import_submodule(submodule: str) -> None:
+    """`from evaluatorq.integrations import X` must not recurse.
+
+    The lazy loader used to do `from . import X` inside `__getattr__`; the
+    import machinery answers that by calling getattr on the package, which
+    re-enters `__getattr__` — RecursionError for every sub-module on 3.13.
+    Run in a subprocess so the sub-module is genuinely not yet imported;
+    in-process the attribute may already be bound by an earlier test.
+    """
+    proc = subprocess.run(
+        [sys.executable, "-c", f"from evaluatorq.integrations import {submodule}"],
+        capture_output=True,
+        text=True,
+        timeout=120,  # RecursionError is fast, but a hung import must not stall the suite
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_importing_the_package_pulls_in_no_integration_library() -> None:
+    """`import evaluatorq.integrations` must work on a base install.
+
+    `langchain_integration` was imported eagerly at module top, and its
+    `convert` module imports `langchain_core` — so the package that exists to
+    make optional dependencies optional required one of them to be installed.
+    """
+    code = (
+        "import sys\n"
+        "import evaluatorq.integrations\n"
+        "leaked = sorted({m.split('.')[0] for m in sys.modules} & "
+        "{'langchain', 'langchain_core', 'langgraph', 'agents', 'pydantic_ai', 'crewai'})\n"
+        "assert not leaked, leaked\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=120
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize(
+    ("name", "canonical"),
+    [
+        ("OpenAIAgentTarget", "evaluatorq.integrations.openai_agents_integration"),
+        ("LangGraphTarget", "evaluatorq.integrations.langgraph_integration"),
+        ("VercelAISdkTarget", "evaluatorq.integrations.vercel_ai_sdk_integration"),
+        ("CallableTarget", "evaluatorq.integrations.callable_integration"),
+        ("CrewAITarget", "evaluatorq.integrations.crewai_integration"),
+        ("PydanticAITarget", "evaluatorq.integrations.pydantic_ai_integration"),
+    ],
+)
+def test_framework_target_exposed_from_simulation(name: str, canonical: str) -> None:
+    """Identity, not just presence: a lazy mapping that resolved `CrewAITarget`
+    to `CallableTarget` would satisfy `hasattr` while handing callers the wrong
+    class."""
+    import importlib
+
     import evaluatorq.simulation as sim
 
     assert hasattr(sim, name), f"{name} not exposed from evaluatorq.simulation"
     assert name in sim.__all__
+    assert getattr(sim, name) is getattr(importlib.import_module(canonical), name)
 
 
 @pytest.mark.parametrize(
     ("name", "extra"),
-    [("LangGraphTarget", "langgraph"), ("OpenAIAgentTarget", "openai-agents")],
+    [
+        ("LangGraphTarget", "langgraph"),
+        ("OpenAIAgentTarget", "openai-agents"),
+    ],
 )
 def test_missing_optional_dep_gives_actionable_error(
     name: str, extra: str, monkeypatch: pytest.MonkeyPatch
@@ -67,6 +136,24 @@ def test_missing_optional_dep_gives_actionable_error(
     monkeypatch.setattr(sim.importlib, "import_module", _boom)
     with pytest.raises(ImportError, match=rf"evaluatorq\[{extra}\]"):
         sim.__getattr__(name)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["CriterionVerdict", "criterion_id_for", "CRITERION_ID_PATTERN"],
+)
+def test_criterion_id_helpers_exposed_from_simulation(name: str) -> None:
+    """RES-1308 CHANGELOG entry: `criterion_id_for`/`CRITERION_ID_PATTERN` (and
+    `CriterionVerdict`) are documented as public simulation exports. A prior
+    revision added `CriterionVerdict` to `_LAZY_IMPORTS`/`__all__` but never
+    exported the two helpers the CHANGELOG claimed alongside it, so
+    `from evaluatorq.simulation import criterion_id_for` raised ImportError."""
+    import evaluatorq.simulation as sim
+    from evaluatorq.simulation import types as sim_types
+
+    assert hasattr(sim, name), f"{name} not exposed from evaluatorq.simulation"
+    assert name in sim.__all__
+    assert getattr(sim, name) is getattr(sim_types, name)
 
 
 @pytest.mark.asyncio

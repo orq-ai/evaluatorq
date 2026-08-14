@@ -6,8 +6,20 @@ This file provides guidance to Claude Code when working in `packages/evaluatorq-
 
 Parallel agent sessions typically run in their own git worktree, so uncommitted
 changes you did not make may appear in the working tree from concurrent work.
-**Never `git stash` or `git reset`** to clean the tree — you would destroy another
-session's work. When committing, stage only the exact files your task changed.
+**Never run `git stash` (any subcommand) or `git reset`.** Not `stash` to clean
+the tree, and not `stash pop`/`apply` either: the stash holds other sessions'
+autostash entries, and popping one drops a merge into your tree and consumes the
+entry. `git checkout <path>` and `git checkout -- .` are equally destructive to
+uncommitted work you did not write. When committing, stage only the exact files
+your task changed.
+
+The same applies to every subagent you dispatch — say it in the dispatch prompt.
+A reviewer that "just needed a clean tree for a moment" has already popped
+another session's autostash once.
+
+To read a file as it is on HEAD without touching the tree, use
+`git show HEAD:<path>`. To see only your own changes on a shared dirty tree,
+diff the paths you touched: `git diff -- <your paths>`.
 
 ## Quick Reference
 
@@ -140,6 +152,7 @@ mode this table exists to prevent.
 | Normalising agent output shapes | `common.output_adapters`, `common.messages` | per-surface `isinstance` ladders |
 | Turning message content or a tool result into text | `contracts.content_to_text` / `tool_result_to_text` | `str()` on a `str \| list[ContentPart]` — it renders a Python repr that a judge then scores |
 | Building an Orq SDK client | `common.orq_client.resolve_orq_client` | `Orq(...)` anywhere but that module |
+| Rendering a transcript as Responses `input` | `openresponses.input_items.messages_to_responses_input` | a hand-built `{'role', 'content'}` list — an assistant turn needs `output_text` parts or the Orq router **silently drops it** |
 
 
 ## House rules
@@ -157,6 +170,7 @@ Distilled from review findings that recurred. Each cost a review round.
 - **Nothing stateful is shared across concurrent work.** `evaluate()` / `simulate()` / `red_team()` run datapoints concurrently: give each task its own target via `new()` (a shared `ORQAgentTarget` races on `_task_id`), and key per-item assignment on the dataset row, never on an arrival-order cursor. An `asyncio` primitive binds to the loop that first blocks on it — don't reuse one across loops.
 - **A new registry copies `vulnerability_registry.py`.** Assert `set(Enum) == set(registry)` at import time and freeze with `MappingProxyType`; a plain mutable dict drifts silently as the enum grows.
 - **Every filtered UI section renders an empty state.** A section that disappears on zero matches is indistinguishable from a bug.
+- **Never ask a judge for a verdict that inverts between types.** `must_happen` and `must_not_happen` mean opposite things by the same `passed` flag, and models get it backwards — gpt-5.4-mini marked a satisfied `must_happen` as unmet while its own `reason` said the opposite. Ask for the one factual thing (*did it occur?*) and map occurrence to pass/fail in code.
 - **Provider usage/cost shapes are not interchangeable.** Anthropic reports cache reads top-level where Orq/OpenAI nest them. Build the test fixture from the provider SDK's own models so a schema move fails the test instead of confirming the guess.
 
 Guardrails for the mechanical parts live in `tests/test_reuse_guardrails.py`.
@@ -254,7 +268,7 @@ or tag by hand on the normal path** — commit messages drive it.
 - On a release-worthy push the workflow: computes the next version, **pushes the tag `vX.Y.Z`**, builds the wheel/sdist (version derived from the tag), **publishes to PyPI via token auth** (the `PYPI_TOKEN` repo secret, passed to `pypa/gh-action-pypi-publish`), then creates a GitHub Release with PR-based auto-notes (`.github/release.yml` controls the categories — merged PRs + contributor attributions).
 - **Never write a breaking commit without explicit approval.** Do not use `feat!:`/`fix!:` or a `BREAKING CHANGE:` footer unless the user has explicitly approved a major release for that change. A single one halts **all** releases (see next bullet) until a human forces a bump — in July 2026 three `!` commits froze PyPI on `v1.10.1` for 24 days and 317 commits, and the client bug that surfaced it was already fixed in an unreleased commit. If a change is genuinely breaking, ask first; otherwise land it as `feat:`/`fix:`/`refactor:` and describe the break in the PR body.
 - **Accidental majors are refused.** A computed `major` bump is skipped unless you re-run via **workflow_dispatch** with `force_level=major`. Use `force_level=minor`/`patch` to override the computed level (e.g. to ship breaking changes as a minor deliberately). The refusal **fails the run** (`::error::` + `exit 1`) so a blocked release is visible; a genuine no-op (e.g. a `docs:`-only push, nothing to release) still exits 0 and stays green. The `!` commits stay in range until someone releases, so the block is permanent, not transient — a red Release run means act, not retry.
-- There is no committed `CHANGELOG.md`; the human-readable changelog is the GitHub Release notes. Release notes are created last and are non-blocking — a notes failure never blocks the PyPI publish.
+- The GitHub Release notes are generated from merged PRs and are created last, non-blocking — a notes failure never blocks the PyPI publish. The committed `CHANGELOG.md` is hand-written and separate from them: a behaviour change to a public default belongs under its `### Notable defaults` section in the same PR, not only in a docstring.
 - PyPI publishing uses the **`PYPI_TOKEN`** repo secret (an API token). To switch to OIDC trusted publishing later, configure a **Trusted Publisher** on PyPI for this repo + `release.yml` (PyPI → project → Publishing) and delete the `with: password:` block in the publish step — `id-token: write` is already granted.
 
 ### Docs
@@ -274,3 +288,13 @@ Read it when adding anything users choose between; **a new dimension means editi
 that file in the same PR**, or coverage checking silently stops seeing it.
 
 Rules live in the skills, not here. Both are under `.claude/skills/`.
+
+**Fence every code sample in a docstring, with a language.** An indented block or an
+RST `Example::` literal reaches Pygments with no lexer and renders as grey text; nothing
+warns, and `mkdocs build --strict` stays green. Keep the body under `Example:` / `Usage:`
+**un-indented** — griffe only opens a Google section when the body is indented, and an
+indented fence inside a `cleandoc`-ed docstring becomes a literal code block instead.
+In `examples/*.py`, a fence inside the module docstring is embedded in the generated
+page's own fence, so it must stay 3 backticks — `write_example_pages` widens the outer
+one to compensate. `docs/hooks.py` fails the build on any unhighlighted block, on
+**every** page; the two exemptions there are prose diagrams, not an escape hatch.

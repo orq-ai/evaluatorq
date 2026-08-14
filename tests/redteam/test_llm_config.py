@@ -137,18 +137,6 @@ def test_retry_extra_body_empty_for_client_without_base_url():
     assert cfg.retry_extra_body(None) == {}
 
 
-@pytest.mark.asyncio
-async def test_red_team_accepts_legacy_config_keyword(monkeypatch):
-    from evaluatorq.redteam import red_team
-    from evaluatorq.redteam.exceptions import CredentialError
-
-    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
-    monkeypatch.delenv('ORQ_API_KEY', raising=False)
-
-    with pytest.deprecated_call(match='config= is deprecated'), pytest.raises(CredentialError):
-        await red_team('agent:test', config=LLMConfig())
-
-
 # ---------------------------------------------------------------------------
 # completion_params: extra_kwargs must merge, never collide
 # ---------------------------------------------------------------------------

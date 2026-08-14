@@ -1,12 +1,12 @@
 """Black-box agent capability classification via conversational probing.
 
-The white-box classifier (:mod:`capability_classifier`) needs an
+The white-box classifier (`capability_classifier`) needs an
 ``AgentContext`` with explicit ``tools`` / ``memory_stores`` /
 ``knowledge_bases``. When those are absent — third-party agents, opaque
 deployments, agents configured outside ORQ — it is blind and the strategy
 planner falls back to optimistic inclusion.
 
-This module infers the same :class:`AgentCapabilities` from the agent's
+This module infers the same `AgentCapabilities` from the agent's
 replies alone: it sends a small set of targeted probes through the agent's own
 ``respond()`` interface (so it works with any backend), then a single LLM
 judge call reads the transcript and decides which capabilities the agent
@@ -131,7 +131,7 @@ class BlackboxAgentCapabilities(AgentCapabilities):
 class BlackboxCapabilityInference(BaseModel):
     """Structured judge output: which capabilities the transcript demonstrates.
 
-    One flag per probe-tractable :class:`AgentCapability`. The judge sees only
+    One flag per probe-tractable `AgentCapability`. The judge sees only
     the probe transcript (agent's own words), never internal config.
     """
 
@@ -341,6 +341,13 @@ async def _judge_transcript(
         input_messages=judge_messages,
         attributes={'orq.redteam.llm_purpose': 'blackbox_classify'},
     ) as span:
+        # RES-1295: this call extracts no usage, so its tokens never reach any
+        # total. `classify_agent_capabilities_blackbox` returns
+        # `BlackboxCapabilityInference` with no usage field, and the function
+        # is not currently wired into any pipeline (exported but uncalled
+        # outside tests) — adding a sink here would mean widening a public
+        # return type for a path nothing exercises yet. See "What the totals
+        # do not include" in docs/guides/red-teaming.md.
         response = await llm_client.chat.completions.parse(
             model=model,
             messages=judge_messages,
@@ -385,7 +392,7 @@ async def classify_agent_capabilities_blackbox(
     execution, web request, file system, multi-agent) through
     ``agent_target.respond()``, then a single LLM judge call infers the
     capabilities from the agent's replies. Returns the same
-    :class:`AgentCapabilities` type as the white-box classifier.
+    `AgentCapabilities` type as the white-box classifier.
 
     Args:
         agent_target: The opaque agent to probe (any backend implementing

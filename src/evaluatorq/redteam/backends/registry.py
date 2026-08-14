@@ -29,7 +29,7 @@ def create_async_llm_client(
 ) -> AsyncOpenAI:
     """Create an OpenAI-compatible async client.
 
-    Thin red-team wrapper over :func:`evaluatorq.common.llm_client.resolve_llm_client`
+    Thin red-team wrapper over `evaluatorq.common.llm_client.resolve_llm_client`
     (the single source of truth for env-var precedence). If ``role_config.client``
     is set it is returned directly; otherwise the client is auto-detected.
 
@@ -42,8 +42,12 @@ def create_async_llm_client(
     to produce the OpenAI-compatible completions endpoint.
 
     ``max_retries`` feeds the SDK's client-side retry budget (pass
-    ``LLMConfig.retry_count``); ``None`` keeps the SDK default. It is the single
-    client-side retry layer — no per-call wrapper is added on top.
+    ``LLMConfig.retry_count``); ``None`` keeps the SDK default. Callers that own
+    retry themselves — the judge via ``with_retry``, ``OrqResponsesTarget`` — must
+    not stack a second budget underneath their own; ``run_judge``'s
+    ``_without_client_retries`` helper (``evaluatorq.common.judge``) enforces
+    that by disarming the client it is given, so a client built here and handed to
+    a judge comes back with ``max_retries=0``.
     """
     from evaluatorq.common.llm_client import MissingLLMCredentialsError, resolve_llm_client
 

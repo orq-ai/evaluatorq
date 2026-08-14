@@ -165,3 +165,76 @@ def test_detection_actually_fires(source: str, predicate: object, expected: bool
     """A guardrail nobody proved can fail is a guardrail that silently no-ops."""
     assert callable(predicate)
     assert any(predicate(name) for _, name in _calls(source)) is expected
+
+
+def _hand_written_properties_dict_lines(source: str) -> list[int]:
+    """Line numbers of dict literals mapping a literal ``'properties'`` key to a
+    literal dict of field definitions.
+
+    AST-based so a docstring or comment mentioning ``properties`` is not a hit,
+    and a value that happens to equal the string ``'properties'`` (not a key)
+    is not one either. An *empty* ``'properties': {}`` is not flagged — that is
+    a "this tool takes no parameters" fallback, not a hand-rolled schema with
+    fields a pydantic model should own instead.
+    """
+    return [
+        node.lineno
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Dict)
+        for key, value in zip(node.keys, node.values, strict=True)
+        if isinstance(key, ast.Constant) and key.value == 'properties' and isinstance(value, ast.Dict) and value.keys
+    ]
+
+
+# Scope: the whole package. The judge's tool schemas (simulation/) are where
+# RES-1308's schema/parser drift happened, but the remedy — generate the schema
+# from a pydantic model — applies just as well to a future hand-rolled schema in
+# redteam/, openresponses/ or integrations/, and the measured hit count repo-wide
+# is 0, so the wider scope costs nothing and catches more. A schema genuinely
+# handed to a provider verbatim is the escape hatch named in the failure message.
+_HAND_WRITTEN_PROPERTIES_ROOT = SRC
+
+
+@cache
+def _hand_written_properties_hits() -> list[str]:
+    return [
+        f'{path.relative_to(SRC).as_posix()}:{lineno}'
+        for path in sorted(_HAND_WRITTEN_PROPERTIES_ROOT.rglob('*.py'))
+        for lineno in _hand_written_properties_dict_lines(path.read_text(encoding='utf-8'))
+    ]
+
+
+def test_no_hand_written_json_schema_properties_dicts() -> None:
+    """A JSON-schema `'properties': {...}` dict literal is a schema written by hand.
+
+    RES-1308 happened because a hand-written tool schema and the parser reading
+    it drifted apart. `judge.py`'s two tool schemas are generated from pydantic
+    models via `_wire_schema` / `model_json_schema()` for exactly this reason;
+    this measured 3 hits in `simulation/` before that refactor and 0 after — and
+    0 across the whole package, which is why the scope is package-wide. A hit
+    here means a schema is being hand-rolled again — define a `pydantic.BaseModel`
+    and generate its schema instead (see `judge.py`'s `_wire_schema`).
+
+    The scope is all of `src/evaluatorq/`; see `_HAND_WRITTEN_PROPERTIES_ROOT`.
+    """
+    hits = _hand_written_properties_hits()
+    assert not hits, (
+        "Hand-written JSON-schema 'properties' dict literal: "
+        + ', '.join(hits)
+        + '. Define a pydantic BaseModel and generate the schema via model_json_schema() '
+        '/ _wire_schema (see simulation/agents/judge.py) instead of hand-writing it. '
+        'Escape hatch: a schema this package hands to a provider verbatim and never '
+        'parses back (an HTTP/json_schema evaluator definition) — add that one path to '
+        'an explicit exemption here, with the reason, rather than narrowing the scope.'
+    )
+
+
+def test_hand_written_properties_detector_actually_fires() -> None:
+    """A guardrail nobody proved can fail is a guardrail that silently no-ops."""
+    assert _hand_written_properties_dict_lines('x = {"properties": {"a": {"type": "string"}}}') == [1]
+    assert _hand_written_properties_dict_lines('x = {"foo": "properties"}') == []
+    assert _hand_written_properties_dict_lines('# {"properties": {}}') == []
+    assert _hand_written_properties_dict_lines('"""Docstring mentions properties."""') == []
+    # An empty properties dict is "no parameters", not a hand-rolled schema —
+    # this is the real shape at simulation/agents/base.py's Responses fallback.
+    assert _hand_written_properties_dict_lines('x = {"type": "object", "properties": {}}') == []

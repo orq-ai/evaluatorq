@@ -119,7 +119,7 @@ async def amain(args: argparse.Namespace) -> int:
         vulnerabilities=vulns,
         llm_config=llm_config,
         llm_client=orq_openai_client,
-        generate_recommendations=False,
+        recommendations=False,
         max_turns=5,
         max_per_category=args.max_per_category,
         parallelism=args.parallelism,

@@ -211,12 +211,7 @@ async def _infer_resource_capabilities(
     cfg = cfg or PIPELINE_CONFIG
     tool_list = '\n'.join(f'- {t.name}: {t.description or "No description"}' for t in agent_context.tools) or '- none'
     instructions = (agent_context.instructions or agent_context.system_prompt or '(none)').strip() or '(none)'
-    # Cap token contribution: production system prompts can be 10k+ tokens, and this
-    # call runs per classified target. 2000 chars is ample signal for is_multi_agent.
-    instructions = instructions[:2000]
-    # Same cost / prompt-injection bound as instructions; 500 chars is conclusive
-    # for is_multi_agent ("orchestrator that routes tasks between worker agents").
-    description = (agent_context.description or '(none)')[:500]
+    description = agent_context.description or '(none)'
     prompt = safe_substitute(
         RESOURCE_CAPABILITY_PROMPT,
         {
@@ -236,6 +231,11 @@ async def _infer_resource_capabilities(
             input_messages=infer_messages,
             attributes={'orq.redteam.llm_purpose': 'infer_resources'},
         ) as res_span:
+            # RES-1295: `execute_chat_parse` prices this call, but the returned
+            # `Usage` is discarded here — `_infer_resources` returns bare
+            # `ResourceCapabilityInference`, with no sink to carry the usage to
+            # a run total. Real spend, uncounted. See "What the totals do not
+            # include" in docs/guides/red-teaming.md.
             response, _ = await execute_chat_parse(
                 client=llm_client,
                 model=model,
@@ -303,6 +303,11 @@ async def _classify_tools(
                 'orq.redteam.num_tools': len(agent_context.tools),
             },
         ) as cls_span:
+            # RES-1295: `execute_chat_parse` prices this call, but the returned
+            # `Usage` is discarded here — `_classify_tools` returns a bare
+            # capabilities dict, with no sink to carry the usage to a run
+            # total. Real spend, uncounted. See "What the totals do not
+            # include" in docs/guides/red-teaming.md.
             response, _ = await execute_chat_parse(
                 client=llm_client,
                 model=model,

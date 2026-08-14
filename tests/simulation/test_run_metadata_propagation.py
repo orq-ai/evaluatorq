@@ -222,29 +222,38 @@ async def test_simulate_stamps_run_id_on_root_span(
 
 
 @pytest.mark.asyncio
-async def test_post_run_processor_stays_under_pipeline_root(
+async def test_recommendation_generation_stays_under_pipeline_root(
     span_collector: _CollectingExporter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Post-run LLM work inherits both the root span and its run metadata."""
+    """In-core recommendation work inherits both the root span and its run metadata."""
     from evaluatorq.simulation import api
     from evaluatorq.simulation.api import _simulate_run
+    from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig
     from evaluatorq.simulation.tracing import with_llm_span
 
     async def fake_core(**kwargs: Any) -> Any:
         run = MagicMock(results=[])
-        await kwargs['post_run'](run)
+        await api._attach_recommendations(run, kwargs['config'].recommendations, 'test')  # noqa: SLF001
         return run
 
-    monkeypatch.setattr(api, '_simulate_core', fake_core)
-
-    async def post_run(_run: Any) -> None:
+    async def fake_generate(*_args: Any, **_kwargs: Any) -> list[Any]:
         assert pipeline_metadata() == {
             'evaluatorq_pipeline': 'agent_simulation',
             'evaluatorq_run_id': pipeline_metadata()['evaluatorq_run_id'],
         }
         async with with_llm_span(model='recommendation-model', purpose='recommendations'):
-            pass
+            return []
+
+    monkeypatch.setattr(api, '_simulate_core', fake_core)
+    monkeypatch.setattr(
+        'evaluatorq.simulation.reports.recommendations.generate_recommendations',
+        fake_generate,
+    )
+    monkeypatch.setattr(
+        'evaluatorq.common.llm_client.resolve_llm_client',
+        lambda *a, **k: SimpleNamespace(client=MagicMock(), owned=False),
+    )
 
     await _simulate_run(
         target=lambda messages: 'ok',
@@ -252,7 +261,7 @@ async def test_post_run_processor_stays_under_pipeline_root(
         sim_model='test',
         upload_results=False,
         executive_summary=False,
-        post_run=post_run,
+        recommendations=SimulationRecommendationConfig(),
     )
 
     root = _find(span_collector, 'Evaluatorq - Agent Simulation')

@@ -16,11 +16,15 @@ from evaluatorq.simulation.reports.apply import (
 )
 from evaluatorq.simulation.reports.export_html import export_html
 from evaluatorq.simulation.reports.export_md import export_markdown
-from evaluatorq.simulation.reports.recommendations import generate_recommendations
+from evaluatorq.simulation.reports.recommendations import (
+    SimulationRecommendationConfig,
+    generate_recommendations,
+)
 from evaluatorq.simulation.reports.sections import build_report_sections
 
 __all__ = [
     'ApplySuggestionsResult',
+    'SimulationRecommendationConfig',
     'apply_suggestions',
     'build_report_sections',
     'export_html',

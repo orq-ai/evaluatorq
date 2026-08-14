@@ -78,6 +78,7 @@ def wrap_langchain_agent(
     Creates an evaluatorq Job from a LangChain agent.
 
     The job will:
+
     - Execute the agent with the prompt from data.inputs[prompt_key]
     - Convert the result to OpenResponses format (industry standard)
     - Return the OpenResponses resource for backend integration

@@ -109,7 +109,7 @@ def _plurality_vote(values: Sequence[VerdictValue]) -> tuple[VerdictValue | None
 
 def _numeric_reduce(values: Sequence[VerdictValue], how: NumericAggName) -> float | None:
     """Reduce numeric verdicts to one float. ``mean_std`` returns the mean (the
-    std rides along in :func:`_jury_stats`); ``median``/``min``/``max`` are exact."""
+    std rides along in `_jury_stats`); ``median``/``min``/``max`` are exact."""
     nums = [float(v) for v in values if isinstance(v, (int, float)) and not isinstance(v, bool)]
     if not nums:
         return None
@@ -333,7 +333,7 @@ def _record_judge_span(span: Span | None, vote: JuryVote, *, latency_ms: float, 
     """Set the outcome ``judge.*`` attributes on a judge span from its vote.
 
     Identity (``judge.name`` / ``judge.model`` / ``judge.replacement`` /
-    ``judge.label_swapped``) is already stamped by :func:`_judge_vote` at
+    ``judge.label_swapped``) is already stamped by `_judge_vote` at
     span-open and cannot change here, so it is not re-written. The verdict is
     stringified so bool / float / str verdicts share one attribute type.
 
@@ -507,8 +507,8 @@ async def run_jury(
     ``orq.evaluation`` -> ``orq.jury`` -> ``orq.judge`` -> ``chat {model}``.
 
     Comparative mode needs one jury span across BOTH label orderings, so it
-    drives :func:`_run_jury_core` directly rather than calling this function
-    twice; see :func:`evaluatorq.pairwise.run_pairwise`.
+    drives `_run_jury_core` directly rather than calling this function
+    twice; see `evaluatorq.pairwise.run_pairwise`.
     """
     async with with_span('orq.jury') as jury_span:
         # Captured once and threaded into each judge so per-judge spans parent
@@ -601,9 +601,9 @@ async def _run_jury_core(
     label_swapped: bool | None = None,
     replacement: bool = False,
 ) -> JuryDeliberation:
-    """Panel deliberation + aggregation (see :func:`run_jury` for semantics).
+    """Panel deliberation + aggregation (see `run_jury` for semantics).
 
-    Split out so :func:`run_jury` owns only the span; ``parent_context`` is the
+    Split out so `run_jury` owns only the span; ``parent_context`` is the
     jury span's context, threaded into each judge span. ``replacement=True``
     marks the WHOLE panel as stand-ins — comparative mode promotes replacements
     at the pair level and runs them through a second core call, so without it

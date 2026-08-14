@@ -4,9 +4,11 @@ Implements the judge-aware Bradley-Terry family from "Who can we trust?
 LLM-as-a-jury for Comparative Assessment" (arXiv:2602.16610), whose model class
 is independently derived with identifiability and consistency proofs in
 arXiv:2601.21817. Given pairwise comparisons from K judges, it jointly fits
-latent item skills ``s_i`` and per-judge discriminators ``sigma_k``::
+latent item skills ``s_i`` and per-judge discriminators ``sigma_k``:
 
-    P_k(i beats j) = logistic((s_i - s_j) / sigma_k)
+```text
+P_k(i beats j) = logistic((s_i - s_j) / sigma_k)
+```
 
 by unsupervised maximum likelihood on the run's own comparisons - no human
 labels, no training data. A small ``sigma_k`` marks a sharp, internally
@@ -26,7 +28,7 @@ Everything is pure Python on purpose: the parameter space is tiny (N items +
 K judges) and evaluatorq's runtime dependency set stays unchanged (no
 scipy/numpy). The cost is O(iterations x records) with iterations growing with
 the data, so collapse repeated identical judgements into one record with a
-``weight`` (see :class:`JudgedComparison`) before fitting large runs — the
+``weight`` (see `JudgedComparison`) before fitting large runs — the
 pairwise ``bt_sigma_aggregation`` does this and stays fast at any run size;
 an uncollapsed fit over thousands of records can take seconds.
 

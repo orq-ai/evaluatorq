@@ -130,7 +130,7 @@ def _build_objective_prompt(
         ', '.join(m.key or m.id for m in agent_context.memory_stores) if agent_context.memory_stores else 'None'
     )
     prompt_text = agent_context.instructions or agent_context.system_prompt or ''
-    instructions_excerpt = prompt_text[:500] + '...' if prompt_text else 'Not available'
+    instructions_excerpt = prompt_text or 'Not available'
 
     if turn_type is None:
         turn_type_guidance = (
@@ -207,6 +207,11 @@ async def _call_llm_for_objectives_single(
             async def _generate(attempt: int) -> Any:
                 if attempt > 0:
                     logger.debug(f'Regenerating objectives for {log_label} (attempt {attempt + 1})')
+                # RES-1295: `execute_chat_parse` prices this call, but the
+                # returned `Usage` is discarded here — this generator returns
+                # a bare `GeneratedObjectives`, with no sink to carry the
+                # usage to a run total. Real spend, uncounted. See "What the
+                # totals do not include" in docs/guides/red-teaming.md.
                 response, _ = await execute_chat_parse(
                     client=llm_client,
                     model=model,

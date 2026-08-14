@@ -37,6 +37,7 @@ from evaluatorq.redteam.adaptive.strategy_registry import (
     list_available_categories as list_categories,
 )
 from evaluatorq.redteam.backends.openai import OpenAIModelTarget
+from evaluatorq.redteam.backends.orq import ORQAgentTarget
 from evaluatorq.redteam.backends.registry import register_backend
 from evaluatorq.redteam.contracts import (
     OWASP_ASI_TOP_10,
@@ -75,6 +76,7 @@ from evaluatorq.redteam.contracts import (
     PipelineStage,
     ReasoningOutputItem,
     RedTeamInput,
+    RedTeamRecommendationConfig,
     RedTeamReport,
     RedTeamResult,
     ReportSnapshot,
@@ -161,6 +163,7 @@ __all__ = [
     'LLMConfig',
     'MemoryStoreInfo',
     'Message',
+    'ORQAgentTarget',
     'OpenAIModelTarget',
     # Result models
     'OrchestratorResult',
@@ -174,6 +177,7 @@ __all__ = [
     'RedTeamError',
     # Input models
     'RedTeamInput',
+    'RedTeamRecommendationConfig',
     # Core public types
     'RedTeamReport',
     'RedTeamResult',

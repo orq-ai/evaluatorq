@@ -21,6 +21,7 @@ from pydantic import (
 )
 from typing_extensions import NotRequired, TypedDict
 
+from evaluatorq.common.recommendations import RecommendationConfigBase
 from evaluatorq.common.target_call import classify_error_type as classify_error_type
 from evaluatorq.contracts import RunSummary, StrEnum
 
@@ -48,7 +49,7 @@ class AttackTechnique(StrEnum):
 
     This enum tracks *known* techniques for internal validation and reporting.
     External datasets may contain additional values — use
-    :func:`is_known_attack_technique` to check membership without failing.
+    `is_known_attack_technique` to check membership without failing.
     """
 
     # Injection
@@ -88,14 +89,14 @@ class AttackTechnique(StrEnum):
 
 
 def is_known_attack_technique(value: str) -> bool:
-    """Check whether *value* is a known :class:`AttackTechnique` member."""
+    """Check whether *value* is a known `AttackTechnique` member."""
     return value in AttackTechnique.__members__.values()
 
 
 class DeliveryMethod(StrEnum):
     """Known jailbreak and delivery techniques.
 
-    See :class:`AttackTechnique` — the same open-set policy applies.
+    See `AttackTechnique` — the same open-set policy applies.
     """
 
     # Persona/Role-play
@@ -126,7 +127,7 @@ def is_known_delivery_method(value: str) -> bool:
     """Check whether *value* is a known delivery method (enum plus registered).
 
     Delegates to the delivery-method registry so registered custom methods count
-    as known. Lazy import: the registry imports :class:`DeliveryMethod` from this
+    as known. Lazy import: the registry imports `DeliveryMethod` from this
     module, so importing it at module top level would be a cycle.
     """
     from evaluatorq.redteam.delivery_method_registry import is_known_delivery_method as _is_known
@@ -353,12 +354,14 @@ def normalize_category(category: str) -> str:
     """Strip 'OWASP-' prefix from category codes.
 
     Examples:
+        ```pycon
         >>> normalize_category("OWASP-ASI01")
         'ASI01'
         >>> normalize_category("ASI01")
         'ASI01'
         >>> normalize_category("OWASP-LLM01")
         'LLM01'
+        ```
     """
     return category.removeprefix('OWASP-')
 
@@ -590,12 +593,26 @@ class EvaluatorConfig(BaseModel):
         min_length=1,
         description='Judge model IDs. judges[0] is the primary evaluator model.',
     )
-    api: Literal['chat_completions', 'responses'] = 'chat_completions'
+    api: Literal['chat_completions', 'responses'] = Field(
+        default='responses',
+        description='Endpoint judges call. Defaults to responses: it is the endpoint the Orq '
+        'router prices, so judge calls record cost like target calls do. Set to '
+        'chat_completions to opt out; a model the router cannot resolve on responses falls '
+        'back to chat completions on its own.',
+    )
     temperature: float = Field(default=1.0, ge=0.0, le=2.0)
     max_tokens: int = Field(default=DEFAULT_TARGET_MAX_TOKENS, gt=0)
     timeout_ms: int = Field(default=90_000, gt=0)
     extra_kwargs: dict[str, Any] = Field(default_factory=dict)
     client: _Client = None
+    retry_count: int = Field(
+        default=1,
+        ge=0,
+        description='Retries per judge call (after the initial call) on rate limits, 5xx and '
+        'transport failures. Same semantics as LLMConfig.retry_count, but this is the judge-side '
+        'budget, distinct from that target-side one. 0 disables retry — a failing judge then '
+        'falls to the panel machinery (replacement_judges / min_successful_judges) immediately.',
+    )
     repetitions: int = Field(default=1, ge=1)
     replacement_judges: list[str] = Field(default_factory=list)
     min_successful_judges: int = Field(default=1, ge=1)
@@ -638,6 +655,7 @@ class EvaluatorConfig(BaseModel):
             timeout_ms=self.timeout_ms,
             extra_kwargs=self.extra_kwargs,
             client=self.client,
+            retry_count=self.retry_count,
         )
 
     @model_validator(mode='after')
@@ -658,18 +676,96 @@ class EvaluatorConfig(BaseModel):
         return self
 
 
+class RedTeamRecommendationConfig(RecommendationConfigBase):
+    """Tunable limits for focus-area recommendation generation.
+
+    Pass an instance as ``recommendations=RedTeamRecommendationConfig(...)`` to
+    ``red_team``; ``recommendations=True`` uses these defaults and ``False`` skips the
+    LLM call entirely. ``SimulationRecommendationConfig`` is the agent-simulation twin —
+    both inherit the shared caps from ``RecommendationConfigBase``.
+    """
+
+    max_areas: int = Field(default=5, ge=1)
+    """How many *focus areas* get analyzed, ranked by risk score, one LLM call each.
+
+    A focus area is a **framework category the run actually broke on** (``LLM06``,
+    ``ASI01``, …) — not a recommendation. Categories with no vulnerabilities found are
+    never candidates. This is a cost knob, not an output-length knob: lowering it drops
+    the lowest-risk categories from the analysis entirely, so they get no advice at all.
+    ``max_suggestions`` is what controls how much advice each analyzed area produces, so
+    the report carries at most ``max_areas * max_suggestions`` recommendations.
+    """
+
+    max_attacks: int = Field(default=10, ge=1)
+    """Failed attacks sampled into the prompt per area, for variety.
+
+    One attack is one ``RedTeamResult``: its conversation, the target's response, and the
+    judge's verdict. Unrelated to ``RedTeamResult.response_traces``, which is the
+    observability sense of the word.
+    """
+
+    max_attack_chars: int = Field(default=200_000, ge=100)
+    """Per-attack budget for the adversarial prompt and for the target's response.
+
+    ~200k chars is ~50k tokens each, so agentic responses carrying tool output survive
+    intact rather than being cut at the interesting part. It is a ceiling, not a
+    reservation — real attacks are far shorter, and only long ones pay. Note it applies
+    **per field per attack**: a full prompt costs ``max_attacks * 2 * max_attack_chars``,
+    so raising ``max_attacks`` alongside it can outgrow the analysis model's context.
+    """
+
+    max_explanation_chars: int = Field(default=300, ge=50)
+    """Budget for the evaluator explanation attached to a sampled attack."""
+
+    condense_above_chars: int = Field(default=1000, ge=100)
+    """Attacks whose formatted block exceeds this are condensed by their own LLM call
+    before the focus-area call sees them (map, then reduce).
+
+    The focus-area call is a single request carrying every sampled attack, so without
+    this a handful of long agentic transcripts could push it past the analysis model's
+    context and lose the whole area. Condensing is conditional on purpose: a normal
+    short attack goes in verbatim and costs nothing extra, so the map calls track the
+    problem rather than the run. Raise it to condense less, lower it to condense more.
+    """
+
+    condense_max_tokens: int = Field(default=10_000, ge=1)
+    """Completion budget for one condense call.
+
+    Generous because reasoning models spend most of it thinking before emitting anything:
+    a budget sized to the ~300-token analysis the prompt asks for would be consumed by
+    reasoning tokens and truncate the answer to nothing. The prompt bounds the output;
+    this bounds the failure.
+    """
+
+    max_area_prompt_chars: int = Field(default=400_000, ge=1_000)
+    """Hard ceiling on the assembled focus-area prompt, applied after condensing.
+
+    A backstop, not the main defence: condensing is what should keep the prompt small.
+    Hitting this means the map step did not shrink enough, so it truncates and warns
+    rather than letting the request fail.
+    """
+
+    max_suggestions: int = Field(default=5, ge=1)
+    """Recommendations asked for, and kept, per focus area."""
+
+    max_tokens: int = Field(default=1500, ge=1)
+    """Completion budget for one focus-area analysis call."""
+
+
 class LLMConfig(BaseModel):
     """Unified LLM configuration for the red teaming pipeline.
 
     Configure per-role LLM behaviour via ``attacker`` and ``evaluator``.
-    Pass an instance as ``llm_config=LLMConfig(...)`` to :func:`red_team`.
+    Pass an instance as ``llm_config=LLMConfig(...)`` to `red_team`.
 
-    Example::
+    Example:
 
-        config = LLMConfig(
-            attacker=LLMCallConfig(model="anthropic/claude-3-5-sonnet", temperature=0.9),
-            evaluator=EvaluatorConfig(model="openai/gpt-4o-mini", temperature=0.0),
-        )
+    ```python
+    config = LLMConfig(
+        attacker=LLMCallConfig(model="anthropic/claude-3-5-sonnet", temperature=0.9),
+        evaluator=EvaluatorConfig(model="openai/gpt-4o-mini", temperature=0.0),
+    )
+    ```
     """
 
     model_config = ConfigDict(extra='forbid')
@@ -684,6 +780,10 @@ class LLMConfig(BaseModel):
     # The two layers multiply only during sustained outages: worst case per call
     # is (retry_count + 1) HTTP requests, each asking the router for up to
     # retry_count provider retries.
+    #
+    # Same semantics as LLMCallConfig.retry_count / EvaluatorConfig.retry_count
+    # (retries after the initial call, 0 disables retry) — this is the target-side
+    # budget, those are the attacker/judge-side ones.
     retry_count: int = Field(default=3, ge=0, le=10)
     retry_on_codes: list[int] = Field(default=[429, 500, 502, 503, 504])
     # How many times to regenerate an attacker turn that the attack model
@@ -878,7 +978,7 @@ SendResult = AgentResponse  # deprecated alias; use AgentResponse directly
 
 
 class RunError(BaseModel):
-    """Structured whole-run error for an attack/evaluation result (the rollup; per-response errors use :class:`evaluatorq.contracts.AgentResponseError`)."""
+    """Structured whole-run error for an attack/evaluation result (the rollup; per-response errors use `evaluatorq.contracts.AgentResponseError`)."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -902,7 +1002,7 @@ class RunError(BaseModel):
 
 
 # RES-883: the attacker LLM output was unified onto
-# :class:`evaluatorq.contracts.AgentResponse` — the same response shape used by
+# `evaluatorq.contracts.AgentResponse` — the same response shape used by
 # targets and simulation agents. ``generated_prompt`` is now ``AgentResponse.text``
 # and ``truncated`` is derivable from ``finish_reason == 'length'``. The former
 # ``AttackerResponse`` type is removed outright (a ``feat!`` breaking change) rather
@@ -915,7 +1015,7 @@ class RunError(BaseModel):
 class Turn(BaseModel):
     """One attacker→target exchange in a multi-turn attack.
 
-    Both sides are :class:`evaluatorq.contracts.AgentResponse` (RES-883). The
+    Both sides are `evaluatorq.contracts.AgentResponse` (RES-883). The
     attacker's prompt is ``attacker.text``; ``attacker.finish_reason == 'length'``
     means the adversarial LLM was truncated.
     """
@@ -927,7 +1027,7 @@ class Turn(BaseModel):
 
     @property
     def errored(self) -> bool:
-        """True when the target side carries an :class:`AgentResponseError`.
+        """True when the target side carries an `AgentResponseError`.
 
         Single source of truth for "this turn is an infra failure, not a real
         reply" — used to skip such turns both when replaying the transcript to
@@ -964,7 +1064,7 @@ def turns_to_messages(turns: list[Turn], *, skip_errors: bool = False) -> list[M
     ``assistant`` row so consumers can rely on a user/assistant pair per turn.
 
     When ``skip_errors`` is True, turns whose target carries an
-    :class:`evaluatorq.contracts.AgentResponseError` are omitted entirely — used
+    `evaluatorq.contracts.AgentResponseError` are omitted entirely — used
     to build the transcript replayed to the target so failed turns never
     re-enter its view.
     """
@@ -1022,9 +1122,9 @@ def turns_to_messages(turns: list[Turn], *, skip_errors: bool = False) -> list[M
 class OrchestratorResult(BaseModel):
     """Result from multi-turn attack orchestration.
 
-    The canonical record is :attr:`turns` — a list of :class:`Turn` pairing the
-    attacker prompt with the full target :class:`AgentResponse`. Convenience
-    views (:attr:`conversation`, :attr:`final_response`, :attr:`n_turns`) are
+    The canonical record is `turns` — a list of `Turn` pairing the
+    attacker prompt with the full target `AgentResponse`. Convenience
+    views (`conversation`, `final_response`, `n_turns`) are
     derived properties so they cannot drift from the canonical record.
     """
 
@@ -1094,12 +1194,12 @@ class OrchestratorResult(BaseModel):
         OpenResponses intermediate format to chat-completions wire shape:
 
         - Attacker prompt -> ``user`` message.
-        - Consecutive :class:`TextOutputItem` runs -> single ``assistant`` message
+        - Consecutive `TextOutputItem` runs -> single ``assistant`` message
           with joined ``content``.
-        - Each :class:`ToolCallOutputItem` -> ``assistant`` message with one
+        - Each `ToolCallOutputItem` -> ``assistant`` message with one
           ``tool_calls`` entry; if ``result`` is set, also a following ``tool``
           role message with ``tool_call_id`` + ``content``.
-        - :class:`ReasoningOutputItem` is dropped — chat-completions has no
+        - `ReasoningOutputItem` is dropped — chat-completions has no
           standard role for reasoning. Callers needing it should read
           ``turn.target.output`` directly.
         """
@@ -1108,12 +1208,12 @@ class OrchestratorResult(BaseModel):
     def attacker_input_at(self, turn_index: int) -> list[Message]:
         """Reconstruct the chat messages sent to the adversarial LLM at turn ``turn_index``.
 
-        Pure function of :attr:`system_prompt`, :attr:`max_turns`, and prior
-        :attr:`turns`. Useful for replaying or auditing what the attacker LLM
+        Pure function of `system_prompt`, `max_turns`, and prior
+        `turns`. Useful for replaying or auditing what the attacker LLM
         saw at any point in the conversation.
 
         Raises:
-            IndexError: if ``turn_index`` is out of bounds for :attr:`turns`.
+            IndexError: if ``turn_index`` is out of bounds for `turns`.
         """
         if turn_index < 0 or turn_index > len(self.turns):
             raise IndexError(f'turn_index {turn_index} out of range for {len(self.turns)} turns')
@@ -1170,8 +1270,8 @@ class AttackEvaluationResult(BaseModel):
         passed=True  → RESISTANT (attack failed)
         passed=False → VULNERABLE (attack succeeded)
 
-    .. note:: Named ``AttackEvaluationResult`` to avoid collision with the root
-       ``evaluatorq.EvaluationResult`` which is used for generic evaluator scores.
+    Note: named `AttackEvaluationResult` to avoid collision with the root
+    `evaluatorq.EvaluationResult`, which is used for generic evaluator scores.
     """
 
     passed: bool | None = Field(
@@ -1602,7 +1702,7 @@ class ReportSummary(BaseModel):
     def coverage_below_minimum(self) -> bool:
         """True when too few attacks were scored to trust the rates computed from them.
 
-        Distinct from :attr:`no_verdict`: here a verdict *does* exist, but it rests on
+        Distinct from `no_verdict`: here a verdict *does* exist, but it rests on
         a sample small enough to be misleading — the realistic shape of a flaky gateway,
         as opposed to a wholly blocked one.
         """
@@ -1623,7 +1723,20 @@ class FocusAreaRecommendation(BaseModel):
 
 
 class RedTeamReport(BaseModel):
-    """Top-level unified report wrapping all results."""
+    """Top-level unified report wrapping all results.
+
+    Usage:
+
+    ```python
+    report = await red_team("agent:YOUR_AGENT_KEY", mode="dynamic")
+
+    rate = report.summary.resistance_rate
+    print(f"Resistance rate: {rate:.0%}" if rate is not None else "no verdict")
+    for result in report.results:
+        if result.vulnerable:
+            print(f"VULNERABLE [{result.attack.category}]: {result.attack.vulnerability}")
+    ```
+    """
 
     version: str = '2.0.0'
     created_at: datetime
@@ -1645,7 +1758,7 @@ class RedTeamReport(BaseModel):
 
     focus_area_recommendations: list[FocusAreaRecommendation] | None = Field(
         default=None,
-        description='LLM-generated actionable recommendations for top risk areas (populated when generate_recommendations=True)',
+        description='LLM-generated actionable recommendations for top risk areas (populated when recommendations is enabled)',
     )
 
     applied_recommendations: list[str] = Field(
