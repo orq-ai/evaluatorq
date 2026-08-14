@@ -50,6 +50,10 @@ def criteria_met_scorer(result: SimulationResult) -> float:
     `CriteriaRow.state == 'pass'`. A criterion the judge settled early *is* audited
     (`_CriteriaTracker` records a verdict before it can become settled), so
     `JudgeAgent.mark_settled` never costs a run a point.
+
+    A ``criteria_meta`` list with no usable (mapping) entry is an unknown shape:
+    it warns and falls through to ``criteria_results`` rather than scoring the
+    empty tally 1.0.
     """
     if result.terminated_by in UNEVALUATED_TERMINATIONS:
         logger.warning(
@@ -69,16 +73,33 @@ def criteria_met_scorer(result: SimulationResult) -> float:
     meta = result.metadata.get('criteria_meta')
     if isinstance(meta, list) and meta:
         entries = [c for c in meta if isinstance(c, dict)]
-        unaudited = [c for c in entries if c.get('audited') is False and c.get('passed')]
-        if unaudited:
+        if len(entries) != len(meta):
             logger.warning(
-                'criteria_met: {} of {} criteria passed only by default (the judge never audited them); '
-                'counting them as not met.',
-                len(unaudited),
-                len(entries),
+                'criteria_met: {} of {} criteria_meta entries are not mappings (e.g. {}); ignoring them.',
+                len(meta) - len(entries),
+                len(meta),
+                type(next(c for c in meta if not isinstance(c, dict))).__name__,
             )
-        met = sum(1 for c in entries if c.get('passed') and c.get('audited') is not False)
-        return met / len(entries) if entries else 1.0
+        # No usable entry is an unknown shape, not a perfect score: returning 1.0
+        # here scored a run whose criteria_meta round-tripped as JSON strings a
+        # clean 1.0 while criteria_results held real failures.
+        if not entries:
+            logger.warning(
+                'criteria_met: criteria_meta holds {} entries but none is a mapping; falling back to '
+                'criteria_results, which carries no audit provenance.',
+                len(meta),
+            )
+        else:
+            unaudited = [c for c in entries if c.get('audited') is False and c.get('passed')]
+            if unaudited:
+                logger.warning(
+                    'criteria_met: {} of {} criteria passed only by default (the judge never audited them); '
+                    'counting them as not met.',
+                    len(unaudited),
+                    len(entries),
+                )
+            met = sum(1 for c in entries if c.get('passed') and c.get('audited') is not False)
+            return met / len(entries)
 
     criteria_results = result.criteria_results or {}
     if not criteria_results:

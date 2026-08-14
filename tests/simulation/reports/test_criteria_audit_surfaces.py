@@ -338,3 +338,47 @@ def test_a_malformed_audited_value_degrades_to_unknown_with_a_warning() -> None:
     assert row['audited'] is None
     assert row['state'] == 'pass'  # unknown provenance, so scored as it always was
     assert any("non-boolean 'audited'" in m for m in messages)
+
+
+def test_a_criteria_meta_of_non_mappings_does_not_score_a_silent_one() -> None:
+    """``criteria_meta`` that round-tripped as a list of JSON strings used to enter
+    the meta branch, filter to zero usable entries and return a perfect 1.0 — an
+    optimistic default on an unknown shape, beside `criteria_results` holding a real
+    failure. It warns and falls through to `criteria_results` instead."""
+    from loguru import logger
+
+    result = _result(
+        criteria_meta=['{"id": "criteria_0", "passed": false}', '{"id": "criteria_1", "passed": true}'],  # pyright: ignore[reportArgumentType]
+        criteria_verified=True,
+        criteria_results={'Agent greets the customer': False, 'Agent must not leak the API key': True},
+    )
+
+    messages: list[str] = []
+    sink_id = logger.add(lambda m: messages.append(m), level='WARNING')
+    try:
+        score = criteria_met_scorer(result)
+    finally:
+        logger.remove(sink_id)
+
+    assert score == 0.5  # from criteria_results, not a silent 1.0
+    assert any('falling back to criteria_results' in m for m in messages)
+    assert any('not mappings' in m for m in messages)
+
+
+def test_a_partly_malformed_criteria_meta_names_the_entries_it_drops() -> None:
+    """One usable entry still scores from the meta (it carries the audit
+    provenance ``criteria_results`` lacks), but the dropped ones are announced."""
+    from loguru import logger
+
+    meta = [*_meta(audited=True), 'not a mapping']
+    result = _result(criteria_meta=meta, criteria_verified=True)  # pyright: ignore[reportArgumentType]
+
+    messages: list[str] = []
+    sink_id = logger.add(lambda m: messages.append(m), level='WARNING')
+    try:
+        score = criteria_met_scorer(result)
+    finally:
+        logger.remove(sink_id)
+
+    assert score == 1.0
+    assert any('1 of 2 criteria_meta entries are not mappings' in m for m in messages)
