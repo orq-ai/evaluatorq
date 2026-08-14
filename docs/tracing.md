@@ -357,6 +357,20 @@ No token usage or cost here: those are recorded once, on the `chat` spans
 underneath, and rolled up by the consumer. Stamping them on every ancestor as
 well made the same tokens appear three times in one trace.
 
+The judge's own LLM span — `chat {model}` in the diagram above, or
+`responses {model}` when the call went out on the Responses endpoint instead —
+carries a `gen_ai.judge.endpoint` attribute, `"chat"` or `"responses"`, naming
+which one actually served that verdict. It is what makes a judge span with no
+`gen_ai.usage.cost` diagnosable: `"chat"` means the model was never sent to
+the Responses endpoint (not in the catalogue, or `structured_output=False`),
+while `"responses"` with no cost means the Responses call itself failed to
+report one. A judge on the Orq router calls Responses by default — the only
+endpoint the router prices — and falls back to Chat Completions per-call on a
+`BadRequestError`; `common.judge.run_judge`'s docstring covers the fallback
+conditions. `raw_output["endpoint"]` on a jury/pairwise result (see
+[Cyclic judge assignment](cyclic-judge.md)) rolls this attribute up across a
+panel's judges, adding `"mixed"` when a panel used both endpoints.
+
 `judge.label_swapped` is only ever set (`True`/`False`) in comparative mode —
 in plain `run_jury()` deliberations it is absent, since each judge votes once.
 
