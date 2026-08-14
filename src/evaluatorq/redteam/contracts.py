@@ -713,8 +713,14 @@ class RedTeamRecommendationConfig(RecommendationConfigBase):
     problem rather than the run. Raise it to condense less, lower it to condense more.
     """
 
-    condense_max_tokens: int = Field(default=600, ge=1)
-    """Completion budget for one condense call. Bounds what the map step feeds back."""
+    condense_max_tokens: int = Field(default=5_000, ge=1)
+    """Completion budget for one condense call.
+
+    Generous because reasoning models spend most of it thinking before emitting anything:
+    a budget sized to the ~300-token analysis the prompt asks for would be consumed by
+    reasoning tokens and truncate the answer to nothing. The prompt bounds the output;
+    this bounds the failure.
+    """
 
     max_area_prompt_chars: int = Field(default=400_000, ge=1_000)
     """Hard ceiling on the assembled focus-area prompt, applied after condensing.
