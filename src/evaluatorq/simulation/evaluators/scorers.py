@@ -35,12 +35,23 @@ def criteria_met_scorer(result: SimulationResult) -> float:
     A run that errored or timed out is scored **0.0**: it terminated before the
     judge could audit anything, so its criteria outcome is unknown, and scoring an
     unchecked run 1.0 let a dead target inflate the run average (RES-1308).
+    A run whose `criteria_verified` is False scores 0.0 for the same reason: the
+    judge never returned an occurrence audit, so the verdicts came from the
+    free-text `rules_broken` list, which cannot fail a `must_happen` criterion.
     A run with no criteria at all still scores 1.0 — nothing to fail.
     """
     if result.terminated_by in _UNEVALUATED:
         logger.warning(
             'criteria_met: run terminated by {} before any criteria audit; scoring 0.0 (unknown, not met).',
             result.terminated_by.value,
+        )
+        return 0.0
+
+    # `None` is a run saved before the flag existed — leave those scored as they were.
+    if result.criteria_verified is False:
+        logger.warning(
+            'criteria_met: judge returned no per-criterion occurrence audit, so these verdicts cannot '
+            'fail a must_happen criterion; scoring 0.0 (unverified, not met).'
         )
         return 0.0
 

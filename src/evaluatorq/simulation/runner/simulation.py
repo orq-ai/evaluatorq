@@ -164,11 +164,35 @@ class _CriteriaTracker:
         self._seen: set[str] = set()
         self._any_audit = False
 
+    @property
+    def verified(self) -> bool:
+        """Whether the run's criteria verdicts actually rest on the judge's audit.
+
+        ``False`` means the audit never arrived for any turn, so ``rules_broken``
+        fell back to the judge's free-text list — which cannot fail a
+        ``must_happen`` criterion, the exact defect RES-1308 is about. A run in
+        that state is *unknown*, not passing, and `criteria_met_scorer` scores it
+        0.0. A scenario with no criteria has nothing to verify, so it is ``True``.
+        """
+        return not self._criteria or self._any_audit
+
     def observe(self, judgment: Judgment) -> None:
         verdicts = judgment.criteria_verdicts
         if not verdicts:
             return
         self._any_audit = True
+        unknown = [cid for cid in verdicts if cid not in self._occurred]
+        if unknown:
+            # A valid-shaped entry for a nonexistent id is not counted as malformed
+            # by the judge's parser, so without this it would vanish in silence —
+            # and if it is an off-by-one on the whole payload, the criteria it was
+            # meant for look simply unaudited.
+            logger.warning(
+                'Judge audited unknown criterion id(s) %s on scenario %r, which defines only %s; discarding them.',
+                ', '.join(sorted(unknown)),
+                self._scenario_name,
+                ', '.join(sorted(self._occurred)) or '<none>',
+            )
         for cid in self._occurred:
             occurred = verdicts.get(cid)
             if occurred is None:
@@ -286,6 +310,8 @@ def _max_turns_result(
     scenario: Scenario | None = None,
     last_judgment: Judgment | None = None,
     target_model: str | None = None,
+    *,
+    criteria_verified: bool | None = None,
 ) -> SimulationResult:
     criteria_results = _build_criteria_results(scenario, last_judgment) if scenario and last_judgment else None
     criteria_meta = _build_criteria_meta(scenario, last_judgment) if scenario and last_judgment else None
@@ -301,6 +327,7 @@ def _max_turns_result(
         turn_metrics=turn_metrics,
         token_usage=token_usage,
         criteria_results=criteria_results,
+        criteria_verified=criteria_verified,
         metadata=metadata,
     )
 
@@ -758,6 +785,7 @@ class SimulationRunner:
                     turn_metrics=turn_metrics_list,
                     token_usage=final_usage,
                     criteria_results=self._build_criteria_results(scenario, resolved) if scenario else None,  # type: ignore[arg-type]
+                    criteria_verified=criteria_tracker.verified,
                     metadata=judge_metadata,  # type: ignore[union-attr]
                 )
 
@@ -781,6 +809,7 @@ class SimulationRunner:
             scenario,
             resolved,
             target_model=target_model_holder['model'],
+            criteria_verified=criteria_tracker.verified,
         )
 
     async def run_batch(

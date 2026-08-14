@@ -406,6 +406,14 @@ class SimulationResult(BaseModel):
     turn_metrics: list[TurnMetrics]
     metadata: dict[str, Any] = Field(default_factory=dict)
     criteria_results: dict[str, bool] | None = None
+    criteria_verified: bool | None = Field(
+        default=None,
+        description='Whether criteria_results rests on the judge per-criterion occurrence audit. '
+        'False means the audit never arrived (a custom judge that does not report it, or a judge that '
+        'malfunctioned and terminated for safety), so the verdicts fell back to the free-text '
+        'rules_broken list, which cannot fail a must_happen criterion — treat them as unknown, not met. '
+        'None for runs saved before this field existed.',
+    )
     total_turns: int | None = None
     thread_id: str | None = Field(
         default=None,

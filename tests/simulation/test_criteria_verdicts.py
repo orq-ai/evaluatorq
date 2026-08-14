@@ -176,6 +176,26 @@ def test_continue_conversation_reports_mid_run_violation():
     assert judgment.criteria_verdicts == {'criteria_0': False, 'criteria_1': True}
 
 
+@pytest.mark.parametrize(
+    'result',
+    [
+        LLMResult(content='I think it should stop.', tool_calls=[]),
+        LLMResult(content='', tool_calls=[SimpleNamespace(function=SimpleNamespace(name='finish_conversation', arguments='{not json'))]),
+        LLMResult(content='', tool_calls=[SimpleNamespace(function=SimpleNamespace(name='invent_a_tool', arguments='{}'))]),
+    ],
+    ids=['no-tool-call', 'unparseable-arguments', 'unknown-tool'],
+)
+def test_judge_safety_terminate_carries_no_audit(result: LLMResult):
+    """The three safety-terminate paths return ``rules_broken=[]``, which passes every
+    criterion. They must leave ``criteria_verdicts`` at ``None`` so the runner marks
+    the run unverified — a malfunctioning judge scoring a perfect 1.0 is the
+    RES-1308 bug wearing a different hat."""
+    judgment = _judge()._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+    assert judgment.should_terminate is True
+    assert judgment.rules_broken == []
+    assert judgment.criteria_verdicts is None
+
+
 def test_finish_conversation_unions_reported_and_audited():
     judge = _judge()
     result = _llm_result(
@@ -239,17 +259,29 @@ def test_both_judge_tools_require_criteria_verdicts():
 
 
 class _FakeJudge:
-    """Replays a scripted per-turn audit, terminating on the last entry."""
+    """Replays a scripted per-turn audit, terminating on the last entry.
 
-    def __init__(self, script: list[dict[str, bool]], *, terminate: bool = True) -> None:
+    A ``None`` script entry is a turn that reported no audit at all — what a custom
+    ``judge=`` predating ``criteria_verdicts`` does on every turn.
+    """
+
+    def __init__(
+        self,
+        script: list[dict[str, bool] | None],
+        *,
+        terminate: bool = True,
+        broken: list[str] | None = None,
+    ) -> None:
         self._script = script
         self._terminate = terminate
+        self._broken = broken
         self._turns = 0
 
     async def evaluate(self, messages):  # noqa: ANN001
         verdicts = self._script[min(self._turns, len(self._script) - 1)]
         self._turns += 1
-        return _occurred(verdicts, terminate=self._terminate and self._turns >= len(self._script))
+        terminate = self._terminate and self._turns >= len(self._script)
+        return _judgment(verdicts, terminate=terminate, broken=self._broken if terminate else None)
 
     def reset_usage(self) -> None: ...
 
@@ -276,7 +308,13 @@ class _FakeSimulator:
         return TokenUsage()
 
 
-async def _run(script: list[dict[str, bool]], *, max_turns: int = 4, terminate: bool = True):
+async def _run(
+    script: list[dict[str, bool] | None],
+    *,
+    max_turns: int = 4,
+    terminate: bool = True,
+    broken: list[str] | None = None,
+):
     async def target(messages):  # noqa: ANN001
         return AgentResponse(text='Which plan are you interested in?')
 
@@ -284,7 +322,7 @@ async def _run(script: list[dict[str, bool]], *, max_turns: int = 4, terminate: 
         target=target,
         max_turns=max_turns,
         user_simulator=_FakeSimulator(),  # pyright: ignore[reportArgumentType]
-        judge=_FakeJudge(script, terminate=terminate),  # pyright: ignore[reportArgumentType]
+        judge=_FakeJudge(script, terminate=terminate, broken=broken),  # pyright: ignore[reportArgumentType]
     )
     try:
         return await runner.run(persona=_persona(), scenario=_scenario())
@@ -327,6 +365,82 @@ async def test_runner_end_to_end_max_turns_path_resolves_criteria():
     assert result.terminated_by is TerminatedBy.max_turns
     assert result.rules_broken == []
     assert criteria_met_scorer(result) == 1.0
+
+
+@pytest.mark.asyncio
+async def test_runner_end_to_end_no_audit_is_reported_as_unverified(caplog):
+    """A judge that never audits (a custom ``judge=`` predating this field, or the
+    built-in one terminating for safety) must not come back a clean 1.0.
+
+    This is the whole RES-1308 failure mode one layer up: the fallback verdicts
+    cannot fail a ``must_happen`` criterion, so an all-green result is unknown, not
+    passing, and `criteria_verified` has to say so on the result itself — a log
+    line nobody is tailing is not a signal a pipeline can act on.
+    """
+    with caplog.at_level('WARNING'):
+        result = await _run([None, None])
+
+    assert result.criteria_verified is False
+    assert result.rules_broken == []  # the fallback cannot fail must_happen
+    assert result.criteria_results == {'Agent writes BANANA': True, 'Agent mentions a plan': True}
+    assert criteria_met_scorer(result) == 0.0
+    assert 'unverified' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_runner_end_to_end_no_audit_still_honours_free_text_rules_broken():
+    """The documented fallback: with no audit to trust, the judge's free-text list
+    is the only evidence there is, so it must survive to the result."""
+    result = await _run([None, None], broken=['criteria_1'])
+
+    assert result.criteria_verified is False
+    assert result.rules_broken == ['criteria_1']
+
+
+@pytest.mark.asyncio
+async def test_runner_end_to_end_partial_audit_counts_as_verified():
+    """One audited criterion is enough to score off the audit; the criterion the
+    judge never mentioned keeps the honest not-observed default."""
+    result = await _run([{'criteria_1': False}] * 2)  # criteria_0 never audited
+
+    assert result.criteria_verified is True
+    assert result.rules_broken == ['criteria_0']  # must_happen, never observed
+    assert criteria_met_scorer(result) == 0.5
+
+
+@pytest.mark.asyncio
+async def test_runner_end_to_end_max_turns_without_any_judgment_is_unverified():
+    """The max-turns branch builds its result from a different helper, and with no
+    judgment at all it has no criteria_results — which used to score 1.0."""
+    result = await _run([None], max_turns=1, terminate=False)
+
+    assert result.terminated_by is TerminatedBy.max_turns
+    assert result.criteria_verified is False
+    assert criteria_met_scorer(result) == 0.0
+
+
+def test_tracker_reports_verified_only_once_an_audit_arrives():
+    t = _CriteriaTracker(_scenario())
+    assert t.verified is False
+    t.observe(_judgment(None))
+    assert t.verified is False
+    t.observe(_occurred({'criteria_0': True}))
+    assert t.verified is True
+
+
+def test_tracker_without_criteria_has_nothing_to_verify():
+    assert _CriteriaTracker(_scenario([])).verified is True
+
+
+def test_verdicts_for_ids_the_scenario_never_defined_are_dropped_with_a_warning(caplog):
+    """A well-formed entry for a nonexistent id is not 'malformed', so the judge's
+    parser lets it through — without this warning it vanishes in silence, and a
+    payload that is off by one everywhere just looks unaudited."""
+    t = _CriteriaTracker(_scenario())
+    with caplog.at_level('WARNING'):
+        t.observe(_occurred({'criteria_0': True, 'criteria_7': True}))
+    assert 'criteria_7' in caplog.text
+    assert t.resolve(_judgment(None, terminate=True)).rules_broken == []
 
 
 # ---------------------------------------------------------------------------

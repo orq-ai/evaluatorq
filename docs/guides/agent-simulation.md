@@ -339,13 +339,22 @@ Failures land in `rules_broken` (criterion ids), `criteria_results`
     The built-in `JudgeAgent` audits each criterion every turn. A custom judge that
     does not populate `Judgment.criteria_verdicts` falls back to the pre-1.3
     behaviour: pass/fail is inferred from its `rules_broken` list, so a
-    `must_happen` criterion **cannot fail** and `criteria_met` trends to 1.0. The
-    runner logs a warning naming that scenario as unverified — it still returns the
-    green result, so treat the warning, not the score, as the signal.
+    `must_happen` criterion **cannot fail**.
 
-A run that ends in an error or a timeout never reaches the audit. Those results
-score `criteria_met` as `0.0` (not `1.0`) and log a warning, so a crashed run
-cannot inflate the average.
+    That run is marked `SimulationResult.criteria_verified = False`, the runner logs
+    a warning naming the scenario, and `criteria_met` scores it `0.0` — unknown, not
+    met. Check the field, not the transcript:
+
+    ```python
+    if result.criteria_verified is False:
+        print('criteria unverified — the judge returned no per-criterion audit')
+    ```
+
+    `criteria_verified` is `None` on runs saved before the field existed.
+
+A run that ends in an error or a timeout never reaches the audit either. Those
+results also score `criteria_met` as `0.0` (not `1.0`) and log a warning, so neither
+a crashed run nor an unaudited one can inflate the average.
 
 The callable passed to `target` is the only structural difference from the Orq path —
 personas, scenarios, criteria, and the result shape are identical. Swap the
