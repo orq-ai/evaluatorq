@@ -164,26 +164,24 @@ def test_legacy_report_without_priced_calls_is_not_flagged_partial():
     assert u.cost_is_partial is False
 
 
-def test_with_calls_keeps_priced_calls_consistent():
-    parsed = Usage.extract({'input_tokens': 1, 'output_tokens': 1, 'total_cost': 0.5}, calls=0)
+def test_extract_prices_the_call_it_counts():
+    """`priced_calls` is derived from `calls` and whether a cost showed up, at the
+    one parse site. This is what `with_calls` used to patch in afterwards on the
+    Responses path, before both parse paths agreed that one response is one call."""
+    parsed = Usage.extract({'input_tokens': 1, 'output_tokens': 1, 'total_cost': 0.5}, calls=1)
+
     assert parsed is not None
-    assert parsed.priced_calls == 0  # nothing billed yet
-
-    stamped = parsed.with_calls(1)
-
-    assert stamped.calls == 1
-    assert stamped.priced_calls == 1
-    assert stamped.cost_is_partial is False
+    assert parsed.calls == 1
+    assert parsed.priced_calls == 1
+    assert parsed.cost_is_partial is False
 
 
-def test_with_calls_leaves_priced_calls_zero_when_cost_unknown():
-    parsed = Usage.extract({'input_tokens': 1, 'output_tokens': 1}, calls=0)
+def test_extract_leaves_priced_calls_zero_when_cost_unknown():
+    parsed = Usage.extract({'input_tokens': 1, 'output_tokens': 1}, calls=1)
+
     assert parsed is not None
-
-    stamped = parsed.with_calls(1)
-
-    assert stamped.calls == 1
-    assert stamped.priced_calls == 0
+    assert parsed.calls == 1
+    assert parsed.priced_calls == 0
 
 
 def test_priced_calls_survives_round_trip():
@@ -312,15 +310,13 @@ def test_subtraction_holds_the_whole_counter_chain():
         assert delta.estimated_calls <= delta.priced_calls <= delta.calls
 
 
-def test_with_calls_leaves_estimated_calls_at_zero():
-    """`with_calls` is the Responses/provider path — it must never mark a call as
-    client-side estimated."""
-    parsed = Usage.extract({'input_tokens': 1, 'output_tokens': 1, 'total_cost': 0.5}, calls=0)
+def test_extract_leaves_estimated_calls_at_zero():
+    """A raw provider payload is provider-priced by definition — the parse must
+    never mark a call as client-side estimated. Only `price_usage` stamps that."""
+    parsed = Usage.extract({'input_tokens': 1, 'output_tokens': 1, 'total_cost': 0.5}, calls=1)
+
     assert parsed is not None
-
-    stamped = parsed.with_calls(1)
-
-    assert stamped.estimated_calls == 0
+    assert parsed.estimated_calls == 0
 
 
 def test_v3_responses_cost_survives_openai_sdk_parsing():

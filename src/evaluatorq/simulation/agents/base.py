@@ -427,9 +427,9 @@ class BaseAgent(ABC):
 
                 record_llm_response(span, response)
 
-                # Accumulate token usage (from_openresponses leaves calls=0, add 1)
+                # Accumulate token usage; from_openresponses already counts the call.
                 if usage is not None:
-                    self._usage = self._usage + usage.with_calls(1)
+                    self._usage = self._usage + usage
 
                 # Separate text from tool-call items; isinstance guards prevent
                 # ReasoningOutputItem.text leaking into response content.

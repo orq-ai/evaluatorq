@@ -537,7 +537,8 @@ class Usage(BaseModel):
         one, and is still rejected (`tests/redteam/test_review_followup.py`).
         Runs on every keyword/dict construction path (``Usage(...)``,
         ``model_validate``); ``model_copy(update=...)`` does not go through
-        validators at all, so it stays outside this guard (see ``with_calls``).
+        validators at all, so a caller using it holds the chain itself (see
+        `common.target_call._attempt_usage`, the one place that does).
         """
         if not isinstance(data, dict):
             return data
@@ -620,27 +621,6 @@ class Usage(BaseModel):
         pre-existing priced call was provider-reported.
         """
         return resolve_cost_source(self.priced_calls, self.estimated_calls)
-
-    def with_calls(self, calls: int) -> Usage:
-        """Stamp the call count, keeping `priced_calls` consistent.
-
-        ``from_openresponses`` parses with ``calls=0`` and leaves the real count to
-        the caller that knows the call was billed. A bare
-        ``model_copy(update={'calls': 1})`` would leave ``priced_calls`` at 0, which
-        `cost_is_partial` reads as legacy untracked data — use this instead.
-
-        ``estimated_calls`` is preserved, clamped to the resolved ``priced_calls``.
-        ``model_copy(update=...)`` runs no validators, so the class-level clamp does
-        not cover this path — the chain is held here by hand.
-        """
-        priced_calls = calls if self.total_cost is not None else 0
-        return self.model_copy(
-            update={
-                'calls': calls,
-                'priced_calls': priced_calls,
-                'estimated_calls': min(self.estimated_calls, priced_calls),
-            }
-        )
 
     @model_serializer(mode='wrap')
     def _serialize(self, handler: Any) -> dict[str, Any]:
@@ -1102,9 +1082,8 @@ class AgentResponse(BaseModel):
 
         ``usage`` is ``None`` when the response carries no ``usage`` block —
         callers must distinguish "no usage reported" from "zero tokens used" so
-        cost reports stay honest. ``usage.calls`` is intentionally left at 0:
-        this is a pure parse; per-call-site accounting (``calls=1`` / ``+1``) is
-        applied by callers to the returned object's ``usage``.
+        cost reports stay honest. ``usage.calls`` is 1: one response object is
+        one API call, matching `Usage.from_completion` on the chat side.
         """
         items: list[OutputMessage] = []
         for item in _gf(response, 'output') or []:
@@ -1158,9 +1137,12 @@ class AgentResponse(BaseModel):
             )
             usage = None
         else:
-            # calls=0 here; the caller patches +1 once it knows this was a billed call.
-            # extract() carries cached_tokens / reasoning_tokens that the old hand-roll dropped.
-            usage = TokenUsage.extract(usage_obj, calls=0)
+            # One response object is one API call, same as `Usage.from_completion`
+            # on the chat side. `extract` derives `priced_calls` from `calls` and
+            # whether a cost showed up, so this is the whole accounting — callers
+            # add the usage as-is. An aggregated dump that carries its own `calls`
+            # still overrides this (see `extract`).
+            usage = TokenUsage.extract(usage_obj, calls=1)
 
         model = _gf(response, 'model')
         status = _gf(response, 'status')
