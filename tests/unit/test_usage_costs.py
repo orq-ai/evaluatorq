@@ -1,6 +1,6 @@
 """Usage cost breakdown: extraction from Orq Responses v3 usage, span recording."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -70,6 +70,33 @@ def test_record_token_usage_sets_cost_attributes():
     span.set_attribute.assert_any_call('gen_ai.usage.total_cost', 0.0032284)
     span.set_attribute.assert_any_call('gen_ai.usage.cost', 0.0032284)
     span.set_attribute.assert_any_call('gen_ai.usage.cache_creation.input_tokens', 512)
+
+
+def test_record_token_usage_warns_on_a_cost_with_no_provenance():
+    """A bare `total_cost=` with no `Usage` behind it emits no `cost_source`.
+
+    No in-`src` caller can reach this branch, so the warning cannot cry wolf —
+    if it ever fires it is precisely the defect the provenance plumbing exists
+    to prevent: a dollar figure on a span with nothing saying whether it was
+    billed or estimated.
+    """
+    span = MagicMock()
+    with patch('evaluatorq.common.tracing.logger.warning') as warn:
+        record_token_usage(span, total_cost=0.5)
+    span.set_attribute.assert_any_call('gen_ai.usage.cost', 0.5)
+    assert all(call.args[0] != 'gen_ai.usage.cost_source' for call in span.set_attribute.call_args_list)
+    assert warn.call_count == 1
+
+
+def test_record_token_usage_stamps_cost_source_from_usage():
+    span = MagicMock()
+    with patch('evaluatorq.common.tracing.logger.warning') as warn:
+        record_token_usage(
+            span,
+            usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2, total_cost=0.5, calls=1, priced_calls=1, estimated_calls=1),
+        )
+    span.set_attribute.assert_any_call('gen_ai.usage.cost_source', 'catalogue')
+    assert warn.call_count == 0
 
 
 def test_record_token_usage_omits_cost_attributes_when_unknown():
@@ -254,6 +281,35 @@ def test_subtraction_clamps_estimated_calls_to_remaining_priced_calls():
     # Still fully catalogue-priced, not 'mixed' — the remaining priced call is the
     # estimated one.
     assert delta.cost_source == 'catalogue'
+
+
+def test_subtraction_clamps_priced_calls_to_remaining_calls():
+    """The other half of the chain: `priced_calls <= calls` after a subtraction.
+
+    `Usage(calls=2, priced=2, est=2) - Usage(calls=2, priced=0, est=0)` used to
+    leave `calls=0, priced=2, est=2` — an aggregate claiming more priced calls
+    than calls, which `cost_is_partial` reads as fully billed. `extract` clamps
+    both axes on read-back; the constructor does not, so `__sub__` holds them.
+    """
+    a = Usage(input_tokens=4, output_tokens=4, total_cost=1.0, calls=2, priced_calls=2, estimated_calls=2)
+    b = Usage(input_tokens=1, output_tokens=1, calls=2, priced_calls=0, estimated_calls=0)
+    delta = a - b
+    assert delta.calls == 0
+    assert delta.priced_calls == 0
+    assert delta.estimated_calls == 0
+
+
+def test_subtraction_holds_the_whole_counter_chain():
+    """`estimated_calls <= priced_calls <= calls` however the clamps compose."""
+    a = Usage(input_tokens=9, output_tokens=9, total_cost=1.0, calls=5, priced_calls=4, estimated_calls=3)
+    for b in (
+        Usage(input_tokens=1, output_tokens=1, calls=4, priced_calls=0, estimated_calls=0),
+        Usage(input_tokens=1, output_tokens=1, calls=0, priced_calls=4, estimated_calls=0),
+        Usage(input_tokens=1, output_tokens=1, calls=5, priced_calls=1, estimated_calls=3),
+        Usage(input_tokens=1, output_tokens=1, calls=99, priced_calls=99, estimated_calls=99),
+    ):
+        delta = a - b
+        assert delta.estimated_calls <= delta.priced_calls <= delta.calls
 
 
 def test_with_calls_leaves_estimated_calls_at_zero():

@@ -460,6 +460,17 @@ def landing(roots: list[Path] | None = None) -> Landing:
                 # legacy report add dollars to Total spend while the qualifier
                 # beside it reported complete provider billing — the exact case
                 # ``unknown_calls`` exists for (see `_cost_calls`).
+                #
+                # Deliberately OUTSIDE the ``if counts.cost:`` guard above. That
+                # guard governs ``costed_runs``, the divisor of the per-run
+                # averages; it is not a statement about coverage. A legacy report
+                # whose results all record ``cost_usd: 0.0`` adds no dollars but is
+                # the archetypal fabricated zero — its calls really are of unknown
+                # coverage, and the run really does make Total spend a lower bound.
+                # Suppressing the qualifier there would hide precisely what
+                # ``unknown_calls`` was added to surface. (``_cost_calls`` already
+                # self-gates the genuinely cost-free case: a legacy usage block with
+                # no cost key at all returns all-zero counters.)
                 priced_calls_total += counts.priced_calls
                 cost_calls_total += counts.cost_calls
                 unknown_calls_total += counts.unknown_calls

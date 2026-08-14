@@ -334,8 +334,10 @@ def record_token_usage(
         else:
             # A cost with no provenance: the caller passed a bare number rather
             # than a Usage. The trace UI can then only show the figure, not
-            # whether it was billed — say so instead of leaving the gap silent.
-            logger.debug('record_token_usage: cost {} recorded without provenance (no cost_source)', total_cost)
+            # whether it was billed. No in-`src` caller can reach this branch, so
+            # the warning cannot cry wolf — if it ever fires it is exactly the
+            # defect this provenance plumbing exists to prevent.
+            logger.warning('record_token_usage: cost {} recorded without provenance (no cost_source)', total_cost)
 
 
 def record_llm_response(

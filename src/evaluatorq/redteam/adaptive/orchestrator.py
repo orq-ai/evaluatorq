@@ -893,22 +893,11 @@ class MultiTurnOrchestrator:
                     # are never misattributed to the target. Must stay ahead of the
                     # failure branch below, which breaks out of the turn loop.
                     if turn_usage is not None:
-                        # Targets report their own call count (orq sums tool-continuation
-                        # rounds); fall back to the number of billed attempts when a
-                        # usage-bearing turn forgot to. ``usage_attempts`` is >= 1
-                        # whenever ``billed_usage`` is not None, so it needs no floor.
-                        if turn_usage.calls == 0:
-                            turn_usage = turn_usage.with_calls(result.usage_attempts)
-                        elif turn_usage.calls < result.usage_attempts:
-                            # Mixed reporting across a retry: one attempt carried a count
-                            # and another did not, so the sum understates the exchanges
-                            # billed. Raise `calls` to the attempt count and leave
-                            # `priced_calls` alone — `extract` clamps priced <= calls per
-                            # attempt, so an attempt contributing no call contributed no
-                            # priced call either, and widening coverage here would show a
-                            # partial cost as fully billed. Still a lower bound: an attempt
-                            # that reported nothing may have burned several rounds.
-                            turn_usage = turn_usage.model_copy(update={'calls': result.usage_attempts})
+                        # No call-count repair here: `call_target_with_retry` normalises
+                        # each attempt's counters before summing, so `calls` already
+                        # covers every billed attempt and `priced_calls` counts only the
+                        # attempts that reported a cost. Repairing it per-surface is what
+                        # made a partially-priced retry render as fully billed.
                         target_usage_acc = target_usage_acc + turn_usage
 
                     if result.succeeded:

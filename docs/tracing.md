@@ -191,7 +191,8 @@ LLM spans (`chat ...`) carry standard GenAI attributes:
 | `gen_ai.usage.output_tokens` | Completion token count |
 | `gen_ai.usage.total_tokens` | Total token count |
 | `gen_ai.usage.calls` | Number of LLM calls rolled into this span (omitted when zero) |
-| `gen_ai.usage.cost` | Total cost in USD, only when the provider reported one (also emitted as `gen_ai.usage.total_cost`; `gen_ai.usage.input_cost` / `gen_ai.usage.output_cost` when the provider breaks it down) |
+| `gen_ai.usage.cost` | Total cost in USD, when a cost is known — either reported by the provider or priced client-side from the model catalogue (also emitted as `gen_ai.usage.total_cost`; `gen_ai.usage.input_cost` / `gen_ai.usage.output_cost` when the provider breaks it down) |
+| `gen_ai.usage.cost_source` | Where that cost came from: `"provider"`, `"catalogue"` (priced client-side from token counts) or `"mixed"`. Emitted alongside `gen_ai.usage.cost` whenever the provenance is known |
 | `gen_ai.usage.cache_read.input_tokens` | Cached prompt tokens, when the provider reports them |
 | `gen_ai.usage.cache_creation.input_tokens` | Cache-write prompt tokens, when the provider reports them |
 | `gen_ai.usage.reasoning.output_tokens` | Reasoning tokens, when the provider reports them |

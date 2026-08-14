@@ -115,9 +115,15 @@ class TargetCallResult:
     common single-successful-attempt path the two are the same object's value,
     so adding both double counts the whole run.
 
-    ``usage_attempts`` counts the attempts that contributed to ``billed_usage``,
-    so a caller that stamps a call count on usage a target reported without one
-    can stamp the real number of billed exchanges rather than assuming 1.
+    Each attempt's usage is normalised by `_attempt_usage` before it is summed,
+    so ``billed_usage.calls`` is always >= the number of billed attempts and
+    ``priced_calls`` counts only the attempts that actually reported a cost.
+    Consumers can therefore read it verbatim — no per-surface `calls == 0`
+    fallback, and no risk of widening `priced_calls` along with `calls`.
+
+    ``usage_attempts`` counts the attempts that contributed to ``billed_usage``.
+    It is >= 1 whenever ``billed_usage`` is not None, and is exposed for tracing
+    and diagnostics; it is no longer needed to repair the call count.
     """
 
     response: AgentResponse
@@ -155,6 +161,30 @@ class TargetCallResult:
             'error_turn': turn,
             'error_details': self.error_details,
         }
+
+
+def _attempt_usage(usage: Usage) -> Usage:
+    """Return ``usage`` with honest per-attempt call counters.
+
+    A target that reports its own ``calls`` (orq sums tool-continuation rounds
+    into one usage block) is returned **unchanged** — it knows better than we do.
+    A target that reports ``calls=0`` has simply not tracked the counter, and the
+    exchange it just billed us for is one call; ``priced_calls`` is 1 exactly when
+    that attempt reported a cost, and 0 otherwise.
+
+    Normalising here rather than at each consumer is what keeps
+    ``billed_usage.priced_calls`` honest across a retry: summing two ``calls=0``
+    attempts where only one reported a cost must yield ``calls=2,
+    priced_calls=1`` (a partial cost), not ``calls=2, priced_calls=2`` (a cost
+    claiming to be fully billed). ``estimated_calls`` is clamped to the resolved
+    ``priced_calls`` so ``estimated_calls <= priced_calls <= calls`` holds.
+    """
+    if usage.calls > 0:
+        return usage
+    priced = 1 if usage.total_cost is not None else 0
+    return usage.model_copy(
+        update={'calls': 1, 'priced_calls': priced, 'estimated_calls': min(usage.estimated_calls, priced)}
+    )
 
 
 def _synthetic(text: str, *, error_type: str, code: str) -> AgentResponse:
@@ -204,7 +234,8 @@ async def call_target_with_retry(
                 if on_attempt_response is not None:
                     on_attempt_response(attempt_context, resp)
             if resp.usage is not None:
-                billed_usage = resp.usage if billed_usage is None else billed_usage + resp.usage
+                attempt_usage = _attempt_usage(resp.usage)
+                billed_usage = attempt_usage if billed_usage is None else billed_usage + attempt_usage
                 usage_attempts += 1
             if resp.error is None:
                 return TargetCallResult(

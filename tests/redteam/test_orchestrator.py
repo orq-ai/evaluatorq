@@ -682,6 +682,71 @@ class TestTimeoutHandling:
         assert result.token_usage_target.cost_is_partial is True
 
     @pytest.mark.asyncio
+    async def test_untracked_call_counts_across_retry_keep_the_cost_qualified(self):
+        """Reviewer's reproduction, asserted on the RUN total.
+
+        Both billed attempts report ``calls=0``; only the second reports a cost.
+        The old ``calls == 0`` fallback stamped the attempt count through
+        ``with_calls``, which widens ``priced_calls`` alongside ``calls`` — so a
+        half-known cost rendered as fully provider-billed (``cost_is_partial``
+        False, ``cost_source`` ``'provider'`` over 2 of 2 calls). Normalising
+        per-attempt in ``call_target_with_retry`` keeps ``priced_calls`` at 1.
+
+        Asserted on ``token_usage_target`` (the run total that reaches the
+        report), not the per-call value, so a double count fails here too.
+        """
+        mock_llm = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = 'Attack prompt'
+        mock_response.choices[0].finish_reason = 'stop'
+        mock_llm.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        failed = AgentResponse(
+            text='backend failed',
+            usage=TokenUsage(prompt_tokens=3, completion_tokens=1, total_tokens=4, calls=0, priced_calls=0),
+            error=AgentResponseError(
+                message='backend failed', error_type='target_error', code='target.backend_error'
+            ),
+        )
+        mock_target = AsyncMock()
+        mock_target.respond = AsyncMock(
+            side_effect=[
+                failed,
+                AgentResponse(
+                    text='Agent response',
+                    usage=TokenUsage(
+                        prompt_tokens=5,
+                        completion_tokens=2,
+                        total_tokens=7,
+                        total_cost=0.01,
+                        calls=0,
+                        priced_calls=0,
+                    ),
+                ),
+            ]
+        )
+        mock_target.consume_last_token_usage = lambda: None
+
+        orchestrator = MultiTurnOrchestrator(llm_client=mock_llm, model='azure/gpt-5-mini')
+        result = await orchestrator.run_attack(
+            target=mock_target,
+            strategy=_make_strategy(),
+            objective='Test',
+            agent_context=AgentContext(key='test_agent'),
+            max_turns=1,
+        )
+
+        assert result.token_usage_target is not None
+        # Tokens and cost counted exactly once — not once per accumulator.
+        assert result.token_usage_target.total_tokens == 11
+        assert result.token_usage_target.total_cost == 0.01
+        assert result.token_usage_target.calls == 2
+        assert result.token_usage_target.priced_calls == 1
+        assert result.token_usage_target.estimated_calls == 0
+        assert result.token_usage_target.cost_is_partial is True
+
+    @pytest.mark.asyncio
     async def test_adversarial_llm_timeout_maps_to_error_fields(self):
         """Timeout from adversarial LLM is caught and mapped correctly."""
         mock_llm = AsyncMock()

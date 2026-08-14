@@ -774,15 +774,19 @@ class Usage(BaseModel):
     def __sub__(self, other: Usage | None) -> Usage:
         """Component-wise difference, clamped at 0 — used for per-turn deltas.
 
-        ``estimated_calls`` is additionally clamped to the resulting
-        ``priced_calls``: clamping the two independently can produce an invalid
-        triple (``Usage(priced=2, est=2) - Usage(priced=1, est=0)`` would leave
-        ``priced=1, est=2``). ``extract`` guards this on read-back, but the
-        constructor does not, so hold the invariant here too.
+        The whole chain ``estimated_calls <= priced_calls <= calls`` is held:
+        clamping the three axes independently can produce an invalid triple
+        (``Usage(calls=2, priced=2, est=2) - Usage(calls=2, priced=0, est=0)``
+        would leave ``calls=0, priced=2, est=2``). ``extract`` guards both
+        clamps on read-back, but the constructor does not, so hold them here
+        too. The clamps compose top-down — ``priced`` first against ``calls``,
+        then ``estimated`` against the already-clamped ``priced`` — so the
+        result is the same whichever axis the subtraction shrank.
         """
         if other is None:
             return self.model_copy()
-        priced_calls = max(self.priced_calls - other.priced_calls, 0)
+        calls = max(self.calls - other.calls, 0)
+        priced_calls = min(max(self.priced_calls - other.priced_calls, 0), calls)
         return Usage(
             input_tokens=max(self.input_tokens - other.input_tokens, 0),
             output_tokens=max(self.output_tokens - other.output_tokens, 0),
@@ -795,7 +799,7 @@ class Usage(BaseModel):
             input_cost=self._combine_cost(self.input_cost, other.input_cost, sign=-1),
             output_cost=self._combine_cost(self.output_cost, other.output_cost, sign=-1),
             total_cost=self._combine_cost(self.total_cost, other.total_cost, sign=-1),
-            calls=max(self.calls - other.calls, 0),
+            calls=calls,
             priced_calls=priced_calls,
             estimated_calls=min(max(self.estimated_calls - other.estimated_calls, 0), priced_calls),
         )

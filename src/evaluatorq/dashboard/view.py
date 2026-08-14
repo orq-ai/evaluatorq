@@ -527,18 +527,16 @@ def _run_cost_cell(row: Any) -> str:
     Rows with no cost (an em dash) and rows whose cost is fully provider-billed
     carry no marker: ``~`` means "qualified", so putting it on everything would
     say nothing.
+
+    Attributes are read directly, not via ``getattr`` defaults: both row types
+    (`SimRunRow`, `RedTeamRunRow`) declare all four counters, and a row that
+    somehow lacks one should raise here rather than silently render its cost
+    unqualified — i.e. as fully billed.
     """
-    cost = getattr(row, 'cost', None)
+    cost = row.cost
     text = esc(_fmt_cost(cost))
     coverage = (
-        _coverage(
-            getattr(row, 'priced_calls', 0),
-            getattr(row, 'cost_calls', 0),
-            getattr(row, 'unknown_calls', 0),
-            getattr(row, 'estimated_calls', 0),
-        )
-        if cost is not None
-        else ''
+        _coverage(row.priced_calls, row.cost_calls, row.unknown_calls, row.estimated_calls) if cost is not None else ''
     )
     if not coverage:
         return f'<span class="rg-num">{text}</span>'
