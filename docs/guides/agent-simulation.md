@@ -480,6 +480,7 @@ function; the fetch-side ones are fixed:
 | `summary_max_tokens` | 10000 | Completion budget for a summarize call — reasoning headroom, not the length target |
 | `max_tokens` | 10000 | Completion budget for the inference and profile calls |
 | `generate_first_message` | `True` | Write the opening from the persona; `False` replays the recorded one |
+| `redact_pii` | `True` | Instruct the model to replace identifying values with placeholders as it writes |
 
 `summary_target_tokens` is a target, not a cut, and deliberately so. Truncating a
 summary removes its end, which is exactly where the prompt puts what went wrong
@@ -513,14 +514,22 @@ produced fewer datapoints than traces has those warnings behind it.
 Trace-derived datapoints are built from real conversations, and a persona
 background or scenario context written straight from one carries whatever was in
 it — names, order numbers, emails — into a JSONL that then gets committed and
-shared. Both the summarize and the persona/scenario prompts are instructed to
-redact as they write, replacing identifying values with placeholders
-(`[CUSTOMER_NAME]`, `[ORDER_ID]`) that keep the meaning; the profile prompt is
-told to carry placeholders through rather than invent concrete values.
+shared. By default both the summarize and the persona/scenario prompts are
+instructed to redact as they write, replacing identifying values with
+placeholders (`[CUSTOMER_NAME]`, `[ORDER_ID]`) that keep the meaning; the profile
+prompt is told to carry placeholders through rather than invent concrete values.
 
-This is an instruction to a model, not a guarantee. Treat a generated dataset
-from production traffic as needing the same review any export of that traffic
-would.
+`--no-redact-pii` (or `TraceAnalysisConfig(redact_pii=False)`) turns it off, for
+when the concrete values are the point — reproducing a specific incident, or a
+fixture where a changed order number breaks the comparison — and the dataset
+stays somewhere the raw traffic could already go. With it off the profile prompt
+also drops its "keep the placeholders" line, since telling a model to preserve
+placeholders that were never introduced invites it to invent them, and invented
+placeholders read as redaction that did not happen.
+
+Either way this is an instruction to a model, not a guarantee. Treat a generated
+dataset from production traffic as needing the same review any export of that
+traffic would.
 
 ##### Why the opening message is generated, not replayed
 

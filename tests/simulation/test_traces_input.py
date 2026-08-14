@@ -713,3 +713,37 @@ async def test_datapoints_from_traces_inference_is_bounded_concurrent(
     assert [dp.id for dp in datapoints] == [f"trace-t{i}" for i in range(12)]
     assert state["peak"] > 1  # actually concurrent, not sequential
     assert state["peak"] <= traces_mod._INFER_CONCURRENCY
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("redact", [True, False])
+async def test_redaction_instruction_follows_the_flag(monkeypatch: pytest.MonkeyPatch, redact: bool) -> None:
+    """The knob is the prompt: on, every prompt carries the rule; off, none of them do."""
+    from evaluatorq.simulation import traces as traces_mod
+
+    parsed = traces_mod._InferredPersonaScenario(persona=_make_persona(), scenario=_make_scenario())
+    systems: list[str] = []
+
+    async def fake_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+        systems.append(kwargs["messages"][0]["content"])
+        if kwargs["response_format"] is traces_mod._ConversationSummary:
+            return traces_mod._ConversationSummary(summary="Wants a refund."), ""
+        return parsed, ""
+
+    monkeypatch.setattr(traces_mod, "generate_structured", fake_generate_structured)
+    _stub_first_message(monkeypatch, "Where is it?")
+
+    long_conversation = traces_mod.TraceConversation(
+        trace_id="long",
+        messages=[{"role": "user", "content": "z" * 5000}],
+    )
+    await datapoints_from_traces(
+        [long_conversation],
+        client=MagicMock(),
+        config=traces_mod.TraceAnalysisConfig(summarize_above_chars=1000, redact_pii=redact),
+    )
+
+    # Both the summarize prompt and the persona/scenario prompt, since either can
+    # copy an order number straight out of the transcript.
+    assert len(systems) == 2
+    assert all(("[CUSTOMER_NAME]" in s) is redact for s in systems)

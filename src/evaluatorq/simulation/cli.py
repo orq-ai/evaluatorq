@@ -1424,6 +1424,19 @@ def from_traces(
             ),
         ),
     ] = False,
+    redact_pii: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option(
+            '--redact-pii/--no-redact-pii',
+            help=(
+                'Instruct the model to replace identifying values (names, emails, '
+                'order numbers) with placeholders as it writes. On by default: these '
+                'datapoints come from real conversations and land in a file that gets '
+                'committed. Pass --no-redact-pii when the concrete values are the '
+                'point. Either way it is a model instruction, not a guarantee.'
+            ),
+        ),
+    ] = True,
     max_summaries: Annotated[
         int,
         typer.Option(
@@ -1474,6 +1487,7 @@ def from_traces(
     trace_config = TraceAnalysisConfig(
         generate_first_message=not replay_first_message,
         max_reduce_summaries=max_summaries,
+        redact_pii=redact_pii,
     )
 
     async def _impl() -> tuple[int, int, list[Any]]:
