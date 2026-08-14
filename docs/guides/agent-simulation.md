@@ -425,6 +425,52 @@ datapoints = await datapoints_from_traces(limit=50, lookback_hours=24)
 
 Full flag list: [`eq sim from-traces`](../cli-reference/simulation.md).
 
+#### What happens between a trace and a datapoint
+
+Fetching is shared; the two modes diverge at the LLM call. Direct mode sends one
+conversation per call, so nothing competes for the prompt budget. Extension mode
+concatenates many into a single call, because a *distribution* — which intents
+make up which share of traffic — is not visible from one conversation at a time.
+
+```mermaid
+flowchart TD
+    A["POST /v2/traces/v3oql<br/>paged listing"] --> B["GET /v2/traces/{id}/v3spans<br/>per trace, 5 at a time"]
+    B --> C["Reconstruct conversation<br/>root span first, then any span<br/>with messages; gen_ai attributes<br/>JSON-decoded"]
+    C --> D{"Has a usable<br/>user message?"}
+    D -- "no" --> E["Dropped, counted in a warning"]
+    D -- "yes" --> F["TraceConversation"]
+
+    F --> G["Direct mode<br/>datapoints_from_traces"]
+    F --> H["Extension mode<br/>extend_from_traces"]
+
+    G --> I["1 LLM call per conversation<br/>whole transcript, uncapped<br/>5 calls in flight"]
+    I --> J["Persona + Scenario<br/>first message copied verbatim<br/>from the real user"]
+    J --> K["SimulationDatapoint<br/>id = trace-{trace_id}"]
+
+    H --> L["1 LLM call for up to 30<br/>transcripts, 6000 chars each"]
+    L --> M["Traffic profile prose:<br/>intent mix and shares, tone and<br/>patience ranges, edge cases"]
+    M --> N["DatapointGenerator<br/>personas x scenarios<br/>grounded in that profile"]
+    N --> O["N new SimulationDatapoints<br/>synthetic, not replayed"]
+```
+
+The limits, and what each one actually protects:
+
+| Limit | Value | Why |
+|---|---|---|
+| Listing pages | 20 pages x 200 rows | Backstop against a page whose rows all lack `trace_id` looping forever, not a cost bound |
+| Span fetches in flight | 5 | Politeness to the traces API |
+| Inference calls in flight | 5 | Same width the datapoint generator uses |
+| Transcript sent to inference | uncapped | One conversation per call has nothing to share the budget with; truncating deletes the part being described |
+| Transcripts per profile call | 30 | They share one prompt |
+| Chars per transcript in that call | 6000 | Multiplied by 30, so this one is real |
+| Completion budget | 2000 tokens | Both calls |
+
+A trace that fails its span fetch, returns a non-list payload, or yields no user
+message is dropped with a warning rather than failing the batch — likewise an
+inference call that raises or returns nothing parseable. A short run that
+silently produced fewer datapoints than traces requested has those warnings
+behind it.
+
 #### Hand-picked seeds
 
 When you want curated archetypes rather than a straight pull from traffic, seed
