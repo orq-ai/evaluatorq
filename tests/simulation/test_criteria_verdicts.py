@@ -769,3 +769,159 @@ def test_criteria_met_is_zero_when_the_run_never_reached_the_audit(terminated_by
     with caplog.at_level('WARNING'):
         assert criteria_met_scorer(result) == 0.0
     assert terminated_by.value in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# `[]` vs `None`, and audits that survive parsing but match nothing
+# ---------------------------------------------------------------------------
+
+
+def test_an_empty_audit_while_criteria_are_unsettled_warns(caplog):
+    """`None` and `[]` are documented as different states, and they are — but while
+    something is still unsettled both mean the turn carried no evidence, so both
+    must warn. Only warning for `None` left the `[]` path silent, two adjacent
+    branches differing in whether they log."""
+    judge = _judge()  # nothing marked settled
+    result = _llm_result(
+        'continue_conversation',
+        {'reason': 'r', 'goal_completion_score': 0.5, 'criteria_verdicts': []},
+    )
+    with caplog.at_level('WARNING'):
+        judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+
+    assert judgment.criteria_verdicts == []  # still distinct from None on the wire
+    assert 'empty criteria_verdicts list' in caplog.text
+    assert '2 unsettled criteria' in caplog.text
+
+
+def test_an_empty_audit_never_marks_a_run_verified():
+    """`[]` is trusted as 'nothing left to report' only because something was
+    already reported. A run whose every turn returned `[]` audited nothing."""
+    t = _CriteriaTracker(_scenario())
+    t.observe([])
+    assert t.verified is False
+
+
+def test_every_verdict_dropped_against_the_scenario_is_unknown_not_empty(caplog):
+    """The two 'everything got dropped' branches must agree. `_keep_usable_verdicts`
+    already returned None when every entry was malformed; the scenario-resolution
+    pass returned `[]` for the identical situation, which is a public claim that
+    the judge audited and found nothing."""
+    judge = _judge()
+    result = _llm_result(
+        'continue_conversation',
+        {
+            'reason': 'r',
+            'goal_completion_score': 0.0,
+            'criteria_verdicts': [
+                {'criterion_id': 'criteria_5', 'occurred': True, 'evidence': 'x'},
+                {'criterion_id': 'criteria_9', 'occurred': True, 'evidence': 'y'},
+            ],
+        },
+    )
+    with caplog.at_level('WARNING'):
+        judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+
+    assert judgment.criteria_verdicts is None
+    assert 'unknown, not an empty audit' in caplog.text
+
+
+def test_a_non_canonical_criterion_id_is_dropped_at_parse_time(caplog):
+    """`criteria_01` matches the id pattern and yields index 1, so the index-based
+    range check accepts it — and then `_CriteriaTracker`, which matches the exact
+    id string, discards it. That seam let a wholly misattributed audit mark a run
+    verified while every criterion kept its not-observed default."""
+    judge = _judge()
+    result = _llm_result(
+        'continue_conversation',
+        {
+            'reason': 'r',
+            'goal_completion_score': 0.0,
+            'criteria_verdicts': [{'criterion_id': 'criteria_01', 'occurred': True, 'evidence': 'a plan'}],
+        },
+    )
+    with caplog.at_level('WARNING'):
+        judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+
+    assert judgment.criteria_verdicts is None
+    assert 'non-canonical-id' in caplog.text
+
+
+def test_an_audit_matching_no_scenario_criterion_does_not_mark_the_run_verified(caplog):
+    """The tracker used to set its verified flag before filtering unknown ids, so a
+    payload it then discarded entirely still claimed the run was audited."""
+    t = _CriteriaTracker(_scenario())
+    with caplog.at_level('WARNING'):
+        t.observe(_occurred({'criteria_7': True, 'criteria_8': True}))
+
+    assert t.verified is False
+    assert t.audited_ids == frozenset()
+    assert 'discarding them' in caplog.text
+
+
+def test_a_partially_matching_audit_still_marks_the_run_verified():
+    """One good entry is a real audit; the guard above must not swallow it."""
+    t = _CriteriaTracker(_scenario())
+    t.observe(_occurred({'criteria_0': True, 'criteria_7': True}))
+    assert t.verified is True
+    assert t.audited_ids == frozenset({'criteria_0'})
+
+
+# ---------------------------------------------------------------------------
+# A target failure must not discard the audit collected before it
+# ---------------------------------------------------------------------------
+
+
+async def _run_until_target_dies(script: list[dict[str, bool] | None], *, die_on_turn: int):
+    """Run with a target that raises from ``die_on_turn`` (1-based) onwards."""
+    calls = {'n': 0}
+
+    async def target(messages):  # noqa: ANN001
+        calls['n'] += 1
+        if calls['n'] >= die_on_turn:
+            raise RuntimeError('target exploded')
+        return AgentResponse(text='Which plan are you interested in?')
+
+    runner = SimulationRunner(
+        target=target,
+        max_turns=6,
+        max_target_retries=0,
+        user_simulator=_FakeSimulator(),  # pyright: ignore[reportArgumentType]
+        judge=_FakeJudge(script, terminate=False),  # pyright: ignore[reportArgumentType]
+    )
+    try:
+        return await runner.run(persona=_persona(), scenario=_scenario())
+    finally:
+        await runner.close()
+
+
+@pytest.mark.asyncio
+async def test_a_target_failure_keeps_the_safety_violation_the_judge_confirmed():
+    """The judge confirms a ``must_not_happen`` violation on turn 1; the target dies
+    on turn 2. The violation has to survive into the result, the report metadata and
+    `find_triggers` — it used to vanish, because the target-failure branch returned
+    ``rules_broken=[]`` and ``criteria_meta=None`` while the tracker sat in scope."""
+    result = await _run_until_target_dies([{'criteria_0': False, 'criteria_1': True}], die_on_turn=2)
+
+    assert result.terminated_by is TerminatedBy.error
+    assert 'criteria_1' in result.rules_broken  # the confirmed violation
+    meta = result.metadata['criteria_meta']
+    assert meta is not None
+    violated = next(c for c in meta if c['id'] == 'criteria_1')
+    assert violated['passed'] is False
+    assert violated['audited'] is True
+    assert violated['evidence'] == 'q'
+    assert result.criteria_verified is True
+    # The run still cannot claim a clean sheet: it terminated by error.
+    assert criteria_met_scorer(result) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_a_target_failure_before_any_audit_reports_unverified():
+    """No audit ever arrived, so the fold has nothing to say and must not pretend
+    otherwise — `criteria_verified` stays False."""
+    result = await _run_until_target_dies([None], die_on_turn=1)
+
+    assert result.terminated_by is TerminatedBy.error
+    assert result.criteria_verified is False
+    assert criteria_met_scorer(result) == 0.0

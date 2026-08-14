@@ -280,29 +280,42 @@ def _first_error(err: ValidationError) -> str:
 def _resolve_against_scenario(
     verdicts: list[CriterionVerdict],
     info: ValidationInfo,
-) -> list[CriterionVerdict]:
+) -> list[CriterionVerdict] | None:
     """Apply the checks that need to know which scenario produced these verdicts.
 
-    Shape is `CriterionVerdict`'s job; these two are not shape:
+    Shape is `CriterionVerdict`'s job; these three are not shape:
 
     - an id outside the scenario's criteria is perfectly well-formed, so it would
       otherwise sail through validation and then match nothing
+    - a non-canonical spelling of an in-range id (``criteria_01`` matches the id
+      pattern and yields index 1) passes every check *here* — which gates on the
+      numeric ``.index`` — and is then discarded downstream by `_CriteriaTracker`,
+      which matches the exact ``criterion_id`` string. The design's premise is
+      that id and index can never disagree, so require the canonical spelling and
+      close that seam rather than let a misattributed audit look accepted.
     - a duplicate id would let the last entry silently win
+
+    Returns ``None`` — *unknown* — when a non-empty payload loses **every** entry,
+    matching `_keep_usable_verdicts`' rule that a salvage which saved nothing is
+    not "audited and clean". An audit that arrived empty still returns ``[]``.
 
     Sorted on the way out, so nothing downstream depends on the order the model
     happened to emit.
     """
     count = (info.context or {}).get('criteria_count')
     kept: dict[int, CriterionVerdict] = {}
-    unknown = duplicate = 0
+    unknown = miswritten = duplicate = 0
     for verdict in verdicts:
         if count is not None and verdict.index >= count:
             unknown += 1
             continue
+        if verdict.criterion_id != criterion_id_for(verdict.index):
+            miswritten += 1
+            continue
         if verdict.index in kept:
             duplicate += 1
         kept[verdict.index] = verdict
-    for label, dropped in (('out-of-range', unknown), ('duplicate', duplicate)):
+    for label, dropped in (('out-of-range', unknown), ('non-canonical-id', miswritten), ('duplicate', duplicate)):
         if dropped:
             logger.warning(
                 'JudgeAgent: discarded %d %s criteria_verdicts entr(y/ies) against a scenario with %s '
@@ -311,6 +324,12 @@ def _resolve_against_scenario(
                 label,
                 count,
             )
+    if verdicts and not kept:
+        logger.warning(
+            'JudgeAgent: every criteria_verdicts entry was discarded against the scenario; this turn '
+            'contributes no criteria evidence (unknown, not an empty audit).',
+        )
+        return None
     return [kept[index] for index in sorted(kept)]
 
 
@@ -717,12 +736,20 @@ class JudgeAgent(BaseAgent):
             return _safety_terminate('Failed to parse judgment decision - terminating for safety')
 
         # Settled criteria are excluded from the audit on purpose, so an empty
-        # payload is only suspicious while something is still unsettled.
+        # payload is only suspicious while something is still unsettled. `None`
+        # (told us nothing) and `[]` (claims it audited and had nothing to report)
+        # are documented as different states, but while something is unsettled
+        # both are the same failure — the turn carries no evidence — so both warn.
+        # Neither marks the run verified: `_CriteriaTracker.observe` ignores an
+        # empty list.
         unsettled = len(self._criteria) - len(self._settled)
-        if unsettled > 0 and args.criteria_verdicts is None:
+        if unsettled > 0 and not args.criteria_verdicts:
             logger.warning(
-                'JudgeAgent: no criteria_verdicts returned for %d unsettled criteria; this turn '
-                'contributes no criteria evidence and must_happen cannot be scored from it.',
+                'JudgeAgent: %s for %d unsettled criteria; this turn contributes no criteria '
+                'evidence and must_happen cannot be scored from it.',
+                'no criteria_verdicts returned'
+                if args.criteria_verdicts is None
+                else 'an empty criteria_verdicts list',
                 unsettled,
             )
         # Derived from the audit for BOTH tools: neither asks for a free-text

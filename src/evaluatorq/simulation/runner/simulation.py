@@ -220,10 +220,18 @@ class _CriteriaTracker:
         Takes the verdict list, not the whole `Judgment`: the audit is the only
         part of a judgment this tracker may read, and `Judgment.rules_broken` is
         precisely the channel it exists to stop trusting.
+
+        An empty list is **not** an audit for `verified` purposes. It legitimately
+        means "everything is settled, nothing left to report" — but only once
+        something *has* been reported, which by definition already set the flag. A
+        run whose every turn returned ``[]`` audited nothing, and the judge warns
+        about that at the point it happens (`JudgeAgent._parse_judgment`).
+        Likewise a payload whose every id is unknown to this scenario is a
+        misattributed audit, not a verified one: the flag is set below, after the
+        filter, not before it.
         """
         if not verdicts:
             return
-        self._any_audit = True
         unknown = [v.criterion_id for v in verdicts if v.criterion_id not in self._occurred]
         if unknown:
             # A valid-shaped entry for a nonexistent id is not counted as malformed
@@ -240,6 +248,7 @@ class _CriteriaTracker:
             cid = verdict.criterion_id
             if cid not in self._occurred:
                 continue
+            self._any_audit = True
             self._seen.add(cid)
             # Sticky: the first turn that saw it is the one whose quote is kept, so
             # later turns cannot overwrite the evidence with a weaker restatement.
@@ -251,6 +260,15 @@ class _CriteriaTracker:
     def _passed(self, index: int) -> bool:
         occurred = self._occurred[criterion_id_for(index)]
         return occurred if self._criteria[index].type == 'must_happen' else not occurred
+
+    @property
+    def broken_ids(self) -> list[str]:
+        """Run-level ``rules_broken``: every criterion the folded audit failed.
+
+        The single computation of that list, so `resolve` (normal termination) and
+        the target-failure branch cannot disagree about what the audit said.
+        """
+        return [criterion_id_for(i) for i in range(len(self._criteria)) if not self._passed(i)]
 
     def resolve(self, judgment: Judgment) -> Judgment:
         """Return ``judgment`` with ``rules_broken`` replaced by the run-level verdict.
@@ -290,8 +308,7 @@ class _CriteriaTracker:
                 ', '.join(sorted(unaudited)),
                 self._scenario_name,
             )
-        broken = [criterion_id_for(i) for i in range(len(self._criteria)) if not self._passed(i)]
-        return judgment.model_copy(update={'rules_broken': broken})
+        return judgment.model_copy(update={'rules_broken': self.broken_ids})
 
 
 def _build_criteria_results(scenario: Scenario, judgment: Judgment) -> dict[str, bool]:
@@ -783,6 +800,7 @@ class SimulationRunner:
                         run_span=run_span,
                         total_usage=_get_total_usage(),
                         target_model=target_model_holder['model'],
+                        criteria_tracker=criteria_tracker,
                     )
 
                 # Record this successful target response's trace/span handles (in
@@ -977,6 +995,7 @@ class SimulationRunner:
         run_span: Span | None,
         total_usage: TokenUsage,
         target_model: str | None,
+        criteria_tracker: _CriteriaTracker,
     ) -> SimulationResult:
         """Terminate the run after the target exhausted its retries.
 
@@ -986,6 +1005,14 @@ class SimulationRunner:
         and retains prior ``messages``/``turn_metrics``. A ``timeout`` error type
         maps to `TerminatedBy.timeout`, everything else to
         `TerminatedBy.error`.
+
+        The criteria audit collected before the target died is **folded in like
+        every other termination branch**, not discarded: a `must_not_happen`
+        violation the judge confirmed on turn 2 has to survive the target dying on
+        turn 4, or it vanishes from the result, the report and `find_triggers`.
+        `criteria_verified` still comes from the tracker, and this run is scored
+        0.0 by `criteria_met` regardless (it terminated by error/timeout), so the
+        fold adds evidence without letting a dead target claim a clean sheet.
         """
         err = call.error
         error_message = err.message if err else 'target failed'
@@ -1002,7 +1029,27 @@ class SimulationRunner:
             },
         )
 
-        metadata = _build_simulation_metadata(persona, scenario, None, target_model)
+        broken = criteria_tracker.broken_ids
+        folded = Judgment(
+            should_terminate=True,
+            reason=error_message,
+            goal_achieved=False,
+            rules_broken=broken,
+            goal_completion_score=0.0,
+        )
+        criteria_meta = (
+            _build_criteria_meta(scenario, folded, criteria_tracker.audited_ids, criteria_tracker.evidence)
+            if scenario
+            else None
+        )
+        if broken:
+            logger.warning(
+                'Target failed (%s) after the judge had already failed %s; keeping those criteria '
+                'verdicts on the errored result.',
+                error_type,
+                ', '.join(broken),
+            )
+        metadata = _build_simulation_metadata(persona, scenario, criteria_meta, target_model)
         metadata['error'] = error_message
         metadata['error_type'] = error_type
         return SimulationResult(
@@ -1011,10 +1058,12 @@ class SimulationRunner:
             reason=error_message,
             goal_achieved=False,
             goal_completion_score=0,
-            rules_broken=[],
+            rules_broken=broken,
             turn_count=turn_count,
             turn_metrics=turn_metrics_list,
             token_usage=total_usage,
+            criteria_results=_build_criteria_results(scenario, folded) if scenario else None,
+            criteria_verified=criteria_tracker.verified,
             metadata=metadata,
         )
 
