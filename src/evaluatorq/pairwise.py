@@ -278,11 +278,12 @@ def repetition_consistency(comparisons: Sequence[PairwiseComparison]) -> dict[st
     Empty dict when no judge has any qualifying group (e.g. repetitions=1 or a
     legacy run without observations).
 
-    Known trade-off (RES-1251, for sign-off): the per-judge mean over groups is
-    UNWEIGHTED, so at the recommended R=2 - where a group's agreement is only 0.0
-    or 1.0 - a judge with one lucky group counts the same as a judge with many.
-    Shrinkage toward the panel mean by group count would damp that; deferred as a
-    modelling decision rather than changed unilaterally.
+    At the recommended R=2 a group's agreement is only 0.0 or 1.0, so a judge with
+    one lucky group would otherwise carry the same weight as a judge with many.
+    Each judge's mean is therefore SHRUNK toward the panel mean by its evidence
+    count (empirical-Bayes, ``_SHRINKAGE_PSEUDO_OBS`` pseudo-observations at the
+    panel mean), so thin evidence is pulled to neutral and cannot dominate a run
+    (RES-1251, signed off in review).
     """
     per_judge: dict[str, list[float]] = {}
     for c in comparisons:
@@ -308,12 +309,29 @@ def repetition_consistency(comparisons: Sequence[PairwiseComparison]) -> dict[st
             n_obs = len(v.observations)
             completion = max(0.0, (n_obs - v.repetition_failures) / n_obs) if n_obs else 1.0
             per_judge.setdefault(v.model, []).append(agreement * completion)
-    return {judge: sum(xs) / len(xs) for judge, xs in sorted(per_judge.items())}
+    if not per_judge:
+        return {}
+    # Raw per-judge mean and its evidence count (comparisons with a qualifying group).
+    raw = {judge: (sum(xs) / len(xs), len(xs)) for judge, xs in per_judge.items()}
+    panel_mean = sum(mean for mean, _ in raw.values()) / len(raw)
+    # Empirical-Bayes shrinkage toward the panel mean by evidence count, so a judge
+    # with one lucky R=2 group is pulled to neutral instead of carrying full weight.
+    k = _SHRINKAGE_PSEUDO_OBS
+    return {judge: (n * mean + k * panel_mean) / (n + k) for judge, (mean, n) in sorted(raw.items())}
 
 
 # Floor for consistency-derived weights: a judge that never agreed with itself
 # still casts a (heavily discounted) vote rather than being erased outright.
 _MIN_CONSISTENCY_WEIGHT = 0.05
+
+# Empirical-Bayes shrinkage strength for repetition_consistency: pseudo-observations
+# at the panel mean, so a judge with thin evidence is pulled toward neutral (RES-1251).
+_SHRINKAGE_PSEUDO_OBS = 1.0
+
+# Reliability weighting from repetition consistency needs a quorum of judges with
+# evidence. Below this the borrowed fallback is effectively one judge's own value,
+# so we skip repetition weighting and keep the pooled fit instead (RES-1251 review).
+_MIN_MEASURED_JUDGES = 2
 
 
 def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAggregation:
@@ -374,8 +392,17 @@ def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAg
     # fit only loses the run-level headline - repetition evidence still weights
     # the winners (RES-1251). Without repeats, fall back as before.
     rep_consistency = repetition_consistency(comparisons)
+    # Reliability weighting needs a quorum of judges with repetition evidence; below
+    # that the borrowed fallback is one judge's own value, so keep the pooled fit and
+    # say so rather than weight the whole panel off a single judge (RES-1251 review).
+    rep_active = len(rep_consistency) >= _MIN_MEASURED_JUDGES
+    if rep_consistency and not rep_active:
+        fit_warnings.append(
+            f'repetition weighting skipped: only {len(rep_consistency)} judge(s) had repeated decisive '
+            f'observations, need >= {_MIN_MEASURED_JUDGES}; using the pooled two-item fit'
+        )
     if not fit.converged:
-        if not rep_consistency:
+        if not rep_active:
             fit_warnings.append('non-converged fit: used uniform plurality winners instead')
             return _uniform_plurality_aggregation(comparisons, fit_warnings, converged=False)
         fit_warnings.append(
@@ -395,7 +422,7 @@ def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAg
         for judge in sorted(one_sided):
             weights[judge] = neutral
             direction = next(iter(vote_counts[judge]))
-            if rep_consistency:
+            if rep_active:
                 # The repetition block below replaces every weight, so the
                 # neutral assignment never survives; only the sigma exclusion
                 # is real on this path.
@@ -421,7 +448,7 @@ def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAg
     # datapoint heterogeneity structurally cannot masquerade as judge noise.
     # The pooled fit still supplies the run-level headline (p_a_beats_b) - two
     # different questions, two different estimators.
-    if rep_consistency:
+    if rep_active:
         weights = {judge: max(c, _MIN_CONSISTENCY_WEIGHT) for judge, c in rep_consistency.items()}
         voted = {v.model for c in comparisons for v in c.votes if v.vote is not None}
         fallback = statistics.median(weights.values()) if weights else 1.0

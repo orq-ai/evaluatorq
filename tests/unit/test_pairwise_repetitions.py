@@ -166,7 +166,11 @@ def _run_with_repeats() -> list[PairwiseComparison]:
 
 def test_weights_come_from_consistency_and_decide_winners() -> None:
     block = bt_sigma_aggregation(_run_with_repeats())
-    assert block.repetition_consistency == {'coin': 0.0, 'steady': 1.0}
+    rc = block.repetition_consistency
+    # Shrunk toward the panel mean (RES-1251), so strictly inside (0, 1), but the
+    # self-consistent judge is still clearly separated from the coin-flipper.
+    assert 0.9 < rc['steady'] < 1.0
+    assert 0.0 < rc['coin'] < 0.1
     # The self-consistent judge wins every row against the coin-flipper.
     assert block.winners == ['A' if k != 1 else 'B' for k in range(12)]
     assert any('repetition consistency' in w for w in block.fit_warnings)
@@ -178,8 +182,8 @@ def test_judge_stats_surface_repetition_consistency() -> None:
     # onto each JudgeStats.
     report = build_report(_run_with_repeats(), aggregation='bt-sigma')
     by_model = {j.model: j for j in report.per_judge}
-    assert by_model['steady'].consistency == 1.0
-    assert by_model['coin'].consistency == 0.0
+    assert by_model['steady'].consistency is not None and by_model['steady'].consistency > 0.9
+    assert by_model['coin'].consistency is not None and by_model['coin'].consistency < 0.1
 
 
 def test_repetition_count_does_not_multiply_panel_weight() -> None:
@@ -215,8 +219,9 @@ def test_failed_pass_lowers_consistency_but_a_clean_abstention_does_not() -> Non
     flaky = _vote('flaky', 'A', [_obs('ab', 0, 'A'), _obs('ab', 1, 'A'), _obs('ab', 2, None)], repetition_failures=1)
     careful = _vote('careful', 'A', [_obs('ab', 0, 'A'), _obs('ab', 1, 'A'), _obs('ab', 2, None)])
     consistency = repetition_consistency([_comparison([flaky, careful])])
-    assert consistency['careful'] == 1.0
-    assert consistency['flaky'] == 2 / 3  # agreement 1.0 x completion (2 of 3 passes usable)
+    # The errored pass discounts flaky's reliability (agreement 1.0 x completion 2/3 before
+    # shrinkage); the clean abstention costs careful nothing, so careful outranks flaky.
+    assert consistency['careful'] > consistency['flaky']
 
 
 def test_one_sided_warning_on_repetition_path_matches_actual_weighting() -> None:
@@ -233,7 +238,29 @@ def test_one_sided_warning_on_repetition_path_matches_actual_weighting() -> None
     assert 'weighted neutrally' not in warning
     assert 'always-a' not in block.judge_sigmas
     # And the claim is true: the judge carries its own consistency weight.
-    assert block.repetition_consistency['always-a'] == 1.0
+    assert block.repetition_consistency['always-a'] > 0.9
+
+
+def test_reliability_weighting_needs_a_quorum_of_measured_judges() -> None:
+    # Only one judge has repetition evidence, so the panel must not be weighted off
+    # that single judge's value; repetition weighting is skipped for the pooled fit.
+    agree = [_obs('ab', 0, 'A'), _obs('ab', 1, 'A')]
+    rows = [_comparison([_vote('measured', 'A', agree), _vote('bare', 'B', [])]) for _ in range(6)]
+    block = bt_sigma_aggregation(rows)
+    assert any('repetition weighting skipped' in w and 'need >= 2' in w for w in block.fit_warnings)
+
+
+def test_shrinkage_damps_a_judge_with_thin_evidence() -> None:
+    # 'many' and 'few' both agree on every pass (raw 1.0), but 'many' has many
+    # comparisons of evidence and 'few' has one. A 'noisy' judge pulls the panel
+    # mean below 1.0, so the thin-evidence judge is shrunk further toward it.
+    agree = [_obs('ab', 0, 'A'), _obs('ab', 1, 'A')]
+    disagree = [_obs('ab', 0, 'A'), _obs('ab', 1, 'B')]
+    rows = [_comparison([_vote('many', 'A', agree), _vote('noisy', None, disagree)]) for _ in range(8)]
+    rows.append(_comparison([_vote('few', 'A', agree), _vote('noisy', None, disagree)]))
+    consistency = repetition_consistency(rows)
+    assert consistency['many'] > consistency['few']  # same raw 1.0, more evidence -> less shrinkage
+    assert consistency['few'] < 1.0  # thin evidence pulled toward the panel mean
 
 
 def test_repeat_datapoint_count_requires_repeats_within_one_ordering() -> None:
@@ -293,7 +320,8 @@ def test_nonconverged_fit_still_uses_consistency_weights(monkeypatch) -> None:
     assert block.converged is False
     assert block.p_a_beats_b == 0.5
     assert block.skill_gap == 0.0
-    assert block.repetition_consistency == {'coin': 0.0, 'steady': 1.0}
+    assert 0.9 < block.repetition_consistency['steady'] < 1.0
+    assert 0.0 < block.repetition_consistency['coin'] < 0.1
     # Winners still come from consistency weights, not uniform plurality.
     assert block.winners == ['A' if k != 1 else 'B' for k in range(12)]
     assert any('non-converged' in w for w in block.fit_warnings)
@@ -333,7 +361,7 @@ def test_end_to_end_pipeline_with_repetitions() -> None:
         assert len(steady_vote.observations) == 6  # 3 reps x 2 orderings
         assert {o.verdict for o in steady_vote.observations} == {'A'}  # canonicalized both orderings
     block = bt_sigma_aggregation(rows)
-    assert block.repetition_consistency['steady'] == 1.0
+    assert block.repetition_consistency['steady'] > block.repetition_consistency['coin']
     assert block.repetition_consistency['coin'] < 1.0
     assert set(block.winners) == {'A'}
 
