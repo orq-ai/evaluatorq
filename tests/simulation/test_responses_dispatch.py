@@ -152,6 +152,35 @@ class TestCallLlmDispatch:
         client.chat.completions.create.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_assistant_turns_are_sent_as_output_text_parts(self):
+        """Assistant history must reach the wire as ``output_text`` parts (RES-1308).
+
+        The Orq router silently drops an assistant input item whose content is a
+        bare string or ``input_text`` parts — the model then sees a transcript with
+        no agent replies in it, which is how a simulation judge ended up unable to
+        fail any criterion about agent behaviour. Guards against `_call_responses`
+        going back to hand-building the input list instead of delegating to
+        `messages_to_responses_input`.
+        """
+        client = _make_client()
+        mock_response = MagicMock()
+        mock_response.output = []
+        mock_response.usage = None
+        client.responses.create = AsyncMock(return_value=mock_response)
+
+        config = LLMCallConfig(model="gpt-4o", api="responses", client=client)
+        agent = _ConcreteAgent(config)
+
+        await agent._call_llm([
+            Message(role="user", content="hi"),
+            Message(role="assistant", content="hello there"),
+        ])
+
+        sent = client.responses.create.await_args.kwargs["input"]
+        assistant = [item for item in sent if item["role"] == "assistant"]
+        assert assistant == [{"role": "assistant", "content": [{"type": "output_text", "text": "hello there"}]}]
+
+    @pytest.mark.asyncio
     async def test_responses_path_converts_function_tools_to_chat_style_result(self):
         client = _make_client()
 
