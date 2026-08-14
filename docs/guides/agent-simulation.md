@@ -348,7 +348,9 @@ the judge actually returned a verdict for that criterion:
 
 ```python
 for c in result.metadata['criteria_meta']:
-    if not c['passed'] and not c['audited']:
+    # `is False` — not `not c['audited']`: `None` means the run predates the
+    # field, which is unknown, not "the judge skipped it".
+    if not c['passed'] and c['audited'] is False:
         print(f"{c['id']} failed by default — the judge never reported on it")
 ```
 
@@ -360,6 +362,13 @@ Each entry also carries **`evidence`** — the quote from the turn where the
 criterion's occurrence first flipped, taken from the judge's `criteria_verdicts`
 audit. It is `''` when the criterion never occurred (or occurred without a
 tracked quote) and `None` when no tracker was available, same as `audited`.
+
+Both keys reach the reports. A criterion that passed only because nobody audited
+it renders as **not audited** (a neutral `?`, never a green tick) in the dashboard,
+the HTML report and the markdown export, and is counted separately from the
+"N/M criteria met" tally; `evidence` is shown beside the criterion it justifies. A
+run with `criteria_verified = False` says so above the criteria list rather than
+showing a tally that contradicts its `criteria_met` score of `0.0`.
 
 !!! warning "A custom `judge=` must report per-criterion verdicts"
 
