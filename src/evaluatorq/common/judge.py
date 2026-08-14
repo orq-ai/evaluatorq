@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from openai import APIConnectionError, APIStatusError, APITimeoutError, BadRequestError
@@ -23,6 +23,7 @@ from evaluatorq.common.retry import with_retry
 from evaluatorq.common.template_engine import render_template
 from evaluatorq.common.tracing import with_llm_span
 from evaluatorq.contracts import (
+    Endpoint,
     LLMCallConfig,
     Message,
     OutputMessage,
@@ -88,7 +89,7 @@ class JudgeOutcome(BaseModel):
     error_message: str | None = None
     error_exc: Exception | None = None
     timeout_ms: int | None = None
-    endpoint: Literal['chat', 'responses'] | None = Field(
+    endpoint: Endpoint | None = Field(
         default=None,
         description='Which endpoint actually served the verdict. Lets a report tell '
         '"the model is not in the catalogue" apart from "Responses fell back to chat" '
@@ -688,7 +689,7 @@ async def run_judge(
             # a chat call, and the Responses path returned before it opened.
             return (await _chat_verdict(span)).model_copy(update={'endpoint': 'chat'})
 
-    def _failed_endpoint() -> Literal['chat', 'responses']:
+    def _failed_endpoint() -> Endpoint:
         """The endpoint that was in flight when the attempt raised.
 
         Known, not guessed: inside `_attempt` the Responses call runs first and

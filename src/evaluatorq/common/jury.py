@@ -19,23 +19,13 @@ from evaluatorq.common.tracing import (
     truncate_for_span,
     with_span,
 )
-from evaluatorq.contracts import JuryResult, JuryStats, JuryVote, StrEnum, TokenUsage
+from evaluatorq.contracts import Endpoint, EndpointFold, JuryResult, JuryStats, JuryVote, StrEnum, TokenUsage
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
 VerdictValue = bool | float | str
 TieBreak = Callable[[list[VerdictValue]], VerdictValue | None]
-
-# The endpoint vocabulary a single judge pass can report, and the folded form
-# used once several passes (repetitions, judges, or pairwise orderings) have
-# been reduced to one provenance label. Declared once here rather than
-# repeated as an inline `Literal[...]` at every call site — `pairwise.py`
-# imports both. TODO(follow-up): move these to `contracts.py` alongside the
-# other cross-subpackage literals and update `judge.py` (which still declares
-# its own copy at `judge.py:91`) to import from there.
-Endpoint = Literal['chat', 'responses']
-EndpointFold = Literal['chat', 'responses', 'mixed']
 
 _UNSWAP = {'A': 'B', 'B': 'A'}
 

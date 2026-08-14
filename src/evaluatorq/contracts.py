@@ -413,6 +413,16 @@ def _clamped_cost(usage: Any, keys: tuple[str, ...]) -> float | None:
     return raw
 
 
+# The endpoint vocabulary a single judge pass can report, and the folded form used
+# once several passes (repetitions, judges, or pairwise orderings) have been reduced
+# to one provenance label. Declared here rather than repeated as an inline
+# `Literal[...]` in `common/judge.py`, `common/jury.py` and `pairwise.py`: a third
+# endpoint would otherwise mean editing four declarations, and the widening relation
+# (a fold is an `Endpoint` or `'mixed'`) is only legible when the two sit together.
+Endpoint = Literal['chat', 'responses']
+EndpointFold = Literal['chat', 'responses', 'mixed']
+
+
 def resolve_cost_source(priced_calls: int, estimated_calls: int) -> Literal['provider', 'catalogue', 'mixed'] | None:
     """Derive cost provenance from priced/estimated call counts.
 

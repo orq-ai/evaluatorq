@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING, Literal, cast
 from pydantic import BaseModel, Field
 
 from evaluatorq.common.jury import (
-    EndpointFold,
     Prediction,
     VerdictValue,
     _agreement_rate,
@@ -30,7 +29,10 @@ from evaluatorq.common.jury import (
     resolve_panel,
 )
 from evaluatorq.common.tracing import current_otel_context, set_span_attrs, with_span
-from evaluatorq.contracts import TokenUsage  # noqa: TC001  # runtime-needed: pydantic field type on PairwiseComparison
+from evaluatorq.contracts import (  # noqa: TC001  # runtime-needed: pydantic field types on PairwiseComparison
+    EndpointFold,
+    TokenUsage,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
