@@ -130,7 +130,7 @@ def _build_objective_prompt(
         ', '.join(m.key or m.id for m in agent_context.memory_stores) if agent_context.memory_stores else 'None'
     )
     prompt_text = agent_context.instructions or agent_context.system_prompt or ''
-    instructions_excerpt = prompt_text[:500] + '...' if prompt_text else 'Not available'
+    instructions_excerpt = prompt_text or 'Not available'
 
     if turn_type is None:
         turn_type_guidance = (

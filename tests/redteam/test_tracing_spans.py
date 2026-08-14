@@ -199,7 +199,7 @@ async def test_red_team_owns_whole_pipeline_span(
             mode=mode,
             llm_client=MagicMock(),
             dataset='local.json',
-            generate_recommendations=True,
+            recommendations=True,
             generate_executive_summary=True,
             save=SaveMode.NONE,
         )
@@ -262,7 +262,7 @@ async def test_root_span_carries_evaluatorq_run_id(
             mode='static',
             llm_client=MagicMock(),
             dataset='local.json',
-            generate_recommendations=True,
+            recommendations=True,
             generate_executive_summary=True,
             save=SaveMode.NONE,
         )

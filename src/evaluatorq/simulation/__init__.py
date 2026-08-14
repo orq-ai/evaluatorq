@@ -100,10 +100,12 @@ if TYPE_CHECKING:
     )
     from evaluatorq.simulation.runner.simulation import SimulationRunner
     from evaluatorq.simulation.traces import (
+        TraceAnalysisConfig,
         TraceConversation,
         datapoints_from_traces,
         extend_from_traces,
         fetch_trace_conversations,
+        summarize_conversations,
     )
     from evaluatorq.simulation.types import (
         CRITERION_ID_PATTERN,
@@ -270,6 +272,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
         'evaluatorq.simulation.utils.prompt_builders',
         'generate_datapoint',
     ),
+    'TraceAnalysisConfig': ('evaluatorq.simulation.traces', 'TraceAnalysisConfig'),
     'TraceConversation': ('evaluatorq.simulation.traces', 'TraceConversation'),
     'fetch_trace_conversations': (
         'evaluatorq.simulation.traces',
@@ -280,6 +283,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
         'datapoints_from_traces',
     ),
     'extend_from_traces': ('evaluatorq.simulation.traces', 'extend_from_traces'),
+    'summarize_conversations': (
+        'evaluatorq.simulation.traces',
+        'summarize_conversations',
+    ),
     'wrap_simulation_agent': (
         'evaluatorq.simulation.wrap_agent',
         'wrap_simulation_agent',
@@ -376,6 +383,7 @@ __all__ = [
     'TerminatedBy',
     'TokenUsage',
     # Traces input
+    'TraceAnalysisConfig',
     'TraceConversation',
     'TurnMetrics',
     'UserSimulatorAgent',
@@ -413,6 +421,7 @@ __all__ = [
     'results_to_jsonl',
     # High-level API
     'simulate',
+    'summarize_conversations',
     # Conversion
     'to_open_responses',
     # Job wrapper

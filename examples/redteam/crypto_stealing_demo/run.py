@@ -89,7 +89,7 @@ async def main() -> None:
         attacker_instructions=attacker_instructions,
         parallelism=20,
         llm_config=LLMConfig(attacker=model, evaluator=model),
-        generate_recommendations=True,
+        recommendations=True,
         verbosity=0,
         name="AI Builders - Red Teaming Demo",
     )

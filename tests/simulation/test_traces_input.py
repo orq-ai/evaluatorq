@@ -16,6 +16,7 @@ from evaluatorq.simulation.traces import (
     datapoints_from_traces,
     extend_from_traces,
     fetch_trace_conversations,
+    summarize_conversations,
 )
 from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario
 
@@ -347,9 +348,7 @@ async def test_fetch_trace_conversations() -> None:
 
 @pytest.mark.asyncio
 async def test_fetch_pagination_terminates_on_unusable_pages() -> None:
-    """Pages with rows lacking trace_id must not loop forever (hard page cap)."""
-    from evaluatorq.simulation.traces import _MAX_PAGES
-
+    """Pages with rows lacking trace_id must not loop forever: stop on no progress."""
     requests_made = {"n": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -365,7 +364,33 @@ async def test_fetch_pagination_terminates_on_unusable_pages() -> None:
         )
 
     assert conversations == []
-    assert requests_made["n"] == _MAX_PAGES
+    # One page proves the point — a second could not add rows the first didn't.
+    assert requests_made["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_honours_a_limit_beyond_one_page() -> None:
+    """A limit larger than the API page size pages until it is met, not until a page cap."""
+    pages_served = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "v3spans" in str(request.url):
+            return httpx.Response(200, json=[])
+        pages_served["n"] += 1
+        start = (pages_served["n"] - 1) * 200
+        return httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"trace_id": f"t{i}"} for i in range(start, start + 200)],
+                "has_more": True,
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await fetch_trace_conversations(limit=5000, api_key="test-key", http_client=client)
+
+    assert pages_served["n"] == 25  # 5000 / 200, not a fixed ceiling of 20
 
 
 @pytest.mark.asyncio
@@ -383,16 +408,25 @@ async def test_fetch_list_error_raises_runtime_error() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _stub_structured(monkeypatch: pytest.MonkeyPatch, parsed: Any, summary: str = "A short summary.") -> None:
+    """Answer both schemas: every direct-mode conversation is summarized before inference."""
+    from evaluatorq.simulation import traces as traces_mod
+
+    async def fake_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+        if kwargs["response_format"] is traces_mod._ConversationSummary:
+            return traces_mod._ConversationSummary(summary=summary), ""
+        return parsed, ""
+
+    monkeypatch.setattr(traces_mod, "generate_structured", fake_generate_structured)
+
+
 @pytest.mark.asyncio
 async def test_datapoints_from_traces(monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.simulation import traces as traces_mod
 
     parsed = traces_mod._InferredPersonaScenario(persona=_make_persona(), scenario=_make_scenario())
-
-    async def fake_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
-        return parsed, ""
-
-    monkeypatch.setattr(traces_mod, "generate_structured", fake_generate_structured)
+    _stub_structured(monkeypatch, parsed)
+    _stub_first_message(monkeypatch, "Hi, chasing an order.")
 
     conversations = [_make_conversation("abc123")]
     datapoints = await datapoints_from_traces(conversations, client=MagicMock())
@@ -400,27 +434,221 @@ async def test_datapoints_from_traces(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(datapoints) == 1
     dp = datapoints[0]
     assert dp.id == "trace-abc123"
-    assert dp.first_message == "Where is my order?"  # verbatim, not LLM-generated
+    # Default: written from the inferred persona/scenario, not replayed from the trace.
+    assert dp.first_message == "Hi, chasing an order."
     assert dp.persona.name == "Test Persona"
     assert dp.user_system_prompt  # built from persona + scenario
 
 
+def _stub_first_message(monkeypatch: pytest.MonkeyPatch, message: str) -> None:
+    """Make FirstMessageGenerator.generate return ``message`` without an LLM call."""
+    from evaluatorq.simulation.generators import first_message_generator as fmg_mod
+
+    async def fake_generate(_self: Any, _persona: Any, _scenario: Any) -> str:
+        return message
+
+    monkeypatch.setattr(fmg_mod.FirstMessageGenerator, "generate", fake_generate)
+
+
 @pytest.mark.asyncio
-async def test_datapoints_from_traces_skips_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_datapoints_from_traces_can_replay_the_recorded_opening(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The opt-out reproduces a specific recorded case verbatim."""
     from evaluatorq.simulation import traces as traces_mod
 
-    calls = {"n": 0}
+    parsed = traces_mod._InferredPersonaScenario(persona=_make_persona(), scenario=_make_scenario())
+    _stub_structured(monkeypatch, parsed)
+    _stub_first_message(monkeypatch, "should not be used")
+
+    datapoints = await datapoints_from_traces(
+        [_make_conversation("abc123")],
+        client=MagicMock(),
+        config=traces_mod.TraceAnalysisConfig(generate_first_message=False),
+    )
+
+    assert datapoints[0].first_message == "Where is my order?"
+
+
+@pytest.mark.asyncio
+async def test_failed_first_message_generation_falls_back_to_the_recording(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Documented degradation: the datapoint survives a dead first-message call."""
+    from evaluatorq.simulation import traces as traces_mod
+    from evaluatorq.simulation.generators import first_message_generator as fmg_mod
+
+    parsed = traces_mod._InferredPersonaScenario(persona=_make_persona(), scenario=_make_scenario())
+    _stub_structured(monkeypatch, parsed)
+
+    async def boom(_self: Any, _persona: Any, _scenario: Any) -> str:
+        raise RuntimeError("first-message LLM down")
+
+    monkeypatch.setattr(fmg_mod.FirstMessageGenerator, "generate", boom)
+
+    datapoints = await datapoints_from_traces([_make_conversation("abc123")], client=MagicMock())
+
+    assert datapoints[0].first_message == "Where is my order?"
+
+
+@pytest.mark.asyncio
+async def test_long_transcript_is_summarized_before_inference(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The map step: an oversized trace reaches inference as a summary, not raw."""
+    from evaluatorq.simulation import traces as traces_mod
+
+    parsed = traces_mod._InferredPersonaScenario(persona=_make_persona(), scenario=_make_scenario())
+    prompts: list[str] = []
+
+    async def fake_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+        prompts.append(kwargs["messages"][1]["content"])
+        if kwargs["response_format"] is traces_mod._ConversationSummary:
+            return traces_mod._ConversationSummary(summary="Impatient user chasing a refund."), ""
+        return parsed, ""
+
+    monkeypatch.setattr(traces_mod, "generate_structured", fake_generate_structured)
+    _stub_first_message(monkeypatch, "Where is it?")
+
+    long_conversation = traces_mod.TraceConversation(
+        trace_id="long",
+        messages=[{"role": "user", "content": "z" * 5000}, {"role": "assistant", "content": "z" * 5000}],
+    )
+    await datapoints_from_traces(
+        [long_conversation],
+        client=MagicMock(),
+        config=traces_mod.TraceAnalysisConfig(),
+    )
+
+    summarize_prompt, infer_prompt = prompts
+    assert "z" * 5000 in summarize_prompt  # the map step sees the whole thing
+    assert "Impatient user chasing a refund." in infer_prompt
+    assert "z" * 5000 not in infer_prompt  # ...the reduce step does not
+
+
+@pytest.mark.asyncio
+async def test_every_conversation_is_summarized_even_a_short_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The map step is unconditional, so one artifact serves both modes."""
+    from evaluatorq.simulation import traces as traces_mod
+
+    parsed = traces_mod._InferredPersonaScenario(persona=_make_persona(), scenario=_make_scenario())
+    schemas: list[Any] = []
+
+    async def fake_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+        schemas.append(kwargs["response_format"])
+        if kwargs["response_format"] is traces_mod._ConversationSummary:
+            return traces_mod._ConversationSummary(summary="Short chat about an order."), ""
+        return parsed, ""
+
+    monkeypatch.setattr(traces_mod, "generate_structured", fake_generate_structured)
+    _stub_first_message(monkeypatch, "Where is it?")
+
+    await datapoints_from_traces([_make_conversation("abc123")], client=MagicMock())
+
+    assert schemas == [traces_mod._ConversationSummary, traces_mod._InferredPersonaScenario]
+
+
+@pytest.mark.asyncio
+async def test_supplied_summaries_are_not_recomputed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A run doing both modes summarizes once: passed-in summaries skip the map call."""
+    from evaluatorq.simulation import traces as traces_mod
+
+    parsed = traces_mod._InferredPersonaScenario(persona=_make_persona(), scenario=_make_scenario())
+    schemas: list[Any] = []
+    prompts: list[str] = []
+
+    async def fake_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+        schemas.append(kwargs["response_format"])
+        prompts.append(kwargs["messages"][1]["content"])
+        return parsed, ""
+
+    monkeypatch.setattr(traces_mod, "generate_structured", fake_generate_structured)
+    _stub_first_message(monkeypatch, "Where is it?")
+
+    await datapoints_from_traces(
+        [_make_conversation("abc123")],
+        client=MagicMock(),
+        summaries={"abc123": "Already summarized elsewhere."},
+    )
+
+    assert schemas == [traces_mod._InferredPersonaScenario]  # no second summarize call
+    assert "Already summarized elsewhere." in prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_datapoints_from_traces_skips_summarize_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A conversation whose *summarize* call fails is dropped before inference ever runs."""
+    from evaluatorq.simulation import traces as traces_mod
+
     parsed = traces_mod._InferredPersonaScenario(persona=_make_persona(), scenario=_make_scenario())
 
     async def flaky_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise RuntimeError("LLM down")
+        if kwargs["response_format"] is traces_mod._ConversationSummary:
+            if "bad" in kwargs["messages"][1]["content"]:
+                raise RuntimeError("LLM down")
+            return traces_mod._ConversationSummary(summary="good conversation"), ""
         return parsed, ""
 
     monkeypatch.setattr(traces_mod, "generate_structured", flaky_generate_structured)
+    _stub_first_message(monkeypatch, "Where is it?")
 
-    conversations = [_make_conversation("bad"), _make_conversation("good")]
+    conversations = [
+        TraceConversation(trace_id="bad", messages=[{"role": "user", "content": "bad marker"}]),
+        TraceConversation(trace_id="good", messages=[{"role": "user", "content": "fine"}]),
+    ]
+    datapoints = await datapoints_from_traces(conversations, client=MagicMock())
+
+    assert [dp.id for dp in datapoints] == ["trace-good"]
+
+
+@pytest.mark.asyncio
+async def test_datapoints_from_traces_skips_inference_exceptions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Covers the ``except Exception`` branch around the persona/scenario inference call:
+    a raising inference call drops only that conversation, not the whole batch."""
+    from evaluatorq.simulation import traces as traces_mod
+
+    parsed = traces_mod._InferredPersonaScenario(persona=_make_persona(), scenario=_make_scenario())
+
+    async def fake_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+        if kwargs["response_format"] is traces_mod._ConversationSummary:
+            summary = "bad summary" if "bad marker" in kwargs["messages"][1]["content"] else "good summary"
+            return traces_mod._ConversationSummary(summary=summary), ""
+        # response_format is _InferredPersonaScenario: the inference call itself.
+        if "bad summary" in kwargs["messages"][1]["content"]:
+            raise RuntimeError("inference LLM down")
+        return parsed, ""
+
+    monkeypatch.setattr(traces_mod, "generate_structured", fake_generate_structured)
+    _stub_first_message(monkeypatch, "Where is it?")
+
+    conversations = [
+        TraceConversation(trace_id="bad", messages=[{"role": "user", "content": "bad marker"}]),
+        TraceConversation(trace_id="good", messages=[{"role": "user", "content": "fine"}]),
+    ]
+    datapoints = await datapoints_from_traces(conversations, client=MagicMock())
+
+    assert [dp.id for dp in datapoints] == ["trace-good"]
+
+
+@pytest.mark.asyncio
+async def test_datapoints_from_traces_skips_unparseable_inference(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Covers the ``parsed is None`` branch after the inference call: an unparseable
+    response drops only that conversation, not the whole batch."""
+    from evaluatorq.simulation import traces as traces_mod
+
+    parsed = traces_mod._InferredPersonaScenario(persona=_make_persona(), scenario=_make_scenario())
+
+    async def fake_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+        if kwargs["response_format"] is traces_mod._ConversationSummary:
+            summary = "bad summary" if "bad marker" in kwargs["messages"][1]["content"] else "good summary"
+            return traces_mod._ConversationSummary(summary=summary), ""
+        if "bad summary" in kwargs["messages"][1]["content"]:
+            return None, ""
+        return parsed, ""
+
+    monkeypatch.setattr(traces_mod, "generate_structured", fake_generate_structured)
+    _stub_first_message(monkeypatch, "Where is it?")
+
+    conversations = [
+        TraceConversation(trace_id="bad", messages=[{"role": "user", "content": "bad marker"}]),
+        TraceConversation(trace_id="good", messages=[{"role": "user", "content": "fine"}]),
+    ]
     datapoints = await datapoints_from_traces(conversations, client=MagicMock())
 
     assert [dp.id for dp in datapoints] == ["trace-good"]
@@ -440,6 +668,10 @@ async def test_extend_from_traces(monkeypatch: pytest.MonkeyPatch) -> None:
     profile = traces_mod._TrafficProfile(profile="Mostly refund questions, casual tone.")
 
     async def fake_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+        # Extension mode is map-then-reduce: every conversation is summarized first,
+        # so the stub has to answer both schemas.
+        if kwargs["response_format"] is traces_mod._ConversationSummary:
+            return traces_mod._ConversationSummary(summary="Wants a refund, casual, impatient."), ""
         return profile, ""
 
     monkeypatch.setattr(traces_mod, "generate_structured", fake_generate_structured)
@@ -564,9 +796,12 @@ async def test_datapoints_from_traces_inference_is_bounded_concurrent(
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         state["active"] -= 1
+        if kwargs["response_format"] is traces_mod._ConversationSummary:
+            return traces_mod._ConversationSummary(summary="summary"), ""
         return parsed, ""
 
     monkeypatch.setattr(traces_mod, "generate_structured", tracked_generate_structured)
+    _stub_first_message(monkeypatch, "Where is it?")
 
     conversations = [_make_conversation(f"t{i}") for i in range(12)]
     datapoints = await datapoints_from_traces(conversations, client=MagicMock())
@@ -574,3 +809,203 @@ async def test_datapoints_from_traces_inference_is_bounded_concurrent(
     assert [dp.id for dp in datapoints] == [f"trace-t{i}" for i in range(12)]
     assert state["peak"] > 1  # actually concurrent, not sequential
     assert state["peak"] <= traces_mod._INFER_CONCURRENCY
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("redact", [True, False])
+async def test_redaction_instruction_follows_the_flag(monkeypatch: pytest.MonkeyPatch, redact: bool) -> None:
+    """The knob is the prompt: on, every prompt carries the rule; off, none of them do."""
+    from evaluatorq.simulation import traces as traces_mod
+
+    parsed = traces_mod._InferredPersonaScenario(persona=_make_persona(), scenario=_make_scenario())
+    systems: list[str] = []
+
+    async def fake_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+        systems.append(kwargs["messages"][0]["content"])
+        if kwargs["response_format"] is traces_mod._ConversationSummary:
+            return traces_mod._ConversationSummary(summary="Wants a refund."), ""
+        return parsed, ""
+
+    monkeypatch.setattr(traces_mod, "generate_structured", fake_generate_structured)
+    _stub_first_message(monkeypatch, "Where is it?")
+
+    long_conversation = traces_mod.TraceConversation(
+        trace_id="long",
+        messages=[{"role": "user", "content": "z" * 5000}],
+    )
+    await datapoints_from_traces(
+        [long_conversation],
+        client=MagicMock(),
+        config=traces_mod.TraceAnalysisConfig(redact_pii=redact),
+    )
+
+    # Both the summarize prompt and the persona/scenario prompt, since either can
+    # copy an order number straight out of the transcript.
+    assert len(systems) == 2
+    assert all(("[CUSTOMER_NAME]" in s) is redact for s in systems)
+
+
+# ---------------------------------------------------------------------------
+# summarize_conversations (the shared map step, exercised directly)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_summarize_conversations_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.simulation import traces as traces_mod
+
+    async def fake_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+        transcript = kwargs["messages"][1]["content"]
+        trace_id = "one" if "first message" in transcript else "two"
+        return traces_mod._ConversationSummary(summary=f"summary for {trace_id}"), ""
+
+    monkeypatch.setattr(traces_mod, "generate_structured", fake_generate_structured)
+
+    conversations = [
+        TraceConversation(trace_id="one", messages=[{"role": "user", "content": "first message"}]),
+        TraceConversation(trace_id="two", messages=[{"role": "user", "content": "second message"}]),
+    ]
+    summaries = await summarize_conversations(conversations, client=MagicMock())
+
+    assert summaries == {"one": "summary for one", "two": "summary for two"}
+
+
+@pytest.mark.asyncio
+async def test_summarize_conversations_drops_failures_and_warns(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from evaluatorq.simulation import traces as traces_mod
+
+    async def flaky_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+        if "bad" in kwargs["messages"][1]["content"]:
+            raise RuntimeError("LLM down")
+        return traces_mod._ConversationSummary(summary="fine"), ""
+
+    monkeypatch.setattr(traces_mod, "generate_structured", flaky_generate_structured)
+
+    conversations = [
+        TraceConversation(trace_id="bad", messages=[{"role": "user", "content": "bad marker"}]),
+        TraceConversation(trace_id="good", messages=[{"role": "user", "content": "fine"}]),
+    ]
+    with caplog.at_level("WARNING"):
+        summaries = await summarize_conversations(conversations, client=MagicMock())
+
+    assert summaries == {"good": "fine"}
+    assert "bad" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_summarize_conversations_all_fail_returns_empty_dict(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.simulation import traces as traces_mod
+
+    async def always_fails(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+        raise RuntimeError("LLM down")
+
+    monkeypatch.setattr(traces_mod, "generate_structured", always_fails)
+
+    conversations = [_make_conversation("t1"), _make_conversation("t2")]
+    summaries = await summarize_conversations(conversations, client=MagicMock())
+
+    assert summaries == {}
+
+
+@pytest.mark.asyncio
+async def test_summarize_conversations_is_bounded_concurrent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mirrors ``test_datapoints_from_traces_inference_is_bounded_concurrent`` for the
+    map step itself, called directly rather than through a downstream mode."""
+    import asyncio
+
+    from evaluatorq.simulation import traces as traces_mod
+
+    state = {"active": 0, "peak": 0}
+
+    async def tracked_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+        state["active"] += 1
+        state["peak"] = max(state["peak"], state["active"])
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        state["active"] -= 1
+        return traces_mod._ConversationSummary(summary="summary"), ""
+
+    monkeypatch.setattr(traces_mod, "generate_structured", tracked_generate_structured)
+
+    conversations = [_make_conversation(f"t{i}") for i in range(12)]
+    summaries = await summarize_conversations(conversations, client=MagicMock())
+
+    assert len(summaries) == 12
+    assert state["peak"] > 1  # actually concurrent, not sequential
+    assert state["peak"] <= traces_mod._INFER_CONCURRENCY
+
+
+@pytest.mark.asyncio
+async def test_supplied_partial_summaries_drop_missing_without_resummarizing_direct(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fix: a supplied ``summaries=`` mapping is authoritative in direct mode — a
+    trace_id absent from it (already attempted and warned about) is dropped without
+    a second summarize call, not silently re-summarized."""
+    from evaluatorq.simulation import traces as traces_mod
+
+    parsed = traces_mod._InferredPersonaScenario(persona=_make_persona(), scenario=_make_scenario())
+    schemas: list[Any] = []
+
+    async def fake_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+        schemas.append(kwargs["response_format"])
+        return parsed, ""
+
+    monkeypatch.setattr(traces_mod, "generate_structured", fake_generate_structured)
+    _stub_first_message(monkeypatch, "Where is it?")
+
+    conversations = [_make_conversation("present"), _make_conversation("missing")]
+    datapoints = await datapoints_from_traces(
+        conversations,
+        client=MagicMock(),
+        summaries={"present": "Already summarized."},
+    )
+
+    assert [dp.id for dp in datapoints] == ["trace-present"]
+    # Only the inference call for "present" ran — no summarize call for either trace.
+    assert schemas == [traces_mod._InferredPersonaScenario]
+
+
+@pytest.mark.asyncio
+async def test_supplied_partial_summaries_drop_missing_without_resummarizing_extend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fix: the same authoritative-mapping contract in extension mode — the
+    missing trace is dropped from the profile without a second summarize call."""
+    from evaluatorq.simulation import traces as traces_mod
+    from evaluatorq.simulation.generators import datapoint_generator as dpg_mod
+    from evaluatorq.simulation.utils.prompt_builders import generate_datapoint
+
+    profile = traces_mod._TrafficProfile(profile="profile text")
+    schemas: list[Any] = []
+
+    async def fake_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+        schemas.append(kwargs["response_format"])
+        return profile, ""
+
+    monkeypatch.setattr(traces_mod, "generate_structured", fake_generate_structured)
+
+    class FakeGenerator:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        async def generate_from_description(self, **kwargs: Any) -> list[Any]:
+            return [generate_datapoint(_make_persona(), _make_scenario())]
+
+        async def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(dpg_mod, "DatapointGenerator", FakeGenerator)
+
+    conversations = [_make_conversation("present"), _make_conversation("missing")]
+    await extend_from_traces(
+        conversations,
+        num_datapoints=1,
+        client=MagicMock(),
+        summaries={"present": "Already summarized."},
+    )
+
+    # Only the profile call ran — no summarize call for either trace.
+    assert schemas == [traces_mod._TrafficProfile]

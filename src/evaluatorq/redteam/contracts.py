@@ -21,6 +21,7 @@ from pydantic import (
 )
 from typing_extensions import NotRequired, TypedDict
 
+from evaluatorq.common.recommendations import RecommendationConfigBase
 from evaluatorq.common.target_call import classify_error_type as classify_error_type
 from evaluatorq.contracts import RunSummary, StrEnum
 
@@ -673,6 +674,82 @@ class EvaluatorConfig(BaseModel):
         object.__setattr__(self, 'judges', panel)
         object.__setattr__(self, 'model', panel[0])
         return self
+
+
+class RedTeamRecommendationConfig(RecommendationConfigBase):
+    """Tunable limits for focus-area recommendation generation.
+
+    Pass an instance as ``recommendations=RedTeamRecommendationConfig(...)`` to
+    ``red_team``; ``recommendations=True`` uses these defaults and ``False`` skips the
+    LLM call entirely. ``SimulationRecommendationConfig`` is the agent-simulation twin —
+    both inherit the shared caps from ``RecommendationConfigBase``.
+    """
+
+    max_areas: int = Field(default=5, ge=1)
+    """How many *focus areas* get analyzed, ranked by risk score, one LLM call each.
+
+    A focus area is a **framework category the run actually broke on** (``LLM06``,
+    ``ASI01``, …) — not a recommendation. Categories with no vulnerabilities found are
+    never candidates. This is a cost knob, not an output-length knob: lowering it drops
+    the lowest-risk categories from the analysis entirely, so they get no advice at all.
+    ``max_suggestions`` is what controls how much advice each analyzed area produces, so
+    the report carries at most ``max_areas * max_suggestions`` recommendations.
+    """
+
+    max_attacks: int = Field(default=10, ge=1)
+    """Failed attacks sampled into the prompt per area, for variety.
+
+    One attack is one ``RedTeamResult``: its conversation, the target's response, and the
+    judge's verdict. Unrelated to ``RedTeamResult.response_traces``, which is the
+    observability sense of the word.
+    """
+
+    max_attack_chars: int = Field(default=200_000, ge=100)
+    """Per-attack budget for the adversarial prompt and for the target's response.
+
+    ~200k chars is ~50k tokens each, so agentic responses carrying tool output survive
+    intact rather than being cut at the interesting part. It is a ceiling, not a
+    reservation — real attacks are far shorter, and only long ones pay. Note it applies
+    **per field per attack**: a full prompt costs ``max_attacks * 2 * max_attack_chars``,
+    so raising ``max_attacks`` alongside it can outgrow the analysis model's context.
+    """
+
+    max_explanation_chars: int = Field(default=300, ge=50)
+    """Budget for the evaluator explanation attached to a sampled attack."""
+
+    condense_above_chars: int = Field(default=1000, ge=100)
+    """Attacks whose formatted block exceeds this are condensed by their own LLM call
+    before the focus-area call sees them (map, then reduce).
+
+    The focus-area call is a single request carrying every sampled attack, so without
+    this a handful of long agentic transcripts could push it past the analysis model's
+    context and lose the whole area. Condensing is conditional on purpose: a normal
+    short attack goes in verbatim and costs nothing extra, so the map calls track the
+    problem rather than the run. Raise it to condense less, lower it to condense more.
+    """
+
+    condense_max_tokens: int = Field(default=10_000, ge=1)
+    """Completion budget for one condense call.
+
+    Generous because reasoning models spend most of it thinking before emitting anything:
+    a budget sized to the ~300-token analysis the prompt asks for would be consumed by
+    reasoning tokens and truncate the answer to nothing. The prompt bounds the output;
+    this bounds the failure.
+    """
+
+    max_area_prompt_chars: int = Field(default=400_000, ge=1_000)
+    """Hard ceiling on the assembled focus-area prompt, applied after condensing.
+
+    A backstop, not the main defence: condensing is what should keep the prompt small.
+    Hitting this means the map step did not shrink enough, so it truncates and warns
+    rather than letting the request fail.
+    """
+
+    max_suggestions: int = Field(default=5, ge=1)
+    """Recommendations asked for, and kept, per focus area."""
+
+    max_tokens: int = Field(default=1500, ge=1)
+    """Completion budget for one focus-area analysis call."""
 
 
 class LLMConfig(BaseModel):
@@ -1681,7 +1758,7 @@ class RedTeamReport(BaseModel):
 
     focus_area_recommendations: list[FocusAreaRecommendation] | None = Field(
         default=None,
-        description='LLM-generated actionable recommendations for top risk areas (populated when generate_recommendations=True)',
+        description='LLM-generated actionable recommendations for top risk areas (populated when recommendations is enabled)',
     )
 
     applied_recommendations: list[str] = Field(

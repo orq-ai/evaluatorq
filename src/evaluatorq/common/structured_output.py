@@ -1,9 +1,18 @@
-"""Structured-output helper with json_object fallback, shared across domains.
+"""Structured-output helper with a non-strict json_schema fallback, shared across domains.
 
-Tries ``client.chat.completions.parse()`` first (schema-enforced structured
-output). When the model doesn't support it the API returns 400; we fall back to
-``response_format={"type": "json_object"}`` and return the raw content for the
+Tries ``client.chat.completions.parse()`` first (strict schema-enforced structured
+output). When the model doesn't support it the API returns 400; we fall back to a
+plain ``create()`` carrying the same schema as a **non-strict**
+``response_format={"type": "json_schema", ...}`` and return the raw content for the
 caller to parse (fence-tolerant parsing lives in ``common.extract_json``).
+
+The fallback sends the schema rather than a bare ``json_object`` because most
+providers that reject ``.parse()`` reject *strict* mode — the schema itself is
+still honoured, and it is the only thing telling the model which keys to emit.
+``json_object`` asks for "some JSON" and leaves field names to chance, which is
+what made the fence-tolerant parsing necessary in the first place. A provider
+that rejects the schema form outright degrades to ``json_object`` on a second
+400, so nothing that worked before stops working.
 
 Lives in ``common`` rather than ``simulation`` so both the simulation and
 red-team report code can reuse one copy (RES-822). It delegates to the canonical
@@ -49,12 +58,13 @@ async def generate_structured(
     temperature: float | None = None,
     extra_kwargs: dict[str, Any] | None = None,
 ) -> tuple[T | None, str]:
-    """Generate a chat completion with structured output, falling back to json_object.
+    """Generate a chat completion with structured output, falling back to a non-strict schema.
 
-    Returns ``(parsed_model, "")`` when structured output succeeds, or
-    ``(None, raw_content)`` when the model doesn't support it and we fall back to
-    json_object mode. The caller parses the raw content itself (typically via
-    ``extract_json_from_response`` + ``model_validate_json``).
+    Returns ``(parsed_model, "")`` when strict structured output succeeds, or
+    ``(None, raw_content)`` when the model rejects it and we fall back to a plain
+    ``create()`` carrying the same schema non-strictly (and, if the provider
+    rejects that too, to bare ``json_object``). The caller parses the raw content
+    itself (typically via ``extract_json_from_response`` + ``model_validate_json``).
 
     ``temperature`` is sent only when not ``None`` (some callers deliberately let
     the provider default stand). ``extra_kwargs`` is merged LAST into both the
@@ -68,7 +78,7 @@ async def generate_structured(
     helper.
 
     On a length-truncated structured response this raises ``RuntimeError``
-    rather than falling back (a same-budget ``json_object`` retry would truncate
+    rather than falling back (a same-budget retry would truncate
     again). "Loud" is scoped to this helper: it surfaces a specific, actionable
     reason instead of returning cut-off JSON. Both report call sites still wrap
     the call in a broad ``except`` and skip that one item, so a truncation
@@ -162,7 +172,7 @@ async def generate_structured(
                 span.set_attribute('orq.structured_output.fallback', True)  # noqa: FBT003
         except LengthFinishReasonError as exc:
             # Length-truncated structured output is unusable — the JSON is cut
-            # off mid-string. Falling back to json_object would truncate at the
+            # off mid-string. Falling back would truncate at the
             # same budget, so fail loudly with an actionable message instead.
             logger.exception('%s: structured output truncated at the token limit (max_tokens=%s)', label, max_tokens)
             raise RuntimeError(
@@ -171,12 +181,46 @@ async def generate_structured(
                 f'budget passed to this call and retry.'
             ) from exc
 
-        # 2. Fallback: json_object mode.
-        fallback_params = _params({'response_format': {'type': 'json_object'}})
-        fallback_response = await with_retry(
-            lambda: client.chat.completions.create(**fallback_params),  # pyright: ignore[reportUnknownLambdaType]
-            label=f'{label} (fallback)',
-        )
+        # 2. Fallback: the same schema, non-strict, via plain create().
+        schema_format: dict[str, Any] = {
+            'type': 'json_schema',
+            'json_schema': {
+                'name': response_format.__name__,
+                # Non-strict on purpose: strict mode is what .parse() already
+                # tried and what the provider just rejected. The schema still
+                # names the fields; only the enforcement is relaxed.
+                'strict': False,
+                'schema': response_format.model_json_schema(),
+            },
+        }
+        try:
+            fallback_response = await with_retry(
+                lambda: client.chat.completions.create(**_params({'response_format': schema_format})),  # pyright: ignore[reportUnknownLambdaType]
+                label=f'{label} (json_schema fallback)',
+            )
+        except APIStatusError as e:
+            if e.status_code != 400:
+                raise
+            # A provider that rejects the schema form outright still gets the
+            # old behaviour rather than losing the call entirely.
+            logger.warning('%s: json_schema not accepted either, falling back to json_object', label)
+            fallback_response = await with_retry(
+                lambda: client.chat.completions.create(**_params({'response_format': {'type': 'json_object'}})),  # pyright: ignore[reportUnknownLambdaType]
+                label=f'{label} (json_object fallback)',
+            )
         record_llm_response(span, fallback_response)
-        content = fallback_response.choices[0].message.content if fallback_response.choices else ''
-        return None, content or ''
+        if not fallback_response.choices:
+            return None, ''
+        choice = fallback_response.choices[0]
+        if choice.finish_reason == 'length':
+            # Same defect as the parse() leg above, which the SDK raises for us:
+            # cut-off JSON parses as a validation error two frames away, or worse,
+            # extract_json_from_response salvages a truncated object and the caller
+            # scores a half-answer. Fail with the same actionable message.
+            logger.error('%s: fallback output truncated at the token limit (max_tokens=%s)', label, max_tokens)
+            raise RuntimeError(
+                f'{label}: the model hit the token limit (max_tokens={max_tokens}) and the '
+                f'fallback output was truncated, so the result is unusable. Raise the max_tokens '
+                f'budget passed to this call and retry.'
+            )
+        return None, choice.message.content or ''
