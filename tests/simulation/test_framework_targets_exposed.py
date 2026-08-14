@@ -138,6 +138,24 @@ def test_missing_optional_dep_gives_actionable_error(
         sim.__getattr__(name)
 
 
+@pytest.mark.parametrize(
+    "name",
+    ["CriterionVerdict", "criterion_id_for", "CRITERION_ID_PATTERN"],
+)
+def test_criterion_id_helpers_exposed_from_simulation(name: str) -> None:
+    """RES-1308 CHANGELOG entry: `criterion_id_for`/`CRITERION_ID_PATTERN` (and
+    `CriterionVerdict`) are documented as public simulation exports. A prior
+    revision added `CriterionVerdict` to `_LAZY_IMPORTS`/`__all__` but never
+    exported the two helpers the CHANGELOG claimed alongside it, so
+    `from evaluatorq.simulation import criterion_id_for` raised ImportError."""
+    import evaluatorq.simulation as sim
+    from evaluatorq.simulation import types as sim_types
+
+    assert hasattr(sim, name), f"{name} not exposed from evaluatorq.simulation"
+    assert name in sim.__all__
+    assert getattr(sim, name) is getattr(sim_types, name)
+
+
 @pytest.mark.asyncio
 async def test_integration_target_reports_token_usage() -> None:
     """A simulation driven by an integration target (the target_agent path, not
