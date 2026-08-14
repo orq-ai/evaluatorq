@@ -176,7 +176,9 @@ class TestCallLlmDispatch:
             Message(role="assistant", content="hello there"),
         ])
 
-        sent = client.responses.create.await_args.kwargs["input"]
+        await_args = client.responses.create.await_args
+        assert await_args is not None
+        sent = await_args.kwargs["input"]
         assistant = [item for item in sent if item["role"] == "assistant"]
         assert assistant == [{"role": "assistant", "content": [{"type": "output_text", "text": "hello there"}]}]
 
