@@ -27,6 +27,16 @@ if TYPE_CHECKING:
 VerdictValue = bool | float | str
 TieBreak = Callable[[list[VerdictValue]], VerdictValue | None]
 
+# The endpoint vocabulary a single judge pass can report, and the folded form
+# used once several passes (repetitions, judges, or pairwise orderings) have
+# been reduced to one provenance label. Declared once here rather than
+# repeated as an inline `Literal[...]` at every call site — `pairwise.py`
+# imports both. TODO(follow-up): move these to `contracts.py` alongside the
+# other cross-subpackage literals and update `judge.py` (which still declares
+# its own copy at `judge.py:91`) to import from there.
+Endpoint = Literal['chat', 'responses']
+EndpointFold = Literal['chat', 'responses', 'mixed']
+
 _UNSWAP = {'A': 'B', 'B': 'A'}
 
 
@@ -73,11 +83,14 @@ class Prediction(BaseModel):
     error: str | None = None
     abstained: bool = False
     # Which endpoint (Orq router Chat Completions vs Responses) actually served
-    # this pass, mirroring `evaluatorq.common.judge.JudgeOutcome.endpoint`. Only
-    # the Responses endpoint returns a priced usage block, so this is what makes
-    # a judge reporting no cost legible. ``None`` when the adapter has no
-    # `JudgeOutcome` to read it from (e.g. the catch-all in `_call_prediction`).
-    endpoint: Literal['chat', 'responses'] | None = None
+    # this pass, mirroring `evaluatorq.common.judge.JudgeOutcome.endpoint`. On
+    # the Orq router, only the Responses endpoint returns a priced usage block,
+    # so this is what makes a judge reporting no cost legible (against a direct
+    # OpenAI-compatible client neither endpoint prices a call, since pricing is
+    # a property of the router, not of the Responses API itself). ``None`` when
+    # the adapter has no `JudgeOutcome` to read it from (e.g. the catch-all in
+    # `_call_prediction`).
+    endpoint: Endpoint | None = None
 
     @property
     def decisive(self) -> bool:
@@ -91,14 +104,15 @@ class JuryDeliberation(BaseModel):
     explanation: str = ''
     jury: JuryResult
     token_usage: TokenUsage | None = None
-    # Aggregated across every decisive-and-failed Prediction the panel produced
-    # (abstained-with-no-error passes carry no endpoint signal, so they are
-    # excluded). ``'mixed'`` when the panel used both endpoints, a single
-    # endpoint when uniform, ``None`` when nothing recorded one.
-    endpoint: Literal['chat', 'responses', 'mixed'] | None = None
+    # Aggregated across every decisive-or-failed Prediction the panel produced,
+    # plus any abstained pass that still carries an endpoint (the abstain came
+    # after the call reached a provider, so the provenance is real even though
+    # the verdict is not). ``'mixed'`` when the panel used both endpoints, a
+    # single endpoint when uniform, ``None`` when nothing recorded one.
+    endpoint: EndpointFold | None = None
 
 
-def combine_endpoints(endpoints: Iterable[str | None]) -> Literal['chat', 'responses', 'mixed'] | None:
+def combine_endpoints(endpoints: Iterable[EndpointFold | None]) -> EndpointFold | None:
     """Reduce the endpoints a set of judge passes used to one provenance label.
 
     ``'mixed'`` when more than one distinct endpoint is present, the single
@@ -112,11 +126,11 @@ def combine_endpoints(endpoints: Iterable[str | None]) -> Literal['chat', 'respo
     caller fold several `JuryDeliberation.endpoint` values together (pairwise
     folds its two orderings this way) without a second vocabulary.
     """
-    distinct = {e for e in endpoints if e is not None}
+    distinct: set[EndpointFold] = {e for e in endpoints if e is not None}
     if not distinct:
         return None
     if len(distinct) == 1:
-        return cast("Literal['chat', 'responses', 'mixed']", next(iter(distinct)))
+        return next(iter(distinct))
     return 'mixed'
 
 
@@ -329,7 +343,7 @@ async def _judge_vote(
     semaphore: asyncio.Semaphore | None = None,
     parent_context: object | None = None,
     label_swapped: bool | None = None,
-) -> tuple[JuryVote, list[TokenUsage], list[str]]:
+) -> tuple[JuryVote, list[TokenUsage], list[EndpointFold]]:
     """Run one judge (its repetitions) inside a per-judge span, then stamp the
     resolved ``JuryVote`` onto the span (RES-985). The span is a no-op when
     tracing is disabled; the vote/usages/endpoints are unchanged either way."""
@@ -415,7 +429,7 @@ async def _compute_judge_vote(
     numeric_how: NumericAggName,
     propagate_errors: bool = False,
     semaphore: asyncio.Semaphore | None = None,
-) -> tuple[JuryVote, list[TokenUsage], list[str]]:
+) -> tuple[JuryVote, list[TokenUsage], list[EndpointFold]]:
     predictions = await asyncio.gather(*[
         _call_prediction(judge_fn, model, propagate_errors=propagate_errors, semaphore=semaphore)
         for _ in range(max(1, repetitions))
@@ -425,10 +439,14 @@ async def _compute_judge_vote(
     abstained = bool(predictions) and not decisive and any(p.abstained for p in predictions)
     repetitions_raw = [p.value if p.decisive else None for p in predictions]
     failed_count = sum(1 for p in predictions if p.error is not None)
-    # Decisive-and-failed passes alike: an abstained pass with no error carries
-    # no endpoint signal worth aggregating, but a mechanical failure still tells
-    # us which endpoint rejected the call.
-    endpoints = [p.endpoint for p in predictions if p.endpoint is not None and (p.decisive or p.error is not None)]
+    # Decisive or failed passes alike: a mechanical failure still tells us which
+    # endpoint rejected the call. An abstained pass that still carries an
+    # endpoint (e.g. a tied repetition, or a judge that abstained on content
+    # after the call reached a provider) is included too — the call was billed
+    # even though the verdict is not usable, and dropping it would make "the
+    # panel abstained" and "the panel never reached a provider" render
+    # identically.
+    endpoints: list[EndpointFold] = [p.endpoint for p in predictions if p.endpoint is not None]
 
     if failed_count > 0 and failed_count < len(predictions):
         logger.warning('judge {} had {}/{} repetitions fail', model, failed_count, len(predictions))
@@ -683,7 +701,7 @@ async def _run_jury_core(
 
     votes: list[JuryVote] = []
     usages: list[TokenUsage] = []
-    endpoints_seen: list[str] = []
+    endpoints_seen: list[EndpointFold] = []
     for vote, vote_usages, vote_endpoints in judge_results:
         votes.append(vote)
         usages.extend(vote_usages)

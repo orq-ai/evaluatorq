@@ -257,6 +257,51 @@ class TestStaticOWASPScorerToolCalls:
         assert result.raw_output['endpoint'] == 'chat'
 
     @pytest.mark.asyncio
+    async def test_scorer_panel_threads_responses_endpoint_value(self) -> None:
+        """The mocked client above only ever resolves to 'chat' — it never hits the
+        Responses model catalogue — so it cannot distinguish real per-pass
+        threading from a hardcoded 'chat' literal. Patch `run_judge` itself so
+        every panel pass reports 'responses' and assert that value reaches
+        `raw_output['endpoint']`, matching the RES-1307 live symptom (`judge
+        endpoints: [null, null, null, null]`) that a constant-string
+        implementation would not catch."""
+        from evaluatorq.common.judge import EvaluatorResponsePayload, JudgeOutcome
+        from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
+
+        mock_evaluator_entity = MagicMock()
+        mock_evaluator_entity.prompt = 'response: {{output.response}}'
+
+        async def _fake_run_judge(**_kwargs: Any) -> JudgeOutcome:
+            return JudgeOutcome(
+                payload=EvaluatorResponsePayload(value=True, explanation='verdict'),
+                token_usage=None,
+                endpoint='responses',
+            )
+
+        with (
+            patch(
+                'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.get_evaluator_for_category',
+                return_value=mock_evaluator_entity,
+            ),
+            patch(
+                'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.run_judge',
+                AsyncMock(side_effect=_fake_run_judge),
+            ),
+        ):
+            evaluator_config = create_owasp_evaluator(
+                evaluator_model='judge-a',
+                llm_client=AsyncMock(),
+                judges=['judge-b'],
+            )
+            result = await evaluator_config['scorer']({
+                'data': DataPoint(inputs={'category': 'ASI01', 'messages': []}),
+                'output': {'response': 'target output'},
+            })
+
+        assert result.raw_output is not None
+        assert result.raw_output['endpoint'] == 'responses'
+
+    @pytest.mark.asyncio
     async def test_scorer_single_judge_parse_failure_keeps_token_usage(self) -> None:
         """RES-1307 audit Task 1 (site 2): a judge call that returns unparseable
         JSON is still billed by the provider. The single-judge error leg used to

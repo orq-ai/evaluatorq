@@ -284,6 +284,44 @@ async def test_endpoint_is_none_when_no_judge_recorded_one() -> None:
     assert comparison.endpoint is None
 
 
+def _panel_endpoint_judge(*, split_endpoints: dict[str, str], uniform_endpoint: str):
+    """A two-judge panel: split across endpoints (by model) in the first
+    ordering ('GOOD' shown first), uniform in the swapped ordering.
+
+    Exercises the fold-of-a-fold `combine_endpoints` documents but every other
+    endpoint test here (single-judge panels) never reaches: one ordering
+    aggregates to 'mixed' on its own, the other to a single endpoint, and the
+    two are folded together into the comparison's overall endpoint.
+    """
+
+    async def judge(first: str, second: str, model: str) -> Prediction:
+        served = split_endpoints[model] if first == 'GOOD' else uniform_endpoint
+        return Prediction(
+            value='A' if first == 'GOOD' else 'B',
+            explanation='quality',
+            endpoint=served,  # pyright: ignore[reportArgumentType]
+        )
+
+    return judge
+
+
+@pytest.mark.asyncio
+async def test_endpoint_folds_a_mixed_ordering_with_a_uniform_one() -> None:
+    """A two-judge panel split across endpoints in one ordering ('mixed') and
+    uniform in the other ('responses') folds to 'mixed' overall."""
+    comparison = await run_pairwise(
+        judge_fn=_panel_endpoint_judge(
+            split_endpoints={'judge-1': 'chat', 'judge-2': 'responses'},
+            uniform_endpoint='responses',
+        ),
+        panel=['judge-1', 'judge-2'],
+        response_a='GOOD',
+        response_b='BAD',
+    )
+
+    assert comparison.endpoint == 'mixed'
+
+
 @pytest.mark.asyncio
 async def test_saved_pairwise_run_carries_the_endpoint(tmp_path: Path) -> None:
     """The whole point of the field: it has to survive into the artifact the

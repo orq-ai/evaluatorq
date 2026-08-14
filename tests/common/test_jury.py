@@ -8,6 +8,7 @@ from evaluatorq.common.jury import (
     NumericAggName,
     Prediction,
     VerdictKind,
+    combine_endpoints,
     run_jury,
     validate_aggregator,
 )
@@ -449,11 +450,27 @@ async def test_deliberation_endpoint_none_when_unrecorded() -> None:
 
 
 @pytest.mark.asyncio
-async def test_deliberation_endpoint_ignores_abstained_without_error() -> None:
-    """An abstained pass with no error carries no endpoint signal even if set."""
+async def test_deliberation_endpoint_includes_abstained_with_endpoint() -> None:
+    """An abstained pass still carries an endpoint when the call reached a
+    provider before the judge abstained — the panel WAS billed, so dropping
+    the endpoint here would make that indistinguishable from a panel that
+    never reached a provider at all."""
 
     async def judge(model: str) -> Prediction:
         return Prediction(abstained=True, explanation='no opinion', endpoint='chat')
+
+    result = await run_jury(judge_fn=judge, panel=['a', 'b'], min_successful_judges=1)
+
+    assert result.endpoint == 'chat'
+
+
+@pytest.mark.asyncio
+async def test_deliberation_endpoint_none_when_abstained_without_endpoint() -> None:
+    """An abstained pass with no endpoint recorded still leaves the panel
+    endpoint None — there's nothing to fold when the adapter never set it."""
+
+    async def judge(model: str) -> Prediction:
+        return Prediction(abstained=True, explanation='no opinion')
 
     result = await run_jury(judge_fn=judge, panel=['a', 'b'], min_successful_judges=1)
 
@@ -486,3 +503,33 @@ async def test_deliberation_endpoint_mixed_from_failed_and_decisive() -> None:
     result = await run_jury(judge_fn=judge, panel=['chat-judge', 'responses-judge'], min_successful_judges=1)
 
     assert result.endpoint == 'mixed'
+
+
+def test_combine_endpoints_folds_an_already_mixed_value() -> None:
+    """`combine_endpoints` accepts a prior 'mixed' fold as input, not just raw
+    per-pass endpoints — this is what lets a caller (e.g. pairwise) fold two
+    already-aggregated `JuryDeliberation.endpoint` values together."""
+    assert combine_endpoints(['mixed']) == 'mixed'
+    assert combine_endpoints(['chat', 'mixed']) == 'mixed'
+
+
+@pytest.mark.asyncio
+async def test_combine_endpoints_fold_of_a_fold_two_orderings() -> None:
+    """Exercise the fold-of-a-fold path the docstring promises: a two-judge
+    panel split across endpoints in one ordering ('mixed'), uniform in the
+    other ('responses'), folds to 'mixed' overall — the scenario that lets
+    pairwise fold its two orderings' `JuryDeliberation.endpoint` values."""
+    endpoints: dict[str, Literal['chat', 'responses']] = {'chat-judge': 'chat', 'responses-judge': 'responses'}
+
+    async def split_judge(model: str) -> Prediction:
+        return Prediction(value=True, explanation='ok', endpoint=endpoints[model])
+
+    async def uniform_judge(model: str) -> Prediction:
+        return Prediction(value=True, explanation='ok', endpoint='responses')
+
+    first_ordering = await run_jury(judge_fn=split_judge, panel=['chat-judge', 'responses-judge'])
+    second_ordering = await run_jury(judge_fn=uniform_judge, panel=['chat-judge', 'responses-judge'])
+
+    assert first_ordering.endpoint == 'mixed'
+    assert second_ordering.endpoint == 'responses'
+    assert combine_endpoints([first_ordering.endpoint, second_ordering.endpoint]) == 'mixed'

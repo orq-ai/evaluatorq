@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Literal, cast
 from pydantic import BaseModel, Field
 
 from evaluatorq.common.jury import (
+    EndpointFold,
     Prediction,
     VerdictValue,
     _agreement_rate,
@@ -99,11 +100,12 @@ class PairwiseComparison(BaseModel):
     token_usage: TokenUsage | None = Field(
         default=None, description='Summed token usage across both orderings and any replacements'
     )
-    endpoint: Literal['chat', 'responses', 'mixed'] | None = Field(
+    endpoint: EndpointFold | None = Field(
         default=None,
         description='Which endpoint served the comparison, folded across both orderings and any '
-        "replacements: 'mixed' when they differed, None when no judge pass recorded one. Only the "
-        'Responses endpoint returns a priced usage block, so this qualifies token_usage.',
+        "replacements: 'mixed' when they differed, None when no judge pass recorded one. On the Orq "
+        'router, only the Responses endpoint returns a priced usage block, so this qualifies '
+        'token_usage.',
     )
 
 
@@ -478,7 +480,7 @@ async def run_pairwise(
 
     async def _ordering(
         models: Sequence[str], *, swapped: bool, replacement: bool
-    ) -> tuple[dict[str, JuryVote], TokenUsage | None, str | None]:
+    ) -> tuple[dict[str, JuryVote], TokenUsage | None, EndpointFold | None]:
         async def _fn(model: str) -> Prediction:
             return await (
                 judge_fn(response_b, response_a, model) if swapped else judge_fn(response_a, response_b, model)
@@ -511,7 +513,7 @@ async def run_pairwise(
 
     async def _both(
         models: Sequence[str], *, replacement: bool = False
-    ) -> tuple[dict[str, JuryVote], dict[str, JuryVote], list[TokenUsage], list[str | None]]:
+    ) -> tuple[dict[str, JuryVote], dict[str, JuryVote], list[TokenUsage], list[EndpointFold | None]]:
         if not swap:
             first_votes, first_usage, first_endpoint = await _ordering(models, swapped=False, replacement=replacement)
             return first_votes, {}, [u for u in (first_usage,) if u], [first_endpoint]
