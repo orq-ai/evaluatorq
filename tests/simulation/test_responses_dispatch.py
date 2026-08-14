@@ -358,20 +358,24 @@ class TestResponsesSpanInput:
         # The defect this guards: the wire shape leaking onto the span.
         assert "output_text" not in repr(logged)
 
-    def test_span_text_degrades_loudly_on_a_non_text_part(self, caplog):
+    def test_span_text_degrades_loudly_on_a_non_text_part(self):
         """A multi-modal part must not raise out of the tracing path.
 
         The Responses path legitimately carries image/file parts, which
         `content_to_text` refuses. Tracing may never break a run, so those degrade
         to a placeholder — and, per the house rule, say so.
         """
-        import logging
+        from loguru import logger
 
         from evaluatorq.contracts import InputImageContent
-        from evaluatorq.simulation.agents.base import _span_message_text
+        from evaluatorq.simulation.tracing import span_message_text
 
-        with caplog.at_level(logging.WARNING):
-            text = _span_message_text([InputImageContent(type="input_image", image_url="https://example.com/a.png")])
+        messages = []
+        sink_id = logger.add(lambda m: messages.append(m), level="WARNING")
+        try:
+            text = span_message_text([InputImageContent(type="input_image", image_url="https://example.com/a.png")])
+        finally:
+            logger.remove(sink_id)
 
         assert "input_image" in text
-        assert "input_image" in caplog.text
+        assert any("input_image" in m for m in messages)

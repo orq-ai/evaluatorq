@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from evaluatorq.contracts import content_to_text
 from evaluatorq.tracing.setup import get_tracer
 
 if TYPE_CHECKING:
@@ -30,8 +31,35 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
     from evaluatorq.common.tracing import AttrMap, AttrValue
+    from evaluatorq.contracts import ContentPart
 
 _otel_import_warned = False
+
+
+def span_message_text(content: str | list[ContentPart] | None) -> str:
+    """Flatten one message's content for a span attribute.
+
+    Delegates to the canonical `content_to_text` (CLAUDE.md: never ``str()`` a
+    ``str | list[ContentPart]`` — it lands on the span as a Python repr). The
+    Responses path legitimately carries image/file parts, which that helper
+    refuses; tracing must never break a run, so those degrade to a placeholder
+    naming the part types, with a warning, rather than raising.
+
+    Lives here rather than beside either caller so the agent LLM spans and the
+    runner's target-call span cannot drift into two different renderings of the
+    same message.
+    """
+    try:
+        return content_to_text(content)
+    except NotImplementedError:
+        parts = content if isinstance(content, list) else []
+        types = ', '.join(sorted({str(p.type) for p in parts})) or 'unknown'
+        logger.warning(
+            'Span input: non-text content part(s) ({}) recorded as a placeholder; the span shows no text for them.',
+            types,
+        )
+        return f'<non-text content: {types}>'
+
 
 _PROVIDER_ALIASES: dict[str, str] = {
     'azure': 'azure.ai.openai',

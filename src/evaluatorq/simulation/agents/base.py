@@ -33,40 +33,16 @@ from evaluatorq.contracts import (
     TextOutputItem,
     TokenUsage,
     ToolCallOutputItem,
-    content_to_text,
 )
 from evaluatorq.openresponses.client import build_simulation_client
 from evaluatorq.openresponses.input_items import messages_to_responses_input
-from evaluatorq.simulation.tracing import with_llm_span
+from evaluatorq.simulation.tracing import span_message_text, with_llm_span
 from evaluatorq.simulation.types import DEFAULT_MODEL, Message
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
-    from evaluatorq.contracts import ContentPart
-
 logger = logging.getLogger(__name__)
-
-
-def _span_message_text(content: str | list[ContentPart] | None) -> str:
-    """Flatten one message's content for a span attribute.
-
-    Delegates to the canonical `content_to_text` (CLAUDE.md: never ``str()`` a
-    ``str | list[ContentPart]`` — it lands on the span as a Python repr). The
-    Responses path legitimately carries image/file parts, which that helper
-    refuses; tracing must never break a run, so those degrade to a placeholder
-    naming the part types, with a warning, rather than raising.
-    """
-    try:
-        return content_to_text(content)
-    except NotImplementedError:
-        parts = content if isinstance(content, list) else []
-        types = ', '.join(sorted({str(p.type) for p in parts})) or 'unknown'
-        logger.warning(
-            'Span input: non-text content part(s) (%s) recorded as a placeholder; the span shows no text for them.',
-            types,
-        )
-        return f'<non-text content: {types}>'
 
 
 def _env_float(name: str, default: float) -> float:
@@ -412,7 +388,7 @@ class BaseAgent(ABC):
             # `record_llm_input` would `str()` into a Python repr on the span.
             # Mirrors runner/simulation.py's target_call span. See CLAUDE.md's
             # `content_to_text` row.
-            record_llm_input(span, [{'role': m.role, 'content': _span_message_text(m.content)} for m in messages])
+            record_llm_input(span, [{'role': m.role, 'content': span_message_text(m.content)} for m in messages])
             trace_headers = await get_trace_context_headers()
 
             async def _do_call() -> LLMResult:
