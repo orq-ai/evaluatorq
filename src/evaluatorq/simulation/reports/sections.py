@@ -31,7 +31,7 @@ from loguru import logger
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.contracts import ReportSection, Usage
 from evaluatorq.simulation.metrics import TURN_METRICS
-from evaluatorq.simulation.types import CriteriaRow, SimulationEntry, TranscriptMessage
+from evaluatorq.simulation.types import CriteriaRow, SimulationEntry, TranscriptMessage, criterion_id_for
 
 if TYPE_CHECKING:
     from evaluatorq.simulation.types import SimulationRecommendation, SimulationResult
@@ -83,7 +83,7 @@ def _criteria_meta(result: SimulationResult) -> list[dict[str, Any]]:
     logger.debug('criteria_meta absent; safety classification unavailable, falling back to criteria_results')
     cr = result.criteria_results or {}
     return [
-        {'id': f'criteria_{i}', 'description': desc, 'type': None, 'passed': bool(passed)}
+        {'id': criterion_id_for(i), 'description': desc, 'type': None, 'passed': bool(passed)}
         for i, (desc, passed) in enumerate(cr.items())
     ]
 

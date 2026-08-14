@@ -109,6 +109,7 @@ if TYPE_CHECKING:
         CommunicationStyle,
         ConversationStrategy,
         Criterion,
+        CriterionVerdict,
         CulturalContext,
         EmotionalArc,
         InputFormat,
@@ -219,6 +220,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
         'ConversationStrategy',
     ),
     'Criterion': ('evaluatorq.simulation.types', 'Criterion'),
+    'CriterionVerdict': ('evaluatorq.simulation.types', 'CriterionVerdict'),
     'CulturalContext': ('evaluatorq.simulation.types', 'CulturalContext'),
     'SimulationDatapoint': ('evaluatorq.simulation.types', 'SimulationDatapoint'),
     'EmotionalArc': ('evaluatorq.simulation.types', 'EmotionalArc'),
@@ -325,6 +327,7 @@ __all__ = [
     'ConversationStrategy',
     'CrewAITarget',
     'Criterion',
+    'CriterionVerdict',
     'CulturalContext',
     # Generators
     'DatapointGenerator',

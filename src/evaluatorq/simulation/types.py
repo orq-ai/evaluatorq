@@ -351,23 +351,86 @@ class Scenario(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+CRITERION_ID_PATTERN = r'^criteria_\d+$'
+"""Shape of a criterion id. Ids are positional (``criteria_0`` is the first
+criterion in `Scenario.criteria`), so this is the one place the format is written
+down; `criterion_id_for` and `CriterionVerdict.index` are the only ways to build
+or read one."""
+
+
+def criterion_id_for(index: int) -> str:
+    """The id of the criterion at `index` in a scenario's criteria list.
+
+    Every id in `rules_broken`, `criteria_results` and `criteria_meta` comes from
+    here. It used to be an inline f-string in nine places, which is nine chances
+    for the prompt, the parser and the report to disagree about what identifies a
+    criterion.
+    """
+    return f'criteria_{index}'
+
+
+class CriterionVerdict(BaseModel):
+    """One criterion's **occurrence** report for a single turn.
+
+    Occurrence, never pass/fail: `occurred` answers "did the described behaviour
+    appear?", which means the same thing for both `Criterion.type` values. A
+    pass/fail flag inverts between them and models get it backwards — gpt-5.4-mini
+    marked a satisfied `must_happen` as unmet while its own reason said otherwise.
+    The type-to-verdict mapping lives in code, where it cannot be confused.
+    """
+
+    criterion_id: str = Field(
+        pattern=CRITERION_ID_PATTERN,
+        description='The criterion id exactly as listed under EVALUATION CRITERIA, e.g. "criteria_0". '
+        'Copy it; do not paraphrase or renumber.',
+    )
+    occurred: bool = Field(
+        description='true if the described behaviour has actually appeared in the conversation so far, '
+        'false if it has not. Answer for the description alone, ignoring whether the criterion is '
+        'must_happen or must_not_happen.'
+    )
+    evidence: str = Field(
+        default='',
+        description='Short quote from the conversation showing the behaviour, or empty when occurred is false.',
+    )
+
+    @property
+    def index(self) -> int:
+        """Position in the scenario's criteria list, for stable ordering.
+
+        Derived from `criterion_id` rather than reported next to it: one value to
+        validate, and the two can never disagree. The id is what crosses the wire
+        because the judge copies it from the prompt, whereas a bare integer makes
+        it *count* — and a miscount lands in range on the neighbouring criterion,
+        which is usually of the opposite type, silently inverting a verdict. An
+        out-of-range id is merely dropped and warned about.
+        """
+        return int(self.criterion_id.removeprefix('criteria_'))
+
+
 class Judgment(BaseModel):
     should_terminate: bool
     reason: str
     goal_achieved: bool
     rules_broken: list[str]
     goal_completion_score: float
-    criteria_verdicts: dict[str, bool] | None = None
-    """Per-criterion **occurrence** audit for this turn, keyed by criterion id
-    (``criteria_0``…). ``True`` means the described behaviour has appeared in the
-    conversation so far — regardless of whether the criterion wanted it. Pass/fail is
-    derived from occurrence + `Criterion.type` in code, never asked of the judge:
-    a pass/fail flag inverts between the two types and models get it backwards.
+    criteria_verdicts: list[CriterionVerdict] | None = None
+    """Per-criterion **occurrence** audit for this turn, ordered by criterion index.
 
-    ``None`` means the judge reported nothing — **unknown, never passed**. Pass/fail
-    used to be inferred from the absence of an id in ``rules_broken``, which made a
-    ``must_happen`` criterion structurally unfailable (never occurring is not a
-    violation the judge is asked to report)."""
+    Three states, all distinct. ``None`` means the judge reported nothing —
+    **unknown, never passed**; the run is marked `criteria_verified=False`. An
+    empty list means it audited and had nothing left to report, which is the
+    normal state once every criterion is settled. A non-empty list is evidence.
+
+    ``occurred=True`` means the described behaviour has appeared in the
+    conversation so far — regardless of whether the criterion wanted it. Pass/fail
+    is derived from occurrence + `Criterion.type` in code, never asked of the
+    judge: a pass/fail flag inverts between the two types and models get it
+    backwards.
+
+    Pass/fail used to be inferred from the absence of an id in ``rules_broken``,
+    which made a ``must_happen`` criterion structurally unfailable — never
+    occurring is not a violation the judge is asked to report (RES-1308)."""
     response_quality: float | None = None
     hallucination_risk: float | None = None
     tone_appropriateness: float | None = None

@@ -21,6 +21,7 @@ from evaluatorq.simulation.agents.user_simulator import (
 from evaluatorq.simulation.tracing import with_simulation_span
 from evaluatorq.simulation.types import (
     DEFAULT_MODEL,
+    CriterionVerdict,
     Judgment,
     Message,
     Persona,
@@ -29,6 +30,7 @@ from evaluatorq.simulation.types import (
     SimulationResult,
     TerminatedBy,
     TurnMetrics,
+    criterion_id_for,
 )
 from evaluatorq.simulation.utils.prompt_builders import (
     build_datapoint_system_prompt,
@@ -37,7 +39,7 @@ from evaluatorq.simulation.utils.prompt_builders import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Mapping
 
     from openai import AsyncOpenAI
     from opentelemetry.trace import Span
@@ -163,8 +165,11 @@ class _CriteriaTracker:
         # Nothing has been observed yet. A criterion the judge never mentions keeps
         # this default, which is the honest reading for both types: a must_happen
         # nobody witnessed fails, a must_not_happen nobody witnessed passes.
-        self._occurred: dict[str, bool] = {f'criteria_{i}': False for i in range(len(self._criteria))}
+        self._occurred: dict[str, bool] = {criterion_id_for(i): False for i in range(len(self._criteria))}
         self._seen: set[str] = set()
+        # Quote from the turn where occurrence first flipped, so the report can show
+        # WHY a criterion is marked occurred rather than only that it is.
+        self._evidence: dict[str, str] = {}
         self._any_audit = False
 
     @property
@@ -200,12 +205,26 @@ class _CriteriaTracker:
         """
         return frozenset(cid for cid, occurred in self._occurred.items() if occurred)
 
-    def observe(self, judgment: Judgment) -> None:
-        verdicts = judgment.criteria_verdicts
+    @property
+    def evidence(self) -> dict[str, str]:
+        """Quote captured at the turn where each criterion's occurrence first flipped.
+
+        Only ids that actually occurred appear, and only when the judge supplied a
+        quote — an entry here is evidence, never an empty placeholder.
+        """
+        return dict(self._evidence)
+
+    def observe(self, verdicts: list[CriterionVerdict] | None) -> None:
+        """Fold one turn's occurrence audit in.
+
+        Takes the verdict list, not the whole `Judgment`: the audit is the only
+        part of a judgment this tracker may read, and `Judgment.rules_broken` is
+        precisely the channel it exists to stop trusting.
+        """
         if not verdicts:
             return
         self._any_audit = True
-        unknown = [cid for cid in verdicts if cid not in self._occurred]
+        unknown = [v.criterion_id for v in verdicts if v.criterion_id not in self._occurred]
         if unknown:
             # A valid-shaped entry for a nonexistent id is not counted as malformed
             # by the judge's parser, so without this it would vanish in silence —
@@ -217,15 +236,20 @@ class _CriteriaTracker:
                 self._scenario_name,
                 ', '.join(sorted(self._occurred)) or '<none>',
             )
-        for cid in self._occurred:
-            occurred = verdicts.get(cid)
-            if occurred is None:
+        for verdict in verdicts:
+            cid = verdict.criterion_id
+            if cid not in self._occurred:
                 continue
             self._seen.add(cid)
-            self._occurred[cid] = self._occurred[cid] or occurred
+            # Sticky: the first turn that saw it is the one whose quote is kept, so
+            # later turns cannot overwrite the evidence with a weaker restatement.
+            if verdict.occurred and not self._occurred[cid]:
+                if verdict.evidence:
+                    self._evidence[cid] = verdict.evidence
+                self._occurred[cid] = True
 
     def _passed(self, index: int) -> bool:
-        occurred = self._occurred[f'criteria_{index}']
+        occurred = self._occurred[criterion_id_for(index)]
         return occurred if self._criteria[index].type == 'must_happen' else not occurred
 
     def resolve(self, judgment: Judgment) -> Judgment:
@@ -266,7 +290,7 @@ class _CriteriaTracker:
                 ', '.join(sorted(unaudited)),
                 self._scenario_name,
             )
-        broken = [f'criteria_{i}' for i in range(len(self._criteria)) if not self._passed(i)]
+        broken = [criterion_id_for(i) for i in range(len(self._criteria)) if not self._passed(i)]
         return judgment.model_copy(update={'rules_broken': broken})
 
 
@@ -276,7 +300,7 @@ def _build_criteria_results(scenario: Scenario, judgment: Judgment) -> dict[str,
     criteria = scenario.criteria or []
     rules_broken = set(judgment.rules_broken)
     for i, criterion in enumerate(criteria):
-        criterion_id = f'criteria_{i}'
+        criterion_id = criterion_id_for(i)
         results[criterion.description] = criterion_id not in rules_broken
     return results
 
@@ -285,6 +309,7 @@ def _build_criteria_meta(
     scenario: Scenario,
     judgment: Judgment,
     audited_ids: frozenset[str] | None = None,
+    evidence: Mapping[str, str] | None = None,
 ) -> list[dict[str, object]]:
     """Id-keyed criteria detail for the report. Stable ids avoid the
     description-collision data loss that ``criteria_results`` (dict-by-description)
@@ -299,13 +324,14 @@ def _build_criteria_meta(
     rules_broken = set(judgment.rules_broken)
     meta: list[dict[str, object]] = []
     for i, criterion in enumerate(criteria):
-        criterion_id = f'criteria_{i}'
+        criterion_id = criterion_id_for(i)
         meta.append({
             'id': criterion_id,
             'description': criterion.description,
             'type': criterion.type,
             'passed': criterion_id not in rules_broken,
             'audited': criterion_id in audited_ids if audited_ids is not None else None,
+            'evidence': evidence.get(criterion_id, '') if evidence is not None else None,
         })
     return meta
 
@@ -353,9 +379,12 @@ def _max_turns_result(
     *,
     criteria_verified: bool | None = None,
     audited_ids: frozenset[str] | None = None,
+    evidence: Mapping[str, str] | None = None,
 ) -> SimulationResult:
     criteria_results = _build_criteria_results(scenario, last_judgment) if scenario and last_judgment else None
-    criteria_meta = _build_criteria_meta(scenario, last_judgment, audited_ids) if scenario and last_judgment else None
+    criteria_meta = (
+        _build_criteria_meta(scenario, last_judgment, audited_ids, evidence) if scenario and last_judgment else None
+    )
     metadata = _build_simulation_metadata(persona, scenario, criteria_meta, target_model)
     return SimulationResult(
         messages=messages,
@@ -767,7 +796,7 @@ class SimulationRunner:
 
                 async with with_simulation_span('orq.simulation.judge_evaluation', None):
                     judgment = await judge.evaluate(messages)
-                criteria_tracker.observe(judgment)
+                criteria_tracker.observe(judgment.criteria_verdicts)
                 # Occurrence is sticky, so a confirmed criterion cannot change —
                 # stop paying for it in every remaining turn's audit payload. Duck
                 # typed, per the _implements note above: a custom judge without the
@@ -818,7 +847,9 @@ class SimulationRunner:
                 judge_metadata = _build_simulation_metadata(
                     persona,
                     scenario,
-                    _build_criteria_meta(scenario, resolved, criteria_tracker.audited_ids) if scenario else None,
+                    _build_criteria_meta(scenario, resolved, criteria_tracker.audited_ids, criteria_tracker.evidence)
+                    if scenario
+                    else None,
                     target_model_holder['model'],
                 )
                 return SimulationResult(
@@ -858,6 +889,7 @@ class SimulationRunner:
             target_model=target_model_holder['model'],
             criteria_verified=criteria_tracker.verified,
             audited_ids=criteria_tracker.audited_ids,
+            evidence=criteria_tracker.evidence,
         )
 
     async def run_batch(

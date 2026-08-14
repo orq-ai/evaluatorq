@@ -20,6 +20,7 @@ from evaluatorq.simulation.runner.simulation import SimulationRunner, _CriteriaT
 from evaluatorq.simulation.types import (
     CommunicationStyle,
     Criterion,
+    CriterionVerdict,
     Judgment,
     Persona,
     Scenario,
@@ -56,14 +57,17 @@ def _judgment(verdicts: dict[str, bool] | None, *, terminate: bool = False, brok
         goal_achieved=False,
         rules_broken=broken or [],
         goal_completion_score=0.0,
-        criteria_verdicts=verdicts,
+        criteria_verdicts=None if verdicts is None else _occurred(verdicts),
     )
 
 
-def _occurred(occurrences: dict[str, bool], *, terminate: bool = False) -> Judgment:
-    """Judgment carrying an occurrence audit — True means the behaviour appeared,
-    for BOTH criterion types. criteria_0 is must_happen, criteria_1 must_not_happen."""
-    return _judgment(occurrences, terminate=terminate)
+def _occurred(occurrences: dict[str, bool]) -> list[CriterionVerdict]:
+    """An occurrence audit — True means the behaviour appeared, for BOTH criterion
+    types. criteria_0 is must_happen, criteria_1 must_not_happen."""
+    return [
+        CriterionVerdict(criterion_id=cid, occurred=occurred, evidence='q' if occurred else '')
+        for cid, occurred in occurrences.items()
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +97,7 @@ def test_must_not_happen_violation_survives_later_clean_turns():
 
 def test_no_audit_at_all_falls_back_and_warns(caplog):
     t = _CriteriaTracker(_scenario())
-    t.observe(_judgment(None))
+    t.observe(None)
     with caplog.at_level('WARNING'):
         resolved = t.resolve(_judgment(None, terminate=True))
     assert resolved.rules_broken == []
@@ -171,14 +175,17 @@ def test_continue_conversation_reports_mid_run_violation():
             'reason': 'r',
             'goal_completion_score': 0.2,
             'criteria_verdicts': [
-                {'id': 'criteria_0', 'occurred': False, 'evidence': ''},
-                {'id': 'criteria_1', 'occurred': True, 'evidence': 'which plan?'},
+                {'criterion_id': 'criteria_0', 'occurred': False, 'evidence': ''},
+                {'criterion_id': 'criteria_1', 'occurred': True, 'evidence': 'which plan?'},
             ],
         },
     )
     judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
     assert judgment.rules_broken == ['criteria_1']  # must_happen not yet met is not a violation
-    assert judgment.criteria_verdicts == {'criteria_0': False, 'criteria_1': True}
+    assert [(v.criterion_id, v.occurred) for v in judgment.criteria_verdicts or []] == [
+        ('criteria_0', False),
+        ('criteria_1', True),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -212,7 +219,7 @@ def test_finish_conversation_derives_rules_broken_from_the_audit_alone():
             'goal_achieved': False,
             'rules_broken': ['criteria_0'],  # not in the schema; must not survive
             'goal_completion_score': 0.0,
-            'criteria_verdicts': [{'id': 'criteria_1', 'occurred': True, 'evidence': 'a plan'}],
+            'criteria_verdicts': [{'criterion_id': 'criteria_1', 'occurred': True, 'evidence': 'a plan'}],
         },
     )
     judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
@@ -238,17 +245,140 @@ def test_malformed_verdict_entries_are_dropped_with_a_warning(caplog):
             'reason': 'r',
             'goal_completion_score': 0.0,
             'criteria_verdicts': [
-                {'id': 'criteria_0', 'occurred': 'true', 'evidence': ''},  # string, not bool
-                {'id': 42, 'occurred': True, 'evidence': ''},  # id not a string
+                {'criterion_id': 'criteria_0', 'occurred': 'not-a-bool', 'evidence': ''},  # unparseable as bool
+                {'criterion_id': 42, 'occurred': True, 'evidence': ''},  # id not a string
                 'not-an-object',
-                {'id': 'criteria_1', 'occurred': True, 'evidence': 'a plan'},
+                {'criterion_id': 'criteria_1', 'occurred': True, 'evidence': 'a plan'},
             ],
         },
     )
     with caplog.at_level('WARNING'):
         judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
-    assert judgment.criteria_verdicts == {'criteria_1': True}
+    assert [(v.criterion_id, v.occurred) for v in judgment.criteria_verdicts or []] == [('criteria_1', True)]
     assert 'malformed' in caplog.text
+
+
+def test_a_wholly_unusable_verdicts_payload_is_unknown_not_empty(caplog):
+    """``None`` is *unknown* and marks the run unverified; ``[]`` would claim the
+    judge audited and found nothing, which is the RES-1308 flattering silence."""
+    judge = _judge()
+    result = _llm_result(
+        'continue_conversation',
+        {'reason': 'r', 'goal_completion_score': 0.0, 'criteria_verdicts': 'all fine'},
+    )
+    with caplog.at_level('WARNING'):
+        judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+    assert judgment.criteria_verdicts is None
+    assert 'unusable as a whole' in caplog.text
+
+
+def test_an_empty_audit_survives_as_audited_and_does_not_become_none():
+    """Every criterion settled is the normal end state, and it must stay
+    distinguishable from a judge that reported nothing at all."""
+    judge = _judge()
+    result = _llm_result(
+        'continue_conversation',
+        {'reason': 'r', 'goal_completion_score': 0.5, 'criteria_verdicts': []},
+    )
+    judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+    assert judgment.criteria_verdicts == []
+
+
+def test_verdicts_outside_the_scenario_criteria_are_dropped_at_parse_time(caplog):
+    """A well-formed id the scenario never defined passes shape validation and then
+    matches nothing, so only the scenario context can catch it."""
+    judge = _judge()
+    result = _llm_result(
+        'continue_conversation',
+        {
+            'reason': 'r',
+            'goal_completion_score': 0.0,
+            'criteria_verdicts': [
+                {'criterion_id': 'criteria_5', 'occurred': True, 'evidence': 'nope'},
+                {'criterion_id': 'criteria_1', 'occurred': True, 'evidence': 'a plan'},
+            ],
+        },
+    )
+    with caplog.at_level('WARNING'):
+        judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+    assert [v.criterion_id for v in judgment.criteria_verdicts or []] == ['criteria_1']
+    assert 'out-of-range' in caplog.text
+
+
+def test_duplicate_verdict_ids_are_collapsed_with_a_warning(caplog):
+    """Left alone the last entry silently wins, and nothing says two arrived."""
+    judge = _judge()
+    result = _llm_result(
+        'continue_conversation',
+        {
+            'reason': 'r',
+            'goal_completion_score': 0.0,
+            'criteria_verdicts': [
+                {'criterion_id': 'criteria_1', 'occurred': False, 'evidence': ''},
+                {'criterion_id': 'criteria_1', 'occurred': True, 'evidence': 'a plan'},
+            ],
+        },
+    )
+    with caplog.at_level('WARNING'):
+        judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+    assert [(v.criterion_id, v.occurred) for v in judgment.criteria_verdicts or []] == [('criteria_1', True)]
+    assert 'duplicate' in caplog.text
+
+
+def test_verdicts_come_back_sorted_by_criterion_index():
+    """Nothing downstream should depend on the order the model happened to emit."""
+    judge = _judge()
+    result = _llm_result(
+        'continue_conversation',
+        {
+            'reason': 'r',
+            'goal_completion_score': 0.0,
+            'criteria_verdicts': [
+                {'criterion_id': 'criteria_1', 'occurred': False, 'evidence': ''},
+                {'criterion_id': 'criteria_0', 'occurred': True, 'evidence': 'BANANA'},
+            ],
+        },
+    )
+    judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+    assert [v.criterion_id for v in judgment.criteria_verdicts or []] == ['criteria_0', 'criteria_1']
+
+
+def test_unusable_goal_completion_score_falls_back_to_zero_and_keeps_the_audit(caplog):
+    """Rejecting the payload over one bad number would safety-terminate the run and
+    throw away the criteria audit with it — a far worse trade."""
+    judge = _judge()
+    result = _llm_result(
+        'continue_conversation',
+        {
+            'reason': 'r',
+            'goal_completion_score': 'high',
+            'criteria_verdicts': [{'criterion_id': 'criteria_1', 'occurred': True, 'evidence': 'a plan'}],
+        },
+    )
+    with caplog.at_level('WARNING'):
+        judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+    assert judgment.goal_completion_score == 0.0
+    assert 'goal_completion_score' in caplog.text
+    assert judgment.rules_broken == ['criteria_1']  # the audit survived
+
+
+def test_a_boolean_score_is_not_read_as_a_number():
+    """``True`` coerces to 1.0 through float(), which would read as a perfect score
+    from a judge that answered the wrong type entirely."""
+    judge = _judge()
+    result = _llm_result(
+        'continue_conversation',
+        {'reason': 'r', 'goal_completion_score': 0.5, 'response_quality': True},
+    )
+    judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+    assert judgment.response_quality is None
+
+
+def test_tracker_keeps_the_evidence_from_the_turn_occurrence_first_flipped():
+    t = _CriteriaTracker(_scenario())
+    t.observe([CriterionVerdict(criterion_id='criteria_0', occurred=True, evidence='BANANA')])
+    t.observe([CriterionVerdict(criterion_id='criteria_0', occurred=True, evidence='banana again')])
+    assert t.evidence == {'criteria_0': 'BANANA'}
 
 
 def test_both_judge_tools_require_criteria_verdicts():
@@ -523,7 +653,7 @@ def test_empty_audit_is_silent_once_every_criterion_is_settled(caplog):
 def test_tracker_reports_verified_only_once_an_audit_arrives():
     t = _CriteriaTracker(_scenario())
     assert t.verified is False
-    t.observe(_judgment(None))
+    t.observe(None)
     assert t.verified is False
     t.observe(_occurred({'criteria_0': True}))
     assert t.verified is True
