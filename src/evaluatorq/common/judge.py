@@ -693,7 +693,10 @@ async def run_judge(
             max_attempts=cfg.retry_count + 1,
             label=f'judge[{model}]',
         )
-    except (asyncio.TimeoutError, APITimeoutError):
+    # Builtin TimeoutError is listed separately because on Python 3.10 it is a
+    # *different* class from asyncio.TimeoutError (they were merged in 3.11).
+    # Without it, a socket-level timeout classifies as UNKNOWN on 3.10 only.
+    except (asyncio.TimeoutError, TimeoutError, APITimeoutError):
         logger.error('Judge [{}] timed out after {}ms', model, cfg.timeout_ms)
         return JudgeOutcome(
             error_kind=JudgeError.TIMEOUT,
