@@ -256,6 +256,7 @@ def record_token_usage(
     input_cost: float | None = None,
     output_cost: float | None = None,
     total_cost: float | None = None,
+    cost_source: str | None = None,
 ) -> None:
     """Record token usage on a span. Safe no-op when span is None.
 
@@ -269,6 +270,13 @@ def record_token_usage(
 
     ``usage`` accepts a `evaluatorq.contracts.Usage` and expands it into
     the individual parameters; explicitly-passed parameters win over it.
+
+    ``cost_source`` (``'provider'`` | ``'catalogue'`` | ``'mixed'``) is the
+    provenance of ``total_cost`` and is emitted as ``gen_ai.usage.cost_source``
+    beside it. Defaults to ``usage.cost_source`` when a `Usage` is supplied, so a
+    client-side catalogue estimate cannot reach a trace viewer labelled as billed.
+    Only ever set alongside a cost: a provenance attribute on a span with no cost
+    would describe a number that is not there.
     """
     if span is None:
         return
@@ -291,6 +299,7 @@ def record_token_usage(
         input_cost = input_cost if input_cost is not None else usage.input_cost
         output_cost = output_cost if output_cost is not None else usage.output_cost
         total_cost = total_cost if total_cost is not None else usage.total_cost
+        cost_source = cost_source if cost_source is not None else usage.cost_source
     if calls is _UNSET_CALLS:
         calls = 0
     prompt = prompt_tokens if prompt_tokens is not None else 0
@@ -320,6 +329,13 @@ def record_token_usage(
     if total_cost is not None:
         span.set_attribute('gen_ai.usage.total_cost', total_cost)
         span.set_attribute('gen_ai.usage.cost', total_cost)
+        if cost_source is not None:
+            span.set_attribute('gen_ai.usage.cost_source', cost_source)
+        else:
+            # A cost with no provenance: the caller passed a bare number rather
+            # than a Usage. The trace UI can then only show the figure, not
+            # whether it was billed — say so instead of leaving the gap silent.
+            logger.debug('record_token_usage: cost {} recorded without provenance (no cost_source)', total_cost)
 
 
 def record_llm_response(

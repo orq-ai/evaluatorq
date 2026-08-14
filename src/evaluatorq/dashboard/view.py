@@ -355,17 +355,26 @@ def landing_body(data: Landing) -> str:
     # matching the "(N of M calls)" qualifier the markdown/HTML reports render.
     # Only qualifies a figure that exists — an em dash "no cost recorded" tile
     # with "(1 of 2 calls)" under it would label a total that was never shown.
+    # The input/output split counts as such a figure: it comes from the same
+    # usage as the total, so it is qualified whenever it is shown, even in the
+    # (rare) case where a report carries the split but no aggregate cost_usd.
     coverage = (
         _coverage(data.priced_calls, data.cost_calls, data.unknown_calls, data.estimated_calls)
-        if data.total_cost is not None
+        if data.total_cost is not None or spend_sub
         else ''
     )
     if coverage:
-        spend_sub = f'{spend_sub} ·{coverage}' if spend_sub else coverage.strip()
+        # Appended directly to the split rather than after a separator: with a
+        # ' · ' between them the clause reads as a third item on the line instead
+        # of a qualifier on the dollars beside it.
+        spend_sub = f'{spend_sub}{coverage}' if spend_sub else coverage.strip()
     band = (
         '<div class="stat-band">'
         + _stat_tile('Jobs run', str(data.total_runs))
-        + _stat_tile('Avg cost / job', _fmt_cost(avg_cost))
+        # Same numerator as Total spend (and the same counters), so the average
+        # inherits its coverage — an unqualified mean of a partly-estimated total
+        # is the same claim, divided.
+        + _stat_tile('Avg cost / job', _fmt_cost(avg_cost), sub=coverage.strip() if avg_cost is not None else '')
         + _stat_tile('Total spend', _fmt_cost(data.total_cost), sub=spend_sub)
         + _stat_tile('Total tokens', _fmt_compact(total_tokens))
         + '</div>'
@@ -390,13 +399,21 @@ def landing_body(data: Landing) -> str:
     sev_colors = [severity_palette.get(s, 'var(--text-faint)') for s, _ in data.severity]
     sev_inner = _bars(sev_rows, sev_colors) if sev_rows else '<p class="rt-panel-loading">No findings.</p>'
     severity_panel = _panel('Findings by severity', 'Vulnerabilities found', sev_inner)
-    # Spend by job type — real dollars (cost_usd recorded upstream).
+    # Spend by job type — the cost_usd recorded upstream, per kind.
     spend_inner = (
         _bars(data.cost_by_kind, _kind_colors(data.cost_by_kind), fmt=_fmt_cost)
         if data.cost_by_kind
         else '<p class="rt-panel-loading">No cost recorded.</p>'
     )
-    spend_panel = _panel('Spend by job type', 'Real cost across runs', spend_inner)
+    # ``cost_by_kind`` carries no per-kind coverage counters, so the bars cannot
+    # be qualified individually. The subtitle states the limitation instead of
+    # asserting "Real cost across runs" over figures that may be client-side
+    # estimates or lower bounds; the clause quoted is the combined one from the
+    # KPI band, which is the only coverage this panel actually knows.
+    spend_sub_text = 'Recorded cost across runs'
+    if coverage:
+        spend_sub_text += f' · combined coverage{coverage}'
+    spend_panel = _panel('Spend by job type', spend_sub_text, spend_inner)
 
     tok_inner = (
         _bars(data.tokens_by_kind, _kind_colors(data.tokens_by_kind), fmt='{:,}')
@@ -498,6 +515,37 @@ def _run_status_pill(status: str) -> str:
     return f'<span class="run-status {esc(status)}">{esc(_STATUS_LABEL.get(status, status))}</span>'
 
 
+def _run_cost_cell(row: Any) -> str:
+    """The Cost column cell, qualified by the row's own coverage counters.
+
+    The KPI band above this table qualifies its spend figure; a bare cost in the
+    table would be the one number on the screen claiming to be fully billed.
+    There is no room for the full clause in a cell, so it renders as a leading
+    ``~`` — derived from the same counters, never from a second label vocabulary
+    — with `_coverage`'s exact wording in the cell's ``title`` tooltip.
+
+    Rows with no cost (an em dash) and rows whose cost is fully provider-billed
+    carry no marker: ``~`` means "qualified", so putting it on everything would
+    say nothing.
+    """
+    cost = getattr(row, 'cost', None)
+    text = esc(_fmt_cost(cost))
+    coverage = (
+        _coverage(
+            getattr(row, 'priced_calls', 0),
+            getattr(row, 'cost_calls', 0),
+            getattr(row, 'unknown_calls', 0),
+            getattr(row, 'estimated_calls', 0),
+        )
+        if cost is not None
+        else ''
+    )
+    if not coverage:
+        return f'<span class="rg-num">{text}</span>'
+    label = coverage.strip().strip('()')
+    return f'<span class="rg-num" title="{esc(label)}">~{text}</span>'
+
+
 def _run_grid(rows: list[Any]) -> str:
     """Run-level table as a clickable anchor-grid — the WHOLE row links to the
     run's report. Borderless (no boxed table chrome), aligned columns.
@@ -506,6 +554,10 @@ def _run_grid(rows: list[Any]) -> str:
         '<div class="runs-grid-head"><span>Job</span><span>Target</span><span>Status</span>'
         '<span>Score</span><span>Cases</span><span>Cost</span><span></span></div>'
     )
+    if not rows:
+        # A page past the last one, or a filter that matched nothing: the head
+        # alone is indistinguishable from a table that failed to render.
+        return f'<div class="runs-grid">{head}<div class="runs-empty">No runs on this page.</div></div>'
     parts: list[str] = [head]
     for r in rows:
         err = '<span class="card-error" title="failed to load">error</span>' if r.error else ''
@@ -517,7 +569,7 @@ def _run_grid(rows: list[Any]) -> str:
             f'<span>{_run_status_pill(r.status)}</span>'
             f'<span class="run-score {_score_cls(r.score)}">{_fmt_score(r.score)}</span>'
             f'<span class="rg-num">{esc(str(r.cases))}</span>'
-            f'<span class="rg-num">{esc(_fmt_cost(r.cost))}</span>'
+            f'{_run_cost_cell(r)}'
             f'{_CHEVRON}'
             f'</a>'
         )
@@ -648,6 +700,9 @@ def sim_overview_body(data: SimOverview, compare_choices: list[tuple[str, str]] 
         cost_label, cost_value = 'Avg cost/sim', _fmt_cost(data.avg_cost)
         if data.avg_input_cost is not None or data.avg_output_cost is not None:
             cost_value += f' (in {_fmt_cost(data.avg_input_cost)} / out {_fmt_cost(data.avg_output_cost)})'
+        # The coverage clause is appended last so it trails the split as well as
+        # the total: both are the same usage priced the same way, and a split
+        # sitting outside the qualifier would read as the exact figure.
         cost_value += _coverage(data.priced_calls, data.cost_calls, data.unknown_calls, data.estimated_calls)
     else:
         cost_label = 'Avg tokens/sim'
@@ -703,9 +758,13 @@ def redteam_overview_body(data: RedTeamOverview) -> str:
         else ('fail' if data.break_rate >= 0.25 else 'warn' if data.break_rate > 0 else 'pass')
     )
     spend_value = _fmt_cost(data.total_cost)
-    if data.total_input_cost is not None or data.total_output_cost is not None:
+    has_split = data.total_input_cost is not None or data.total_output_cost is not None
+    if has_split:
         spend_value += f' (in {_fmt_cost(data.total_input_cost)} / out {_fmt_cost(data.total_output_cost)})'
-    if data.total_cost is not None:
+    # The clause trails both figures and qualifies both — the split is the same
+    # usage priced the same way, so a bare split beside a qualified total would
+    # read as the exact one. Qualified whenever either figure is shown.
+    if data.total_cost is not None or has_split:
         spend_value += _coverage(data.priced_calls, data.cost_calls, data.unknown_calls, data.estimated_calls)
     band = kpi_cards([
         {'label': 'Attacks run', 'value': str(data.attacks_run)},

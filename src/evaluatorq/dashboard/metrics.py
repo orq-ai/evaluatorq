@@ -456,6 +456,14 @@ def landing(roots: list[Path] | None = None) -> Landing:
                 if counts.cost:
                     rt_cost += counts.cost
                     costed_runs += 1
+                # Coverage travels with that cost. Omitting it used to let a
+                # legacy report add dollars to Total spend while the qualifier
+                # beside it reported complete provider billing — the exact case
+                # ``unknown_calls`` exists for (see `_cost_calls`).
+                priced_calls_total += counts.priced_calls
+                cost_calls_total += counts.cost_calls
+                unknown_calls_total += counts.unknown_calls
+                estimated_calls_total += counts.estimated_calls
                 # The input/output split is not recoverable from legacy results.
                 by_sev = counts.by_severity
             else:
@@ -585,6 +593,11 @@ class _RedteamCounts(NamedTuple):
     tokens: int
     cost: float
     by_severity: dict[str, int]
+    # Cost coverage derived from the results list, same four slots as `_cost_calls`.
+    priced_calls: int = 0
+    cost_calls: int = 0
+    unknown_calls: int = 0
+    estimated_calls: int = 0
 
 
 def _result_outcome(res: dict[str, object]) -> bool | None:
@@ -613,13 +626,29 @@ def _result_outcome(res: dict[str, object]) -> bool | None:
     return None
 
 
-def _result_usage(res: dict[str, object]) -> tuple[int, float]:
-    """``(tokens, cost)`` for one result, over both the target and judge calls.
+class _ResultUsage(NamedTuple):
+    """One result's tokens, cost and cost-coverage counters."""
 
-    Same two holders ``converters._aggregate_token_usage`` walks.
+    tokens: int
+    cost: float
+    priced_calls: int
+    cost_calls: int
+    unknown_calls: int
+    estimated_calls: int
+
+
+def _result_usage(res: dict[str, object]) -> _ResultUsage:
+    """Tokens, cost and coverage for one result, over both target and judge calls.
+
+    Same two holders ``converters._aggregate_token_usage`` walks. The coverage
+    counters come from `_cost_calls`, so a derived cost carries the same
+    provenance a stored ``token_usage_total`` would — without them the legacy
+    fallback contributes dollars to the total and nothing to its qualifier,
+    which reads as "the provider billed all of this".
     """
     tokens = 0
     cost = 0.0
+    priced = calls = unknown = estimated = 0
     for holder in ('execution', 'evaluation'):
         parent = res.get(holder)
         usage = parent.get('token_usage') if isinstance(parent, dict) else None
@@ -627,7 +656,12 @@ def _result_usage(res: dict[str, object]) -> tuple[int, float]:
         holder_cost = _cost_usd(usage)
         if holder_cost is not None:
             cost += holder_cost
-    return tokens, cost
+        holder_priced, holder_calls, holder_unknown, holder_estimated = _cost_calls(usage)
+        priced += holder_priced
+        calls += holder_calls
+        unknown += holder_unknown
+        estimated += holder_estimated
+    return _ResultUsage(tokens, cost, priced, calls, unknown, estimated)
 
 
 def _redteam_counts(data: dict[str, object]) -> _RedteamCounts:
@@ -640,14 +674,19 @@ def _redteam_counts(data: dict[str, object]) -> _RedteamCounts:
     """
     attacks = evaluated = vulnerable = errors = tokens = 0
     cost = 0.0
+    priced = calls = unknown = estimated = 0
     by_severity: dict[str, int] = {}
     for res in _results(data):
         attacks += 1
         if res.get('error'):
             errors += 1
-        tok, c = _result_usage(res)
-        tokens += tok
-        cost += c
+        usage = _result_usage(res)
+        tokens += usage.tokens
+        cost += usage.cost
+        priced += usage.priced_calls
+        calls += usage.cost_calls
+        unknown += usage.unknown_calls
+        estimated += usage.estimated_calls
         outcome = _result_outcome(res)
         if outcome is None:
             continue
@@ -667,7 +706,19 @@ def _redteam_counts(data: dict[str, object]) -> _RedteamCounts:
         # Distinguishes "shape we couldn't read" from a genuinely costless run —
         # _result_usage returns zeros for any unrecognised usage schema.
         logger.debug('redteam counts: {} results but zero derivable token usage — unrecognised usage shape?', attacks)
-    return _RedteamCounts(attacks, evaluated, vulnerable, errors, tokens, cost, by_severity)
+    return _RedteamCounts(
+        attacks,
+        evaluated,
+        vulnerable,
+        errors,
+        tokens,
+        cost,
+        by_severity,
+        priced_calls=priced,
+        cost_calls=calls,
+        unknown_calls=unknown,
+        estimated_calls=estimated,
+    )
 
 
 def _summary_severity(summary: dict[str, object]) -> dict[str, int]:
@@ -801,6 +852,14 @@ class SimRunRow:
     cases: int  # number of simulations in the run
     cost: float | None  # summed cost_usd across the run's simulations; None if none recorded
     error: bool
+    # Cost coverage for the row's own ``cost``, so the table cell can be qualified
+    # with the same counters the KPI band above it uses. Default 0 for callers
+    # (and tests) that build a row without cost provenance: `_coverage` renders
+    # nothing for all-zero counters rather than claiming full billing.
+    priced_calls: int = 0
+    cost_calls: int = 0
+    unknown_calls: int = 0
+    estimated_calls: int = 0
 
 
 @dataclass(frozen=True)
@@ -1008,6 +1067,10 @@ def _sim_aggregate(roots_key: tuple[str, ...], fingerprint: tuple[int, int]) -> 
                 cases=stats.cases,
                 cost=stats.cost,
                 error=bool(card.error),
+                priced_calls=stats.priced_calls,
+                cost_calls=stats.cost_calls,
+                unknown_calls=stats.unknown_calls,
+                estimated_calls=stats.estimated_calls,
             )
         )
 
@@ -1059,6 +1122,12 @@ class RedTeamRunRow:
     cases: int  # number of attacks in the run
     cost: float | None  # summed cost_usd for the run; None when not recorded
     error: bool
+    # Cost coverage for the row's own ``cost`` — see `SimRunRow` for why these
+    # default to 0.
+    priced_calls: int = 0
+    cost_calls: int = 0
+    unknown_calls: int = 0
+    estimated_calls: int = 0
 
 
 @dataclass(frozen=True)
@@ -1241,6 +1310,10 @@ def _redteam_aggregate(roots_key: tuple[str, ...], fingerprint: tuple[int, int])
                 cases=stats.cases,
                 cost=stats.cost,
                 error=bool(card.error),
+                priced_calls=stats.priced_calls,
+                cost_calls=stats.cost_calls,
+                unknown_calls=stats.unknown_calls,
+                estimated_calls=stats.estimated_calls,
             )
         )
 

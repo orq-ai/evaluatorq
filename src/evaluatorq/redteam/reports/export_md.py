@@ -635,17 +635,20 @@ def _render_token_usage_section(section: ReportSection) -> str:
         input_cost = overall.get('input_cost')
         output_cost = overall.get('output_cost')
         total_cost = overall.get('total_cost')
+        # Flag a lower-bound total: some calls in this run reported no cost. The
+        # same label qualifies the input/output split — it comes from the same
+        # `Usage` and the same pricing pass, so an unqualified split beside a
+        # qualified total would imply the split alone is exact.
+        coverage = _cost_coverage(
+            overall.get('priced_calls', 0),
+            overall.get('calls', 0),
+            estimated_calls=overall.get('estimated_calls', 0),
+        )
         if input_cost is not None:
-            metric_rows.append(['Input Cost', _fmt_cost(input_cost)])
+            metric_rows.append(['Input Cost', f'{_fmt_cost(input_cost)}{coverage}'])
         if output_cost is not None:
-            metric_rows.append(['Output Cost', _fmt_cost(output_cost)])
+            metric_rows.append(['Output Cost', f'{_fmt_cost(output_cost)}{coverage}'])
         if total_cost is not None:
-            # Flag a lower-bound total: some calls in this run reported no cost.
-            coverage = _cost_coverage(
-                overall.get('priced_calls', 0),
-                overall.get('calls', 0),
-                estimated_calls=overall.get('estimated_calls', 0),
-            )
             metric_rows.append(['Total Cost', f'{_fmt_cost(total_cost)}{coverage}'])
         lines.extend((
             _md_table(['Metric', 'Value'], metric_rows, right_align={1}),

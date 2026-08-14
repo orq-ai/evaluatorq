@@ -4,6 +4,7 @@ metrics aggregation that feeds them (RES-974)."""
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -1144,3 +1145,135 @@ class TestUnknownSeverity:
         # The stored-summary path has the same display comprehension behind it.
         out = metrics._summary_severity({'by_severity': {'Sev1': {'vulnerabilities_found': 2}, 'HIGH': {'count': 1}}})
         assert out == {metrics.UNKNOWN_SEVERITY: 2, 'high': 1}
+
+
+class TestLegacyRedTeamCoverage:
+    """A legacy red-team report's derived cost carries derived coverage.
+
+    The legacy branch of `metrics.landing` summed ``counts.cost`` into Total
+    spend but never touched the coverage counters, so a legacy report's dollars
+    entered the total while the qualifier beside them reported complete provider
+    billing — the exact case ``unknown_calls`` exists for.
+    """
+
+    def _roots(self, tmp_path: Path, results: list[dict]) -> tuple[Path, Path]:
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        (rt / 'legacy.json').write_text(
+            json.dumps(_legacy_redteam_payload('L', created='2026-06-29T10:00:00', resistance=1.0, results=results))
+        )
+        return rt, sim
+
+    def test_legacy_derived_cost_counts_as_unknown_coverage(self, tmp_path: Path) -> None:
+        rt, sim = self._roots(tmp_path, [_legacy_result(tokens=100), _legacy_result(tokens=200)])
+
+        data = metrics.landing([rt, sim])
+        assert data.total_cost is not None
+        assert data.priced_calls == 0
+        assert data.unknown_calls == 2  # one costed usage holder per result
+        assert 'unknown coverage' in view.landing_body(data)
+
+    def test_legacy_report_with_no_cost_adds_no_unknown_coverage(self, tmp_path: Path) -> None:
+        """Unknown coverage is about cost that was summed; a costless legacy
+        report contributes neither dollars nor a qualifier."""
+        rt, sim = self._roots(tmp_path, [_legacy_result(), _legacy_result()])
+
+        data = metrics.landing([rt, sim])
+        assert data.total_cost is None
+        assert (data.priced_calls, data.cost_calls, data.unknown_calls) == (0, 0, 0)
+        assert 'unknown coverage' not in view.landing_body(data)
+
+
+class TestRunGridCostColumn:
+    """The per-run Cost cell must carry the same provenance as the KPI band."""
+
+    def _row(self, **kw: object) -> metrics.SimRunRow:
+        base: dict = dict(
+            rid='r', name='n', when=datetime(2026, 6, 29, 10, 0), targets=[('a', 'agent')],
+            status='finished', score=0.9, cases=3, cost=0.5, error=False,
+        )
+        base.update(kw)
+        return metrics.SimRunRow(**base)
+
+    def test_estimated_cost_is_marked_and_explained_in_the_tooltip(self) -> None:
+        html = view._run_grid([self._row(priced_calls=2, cost_calls=2, estimated_calls=2)])
+        assert '~$0.5000' in html
+        assert 'title="estimated"' in html
+
+    def test_partial_coverage_marker_names_the_counts(self) -> None:
+        html = view._run_grid([self._row(priced_calls=1, cost_calls=4)])
+        assert '~$0.5000' in html
+        assert 'title="1 of 4 calls"' in html
+
+    def test_fully_billed_cost_carries_no_marker(self) -> None:
+        """``~`` means "qualified" — putting it on every row would say nothing."""
+        html = view._run_grid([self._row(priced_calls=4, cost_calls=4)])
+        assert '$0.5000' in html
+        assert '~' not in html
+        assert 'title=' not in html
+
+    def test_unknown_cost_renders_an_em_dash_without_a_marker(self) -> None:
+        html = view._run_grid([self._row(cost=None, priced_calls=1, cost_calls=4)])
+        assert '—' in html
+        assert '~' not in html
+
+    def test_empty_grid_renders_an_empty_state(self) -> None:
+        """A head row with nothing under it is indistinguishable from a bug."""
+        html = view._run_grid([])
+        assert 'runs-empty' in html
+        assert 'No runs on this page.' in html
+
+
+class TestLandingSpendPanelsAreQualified:
+    """Avg cost / job and Spend by job type derive from the same data the
+    Total spend tile qualifies; neither may render bare dollars."""
+
+    def _roots(self, tmp_path: Path, **usage: object) -> tuple[Path, Path]:
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        (rt / 'p.json').write_text(
+            json.dumps({
+                'pipeline': {'mode': 'adaptive'},
+                'created_at': '2026-06-29T10:00:00',
+                'run_name': 'P',
+                'total_results': 1,
+                'results': [{'attack': {'severity': 'low'}, 'vulnerable': False, 'error': None}],
+                'summary': {
+                    'resistance_rate': 1.0,
+                    'vulnerabilities_found': 0,
+                    'evaluated_attacks': 1,
+                    'token_usage_total': {'total_tokens': 500, 'cost_usd': 0.5, **usage},
+                    'by_severity': {},
+                },
+            })
+        )
+        return rt, sim
+
+    def test_avg_cost_tile_inherits_the_totals_coverage(self, tmp_path: Path) -> None:
+        rt, sim = self._roots(tmp_path, calls=2, priced_calls=1, estimated_calls=1)
+        body = view.landing_body(metrics.landing([rt, sim]))
+        # The tile's own sub-line, not just the Total spend one beside it.
+        assert (
+            '<div class="stat-label">Avg cost / job</div>'
+            '<div class="stat-value">$0.5000</div>'
+            '<div class="stat-sub">(1 of 2 calls, estimated)</div>'
+        ) in body
+
+    def test_spend_by_job_type_does_not_claim_real_cost(self, tmp_path: Path) -> None:
+        """``cost_by_kind`` has no per-kind counters, so the panel states the
+        limitation instead of asserting the bars are billed dollars."""
+        rt, sim = self._roots(tmp_path, calls=2, priced_calls=2, estimated_calls=2)
+        body = view.landing_body(metrics.landing([rt, sim]))
+        assert 'Real cost across runs' not in body
+        assert 'Recorded cost across runs' in body
+        assert 'combined coverage (estimated)' in body
+
+    def test_fully_billed_spend_panel_keeps_a_plain_subtitle(self, tmp_path: Path) -> None:
+        rt, sim = self._roots(tmp_path, calls=2, priced_calls=2)
+        body = view.landing_body(metrics.landing([rt, sim]))
+        assert 'Recorded cost across runs' in body
+        assert 'combined coverage' not in body

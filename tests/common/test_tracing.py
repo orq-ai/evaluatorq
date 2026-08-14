@@ -195,6 +195,51 @@ def test_record_llm_response_omits_cost_when_provider_reports_none() -> None:
     assert 'gen_ai.usage.total_cost' not in set_attrs
 
 
+def test_record_token_usage_stamps_cost_provenance_from_usage() -> None:
+    """A client-side catalogue estimate must not reach a trace UI labelled as
+    billed: the cost carries its ``cost_source`` beside it."""
+    from unittest.mock import MagicMock
+
+    from evaluatorq.common.tracing import record_token_usage
+    from evaluatorq.contracts import Usage
+
+    span = MagicMock()
+    usage = Usage(
+        input_tokens=1, output_tokens=1, total_tokens=2, calls=1, priced_calls=1, estimated_calls=1, total_cost=0.25
+    )
+    record_token_usage(span, usage=usage)
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert set_attrs['gen_ai.usage.cost'] == 0.25
+    assert set_attrs['gen_ai.usage.cost_source'] == 'catalogue'
+
+
+def test_record_token_usage_marks_provider_priced_cost_as_provider() -> None:
+    from unittest.mock import MagicMock
+
+    from evaluatorq.common.tracing import record_token_usage
+    from evaluatorq.contracts import Usage
+
+    span = MagicMock()
+    usage = Usage(input_tokens=1, output_tokens=1, total_tokens=2, calls=1, priced_calls=1, total_cost=0.25)
+    record_token_usage(span, usage=usage)
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert set_attrs['gen_ai.usage.cost_source'] == 'provider'
+
+
+def test_record_token_usage_omits_cost_source_when_there_is_no_cost() -> None:
+    """A provenance attribute with no cost beside it describes a number that is
+    not on the span."""
+    from unittest.mock import MagicMock
+
+    from evaluatorq.common.tracing import record_token_usage
+    from evaluatorq.contracts import Usage
+
+    span = MagicMock()
+    record_token_usage(span, usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2, calls=1))
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert 'gen_ai.usage.cost_source' not in set_attrs
+
+
 def test_record_token_usage_explicit_calls_zero_wins_over_usage_calls() -> None:
     """An explicit calls=0 must not be clobbered by usage.calls (sentinel, not falsy check)."""
     from unittest.mock import MagicMock
