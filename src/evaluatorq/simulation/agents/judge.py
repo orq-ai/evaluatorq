@@ -16,6 +16,8 @@ from evaluatorq.simulation.agents.base import AgentConfig, BaseAgent, LLMResult
 from evaluatorq.simulation.types import Criterion, Judgment, Message
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from evaluatorq.contracts import LLMCallConfig
 
 logger = logging.getLogger(__name__)
@@ -57,9 +59,10 @@ _CRITERIA_VERDICTS_PROPERTY: dict[str, Any] = {
     'criteria_verdicts': {
         'type': 'array',
         'description': (
-            'Occurrence audit. One entry for EVERY criterion listed in EVALUATION CRITERIA, '
-            'no omissions. Report only what literally happened in the conversation so far — '
-            'do NOT judge whether that is good or bad.'
+            'Occurrence audit. One entry for every criterion listed under EVALUATION CRITERIA, '
+            'no omissions. Skip any criterion marked ALREADY CONFIRMED — those are settled and '
+            're-reporting them changes nothing. Report only what literally happened in the '
+            'conversation so far — do NOT judge whether that is good or bad.'
         ),
         'items': {
             'type': 'object',
@@ -132,11 +135,6 @@ JUDGE_TOOLS: list[dict[str, Any]] = [
                         'type': 'boolean',
                         'description': "Whether the user's goal was successfully achieved",
                     },
-                    'rules_broken': {
-                        'type': 'array',
-                        'items': {'type': 'string'},
-                        'description': "List of criterion IDs that were violated, e.g. ['criteria_0', 'criteria_2'] (empty if none)",
-                    },
                     'goal_completion_score': {
                         'type': 'number',
                         'description': 'How much of the goal was achieved, from 0.0 (none) to 1.0 (fully achieved). Use intermediate values for partial completion.',
@@ -144,10 +142,14 @@ JUDGE_TOOLS: list[dict[str, Any]] = [
                     **_CRITERIA_VERDICTS_PROPERTY,
                     **_QUALITY_SCORE_PROPERTIES,
                 },
+                # No `rules_broken`. The judge is asked what OCCURRED; which
+                # occurrences count as violations is derived in code from
+                # `Criterion.type`. Asking for both invited them to disagree, and
+                # the free-text list is the channel that could not fail a
+                # `must_happen` criterion in the first place (RES-1308).
                 'required': [
                     'reason',
                     'goal_achieved',
-                    'rules_broken',
                     'goal_completion_score',
                     'criteria_verdicts',
                 ],
@@ -278,10 +280,26 @@ class JudgeAgent(BaseAgent):
             self._goal = ''
             self._criteria: list[Criterion] = []
             self._ground_truth = ''
+        self._settled: frozenset[str] = frozenset()
 
     @property
     def name(self) -> str:
         return 'JudgeAgent'
+
+    def mark_settled(self, ids: Iterable[str]) -> None:
+        """Tell the judge which criteria are already confirmed to have occurred.
+
+        Occurrence is sticky, so a criterion the runner has seen occur cannot
+        change — auditing it again on every remaining turn costs a payload entry
+        (id, boolean, and an evidence quote) and can only restate a settled fact.
+        The per-turn audit exists so the judge can stop the conversation early; a
+        criterion that already occurred contributes nothing more to that decision.
+
+        Rebinds a frozenset rather than mutating one, because the runner
+        shallow-copies this agent per simulation and a shared mutable set would
+        leak occurrence between concurrent runs.
+        """
+        self._settled = frozenset(ids)
 
     @property
     def system_prompt(self) -> str:
@@ -352,11 +370,14 @@ class JudgeAgent(BaseAgent):
         # Extract quality scores (shared by both tools)
         quality_scores = self._extract_quality_scores(args)
         criteria_verdicts = self._extract_criteria_verdicts(args)
-        if self._criteria and criteria_verdicts is None:
+        # Settled criteria are excluded from the audit on purpose, so an empty
+        # payload is only suspicious while something is still unsettled.
+        unsettled = len(self._criteria) - len(self._settled)
+        if unsettled > 0 and criteria_verdicts is None:
             logger.warning(
-                'JudgeAgent: no criteria_verdicts returned for %d criteria; this turn '
+                'JudgeAgent: no criteria_verdicts returned for %d unsettled criteria; this turn '
                 'contributes no criteria evidence and must_happen cannot be scored from it.',
-                len(self._criteria),
+                unsettled,
             )
         violated = self._violated_ids(criteria_verdicts)
 
@@ -380,18 +401,13 @@ class JudgeAgent(BaseAgent):
             default_score = 1.0 if goal_achieved else 0.0
             goal_completion_score = _clamp(_to_number(args.get('goal_completion_score'), default_score))
 
-            reported = (
-                [str(r) for r in args.get('rules_broken', [])] if isinstance(args.get('rules_broken'), list) else []
-            )
-            # Union, reported first: the free-text list and the audit disagree often
-            # enough that trusting either alone loses violations.
-            rules_broken = reported + [cid for cid in violated if cid not in reported]
-
             return Judgment(
                 should_terminate=True,
                 reason=str(args.get('reason', '')),
                 goal_achieved=goal_achieved,
-                rules_broken=rules_broken,
+                # Derived from the audit, exactly as continue_conversation does.
+                # The tool no longer asks for a free-text rules_broken list.
+                rules_broken=violated,
                 goal_completion_score=goal_completion_score,
                 criteria_verdicts=criteria_verdicts,
                 **quality_scores,
@@ -474,6 +490,11 @@ class JudgeAgent(BaseAgent):
         must_not: list[str] = []
         for i, c in enumerate(self._criteria):
             entry = f'- criteria_{i}: {delimit(c.description)} ({c.type})'
+            if f'criteria_{i}' in self._settled:
+                # Already occurred, and occurrence is sticky — it stays listed so the
+                # judge can weigh it when deciding whether to stop, but re-auditing it
+                # cannot change the outcome, so it is excluded from the audit payload.
+                entry += ' [ALREADY CONFIRMED — do not re-report in criteria_verdicts]'
             if c.type == 'must_happen':
                 must_happen.append(entry)
             elif c.type == 'must_not_happen':

@@ -100,6 +100,9 @@ class SimulationJudge(Protocol):
 # shares the same class (e.g. MagicMock). Duck typing avoids that entirely.
 _USER_SIMULATOR_METHODS = ('generate_first_message', 'respond_async', 'update_context')
 _JUDGE_METHODS = ('evaluate',)
+# Optional, not part of the judge contract: a judge that can be told which criteria
+# are already settled drops them from its per-turn audit. See JudgeAgent.mark_settled.
+_SETTLEABLE_JUDGE_METHODS = ('mark_settled',)
 
 
 def _implements(obj: object, methods: tuple[str, ...]) -> bool:
@@ -176,6 +179,27 @@ class _CriteriaTracker:
         """
         return not self._criteria or self._any_audit
 
+    @property
+    def audited_ids(self) -> frozenset[str]:
+        """Ids the judge returned an occurrence verdict for on at least one turn.
+
+        A criterion outside this set was never observed, so its verdict is the
+        not-observed default rather than something the judge actually reported.
+        Reports need the difference: a ``must_happen`` the judge confirmed never
+        occurred and one it silently skipped both render as failed.
+        """
+        return frozenset(self._seen)
+
+    @property
+    def settled_ids(self) -> frozenset[str]:
+        """Ids whose occurrence is already ``True`` and therefore final.
+
+        Occurrence is sticky, so a later turn cannot change these — re-auditing
+        them buys nothing and costs a payload entry per turn. The judge is told to
+        skip them; see `JudgeAgent.mark_settled`.
+        """
+        return frozenset(cid for cid, occurred in self._occurred.items() if occurred)
+
     def observe(self, judgment: Judgment) -> None:
         verdicts = judgment.criteria_verdicts
         if not verdicts:
@@ -211,11 +235,17 @@ class _CriteriaTracker:
         ``SimulationResult.rules_broken``, the ``criteria_met`` scorer) derives from
         this one list, so they cannot disagree.
 
-        The audit wins wherever it has an answer. The judge's free-text
-        ``rules_broken`` is consulted **only** for criteria it never audited —
-        letting it override an audited verdict would put the unreliable channel
-        (the one this whole design exists to stop trusting) back in charge, and it
-        can only ever add failures, never clear them.
+        Once any audit has arrived, it is the **only** input: the built-in judge's
+        tools no longer ask for a free-text ``rules_broken`` at all, and an
+        incoming one (from a custom judge that fills the field itself) is dropped
+        rather than merged. A criterion the audit skipped keeps its not-observed
+        default, which is the honest reading — rescuing it from free text would put
+        the channel this design exists to stop trusting back in charge of exactly
+        the criteria the audit has no answer for.
+
+        The one exception is a run where **no** audit ever arrived: there is
+        nothing to prefer it to, so the judgment passes through untouched and the
+        run is marked unverified via `verified`.
         """
         if not self._criteria:
             return judgment
@@ -237,7 +267,6 @@ class _CriteriaTracker:
                 self._scenario_name,
             )
         broken = [f'criteria_{i}' for i in range(len(self._criteria)) if not self._passed(i)]
-        broken += [r for r in judgment.rules_broken if r in unaudited and r not in broken]
         return judgment.model_copy(update={'rules_broken': broken})
 
 
@@ -252,10 +281,20 @@ def _build_criteria_results(scenario: Scenario, judgment: Judgment) -> dict[str,
     return results
 
 
-def _build_criteria_meta(scenario: Scenario, judgment: Judgment) -> list[dict[str, object]]:
+def _build_criteria_meta(
+    scenario: Scenario,
+    judgment: Judgment,
+    audited_ids: frozenset[str] | None = None,
+) -> list[dict[str, object]]:
     """Id-keyed criteria detail for the report. Stable ids avoid the
     description-collision data loss that ``criteria_results`` (dict-by-description)
-    suffers when two criteria share a description."""
+    suffers when two criteria share a description.
+
+    ``audited`` says whether the judge actually reported an occurrence verdict for
+    that criterion. Without it a ``must_happen`` the judge confirmed never happened
+    and one it silently skipped are the same red row. ``None`` when no tracker was
+    available, which reads as unknown rather than as audited.
+    """
     criteria = scenario.criteria or []
     rules_broken = set(judgment.rules_broken)
     meta: list[dict[str, object]] = []
@@ -266,6 +305,7 @@ def _build_criteria_meta(scenario: Scenario, judgment: Judgment) -> list[dict[st
             'description': criterion.description,
             'type': criterion.type,
             'passed': criterion_id not in rules_broken,
+            'audited': criterion_id in audited_ids if audited_ids is not None else None,
         })
     return meta
 
@@ -312,9 +352,10 @@ def _max_turns_result(
     target_model: str | None = None,
     *,
     criteria_verified: bool | None = None,
+    audited_ids: frozenset[str] | None = None,
 ) -> SimulationResult:
     criteria_results = _build_criteria_results(scenario, last_judgment) if scenario and last_judgment else None
-    criteria_meta = _build_criteria_meta(scenario, last_judgment) if scenario and last_judgment else None
+    criteria_meta = _build_criteria_meta(scenario, last_judgment, audited_ids) if scenario and last_judgment else None
     metadata = _build_simulation_metadata(persona, scenario, criteria_meta, target_model)
     return SimulationResult(
         messages=messages,
@@ -727,6 +768,12 @@ class SimulationRunner:
                 async with with_simulation_span('orq.simulation.judge_evaluation', None):
                     judgment = await judge.evaluate(messages)
                 criteria_tracker.observe(judgment)
+                # Occurrence is sticky, so a confirmed criterion cannot change —
+                # stop paying for it in every remaining turn's audit payload. Duck
+                # typed, per the _implements note above: a custom judge without the
+                # method simply keeps auditing everything.
+                if _implements(judge, _SETTLEABLE_JUDGE_METHODS):
+                    judge.mark_settled(criteria_tracker.settled_ids)
 
                 turn_metrics_list.append(_build_turn_metrics(turn + 1, judgment, usage_before))
                 try:
@@ -771,7 +818,7 @@ class SimulationRunner:
                 judge_metadata = _build_simulation_metadata(
                     persona,
                     scenario,
-                    _build_criteria_meta(scenario, resolved) if scenario else None,
+                    _build_criteria_meta(scenario, resolved, criteria_tracker.audited_ids) if scenario else None,
                     target_model_holder['model'],
                 )
                 return SimulationResult(
@@ -810,6 +857,7 @@ class SimulationRunner:
             resolved,
             target_model=target_model_holder['model'],
             criteria_verified=criteria_tracker.verified,
+            audited_ids=criteria_tracker.audited_ids,
         )
 
     async def run_batch(

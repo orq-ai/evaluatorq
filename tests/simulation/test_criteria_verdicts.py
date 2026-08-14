@@ -110,10 +110,10 @@ def test_unaudited_criterion_keeps_honest_default_and_warns(caplog):
 
 
 def test_free_text_rules_broken_cannot_override_an_audited_criterion():
-    """The audit wins where it has an answer.
+    """Once an audit exists it is the only input.
 
     Letting the judge's free-text list flip an audited pass to a fail puts the
-    unreliable channel back in charge — and it can only ever add failures.
+    unreliable channel back in charge.
     """
     t = _CriteriaTracker(_scenario())
     t.observe(_occurred({'criteria_0': True, 'criteria_1': False}))  # both pass
@@ -121,13 +121,18 @@ def test_free_text_rules_broken_cannot_override_an_audited_criterion():
     assert resolved.rules_broken == []
 
 
-def test_free_text_rules_broken_still_rescues_an_unaudited_criterion():
-    """...but a criterion the judge never audited has no verdict to defend, so an
-    explicit free-text mention is the only evidence available and is honoured."""
+def test_free_text_rules_broken_does_not_rescue_an_unaudited_criterion():
+    """...including for a criterion the audit skipped.
+
+    The not-observed default is the honest reading, and rescuing from free text
+    would hand that channel exactly the criteria the audit has no answer for —
+    the ones where it is least checkable. Note criteria_1 is must_not_happen, so
+    not-observed means it passes.
+    """
     t = _CriteriaTracker(_scenario())
     t.observe(_occurred({'criteria_0': True}))  # criteria_1 never audited
     resolved = t.resolve(_judgment(None, terminate=True, broken=['criteria_1']))
-    assert resolved.rules_broken == ['criteria_1']
+    assert resolved.rules_broken == []
 
 
 def test_unknown_ids_in_free_text_are_ignored():
@@ -196,20 +201,22 @@ def test_judge_safety_terminate_carries_no_audit(result: LLMResult):
     assert judgment.criteria_verdicts is None
 
 
-def test_finish_conversation_unions_reported_and_audited():
+def test_finish_conversation_derives_rules_broken_from_the_audit_alone():
+    """A free-text rules_broken is no longer asked for, and one sent anyway is
+    ignored — otherwise the two channels have something to disagree about."""
     judge = _judge()
     result = _llm_result(
         'finish_conversation',
         {
             'reason': 'r',
             'goal_achieved': False,
-            'rules_broken': ['criteria_0'],
+            'rules_broken': ['criteria_0'],  # not in the schema; must not survive
             'goal_completion_score': 0.0,
             'criteria_verdicts': [{'id': 'criteria_1', 'occurred': True, 'evidence': 'a plan'}],
         },
     )
     judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
-    assert judgment.rules_broken == ['criteria_0', 'criteria_1']
+    assert judgment.rules_broken == ['criteria_1']
 
 
 def test_missing_verdicts_parse_to_none_not_empty(caplog):
@@ -417,6 +424,100 @@ async def test_runner_end_to_end_max_turns_without_any_judgment_is_unverified():
     assert result.terminated_by is TerminatedBy.max_turns
     assert result.criteria_verified is False
     assert criteria_met_scorer(result) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_runner_end_to_end_marks_which_criteria_were_audited():
+    """`criteria_meta` distinguishes a verdict the judge gave from a default."""
+    result = await _run([{'criteria_1': False}] * 2)  # criteria_0 never audited
+
+    meta = {m['id']: m for m in result.metadata['criteria_meta']}
+    assert meta['criteria_0']['passed'] is False and meta['criteria_0']['audited'] is False
+    assert meta['criteria_1']['passed'] is True and meta['criteria_1']['audited'] is True
+
+
+@pytest.mark.asyncio
+async def test_runner_tells_the_judge_which_criteria_have_settled():
+    """The saving only lands if the runner actually feeds the tracker's settled set
+    back to the judge each turn."""
+
+    class _RecordingJudge(_FakeJudge):
+        def __init__(self, script):  # noqa: ANN001
+            super().__init__(script)
+            self.settled_per_turn: list[frozenset[str]] = []
+
+        def mark_settled(self, ids) -> None:  # noqa: ANN001
+            self.settled_per_turn.append(frozenset(ids))
+
+    judge = _RecordingJudge([
+        {'criteria_0': True, 'criteria_1': False},  # criteria_0 settles here
+        {'criteria_0': False, 'criteria_1': False},
+    ])
+
+    async def target(messages):  # noqa: ANN001
+        return AgentResponse(text='ok')
+
+    runner = SimulationRunner(
+        target=target,
+        max_turns=4,
+        user_simulator=_FakeSimulator(),  # pyright: ignore[reportArgumentType]
+        judge=judge,  # pyright: ignore[reportArgumentType]
+    )
+    try:
+        await runner.run(persona=_persona(), scenario=_scenario())
+    finally:
+        await runner.close()
+
+    assert judge.settled_per_turn == [frozenset({'criteria_0'}), frozenset({'criteria_0'})]
+
+
+def test_settled_criteria_are_confirmed_ids_only():
+    t = _CriteriaTracker(_scenario())
+    assert t.settled_ids == frozenset()
+    t.observe(_occurred({'criteria_0': True, 'criteria_1': False}))
+    assert t.settled_ids == frozenset({'criteria_0'})
+    # Sticky: a later turn reporting False cannot unsettle it.
+    t.observe(_occurred({'criteria_0': False, 'criteria_1': False}))
+    assert t.settled_ids == frozenset({'criteria_0'})
+
+
+def test_settled_criteria_are_excluded_from_the_audit_but_stay_in_the_prompt():
+    """Occurrence is sticky, so re-auditing a confirmed criterion costs a payload
+    entry per turn and can only restate a settled fact. It stays listed — the judge
+    still needs it to decide whether to stop — but is marked do-not-report."""
+    judge = _judge()
+    assert 'ALREADY CONFIRMED' not in judge.system_prompt
+
+    judge.mark_settled({'criteria_0'})
+    prompt = judge.system_prompt
+    assert 'criteria_0' in prompt and 'criteria_1' in prompt
+    assert prompt.count('ALREADY CONFIRMED') == 1
+    assert 'criteria_0' in prompt.split('ALREADY CONFIRMED')[0].rsplit('\n', 1)[-1]
+
+
+def test_mark_settled_rebinds_so_a_shallow_copy_cannot_leak_between_runs():
+    """The runner shallow-copies the judge per simulation; a shared mutable set
+    would leak one run's occurrence into another running concurrently."""
+    import copy
+
+    original = _judge()
+    original.mark_settled({'criteria_0'})
+    clone = copy.copy(original)
+    clone.mark_settled({'criteria_0', 'criteria_1'})
+
+    assert original._settled == frozenset({'criteria_0'})  # pyright: ignore[reportPrivateUsage]
+    assert clone._settled == frozenset({'criteria_0', 'criteria_1'})  # pyright: ignore[reportPrivateUsage]
+
+
+def test_empty_audit_is_silent_once_every_criterion_is_settled(caplog):
+    """An empty payload is expected when nothing is left to report, so the
+    'no criteria_verdicts' warning must not cry wolf on it."""
+    judge = _judge()
+    judge.mark_settled({'criteria_0', 'criteria_1'})
+    result = _llm_result('continue_conversation', {'reason': 'r', 'goal_completion_score': 0.5})
+    with caplog.at_level('WARNING'):
+        judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+    assert 'no criteria_verdicts' not in caplog.text
 
 
 def test_tracker_reports_verified_only_once_an_audit_arrives():

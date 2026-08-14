@@ -145,9 +145,20 @@ class TestJudgeTools:
     def test_finish_required_fields(self):
         required = JUDGE_TOOLS[1]["function"]["parameters"]["required"]
         assert "goal_achieved" in required
-        assert "rules_broken" in required
         assert "goal_completion_score" in required
         assert "reason" in required
+        assert "criteria_verdicts" in required
+
+    def test_finish_does_not_ask_for_a_free_text_rules_broken(self):
+        """Violations are derived in code from the occurrence audit + criterion type.
+
+        Asking the judge for them as well gave the two channels something to
+        disagree about, and the free-text one is structurally unable to fail a
+        must_happen criterion (RES-1308).
+        """
+        params = JUDGE_TOOLS[1]["function"]["parameters"]
+        assert "rules_broken" not in params["properties"]
+        assert "rules_broken" not in params["required"]
 
     def test_both_tools_have_quality_scores(self):
         quality_fields = {

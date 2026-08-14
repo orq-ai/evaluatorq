@@ -331,14 +331,36 @@ run that ends on turn 6:
 - **`must_not_happen`** fails if it was violated in *any* turn. One violation is
   permanent; a clean later turn does not clear it.
 
-Failures land in `rules_broken` (criterion ids), `criteria_results`
+The judge is only ever asked **what occurred**, never what passed — a pass/fail
+flag means the opposite thing for the two criterion types, and models invert it.
+Occurrence is mapped to pass/fail in code, so `rules_broken` is derived, not
+reported. Failures land in `rules_broken` (criterion ids), `criteria_results`
 (description → passed), and the `criteria_met` score.
+
+Once a criterion is confirmed to have occurred it is settled — stickiness means a
+later turn cannot change it — so the judge is told to stop re-auditing it. It stays
+in the prompt (the judge still needs it to decide whether to stop early) but drops
+out of the per-turn audit payload, which otherwise costs an entry with an evidence
+quote per criterion per turn.
+
+Per-criterion detail is in `metadata['criteria_meta']`, where `audited` says whether
+the judge actually returned a verdict for that criterion:
+
+```python
+for c in result.metadata['criteria_meta']:
+    if not c['passed'] and not c['audited']:
+        print(f"{c['id']} failed by default — the judge never reported on it")
+```
+
+A `must_happen` the judge confirmed never occurred and one it silently skipped both
+show `passed: False`; only `audited` separates them. It is `None` for runs saved
+before the field existed.
 
 !!! warning "A custom `judge=` must report per-criterion verdicts"
 
-    The built-in `JudgeAgent` audits each criterion every turn. A custom judge that
-    does not populate `Judgment.criteria_verdicts` falls back to the pre-1.3
-    behaviour: pass/fail is inferred from its `rules_broken` list, so a
+    The built-in `JudgeAgent` audits each unsettled criterion every turn. A custom
+    judge that does not populate `Judgment.criteria_verdicts` falls back to the
+    pre-1.3 behaviour: pass/fail is inferred from its `rules_broken` list, so a
     `must_happen` criterion **cannot fail**.
 
     That run is marked `SimulationResult.criteria_verified = False`, the runner logs

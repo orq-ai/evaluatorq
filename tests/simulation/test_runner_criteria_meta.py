@@ -24,11 +24,52 @@ def test_build_criteria_meta_is_id_keyed_with_type_and_passed():
         rules_broken=['criteria_0'],
         goal_completion_score=0.0,
     )
-    meta = _build_criteria_meta(_scenario(), judgment)
+    meta = _build_criteria_meta(_scenario(), judgment, frozenset({'criteria_0', 'criteria_1'}))
     assert meta == [
-        {'id': 'criteria_0', 'description': 'explain charge', 'type': 'must_happen', 'passed': False},
-        {'id': 'criteria_1', 'description': 'no rudeness', 'type': 'must_not_happen', 'passed': True},
+        {
+            'id': 'criteria_0',
+            'description': 'explain charge',
+            'type': 'must_happen',
+            'passed': False,
+            'audited': True,
+        },
+        {
+            'id': 'criteria_1',
+            'description': 'no rudeness',
+            'type': 'must_not_happen',
+            'passed': True,
+            'audited': True,
+        },
     ]
+
+
+def test_build_criteria_meta_separates_a_confirmed_failure_from_an_unaudited_one():
+    """Both rows render red, but only one is a verdict the judge actually gave.
+
+    Without `audited` a must_happen the judge confirmed never occurred and one it
+    silently skipped are indistinguishable in the report.
+    """
+    judgment = Judgment(
+        should_terminate=True,
+        reason='r',
+        goal_achieved=False,
+        rules_broken=['criteria_0', 'criteria_1'],
+        goal_completion_score=0.0,
+    )
+    meta = _build_criteria_meta(_scenario(), judgment, frozenset({'criteria_0'}))
+    assert [m['passed'] for m in meta] == [False, False]
+    assert [m['audited'] for m in meta] == [True, False]
+
+
+def test_build_criteria_meta_without_a_tracker_reports_audited_unknown():
+    judgment = Judgment(
+        should_terminate=True,
+        reason='r',
+        goal_achieved=False,
+        rules_broken=[],
+        goal_completion_score=0.0,
+    )
+    assert [m['audited'] for m in _build_criteria_meta(_scenario(), judgment)] == [None, None]
 
 
 def test_build_criteria_meta_survives_duplicate_descriptions():
