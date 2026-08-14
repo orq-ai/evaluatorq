@@ -62,14 +62,20 @@ class CostCoverage:
     estimated_calls: int = 0  # of priced_calls, how many were client-side catalogue estimates
 
     def __post_init__(self) -> None:
-        # estimated_calls is defined as a subset of priced_calls (see
-        # contracts.resolve_cost_source): a caller passing more than that is a
-        # bug upstream that must not propagate into a coverage label reading
-        # "5 of 3 calls estimated". Clamp rather than raise — this value
-        # travels through mtime-keyed caches, where a hard failure on one
-        # malformed report would take the whole dashboard page down with it.
-        if self.estimated_calls > self.priced_calls:
-            object.__setattr__(self, 'estimated_calls', self.priced_calls)
+        # The same chain `contracts.Usage._clamp_call_counts` holds one layer
+        # down: estimated_calls is a subset of priced_calls, which is a subset
+        # of the calls seen alongside them. A caller passing more is a bug
+        # upstream that must not propagate into a coverage label reading "5 of
+        # 3 calls estimated" — or, worse, into `priced_calls >= cost_calls`,
+        # which `coverage_parts` reads as fully covered and renders with NO
+        # qualifier at all. Clamp rather than raise: this value travels through
+        # mtime-keyed caches, where a hard failure on one malformed report would
+        # take the whole dashboard page down with it.
+        priced_calls = min(self.priced_calls, self.cost_calls)
+        if priced_calls != self.priced_calls:
+            object.__setattr__(self, 'priced_calls', priced_calls)
+        if self.estimated_calls > priced_calls:
+            object.__setattr__(self, 'estimated_calls', priced_calls)
 
     def __add__(self, other: CostCoverage) -> CostCoverage:
         if not isinstance(other, CostCoverage):

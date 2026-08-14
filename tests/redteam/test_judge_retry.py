@@ -513,3 +513,34 @@ async def test_unknown_failure_on_chat_stamps_chat_endpoint():
 
     assert outcome.error_kind is JudgeError.UNKNOWN
     assert outcome.endpoint == 'chat'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('base_url', 'expected'),
+    [(None, 'responses'), (OPENAI_URL, 'chat')],
+)
+async def test_judge_span_carries_the_endpoint_attribute(
+    monkeypatch: pytest.MonkeyPatch, base_url: str | None, expected: str
+):
+    """The judge span names its leg via `gen_ai.judge.endpoint`.
+
+    `operation` happens to carry the same value today, but only the dedicated
+    attribute states *why* a judge span can lack a cost: on the Orq router only
+    the Responses endpoint returns a priced usage block, so a chat span with no
+    cost is a fallback, not a catalogue miss. Asserted on the real
+    `with_llm_span` call rather than on a helper parameter — the attribute is
+    set at the span, and a test that exercised anything else would pass while
+    production emitted nothing.
+    """
+    seen: list[dict[str, Any]] = []
+    real = judge_mod.with_llm_span
+
+    def capture(**kwargs: Any) -> Any:
+        seen.append(kwargs.get('attributes') or {})
+        return real(**kwargs)
+
+    monkeypatch.setattr(judge_mod, 'with_llm_span', capture)
+    client = _Client() if base_url is None else _Client(base_url=base_url)
+    await _judge(client)
+    assert [a.get('gen_ai.judge.endpoint') for a in seen] == [expected]

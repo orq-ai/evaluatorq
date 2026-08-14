@@ -251,33 +251,6 @@ def test_record_token_usage_has_no_standalone_cost_source_override() -> None:
     assert 'cost_source' not in inspect.signature(record_token_usage).parameters
 
 
-def test_record_token_usage_records_judge_endpoint() -> None:
-    """`gen_ai.judge.endpoint` names which leg the call actually ran on, so a
-    trace viewer can tell a catalogue-priced chat-completions call apart from
-    an unpriced Responses call that fell back — the pairing that makes "this
-    judge reports no cost" diagnosable."""
-    from unittest.mock import MagicMock
-
-    from evaluatorq.common.tracing import record_token_usage
-
-    span = MagicMock()
-    record_token_usage(span, total_cost=0.1, judge_endpoint='chat_completions')
-    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
-    assert set_attrs['gen_ai.judge.endpoint'] == 'chat_completions'
-
-
-def test_record_token_usage_omits_judge_endpoint_when_not_given() -> None:
-    from unittest.mock import MagicMock
-
-    from evaluatorq.common.tracing import record_token_usage
-    from evaluatorq.contracts import Usage
-
-    span = MagicMock()
-    record_token_usage(span, usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2, calls=1))
-    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
-    assert 'gen_ai.judge.endpoint' not in set_attrs
-
-
 def test_record_token_usage_explicit_calls_zero_wins_over_usage_calls() -> None:
     """An explicit calls=0 must not be clobbered by usage.calls (sentinel, not falsy check)."""
     from unittest.mock import MagicMock

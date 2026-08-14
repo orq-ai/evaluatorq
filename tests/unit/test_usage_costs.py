@@ -531,3 +531,12 @@ def test_non_finite_cost_is_ignored_rather_than_raising():
     assert extracted is not None
     assert extracted.total_cost is None
     assert extracted.priced_calls == 0
+
+
+def test_clamp_validator_holds_the_chain_on_direct_construction() -> None:
+    """The validator is the only thing standing between a malformed report and a
+    coverage label reading '9 of 1 calls estimated'. Exercised directly rather
+    than only through `extract`/`__sub__`, which is where every other test
+    reaches it."""
+    usage = Usage(calls=1, priced_calls=5, estimated_calls=9)
+    assert (usage.calls, usage.priced_calls, usage.estimated_calls) == (1, 1, 1)

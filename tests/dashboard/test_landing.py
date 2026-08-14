@@ -1367,3 +1367,13 @@ class TestLandingSpendPanelsAreQualified:
         body = view.landing_body(metrics.landing([rt, sim]))
         assert 'Recorded cost across runs' in body
         assert 'combined coverage' not in body
+
+
+def test_cost_coverage_clamps_priced_calls_to_the_calls_seen() -> None:
+    """`priced_calls > cost_calls` reads as fully covered in `coverage_parts`,
+    which renders NO qualifier — a malformed report would then present a partly
+    priced total as authoritative, the exact defect coverage labels exist to
+    prevent. Clamped, not raised: this value travels through the mtime-keyed
+    report cache, where one bad report must not take the page down."""
+    coverage = metrics.CostCoverage(priced_calls=5, cost_calls=3, estimated_calls=4)
+    assert (coverage.priced_calls, coverage.cost_calls, coverage.estimated_calls) == (3, 3, 3)

@@ -529,9 +529,12 @@ class Usage(BaseModel):
     def _clamp_call_counts(cls, data: Any) -> Any:
         """Enforce ``estimated_calls <= priced_calls <= calls`` by construction.
 
-        Clamps, never raises: legacy report JSON flows through ``model_validate``
-        on load, and a hard validation failure here would take down report
-        loading for the whole run rather than just under-reporting one figure.
+        Clamps the *ordering* rather than raising on it: legacy report JSON flows
+        through ``model_validate`` on load, and a hard failure on an out-of-order
+        triple would take down report loading for the whole run rather than just
+        under-reporting one figure. It does not widen the per-field ``ge=0``
+        constraint — a negative count is a corrupt payload rather than a stale
+        one, and is still rejected (`tests/redteam/test_review_followup.py`).
         Runs on every keyword/dict construction path (``Usage(...)``,
         ``model_validate``); ``model_copy(update=...)`` does not go through
         validators at all, so it stays outside this guard (see ``with_calls``).

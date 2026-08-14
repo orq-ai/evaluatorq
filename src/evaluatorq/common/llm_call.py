@@ -100,14 +100,16 @@ async def _price_and_record_cost(
     unpriced, then stamp the priced cost onto ``span``.
 
     ``record_llm_response`` (called by every caller of this helper, before it)
-    already recorded this call's raw token counts and incremented
-    ``gen_ai.usage.calls`` on ``span``. `price_usage` only fills in
-    cost/cost_source on the same ``usage`` — it never changes token counts or
-    the call count — so this passes ``calls=0`` through to
-    `record_token_usage`; passing the real call count again would double-count
-    it on the span. Without this stamp, a catalogue-estimated cost is returned
-    to the caller but never reaches the span, so `gen_ai.usage.cost_source`
-    can only ever read ``'provider'`` in a trace viewer (RES-1307).
+    already recorded this call's raw token counts. It passes ``calls=0`` and so
+    writes no ``gen_ai.usage.calls`` at all: an LLM span *is* one call, so the
+    attribute would be a constant 1 on every span. This second write keeps that
+    convention — ``calls=0`` here means "don't start writing it now", not
+    "avoid double-counting an increment", because there is no increment.
+    `price_usage` only fills in cost/cost_source on the same ``usage``; it never
+    touches token counts. Without this stamp a catalogue-estimated cost is
+    returned to the caller but never reaches the span, so
+    `gen_ai.usage.cost_source` could only ever read ``'provider'`` in a trace
+    viewer (RES-1307).
     """
     priced = await price_usage(usage, model, client)
     if priced is not None:

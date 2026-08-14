@@ -256,7 +256,6 @@ def record_token_usage(
     input_cost: float | None = None,
     output_cost: float | None = None,
     total_cost: float | None = None,
-    judge_endpoint: str | None = None,
 ) -> None:
     """Record token usage on a span. Safe no-op when span is None.
 
@@ -279,12 +278,6 @@ def record_token_usage(
     trace viewer labelled as billed. Only ever set alongside a cost: a
     provenance attribute on a span with no cost would describe a number that is
     not there.
-
-    ``judge_endpoint`` records which endpoint the call actually ran on
-    (``'responses'`` / ``'chat_completions'``) as ``gen_ai.judge.endpoint``,
-    independent of whether a cost was recorded — it is what makes "this judge
-    reports no cost" diagnosable (model absent from the catalogue vs. Responses
-    400'd and the call fell back to Chat Completions).
     """
     if span is None:
         return
@@ -348,8 +341,6 @@ def record_token_usage(
             # this provenance plumbing exists to prevent, so this warns whenever
             # it happens rather than only in cases believed unreachable today.
             logger.warning('record_token_usage: cost {} recorded without provenance (no cost_source)', total_cost)
-    if judge_endpoint is not None:
-        span.set_attribute('gen_ai.judge.endpoint', judge_endpoint)
 
 
 def record_llm_response(
