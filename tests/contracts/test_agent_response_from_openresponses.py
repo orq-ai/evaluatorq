@@ -45,7 +45,11 @@ def test_none_usage_stays_none():
     assert r.usage is None
 
 
-def test_usage_parsed_without_calls_accounting():
+def test_usage_parse_counts_the_call():
+    """One response object is one API call, same as `Usage.from_completion` on the
+    chat side. This used to parse as `calls=0` and leave every call site to stamp
+    the 1 back on via `with_calls`, which is how a site that forgot reported a real
+    exchange as zero calls."""
     r = AgentResponse.from_openresponses(_resp(
         output=[{"type": "message", "content": [{"type": "output_text", "text": "x"}]}],
         usage={"input_tokens": 3, "output_tokens": 5},
@@ -54,7 +58,19 @@ def test_usage_parsed_without_calls_accounting():
     assert r.usage.prompt_tokens == 3
     assert r.usage.completion_tokens == 5
     assert r.usage.total_tokens == 8
-    assert r.usage.calls == 0  # pure parse; call sites bump calls
+    assert r.usage.calls == 1
+    assert r.usage.priced_calls == 0  # no cost in the payload
+
+
+def test_usage_parse_prices_the_call_it_counts():
+    r = AgentResponse.from_openresponses(_resp(
+        output=[{"type": "message", "content": [{"type": "output_text", "text": "x"}]}],
+        usage={"input_tokens": 3, "output_tokens": 5, "total_cost": 0.5},
+    ))
+    assert r.usage is not None
+    assert r.usage.calls == 1
+    assert r.usage.priced_calls == 1
+    assert r.usage.cost_is_partial is False
 
 
 def test_model_finish_reason_and_response_id_populated():

@@ -189,6 +189,38 @@ async def test_parsed_none_without_refusal_is_parse_error():
     assert out.payload is None
 
 
+def _usage_mock(prompt_tokens: int, completion_tokens: int) -> MagicMock:
+    usage = MagicMock()
+    usage.prompt_tokens = prompt_tokens
+    usage.completion_tokens = completion_tokens
+    usage.total_tokens = prompt_tokens + completion_tokens
+    return usage
+
+
+@pytest.mark.asyncio
+async def test_legacy_json_object_parse_failure_keeps_token_usage():
+    # RES-1307 audit Task 1 (site 3): the legacy json_object path's `usage` was a
+    # local in `_chat_verdict`, gone by the time the outer `except ValidationError`
+    # handler ran on a malformed verdict — the call was billed but the tokens were
+    # dropped. `usage` is now scoped like `raw_content` so the PARSE outcome still
+    # carries it, matching the structured paths, which already keep usage on a
+    # parse failure by design.
+    client = MagicMock()
+    comp = MagicMock()
+    comp.choices = [MagicMock(message=MagicMock(content="not valid json"))]
+    comp.usage = _usage_mock(10, 5)
+    client.chat.completions.create = AsyncMock(return_value=comp)
+
+    out = await run_judge(
+        client=client, model="m", cfg=_cfg(),
+        prompt_template="t", replacements={}, system_prompt="sys",
+    )
+    assert out.error_kind is JudgeError.PARSE
+    assert out.payload is None
+    assert out.token_usage is not None
+    assert out.token_usage.calls == 1
+
+
 @pytest.mark.asyncio
 async def test_json_object_fallback_enforces_label_set():
     # On the fallback path an out-of-set categorical label must raise (-> PARSE),
@@ -205,7 +237,7 @@ async def test_json_object_fallback_enforces_label_set():
     )
     create_comp = MagicMock()
     create_comp.choices = [MagicMock(message=MagicMock(content='{"value": "maybe", "explanation": "x"}'))]
-    create_comp.usage = None
+    create_comp.usage = _usage_mock(10, 5)
     client.chat.completions.create = AsyncMock(return_value=create_comp)
 
     out = await run_judge(
@@ -213,3 +245,36 @@ async def test_json_object_fallback_enforces_label_set():
         prompt_template="t", replacements={}, system_prompt="sys", response_model=verdict_model,
     )
     assert out.error_kind is JudgeError.PARSE
+    # RES-1307 audit Task 1 (site 3): the fallback still goes through
+    # _json_object_judge's own model_validate_json, whose ValidationError used to
+    # escape with the usage obtained just before it discarded — usage_sink reports
+    # it to the outer scope before that parse runs.
+    assert out.token_usage is not None
+    assert out.token_usage.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_schema_injected_fallback_parse_failure_keeps_token_usage():
+    # RES-1307 audit Task 1 (site 3, "schema-injected fallback path"): structured
+    # output disabled but a verdict model set stays on the json_object path with
+    # the schema injected (_chat_verdict's second `_json_object_judge` call site).
+    # A label-set violation there must still report the billed usage.
+    verdict_model = create_model(
+        "LabelVerdict", value=(Literal["yes", "no"], ...), explanation=(str, ...)
+    )
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock()  # must not be called
+    comp = MagicMock()
+    comp.choices = [MagicMock(message=MagicMock(content='{"value": "maybe", "explanation": "x"}'))]
+    comp.usage = _usage_mock(10, 5)
+    client.chat.completions.create = AsyncMock(return_value=comp)
+
+    out = await run_judge(
+        client=client, model="m", cfg=_cfg(),
+        prompt_template="t", replacements={}, system_prompt="sys",
+        response_model=verdict_model, structured_output=False,
+    )
+    assert not client.chat.completions.parse.called
+    assert out.error_kind is JudgeError.PARSE
+    assert out.token_usage is not None
+    assert out.token_usage.calls == 1

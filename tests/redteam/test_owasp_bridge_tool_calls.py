@@ -38,6 +38,15 @@ def _make_tool_call_item(
     return tc
 
 
+def _usage_mock(prompt_tokens: int, completion_tokens: int) -> MagicMock:
+    """Return a mock ``response.usage`` block with the given token counts."""
+    usage = MagicMock()
+    usage.prompt_tokens = prompt_tokens
+    usage.completion_tokens = completion_tokens
+    usage.total_tokens = prompt_tokens + completion_tokens
+    return usage
+
+
 def _make_evaluator_mock(value: bool, explanation: str = '') -> AsyncMock:
     """Return a mock LLM client that always returns the given value/explanation."""
     content = json.dumps({'value': value, 'explanation': explanation or ('Resistant' if value else 'Vulnerable')})
@@ -177,6 +186,218 @@ class TestStaticOWASPScorerToolCalls:
         assert jury['tie'] is True
         assert '[jury: 2/2 judges, raw agreement 50%, TIE (tie-break applied)]' in (result.explanation or '')
         assert mock_client.chat.completions.create.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_scorer_single_judge_writes_raw_output_endpoint(self) -> None:
+        """Static single-judge path must write raw_output['endpoint'] (RES-1307
+        Task 7 Finding 1) — the same key/meaning the adaptive evaluator's
+        single-judge fast path already stamped. The mocked client only serves
+        chat.completions, so the judge stays on 'chat'."""
+        from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
+
+        mock_evaluator_entity = MagicMock()
+        mock_evaluator_entity.prompt = 'response: {{output.response}}'
+        mock_client = _make_evaluator_mock(True, 'Resistant')
+
+        with patch(
+            'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.get_evaluator_for_category',
+            return_value=mock_evaluator_entity,
+        ):
+            evaluator_config = create_owasp_evaluator(llm_client=mock_client)
+            result = await evaluator_config['scorer']({
+                'data': DataPoint(inputs={'category': 'ASI01', 'messages': []}),
+                'output': {'response': 'target output'},
+            })
+
+        assert result.raw_output is not None
+        assert result.raw_output['endpoint'] == 'chat'
+
+    @pytest.mark.asyncio
+    async def test_scorer_panel_writes_raw_output_endpoint(self) -> None:
+        """Static panel/jury path must also write raw_output['endpoint']
+        (RES-1307 Task 7 Finding 1) — previously only the adaptive evaluator's
+        panel path did, leaving static-mode panel runs with no endpoint key at
+        all (the ticket's live evidence: `judge endpoints: [null, null, null,
+        null]`)."""
+        from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
+
+        mock_evaluator_entity = MagicMock()
+        mock_evaluator_entity.prompt = 'response: {{output.response}}'
+
+        async def _create(**kwargs: Any) -> MagicMock:
+            model = kwargs['model']
+            value = model == 'judge-a'
+            mock_msg = MagicMock()
+            mock_msg.content = json.dumps({'value': value, 'explanation': f'{model} verdict'})
+            mock_choice = MagicMock()
+            mock_choice.message = mock_msg
+            mock_resp = MagicMock()
+            mock_resp.choices = [mock_choice]
+            return mock_resp
+
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create = AsyncMock(side_effect=_create)
+
+        with patch(
+            'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.get_evaluator_for_category',
+            return_value=mock_evaluator_entity,
+        ):
+            evaluator_config = create_owasp_evaluator(
+                evaluator_model='judge-a',
+                llm_client=mock_client,
+                judges=['judge-b'],
+            )
+            result = await evaluator_config['scorer']({
+                'data': DataPoint(inputs={'category': 'ASI01', 'messages': []}),
+                'output': {'response': 'target output'},
+            })
+
+        assert result.raw_output is not None
+        # Both judges are mocked via chat.completions.create — endpoint is uniformly 'chat'.
+        assert result.raw_output['endpoint'] == 'chat'
+
+    @pytest.mark.asyncio
+    async def test_scorer_panel_threads_responses_endpoint_value(self) -> None:
+        """The mocked client above only ever resolves to 'chat' — it never hits the
+        Responses model catalogue — so it cannot distinguish real per-pass
+        threading from a hardcoded 'chat' literal. Patch `run_judge` itself so
+        every panel pass reports 'responses' and assert that value reaches
+        `raw_output['endpoint']`, matching the RES-1307 live symptom (`judge
+        endpoints: [null, null, null, null]`) that a constant-string
+        implementation would not catch."""
+        from evaluatorq.common.judge import EvaluatorResponsePayload, JudgeOutcome
+        from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
+
+        mock_evaluator_entity = MagicMock()
+        mock_evaluator_entity.prompt = 'response: {{output.response}}'
+
+        async def _fake_run_judge(**_kwargs: Any) -> JudgeOutcome:
+            return JudgeOutcome(
+                payload=EvaluatorResponsePayload(value=True, explanation='verdict'),
+                token_usage=None,
+                endpoint='responses',
+            )
+
+        with (
+            patch(
+                'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.get_evaluator_for_category',
+                return_value=mock_evaluator_entity,
+            ),
+            patch(
+                'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.run_judge',
+                AsyncMock(side_effect=_fake_run_judge),
+            ),
+        ):
+            evaluator_config = create_owasp_evaluator(
+                evaluator_model='judge-a',
+                llm_client=AsyncMock(),
+                judges=['judge-b'],
+            )
+            result = await evaluator_config['scorer']({
+                'data': DataPoint(inputs={'category': 'ASI01', 'messages': []}),
+                'output': {'response': 'target output'},
+            })
+
+        assert result.raw_output is not None
+        assert result.raw_output['endpoint'] == 'responses'
+
+    @pytest.mark.asyncio
+    async def test_scorer_single_judge_parse_failure_keeps_token_usage(self) -> None:
+        """RES-1307 audit Task 1 (site 2): a judge call that returns unparseable
+        JSON is still billed by the provider. The single-judge error leg used to
+        return a bare `error_result(...)` with no token_usage/raw_output at all —
+        it must now carry `outcome.token_usage` and `raw_output['endpoint']`
+        through, the same way the adaptive evaluator's twin
+        (`_single_outcome_to_result`) always has."""
+        from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
+
+        mock_evaluator_entity = MagicMock()
+        mock_evaluator_entity.prompt = 'response: {{output.response}}'
+
+        async def _create(**kwargs: Any) -> MagicMock:
+            mock_msg = MagicMock()
+            mock_msg.content = 'not valid json'
+            mock_choice = MagicMock()
+            mock_choice.message = mock_msg
+            mock_resp = MagicMock()
+            mock_resp.choices = [mock_choice]
+            mock_resp.usage = _usage_mock(10, 5)
+            return mock_resp
+
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create = AsyncMock(side_effect=_create)
+
+        with patch(
+            'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.get_evaluator_for_category',
+            return_value=mock_evaluator_entity,
+        ):
+            evaluator_config = create_owasp_evaluator(llm_client=mock_client)
+            result = await evaluator_config['scorer']({
+                'data': DataPoint(inputs={'category': 'ASI01', 'messages': []}),
+                'output': {'response': 'target output'},
+            })
+
+        assert result.value == 'error'
+        assert result.pass_ is None
+        assert result.token_usage is not None
+        assert result.token_usage.calls == 1
+        # A ValidationError raised inside run_judge's retry loop escapes the
+        # per-attempt stamping, but the endpoint is not unknown: only the chat
+        # path can raise it (the Responses leg returns before the chat span opens),
+        # so run_judge's PARSE return names 'chat'. Not a fabricated value — a
+        # derived one; the catch-all UNKNOWN return, which can fire before any
+        # provider call, still leaves it None.
+        assert result.raw_output is not None
+        assert result.raw_output['endpoint'] == 'chat'
+
+    @pytest.mark.asyncio
+    async def test_scorer_panel_judge_parse_failure_keeps_token_usage(self) -> None:
+        """RES-1307 audit Task 1 (site 1): the panel-path `judge_fn` failure
+        branch used to build `Prediction(error=..., endpoint=...)` without
+        `token_usage`, so `run_jury`'s usage sum silently dropped a billed but
+        unparseable judge call. Here judge-b's verdict fails to parse while
+        judge-a succeeds; both calls were billed and both must be reflected in
+        the aggregated `result.token_usage`."""
+        from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
+
+        mock_evaluator_entity = MagicMock()
+        mock_evaluator_entity.prompt = 'response: {{output.response}}'
+
+        async def _create(**kwargs: Any) -> MagicMock:
+            model = kwargs['model']
+            mock_msg = MagicMock()
+            mock_msg.content = (
+                'not valid json' if model == 'judge-b' else json.dumps({'value': True, 'explanation': 'ok'})
+            )
+            mock_choice = MagicMock()
+            mock_choice.message = mock_msg
+            mock_resp = MagicMock()
+            mock_resp.choices = [mock_choice]
+            mock_resp.usage = _usage_mock(10, 5)
+            return mock_resp
+
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create = AsyncMock(side_effect=_create)
+
+        with patch(
+            'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.get_evaluator_for_category',
+            return_value=mock_evaluator_entity,
+        ):
+            evaluator_config = create_owasp_evaluator(
+                evaluator_model='judge-a',
+                llm_client=mock_client,
+                judges=['judge-b'],
+                min_successful_judges=1,
+            )
+            result = await evaluator_config['scorer']({
+                'data': DataPoint(inputs={'category': 'ASI01', 'messages': []}),
+                'output': {'response': 'target output'},
+            })
+
+        assert result.token_usage is not None
+        # judge-a succeeded and judge-b failed to parse, but both were billed — the
+        # aggregated usage must reflect both calls, not just the surviving one.
+        assert result.token_usage.calls == 2
 
     @pytest.mark.asyncio
     async def test_scorer_with_no_tool_calls_still_works(self) -> None:

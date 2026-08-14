@@ -429,6 +429,7 @@ def _build_token_usage_section(results: list[SimulationResult]) -> ReportSection
             # so a partial total reads as authoritative.
             'calls': usage_total.calls,
             'priced_calls': usage_total.priced_calls,
+            'estimated_calls': usage_total.estimated_calls,
         },
     )
 

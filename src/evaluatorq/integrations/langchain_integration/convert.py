@@ -87,6 +87,7 @@ def convert_to_open_responses(
     total_output_tokens = 0
     total_tokens = 0
     cached_tokens = 0
+    cache_creation_tokens = 0
     reasoning_tokens = 0
     model_name = 'unknown'
     last_finish_reason = 'stop'
@@ -120,6 +121,11 @@ def convert_to_open_responses(
                 total_tokens += usage.get('total_tokens', 0)
                 input_details = usage.get('input_token_details', {})
                 cached_tokens += input_details.get('cache_read', 0)
+                # langchain-core >= 0.3.9 standardizes cache writes as
+                # `input_token_details.cache_creation` (InputTokenDetails). Without
+                # this read, cache-write tokens stay 0 on every LangChain-fronted
+                # call, including an Anthropic-backed one that really did write a cache.
+                cache_creation_tokens += input_details.get('cache_creation', 0)
                 output_details = usage.get('output_token_details', {})
                 reasoning_tokens += output_details.get('reasoning', 0)
 
@@ -227,7 +233,10 @@ def convert_to_open_responses(
             input_tokens=total_input_tokens,
             output_tokens=total_output_tokens,
             total_tokens=total_tokens,
-            input_tokens_details=InputTokensDetails(cached_tokens=cached_tokens),
+            input_tokens_details=InputTokensDetails(
+                cached_tokens=cached_tokens,
+                cache_creation_tokens=cache_creation_tokens,
+            ),
             output_tokens_details=OutputTokensDetails(reasoning_tokens=reasoning_tokens),
         )
 

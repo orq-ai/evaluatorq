@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import contextlib
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -196,6 +196,63 @@ class TestJury:
         assert jury.stats is not None
         assert jury.stats.mean == 1.0
         assert jury.stats.std == 0.0
+
+    @pytest.mark.asyncio
+    async def test_panel_path_writes_raw_output_endpoint(self):
+        """The panel/jury path must write raw_output['endpoint'] under the same
+        key the single-judge fast path uses (RES-1307 Task 7), so a consumer
+        reads one key regardless of which path produced the result. These fake
+        model ids never resolve on the Responses model catalogue, so every judge
+        stays on chat completions and the panel's aggregated endpoint is
+        uniformly 'chat' — the mixed/None aggregation itself is covered at the
+        run_jury level in tests/common/test_jury.py."""
+        client = _model_client({
+            'judge-a': [_verdict_json(True)],
+            'judge-b': [_verdict_json(True)],
+            'judge-c': [_verdict_json(True)],
+        })
+        evaluator = OWASPEvaluator(
+            evaluator_model='judge-a',
+            llm_client=client,
+            judges=['judge-b', 'judge-c'],
+        )
+
+        result = await _evaluate(evaluator)
+
+        assert result.jury is not None
+        assert result.raw_output is not None
+        assert result.raw_output['endpoint'] == 'chat'
+
+    @pytest.mark.asyncio
+    async def test_panel_path_threads_responses_endpoint_value(self):
+        """The mocked client above can only ever land on 'chat' — it never resolves
+        the Responses model catalogue, so `test_panel_path_writes_raw_output_endpoint`
+        cannot tell real per-pass threading from a hardcoded literal. Patch
+        `run_judge` itself so every panel pass reports 'responses' and assert that
+        value — not just 'chat' — reaches `raw_output['endpoint']`, catching the
+        RES-1307 live symptom (`judge endpoints: [null, null, null, null]`) that a
+        constant-string implementation would not."""
+        from evaluatorq.common.judge import EvaluatorResponsePayload, JudgeOutcome
+
+        async def _fake_run_judge(**_kwargs: Any) -> JudgeOutcome:
+            return JudgeOutcome(
+                payload=EvaluatorResponsePayload(value=True, explanation='judge says True'),
+                token_usage=None,
+                endpoint='responses',
+            )
+
+        evaluator = OWASPEvaluator(
+            evaluator_model='judge-a',
+            llm_client=AsyncMock(),
+            judges=['judge-b', 'judge-c'],
+        )
+
+        with patch('evaluatorq.redteam.adaptive.evaluator.run_judge', AsyncMock(side_effect=_fake_run_judge)):
+            result = await _evaluate(evaluator)
+
+        assert result.jury is not None
+        assert result.raw_output is not None
+        assert result.raw_output['endpoint'] == 'responses'
 
     @pytest.mark.asyncio
     async def test_split_jury_takes_majority(self):

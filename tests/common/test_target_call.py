@@ -11,7 +11,7 @@ from evaluatorq.common.target_call import (
     default_map_error,
     extract_status_code,
 )
-from evaluatorq.contracts import AgentResponse, AgentResponseError, Message
+from evaluatorq.contracts import AgentResponse, AgentResponseError, Message, Usage
 
 class _Target:
     """Minimal AgentTarget double: respond() returns queued items or raises them."""
@@ -309,3 +309,243 @@ async def test_implicitly_chained_client_error_is_not_retried():
     assert r.succeeded is False
     assert r.attempts == 1
     assert t.calls == 1
+
+
+# ---------------------------------------------------------------------------
+# billed_usage accumulator (RES-1307 audit task 2)
+# ---------------------------------------------------------------------------
+
+
+def _usage(total: int, *, calls: int = 0) -> Usage:
+    return Usage(input_tokens=total, output_tokens=0, total_tokens=total, calls=calls)
+
+
+def _err_with_usage(msg: str, usage: Usage) -> AgentResponse:
+    """An error marker that still carries a billed usage block — the case the
+    old `usage if succeeded else None` read silently dropped."""
+    return AgentResponse(
+        text=msg, usage=usage, error=AgentResponseError(message=msg, error_type='target_error', code='x')
+    )
+
+
+@pytest.mark.asyncio
+async def test_billed_usage_none_when_no_attempt_reported_usage():
+    t = _Target([_ok('hi')])
+    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    assert r.billed_usage is None
+
+
+@pytest.mark.asyncio
+async def test_billed_usage_matches_response_usage_on_single_success():
+    """The single-attempt success path: accumulator == response.usage exactly.
+
+    This is what makes it safe for callers to REPLACE the `response.usage` read
+    rather than add to it — adding both here would double every run total.
+    """
+    single = Usage(input_tokens=30, output_tokens=0, total_tokens=30, total_cost=0.03, calls=1, priced_calls=1)
+    t = _Target([AgentResponse(text='hi', usage=single)])
+    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    assert r.billed_usage is not None
+    assert r.response.usage is not None
+    assert r.billed_usage.total_tokens == 30
+    assert r.billed_usage.total_tokens == r.response.usage.total_tokens
+    assert r.billed_usage.total_cost == r.response.usage.total_cost == 0.03
+    assert r.billed_usage.priced_calls == r.response.usage.priced_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_billed_usage_sums_failed_attempt_then_success():
+    """Tokens burned by a usage-bearing error attempt survive a later success."""
+    t = _Target([_err_with_usage('boom', _usage(7, calls=1)), AgentResponse(text='hi', usage=_usage(11, calls=1))])
+    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    assert r.succeeded is True
+    assert r.attempts == 2
+    assert r.billed_usage is not None
+    assert r.billed_usage.total_tokens == 18
+    assert r.billed_usage.calls == 2
+    # `response` still means the surviving response, not the aggregate.
+    assert r.response.usage is not None
+    assert r.response.usage.total_tokens == 11
+
+
+@pytest.mark.asyncio
+async def test_billed_usage_recorded_when_every_attempt_fails_with_usage():
+    t = _Target([_err_with_usage('boom', _usage(5)) for _ in range(3)])
+    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    assert r.succeeded is False
+    assert r.billed_usage is not None
+    assert r.billed_usage.total_tokens == 15
+
+
+@pytest.mark.asyncio
+async def test_synthetic_timeout_and_exception_contribute_no_usage():
+    """`_synthetic()` carries `usage=None`, so those branches stay unknown-not-zero:
+    a usage-bearing attempt before them is still counted, the synthetic ones add
+    nothing rather than a fabricated 0-cost call."""
+
+    class _OnceThenRaise:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def respond(self, messages: list[Message]) -> AgentResponse:
+            self.calls += 1
+            if self.calls == 1:
+                return _err_with_usage('boom', _usage(9, calls=1))
+            raise ConnectionError('connection reset')
+
+    t = _OnceThenRaise()
+    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    assert r.succeeded is False
+    assert t.calls == 3
+    assert r.billed_usage is not None
+    assert r.billed_usage.total_tokens == 9
+
+
+# ---------------------------------------------------------------------------
+# per-attempt call-counter normalisation (RES-1307 audit fix wave)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_untracked_call_count_normalised_to_one_per_attempt():
+    """A target reporting `calls=0` billed one exchange per attempt, not zero.
+
+    Consumers read `billed_usage` verbatim; leaving `calls=0` there gave a run
+    total with a cost and no call count, which `cost_is_partial` cannot qualify
+    and `cost_source` reads as unknown.
+    """
+    t = _Target([_err_with_usage('boom', _usage(4)), AgentResponse(text='hi', usage=_usage(7))])
+    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    assert r.billed_usage is not None
+    assert r.billed_usage.total_tokens == 11
+    assert r.billed_usage.calls == 2
+    assert r.billed_usage.priced_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_mixed_cost_reporting_across_retry_stays_partial():
+    """The reviewer's reproduction: two billed attempts, one reported a cost.
+
+    `with_calls(2)` would have widened `priced_calls` to 2 alongside `calls`,
+    rendering a half-known cost as fully provider-billed. Per-attempt
+    normalisation keeps `priced_calls` at 1, so the figure stays qualified.
+    """
+    priced = Usage(input_tokens=7, output_tokens=0, total_tokens=7, total_cost=0.01, calls=0)
+    t = _Target([_err_with_usage('boom', _usage(4)), AgentResponse(text='hi', usage=priced)])
+    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    assert r.billed_usage is not None
+    assert r.billed_usage.calls == 2
+    assert r.billed_usage.priced_calls == 1
+    assert r.billed_usage.total_cost == 0.01
+    assert r.billed_usage.cost_is_partial is True
+    assert r.billed_usage.cost_source == 'provider'
+
+
+@pytest.mark.asyncio
+async def test_target_reported_counters_are_left_alone():
+    """A target that tracks its own counters must come through untouched.
+
+    orq sums tool-continuation rounds into one usage block, so `calls=3` for a
+    single attempt is correct and must not be flattened to 1. A catalogue-priced
+    block keeps its `estimated_calls` too.
+    """
+    honest = Usage(
+        input_tokens=10,
+        output_tokens=5,
+        total_tokens=15,
+        total_cost=0.02,
+        calls=3,
+        priced_calls=2,
+        estimated_calls=1,
+    )
+    t = _Target([AgentResponse(text='hi', usage=honest)])
+    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    assert r.billed_usage is not None
+    assert r.billed_usage.calls == 3
+    assert r.billed_usage.priced_calls == 2
+    assert r.billed_usage.estimated_calls == 1
+    assert r.billed_usage.cost_source == 'mixed'
+
+
+@pytest.mark.asyncio
+async def test_untracked_estimated_calls_clamped_to_priced_calls():
+    """`estimated_calls <= priced_calls <= calls` survives normalisation.
+
+    A `calls=0` block that nonetheless claims an estimated call but carries no
+    cost has nothing to have estimated — the counter is dropped, not preserved
+    into an aggregate where it would out-number `priced_calls`.
+    """
+    bogus = Usage(input_tokens=2, output_tokens=0, total_tokens=2, calls=0, priced_calls=0, estimated_calls=1)
+    t = _Target([AgentResponse(text='hi', usage=bogus)])
+    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    assert r.billed_usage is not None
+    assert r.billed_usage.calls == 1
+    assert r.billed_usage.priced_calls == 0
+    assert r.billed_usage.estimated_calls == 0
+    assert r.billed_usage.cost_source is None
+
+
+@pytest.mark.asyncio
+async def test_untracked_estimated_calls_preserved_when_priced():
+    """A `calls=0` block that DOES carry a cost must keep its estimate.
+
+    `_attempt_usage` derives `priced` from `usage.total_cost`, not from
+    `usage.priced_calls` — a naive fix that clamped against the latter (which
+    `Usage`'s own validator forces to 0 whenever `calls == 0`) would zero
+    `estimated_calls` unconditionally and relabel every catalogue-priced,
+    untracked-call-count attempt as provider-billed. Built via
+    `model_construct` because `Usage(...)`'s validator would otherwise clamp
+    this exact shape away before `_attempt_usage` ever sees it — this
+    reproduces a target that hands back a `Usage` without going through that
+    constructor (e.g. built by `model_copy`, which also bypasses it).
+    """
+    priced_and_estimated = Usage.model_construct(
+        input_tokens=2,
+        output_tokens=0,
+        total_tokens=2,
+        total_cost=0.01,
+        calls=0,
+        priced_calls=0,
+        estimated_calls=1,
+    )
+    t = _Target([AgentResponse(text='hi', usage=priced_and_estimated)])
+    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    assert r.billed_usage is not None
+    assert r.billed_usage.calls == 1
+    assert r.billed_usage.priced_calls == 1
+    assert r.billed_usage.estimated_calls == 1
+    assert r.billed_usage.cost_source == 'catalogue'
+
+
+@pytest.mark.asyncio
+async def test_hand_built_usage_with_cost_but_no_priced_calls_warns(caplog: pytest.LogCaptureFixture):
+    """A custom AgentTarget can build a Usage whose cost has no priced call.
+
+    `_attempt_usage` leaves a self-tracking target's counters alone, so the cost
+    reaches the run total with `priced_calls=0` and renders unqualified — i.e. as
+    fully provider-billed. Widening `priced_calls` here would over-claim for a
+    genuinely partial aggregate, so the degraded path announces itself instead.
+    """
+    hand_built = Usage(input_tokens=10, output_tokens=0, total_tokens=10, calls=2, total_cost=0.02)
+    t = _Target([AgentResponse(text='hi', usage=hand_built)])
+    with caplog.at_level('WARNING'):
+        r = await call_target_with_retry(
+            t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2
+        )
+    assert r.billed_usage is not None
+    assert (r.billed_usage.calls, r.billed_usage.priced_calls) == (2, 0)
+    assert 'priced_calls=0' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_self_tracking_usage_with_priced_calls_does_not_warn(caplog: pytest.LogCaptureFixture):
+    """The honest shape must stay silent — two branches must not differ only in logging."""
+    honest = Usage(input_tokens=10, output_tokens=0, total_tokens=10, calls=2, priced_calls=2, total_cost=0.02)
+    t = _Target([AgentResponse(text='hi', usage=honest)])
+    with caplog.at_level('WARNING'):
+        r = await call_target_with_retry(
+            t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2
+        )
+    assert r.billed_usage is not None
+    assert r.billed_usage.priced_calls == 2
+    assert 'priced_calls=0' not in caplog.text

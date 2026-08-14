@@ -711,3 +711,152 @@ class TestIncompleteAttacksNotJudged:
 
         evaluate.assert_not_awaited()
         assert result.value == 'error'
+
+
+# ---------------------------------------------------------------------------
+# Retried / failed target attempts still bill tokens (RES-1307 audit task 2)
+# ---------------------------------------------------------------------------
+
+
+class _ScriptedTarget(AgentTarget):
+    """Returns a scripted sequence of `AgentResponse`s, one per `respond()` call.
+
+    Unlike `_FakeTarget` this can emit an error marker that *also* carries a
+    real usage block — the shape the provider returns when it charged for the
+    call and then refused (content filter, tool-loop abort, guardrail).
+    """
+
+    def __init__(self, script: list[AgentResponse]) -> None:
+        super().__init__()
+        self._script = list(script)
+        self.call_count = 0
+
+    async def respond(self, messages: list[Message]) -> AgentResponse:
+        self.call_count += 1
+        return self._script[min(self.call_count - 1, len(self._script) - 1)]
+
+    def new(self) -> '_ScriptedTarget':
+        return _ScriptedTarget(self._script)
+
+
+def _target_usage(total: int, *, calls: int = 1) -> TokenUsage:
+    return TokenUsage(prompt_tokens=total, completion_tokens=0, total_tokens=total, calls=calls)
+
+
+def _billed_error(total: int) -> AgentResponse:
+    from evaluatorq.contracts import AgentResponseError
+
+    return AgentResponse(
+        text='[refused]',
+        usage=_target_usage(total),
+        error=AgentResponseError(message='refused', error_type='target_error', code='x'),
+    )
+
+
+class TestBilledTargetUsageOnRetryAndFailure:
+    """`TargetCallResult.billed_usage` must reach the run total exactly once."""
+
+    @pytest.mark.asyncio
+    async def test_retried_attempt_tokens_reach_the_run_total_once(self) -> None:
+        """A billed error attempt + a successful retry = the sum, not either alone.
+
+        Also pins the no-double-count half: if the orchestrator added both the
+        accumulator and the surviving `response.usage`, the target total would
+        come out at 7 + 2*36 + 36 instead of 7 + 2*36.
+        """
+        max_turns = 2
+        burned = 7
+        create_mock = AsyncMock(side_effect=[_make_chat_completion() for _ in range(max_turns)])
+        ok = AgentResponse(text='target reply', usage=_target_usage(TARGET_TOTAL))
+        target = _ScriptedTarget([_billed_error(burned), ok])
+        orchestrator = _make_orchestrator(create_mock)
+
+        result = await orchestrator.run_attack(
+            target=target,
+            strategy=_make_strategy(),
+            objective='Test',
+            agent_context=AgentContext(key='fake_agent'),
+            max_turns=max_turns,
+        )
+
+        assert result.error is None
+        assert result.n_turns == max_turns
+        assert target.call_count == max_turns + 1  # one retry
+
+        tgt = result.token_usage_target
+        assert tgt is not None
+        assert tgt.total_tokens == burned + TARGET_TOTAL * max_turns
+        assert tgt.calls == max_turns + 1
+
+        adv = result.token_usage_adversarial
+        assert adv is not None
+        assert result.token_usage is not None
+        assert result.token_usage.total_tokens == adv.total_tokens + tgt.total_tokens
+
+        # The run-level report total must agree with the per-attack figure.
+        summary = compute_report_summary([_make_result(execution_usage=result.token_usage)])
+        assert summary.token_usage_total is not None
+        assert summary.token_usage_total.total_tokens == adv.total_tokens + tgt.total_tokens
+
+    @pytest.mark.asyncio
+    async def test_all_attempts_fail_with_usage_still_billed(self) -> None:
+        """Retries exhausted against a target that charged for every refusal.
+
+        Before the fix this run reported `token_usage_target is None` — a real
+        spend of 3 x 5 tokens rendered as $0.
+        """
+        burned = 5
+        create_mock = AsyncMock(side_effect=[_make_chat_completion()])
+        target = _ScriptedTarget([_billed_error(burned)])
+        orchestrator = _make_orchestrator(create_mock)
+
+        result = await orchestrator.run_attack(
+            target=target,
+            strategy=_make_strategy(),
+            objective='Test',
+            agent_context=AgentContext(key='fake_agent'),
+            max_turns=4,
+        )
+
+        assert result.error is not None
+        assert target.call_count == 3  # 1 + 2 retries, then abort
+
+        tgt = result.token_usage_target
+        assert tgt is not None
+        assert tgt.total_tokens == burned * 3
+        assert tgt.calls == 3
+
+        adv = result.token_usage_adversarial
+        assert adv is not None
+        assert result.token_usage is not None
+        assert result.token_usage.total_tokens == adv.total_tokens + burned * 3
+
+    @pytest.mark.asyncio
+    async def test_call_count_fallback_uses_billed_attempt_count(self) -> None:
+        """A target that reports usage without `calls` gets one call per billed
+        attempt, not a flat 1 — otherwise a retried turn looks cheaper per call
+        than it was and `priced_calls`/`calls` coverage drifts."""
+        create_mock = AsyncMock(side_effect=[_make_chat_completion()])
+        no_calls = TokenUsage(prompt_tokens=4, completion_tokens=0, total_tokens=4, calls=0)
+        from evaluatorq.contracts import AgentResponseError
+
+        refused = AgentResponse(
+            text='[refused]',
+            usage=no_calls,
+            error=AgentResponseError(message='refused', error_type='target_error', code='x'),
+        )
+        target = _ScriptedTarget([refused, AgentResponse(text='ok', usage=no_calls)])
+        orchestrator = _make_orchestrator(create_mock)
+
+        result = await orchestrator.run_attack(
+            target=target,
+            strategy=_make_strategy(),
+            objective='Test',
+            agent_context=AgentContext(key='fake_agent'),
+            max_turns=1,
+        )
+
+        tgt = result.token_usage_target
+        assert tgt is not None
+        assert tgt.total_tokens == 8
+        assert tgt.calls == 2

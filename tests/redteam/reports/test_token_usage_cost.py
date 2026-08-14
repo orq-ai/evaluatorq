@@ -247,3 +247,117 @@ def test_export_marks_partial_coverage_on_per_agent_costs():
     # Overall total: markdown puts the qualifier on the value, HTML on the label.
     assert '$0.7500 (2 of 3 calls)' in md
     assert 'Total Cost (2 of 3 calls)' in html
+
+
+def test_export_marks_estimated_coverage():
+    """A fully-priced but catalogue-estimated cost is labelled "(estimated)".
+
+    `estimated_calls` must survive `_build_token_usage_section` into the saved
+    report dict, or the renderer always sees 0 and drops the qualifier silently.
+    """
+    results = [
+        _make_result(
+            agent_key='agent-a',
+            token_usage=TokenUsage(
+                prompt_tokens=10,
+                completion_tokens=5,
+                total_tokens=15,
+                total_cost=0.5,
+                calls=1,
+                priced_calls=1,
+                estimated_calls=1,
+            ),
+        ),
+    ]
+    report = _make_report(results)
+    md, html = export_markdown(report), export_html(report)
+    assert '$0.5000 (estimated)' in md
+    assert 'Total Cost (estimated)' in html
+    assert '$0.5000</div>' in html
+
+
+def test_export_provider_priced_run_has_no_estimated_qualifier():
+    """A fully provider-priced run must not pick up an "(estimated)" label."""
+    results = [
+        _make_result(
+            agent_key='agent-a',
+            token_usage=TokenUsage(
+                prompt_tokens=10,
+                completion_tokens=5,
+                total_tokens=15,
+                total_cost=0.5,
+                calls=1,
+                priced_calls=1,
+            ),
+        ),
+    ]
+    report = _make_report(results)
+    md, html = export_markdown(report), export_html(report)
+    assert 'estimated' not in md
+    assert 'estimated' not in html
+    assert '$0.5000' in md
+    assert '$0.5000' in html
+
+
+def test_build_token_usage_section_carries_estimated_calls():
+    results = [
+        _make_result(
+            agent_key='agent-a',
+            token_usage=TokenUsage(
+                prompt_tokens=10, completion_tokens=5, total_tokens=15, calls=1, priced_calls=1, estimated_calls=1
+            ),
+        ),
+    ]
+    section = _build_token_usage_section(_make_report(results))
+    assert section is not None
+    assert section.data['overall']['estimated_calls'] == 1
+    assert section.data['per_agent'][0]['estimated_calls'] == 1
+
+
+def test_export_qualifies_the_input_output_split_like_the_total():
+    """The split is the same usage priced the same way — an unqualified split
+    beside a qualified total implies the split alone is exact."""
+    results = [
+        _make_result(
+            agent_key='agent-a',
+            token_usage=TokenUsage(
+                prompt_tokens=10,
+                completion_tokens=5,
+                total_tokens=15,
+                input_cost=0.1,
+                output_cost=0.2,
+                total_cost=0.3,
+                calls=1,
+                priced_calls=1,
+                estimated_calls=1,
+            ),
+        ),
+    ]
+    report = _make_report(results)
+    md, html = export_markdown(report), export_html(report)
+    assert '$0.1000 (estimated)' in md
+    assert '$0.2000 (estimated)' in md
+    assert 'Input Cost (estimated)' in html
+    assert 'Output Cost (estimated)' in html
+
+
+def test_export_leaves_a_fully_billed_split_unqualified():
+    results = [
+        _make_result(
+            agent_key='agent-a',
+            token_usage=TokenUsage(
+                prompt_tokens=10,
+                completion_tokens=5,
+                total_tokens=15,
+                input_cost=0.1,
+                output_cost=0.2,
+                total_cost=0.3,
+                calls=1,
+                priced_calls=1,
+            ),
+        ),
+    ]
+    report = _make_report(results)
+    md, html = export_markdown(report), export_html(report)
+    assert '$0.1000 (' not in md
+    assert 'Input Cost (' not in html

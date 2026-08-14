@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from evaluatorq.contracts import AgentResponse, AgentResponseError, Message, TextOutputItem
+from evaluatorq.contracts import AgentResponse, AgentResponseError, Message, TextOutputItem, Usage
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -104,6 +104,22 @@ class TargetCallResult:
     success or a returned-error attempt, or a synthetic one on timeout/exception.
     ``error`` is ``None`` iff ``succeeded``. ``error_details`` carries the raw
     exception info callers persist into ``AttackOutput.error_details``.
+
+    ``billed_usage`` is the sum of **every** attempt's usage, not just the final
+    one: an attempt that returned an ``.error`` marker alongside a real usage
+    block was still billed, and so was a failed attempt that preceded a
+    successful retry. It is ``None`` when no attempt reported usage (the usual
+    case for the timeout/exception branches — ``_synthetic`` carries
+    ``usage=None``, so there is genuinely nothing to record). Callers must add
+    this **instead of** ``response.usage``, never in addition to it: on the
+    common single-successful-attempt path the two carry the same tokens and
+    cost, with normalised counters — adding both double counts the whole run.
+
+    Each attempt's usage is normalised by `_attempt_usage` before it is summed,
+    so ``billed_usage.calls`` is always >= the number of billed attempts and
+    ``priced_calls`` counts only the attempts that actually reported a cost.
+    Consumers can therefore read it verbatim — no per-surface `calls == 0`
+    fallback, and no risk of widening `priced_calls` along with `calls`.
     """
 
     response: AgentResponse
@@ -111,6 +127,7 @@ class TargetCallResult:
     attempts: int
     error: AgentResponseError | None
     error_details: dict[str, object] | None
+    billed_usage: Usage | None = None
 
     def error_payload(self, *, context: str = '', turn: int = 1) -> dict[str, Any]:
         """Return this result's error as the flat fields the report layer stores.
@@ -141,6 +158,48 @@ class TargetCallResult:
         }
 
 
+def _attempt_usage(usage: Usage) -> Usage:
+    """Return ``usage`` with honest per-attempt call counters.
+
+    A target that reports its own ``calls`` (orq sums tool-continuation rounds
+    into one usage block) is returned **unchanged** — it knows better than we do.
+
+    A target that reports ``calls=0`` has simply not tracked the counter, and the
+    exchange it just billed us for is one call; ``priced_calls`` is 1 exactly when
+    that attempt reported a cost, and 0 otherwise. Normalising here rather than at
+    each consumer is what keeps ``billed_usage.priced_calls`` honest across a
+    retry: summing two ``calls=0`` attempts where only one reported a cost must
+    yield ``calls=2, priced_calls=1`` (a partial cost), not ``calls=2,
+    priced_calls=2`` (a cost claiming to be fully billed). ``estimated_calls`` is
+    clamped to the resolved ``priced`` here explicitly: the return uses
+    ``model_copy(update=...)``, which — unlike ``Usage(...)`` — does not run
+    `Usage`'s ``_clamp_call_counts`` validator, so this is the only place the
+    ``estimated_calls <= priced_calls <= calls`` invariant is enforced on this
+    path. The ``calls=0`` stamp is still a lower bound: an attempt that tracked
+    nothing may have burned several tool-continuation rounds, and we count it as
+    one.
+    """
+    if usage.calls > 0:
+        if usage.total_cost is not None and usage.priced_calls == 0:
+            # A cost with no priced call renders unqualified, i.e. as fully
+            # provider-billed. No shipped target produces this shape; a custom
+            # AgentTarget that hand-builds its usage can. Widening priced_calls
+            # here would over-claim for a genuinely partial aggregate, so say so
+            # instead of guessing.
+            logger.warning(
+                'Target usage reports a cost ({}) with priced_calls=0 over {} call(s); '
+                'the cost will render without a coverage qualifier. Set priced_calls '
+                'on the usage this target returns.',
+                usage.total_cost,
+                usage.calls,
+            )
+        return usage
+    priced = 1 if usage.total_cost is not None else 0
+    return usage.model_copy(
+        update={'calls': 1, 'priced_calls': priced, 'estimated_calls': min(usage.estimated_calls, priced)}
+    )
+
+
 def _synthetic(text: str, *, error_type: str, code: str) -> AgentResponse:
     return AgentResponse(
         output=[TextOutputItem(text=text, annotations=[])],
@@ -168,12 +227,19 @@ async def call_target_with_retry(
     caller-supplied context value and each returned response while that context
     is still open, so callers can annotate per-attempt spans. Returns a uniform
     `TargetCallResult`.
+
+    This is the only retry layer on the target-call path. A target whose own
+    client sets ``max_retries`` (or otherwise retries internally) composes
+    multiplicatively with the retries here and will over-report
+    ``billed_usage``.
     """
     timeout_s = target_agent_timeout_ms / 1000.0
     max_attempts = max(1, max_target_retries + 1)
     last_response: AgentResponse = AgentResponse()
     last_error: AgentResponseError | None = None
     last_details: dict[str, object] | None = None
+    # Billed across ALL attempts, not just the surviving one — see TargetCallResult.
+    billed_usage: Usage | None = None
 
     attempt = 0  # max_attempts >= 1, but the type checker can't prove the loop runs
     for attempt in range(max_attempts):
@@ -184,9 +250,26 @@ async def call_target_with_retry(
                 resp = _coerce_to_agent_response(raw)
                 if on_attempt_response is not None:
                     on_attempt_response(attempt_context, resp)
+            if resp.usage is not None:
+                attempt_usage = _attempt_usage(resp.usage)
+                billed_usage = attempt_usage if billed_usage is None else billed_usage + attempt_usage
             if resp.error is None:
                 return TargetCallResult(
-                    response=resp, succeeded=True, attempts=attempt + 1, error=None, error_details=None
+                    response=resp,
+                    succeeded=True,
+                    attempts=attempt + 1,
+                    error=None,
+                    error_details=None,
+                    billed_usage=billed_usage,
+                )
+            if resp.usage is not None:
+                # Debug, not warning: the error itself is reported by the caller, and
+                # counting a failed attempt's tokens is the correct handling, not a
+                # degraded path. At warning it fired once per attempt on every target
+                # that legitimately retries.
+                logger.debug(
+                    f'Target attempt {attempt + 1} returned an error marker with a billed usage block '
+                    f'({resp.usage.total_tokens} tokens); counting it toward the exchange cost'
                 )
             last_response = resp
             last_error = resp.error
@@ -225,5 +308,10 @@ async def call_target_with_retry(
             logger.warning(f'Target call failed (attempt {attempt + 1}/{max_attempts}); retrying same exchange')
 
     return TargetCallResult(
-        response=last_response, succeeded=False, attempts=attempt + 1, error=last_error, error_details=last_details
+        response=last_response,
+        succeeded=False,
+        attempts=attempt + 1,
+        error=last_error,
+        error_details=last_details,
+        billed_usage=billed_usage,
     )

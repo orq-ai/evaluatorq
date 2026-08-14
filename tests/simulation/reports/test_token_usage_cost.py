@@ -179,3 +179,62 @@ def test_section_to_rows_labels_partial_coverage_end_to_end():
     assert section.data['calls'] == 2
     assert section.data['priced_calls'] == 1
     assert ['Total Cost', '$0.5000 (1 of 2 calls)'] in build_token_usage_rows(section.data)
+
+
+def test_section_to_rows_labels_estimated_coverage_end_to_end():
+    """A catalogue-estimated cost must render "(estimated)" through the real
+    section -> renderer path, not just when the dict is hand-built."""
+    results = [
+        _make_result(
+            token_usage=TokenUsage(
+                prompt_tokens=10,
+                completion_tokens=5,
+                total_tokens=15,
+                total_cost=0.5,
+                calls=1,
+                priced_calls=1,
+                estimated_calls=1,
+            )
+        ),
+    ]
+    section = _build_token_usage_section(results)
+    assert section.data['estimated_calls'] == 1
+    assert ['Total Cost', '$0.5000 (estimated)'] in build_token_usage_rows(section.data)
+
+
+def test_total_cost_row_unlabelled_estimated_when_provider_priced():
+    """A fully provider-priced, fully-covered cost carries no qualifier at all."""
+    rows = build_token_usage_rows({'total_cost': 0.5, 'calls': 10, 'priced_calls': 10, 'estimated_calls': 0})
+    assert ['Total Cost', '$0.5000'] in rows
+
+
+def test_input_output_split_carries_the_same_coverage_label():
+    """The split comes from the same `Usage` and the same pricing pass as the
+    total. Left bare beside a qualified total it reads as the exact figure."""
+    rows = dict(
+        build_token_usage_rows({
+            'input_cost': 0.1,
+            'output_cost': 0.2,
+            'total_cost': 0.3,
+            'calls': 10,
+            'priced_calls': 3,
+            'estimated_calls': 3,
+        })
+    )
+    assert rows['Input Cost'] == '$0.1000 (3 of 10 calls, estimated)'
+    assert rows['Output Cost'] == '$0.2000 (3 of 10 calls, estimated)'
+    assert rows['Total Cost'] == '$0.3000 (3 of 10 calls, estimated)'
+
+
+def test_input_output_split_unlabelled_when_fully_provider_priced():
+    rows = dict(
+        build_token_usage_rows({
+            'input_cost': 0.1,
+            'output_cost': 0.2,
+            'total_cost': 0.3,
+            'calls': 10,
+            'priced_calls': 10,
+        })
+    )
+    assert rows['Input Cost'] == '$0.1000'
+    assert rows['Output Cost'] == '$0.2000'

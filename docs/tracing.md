@@ -191,7 +191,8 @@ LLM spans (`chat ...`) carry standard GenAI attributes:
 | `gen_ai.usage.output_tokens` | Completion token count |
 | `gen_ai.usage.total_tokens` | Total token count |
 | `gen_ai.usage.calls` | Number of LLM calls rolled into this span (omitted when zero) |
-| `gen_ai.usage.cost` | Total cost in USD, only when the provider reported one (also emitted as `gen_ai.usage.total_cost`; `gen_ai.usage.input_cost` / `gen_ai.usage.output_cost` when the provider breaks it down) |
+| `gen_ai.usage.cost` | Total cost in USD, when a cost is known — either reported by the provider or priced client-side from the model catalogue (also emitted as `gen_ai.usage.total_cost`; `gen_ai.usage.input_cost` / `gen_ai.usage.output_cost` when the provider breaks it down) |
+| `gen_ai.usage.cost_source` | Where that cost came from: `"provider"`, `"catalogue"` (priced client-side from token counts) or `"mixed"`. Emitted alongside `gen_ai.usage.cost` whenever the provenance is known |
 | `gen_ai.usage.cache_read.input_tokens` | Cached prompt tokens, when the provider reports them |
 | `gen_ai.usage.cache_creation.input_tokens` | Cache-write prompt tokens, when the provider reports them |
 | `gen_ai.usage.reasoning.output_tokens` | Reasoning tokens, when the provider reports them |
@@ -355,6 +356,20 @@ Span attributes on `orq.judge`:
 No token usage or cost here: those are recorded once, on the `chat` spans
 underneath, and rolled up by the consumer. Stamping them on every ancestor as
 well made the same tokens appear three times in one trace.
+
+The judge's own LLM span — `chat {model}` in the diagram above, or
+`responses {model}` when the call went out on the Responses endpoint instead —
+carries a `gen_ai.judge.endpoint` attribute, `"chat"` or `"responses"`, naming
+which one actually served that verdict. It is what makes a judge span with no
+`gen_ai.usage.cost` diagnosable: `"chat"` means the model was never sent to
+the Responses endpoint (not in the catalogue, or `structured_output=False`),
+while `"responses"` with no cost means the Responses call itself failed to
+report one. A judge on the Orq router calls Responses by default — the only
+endpoint the router prices — and falls back to Chat Completions per-call on a
+`BadRequestError`; `common.judge.run_judge`'s docstring covers the fallback
+conditions. `raw_output["endpoint"]` on a jury/pairwise result (see
+[Cyclic judge assignment](cyclic-judge.md)) rolls this attribute up across a
+panel's judges, adding `"mixed"` when a panel used both endpoints.
 
 `judge.label_swapped` is only ever set (`True`/`False`) in comparative mode —
 in plain `run_jury()` deliberations it is absent, since each judge votes once.

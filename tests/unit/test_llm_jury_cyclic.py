@@ -22,17 +22,26 @@ from evaluatorq.types import DataPoint
 llm_jury_mod = importlib.import_module("evaluatorq.llm_jury")
 
 
-def _fake_run_judge(calls: list[str], value: str = "yes"):
+def _fake_run_judge(
+    calls: list[str],
+    value: str = "yes",
+    *,
+    endpoint: str | None = None,
+    endpoint_by_model: dict[str, str] | None = None,
+):
     async def fake(**kwargs):
-        calls.append(kwargs["model"])
+        model = kwargs["model"]
+        calls.append(model)
         # Yield to the event loop so asyncio.gather genuinely interleaves:
         # without this the concurrency tests cannot distinguish arrival order
         # from dataset order and would pass whatever the assignment logic does.
         await asyncio.sleep(0)
+        served = endpoint_by_model.get(model) if endpoint_by_model else endpoint
         return JudgeOutcome(
             payload=EvaluatorResponsePayload(value=value, explanation="ok"),
             token_usage=None,
             raw_content="{}",
+            endpoint=served,  # pyright: ignore[reportArgumentType]
         )
 
     return fake
@@ -351,10 +360,60 @@ async def test_result_carries_jury_record_for_audit():
 @pytest.mark.asyncio
 async def test_all_assignment_result_has_no_jury_record():
     """The jury record is cyclic-only: under 'all' the panel itself is the
-    record, and raw_output stays None so external callers using it as a
-    signal keep the pre-cyclic behavior."""
+    record, so the redundant payload is omitted. raw_output itself is still
+    written, because it carries the endpoint."""
     ev = llm_jury(name="x", criteria="c", judges=["m1", "m2", "m3"], client=MagicMock())
     with patch.object(llm_jury_mod, "run_judge", side_effect=_fake_run_judge([])):
         result = await ev["scorer"]({"data": _datapoint(), "output": "x"})
     assert not isinstance(result, dict)
-    assert result.raw_output is None
+    assert result.raw_output is not None
+    assert "jury" not in result.raw_output
+
+
+@pytest.mark.asyncio
+async def test_all_assignment_result_records_endpoint():
+    """The documented default (assignment='all') must still stamp the endpoint:
+    only the Responses endpoint returns a priced usage block, so without this a
+    judge reporting no cost is indistinguishable from an unpriced one. Before
+    the fix the deliberation's endpoint was computed and then discarded here."""
+    ev = llm_jury(name="x", criteria="c", judges=["m1", "m2", "m3"], client=MagicMock())
+    with patch.object(
+        llm_jury_mod, "run_judge", side_effect=_fake_run_judge([], endpoint="responses")
+    ):
+        result = await ev["scorer"]({"data": _datapoint(), "output": "x"})
+    assert not isinstance(result, dict)
+    assert result.raw_output is not None
+    assert result.raw_output["endpoint"] == "responses"
+
+
+@pytest.mark.asyncio
+async def test_all_assignment_records_mixed_endpoint():
+    """A panel split across endpoints aggregates to 'mixed' on the default path,
+    the same label the cyclic path and the redteam bridge already use."""
+    ev = llm_jury(name="x", criteria="c", judges=["m1", "m2"], client=MagicMock())
+    with patch.object(
+        llm_jury_mod,
+        "run_judge",
+        side_effect=_fake_run_judge([], endpoint_by_model={"m1": "responses", "m2": "chat"}),
+    ):
+        result = await ev["scorer"]({"data": _datapoint(), "output": "x"})
+    assert not isinstance(result, dict)
+    assert result.raw_output is not None
+    assert result.raw_output["endpoint"] == "mixed"
+
+
+@pytest.mark.asyncio
+async def test_cyclic_assignment_keeps_both_jury_record_and_endpoint():
+    """Adding the endpoint to the 'all' path must not cost the cyclic path its
+    jury record — both keys ride on the same raw_output dict."""
+    ev = llm_jury(
+        name="x", criteria="c", judges=["m1", "m2"], assignment="cyclic", client=MagicMock()
+    )
+    with patch.object(
+        llm_jury_mod, "run_judge", side_effect=_fake_run_judge([], endpoint="chat")
+    ):
+        result = await ev["scorer"]({"data": _datapoint(), "output": "x", "row": 0})
+    assert not isinstance(result, dict)
+    assert result.raw_output is not None
+    assert result.raw_output["endpoint"] == "chat"
+    assert [v["model"] for v in result.raw_output["jury"]["votes"]] == ["m1"]

@@ -394,76 +394,6 @@ class MultiTurnOrchestrator:
                 update={'attacker': self._cfg.attacker.model_copy(update={'extra_kwargs': merged})}
             )
 
-    async def generate_single_prompt(
-        self,
-        strategy: AttackStrategy,
-        objective: str,
-        agent_context: AgentContext,
-    ) -> tuple[str, TokenUsage | None, str]:
-        """Generate a single attack prompt using the adversarial LLM.
-
-        Used for dynamic single-turn attacks where prompt_template is None
-        but we still want only one shot at the agent.
-
-        Args:
-            strategy: Attack strategy being used
-            objective: Filled objective string
-            agent_context: Agent context for prompt generation
-
-        Returns:
-            Tuple of (prompt string, token usage or None, rendered system prompt)
-        """
-        system_prompt = _build_adversarial_system_prompt(
-            objective,
-            strategy,
-            agent_context,
-            max_turns=1,
-            attacker_instructions=self.attacker_instructions,
-        )
-
-        llm_messages: list[dict[str, Any]] = [
-            {'role': 'system', 'content': system_prompt},
-            {'role': 'user', 'content': 'Generate a single attack prompt to achieve the objective in one message.'},
-        ]
-        async with (
-            with_redteam_span(
-                'orq.redteam.adversarial_generation',
-                {'orq.redteam.strategy_name': strategy.name},
-            ),
-            with_llm_span(
-                model=self.model,
-                temperature=self._cfg.attacker.temperature,
-                max_tokens=self._cfg.attacker.max_tokens,
-                input_messages=llm_messages,
-                attributes={
-                    'orq.redteam.llm_purpose': 'adversarial',
-                    'orq.redteam.strategy_name': strategy.name,
-                },
-            ) as llm_span,
-        ):
-            llm_timeout_s = self._cfg.attacker.timeout_ms / 1000.0
-            response, usage = await execute_chat_completion(
-                client=self.llm_client,
-                model=self.model,
-                messages=llm_messages,
-                span=llm_span,
-                timeout_s=llm_timeout_s,
-                temperature=self._cfg.attacker.temperature,
-                max_completion_tokens=self._cfg.attacker.max_tokens,
-                extra_kwargs={
-                    'extra_body': self._cfg.retry_extra_body(self.llm_client),
-                    **self._cfg.attacker.extra_kwargs,
-                },
-            )
-
-            prompt = response.choices[0].message.content or ''
-            # Strip any leading objective-achieved marker (shouldn't appear in
-            # single-turn generation, but guard so it never leaks to the target).
-            _, _, prompt = _parse_objective_marker(prompt)
-
-        logger.debug(f'Generated dynamic single-turn prompt for {strategy.name}: {prompt[:100]}...')
-        return prompt, usage, system_prompt
-
     async def _plan_tool_chain(
         self,
         strategy: AttackStrategy,
@@ -951,7 +881,24 @@ class MultiTurnOrchestrator:
 
                     tgt_result = result.response
                     agent_response = tgt_result.text
-                    turn_usage: TokenUsage | None = tgt_result.usage if result.succeeded else None
+                    # Every attempt that reported usage was billed — including a failed
+                    # final turn whose response carried a real usage block, and any
+                    # attempt burned before a successful retry. Read the accumulator
+                    # rather than ``response.usage``, which drops both. It already
+                    # covers the successful attempt, so it REPLACES that read; adding
+                    # both would double count every turn.
+                    turn_usage: TokenUsage | None = result.billed_usage
+
+                    # Accumulate token usage outside the target call, so arithmetic bugs
+                    # are never misattributed to the target. Must stay ahead of the
+                    # failure branch below, which breaks out of the turn loop.
+                    if turn_usage is not None:
+                        # No call-count repair here: `call_target_with_retry` normalises
+                        # each attempt's counters before summing, so `calls` already
+                        # covers every billed attempt and `priced_calls` counts only the
+                        # attempts that reported a cost. Repairing it per-surface is what
+                        # made a partially-priced retry render as fully billed.
+                        target_usage_acc = target_usage_acc + turn_usage
 
                     if result.succeeded:
                         # The per-attempt span closes inside the helper, so record the
@@ -990,15 +937,6 @@ class MultiTurnOrchestrator:
                             },
                         )
                         break
-
-                    # Accumulate token usage outside the target call, so arithmetic bugs
-                    # are never misattributed to the target.
-                    if turn_usage is not None:
-                        # Targets report their own call count (orq sums tool-continuation
-                        # rounds); fall back to 1 only when a usage-bearing turn forgot to.
-                        if turn_usage.calls == 0:
-                            turn_usage = turn_usage.with_calls(1)
-                        target_usage_acc = target_usage_acc + turn_usage
 
                     # Record the completed turn (target succeeded)
                     turns_record.append(Turn(attacker=current_attacker, target=tgt_result))

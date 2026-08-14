@@ -88,9 +88,13 @@ per-judge votes, model IDs, verdicts — under `raw_output["jury"]`. It is the o
 record of which judge scored which item, so it is what you reach for to check the
 rotation actually balanced, or to find a judge that has gone off the rails.
 
-This is cyclic-only. Under `"all"` the panel itself is the record, so the payload
-would be redundant: `raw_output` stays `None` and results keep the shape they had
-before cyclic existed.
+The `"jury"` key is cyclic-only. Under `"all"` the panel itself is the record, so
+that payload would be redundant and is omitted. `raw_output` is still written on
+both assignments, carrying `raw_output["endpoint"]` — `"chat"`, `"responses"`,
+`"mixed"`, or `None` when no judge pass recorded one. On the Orq router, only the
+Responses endpoint returns a priced usage block, so this is what tells a
+zero-cost judge run from an unpriced one (a direct OpenAI-compatible client
+prices neither endpoint, since pricing is a property of the router).
 
 ```python
 from collections import Counter

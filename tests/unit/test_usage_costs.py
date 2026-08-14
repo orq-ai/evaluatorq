@@ -1,6 +1,6 @@
 """Usage cost breakdown: extraction from Orq Responses v3 usage, span recording."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -72,6 +72,33 @@ def test_record_token_usage_sets_cost_attributes():
     span.set_attribute.assert_any_call('gen_ai.usage.cache_creation.input_tokens', 512)
 
 
+def test_record_token_usage_warns_on_a_cost_with_no_provenance():
+    """A bare `total_cost=` with no `Usage` behind it emits no `cost_source`.
+
+    No in-`src` caller can reach this branch, so the warning cannot cry wolf —
+    if it ever fires it is precisely the defect the provenance plumbing exists
+    to prevent: a dollar figure on a span with nothing saying whether it was
+    billed or estimated.
+    """
+    span = MagicMock()
+    with patch('evaluatorq.common.tracing.logger.warning') as warn:
+        record_token_usage(span, total_cost=0.5)
+    span.set_attribute.assert_any_call('gen_ai.usage.cost', 0.5)
+    assert all(call.args[0] != 'gen_ai.usage.cost_source' for call in span.set_attribute.call_args_list)
+    assert warn.call_count == 1
+
+
+def test_record_token_usage_stamps_cost_source_from_usage():
+    span = MagicMock()
+    with patch('evaluatorq.common.tracing.logger.warning') as warn:
+        record_token_usage(
+            span,
+            usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2, total_cost=0.5, calls=1, priced_calls=1, estimated_calls=1),
+        )
+    span.set_attribute.assert_any_call('gen_ai.usage.cost_source', 'catalogue')
+    assert warn.call_count == 0
+
+
 def test_record_token_usage_omits_cost_attributes_when_unknown():
     span = MagicMock()
     record_token_usage(span, usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2, calls=1))
@@ -137,26 +164,24 @@ def test_legacy_report_without_priced_calls_is_not_flagged_partial():
     assert u.cost_is_partial is False
 
 
-def test_with_calls_keeps_priced_calls_consistent():
-    parsed = Usage.extract({'input_tokens': 1, 'output_tokens': 1, 'total_cost': 0.5}, calls=0)
+def test_extract_prices_the_call_it_counts():
+    """`priced_calls` is derived from `calls` and whether a cost showed up, at the
+    one parse site. This is what `with_calls` used to patch in afterwards on the
+    Responses path, before both parse paths agreed that one response is one call."""
+    parsed = Usage.extract({'input_tokens': 1, 'output_tokens': 1, 'total_cost': 0.5}, calls=1)
+
     assert parsed is not None
-    assert parsed.priced_calls == 0  # nothing billed yet
-
-    stamped = parsed.with_calls(1)
-
-    assert stamped.calls == 1
-    assert stamped.priced_calls == 1
-    assert stamped.cost_is_partial is False
+    assert parsed.calls == 1
+    assert parsed.priced_calls == 1
+    assert parsed.cost_is_partial is False
 
 
-def test_with_calls_leaves_priced_calls_zero_when_cost_unknown():
-    parsed = Usage.extract({'input_tokens': 1, 'output_tokens': 1}, calls=0)
+def test_extract_leaves_priced_calls_zero_when_cost_unknown():
+    parsed = Usage.extract({'input_tokens': 1, 'output_tokens': 1}, calls=1)
+
     assert parsed is not None
-
-    stamped = parsed.with_calls(1)
-
-    assert stamped.calls == 1
-    assert stamped.priced_calls == 0
+    assert parsed.calls == 1
+    assert parsed.priced_calls == 0
 
 
 def test_priced_calls_survives_round_trip():
@@ -168,6 +193,130 @@ def test_subtraction_clamps_priced_calls_at_zero():
     a = Usage(input_tokens=2, output_tokens=2, total_cost=0.5, calls=1, priced_calls=1)
     b = Usage(input_tokens=1, output_tokens=1, total_cost=0.2, calls=3, priced_calls=3)
     assert (a - b).priced_calls == 0
+
+
+# ---------------------------------------------------------------------------
+# estimated_calls / cost_source — provenance of the priced cost
+# ---------------------------------------------------------------------------
+
+
+def test_cost_source_is_none_when_nothing_priced():
+    u = Usage(input_tokens=1, output_tokens=1, calls=1)
+    assert u.priced_calls == 0
+    assert u.cost_source is None
+
+
+def test_cost_source_is_provider_when_no_calls_are_estimated():
+    u = Usage.extract({'input_tokens': 1, 'output_tokens': 1, 'total_cost': 0.5}, calls=1)
+    assert u is not None
+    assert u.estimated_calls == 0
+    assert u.cost_source == 'provider'
+
+
+def test_cost_source_is_catalogue_when_estimated_calls_covers_all_priced_calls():
+    u = Usage(input_tokens=1, output_tokens=1, total_cost=0.5, calls=1, priced_calls=1, estimated_calls=1)
+    assert u.cost_source == 'catalogue'
+
+
+def test_summing_provider_and_catalogue_priced_usage_is_mixed():
+    provider = Usage.extract({'input_tokens': 1, 'output_tokens': 1, 'total_cost': 0.5}, calls=1)
+    assert provider is not None
+    catalogue = Usage(input_tokens=1, output_tokens=1, total_cost=0.1, calls=1, priced_calls=1, estimated_calls=1)
+
+    total = provider + catalogue
+
+    assert total.priced_calls == 2
+    assert total.estimated_calls == 1
+    assert total.cost_source == 'mixed'
+
+
+def test_legacy_dict_without_estimated_calls_reads_as_provider():
+    """Reports saved before RES-1307 deserialize with estimated_calls=0 — every
+    pre-existing priced call was provider-reported, since client-side catalogue
+    estimation (RES-1295) stamps estimated_calls only from this task onward."""
+    u = Usage.model_validate({'input_tokens': 10, 'output_tokens': 5, 'cost_usd': 1.25, 'calls': 4, 'priced_calls': 4})
+    assert u.estimated_calls == 0
+    assert u.cost_source == 'provider'
+
+
+def test_extract_clamps_estimated_calls_to_priced_calls():
+    """An aggregated dump with a bogus estimated_calls > priced_calls must not
+    leak past the same clamp priced_calls itself gets against calls."""
+    u = Usage.extract(
+        {'input_tokens': 1, 'output_tokens': 1, 'total_cost': 0.5, 'calls': 1, 'priced_calls': 1, 'estimated_calls': 5},
+        calls=1,
+    )
+    assert u is not None
+    assert u.priced_calls == 1
+    assert u.estimated_calls == 1
+
+
+def test_estimated_calls_survives_round_trip():
+    original = Usage(input_tokens=1, output_tokens=1, total_cost=0.5, calls=3, priced_calls=1, estimated_calls=1)
+    assert Usage.model_validate(original.model_dump()) == original
+
+
+def test_subtraction_clamps_estimated_calls_at_zero():
+    a = Usage(input_tokens=2, output_tokens=2, total_cost=0.5, calls=1, priced_calls=1, estimated_calls=1)
+    b = Usage(input_tokens=1, output_tokens=1, total_cost=0.2, calls=3, priced_calls=3, estimated_calls=3)
+    assert (a - b).estimated_calls == 0
+
+
+def test_subtraction_clamps_estimated_calls_to_remaining_priced_calls():
+    """Clamping the two counters independently yields an invalid triple.
+
+    `Usage(priced=2, est=2) - Usage(priced=1, est=0)` must not leave
+    `priced=1, est=2`: `extract` guards this on read-back but the constructor
+    does not, so `__sub__` has to hold the invariant by construction.
+    """
+    a = Usage(input_tokens=4, output_tokens=4, total_cost=1.0, calls=2, priced_calls=2, estimated_calls=2)
+    b = Usage(input_tokens=1, output_tokens=1, total_cost=0.2, calls=1, priced_calls=1, estimated_calls=0)
+
+    delta = a - b
+    assert delta.priced_calls == 1
+    assert delta.estimated_calls == 1
+    assert delta.estimated_calls <= delta.priced_calls
+    # Still fully catalogue-priced, not 'mixed' — the remaining priced call is the
+    # estimated one.
+    assert delta.cost_source == 'catalogue'
+
+
+def test_subtraction_clamps_priced_calls_to_remaining_calls():
+    """The other half of the chain: `priced_calls <= calls` after a subtraction.
+
+    `Usage(calls=2, priced=2, est=2) - Usage(calls=2, priced=0, est=0)` used to
+    leave `calls=0, priced=2, est=2` — an aggregate claiming more priced calls
+    than calls, which `cost_is_partial` reads as fully billed. `extract` clamps
+    both axes on read-back; the constructor does not, so `__sub__` holds them.
+    """
+    a = Usage(input_tokens=4, output_tokens=4, total_cost=1.0, calls=2, priced_calls=2, estimated_calls=2)
+    b = Usage(input_tokens=1, output_tokens=1, calls=2, priced_calls=0, estimated_calls=0)
+    delta = a - b
+    assert delta.calls == 0
+    assert delta.priced_calls == 0
+    assert delta.estimated_calls == 0
+
+
+def test_subtraction_holds_the_whole_counter_chain():
+    """`estimated_calls <= priced_calls <= calls` however the clamps compose."""
+    a = Usage(input_tokens=9, output_tokens=9, total_cost=1.0, calls=5, priced_calls=4, estimated_calls=3)
+    for b in (
+        Usage(input_tokens=1, output_tokens=1, calls=4, priced_calls=0, estimated_calls=0),
+        Usage(input_tokens=1, output_tokens=1, calls=0, priced_calls=4, estimated_calls=0),
+        Usage(input_tokens=1, output_tokens=1, calls=5, priced_calls=1, estimated_calls=3),
+        Usage(input_tokens=1, output_tokens=1, calls=99, priced_calls=99, estimated_calls=99),
+    ):
+        delta = a - b
+        assert delta.estimated_calls <= delta.priced_calls <= delta.calls
+
+
+def test_extract_leaves_estimated_calls_at_zero():
+    """A raw provider payload is provider-priced by definition — the parse must
+    never mark a call as client-side estimated. Only `price_usage` stamps that."""
+    parsed = Usage.extract({'input_tokens': 1, 'output_tokens': 1, 'total_cost': 0.5}, calls=1)
+
+    assert parsed is not None
+    assert parsed.estimated_calls == 0
 
 
 def test_v3_responses_cost_survives_openai_sdk_parsing():
@@ -378,3 +527,12 @@ def test_non_finite_cost_is_ignored_rather_than_raising():
     assert extracted is not None
     assert extracted.total_cost is None
     assert extracted.priced_calls == 0
+
+
+def test_clamp_validator_holds_the_chain_on_direct_construction() -> None:
+    """The validator is the only thing standing between a malformed report and a
+    coverage label reading '9 of 1 calls estimated'. Exercised directly rather
+    than only through `extract`/`__sub__`, which is where every other test
+    reaches it."""
+    usage = Usage(calls=1, priced_calls=5, estimated_calls=9)
+    assert (usage.calls, usage.priced_calls, usage.estimated_calls) == (1, 1, 1)

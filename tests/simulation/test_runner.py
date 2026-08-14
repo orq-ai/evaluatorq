@@ -179,3 +179,117 @@ class TestSimulationRunnerBatchValidation:
         runner = SimulationRunner(target=lambda msgs: "ok")
         with pytest.raises(ValueError, match="max_concurrency must be >= 1"):
             await runner.run_batch([], max_concurrency=-5)
+
+
+class TestTargetUsageOnRetryAndFailure:
+    """Billed target attempts must reach `SimulationResult.token_usage` exactly once.
+
+    The run total is `user_simulator.get_usage() + judge.get_usage() +
+    target_usage_acc`, and the target accumulator is fed from exactly one place
+    in the turn loop — so asserting the total catches both a dropped attempt and
+    a double-counted one.
+    """
+
+    JUDGE_USAGE = 2
+    SIM_USAGE = 3
+
+    def _runner(self, target, *, judge_turns: int):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from evaluatorq.contracts import TokenUsage
+
+        def _judgment(*, terminate: bool):
+            j = MagicMock()
+            j.should_terminate = terminate
+            j.goal_achieved = terminate
+            j.goal_completion_score = 1.0 if terminate else 0.5
+            j.rules_broken = []
+            j.reason = "done" if terminate else "keep going"
+            j.response_quality = 0.9
+            j.hallucination_risk = 0.1
+            j.tone_appropriateness = 0.9
+            j.factual_accuracy = 0.9
+            return j
+
+        judge = MagicMock()
+        judge.evaluate = AsyncMock(
+            side_effect=[_judgment(terminate=i == judge_turns - 1) for i in range(judge_turns)]
+        )
+        judge.get_usage = MagicMock(return_value=TokenUsage(total_tokens=self.JUDGE_USAGE, calls=1))
+
+        user_sim = MagicMock()
+        user_sim.generate_first_message = AsyncMock(return_value="Hi, I need help.")
+        user_sim.respond_async = AsyncMock(return_value="ok thanks")
+        user_sim.get_usage = MagicMock(return_value=TokenUsage(total_tokens=self.SIM_USAGE, calls=1))
+
+        return SimulationRunner(
+            target_agent=target,
+            model="azure/gpt-4o-mini",
+            max_turns=2,
+            user_simulator=user_sim,
+            judge=judge,
+        )
+
+    @staticmethod
+    def _scripted_target(script):
+        from evaluatorq.contracts import AgentTarget
+
+        class _Scripted(AgentTarget):
+            def __init__(self) -> None:
+                super().__init__()
+                self.calls = 0
+
+            async def respond(self, messages):
+                self.calls += 1
+                return script[min(self.calls - 1, len(script) - 1)]
+
+            def new(self):
+                return self
+
+        return _Scripted()
+
+    @staticmethod
+    def _billed_error(total: int):
+        from evaluatorq.contracts import AgentResponse, AgentResponseError, TokenUsage
+
+        return AgentResponse(
+            text="[refused]",
+            usage=TokenUsage(total_tokens=total, calls=1),
+            error=AgentResponseError(message="refused", error_type="target_error", code="x"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_burned_retry_tokens_reach_the_run_total_once(self, monkeypatch):
+        monkeypatch.setenv("ORQ_API_KEY", "test-key")
+        from evaluatorq.contracts import AgentResponse, TokenUsage
+
+        ok = AgentResponse(text="agent reply", usage=TokenUsage(total_tokens=11, calls=1))
+        target = self._scripted_target([self._billed_error(7), ok])
+        runner = self._runner(target, judge_turns=1)
+
+        result = await runner.run(
+            persona=_make_persona(), scenario=_make_scenario(), first_message="Hi"
+        )
+
+        assert target.calls == 2  # one refusal, one successful retry
+        # 7 burned + 11 billed; adding the surviving response.usage on top of the
+        # accumulator would give 29 here.
+        assert result.token_usage.total_tokens == self.JUDGE_USAGE + self.SIM_USAGE + 18
+        assert result.token_usage.calls == 2 + 2
+
+    @pytest.mark.asyncio
+    async def test_failed_final_turn_with_usage_is_billed(self, monkeypatch):
+        """Every attempt refused, each one charged: the run total must show it
+        rather than reporting the target as free."""
+        monkeypatch.setenv("ORQ_API_KEY", "test-key")
+
+        target = self._scripted_target([self._billed_error(5)])
+        runner = self._runner(target, judge_turns=1)
+
+        result = await runner.run(
+            persona=_make_persona(), scenario=_make_scenario(), first_message="Hi"
+        )
+
+        assert result.terminated_by == TerminatedBy.error
+        assert target.calls == 3  # 1 + 2 retries
+        assert result.token_usage.total_tokens == self.JUDGE_USAGE + self.SIM_USAGE + 15

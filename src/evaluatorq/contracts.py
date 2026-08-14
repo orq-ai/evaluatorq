@@ -413,6 +413,35 @@ def _clamped_cost(usage: Any, keys: tuple[str, ...]) -> float | None:
     return raw
 
 
+# The endpoint vocabulary a single judge pass can report, and the folded form used
+# once several passes (repetitions, judges, or pairwise orderings) have been reduced
+# to one provenance label. Declared here rather than repeated as an inline
+# `Literal[...]` in `common/judge.py`, `common/jury.py` and `pairwise.py`: a third
+# endpoint would otherwise mean editing four declarations, and the widening relation
+# (a fold is an `Endpoint` or `'mixed'`) is only legible when the two sit together.
+Endpoint = Literal['chat', 'responses']
+EndpointFold = Literal['chat', 'responses', 'mixed']
+
+
+def resolve_cost_source(priced_calls: int, estimated_calls: int) -> Literal['provider', 'catalogue', 'mixed'] | None:
+    """Derive cost provenance from priced/estimated call counts.
+
+    The single implementation of the three-way rule (``estimated <= 0`` ->
+    provider, ``estimated >= priced`` -> catalogue, else mixed), shared by
+    `Usage.cost_source` and `common.reports.md_helpers.cost_coverage` — the latter
+    only has raw ints in hand (a `priced_calls`/`calls` pair, not a `Usage`), so it
+    cannot call the property directly. Returns ``None`` when ``priced_calls <= 0``
+    (nothing priced, so provenance is undefined).
+    """
+    if priced_calls <= 0:
+        return None
+    if estimated_calls <= 0:
+        return 'provider'
+    if estimated_calls >= priced_calls:
+        return 'catalogue'
+    return 'mixed'
+
+
 class Usage(BaseModel):
     """Token usage and cost for an LLM call or aggregation of calls.
 
@@ -486,6 +515,49 @@ class Usage(BaseModel):
         ge=0,
         description='How many of `calls` reported a cost. Below `calls` means the cost fields are a lower bound.',
     )
+    estimated_calls: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            'How many of `priced_calls` were priced client-side by common.model_catalogue.price_usage '
+            '(the provider reported no cost) rather than billed by the provider.'
+        ),
+    )
+
+    @model_validator(mode='before')
+    @classmethod
+    def _clamp_call_counts(cls, data: Any) -> Any:
+        """Enforce ``estimated_calls <= priced_calls <= calls`` by construction.
+
+        Clamps the *ordering* rather than raising on it: legacy report JSON flows
+        through ``model_validate`` on load, and a hard failure on an out-of-order
+        triple would take down report loading for the whole run rather than just
+        under-reporting one figure. It does not widen the per-field ``ge=0``
+        constraint — a negative count is a corrupt payload rather than a stale
+        one, and is still rejected (`tests/redteam/test_review_followup.py`).
+        Runs on every keyword/dict construction path (``Usage(...)``,
+        ``model_validate``); ``model_copy(update=...)`` does not go through
+        validators at all, so a caller using it holds the chain itself (see
+        `common.target_call._attempt_usage`, the one place that does).
+
+        An **omitted** ``calls`` widens to the priced count rather than clamping
+        it away. ``calls`` defaults to 0, so ``Usage(total_cost=0.02,
+        priced_calls=1)`` — the shape a hand-built target usage most plausibly
+        takes — would otherwise silently flip a billed figure to "no coverage
+        data". A caller who states ``calls`` explicitly still wins the clamp.
+        """
+        if not isinstance(data, dict):
+            return data
+        calls = data.get('calls') or 0
+        if 'calls' not in data:
+            calls = max(data.get('priced_calls') or 0, data.get('estimated_calls') or 0)
+            data = {**data, 'calls': calls}
+        priced_calls = min(data.get('priced_calls') or 0, calls)
+        estimated_calls = min(data.get('estimated_calls') or 0, priced_calls)
+        data = dict(data)
+        data['priced_calls'] = priced_calls
+        data['estimated_calls'] = estimated_calls
+        return data
 
     if TYPE_CHECKING:
         # The legacy ``prompt_tokens``/``completion_tokens`` names are accepted at
@@ -513,6 +585,7 @@ class Usage(BaseModel):
             cost_usd: float | None = ...,
             calls: int = ...,
             priced_calls: int = ...,
+            estimated_calls: int = ...,
         ) -> None: ...
 
     @property
@@ -546,15 +619,17 @@ class Usage(BaseModel):
         """
         return self.total_cost is not None and 0 < self.priced_calls < self.calls
 
-    def with_calls(self, calls: int) -> Usage:
-        """Stamp the call count, keeping `priced_calls` consistent.
+    @property
+    def cost_source(self) -> Literal['provider', 'catalogue', 'mixed'] | None:
+        """Provenance of the priced cost: billed by the provider, estimated
+        client-side from `common.model_catalogue`, or a mix within this aggregate.
 
-        ``from_openresponses`` parses with ``calls=0`` and leaves the real count to
-        the caller that knows the call was billed. A bare
-        ``model_copy(update={'calls': 1})`` would leave ``priced_calls`` at 0, which
-        `cost_is_partial` reads as legacy untracked data — use this instead.
+        ``None`` when nothing is priced at all (`priced_calls <= 0`). Old reports
+        (`estimated_calls` defaults to 0) correctly read as ``'provider'`` —
+        client-side estimation did not exist before RES-1295, so every
+        pre-existing priced call was provider-reported.
         """
-        return self.model_copy(update={'calls': calls, 'priced_calls': calls if self.total_cost is not None else 0})
+        return resolve_cost_source(self.priced_calls, self.estimated_calls)
 
     @model_serializer(mode='wrap')
     def _serialize(self, handler: Any) -> dict[str, Any]:
@@ -656,6 +731,13 @@ class Usage(BaseModel):
             if isinstance(raw_priced, (int, float)) and not isinstance(raw_priced, bool)
             else (resolved_calls if cost is not None else 0)
         )
+        # An aggregated dump carries its own estimated_calls count; a raw provider
+        # payload is by definition provider-priced (client-side catalogue pricing
+        # is stamped later, at the pricing site — Task 2), so it defaults to 0.
+        raw_estimated = _usage_get(usage, 'estimated_calls')
+        resolved_estimated = (
+            int(raw_estimated) if isinstance(raw_estimated, (int, float)) and not isinstance(raw_estimated, bool) else 0
+        )
         return cls(
             input_tokens=inp,
             output_tokens=out,
@@ -669,7 +751,8 @@ class Usage(BaseModel):
             output_cost=output_cost,
             total_cost=cost,
             calls=resolved_calls,
-            priced_calls=min(resolved_priced, resolved_calls),
+            priced_calls=resolved_priced,
+            estimated_calls=resolved_estimated,
         )
 
     @classmethod
@@ -704,6 +787,7 @@ class Usage(BaseModel):
             total_cost=self._combine_cost(self.total_cost, other.total_cost),
             calls=self.calls + other.calls,
             priced_calls=self.priced_calls + other.priced_calls,
+            estimated_calls=self.estimated_calls + other.estimated_calls,
         )
 
     def __radd__(self, other: object) -> Usage:
@@ -715,7 +799,15 @@ class Usage(BaseModel):
         return NotImplemented
 
     def __sub__(self, other: Usage | None) -> Usage:
-        """Component-wise difference, clamped at 0 — used for per-turn deltas."""
+        """Component-wise difference, clamped at 0 — used for per-turn deltas.
+
+        The whole chain ``estimated_calls <= priced_calls <= calls`` is held by
+        ``_clamp_call_counts`` on construction, so subtracting each axis
+        independently here (which can transiently produce an invalid triple,
+        e.g. ``Usage(calls=2, priced=2, est=2) - Usage(calls=2, priced=0, est=0)``
+        naively leaves ``calls=0, priced=2, est=2``) is corrected by the
+        validator before the result is returned.
+        """
         if other is None:
             return self.model_copy()
         return Usage(
@@ -732,6 +824,7 @@ class Usage(BaseModel):
             total_cost=self._combine_cost(self.total_cost, other.total_cost, sign=-1),
             calls=max(self.calls - other.calls, 0),
             priced_calls=max(self.priced_calls - other.priced_calls, 0),
+            estimated_calls=max(self.estimated_calls - other.estimated_calls, 0),
         )
 
 
@@ -998,9 +1091,8 @@ class AgentResponse(BaseModel):
 
         ``usage`` is ``None`` when the response carries no ``usage`` block —
         callers must distinguish "no usage reported" from "zero tokens used" so
-        cost reports stay honest. ``usage.calls`` is intentionally left at 0:
-        this is a pure parse; per-call-site accounting (``calls=1`` / ``+1``) is
-        applied by callers to the returned object's ``usage``.
+        cost reports stay honest. ``usage.calls`` is 1: one response object is
+        one API call, matching `Usage.from_completion` on the chat side.
         """
         items: list[OutputMessage] = []
         for item in _gf(response, 'output') or []:
@@ -1054,9 +1146,12 @@ class AgentResponse(BaseModel):
             )
             usage = None
         else:
-            # calls=0 here; the caller patches +1 once it knows this was a billed call.
-            # extract() carries cached_tokens / reasoning_tokens that the old hand-roll dropped.
-            usage = TokenUsage.extract(usage_obj, calls=0)
+            # One response object is one API call, same as `Usage.from_completion`
+            # on the chat side. `extract` derives `priced_calls` from `calls` and
+            # whether a cost showed up, so this is the whole accounting — callers
+            # add the usage as-is. An aggregated dump that carries its own `calls`
+            # still overrides this (see `extract`).
+            usage = TokenUsage.extract(usage_obj, calls=1)
 
         model = _gf(response, 'model')
         status = _gf(response, 'status')
@@ -1570,5 +1665,6 @@ __all__ = [
     'ToolInfo',
     'Usage',
     'content_to_text',
+    'resolve_cost_source',
     'tool_result_to_text',
 ]

@@ -43,6 +43,52 @@ UNKNOWN_SEVERITY = 'unknown'
 
 
 @dataclass(frozen=True)
+class CostCoverage:
+    """Cost-coverage counters for a spend figure, threaded as one value instead
+    of four loose ints independently declared, defaulted and summed across the
+    landing/sim/red-team aggregates. See `_cost_calls` for what each field
+    means and why a coverage-unknown call cannot be folded into any of the
+    other three.
+
+    ``__add__`` lets an aggregation loop read ``total = total + stats.coverage``
+    instead of four ``x_total += stats.x`` lines that could drift out of step
+    with each other one field at a time — the failure mode a bare positional
+    4-tuple return from `_cost_calls` invited at its unpacking call sites.
+    """
+
+    priced_calls: int = 0  # LLM calls that reported a cost
+    cost_calls: int = 0  # LLM calls seen alongside those, for the "N of M calls" coverage label
+    unknown_calls: int = 0  # costed calls from reports predating priced_calls — coverage unknown
+    estimated_calls: int = 0  # of priced_calls, how many were client-side catalogue estimates
+
+    def __post_init__(self) -> None:
+        # The same chain `contracts.Usage._clamp_call_counts` holds one layer
+        # down: estimated_calls is a subset of priced_calls, which is a subset
+        # of the calls seen alongside them. A caller passing more is a bug
+        # upstream that must not propagate into a coverage label reading "5 of
+        # 3 calls estimated" — or, worse, into `priced_calls >= cost_calls`,
+        # which `coverage_parts` reads as fully covered and renders with NO
+        # qualifier at all. Clamp rather than raise: this value travels through
+        # mtime-keyed caches, where a hard failure on one malformed report would
+        # take the whole dashboard page down with it.
+        priced_calls = min(self.priced_calls, self.cost_calls)
+        if priced_calls != self.priced_calls:
+            object.__setattr__(self, 'priced_calls', priced_calls)
+        if self.estimated_calls > priced_calls:
+            object.__setattr__(self, 'estimated_calls', priced_calls)
+
+    def __add__(self, other: CostCoverage) -> CostCoverage:
+        if not isinstance(other, CostCoverage):
+            return NotImplemented
+        return CostCoverage(
+            priced_calls=self.priced_calls + other.priced_calls,
+            cost_calls=self.cost_calls + other.cost_calls,
+            unknown_calls=self.unknown_calls + other.unknown_calls,
+            estimated_calls=self.estimated_calls + other.estimated_calls,
+        )
+
+
+@dataclass(frozen=True)
 class RunRow:
     """One discovered run, with the fields the run lists + landing display."""
 
@@ -81,9 +127,7 @@ class Landing:
     cost_by_kind: list[tuple[str, float]] = field(default_factory=list)  # non-zero only
     total_input_cost: float | None = None  # summed input_cost across all stores; None when unrecorded
     total_output_cost: float | None = None  # summed output_cost across all stores; None when unrecorded
-    priced_calls: int = 0  # LLM calls that reported a cost, across all stores
-    cost_calls: int = 0  # calls seen alongside those, for the "N of M calls" coverage label
-    unknown_calls: int = 0  # costed calls from reports predating priced_calls — coverage unknown
+    coverage: CostCoverage = field(default_factory=CostCoverage)  # cost-coverage counters, across all stores
     recent: list[RunRow] = field(default_factory=list)
 
 
@@ -168,12 +212,12 @@ def _input_cost(usage: object) -> float | None:
     return _as_float_or_none(usage.get('input_cost'))
 
 
-def _cost_calls(usage: object) -> tuple[int, int, int]:
-    """``(priced_calls, calls, unknown_calls)`` from a Usage-shaped dict.
+def _cost_calls(usage: object) -> CostCoverage:
+    """``CostCoverage(priced_calls, calls, unknown_calls, estimated_calls)`` from a Usage-shaped dict.
 
     A cost summed over calls where only some reported one is a *lower bound*,
     not a total. Reports render "(N of M calls)" next to such a figure via
-    ``cost_coverage``; the dashboard reads the same two fields so both surfaces
+    ``cost_coverage``; the dashboard reads the same fields so both surfaces
     agree.
 
     Reports written before ``priced_calls`` existed count into the third slot
@@ -183,16 +227,45 @@ def _cost_calls(usage: object) -> tuple[int, int, int]:
     silently is the opposite lie: the dashboard sums across reports, so an empty
     label would then mean both "everything was priced" and "we have no idea".
     Counting them separately lets the renderer say which.
+
+    A modern usage that carries the key but reports ``priced_calls: 0``
+    *alongside a real cost* gets the same treatment: ``common.target_call.
+    _attempt_usage``'s own warning documents that a custom ``AgentTarget`` can
+    produce exactly that shape, so it is reachable, not just a legacy artifact.
+    Reading it as "0 of N priced, coverage known" would render the cost as
+    fully billed; it is exactly as unknown as the absent-key case. This is
+    narrower than the absent-key branch above: when ``priced_calls`` is
+    present-but-zero and there is genuinely no cost either, the ``calls`` count
+    is still a real, modern-schema figure (unlike the legacy branch, which has
+    no such guarantee) — it is not folded into "unknown", it is counted
+    normally with zero priced calls.
+
+    ``estimated_calls`` counts how many of ``priced_calls`` were priced
+    client-side (``common.model_catalogue.price_usage``) rather than billed by
+    the provider. Reports predating the field simply lack the key: ``.get(...)``
+    defaults to 0, which correctly reads as "provider-priced" — client-side
+    estimation did not exist before those reports were written.
     """
     if not isinstance(usage, dict):
-        return (0, 0, 0)
-    if usage.get('priced_calls') is None:
+        return CostCoverage()
+    priced_raw = usage.get('priced_calls')
+    cost = _cost_usd(usage)
+    if priced_raw is None:
         # A legacy report with no cost at all contributes nothing to the total,
         # so it has no coverage to be unknown about.
-        if _cost_usd(usage) is None:
-            return (0, 0, 0)
-        return (0, 0, _as_int(usage.get('calls')) or 1)
-    return (_as_int(usage.get('priced_calls')), _as_int(usage.get('calls')), 0)
+        if cost is None:
+            return CostCoverage()
+        return CostCoverage(unknown_calls=_as_int(usage.get('calls')) or 1)
+    priced = _as_int(priced_raw)
+    if priced == 0 and cost is not None:
+        # Present-but-zero priced_calls beside a real cost — see the docstring
+        # above for why this gets the same "unknown" slot as the absent-key case.
+        return CostCoverage(unknown_calls=_as_int(usage.get('calls')) or 1)
+    return CostCoverage(
+        priced_calls=priced,
+        cost_calls=_as_int(usage.get('calls')),
+        estimated_calls=_as_int(usage.get('estimated_calls')),
+    )
 
 
 def _output_cost(usage: object) -> float | None:
@@ -401,9 +474,7 @@ def landing(roots: list[Path] | None = None) -> Landing:
     pw_cost = 0.0
     input_cost_total = 0.0
     output_cost_total = 0.0
-    priced_calls_total = 0
-    cost_calls_total = 0
-    unknown_calls_total = 0
+    coverage_total = CostCoverage()
     has_input_cost = False
     has_output_cost = False
     resistant = 0
@@ -443,6 +514,22 @@ def landing(roots: list[Path] | None = None) -> Landing:
                 if counts.cost:
                     rt_cost += counts.cost
                     costed_runs += 1
+                # Coverage travels with that cost. Omitting it used to let a
+                # legacy report add dollars to Total spend while the qualifier
+                # beside it reported complete provider billing — the exact case
+                # ``unknown_calls`` exists for (see `_cost_calls`).
+                #
+                # Deliberately OUTSIDE the ``if counts.cost:`` guard above. That
+                # guard governs ``costed_runs``, the divisor of the per-run
+                # averages; it is not a statement about coverage. A legacy report
+                # whose results all record ``cost_usd: 0.0`` adds no dollars but is
+                # the archetypal fabricated zero — its calls really are of unknown
+                # coverage, and the run really does make Total spend a lower bound.
+                # Suppressing the qualifier there would hide precisely what
+                # ``unknown_calls`` was added to surface. (``_cost_calls`` already
+                # self-gates the genuinely cost-free case: a legacy usage block with
+                # no cost key at all returns all-zero counters.)
+                coverage_total = coverage_total + counts.coverage
                 # The input/output split is not recoverable from legacy results.
                 by_sev = counts.by_severity
             else:
@@ -464,10 +551,7 @@ def landing(roots: list[Path] | None = None) -> Landing:
                 if run_output is not None:
                     output_cost_total += run_output
                     has_output_cost = True
-                run_priced, run_calls, run_unknown = _cost_calls(usage)
-                priced_calls_total += run_priced
-                cost_calls_total += run_calls
-                unknown_calls_total += run_unknown
+                coverage_total = coverage_total + _cost_calls(usage)
                 by_sev = _summary_severity(summary)
             for sev, n in by_sev.items():
                 severity_counts[sev] = severity_counts.get(sev, 0) + n
@@ -490,10 +574,7 @@ def landing(roots: list[Path] | None = None) -> Landing:
                 output_cost_total += sum(outputs)
                 has_output_cost = True
             for u in usages:
-                res_priced, res_calls, res_unknown = _cost_calls(u)
-                priced_calls_total += res_priced
-                cost_calls_total += res_calls
-                unknown_calls_total += res_unknown
+                coverage_total = coverage_total + _cost_calls(u)
         elif card.surface == 'pairwise':
             usages = [_comparison_usage(entry) for entry in _entries(data)]
             tok = sum(_tokens_total(u) for u in usages)
@@ -512,10 +593,7 @@ def landing(roots: list[Path] | None = None) -> Landing:
                 output_cost_total += sum(outputs)
                 has_output_cost = True
             for u in usages:
-                res_priced, res_calls, res_unknown = _cost_calls(u)
-                priced_calls_total += res_priced
-                cost_calls_total += res_calls
-                unknown_calls_total += res_unknown
+                coverage_total = coverage_total + _cost_calls(u)
 
     # Unknown sorts last, after the real scale, and only appears when non-zero.
     severity = [(sev, severity_counts[sev]) for sev in (*SEVERITY_ORDER, UNKNOWN_SEVERITY) if severity_counts.get(sev)]
@@ -551,9 +629,7 @@ def landing(roots: list[Path] | None = None) -> Landing:
         cost_by_kind=cost_by_kind,
         total_input_cost=input_cost_total if has_input_cost else None,
         total_output_cost=output_cost_total if has_output_cost else None,
-        priced_calls=priced_calls_total,
-        cost_calls=cost_calls_total,
-        unknown_calls=unknown_calls_total,
+        coverage=coverage_total,
         recent=rows[:5],
     )
 
@@ -568,6 +644,8 @@ class _RedteamCounts(NamedTuple):
     tokens: int
     cost: float
     by_severity: dict[str, int]
+    # Cost coverage derived from the results list, same shape `_cost_calls` returns.
+    coverage: CostCoverage = CostCoverage()
 
 
 def _result_outcome(res: dict[str, object]) -> bool | None:
@@ -596,13 +674,26 @@ def _result_outcome(res: dict[str, object]) -> bool | None:
     return None
 
 
-def _result_usage(res: dict[str, object]) -> tuple[int, float]:
-    """``(tokens, cost)`` for one result, over both the target and judge calls.
+class _ResultUsage(NamedTuple):
+    """One result's tokens, cost and cost-coverage counters."""
 
-    Same two holders ``converters._aggregate_token_usage`` walks.
+    tokens: int
+    cost: float
+    coverage: CostCoverage = CostCoverage()
+
+
+def _result_usage(res: dict[str, object]) -> _ResultUsage:
+    """Tokens, cost and coverage for one result, over both target and judge calls.
+
+    Same two holders ``converters._aggregate_token_usage`` walks. The coverage
+    counters come from `_cost_calls`, so a derived cost carries the same
+    provenance a stored ``token_usage_total`` would — without them the legacy
+    fallback contributes dollars to the total and nothing to its qualifier,
+    which reads as "the provider billed all of this".
     """
     tokens = 0
     cost = 0.0
+    coverage = CostCoverage()
     for holder in ('execution', 'evaluation'):
         parent = res.get(holder)
         usage = parent.get('token_usage') if isinstance(parent, dict) else None
@@ -610,7 +701,8 @@ def _result_usage(res: dict[str, object]) -> tuple[int, float]:
         holder_cost = _cost_usd(usage)
         if holder_cost is not None:
             cost += holder_cost
-    return tokens, cost
+        coverage = coverage + _cost_calls(usage)
+    return _ResultUsage(tokens, cost, coverage)
 
 
 def _redteam_counts(data: dict[str, object]) -> _RedteamCounts:
@@ -623,14 +715,16 @@ def _redteam_counts(data: dict[str, object]) -> _RedteamCounts:
     """
     attacks = evaluated = vulnerable = errors = tokens = 0
     cost = 0.0
+    coverage = CostCoverage()
     by_severity: dict[str, int] = {}
     for res in _results(data):
         attacks += 1
         if res.get('error'):
             errors += 1
-        tok, c = _result_usage(res)
-        tokens += tok
-        cost += c
+        usage = _result_usage(res)
+        tokens += usage.tokens
+        cost += usage.cost
+        coverage = coverage + usage.coverage
         outcome = _result_outcome(res)
         if outcome is None:
             continue
@@ -650,7 +744,16 @@ def _redteam_counts(data: dict[str, object]) -> _RedteamCounts:
         # Distinguishes "shape we couldn't read" from a genuinely costless run —
         # _result_usage returns zeros for any unrecognised usage schema.
         logger.debug('redteam counts: {} results but zero derivable token usage — unrecognised usage shape?', attacks)
-    return _RedteamCounts(attacks, evaluated, vulnerable, errors, tokens, cost, by_severity)
+    return _RedteamCounts(
+        attacks,
+        evaluated,
+        vulnerable,
+        errors,
+        tokens,
+        cost,
+        by_severity,
+        coverage=coverage,
+    )
 
 
 def _summary_severity(summary: dict[str, object]) -> dict[str, int]:
@@ -784,6 +887,12 @@ class SimRunRow:
     cases: int  # number of simulations in the run
     cost: float | None  # summed cost_usd across the run's simulations; None if none recorded
     error: bool
+    # Cost coverage for the row's own ``cost``, so the table cell can be qualified
+    # with the same counters the KPI band above it uses. Defaults to an all-zero
+    # `CostCoverage` for callers (and tests) that build a row without cost
+    # provenance: `_coverage` renders nothing for all-zero counters rather than
+    # claiming full billing.
+    coverage: CostCoverage = field(default_factory=CostCoverage)
 
 
 @dataclass(frozen=True)
@@ -805,9 +914,7 @@ class SimOverview:
     avg_cost: float | None  # mean cost_usd per sim
     avg_input_cost: float | None  # mean input_cost per sim, averaged over costed sims only
     avg_output_cost: float | None  # mean output_cost per sim, averaged over costed sims only
-    priced_calls: int  # LLM calls that reported a cost
-    cost_calls: int  # LLM calls seen alongside those, for the coverage label
-    unknown_calls: int  # costed calls whose coverage predates priced_calls
+    coverage: CostCoverage  # cost-coverage counters across the surface
     achieved: int  # outcomes donut segments
     not_achieved: int
     errors: int
@@ -845,9 +952,7 @@ class _SimRunStats:
     input_costed: int
     output_cost: float
     output_costed: int
-    priced_calls: int
-    cost_calls: int
-    unknown_calls: int
+    coverage: CostCoverage
     score: float | None
     target: tuple[str, str]
 
@@ -868,7 +973,7 @@ def _sim_run_stats(path_str: str, mtime_ns: int) -> _SimRunStats | None:  # mtim
     cases = errors = achieved = not_achieved = turns = tokens = 0
     costed = input_costed = output_costed = 0
     input_cost_total = output_cost_total = 0.0
-    priced = calls = unknown = 0
+    coverage = CostCoverage()
     run_costs: list[float] = []
     for res in _results(data):
         cases += 1
@@ -887,10 +992,7 @@ def _sim_run_stats(path_str: str, mtime_ns: int) -> _SimRunStats | None:  # mtim
         if output_cost is not None:
             output_cost_total += output_cost
             output_costed += 1
-        res_priced, res_calls, res_unknown = _cost_calls(usage)
-        priced += res_priced
-        calls += res_calls
-        unknown += res_unknown
+        coverage = coverage + _cost_calls(usage)
         # Mirror the donut segments (goal_achieved / error) exactly.
         if str(res.get('terminated_by') or '') == 'error':
             errors += 1
@@ -911,9 +1013,7 @@ def _sim_run_stats(path_str: str, mtime_ns: int) -> _SimRunStats | None:  # mtim
         input_costed=input_costed,
         output_cost=output_cost_total,
         output_costed=output_costed,
-        priced_calls=priced,
-        cost_calls=calls,
-        unknown_calls=unknown,
+        coverage=coverage,
         score=_sim_run_score(data),
         target=_sim_target(data),
     )
@@ -942,9 +1042,7 @@ def _sim_aggregate(roots_key: tuple[str, ...], fingerprint: tuple[int, int]) -> 
     input_costed = 0
     output_cost_total = 0.0
     output_costed = 0
-    priced_calls_total = 0
-    cost_calls_total = 0
-    unknown_calls_total = 0
+    coverage_total = CostCoverage()
     achieved = not_achieved = errors = 0
     total = 0
 
@@ -963,9 +1061,7 @@ def _sim_aggregate(roots_key: tuple[str, ...], fingerprint: tuple[int, int]) -> 
         input_costed += stats.input_costed
         output_cost_total += stats.output_cost
         output_costed += stats.output_costed
-        priced_calls_total += stats.priced_calls
-        cost_calls_total += stats.cost_calls
-        unknown_calls_total += stats.unknown_calls
+        coverage_total = coverage_total + stats.coverage
         achieved += stats.achieved
         not_achieved += stats.not_achieved
         errors += stats.errors
@@ -985,6 +1081,7 @@ def _sim_aggregate(roots_key: tuple[str, ...], fingerprint: tuple[int, int]) -> 
                 cases=stats.cases,
                 cost=stats.cost,
                 error=bool(card.error),
+                coverage=stats.coverage,
             )
         )
 
@@ -997,9 +1094,7 @@ def _sim_aggregate(roots_key: tuple[str, ...], fingerprint: tuple[int, int]) -> 
         avg_cost=(cost_total / costed) if costed else None,
         avg_input_cost=(input_cost_total / input_costed) if input_costed else None,
         avg_output_cost=(output_cost_total / output_costed) if output_costed else None,
-        priced_calls=priced_calls_total,
-        cost_calls=cost_calls_total,
-        unknown_calls=unknown_calls_total,
+        coverage=coverage_total,
         achieved=achieved,
         not_achieved=not_achieved,
         errors=errors,
@@ -1035,6 +1130,9 @@ class RedTeamRunRow:
     cases: int  # number of attacks in the run
     cost: float | None  # summed cost_usd for the run; None when not recorded
     error: bool
+    # Cost coverage for the row's own ``cost`` — see `SimRunRow` for why this
+    # defaults to an all-zero `CostCoverage`.
+    coverage: CostCoverage = field(default_factory=CostCoverage)
 
 
 @dataclass(frozen=True)
@@ -1048,9 +1146,7 @@ class RedTeamOverview:
     total_cost: float | None  # summed cost_usd across red team runs
     total_input_cost: float | None = None  # summed input_cost across red team runs
     total_output_cost: float | None = None  # summed output_cost across red team runs
-    priced_calls: int = 0  # LLM calls that reported a cost
-    cost_calls: int = 0  # LLM calls seen alongside those, for the coverage label
-    unknown_calls: int = 0  # costed calls whose coverage predates priced_calls
+    coverage: CostCoverage = field(default_factory=CostCoverage)  # cost-coverage counters across the surface
     recent: list[RedTeamRunRow] = field(default_factory=list)  # newest run first, current page
     total_runs: int = 0  # total runs before paging (for the pager)
     page: int = 1
@@ -1110,9 +1206,7 @@ class _RedTeamRunStats:
     cost: float | None
     input_cost: float | None
     output_cost: float | None
-    priced_calls: int
-    cost_calls: int
-    unknown_calls: int
+    coverage: CostCoverage
     resistance: float | None
     cases: int
     targets: tuple[tuple[str, str], ...]
@@ -1128,7 +1222,7 @@ def _redteam_run_stats(path_str: str, mtime_ns: int) -> _RedTeamRunStats | None:
     summary = data.get('summary')
     summary = summary if isinstance(summary, dict) else {}
     usage = summary.get('token_usage_total')
-    priced, calls, unknown = _cost_calls(usage)
+    coverage = _cost_calls(usage)
     counts = _redteam_counts(data)
     resistance = _as_float(summary.get('resistance_rate')) if 'resistance_rate' in summary else None
     if zero_evaluated_attacks(summary):
@@ -1144,9 +1238,7 @@ def _redteam_run_stats(path_str: str, mtime_ns: int) -> _RedTeamRunStats | None:
         cost=_cost_usd(usage),
         input_cost=_input_cost(usage),
         output_cost=_output_cost(usage),
-        priced_calls=priced,
-        cost_calls=calls,
-        unknown_calls=unknown,
+        coverage=coverage,
         resistance=resistance,
         cases=_as_int(summary.get('total_attacks')) or counts.attacks,
         targets=tuple(_redteam_targets(data)),
@@ -1168,9 +1260,7 @@ def _redteam_aggregate(roots_key: tuple[str, ...], fingerprint: tuple[int, int])
     has_input_cost = False
     output_cost_total = 0.0
     has_output_cost = False
-    priced_calls_total = 0
-    cost_calls_total = 0
-    unknown_calls_total = 0
+    coverage_total = CostCoverage()
     total_attacks = 0
 
     for card in library.scan(roots):
@@ -1189,9 +1279,7 @@ def _redteam_aggregate(roots_key: tuple[str, ...], fingerprint: tuple[int, int])
         if stats.output_cost is not None:
             output_cost_total += stats.output_cost
             has_output_cost = True
-        priced_calls_total += stats.priced_calls
-        cost_calls_total += stats.cost_calls
-        unknown_calls_total += stats.unknown_calls
+        coverage_total = coverage_total + stats.coverage
 
         total_attacks += stats.attacks
         evaluated += stats.evaluated
@@ -1212,6 +1300,7 @@ def _redteam_aggregate(roots_key: tuple[str, ...], fingerprint: tuple[int, int])
                 cases=stats.cases,
                 cost=stats.cost,
                 error=bool(card.error),
+                coverage=stats.coverage,
             )
         )
 
@@ -1224,9 +1313,7 @@ def _redteam_aggregate(roots_key: tuple[str, ...], fingerprint: tuple[int, int])
         total_cost=cost_total if has_cost else None,
         total_input_cost=input_cost_total if has_input_cost else None,
         total_output_cost=output_cost_total if has_output_cost else None,
-        priced_calls=priced_calls_total,
-        cost_calls=cost_calls_total,
-        unknown_calls=unknown_calls_total,
+        coverage=coverage_total,
         recent=runs,
         total_runs=len(runs),
     )

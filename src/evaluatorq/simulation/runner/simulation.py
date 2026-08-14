@@ -584,9 +584,14 @@ class SimulationRunner:
                     )
                     call = await self._get_target_response(messages, target=conversation_target)
                     agent_response_text = call.response.text
-                    # Only trust usage on success; a synthetic error response
-                    # carries no real token accounting.
-                    agent_response_usage = call.response.usage if call.succeeded else None
+                    # Sum over every billed attempt. A synthetic timeout/exception
+                    # response carries no token accounting (so it contributes
+                    # nothing), but a target that *returns* an error marker with a
+                    # real usage block was still charged for it, as was any attempt
+                    # burned before a successful retry. This REPLACES the
+                    # `call.response.usage` read — the accumulator already includes
+                    # the successful attempt, so adding both would double count.
+                    agent_response_usage = call.billed_usage
                     agent_response_model = call.response.model
                     if agent_response_usage is not None:
                         target_usage_acc['acc'] = target_usage_acc['acc'] + agent_response_usage

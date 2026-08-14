@@ -195,6 +195,62 @@ def test_record_llm_response_omits_cost_when_provider_reports_none() -> None:
     assert 'gen_ai.usage.total_cost' not in set_attrs
 
 
+def test_record_token_usage_marks_provider_priced_cost_as_provider() -> None:
+    from unittest.mock import MagicMock
+
+    from evaluatorq.common.tracing import record_token_usage
+    from evaluatorq.contracts import Usage
+
+    span = MagicMock()
+    usage = Usage(input_tokens=1, output_tokens=1, total_tokens=2, calls=1, priced_calls=1, total_cost=0.25)
+    record_token_usage(span, usage=usage)
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert set_attrs['gen_ai.usage.cost_source'] == 'provider'
+
+
+def test_record_token_usage_omits_cost_source_when_there_is_no_cost() -> None:
+    """A provenance attribute with no cost beside it describes a number that is
+    not on the span."""
+    from unittest.mock import MagicMock
+
+    from evaluatorq.common.tracing import record_token_usage
+    from evaluatorq.contracts import Usage
+
+    span = MagicMock()
+    record_token_usage(span, usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2, calls=1))
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert 'gen_ai.usage.cost_source' not in set_attrs
+
+
+def test_record_token_usage_warns_on_bare_total_cost_with_no_usage() -> None:
+    """`record_token_usage` is the canonical helper CLAUDE.md names for token
+    usage; calling it exactly as documented — a bare ``total_cost=`` with no
+    ``Usage`` behind it — must still warn rather than silently rendering an
+    unqualified dollar figure. The condition is real, not merely believed
+    unreachable: this call reaches it directly."""
+    from unittest.mock import MagicMock, patch
+
+    from evaluatorq.common.tracing import record_token_usage
+
+    span = MagicMock()
+    with patch('evaluatorq.common.tracing.logger.warning') as warn:
+        record_token_usage(span, total_cost=0.5)
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert set_attrs['gen_ai.usage.cost'] == 0.5
+    assert 'gen_ai.usage.cost_source' not in set_attrs
+    assert warn.call_count == 1
+
+
+def test_record_token_usage_has_no_standalone_cost_source_override() -> None:
+    """`cost_source` is derived solely from `usage.cost_source`; there is no
+    separate override parameter for a caller to leave unused (RES-1307)."""
+    import inspect
+
+    from evaluatorq.common.tracing import record_token_usage
+
+    assert 'cost_source' not in inspect.signature(record_token_usage).parameters
+
+
 def test_record_token_usage_explicit_calls_zero_wins_over_usage_calls() -> None:
     """An explicit calls=0 must not be clobbered by usage.calls (sentinel, not falsy check)."""
     from unittest.mock import MagicMock

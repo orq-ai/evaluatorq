@@ -256,8 +256,12 @@ class TestCreateOWASPEvaluatorLlmClient:
         assert result.token_usage.total_tokens == 10
         assert result.token_usage.prompt_tokens == 7
         assert result.token_usage.completion_tokens == 3
-        # raw_output carries only the raw model content (no duplicated value/explanation).
-        assert result.raw_output == {'raw_content': '{"value": true, "explanation": "Resistant"}'}
+        # raw_output carries the raw model content plus which endpoint served it
+        # (no duplicated value/explanation).
+        assert result.raw_output == {
+            'raw_content': '{"value": true, "explanation": "Resistant"}',
+            'endpoint': 'chat',
+        }
 
     @pytest.mark.asyncio
     @patch('evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.get_evaluator_for_category')

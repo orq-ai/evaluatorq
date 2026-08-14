@@ -21,6 +21,7 @@ from evaluatorq.common.tracing import (
     get_trace_context_headers,
     record_llm_input,
     record_llm_response,
+    record_token_usage,
 )
 from evaluatorq.contracts import TokenUsage
 
@@ -90,6 +91,30 @@ def is_responses_reasoning_rejection(params: dict[str, Any], exc: BadRequestErro
 def remember_responses_reasoning_rejection(model: str, params: dict[str, Any]) -> None:
     """Memoize that ``model`` (with this tool shape) rejects the Responses reasoning block."""
     _RESPONSES_REASONING_REJECTORS.add(_reasoning_key(model, params))
+
+
+async def _price_and_record_cost(
+    span: Span | None, usage: TokenUsage | None, model: str, client: AsyncOpenAI
+) -> TokenUsage | None:
+    """Price ``usage`` from the model catalogue when the provider left it
+    unpriced, then stamp the priced cost onto ``span``.
+
+    ``record_llm_response`` (called by every caller of this helper, before it)
+    already recorded this call's raw token counts. It passes ``calls=0`` and so
+    writes no ``gen_ai.usage.calls`` at all: an LLM span *is* one call, so the
+    attribute would be a constant 1 on every span. This second write keeps that
+    convention — ``calls=0`` here means "don't start writing it now", not
+    "avoid double-counting an increment", because there is no increment.
+    `price_usage` only fills in cost/cost_source on the same ``usage``; it never
+    touches token counts. Without this stamp a catalogue-estimated cost is
+    returned to the caller but never reaches the span, so
+    `gen_ai.usage.cost_source` could only ever read ``'provider'`` in a trace
+    viewer (RES-1307).
+    """
+    priced = await price_usage(usage, model, client)
+    if priced is not None:
+        record_token_usage(span, usage=priced, calls=0)
+    return priced
 
 
 def apply_pipeline_metadata(params: dict[str, Any]) -> None:
@@ -183,8 +208,9 @@ async def execute_chat_completion(
         response = await asyncio.wait_for(client.chat.completions.create(**params), timeout=timeout_s)
     record_llm_response(span, response)
     # The Orq router prices Responses but not Chat Completions, so usage here carries
-    # tokens only; price it from the model catalogue (RES-1295).
-    return response, await price_usage(TokenUsage.from_completion(response), model, client)
+    # tokens only; price it from the model catalogue and stamp the estimate onto
+    # `span` (RES-1295, RES-1307).
+    return response, await _price_and_record_cost(span, TokenUsage.from_completion(response), model, client)
 
 
 async def execute_chat_parse(
@@ -233,7 +259,7 @@ async def execute_chat_parse(
         params.pop('reasoning_effort', None)
         response = await asyncio.wait_for(client.chat.completions.parse(**params), timeout=timeout_s)
     record_llm_response(span, response)
-    return response, await price_usage(TokenUsage.from_completion(response), model, client)
+    return response, await _price_and_record_cost(span, TokenUsage.from_completion(response), model, client)
 
 
 async def execute_response(
@@ -297,5 +323,8 @@ async def execute_response(
         response = await _call()
     record_llm_response(span, response)
     # Priced by the router; price_usage is a no-op unless it came back unpriced
-    # (a non-Orq endpoint, or a model the router does not price).
-    return response, await price_usage(TokenUsage.extract(getattr(response, 'usage', None), calls=1), model, client)
+    # (a non-Orq endpoint, or a model the router does not price) — in which case
+    # the catalogue estimate is stamped onto `span` here too.
+    return response, await _price_and_record_cost(
+        span, TokenUsage.extract(getattr(response, 'usage', None), calls=1), model, client
+    )

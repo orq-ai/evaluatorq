@@ -240,13 +240,29 @@ async def qualified_model(model: str, client: AsyncOpenAI | None = None) -> str 
 async def price_usage(usage: Usage | None, model: str, client: AsyncOpenAI | None = None) -> Usage | None:
     """Fill in cost on a **single call's** ``usage`` when the provider reported none.
 
-    Returns ``usage`` unchanged when it is ``None``, already priced, spans more
-    than one call, or the model is absent from the catalogue. The multi-call
-    guard matters: pricing an aggregate at one model's rate would also set
-    ``priced_calls == calls``, asserting full pricing for calls this function
-    never saw and defeating `Usage.cost_is_partial`.
+    Returns ``usage`` unchanged when it is ``None``, already priced, does not
+    span exactly one call, or the model is absent from the catalogue. The
+    ``calls != 1`` guard matters on both sides: pricing an aggregate (``calls >
+    1``) at one model's rate would set ``priced_calls == calls``, asserting full
+    pricing for calls this function never saw and defeating
+    `Usage.cost_is_partial`; pricing a ``calls == 0`` usage would write a real
+    ``total_cost`` alongside ``priced_calls == 0``, which reads back as
+    unprovenanced (`Usage.cost_source` is ``None`` below `priced_calls > 0`) —
+    the exact unqualified-dollar-figure defect this module exists to prevent.
+    On success the returned `Usage` also carries `estimated_calls` equal to the
+    priced call, which is what marks the cost's provenance as ``'catalogue'``
+    rather than ``'provider'`` once it reaches a span via
+    `common.tracing.record_token_usage`.
     """
-    if usage is None or usage.total_cost is not None or usage.calls > 1:
+    if usage is None or usage.total_cost is not None:
+        return usage
+    if usage.calls != 1:
+        if usage.calls == 0:
+            logger.warning(
+                'price_usage: usage for {} reports calls=0; skipping catalogue pricing rather than '
+                'writing a cost with no priced call behind it',
+                model,
+            )
         return usage
     info = await _lookup(model, client)
     if info is None:
@@ -263,6 +279,7 @@ async def price_usage(usage: Usage | None, model: str, client: AsyncOpenAI | Non
             'output_cost': output_cost,
             'total_cost': input_cost + output_cost,
             'priced_calls': usage.calls,
+            'estimated_calls': usage.calls,
         }
     )
 

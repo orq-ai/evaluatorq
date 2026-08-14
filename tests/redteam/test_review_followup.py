@@ -81,6 +81,20 @@ class TestTokenUsageValidation:
         with pytest.raises(ValidationError):
             TokenUsage(**{field: -1})
 
+    def test_omitted_calls_widens_to_the_priced_count(self) -> None:
+        # `calls` defaults to 0, so clamping priced_calls against it would flip a
+        # hand-built target usage from "billed" to "no coverage data" silently.
+        usage = TokenUsage(total_cost=0.02, priced_calls=1)
+        assert usage.calls == 1
+        assert usage.priced_calls == 1
+        assert usage.cost_source == 'provider'
+
+    def test_explicit_calls_still_clamps(self) -> None:
+        # A caller who states `calls` means it — the chain wins over the claim.
+        usage = TokenUsage(total_cost=0.02, calls=0, priced_calls=1)
+        assert usage.calls == 0
+        assert usage.priced_calls == 0
+
 
 class TestTokenUsageFromCompletion:
     def test_zero_total_falls_back_to_sum(self) -> None:

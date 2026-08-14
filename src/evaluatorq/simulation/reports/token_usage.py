@@ -42,16 +42,23 @@ def build_token_usage_rows(data: Mapping[str, Any]) -> list[list[str]]:
     # ("unknown") must never be rendered as `$0.00`. Old saved reports predate
     # the cost breakdown entirely, so `.get` returning None here is expected
     # and simply omits the row rather than fabricating a value.
+    # A cost summed across calls where only some reported one is a lower bound,
+    # not a total — say so rather than let it read as authoritative. The same
+    # label qualifies the input/output split: it comes from the same `Usage` and
+    # the same `price_usage` call, so a bare split beside a qualified total would
+    # be the one figure on the table claiming to be exact.
+    coverage = cost_coverage(
+        int(token_value(data, 'priced_calls')),
+        int(token_value(data, 'calls')),
+        estimated_calls=int(token_value(data, 'estimated_calls')),
+    )
     input_cost = data.get('input_cost')
     if input_cost is not None and isinstance(input_cost, int | float) and not isinstance(input_cost, bool):
-        rows.append(['Input Cost', fmt_cost(input_cost)])
+        rows.append(['Input Cost', f'{fmt_cost(input_cost)}{coverage}'])
     output_cost = data.get('output_cost')
     if output_cost is not None and isinstance(output_cost, int | float) and not isinstance(output_cost, bool):
-        rows.append(['Output Cost', fmt_cost(output_cost)])
+        rows.append(['Output Cost', f'{fmt_cost(output_cost)}{coverage}'])
     total_cost = data.get('total_cost')
     if total_cost is not None and isinstance(total_cost, int | float) and not isinstance(total_cost, bool):
-        # A cost summed across calls where only some reported one is a lower
-        # bound, not a total — say so rather than let it read as authoritative.
-        coverage = cost_coverage(int(token_value(data, 'priced_calls')), int(token_value(data, 'calls')))
         rows.append(['Total Cost', f'{fmt_cost(total_cost)}{coverage}'])
     return rows

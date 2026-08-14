@@ -792,8 +792,7 @@ def _build_token_usage_section(report: RedTeamReport) -> ReportSection | None:
 
     Returns ``None`` when no token usage data is present in the report.
     """
-    # Prefer the canonical summary field; fall back to the legacy field
-    overall = report.summary.token_usage_total or report.token_usage_summary
+    overall = report.summary.token_usage_total
 
     if overall is None:
         has_any = any(r.execution is not None and r.execution.token_usage is not None for r in report.results)
@@ -809,6 +808,7 @@ def _build_token_usage_section(report: RedTeamReport) -> ReportSection | None:
             'cache_creation_tokens': overall.cache_creation_tokens,
             'calls': overall.calls,
             'priced_calls': overall.priced_calls,
+            'estimated_calls': overall.estimated_calls,
             'input_cost': overall.input_cost,
             'output_cost': overall.output_cost,
             'total_cost': overall.total_cost,
@@ -830,6 +830,7 @@ def _build_token_usage_section(report: RedTeamReport) -> ReportSection | None:
             'cache_creation_tokens': tu.cache_creation_tokens,
             'calls': tu.calls,
             'priced_calls': tu.priced_calls,
+            'estimated_calls': tu.estimated_calls,
             'input_cost': tu.input_cost,
             'output_cost': tu.output_cost,
             'total_cost': tu.total_cost,

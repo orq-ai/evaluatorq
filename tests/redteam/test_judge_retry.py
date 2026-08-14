@@ -355,3 +355,192 @@ async def test_endpoint_is_chat_when_responses_400s_and_falls_back():
 
     assert outcome.endpoint == 'chat'
     assert outcome.payload is not None and outcome.payload.value is True
+
+
+# --- JudgeOutcome.endpoint on the terminal error returns ------------------------
+#
+# A panel aggregates endpoints over decisive AND failed predictions
+# (`common.jury._run_jury_core`), so an unstamped failure makes a whole panel's
+# provenance read `None` — "nothing recorded an endpoint" rather than "the
+# Responses call timed out". These pin which endpoint each terminal return names.
+
+
+@pytest.mark.asyncio
+async def test_timeout_on_responses_stamps_responses_endpoint():
+    client = _Client()
+
+    async def times_out(**kwargs: Any) -> Any:
+        client.calls.append('responses')
+        raise TimeoutError
+
+    client.responses = SimpleNamespace(parse=times_out)
+    outcome = await _judge(client, retry_count=0)
+
+    assert outcome.error_kind is JudgeError.TIMEOUT
+    assert outcome.endpoint == 'responses'
+
+
+@pytest.mark.asyncio
+async def test_timeout_on_chat_stamps_chat_endpoint():
+    client = _Client(base_url=OPENAI_URL)  # non-Orq -> never leaves chat
+
+    async def times_out(**kwargs: Any) -> Any:
+        client.calls.append('chat')
+        raise TimeoutError
+
+    client.chat = SimpleNamespace(completions=SimpleNamespace(parse=times_out))
+    outcome = await _judge(client, retry_count=0)
+
+    assert outcome.error_kind is JudgeError.TIMEOUT
+    assert outcome.endpoint == 'chat'
+
+
+@pytest.mark.asyncio
+async def test_exhausted_retries_stamp_the_responses_endpoint():
+    client = _Client()
+
+    async def always_fails(**kwargs: Any) -> Any:
+        client.calls.append('responses')
+        raise _server_error(503)
+
+    client.responses = SimpleNamespace(parse=always_fails)
+    outcome = await _judge(client, retry_count=1)
+
+    assert outcome.error_kind is JudgeError.API_STATUS
+    assert outcome.endpoint == 'responses'
+
+
+@pytest.mark.asyncio
+async def test_parse_error_on_chat_stamps_chat_endpoint():
+    """The legacy json_object path's unparseable verdict: a ValidationError still
+    knows it was chat that served it."""
+    client = _Client(base_url=OPENAI_URL)
+
+    async def malformed_chat_create(**kwargs: Any) -> Any:
+        client.calls.append('chat')
+        reply = _chat_reply()
+        reply.choices[0].message = SimpleNamespace(content='not valid json')
+        return reply
+
+    client.chat = SimpleNamespace(completions=SimpleNamespace(create=malformed_chat_create))
+    outcome = await _judge(client, retry_count=0, response_model=None)
+
+    assert outcome.error_kind is JudgeError.PARSE
+    assert outcome.endpoint == 'chat'
+
+
+@pytest.mark.asyncio
+async def test_failure_after_responses_fallback_stamps_chat_not_responses():
+    """The regression a naive `cfg.api` read would cause: cfg says 'responses',
+    but the Responses call 400'd and it was the chat retry that actually failed."""
+    client = _Client()
+
+    async def rejecting_responses_parse(**kwargs: Any) -> Any:
+        client.calls.append('responses')
+        raise _bad_request('responses endpoint not supported for this model')
+
+    async def failing_chat_parse(**kwargs: Any) -> Any:
+        client.calls.append('chat')
+        raise _server_error(503)
+
+    client.responses = SimpleNamespace(parse=rejecting_responses_parse)
+    client.chat = SimpleNamespace(completions=SimpleNamespace(parse=failing_chat_parse))
+    outcome = await _judge(client, retry_count=0)
+
+    assert client.calls == ['responses', 'chat']
+    assert outcome.error_kind is JudgeError.API_STATUS
+    assert outcome.endpoint == 'chat'
+
+
+@pytest.mark.asyncio
+async def test_unknown_failure_on_responses_stamps_responses_endpoint():
+    """The catch-all also covers failures that never reached a provider (a bad
+    `extra_kwargs`, a client that raises on request construction), but
+    `_failed_endpoint()` names the leg that was in flight regardless of whether
+    it got an HTTP response — same as the APIStatusError branch above it."""
+    client = _Client()
+
+    async def explodes(**kwargs: Any) -> Any:
+        raise RuntimeError('something entirely else')
+
+    client.responses = SimpleNamespace(parse=explodes)
+    outcome = await _judge(client, retry_count=0)
+
+    assert outcome.error_kind is JudgeError.UNKNOWN
+    assert outcome.endpoint == 'responses'
+
+
+class _OptionalExplanationVerdict(BaseModel):
+    value: bool
+    explanation: str | None = None
+
+
+@pytest.mark.asyncio
+async def test_responses_judge_parse_failure_keeps_token_usage():
+    """RES-1307 audit Task 1 (site 1): a caller-supplied `response_model` whose
+    `explanation` is optional/None parses fine as the caller's model, but
+    `EvaluatorResponsePayload(value=..., explanation=...)` then raises
+    ValidationError because its own `explanation` is required. The Responses
+    endpoint already billed the call by that point; the usage must survive."""
+    client = _Client()
+
+    async def parses_with_none_explanation(**kwargs: Any) -> Any:
+        client.calls.append('responses')
+        reply = _responses_reply()
+        reply.output_parsed = _OptionalExplanationVerdict(value=True, explanation=None)
+        return reply
+
+    client.responses = SimpleNamespace(parse=parses_with_none_explanation)
+    outcome = await _judge(client, retry_count=0, response_model=_OptionalExplanationVerdict)
+
+    assert len(client.calls) == 1
+    assert outcome.error_kind is JudgeError.PARSE
+    assert outcome.payload is None
+    assert outcome.token_usage is not None
+    assert outcome.token_usage.calls == 1
+    assert outcome.endpoint == 'responses'
+
+
+@pytest.mark.asyncio
+async def test_unknown_failure_on_chat_stamps_chat_endpoint():
+    client = _Client(base_url=OPENAI_URL)  # non-Orq -> never leaves chat
+
+    async def explodes(**kwargs: Any) -> Any:
+        raise RuntimeError('something entirely else')
+
+    client.chat = SimpleNamespace(completions=SimpleNamespace(parse=explodes))
+    outcome = await _judge(client, retry_count=0)
+
+    assert outcome.error_kind is JudgeError.UNKNOWN
+    assert outcome.endpoint == 'chat'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('base_url', 'expected'),
+    [(None, 'responses'), (OPENAI_URL, 'chat')],
+)
+async def test_judge_span_carries_the_endpoint_attribute(
+    monkeypatch: pytest.MonkeyPatch, base_url: str | None, expected: str
+):
+    """The judge span names its leg via `gen_ai.judge.endpoint`.
+
+    `operation` happens to carry the same value today, but only the dedicated
+    attribute states *why* a judge span can lack a cost: on the Orq router only
+    the Responses endpoint returns a priced usage block, so a chat span with no
+    cost is a fallback, not a catalogue miss. Asserted on the real
+    `with_llm_span` call rather than on a helper parameter — the attribute is
+    set at the span, and a test that exercised anything else would pass while
+    production emitted nothing.
+    """
+    seen: list[dict[str, Any]] = []
+    real = judge_mod.with_llm_span
+
+    def capture(**kwargs: Any) -> Any:
+        seen.append(kwargs.get('attributes') or {})
+        return real(**kwargs)
+
+    monkeypatch.setattr(judge_mod, 'with_llm_span', capture)
+    client = _Client() if base_url is None else _Client(base_url=base_url)
+    await _judge(client)
+    assert [a.get('gen_ai.judge.endpoint') for a in seen] == [expected]

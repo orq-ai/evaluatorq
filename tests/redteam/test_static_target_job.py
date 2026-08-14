@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from evaluatorq.common.target_call import TargetCallResult
-from evaluatorq.contracts import AgentResponse, AgentResponseError, Message
+from evaluatorq.contracts import AgentResponse, AgentResponseError, Message, Usage
 from evaluatorq.types import DataPoint
 
 pytestmark = pytest.mark.asyncio
@@ -152,6 +152,52 @@ async def test_error_payload_keys_are_present_on_both_branches() -> None:
     # A target that reports no code still needs one — the dashboard groups on it.
     assert fields['error_code'] == 'target_error'
     assert fields['error_turn'] == 2
+
+
+async def test_static_job_sums_billed_usage_across_retry_attempts() -> None:
+    """The static leg's ``token_usage`` must be `call.billed_usage`, not `result.usage`.
+
+    ``runner.py`` changed the static job's ``token_usage`` field from
+    ``result.usage`` (the surviving response only) to ``call.billed_usage``
+    (every billed attempt). A scripted target burns tokens on a refused first
+    attempt and then succeeds on retry; asserting only the final response's
+    usage would pass against either implementation, so the assertion sums both
+    attempts and checks ``calls`` too — a revert to ``result.usage`` fails this.
+    """
+    from evaluatorq.contracts import AgentTarget
+    from evaluatorq.redteam.runner import _create_static_job_for_agent_target
+
+    burned = AgentResponse(
+        text='[refused]',
+        usage=Usage(total_tokens=7, calls=1),
+        error=AgentResponseError(message='refused', error_type='target_error', code='x'),
+    )
+    ok = AgentResponse(text='hello there', usage=Usage(total_tokens=11, calls=1))
+
+    class _RetryingTarget(AgentTarget):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        async def respond(self, messages: list[Message]) -> AgentResponse:
+            self.calls += 1
+            return burned if self.calls == 1 else ok
+
+        def new(self) -> _RetryingTarget:
+            return self
+
+    target = _RetryingTarget()
+    job = _create_static_job_for_agent_target(lambda: target, 'lbl')
+
+    wrapped = await job(_datapoint(), 0)
+    out = wrapped['output']
+
+    assert target.calls == 2
+    usage = out['token_usage']
+    assert usage.total_tokens == 7 + 11
+    assert usage.calls == 2
+    assert out['error'] is None
+    assert out['response'] == 'hello there'
 
 
 async def test_hybrid_static_leg_reports_target_failure(monkeypatch: pytest.MonkeyPatch) -> None:

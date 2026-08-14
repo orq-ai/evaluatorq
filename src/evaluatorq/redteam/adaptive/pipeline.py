@@ -443,7 +443,12 @@ def create_dynamic_redteam_job(
 
                 agent_resp = result.response
                 response = agent_resp.text
-                token_usage = agent_resp.usage if result.succeeded else None
+                # Sum of every billed attempt, not just the surviving response: a
+                # target that returns an `.error` marker with a real usage block was
+                # still charged for it. This REPLACES the `agent_resp.usage` read —
+                # the accumulator already includes the successful attempt, so adding
+                # both would double count the whole run.
+                token_usage = result.billed_usage
                 error_fields = result.error_payload()
                 result_dict = AttackOutput(
                     turns=[

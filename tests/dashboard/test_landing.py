@@ -4,6 +4,7 @@ metrics aggregation that feeds them (RES-974)."""
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -810,7 +811,7 @@ class TestDashboardCostCoverage:
     the markdown/HTML reports render. A total summed over calls where only some
     reported a cost is a lower bound; showing it bare reads as authoritative."""
 
-    def _redteam_payload(self, name: str, *, created: str, priced: int, calls: int) -> dict:
+    def _redteam_payload(self, name: str, *, created: str, priced: int, calls: int, estimated: int = 0) -> dict:
         return {
             'pipeline': {'mode': 'adaptive'},
             'created_at': created,
@@ -833,6 +834,7 @@ class TestDashboardCostCoverage:
                     'cost_usd': 0.5,
                     'calls': calls,
                     'priced_calls': priced,
+                    'estimated_calls': estimated,
                 },
                 'by_severity': {},
             },
@@ -850,12 +852,53 @@ class TestDashboardCostCoverage:
         rt, sim = self._roots(tmp_path, self._redteam_payload('P', created='2026-06-29T10:00:00', priced=3, calls=10))
 
         data = metrics.landing([rt, sim])
-        assert (data.priced_calls, data.cost_calls) == (3, 10)
+        assert (data.coverage.priced_calls, data.coverage.cost_calls) == (3, 10)
         assert '(3 of 10 calls)' in view.landing_body(data)
 
         ov = metrics.redteam_overview([rt, sim])
-        assert (ov.priced_calls, ov.cost_calls) == (3, 10)
+        assert (ov.coverage.priced_calls, ov.coverage.cost_calls) == (3, 10)
         assert '(3 of 10 calls)' in view.redteam_overview_body(ov)
+
+    def test_all_estimated_store_labels_estimated(self, tmp_path: Path) -> None:
+        """A store of catalogue-estimated runs (every priced call client-side)
+        must aggregate to the "(estimated)" provenance label, not read as
+        billed just because ``estimated_calls`` defaults to 0 on an unrelated
+        code path."""
+        rt, sim = self._roots(
+            tmp_path,
+            self._redteam_payload('P', created='2026-06-29T10:00:00', priced=10, calls=10, estimated=10),
+        )
+
+        data = metrics.landing([rt, sim])
+        assert data.coverage.priced_calls == data.coverage.estimated_calls == 10
+        assert '(estimated)' in view.landing_body(data)
+
+        ov = metrics.redteam_overview([rt, sim])
+        assert ov.coverage.priced_calls == ov.coverage.estimated_calls == 10
+        assert '(estimated)' in view.redteam_overview_body(ov)
+
+    def test_mixed_store_labels_partly_estimated(self, tmp_path: Path) -> None:
+        """One fully-billed run beside one fully-estimated run must aggregate to
+        "partly estimated" — neither "estimated" (some priced calls were billed)
+        nor silently "provider" (some were not)."""
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        (rt / 'billed.json').write_text(
+            json.dumps(self._redteam_payload('B', created='2026-06-29T10:00:00', priced=5, calls=5, estimated=0))
+        )
+        (rt / 'estimated.json').write_text(
+            json.dumps(self._redteam_payload('E', created='2026-06-29T11:00:00', priced=5, calls=5, estimated=5))
+        )
+
+        data = metrics.landing([rt, sim])
+        assert (data.coverage.priced_calls, data.coverage.estimated_calls) == (10, 5)
+        assert '(partly estimated)' in view.landing_body(data)
+
+        ov = metrics.redteam_overview([rt, sim])
+        assert (ov.coverage.priced_calls, ov.coverage.estimated_calls) == (10, 5)
+        assert '(partly estimated)' in view.redteam_overview_body(ov)
 
     def test_no_label_when_every_call_priced(self, tmp_path: Path) -> None:
         rt, sim = self._roots(tmp_path, self._redteam_payload('P', created='2026-06-29T10:00:00', priced=10, calls=10))
@@ -899,8 +942,65 @@ class TestDashboardCostCoverage:
         )
 
         ov = metrics.sim_overview([rt, sim])
-        assert (ov.priced_calls, ov.cost_calls) == (1, 2)
+        assert (ov.coverage.priced_calls, ov.coverage.cost_calls) == (1, 2)
         assert '(1 of 2 calls)' in view.sim_overview_body(ov)
+
+    def _sim_payload(self, name: str, *, created: str, priced: int, calls: int, estimated: int = 0) -> dict:
+        return {
+            'mode': 'run',
+            'created_at': created,
+            'run_name': name,
+            'total_results': 1,
+            'scorer_averages': {},
+            'results': [
+                {
+                    'token_usage': {
+                        'total_tokens': 500,
+                        'cost_usd': 0.5,
+                        'calls': calls,
+                        'priced_calls': priced,
+                        'estimated_calls': estimated,
+                    },
+                    'goal_achieved': True,
+                    'turn_count': 1,
+                }
+            ],
+        }
+
+    def test_sim_overview_labels_estimated_coverage(self, tmp_path: Path) -> None:
+        """`sim_overview_body` (RES-1022) must carry the same "(estimated)"
+        provenance clause the landing and red-team overviews render — a
+        regression guard for the ``estimated_calls`` argument `sim_overview_body`
+        passes into `_coverage` with no test asserting on it."""
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        (sim / 's.json').write_text(
+            json.dumps(self._sim_payload('S', created='2026-06-30T10:00:00', priced=10, calls=10, estimated=10))
+        )
+
+        ov = metrics.sim_overview([rt, sim])
+        assert ov.coverage.priced_calls == ov.coverage.estimated_calls == 10
+        assert '(estimated)' in view.sim_overview_body(ov)
+
+    def test_sim_overview_labels_partly_estimated_coverage(self, tmp_path: Path) -> None:
+        """Same regression guard as above, for the "(partly estimated)" branch —
+        one fully-billed sim run beside one fully-estimated one."""
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        (sim / 'billed.json').write_text(
+            json.dumps(self._sim_payload('B', created='2026-06-30T10:00:00', priced=5, calls=5, estimated=0))
+        )
+        (sim / 'estimated.json').write_text(
+            json.dumps(self._sim_payload('E', created='2026-06-30T11:00:00', priced=5, calls=5, estimated=5))
+        )
+
+        ov = metrics.sim_overview([rt, sim])
+        assert (ov.coverage.priced_calls, ov.coverage.estimated_calls) == (10, 5)
+        assert '(partly estimated)' in view.sim_overview_body(ov)
 
     def test_legacy_report_does_not_inflate_the_coverage_denominator(self, tmp_path: Path) -> None:
         """A report predating priced_calls has *unknown* coverage, not zero coverage.
@@ -922,11 +1022,46 @@ class TestDashboardCostCoverage:
         )
 
         data = metrics.landing([rt, sim])
-        assert (data.priced_calls, data.cost_calls, data.unknown_calls) == (1, 1, 10)
+        assert (data.coverage.priced_calls, data.coverage.cost_calls, data.coverage.unknown_calls) == (1, 1, 10)
         body = view.landing_body(data)
         assert '1 of 11 calls' not in body
         # ...but the combined $10.50 must not read as authoritative either: 10 of
         # the 11 calls behind it have coverage nobody recorded.
+        assert '10 calls of unknown coverage' in body
+
+    def test_legacy_unknown_coverage_beside_fully_estimated_report_keeps_priced_count(
+        self, tmp_path: Path
+    ) -> None:
+        """A pre-``priced_calls`` legacy report (unknown coverage) alongside a
+        report whose known calls were entirely catalogue-estimated must show
+        *both* the priced count and the provenance — not let provenance displace
+        the priced-count clause.
+
+        Regression for the case where ``priced_calls == calls`` (nothing for
+        ``cost_coverage`` to qualify on its own) made the "estimated" provenance
+        clause the only content, silently dropping how many calls were priced.
+        """
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        legacy = self._redteam_payload('L', created='2026-06-29T10:00:00', priced=0, calls=10)
+        del legacy['summary']['token_usage_total']['priced_calls']
+        (rt / 'legacy.json').write_text(json.dumps(legacy))
+        (rt / 'new.json').write_text(
+            json.dumps(self._redteam_payload('N', created='2026-06-29T11:00:00', priced=1, calls=1, estimated=1))
+        )
+
+        data = metrics.landing([rt, sim])
+        assert (
+            data.coverage.priced_calls,
+            data.coverage.cost_calls,
+            data.coverage.unknown_calls,
+            data.coverage.estimated_calls,
+        ) == (1, 1, 10, 1)
+        body = view.landing_body(data)
+        assert '1 of 1 calls priced' in body
+        assert 'estimated' in body
         assert '10 calls of unknown coverage' in body
 
     def test_legacy_only_totals_are_labelled_unknown_not_complete(self, tmp_path: Path) -> None:
@@ -944,7 +1079,7 @@ class TestDashboardCostCoverage:
         (rt / 'legacy.json').write_text(json.dumps(legacy))
 
         data = metrics.landing([rt, sim])
-        assert (data.priced_calls, data.cost_calls, data.unknown_calls) == (0, 0, 10)
+        assert (data.coverage.priced_calls, data.coverage.cost_calls, data.coverage.unknown_calls) == (0, 0, 10)
         assert '10 calls of unknown coverage' in view.landing_body(data)
 
     def test_a_legacy_report_with_no_cost_contributes_no_unknown_coverage(self, tmp_path: Path) -> None:
@@ -963,7 +1098,7 @@ class TestDashboardCostCoverage:
         )
 
         data = metrics.landing([rt, sim])
-        assert (data.priced_calls, data.cost_calls, data.unknown_calls) == (1, 1, 0)
+        assert (data.coverage.priced_calls, data.coverage.cost_calls, data.coverage.unknown_calls) == (1, 1, 0)
         assert 'unknown coverage' not in view.landing_body(data)
 
     def test_no_coverage_label_when_cost_is_unknown(self, tmp_path: Path) -> None:
@@ -977,6 +1112,29 @@ class TestDashboardCostCoverage:
         assert data.total_cost is None
         assert '(1 of 2 calls)' not in view.landing_body(data)
         assert '(1 of 2 calls)' not in view.redteam_overview_body(metrics.redteam_overview([rt, sim]))
+
+    def test_present_zero_priced_calls_with_a_cost_is_unknown_not_fully_billed(self, tmp_path: Path) -> None:
+        """A custom ``AgentTarget`` can report ``priced_calls: 0`` alongside a
+        real ``cost_usd`` (see ``common.target_call._attempt_usage``'s own
+        warning for this exact shape). That must land in the same "unknown
+        coverage" slot as the legacy no-``priced_calls``-key case, not read as
+        "0 of N priced, coverage known" — which would render the cost as fully
+        billed with no qualifier at all (RES-1307)."""
+        payload = self._redteam_payload('P', created='2026-06-29T10:00:00', priced=0, calls=4)
+        rt, sim = self._roots(tmp_path, payload)
+
+        data = metrics.landing([rt, sim])
+        assert (data.coverage.priced_calls, data.coverage.cost_calls, data.coverage.unknown_calls) == (0, 0, 4)
+        assert data.total_cost is not None
+        body = view.landing_body(data)
+        assert 'calls priced' not in body
+        assert '4 calls of unknown coverage' in body
+
+        ov = metrics.redteam_overview([rt, sim])
+        assert (ov.coverage.priced_calls, ov.coverage.cost_calls, ov.coverage.unknown_calls) == (0, 0, 4)
+        assert '4 calls of unknown coverage' in view.redteam_overview_body(ov)
+
+
 class TestScoreTooltip:
     """The Score cell must name what the rate was measured over (RES-1202)."""
 
@@ -1072,3 +1230,150 @@ class TestUnknownSeverity:
         # The stored-summary path has the same display comprehension behind it.
         out = metrics._summary_severity({'by_severity': {'Sev1': {'vulnerabilities_found': 2}, 'HIGH': {'count': 1}}})
         assert out == {metrics.UNKNOWN_SEVERITY: 2, 'high': 1}
+
+
+class TestLegacyRedTeamCoverage:
+    """A legacy red-team report's derived cost carries derived coverage.
+
+    The legacy branch of `metrics.landing` summed ``counts.cost`` into Total
+    spend but never touched the coverage counters, so a legacy report's dollars
+    entered the total while the qualifier beside them reported complete provider
+    billing — the exact case ``unknown_calls`` exists for.
+    """
+
+    def _roots(self, tmp_path: Path, results: list[dict]) -> tuple[Path, Path]:
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        (rt / 'legacy.json').write_text(
+            json.dumps(_legacy_redteam_payload('L', created='2026-06-29T10:00:00', resistance=1.0, results=results))
+        )
+        return rt, sim
+
+    def test_legacy_derived_cost_counts_as_unknown_coverage(self, tmp_path: Path) -> None:
+        rt, sim = self._roots(tmp_path, [_legacy_result(tokens=100), _legacy_result(tokens=200)])
+
+        data = metrics.landing([rt, sim])
+        assert data.total_cost is not None
+        assert data.coverage.priced_calls == 0
+        assert data.coverage.unknown_calls == 2  # one costed usage holder per result
+        assert 'unknown coverage' in view.landing_body(data)
+
+    def test_legacy_report_with_no_cost_adds_no_unknown_coverage(self, tmp_path: Path) -> None:
+        """Unknown coverage is about cost that was summed; a costless legacy
+        report contributes neither dollars nor a qualifier."""
+        rt, sim = self._roots(tmp_path, [_legacy_result(), _legacy_result()])
+
+        data = metrics.landing([rt, sim])
+        assert data.total_cost is None
+        assert (data.coverage.priced_calls, data.coverage.cost_calls, data.coverage.unknown_calls) == (0, 0, 0)
+        assert 'unknown coverage' not in view.landing_body(data)
+
+
+class TestRunGridCostColumn:
+    """The per-run Cost cell must carry the same provenance as the KPI band."""
+
+    def _row(self, **kw: object) -> metrics.SimRunRow:
+        # Coverage kwargs are collapsed into a `CostCoverage` here so the
+        # individual test bodies below can keep passing the four counters by
+        # name, matching what they assert about.
+        coverage_kw = {k: kw.pop(k) for k in ('priced_calls', 'cost_calls', 'unknown_calls', 'estimated_calls') if k in kw}
+        base: dict = dict(
+            rid='r', name='n', when=datetime(2026, 6, 29, 10, 0), targets=[('a', 'agent')],
+            status='finished', score=0.9, cases=3, cost=0.5, error=False,
+            coverage=metrics.CostCoverage(**coverage_kw),
+        )
+        base.update(kw)
+        return metrics.SimRunRow(**base)
+
+    def test_estimated_cost_is_marked_and_explained_in_the_tooltip(self) -> None:
+        html = view._run_grid([self._row(priced_calls=2, cost_calls=2, estimated_calls=2)])
+        assert '~$0.5000' in html
+        assert 'title="estimated"' in html
+
+    def test_partial_coverage_marker_names_the_counts(self) -> None:
+        html = view._run_grid([self._row(priced_calls=1, cost_calls=4)])
+        assert '~$0.5000' in html
+        assert 'title="1 of 4 calls"' in html
+
+    def test_fully_billed_cost_carries_no_marker(self) -> None:
+        """``~`` means "qualified" — putting it on every row would say nothing."""
+        html = view._run_grid([self._row(priced_calls=4, cost_calls=4)])
+        assert '$0.5000' in html
+        assert '~' not in html
+        assert 'title=' not in html
+
+    def test_unknown_cost_renders_an_em_dash_without_a_marker(self) -> None:
+        html = view._run_grid([self._row(cost=None, priced_calls=1, cost_calls=4)])
+        assert '—' in html
+        assert '~' not in html
+
+    def test_empty_grid_renders_an_empty_state(self) -> None:
+        """A head row with nothing under it is indistinguishable from a bug."""
+        html = view._run_grid([])
+        assert 'runs-empty' in html
+        assert 'No runs on this page.' in html
+
+
+class TestLandingSpendPanelsAreQualified:
+    """Avg cost / job and Spend by job type derive from the same data the
+    Total spend tile qualifies; neither may render bare dollars."""
+
+    def _roots(self, tmp_path: Path, **usage: object) -> tuple[Path, Path]:
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        (rt / 'p.json').write_text(
+            json.dumps({
+                'pipeline': {'mode': 'adaptive'},
+                'created_at': '2026-06-29T10:00:00',
+                'run_name': 'P',
+                'total_results': 1,
+                'results': [{'attack': {'severity': 'low'}, 'vulnerable': False, 'error': None}],
+                'summary': {
+                    'resistance_rate': 1.0,
+                    'vulnerabilities_found': 0,
+                    'evaluated_attacks': 1,
+                    'token_usage_total': {'total_tokens': 500, 'cost_usd': 0.5, **usage},
+                    'by_severity': {},
+                },
+            })
+        )
+        return rt, sim
+
+    def test_avg_cost_tile_inherits_the_totals_coverage(self, tmp_path: Path) -> None:
+        rt, sim = self._roots(tmp_path, calls=2, priced_calls=1, estimated_calls=1)
+        body = view.landing_body(metrics.landing([rt, sim]))
+        # The tile's own sub-line, not just the Total spend one beside it.
+        assert (
+            '<div class="stat-label">Avg cost / job</div>'
+            '<div class="stat-value">$0.5000</div>'
+            '<div class="stat-sub">(1 of 2 calls, estimated)</div>'
+        ) in body
+
+    def test_spend_by_job_type_does_not_claim_real_cost(self, tmp_path: Path) -> None:
+        """``cost_by_kind`` has no per-kind counters, so the panel states the
+        limitation instead of asserting the bars are billed dollars."""
+        rt, sim = self._roots(tmp_path, calls=2, priced_calls=2, estimated_calls=2)
+        body = view.landing_body(metrics.landing([rt, sim]))
+        assert 'Real cost across runs' not in body
+        assert 'Recorded cost across runs' in body
+        assert 'combined coverage (estimated)' in body
+
+    def test_fully_billed_spend_panel_keeps_a_plain_subtitle(self, tmp_path: Path) -> None:
+        rt, sim = self._roots(tmp_path, calls=2, priced_calls=2)
+        body = view.landing_body(metrics.landing([rt, sim]))
+        assert 'Recorded cost across runs' in body
+        assert 'combined coverage' not in body
+
+
+def test_cost_coverage_clamps_priced_calls_to_the_calls_seen() -> None:
+    """`priced_calls > cost_calls` reads as fully covered in `coverage_parts`,
+    which renders NO qualifier — a malformed report would then present a partly
+    priced total as authoritative, the exact defect coverage labels exist to
+    prevent. Clamped, not raised: this value travels through the mtime-keyed
+    report cache, where one bad report must not take the page down."""
+    coverage = metrics.CostCoverage(priced_calls=5, cost_calls=3, estimated_calls=4)
+    assert (coverage.priced_calls, coverage.cost_calls, coverage.estimated_calls) == (3, 3, 3)

@@ -269,9 +269,19 @@ def record_token_usage(
 
     ``usage`` accepts a `evaluatorq.contracts.Usage` and expands it into
     the individual parameters; explicitly-passed parameters win over it.
+
+    ``gen_ai.usage.cost_source`` (``'provider'`` | ``'catalogue'`` | ``'mixed'``)
+    is the provenance of ``total_cost`` and is always derived from
+    ``usage.cost_source`` — there is no standalone override parameter, since no
+    caller has ever needed to state a provenance without the ``Usage`` it came
+    from. This is what keeps a client-side catalogue estimate from reaching a
+    trace viewer labelled as billed. Only ever set alongside a cost: a
+    provenance attribute on a span with no cost would describe a number that is
+    not there.
     """
     if span is None:
         return
+    cost_source: str | None = None
     if usage is not None:
         prompt_tokens = prompt_tokens if prompt_tokens is not None else usage.input_tokens
         completion_tokens = completion_tokens if completion_tokens is not None else usage.output_tokens
@@ -291,6 +301,7 @@ def record_token_usage(
         input_cost = input_cost if input_cost is not None else usage.input_cost
         output_cost = output_cost if output_cost is not None else usage.output_cost
         total_cost = total_cost if total_cost is not None else usage.total_cost
+        cost_source = usage.cost_source
     if calls is _UNSET_CALLS:
         calls = 0
     prompt = prompt_tokens if prompt_tokens is not None else 0
@@ -320,6 +331,16 @@ def record_token_usage(
     if total_cost is not None:
         span.set_attribute('gen_ai.usage.total_cost', total_cost)
         span.set_attribute('gen_ai.usage.cost', total_cost)
+        if cost_source is not None:
+            span.set_attribute('gen_ai.usage.cost_source', cost_source)
+        else:
+            # A cost with no provenance: either the caller passed a bare
+            # `total_cost=` with no `usage`, or it passed a `Usage` carrying a
+            # cost with `priced_calls=0`. Either way the trace UI can then only
+            # show the figure, not whether it was billed — exactly the defect
+            # this provenance plumbing exists to prevent, so this warns whenever
+            # it happens rather than only in cases believed unreachable today.
+            logger.warning('record_token_usage: cost {} recorded without provenance (no cost_source)', total_cost)
 
 
 def record_llm_response(
