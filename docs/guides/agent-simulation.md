@@ -348,9 +348,10 @@ the judge actually returned a verdict for that criterion:
 
 ```python
 for c in result.metadata['criteria_meta']:
-    # `is False` — not `not c['audited']`: `None` means the run predates the
-    # field, which is unknown, not "the judge skipped it".
-    if not c['passed'] and c['audited'] is False:
+    # `.get('audited') is False` — not `not c['audited']`: `None` (and an absent
+    # key, on a report saved before the field existed) means unknown, not "the
+    # judge skipped it".
+    if not c['passed'] and c.get('audited') is False:
         print(f"{c['id']} failed by default — the judge never reported on it")
 ```
 
@@ -369,6 +370,11 @@ the HTML report and the markdown export, and is counted separately from the
 "N/M criteria met" tally; `evidence` is shown beside the criterion it justifies. A
 run with `criteria_verified = False` says so above the criteria list rather than
 showing a tally that contradicts its `criteria_met` score of `0.0`.
+
+The `criteria_met` score applies the same rule: an unaudited criterion is **not
+met**, so the score and the tally beside it agree. A criterion the judge settled
+early still counts — a verdict is what settles it — and `audited: None` (a run
+saved before the field existed) keeps the score it always had.
 
 !!! warning "A custom `judge=` must report per-criterion verdicts"
 
@@ -390,7 +396,10 @@ showing a tally that contradicts its `criteria_met` score of `0.0`.
 
 A run that ends in an error or a timeout never reaches the audit either. Those
 results also score `criteria_met` as `0.0` (not `1.0`) and log a warning, so neither
-a crashed run nor an unaudited one can inflate the average.
+a crashed run nor an unaudited one can inflate the average. A target that dies
+mid-run keeps whatever the judge had already confirmed, but a target that dies
+*before* any audit reports its criteria as **unknown** — never as failed. It is not
+the judge's verdict that nothing happened; nobody looked.
 
 The callable passed to `target` is the only structural difference from the Orq path —
 personas, scenarios, criteria, and the result shape are identical. Swap the
