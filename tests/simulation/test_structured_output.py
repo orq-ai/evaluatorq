@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 # ruff: noqa: S101
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -118,3 +119,65 @@ def _no_parsed_completion() -> MagicMock:
     completion.choices[0].message.refusal = None
     completion.choices[0].message.parsed = None
     return completion
+
+
+def _schema_400() -> Any:
+    """A 400 that reads as a structured-output-support problem."""
+    import httpx
+    from openai import APIStatusError
+
+    request = httpx.Request("POST", "https://router.example/v3/router")
+    return APIStatusError(
+        "response_format json_schema not supported",
+        response=httpx.Response(400, request=request),
+        body=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_fallback_carries_the_schema_not_a_bare_json_object() -> None:
+    """The fallback is what tells the model which keys to emit — json_object does not."""
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(side_effect=_schema_400())
+    client.chat.completions.create = AsyncMock(return_value=_fallback_completion('{"value": "ok"}', "stop"))
+
+    _parsed, raw = await generate_structured(
+        client,
+        model="local-model",
+        messages=[{"role": "user", "content": "return json"}],
+        response_format=SampleResponse,
+        max_tokens=64,
+        label="Sample.generate",
+    )
+
+    assert raw == '{"value": "ok"}'
+    await_args = client.chat.completions.create.await_args
+    assert await_args is not None
+    response_format = await_args.kwargs["response_format"]
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["name"] == "SampleResponse"
+    assert response_format["json_schema"]["strict"] is False  # strict is what parse() just failed on
+    assert "value" in response_format["json_schema"]["schema"]["properties"]
+
+
+@pytest.mark.asyncio
+async def test_provider_rejecting_the_schema_form_still_gets_json_object() -> None:
+    """Degrade, don't lose the call: a provider that refuses both forms keeps working."""
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(side_effect=_schema_400())
+    client.chat.completions.create = AsyncMock(
+        side_effect=[_schema_400(), _fallback_completion('{"value": "ok"}', "stop")]
+    )
+
+    _parsed, raw = await generate_structured(
+        client,
+        model="local-model",
+        messages=[{"role": "user", "content": "return json"}],
+        response_format=SampleResponse,
+        max_tokens=64,
+        label="Sample.generate",
+    )
+
+    assert raw == '{"value": "ok"}'
+    formats = [c.kwargs["response_format"] for c in client.chat.completions.create.await_args_list]
+    assert [f["type"] for f in formats] == ["json_schema", "json_object"]
