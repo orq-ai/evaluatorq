@@ -186,11 +186,19 @@ def _hand_written_properties_dict_lines(source: str) -> list[int]:
     ]
 
 
+# Scope: the simulation package, where the judge's tool schemas live and where
+# RES-1308's schema/parser drift happened. Deliberately NOT package-wide — a
+# hand-written JSON schema is legitimate elsewhere (an HTTP or json_schema
+# evaluator definition, a tool definition handed to a provider verbatim), and a
+# guardrail whose remedy does not apply to the code it fires on gets neutered.
+_HAND_WRITTEN_PROPERTIES_ROOT = SRC / 'simulation'
+
+
 @cache
 def _hand_written_properties_hits() -> list[str]:
     return [
         f'{path.relative_to(SRC).as_posix()}:{lineno}'
-        for path in sorted(SRC.rglob('*.py'))
+        for path in sorted(_HAND_WRITTEN_PROPERTIES_ROOT.rglob('*.py'))
         for lineno in _hand_written_properties_dict_lines(path.read_text(encoding='utf-8'))
     ]
 
@@ -201,17 +209,21 @@ def test_no_hand_written_json_schema_properties_dicts() -> None:
     RES-1308 happened because a hand-written tool schema and the parser reading
     it drifted apart. `judge.py`'s two tool schemas are generated from pydantic
     models via `_wire_schema` / `model_json_schema()` for exactly this reason;
-    this measured 3 hits before that refactor and 0 after. A hit here means a
-    schema is being hand-rolled again — define a `pydantic.BaseModel` and
-    generate its schema instead (see `judge.py`'s `_wire_schema`), don't add an
-    allowlist entry.
+    this measured 3 hits in `simulation/` before that refactor and 0 after. A hit
+    here means a schema is being hand-rolled again — define a `pydantic.BaseModel`
+    and generate its schema instead (see `judge.py`'s `_wire_schema`).
+
+    The scope is `src/evaluatorq/simulation/` on purpose; see
+    `_HAND_WRITTEN_PROPERTIES_ROOT`.
     """
     hits = _hand_written_properties_hits()
     assert not hits, (
-        "Hand-written JSON-schema 'properties' dict literal: "
+        "Hand-written JSON-schema 'properties' dict literal under simulation/: "
         + ', '.join(hits)
         + '. Define a pydantic BaseModel and generate the schema via model_json_schema() '
-        '/ _wire_schema (see simulation/agents/judge.py) instead of hand-writing it.'
+        '/ _wire_schema (see simulation/agents/judge.py) instead of hand-writing it. '
+        'If this really is a schema handed to a provider verbatim rather than one this '
+        'package also parses, it belongs outside simulation/ — do not widen this scope.'
     )
 
 
