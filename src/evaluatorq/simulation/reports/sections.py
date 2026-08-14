@@ -131,12 +131,31 @@ def _criteria_rows(result: SimulationResult) -> list[dict[str, Any]]:
     surface may recompute — is `CriteriaRow`'s computed field, which is why these
     rows are built as `CriteriaRow` objects and dumped rather than hand-assembled:
     the dict and the model then cannot disagree.
+
+    A malformed ``audited`` or ``evidence`` degrades to ``None`` (unknown) **with a
+    warning**: this is the field whose whole purpose is separating *unknown* from
+    *checked*, so coercing it in silence would recreate the defect it exists to
+    expose (CLAUDE.md: a degraded path announces itself).
     """
     rows = []
     for c in _criteria_meta(result):
         passed = bool(c.get('passed', True))
         audited = c.get('audited')
+        if audited is not None and not isinstance(audited, bool):
+            logger.warning(
+                "criteria_meta entry {!r} has a non-boolean 'audited' ({!r}); reporting it as unknown "
+                'rather than as audited.',
+                c.get('id'),
+                audited,
+            )
+            audited = None
         evidence = c.get('evidence')
+        if evidence is not None and not isinstance(evidence, str):
+            logger.warning(
+                "criteria_meta entry {!r} has a non-string 'evidence' ({}); rendering its repr.",
+                c.get('id'),
+                type(evidence).__name__,
+            )
         rows.append(
             CriteriaRow(
                 id=c['id'],
@@ -144,7 +163,7 @@ def _criteria_rows(result: SimulationResult) -> list[dict[str, Any]]:
                 type=c.get('type'),
                 passed=passed,
                 safety=(c.get('type') == 'must_not_happen') and not passed,
-                audited=audited if isinstance(audited, bool) else None,
+                audited=audited,
                 evidence=str(evidence) if evidence else None,
             ).model_dump(mode='json')
         )
@@ -643,7 +662,10 @@ def _build_failure_mode_section(results: list[SimulationResult]) -> ReportSectio
             continue
         scen = _scenario_name(r)
         for c in _criteria_rows(r):
-            if not c['passed']:
+            # `state`, not `passed`: a criterion nobody audited is unknown, and a
+            # cross-run failure-mode tally is exactly where an unknown must not be
+            # counted as a recurring failure.
+            if c['state'] == 'fail':
                 counts[f'{scen}: {c["description"]}'] += 1
     return ReportSection(
         kind='failure_mode',

@@ -898,9 +898,11 @@ async def _run_until_target_dies(script: list[dict[str, bool] | None], *, die_on
 @pytest.mark.asyncio
 async def test_a_target_failure_keeps_the_safety_violation_the_judge_confirmed():
     """The judge confirms a ``must_not_happen`` violation on turn 1; the target dies
-    on turn 2. The violation has to survive into the result, the report metadata and
-    `find_triggers` — it used to vanish, because the target-failure branch returned
-    ``rules_broken=[]`` and ``criteria_meta=None`` while the tracker sat in scope."""
+    on turn 2. The violation has to survive into the result and the report metadata —
+    it used to vanish, because the target-failure branch returned ``rules_broken=[]``
+    and ``criteria_meta=None`` while the tracker sat in scope. (`find_triggers` is
+    not in that list: it returns ``[]`` for any errored result before it looks at
+    criteria, both before and after this change.)"""
     result = await _run_until_target_dies([{'criteria_0': False, 'criteria_1': True}], die_on_turn=2)
 
     assert result.terminated_by is TerminatedBy.error
@@ -925,3 +927,42 @@ async def test_a_target_failure_before_any_audit_reports_unverified():
     assert result.terminated_by is TerminatedBy.error
     assert result.criteria_verified is False
     assert criteria_met_scorer(result) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_a_target_failure_before_any_audit_reports_unknown_not_failed():
+    """A dead target must not fabricate criteria failures the judge never made.
+
+    Folding the tracker unconditionally turned every unobserved ``must_happen``
+    into a confirmed failure: ``rules_broken=['criteria_0']``, a red row in the
+    markdown export and the dashboard, and a phantom entry in the cross-run
+    failure-mode table — the branch's thesis (unknown is its own state) inverted.
+    Pinned on every surface the result reaches.
+    """
+    from evaluatorq.simulation.reports.recommendations import find_triggers
+    from evaluatorq.simulation.reports.sections import _criteria_rows, build_report_sections
+
+    result = await _run_until_target_dies([None], die_on_turn=1)
+
+    # Result level: nothing failed, nothing claims to have passed on the judge's say-so.
+    assert result.rules_broken == []
+    assert result.criteria_verified is False
+    assert result.criteria_results == {'Agent writes BANANA': True, 'Agent mentions a plan': True}
+
+    # Row level: unknown, not fail — the state every renderer keys on.
+    meta = result.metadata['criteria_meta']
+    assert meta is not None
+    assert [c['passed'] for c in meta] == [True, True]
+    assert [c['audited'] for c in meta] == [False, False]
+    assert [row['state'] for row in _criteria_rows(result)] == ['unknown', 'unknown']
+
+    # Scorer: unknown scores 0.0, and never 1.0 off the defaulted results dict.
+    assert criteria_met_scorer(result) == 0.0
+
+    # Cross-run failure-mode table: no phantom rows.
+    sections = build_report_sections([result])
+    failure_modes = next(s for s in sections if s.kind == 'failure_mode')
+    assert failure_modes.data['rows'] == []
+
+    # Remediation: an errored run is not remediable, so nothing is suggested.
+    assert find_triggers(result) == []

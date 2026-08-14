@@ -18,7 +18,7 @@ from evaluatorq.simulation.agents.user_simulator import (
     UserSimulatorAgent,
     UserSimulatorAgentConfig,
 )
-from evaluatorq.simulation.tracing import with_simulation_span
+from evaluatorq.simulation.tracing import span_message_text, with_simulation_span
 from evaluatorq.simulation.types import (
     DEFAULT_MODEL,
     CriterionVerdict,
@@ -769,9 +769,12 @@ class SimulationRunner:
                 },
             ) as turn_span:
                 async with with_simulation_span('orq.simulation.target_call', None) as target_span:
+                    # `span_message_text`, not `m.content or ''`: multi-part content
+                    # would otherwise land on the span as a Python repr. Same helper
+                    # the agent LLM spans use, so the two renderings cannot drift.
                     record_llm_input(
                         target_span,
-                        [{'role': m.role, 'content': m.content or ''} for m in messages],
+                        [{'role': m.role, 'content': span_message_text(m.content)} for m in messages],
                     )
                     call = await self._get_target_response(messages, target=conversation_target)
                     agent_response_text = call.response.text
@@ -1009,10 +1012,18 @@ class SimulationRunner:
         The criteria audit collected before the target died is **folded in like
         every other termination branch**, not discarded: a `must_not_happen`
         violation the judge confirmed on turn 2 has to survive the target dying on
-        turn 4, or it vanishes from the result, the report and `find_triggers`.
+        turn 4, or it vanishes from the result and the report.
         `criteria_verified` still comes from the tracker, and this run is scored
         0.0 by `criteria_met` regardless (it terminated by error/timeout), so the
         fold adds evidence without letting a dead target claim a clean sheet.
+
+        The fold is guarded exactly as `_CriteriaTracker.resolve` guards it: with
+        **no** audit at all there is nothing to fold, and folding the not-observed
+        defaults would report every `must_happen` criterion as a *confirmed*
+        failure the judge never made — the branch's own thesis inverted, with a
+        red row in every report and a phantom entry in the cross-run failure-mode
+        table. No audit is `unknown` (`criteria_verified=False`,
+        `audited=False`, `state='unknown'`), never `fail`.
         """
         err = call.error
         error_message = err.message if err else 'target failed'
@@ -1029,7 +1040,17 @@ class SimulationRunner:
             },
         )
 
-        broken = criteria_tracker.broken_ids
+        # `verified` is the same condition `resolve` guards on (an audit arrived, or
+        # there are no criteria at all — in which case `broken_ids` is empty anyway).
+        broken = criteria_tracker.broken_ids if criteria_tracker.verified else []
+        if not criteria_tracker.verified:
+            logger.warning(
+                'Target failed (%s) before the judge audited any criterion of scenario %r; reporting '
+                'those %d criteria as unknown (unverified), not as failed.',
+                error_type,
+                scenario.name if scenario else '<none>',
+                len(scenario.criteria or []) if scenario else 0,
+            )
         folded = Judgment(
             should_terminate=True,
             reason=error_message,
