@@ -164,6 +164,7 @@ def _make_entry(thread_id: str | None, last_trace_id: str | None = None) -> Any:
         goal_completion_score=0.0,
         rules_broken=[],
         criteria=[],
+        criteria_verified=None,
         turn_count=2,
         total_tokens=0,
         judge_reason='',

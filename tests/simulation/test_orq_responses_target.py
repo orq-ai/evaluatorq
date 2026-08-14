@@ -244,7 +244,7 @@ class TestOrqResponsesTargetRespond:
         call_kwargs = client.responses.create.call_args.kwargs
         assert call_kwargs["input"] == [
             {"role": "user", "content": "turn 1"},
-            {"role": "assistant", "content": "reply"},
+            {"role": "assistant", "content": [{"type": "output_text", "text": "reply"}]},
             {"role": "user", "content": "turn 2"},
         ]
 
@@ -300,7 +300,7 @@ class TestOrqResponsesTargetRespond:
         )
 
         sent = client.responses.create.call_args.kwargs["input"]
-        assert sent[1] == {"role": "assistant", "content": "let me check"}
+        assert sent[1] == {"role": "assistant", "content": [{"type": "output_text", "text": "let me check"}]}
         # item_id round-trips as the function_call item id when present.
         assert sent[2] == {
             "type": "function_call",

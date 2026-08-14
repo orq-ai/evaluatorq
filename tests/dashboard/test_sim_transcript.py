@@ -507,6 +507,7 @@ def _entry(
     error: str | None = None,
     criteria: list | None = None,
     transcript: list | None = None,
+    criteria_verified: bool | None = None,
 ):
     from evaluatorq.simulation.types import CriteriaRow, SimulationEntry, TranscriptMessage
 
@@ -536,6 +537,7 @@ def _entry(
         goal_completion_score=goal_completion_score,
         rules_broken=[],
         criteria=criteria,
+        criteria_verified=criteria_verified,
         turn_count=turn_count,
         total_tokens=100,
         judge_reason=judge_reason,

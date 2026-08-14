@@ -1845,23 +1845,60 @@ def _sim_evaluation_details(name: str, result: SimulationResult) -> tuple[str | 
     Only the default evaluators (``goal_achieved`` / ``criteria_met``) carry a
     reasoning surface today; others return ``(None, None)`` so their span/experiment
     detail is unchanged.
+
+    ``criteria_met``'s ``pass_`` tracks `criteria_met_scorer`: the two states it
+    scores 0.0 (an errored/timed-out run, and one whose criteria were never
+    audited) report ``False`` here with an explanation naming the cause, so the
+    evaluator span and the uploaded experiment cannot show an unaudited run green.
+    An individual unaudited criterion is likewise reported ``UNKNOWN`` rather than
+    ``PASS`` and does not count towards ``pass_`` — the same rule the scorer and
+    the report tallies apply.
     """
+    from evaluatorq.simulation.evaluators.scorers import UNEVALUATED_TERMINATIONS
+
     if name == 'goal_achieved':
         return (result.reason or None), result.goal_achieved
     if name == 'criteria_met':
+        # The two states `criteria_met_scorer` scores 0.0 must not report `pass=True`
+        # here: this flag lands on the evaluator span and the uploaded Orq
+        # experiment, so a run the scorer called unknown would show up green there
+        # (RES-1308). Both branches mirror the scorer's own order and reasons — keep
+        # them in step.
+        if result.terminated_by in UNEVALUATED_TERMINATIONS:
+            return (
+                (
+                    f'Run terminated by {result.terminated_by.value} before the judge could audit any '
+                    'criterion; outcome unknown, not met.'
+                ),
+                False,
+            )
+        if result.criteria_verified is False:
+            return (
+                (
+                    'Judge returned no per-criterion occurrence audit, so these verdicts cannot fail a '
+                    'must_happen criterion; unverified, not met.'
+                ),
+                False,
+            )
         meta = result.metadata.get('criteria_meta') or []
         if isinstance(meta, list) and meta:
             # Tag each line with the criterion polarity. Without it, a passed
             # 'must_not_happen' rule renders as e.g. "PASS: Agent blames the
             # customer", which reads as if the agent passed *by* misbehaving.
             # "[prohibited]" makes clear PASS means the behavior was avoided.
+            # UNKNOWN, not PASS, for a criterion the judge never audited: it is
+            # passing only by its not-observed default, and `criteria_met_scorer`
+            # does not count it as met either. The two must agree, or the score and
+            # the explanation beside it contradict each other on the same span.
             def _line(c: dict[str, object]) -> str:
-                verdict = 'PASS' if c.get('passed') else 'FAIL'
+                passed = bool(c.get('passed'))
+                verdict = ('UNKNOWN' if c.get('audited') is False else 'PASS') if passed else 'FAIL'
                 polarity = 'prohibited' if c.get('type') == 'must_not_happen' else 'required'
-                return f'{verdict} [{polarity}]: {c.get("description", c.get("id", "?"))}'
+                suffix = ' (not audited)' if verdict == 'UNKNOWN' else ''
+                return f'{verdict} [{polarity}]: {c.get("description", c.get("id", "?"))}{suffix}'
 
             lines = [_line(c) for c in meta]
-            all_met = all(c.get('passed') for c in meta)
+            all_met = all(c.get('passed') and c.get('audited') is not False for c in meta)
             return '\n'.join(lines), all_met
         # Fallback to the lossy criteria_results dict when criteria_meta is absent.
         criteria_results = result.criteria_results or {}

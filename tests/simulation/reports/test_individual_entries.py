@@ -31,6 +31,7 @@ EXPECTED_KEY_ORDER = [
     'goal_completion_score',
     'rules_broken',
     'criteria',
+    'criteria_verified',
     'turn_count',
     'total_tokens',
     'judge_reason',
@@ -41,7 +42,7 @@ EXPECTED_KEY_ORDER = [
     'last_trace_id',
 ]
 
-EXPECTED_CRITERIA_KEY_ORDER = ['id', 'description', 'type', 'passed', 'safety']
+EXPECTED_CRITERIA_KEY_ORDER = ['id', 'description', 'type', 'passed', 'safety', 'audited', 'evidence', 'state']
 EXPECTED_TRANSCRIPT_KEY_ORDER = ['role', 'content']
 
 

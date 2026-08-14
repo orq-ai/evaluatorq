@@ -152,6 +152,7 @@ mode this table exists to prevent.
 | Normalising agent output shapes | `common.output_adapters`, `common.messages` | per-surface `isinstance` ladders |
 | Turning message content or a tool result into text | `contracts.content_to_text` / `tool_result_to_text` | `str()` on a `str \| list[ContentPart]` — it renders a Python repr that a judge then scores |
 | Building an Orq SDK client | `common.orq_client.resolve_orq_client` | `Orq(...)` anywhere but that module |
+| Rendering a transcript as Responses `input` | `openresponses.input_items.messages_to_responses_input` | a hand-built `{'role', 'content'}` list — an assistant turn needs `output_text` parts or the Orq router **silently drops it** |
 
 
 ## House rules
@@ -169,6 +170,7 @@ Distilled from review findings that recurred. Each cost a review round.
 - **Nothing stateful is shared across concurrent work.** `evaluate()` / `simulate()` / `red_team()` run datapoints concurrently: give each task its own target via `new()` (a shared `ORQAgentTarget` races on `_task_id`), and key per-item assignment on the dataset row, never on an arrival-order cursor. An `asyncio` primitive binds to the loop that first blocks on it — don't reuse one across loops.
 - **A new registry copies `vulnerability_registry.py`.** Assert `set(Enum) == set(registry)` at import time and freeze with `MappingProxyType`; a plain mutable dict drifts silently as the enum grows.
 - **Every filtered UI section renders an empty state.** A section that disappears on zero matches is indistinguishable from a bug.
+- **Never ask a judge for a verdict that inverts between types.** `must_happen` and `must_not_happen` mean opposite things by the same `passed` flag, and models get it backwards — gpt-5.4-mini marked a satisfied `must_happen` as unmet while its own `reason` said the opposite. Ask for the one factual thing (*did it occur?*) and map occurrence to pass/fail in code.
 - **Provider usage/cost shapes are not interchangeable.** Anthropic reports cache reads top-level where Orq/OpenAI nest them. Build the test fixture from the provider SDK's own models so a schema move fails the test instead of confirming the guess.
 
 Guardrails for the mechanical parts live in `tests/test_reuse_guardrails.py`.

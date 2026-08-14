@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime  # noqa: TC003
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 from typing_extensions import TypedDict
 
 from evaluatorq.contracts import Message, ResponseTrace, RunSummary, StrEnum, TokenUsage
@@ -351,12 +351,91 @@ class Scenario(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+CRITERION_ID_PATTERN = r'^criteria_\d+$'
+"""Shape of a criterion id. Ids are positional (``criteria_0`` is the first
+criterion in `Scenario.criteria`), so this is the one place the format is written
+down; `criterion_id_for` and `CriterionVerdict.index` are the only ways to build
+or read one."""
+
+
+def criterion_id_for(index: int) -> str:
+    """The id of the criterion at `index` in a scenario's criteria list.
+
+    Every id in `rules_broken`, `criteria_results` and `criteria_meta` comes from
+    here. It used to be an inline f-string in nine places, which is nine chances
+    for the prompt, the parser and the report to disagree about what identifies a
+    criterion.
+    """
+    return f'criteria_{index}'
+
+
+class CriterionVerdict(BaseModel):
+    """One criterion's **occurrence** report for a single turn.
+
+    Occurrence, never pass/fail: `occurred` answers "did the described behaviour
+    appear?", which means the same thing for both `Criterion.type` values. A
+    pass/fail flag inverts between them and models get it backwards — gpt-5.4-mini
+    marked a satisfied `must_happen` as unmet while its own reason said otherwise.
+    The type-to-verdict mapping lives in code, where it cannot be confused.
+    """
+
+    criterion_id: str = Field(
+        pattern=CRITERION_ID_PATTERN,
+        description='The criterion id exactly as listed under EVALUATION CRITERIA, e.g. "criteria_0". '
+        'Copy it; do not paraphrase or renumber.',
+    )
+    occurred: bool = Field(
+        description='true if the described behaviour has actually appeared in the conversation so far, '
+        'false if it has not. Answer for the description alone, ignoring whether the criterion is '
+        'must_happen or must_not_happen.'
+    )
+    evidence: str = Field(
+        default='',
+        description='Short quote from the conversation showing the behaviour, or empty when occurred is false.',
+    )
+
+    @property
+    def index(self) -> int:
+        """Position in the scenario's criteria list, for stable ordering.
+
+        Derived from `criterion_id` rather than reported next to it: one value to
+        validate, and the two can never disagree. The id is what crosses the wire
+        because the judge copies it from the prompt, whereas a bare integer makes
+        it *count* — and a miscount lands in range on the neighbouring criterion,
+        which is usually of the opposite type, silently inverting a verdict. An
+        out-of-range id is merely dropped and warned about.
+        """
+        return int(self.criterion_id.removeprefix('criteria_'))
+
+
 class Judgment(BaseModel):
     should_terminate: bool
     reason: str
     goal_achieved: bool
     rules_broken: list[str]
     goal_completion_score: float
+    criteria_verdicts: list[CriterionVerdict] | None = None
+    """Per-criterion **occurrence** audit for this turn, ordered by criterion index.
+
+    Three states, all distinct. ``None`` means the judge reported nothing —
+    **unknown, never passed**; the run is marked `criteria_verified=False`. An
+    empty list means it audited and had nothing left to report, which is the
+    normal state once every criterion is settled. A non-empty list is evidence.
+
+    Only a non-empty list marks the run verified. ``[]`` is trusted as "nothing
+    left" precisely because something was already reported, which set the flag —
+    a run whose every turn returned ``[]`` audited nothing, and the judge warns at
+    the turn it happens.
+
+    ``occurred=True`` means the described behaviour has appeared in the
+    conversation so far — regardless of whether the criterion wanted it. Pass/fail
+    is derived from occurrence + `Criterion.type` in code, never asked of the
+    judge: a pass/fail flag inverts between the two types and models get it
+    backwards.
+
+    Pass/fail used to be inferred from the absence of an id in ``rules_broken``,
+    which made a ``must_happen`` criterion structurally unfailable — never
+    occurring is not a violation the judge is asked to report (RES-1308)."""
     response_quality: float | None = None
     hallucination_risk: float | None = None
     tone_appropriateness: float | None = None
@@ -395,6 +474,14 @@ class SimulationResult(BaseModel):
     turn_metrics: list[TurnMetrics]
     metadata: dict[str, Any] = Field(default_factory=dict)
     criteria_results: dict[str, bool] | None = None
+    criteria_verified: bool | None = Field(
+        default=None,
+        description='Whether criteria_results rests on the judge per-criterion occurrence audit. '
+        'False means the audit never arrived (a custom judge that does not report it, or a judge that '
+        'malfunctioned and terminated for safety), so the verdicts fell back to the free-text '
+        'rules_broken list, which cannot fail a must_happen criterion — treat them as unknown, not met. '
+        'None for runs saved before this field existed.',
+    )
     total_turns: int | None = None
     thread_id: str | None = Field(
         default=None,
@@ -554,7 +641,8 @@ class CriteriaRow(BaseModel):
 
     Field order MUST match the key order of the dicts returned by
     ``_criteria_rows()`` so that ``model_dump(mode='json')`` is byte-identical
-    to the hand-built dict.
+    to the hand-built dict — which it is by construction, because that function
+    builds these objects and dumps them. Computed fields dump last.
     """
 
     id: str
@@ -562,6 +650,29 @@ class CriteriaRow(BaseModel):
     type: Literal['must_happen', 'must_not_happen'] | None
     passed: bool
     safety: bool
+    audited: bool | None = None
+    """Whether the judge actually returned an occurrence verdict for this
+    criterion. ``None`` on runs saved before the field existed."""
+    evidence: str | None = None
+    """Quote from the turn where occurrence first flipped; ``None`` when the
+    criterion never occurred, no quote was given, or the run predates the field."""
+
+    @computed_field
+    @property
+    def state(self) -> Literal['pass', 'fail', 'unknown']:
+        """The rendering verdict every surface must use instead of ``passed``.
+
+        ``'unknown'`` means the criterion passed only by default, because the
+        judge never audited it — a default-passing ``must_not_happen`` nobody
+        checked is exactly the flattering silence RES-1308 is about, and no
+        renderer may paint it green. A failing unaudited criterion stays
+        ``'fail'``; that reading is already conservative. Computed here so the
+        dashboard, the HTML report and the markdown export cannot each invent
+        their own rule.
+        """
+        if self.passed and self.audited is False:
+            return 'unknown'
+        return 'pass' if self.passed else 'fail'
 
 
 class SimulationEntry(BaseModel):
@@ -582,6 +693,11 @@ class SimulationEntry(BaseModel):
     goal_completion_score: float
     rules_broken: list[str]
     criteria: list[CriteriaRow]
+    criteria_verified: bool | None
+    """Mirrors ``SimulationResult.criteria_verified``. ``False`` means the judge
+    returned no per-criterion audit, so the whole criteria block is unknown and
+    `criteria_met` scored the run 0.0 — renderers say so instead of showing a
+    tally that contradicts the score. ``None`` on runs saved before the field."""
     turn_count: int
     total_tokens: int
     judge_reason: str

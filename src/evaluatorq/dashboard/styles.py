@@ -1507,6 +1507,8 @@ _SIM_REPORT_OVERRIDES_CSS = """
 .sim-report .crit-dot--pass { background: var(--green-600); }
 .sim-report .crit-dot--fail { background: var(--red-600); }
 .sim-report .crit-dot--safety { background: var(--orange-500); }
+/* Unaudited: hollow, so it reads as "unknown" rather than as a pass. */
+.sim-report .crit-dot--unknown { background: var(--surface-sunken); box-shadow: inset 0 0 0 1px var(--border-strong); }
 .sim-report .crit-caret {
     width: 13px; height: 13px; flex: none; color: var(--text-faint);
     transition: transform .2s ease, color .15s ease;
@@ -1536,6 +1538,8 @@ _SIM_REPORT_OVERRIDES_CSS = """
 .sim-report .crit-li--pass::before { background: var(--green-600); }
 .sim-report .crit-li--fail::before { background: var(--red-600); }
 .sim-report .crit-li--safety::before { background: var(--orange-500); }
+.sim-report .crit-li--unknown::before { background: var(--text-faint); }
+.sim-report .crit-evidence { margin: 4px 0 0; padding-left: 18px; font-size: 12px; font-style: italic; color: var(--text-muted); }
 @media (prefers-reduced-motion: reduce) {
     .sim-report .crit-summary, .sim-report .crit-dot, .sim-report .crit-caret,
     .sim-report .crit-cell::details-content { transition: none; }
@@ -2063,7 +2067,8 @@ _SIM_TRANSCRIPT_OVERRIDES_CSS = """
 /* Scoped to the criteria list so it no longer collides with the Scenarios-panel
    .sim-criterion rule above. Plain gapped column (no dividers). */
 .sim-report .sim-criteria-list .sim-criterion {
-    display: flex; align-items: center; gap: 8px;
+    /* wraps so the evidence quote drops onto its own full-width line under the row */
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
     /* Reset the row-divider + padding the legacy `.sim-criterion` rule adds; the
        criteria list is a plain gapped column so only the section-level rules
        (general info ↔ criteria ↔ conversation) draw dividers. */
@@ -2080,6 +2085,33 @@ _SIM_TRANSCRIPT_OVERRIDES_CSS = """
 }
 .sim-report .sim-ctype-unsafe {
     color: var(--red-600); background: var(--red-100); border-color: transparent;
+}
+/* Unaudited criteria read as neither pass nor fail: a muted "?" tile, a "not
+   audited" chip and a run-level note, so an unverified run can never look like a
+   clean one (RES-1308). */
+.sim-report .sim-criterion-unknown .sim-criterion-icon {
+    background: var(--surface-sunken); color: var(--text-faint);
+    border: 1px solid var(--border-subtle);
+}
+.sim-report .sim-criterion-unaudited {
+    flex-shrink: 0; font-family: var(--font-sans); font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.03em; white-space: nowrap;
+    color: var(--text-faint);
+}
+.sim-report .sim-criterion-evidence {
+    flex: 1 1 100%; font-size: 12px; font-style: italic; color: var(--text-muted);
+    padding-left: 26px;
+}
+.sim-report .sim-criteria-unknown {
+    font-family: var(--font-sans); font-size: 12px; color: var(--text-faint); white-space: nowrap;
+}
+.sim-report .sim-criteria-unverified {
+    margin: 0 0 10px; font-size: 12px; line-height: 1.5; color: var(--text-muted);
+    padding: 8px 10px; border-radius: 6px;
+    background: var(--surface-sunken); border: 1px solid var(--border-subtle);
+}
+.sim-report .sim-criteria-empty {
+    margin: 0; font-size: 13px; color: var(--text-faint);
 }
 """
 
