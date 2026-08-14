@@ -362,6 +362,78 @@ def test_unusable_goal_completion_score_falls_back_to_zero_and_keeps_the_audit(c
     assert judgment.rules_broken == ['criteria_1']  # the audit survived
 
 
+def test_a_salvage_that_saves_nothing_is_unknown_not_an_empty_audit(caplog):
+    """Every entry malformed leaves the retry with ``[]``, which would claim the judge
+    audited and found nothing left to report — the flattering silence of RES-1308.
+    Nothing salvageable is *unknown*, so the run is marked unverified."""
+    judge = _judge()
+    result = _llm_result(
+        'continue_conversation',
+        {
+            'reason': 'r',
+            'goal_completion_score': 0.0,
+            'criteria_verdicts': [
+                {'criterion_id': 'criteria_0', 'occurred': 'not-a-bool', 'evidence': ''},
+                {'criterion_id': 42, 'occurred': True, 'evidence': ''},
+            ],
+        },
+    )
+    with caplog.at_level('WARNING'):
+        judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+    assert judgment.criteria_verdicts is None
+    assert 'unknown, not an empty audit' in caplog.text
+
+
+def test_a_non_string_reason_is_coerced_instead_of_discarding_the_audit(caplog):
+    """`reason` is free text nothing branches on; failing the payload over it would
+    safety-terminate the run and throw away the criteria audit with it — the same
+    trade `goal_completion_score` already makes."""
+    judge = _judge()
+    result = _llm_result(
+        'continue_conversation',
+        {
+            'reason': 42,
+            'goal_completion_score': 0.5,
+            'criteria_verdicts': [{'criterion_id': 'criteria_1', 'occurred': True, 'evidence': 'a plan'}],
+        },
+    )
+    with caplog.at_level('WARNING'):
+        judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+    assert judgment.should_terminate is False  # not a safety termination
+    assert judgment.reason == '42'
+    assert judgment.rules_broken == ['criteria_1']  # the audit survived
+    assert 'non-string reason' in caplog.text
+
+
+@pytest.mark.parametrize(
+    'payload',
+    [
+        {'reason': 'r', 'goal_achieved': True},
+        {'reason': 'r', 'goal_achieved': True, 'goal_completion_score': None},
+    ],
+    ids=['omitted', 'explicit-null'],
+)
+def test_an_achieved_finish_without_a_score_reads_as_complete(payload: dict[str, object]):
+    """The two spellings mean the same thing to a model, so they must score the same.
+    An explicit null lands in `model_fields_set`, which used to skip the 1.0 fallback
+    and score an achieved goal 0.0."""
+    judge = _judge()
+    judgment = judge._parse_judgment(_llm_result('finish_conversation', payload))  # pyright: ignore[reportPrivateUsage]
+    assert judgment.goal_achieved is True
+    assert judgment.goal_completion_score == 1.0
+
+
+def test_the_criterion_verdict_item_schema_requires_evidence():
+    """`WIRE_REQUIRED` governs the top-level object only, and pydantic's own
+    ``required`` drops `evidence` because the parser defaults it to ''. The evidence
+    capture the audit depends on must not be optional on the wire."""
+    from evaluatorq.simulation.agents.judge import JUDGE_TOOLS
+
+    for tool in JUDGE_TOOLS:
+        items = tool['function']['parameters']['properties']['criteria_verdicts']['items']
+        assert items['required'] == ['criterion_id', 'evidence', 'occurred'], tool['function']['name']
+
+
 def test_a_boolean_score_is_not_read_as_a_number():
     """``True`` coerces to 1.0 through float(), which would read as a perfect score
     from a judge that answered the wrong type entirely."""

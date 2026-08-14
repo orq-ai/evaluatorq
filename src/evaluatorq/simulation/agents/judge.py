@@ -20,6 +20,7 @@ from pydantic import (
     ValidationInfo,
     ValidatorFunctionWrapHandler,
     field_validator,
+    model_validator,
 )
 
 from evaluatorq.common.sanitize import delimit
@@ -113,6 +114,41 @@ class _JudgeToolArgs(BaseModel):
         '1.0=fully correct). Only score this if ground truth is provided.'
     )
 
+    @model_validator(mode='before')
+    @classmethod
+    def _null_score_reads_as_omitted(cls, data: object) -> object:
+        """Treat an explicit ``"goal_completion_score": null`` as if the key were absent.
+
+        The two spellings mean the same thing to a model, but pydantic records an
+        explicitly-null key in `model_fields_set`, which would skip the "a finish
+        that achieved the goal and sent no score means 1.0" fallback in
+        `_parse_judgment` and score the run 0.0 instead. Normalising here — before
+        the field validators run — also keeps the null out of
+        `_coerce_required_score`, which would otherwise warn about a value that is
+        not actually a broken answer.
+        """
+        if isinstance(data, dict) and data.get('goal_completion_score', ...) is None:
+            data = {k: v for k, v in cast('dict[str, object]', data).items() if k != 'goal_completion_score'}
+        return data
+
+    @field_validator('reason', mode='before')
+    @classmethod
+    def _coerce_reason(cls, value: object) -> str:
+        """Coerce a non-string `reason` rather than failing the whole payload over it.
+
+        Same trade as `_coerce_required_score` directly below, for the same reason:
+        `reason` is free text nothing branches on, while rejecting the payload would
+        safety-terminate the run and discard its criteria audit. The two adjacent
+        branches must not differ in whether they degrade.
+        """
+        if isinstance(value, str):
+            return value
+        logger.warning(
+            'JudgeAgent: non-string reason %r; coercing to text rather than discarding this turn.',
+            value,
+        )
+        return '' if value is None else str(value)
+
     @field_validator(
         'response_quality',
         'hallucination_risk',
@@ -196,6 +232,16 @@ class _JudgeToolArgs(BaseModel):
                     _first_error(second),
                 )
                 return None
+            if not verdicts:
+                # Salvage that saved nothing is *unknown*, not "audited and clean":
+                # `[]` claims the judge looked and had nothing left to report, which
+                # is the flattering silence RES-1308 is about. An audit that arrived
+                # empty is a different thing and still returns `[]` above.
+                logger.warning(
+                    'JudgeAgent: every criteria_verdicts entry was malformed; this turn contributes no '
+                    'criteria evidence (unknown, not an empty audit).',
+                )
+                return None
         if verdicts is None:
             return None
         return _resolve_against_scenario(cast('list[CriterionVerdict]', verdicts), info)
@@ -271,6 +317,11 @@ def _resolve_against_scenario(
 class ContinueConversation(_JudgeToolArgs):
     """Allow the conversation to continue. Use when the goal is not yet achieved and no rules are broken."""
 
+    # `reason` is re-declared only to carry this tool's own wording: field
+    # descriptions are prompt text the judge reads, and "the decision" says less
+    # than naming which decision it just made.
+    reason: str = Field(default='', description='Brief explanation of why the conversation should continue')
+
     # No `rules_broken` here either — see `FinishConversation`.
 
 
@@ -279,6 +330,15 @@ class FinishConversation(_JudgeToolArgs):
 
     WIRE_REQUIRED: ClassVar[frozenset[str]] = _JudgeToolArgs.WIRE_REQUIRED | {'goal_achieved'}
 
+    reason: str = Field(default='', description='Explanation of why the conversation should end')
+    # The base wording ("SO FAR … if the run hits max turns this is the final
+    # score") is written for a turn that continues; on the call that ends the run
+    # there is no "so far".
+    goal_completion_score: float = Field(
+        default=0.0,
+        description='How much of the goal was achieved, from 0.0 (none) to 1.0 (fully achieved). Use '
+        'intermediate values for partial completion.',
+    )
     goal_achieved: bool = Field(default=False, description="Whether the user's goal was successfully achieved")
 
     # No `rules_broken`. The judge is asked what OCCURRED; which occurrences count
@@ -290,6 +350,19 @@ class FinishConversation(_JudgeToolArgs):
 # ---------------------------------------------------------------------------
 # Model -> wire schema
 # ---------------------------------------------------------------------------
+
+_NESTED_WIRE_REQUIRED: dict[type[BaseModel], frozenset[str]] = {
+    CriterionVerdict: frozenset({'criterion_id', 'occurred', 'evidence'}),
+}
+"""`WIRE_REQUIRED`, one nesting level down.
+
+`_JudgeToolArgs.WIRE_REQUIRED` governs the top-level object only; a nested model
+gets pydantic's own ``required``, which omits every field that has a parser-side
+default — exactly the "generated schema quietly un-requires a field" defect
+`WIRE_REQUIRED` exists to prevent, reproduced inside the item schema. `evidence`
+defaults to ``''`` in the parser and would drop out of the item's ``required``,
+so the evidence capture the audit depends on would become optional on the wire.
+"""
 
 _STRIPPED_SCHEMA_KEYS = ('title', 'default')
 """Dropped from every node of a generated schema.
@@ -339,7 +412,19 @@ def _inline_refs(schema: dict[str, Any]) -> dict[str, Any]:
             node = cast('dict[str, Any]', node)
             ref = node.get('$ref')
             if isinstance(ref, str) and ref.startswith('#/$defs/'):
-                target = {**defs.get(ref.rsplit('/', 1)[-1], {}), **{k: v for k, v in node.items() if k != '$ref'}}
+                definition = defs.get(ref.rsplit('/', 1)[-1])
+                if definition is None:
+                    # Cannot happen with a schema pydantic just generated, so if it
+                    # does the generator changed under us — and the consequence is a
+                    # shapeless node the model can fill with anything, which shows up
+                    # as an unaudited run rather than as an error.
+                    logger.warning(
+                        'JudgeAgent: unresolvable %s in the generated tool schema; that node reaches the '
+                        'model with no shape.',
+                        ref,
+                    )
+                    definition = {}
+                target = {**cast('dict[str, Any]', definition), **{k: v for k, v in node.items() if k != '$ref'}}
                 return resolve(target)
             return {key: resolve(value) for key, value in node.items()}
         if isinstance(node, list):
@@ -349,7 +434,7 @@ def _inline_refs(schema: dict[str, Any]) -> dict[str, Any]:
     return cast('dict[str, Any]', resolve(schema))
 
 
-def _drop_null_branch(prop: dict[str, Any]) -> dict[str, Any]:
+def _drop_null_branch(name: str, prop: dict[str, Any]) -> dict[str, Any]:
     """Collapse the ``anyOf: [X, null]`` pydantic emits for ``X | None`` down to ``X``.
 
     See `_JudgeToolArgs.WIRE_NON_NULLABLE` for why one field must not be nullable
@@ -357,6 +442,12 @@ def _drop_null_branch(prop: dict[str, Any]) -> dict[str, Any]:
     """
     branches = [b for b in cast('list[dict[str, Any]]', prop.get('anyOf', [])) if b.get('type') != 'null']
     if len(branches) != 1:
+        logger.warning(
+            'JudgeAgent: %s is listed in WIRE_NON_NULLABLE but its schema has %d non-null branch(es), not '
+            'one; leaving it nullable on the wire, so the model can send null deliberately.',
+            name,
+            len(branches),
+        )
         return prop
     return {**{k: v for k, v in prop.items() if k != 'anyOf'}, **branches[0]}
 
@@ -366,15 +457,23 @@ def _wire_schema(model: type[_JudgeToolArgs]) -> dict[str, Any]:
 
     Three deliberate departures from `model_json_schema()`, because the wire
     contract and the parser contract are not the same contract: ``required`` comes
-    from `WIRE_REQUIRED`, ``default`` is stripped, and `WIRE_NON_NULLABLE` fields
-    lose their null branch.
+    from `WIRE_REQUIRED` (and, one level down, `_NESTED_WIRE_REQUIRED`),
+    ``default`` is stripped, and `WIRE_NON_NULLABLE` fields lose their null branch.
     """
-    schema = _inline_refs(model.model_json_schema())
+    raw = model.model_json_schema()
+    # Before inlining: while the nested models still live in `$defs` under their
+    # class name, which is the one place their `required` can be reached by name.
+    defs = cast('dict[str, Any]', raw.get('$defs') or {})
+    for nested, required in _NESTED_WIRE_REQUIRED.items():
+        node = cast('dict[str, Any] | None', defs.get(nested.__name__))
+        if node is not None:
+            node['required'] = sorted(required)
+    schema = _inline_refs(raw)
     _walk(schema, _strip_node)
     properties = cast('dict[str, Any]', schema.get('properties', {}))
     for name in model.WIRE_NON_NULLABLE:
         if name in properties:
-            properties[name] = _drop_null_branch(properties[name])
+            properties[name] = _drop_null_branch(name, properties[name])
     schema['required'] = sorted(model.WIRE_REQUIRED)
     return schema
 
@@ -411,12 +510,18 @@ def _assert_wire_fields_exist() -> None:
     `WIRE_REQUIRED` is written by hand because pydantic's own ``required`` cannot
     express it. This is the mechanical check that a rename cannot land on only one
     of the two — otherwise the tool would keep demanding a field that no longer
-    exists, and the parser would never see it.
+    exists, and the parser would never see it. The nested models in
+    `_NESTED_WIRE_REQUIRED` are checked the same way: a rename inside
+    `CriterionVerdict` must not half-land either.
     """
-    for model in _TOOL_MODELS.values():
-        missing = model.WIRE_REQUIRED - set(model.model_fields)
+    hand_written: list[tuple[type[BaseModel], frozenset[str]]] = [
+        *((model, model.WIRE_REQUIRED) for model in _TOOL_MODELS.values()),
+        *_NESTED_WIRE_REQUIRED.items(),
+    ]
+    for model, required in hand_written:
+        missing = required - set(model.model_fields)
         if missing:
-            raise RuntimeError(f'{model.__name__}.WIRE_REQUIRED names unknown field(s): {sorted(missing)}')
+            raise RuntimeError(f'{model.__name__} wire-required names unknown field(s): {sorted(missing)}')
 
 
 _assert_wire_fields_exist()

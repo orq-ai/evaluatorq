@@ -160,6 +160,23 @@ class TestJudgeTools:
         assert "rules_broken" not in params["properties"]
         assert "rules_broken" not in params["required"]
 
+    def test_each_tool_describes_its_own_reason_field(self):
+        """Field descriptions are prompt text the judge reads, so the two tools must
+        not share one generic wording for the decision they just made."""
+        continue_props = JUDGE_TOOLS[0]["function"]["parameters"]["properties"]
+        finish_props = JUDGE_TOOLS[1]["function"]["parameters"]["properties"]
+        assert "continue" in continue_props["reason"]["description"]
+        assert "end" in finish_props["reason"]["description"]
+
+    def test_finish_does_not_score_the_goal_SO_FAR(self):
+        """"SO FAR ... if the run hits max turns this is the final score" is written
+        for a turn that continues; on the call that ends the run there is no so-far."""
+        continue_desc = JUDGE_TOOLS[0]["function"]["parameters"]["properties"]["goal_completion_score"]["description"]
+        finish_desc = JUDGE_TOOLS[1]["function"]["parameters"]["properties"]["goal_completion_score"]["description"]
+        assert "SO FAR" in continue_desc
+        assert "SO FAR" not in finish_desc
+        assert "partial completion" in finish_desc
+
     def test_both_tools_have_quality_scores(self):
         quality_fields = {
             "response_quality",
