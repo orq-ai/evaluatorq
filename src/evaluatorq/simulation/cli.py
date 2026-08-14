@@ -1411,6 +1411,30 @@ def from_traces(
             ),
         ),
     ] = DEFAULT_MODEL,
+    replay_first_message: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option(
+            '--replay-first-message/--generate-first-message',
+            help=(
+                "Open each conversation with the real user's recorded first message "
+                'instead of one written from the inferred persona and scenario. '
+                'Faithful to the recording, but turn one then sounds like production '
+                'and every turn after it like the persona — and recorded text carries '
+                'whatever PII was in it into the dataset.'
+            ),
+        ),
+    ] = False,
+    max_summaries: Annotated[
+        int,
+        typer.Option(
+            '--max-summaries',
+            min=1,
+            help=(
+                'How many trace summaries the --extend traffic-profile call carries. '
+                'Traces beyond this are dropped from the profile with a warning.'
+            ),
+        ),
+    ] = 50,
     verbose: Annotated[
         int,
         typer.Option(
@@ -1429,19 +1453,27 @@ def from_traces(
 
     Fetches recent traces from the Orq traces API (requires ``ORQ_API_KEY``)
     and builds one datapoint per trace conversation: the persona and scenario
-    are inferred from the transcript, the first message is the real user's
-    opening message verbatim. Pass ``--extend N`` to additionally generate N
-    new datapoints matching the traffic distribution of the fetched traces.
-    Feed the output file to ``sim simulate --input`` to run.
+    are inferred from the transcript (summarized first when it is long), and the
+    opening message is written from that persona and scenario — pass
+    ``--replay-first-message`` to reuse the recorded one instead. Pass
+    ``--extend N`` to additionally generate N new datapoints matching the traffic
+    distribution of the fetched traces. Feed the output file to
+    ``sim simulate --input`` to run.
     """
     if quiet:
         verbose = -1
     _configure_logging(verbose)
 
     from evaluatorq.simulation.traces import (
+        TraceAnalysisConfig,
         datapoints_from_traces,
         extend_from_traces,
         fetch_trace_conversations,
+    )
+
+    trace_config = TraceAnalysisConfig(
+        generate_first_message=not replay_first_message,
+        max_reduce_summaries=max_summaries,
     )
 
     async def _impl() -> tuple[int, int, list[Any]]:
@@ -1459,7 +1491,7 @@ def from_traces(
             raise RuntimeError(
                 'No traces with a usable conversation found. Widen --lookback-hours, raise --limit, or drop --search.'
             )
-        datapoints = await datapoints_from_traces(conversations, model=sim_model)
+        datapoints = await datapoints_from_traces(conversations, model=sim_model, config=trace_config)
         num_direct = len(datapoints)
         if extend > 0:
             datapoints += await extend_from_traces(
@@ -1467,6 +1499,7 @@ def from_traces(
                 num_datapoints=extend,
                 agent_description=agent_description,
                 model=sim_model,
+                config=trace_config,
             )
         return len(conversations), num_direct, datapoints
 

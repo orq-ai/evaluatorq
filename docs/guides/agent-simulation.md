@@ -405,7 +405,8 @@ archetypes and situations your agent actually meets.
 
 The direct route is `eq sim from-traces`, which pulls recent traces from the Orq
 traces API and writes one datapoint per conversation — persona and scenario
-inferred from the transcript, first message taken from the real user verbatim:
+inferred from the transcript, opening message written from that persona and
+scenario:
 
 ```bash
 eq sim from-traces --output traces_datapoints.jsonl --limit 50 --lookback-hours 24
@@ -427,10 +428,17 @@ Full flag list: [`eq sim from-traces`](../cli-reference/simulation.md).
 
 #### What happens between a trace and a datapoint
 
-Fetching is shared; the two modes diverge at the LLM call. Direct mode sends one
-conversation per call, so nothing competes for the prompt budget. Extension mode
-concatenates many into a single call, because a *distribution* — which intents
-make up which share of traffic — is not visible from one conversation at a time.
+Fetching is shared; both modes are then map-then-reduce. Each conversation is
+summarized on its own (the map), and the summaries — never the raw transcripts —
+go into the call that produces the output (the reduce). That is what keeps a
+prompt's size a function of *how many* traces there are rather than how long any
+one of them ran: before it, a single long agentic session crowded out the twenty
+short conversations it should have been weighed against.
+
+The two differ in when they summarize. Direct mode does it only past
+`summarize_above_chars`, since a short trace can go to inference whole and cost
+no extra call. Extension mode always does, because its reduce call carries many
+conversations at once and even short ones compete.
 
 ```mermaid
 flowchart TD
@@ -443,33 +451,63 @@ flowchart TD
     F --> G["Direct mode<br/>datapoints_from_traces"]
     F --> H["Extension mode<br/>extend_from_traces"]
 
-    G --> I["1 LLM call per conversation<br/>whole transcript, uncapped<br/>5 calls in flight"]
-    I --> J["Persona + Scenario<br/>first message copied verbatim<br/>from the real user"]
+    G --> G1{"Transcript over<br/>summarize_above_chars?"}
+    G1 -- "yes" --> G2["MAP: summarize this one<br/>~250 tokens"]
+    G1 -- "no" --> G3["Send the transcript whole"]
+    G2 --> I["REDUCE: infer Persona + Scenario<br/>1 call per conversation"]
+    G3 --> I
+    I --> J["Write the opening message<br/>from that persona and scenario<br/>--replay-first-message reuses<br/>the recorded one"]
     J --> K["SimulationDatapoint<br/>id = trace-{trace_id}"]
 
-    H --> L["1 LLM call for up to 30<br/>transcripts, 6000 chars each"]
+    H --> H1["MAP: summarize every conversation<br/>~250 tokens each, 5 in flight"]
+    H1 --> L["REDUCE: 1 call over up to 50 summaries"]
     L --> M["Traffic profile prose:<br/>intent mix and shares, tone and<br/>patience ranges, edge cases"]
     M --> N["DatapointGenerator<br/>personas x scenarios<br/>grounded in that profile"]
     N --> O["N new SimulationDatapoints<br/>synthetic, not replayed"]
 ```
 
-The limits, and what each one actually protects:
+Every LLM-side limit lives on `TraceAnalysisConfig`, passed as `config=` to either
+function; the fetch-side ones are fixed:
 
-| Limit | Value | Why |
+| Limit | Default | Why |
 |---|---|---|
-| Listing pages | 20 pages x 200 rows | Backstop against a page whose rows all lack `trace_id` looping forever, not a cost bound |
+| Listing pages | 20 x 200 rows | Backstop against a page whose rows all lack `trace_id` looping forever, not a cost bound |
 | Span fetches in flight | 5 | Politeness to the traces API |
-| Inference calls in flight | 5 | Same width the datapoint generator uses |
-| Transcript sent to inference | uncapped | One conversation per call has nothing to share the budget with; truncating deletes the part being described |
-| Transcripts per profile call | 30 | They share one prompt |
-| Chars per transcript in that call | 6000 | Multiplied by 30, so this one is real |
-| Completion budget | 2000 tokens | Both calls |
+| LLM calls in flight | 5 | Same width the datapoint generator uses |
+| `summarize_above_chars` | 8000 | Above this, direct mode summarizes first — below it, the extra call buys nothing |
+| `summary_max_chars` | 1000 (~250 tokens) | One summary's budget in the reduce prompt; a longer one is truncated with a warning |
+| `max_reduce_summaries` | 50 | How many summaries the profile call carries; the rest are dropped with a warning naming the count |
+| `summary_max_tokens` | 10000 | Completion budget for a summarize call — reasoning headroom, not the length target |
+| `max_tokens` | 10000 | Completion budget for the inference and profile calls |
+| `generate_first_message` | `True` | Write the opening from the persona; `False` replays the recorded one |
+
+The completion budgets are deliberately far above the answers they bound.
+Reasoning models spend most of a budget thinking before emitting anything, so a
+budget sized to the output gets consumed by reasoning tokens and truncates the
+answer to nothing — the prompt bounds the length, the budget bounds the failure.
+Truncation is never silent: `generate_structured` raises on a length-finished
+response on both the structured and the `json_object` path rather than handing
+back a cut-off object.
 
 A trace that fails its span fetch, returns a non-list payload, or yields no user
 message is dropped with a warning rather than failing the batch — likewise an
-inference call that raises or returns nothing parseable. A short run that
-silently produced fewer datapoints than traces requested has those warnings
-behind it.
+inference call that raises or returns nothing parseable. A failed *summarize*
+call degrades instead of dropping the trace: the head of the raw transcript
+stands in, cut to the same budget, with a warning naming the trace. A run that
+produced fewer datapoints than traces has those warnings behind it.
+
+##### Why the opening message is generated, not replayed
+
+Replaying the real user's first message looks like the faithful choice and
+behaves worse. The simulated user is the *persona*; if turn one is production
+text the persona would not have written, the conversation opens in one voice and
+continues in another, and whatever the agent does with that mismatch is not
+evidence about either. Reusing recorded text also carries any PII in it into a
+generated dataset that then gets committed and shared.
+
+`--replay-first-message` (or `TraceAnalysisConfig(generate_first_message=False)`)
+is the opt-out, for when you are reproducing one specific recorded case and want
+the exact opening back.
 
 #### Hand-picked seeds
 

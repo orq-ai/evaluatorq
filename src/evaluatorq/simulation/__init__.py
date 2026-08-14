@@ -100,6 +100,7 @@ if TYPE_CHECKING:
     )
     from evaluatorq.simulation.runner.simulation import SimulationRunner
     from evaluatorq.simulation.traces import (
+        TraceAnalysisConfig,
         TraceConversation,
         datapoints_from_traces,
         extend_from_traces,
@@ -264,6 +265,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
         'evaluatorq.simulation.utils.prompt_builders',
         'generate_datapoint',
     ),
+    'TraceAnalysisConfig': ('evaluatorq.simulation.traces', 'TraceAnalysisConfig'),
     'TraceConversation': ('evaluatorq.simulation.traces', 'TraceConversation'),
     'fetch_trace_conversations': (
         'evaluatorq.simulation.traces',
@@ -368,6 +370,7 @@ __all__ = [
     'TerminatedBy',
     'TokenUsage',
     # Traces input
+    'TraceAnalysisConfig',
     'TraceConversation',
     'TurnMetrics',
     'UserSimulatorAgent',
