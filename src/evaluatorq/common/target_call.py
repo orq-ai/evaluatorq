@@ -122,8 +122,10 @@ class TargetCallResult:
     fallback, and no risk of widening `priced_calls` along with `calls`.
 
     ``usage_attempts`` counts the attempts that contributed to ``billed_usage``.
-    It is >= 1 whenever ``billed_usage`` is not None, and is exposed for tracing
-    and diagnostics; it is no longer needed to repair the call count.
+    It is >= 1 whenever ``billed_usage`` is not None. Diagnostic only — nothing in
+    ``src`` reads it since the per-surface call-count repair was removed, and it
+    carries what ``billed_usage.calls`` cannot recover (a single attempt that
+    reported three continuation rounds gives ``usage_attempts == 1``).
     """
 
     response: AgentResponse
@@ -178,8 +180,24 @@ def _attempt_usage(usage: Usage) -> Usage:
     priced_calls=1`` (a partial cost), not ``calls=2, priced_calls=2`` (a cost
     claiming to be fully billed). ``estimated_calls`` is clamped to the resolved
     ``priced_calls`` so ``estimated_calls <= priced_calls <= calls`` holds.
+
+    The ``calls=0`` stamp is still a lower bound: an attempt that tracked nothing
+    may have burned several tool-continuation rounds, and we count it as one.
     """
     if usage.calls > 0:
+        if usage.total_cost is not None and usage.priced_calls == 0:
+            # A cost with no priced call renders unqualified, i.e. as fully
+            # provider-billed. No shipped target produces this shape; a custom
+            # AgentTarget that hand-builds its usage can. Widening priced_calls
+            # here would over-claim for a genuinely partial aggregate, so say so
+            # instead of guessing.
+            logger.warning(
+                'Target usage reports a cost ({}) with priced_calls=0 over {} call(s); '
+                'the cost will render without a coverage qualifier. Set priced_calls '
+                'on the usage this target returns.',
+                usage.total_cost,
+                usage.calls,
+            )
         return usage
     priced = 1 if usage.total_cost is not None else 0
     return usage.model_copy(

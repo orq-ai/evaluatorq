@@ -332,8 +332,9 @@ def record_token_usage(
         if cost_source is not None:
             span.set_attribute('gen_ai.usage.cost_source', cost_source)
         else:
-            # A cost with no provenance: the caller passed a bare number rather
-            # than a Usage. The trace UI can then only show the figure, not
+            # A cost with no provenance: either the caller passed a bare number
+            # rather than a Usage, or it passed a Usage carrying a cost with
+            # priced_calls=0. The trace UI can then only show the figure, not
             # whether it was billed. No in-`src` caller can reach this branch, so
             # the warning cannot cry wolf — if it ever fires it is exactly the
             # defect this provenance plumbing exists to prevent.

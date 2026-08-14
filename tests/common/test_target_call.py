@@ -486,3 +486,37 @@ async def test_untracked_estimated_calls_clamped_to_priced_calls():
     assert r.billed_usage.priced_calls == 0
     assert r.billed_usage.estimated_calls == 0
     assert r.billed_usage.cost_source is None
+
+
+@pytest.mark.asyncio
+async def test_hand_built_usage_with_cost_but_no_priced_calls_warns(caplog: pytest.LogCaptureFixture):
+    """A custom AgentTarget can build a Usage whose cost has no priced call.
+
+    `_attempt_usage` leaves a self-tracking target's counters alone, so the cost
+    reaches the run total with `priced_calls=0` and renders unqualified — i.e. as
+    fully provider-billed. Widening `priced_calls` here would over-claim for a
+    genuinely partial aggregate, so the degraded path announces itself instead.
+    """
+    hand_built = Usage(input_tokens=10, output_tokens=0, total_tokens=10, calls=2, total_cost=0.02)
+    t = _Target([AgentResponse(text='hi', usage=hand_built)])
+    with caplog.at_level('WARNING'):
+        r = await call_target_with_retry(
+            t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2
+        )
+    assert r.billed_usage is not None
+    assert (r.billed_usage.calls, r.billed_usage.priced_calls) == (2, 0)
+    assert 'priced_calls=0' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_self_tracking_usage_with_priced_calls_does_not_warn(caplog: pytest.LogCaptureFixture):
+    """The honest shape must stay silent — two branches must not differ only in logging."""
+    honest = Usage(input_tokens=10, output_tokens=0, total_tokens=10, calls=2, priced_calls=2, total_cost=0.02)
+    t = _Target([AgentResponse(text='hi', usage=honest)])
+    with caplog.at_level('WARNING'):
+        r = await call_target_with_retry(
+            t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2
+        )
+    assert r.billed_usage is not None
+    assert r.billed_usage.priced_calls == 2
+    assert 'priced_calls=0' not in caplog.text
