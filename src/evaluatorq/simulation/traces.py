@@ -37,7 +37,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _TEMPERATURE_ANALYSIS = 0.3
-_MAX_TRANSCRIPT_CHARS = 6000
+# Only the traffic-profile call needs a per-transcript cap: it concatenates up to
+# _MAX_PROFILE_CONVERSATIONS transcripts into ONE prompt, so an unbounded budget is
+# multiplied by 30. Persona/scenario inference sends one conversation per call and
+# gets the whole thing — truncating a real production trace there silently drops the
+# part of the conversation the inference is supposed to describe.
+_MAX_PROFILE_TRANSCRIPT_CHARS = 6000
 _MAX_PROFILE_CONVERSATIONS = 30
 _SPAN_FETCH_CONCURRENCY = 5
 _INFER_CONCURRENCY = 5
@@ -62,9 +67,14 @@ class TraceConversation(BaseModel):
             None,
         )
 
-    def transcript(self, max_chars: int = _MAX_TRANSCRIPT_CHARS) -> str:
+    def transcript(self, max_chars: int | None = None) -> str:
+        """The conversation as ``role: content`` lines.
+
+        Uncapped by default. Pass ``max_chars`` only where several transcripts share
+        one prompt; a caller that sends a single conversation wants all of it.
+        """
         text = '\n'.join(f'{m["role"]}: {m["content"]}' for m in self.messages)
-        return text[:max_chars]
+        return text if max_chars is None else text[:max_chars]
 
 
 # ---------------------------------------------------------------------------
@@ -463,7 +473,8 @@ async def extend_from_traces(
     llm_client, owned = build_simulation_client(client, extra_api_key=api_key)
     try:
         transcripts = '\n\n'.join(
-            delimit(c.transcript(), tag='transcript') for c in conversations[:_MAX_PROFILE_CONVERSATIONS]
+            delimit(c.transcript(_MAX_PROFILE_TRANSCRIPT_CHARS), tag='transcript')
+            for c in conversations[:_MAX_PROFILE_CONVERSATIONS]
         )
         messages: list[dict[str, Any]] = [
             {'role': 'system', 'content': _PROFILE_SYSTEM_PROMPT},
