@@ -12,12 +12,12 @@ from loguru import logger
 from pydantic import ValidationError
 
 from evaluatorq import DataPoint, EvaluationResult
-from evaluatorq.common.judge import JudgeError, build_eval_replacements, run_judge
+from evaluatorq.common.judge import JudgeError, JudgeOutcome, build_eval_replacements, run_judge
 from evaluatorq.common.jury import Prediction, VerdictKind, _panel_composition_messages, append_jury_summary, run_jury
 from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.common.output_adapters import output_error_text, output_to_messages
 from evaluatorq.common.tracing import set_span_attrs
-from evaluatorq.contracts import JURY_RAW_OUTPUT_KEY
+from evaluatorq.contracts import JURY_RAW_OUTPUT_KEY, TokenUsage
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
@@ -168,9 +168,27 @@ def _parse_hf_source(rest: str) -> tuple[str, str]:
     return f'{parts[0]}/{parts[1]}', DEFAULT_HF_FILENAME
 
 
-def _error_result(explanation: str) -> EvaluationResult:
-    """Inconclusive scorer row: not RESISTANT/VULNERABLE, just unscoreable."""
-    return EvaluationResult.model_validate({'value': 'error', 'explanation': explanation, 'pass': None})
+def _error_result(
+    explanation: str,
+    *,
+    token_usage: TokenUsage | None = None,
+    raw_output: dict[str, Any] | None = None,
+) -> EvaluationResult:
+    """Inconclusive scorer row: not RESISTANT/VULNERABLE, just unscoreable.
+
+    ``token_usage``/``raw_output`` are ``None`` by default: most call sites (missing
+    category, no evaluator, target error) never had a ``JudgeOutcome`` to read from,
+    so there is nothing real to report — passing a value here is only correct for
+    callers that *do* have one (a judge call that errored or timed out but was still
+    billed).
+    """
+    return EvaluationResult.model_validate({
+        'value': 'error',
+        'explanation': explanation,
+        'pass': None,
+        'token_usage': token_usage,
+        'raw_output': raw_output,
+    })
 
 
 def create_owasp_evaluator(
@@ -233,6 +251,23 @@ def create_owasp_evaluator(
                 set_span_attrs(evaluation_span, {'orq.redteam.passed': 'inconclusive', 'output': explanation})
                 return _error_result(explanation)
 
+            def judge_error_result(explanation: str, outcome: JudgeOutcome) -> EvaluationResult:
+                """Like ``error_result``, but for a call site backed by a ``JudgeOutcome``.
+
+                The judge call was already billed even though it errored or timed out,
+                so — unlike ``error_result``'s other call sites (missing category, no
+                evaluator, target error), which never had a call to bill — this carries
+                ``outcome.token_usage`` and ``raw_output['endpoint']`` through instead of
+                discarding them. Same key/meaning as the success leg's
+                ``raw_output['endpoint']`` below and adaptive/evaluator.py's.
+                """
+                set_span_attrs(evaluation_span, {'orq.redteam.passed': 'inconclusive', 'output': explanation})
+                return _error_result(
+                    explanation,
+                    token_usage=outcome.token_usage,
+                    raw_output={'endpoint': outcome.endpoint},
+                )
+
             if not category:
                 logger.error("Scorer received datapoint with missing 'category' field")
                 return error_result("Missing 'category' in datapoint inputs — cannot score")
@@ -265,11 +300,13 @@ def create_owasp_evaluator(
                     replacements=eval_replacements,
                 )
 
-                # Static path swallows ALL errors into an inconclusive row (never re-raises).
+                # Static path swallows ALL errors into an inconclusive row (never re-raises),
+                # but the call was already billed — carry its usage and endpoint through,
+                # same as adaptive/evaluator.py's twin (_single_outcome_to_result).
                 if outcome.error_kind is JudgeError.TIMEOUT:
-                    return error_result(f'Evaluation timed out after {outcome.timeout_ms}ms')
+                    return judge_error_result(f'Evaluation timed out after {outcome.timeout_ms}ms', outcome)
                 if outcome.error_kind is not None or outcome.payload is None:
-                    return error_result(f'Evaluation error: {outcome.error_message}')
+                    return judge_error_result(f'Evaluation error: {outcome.error_message}', outcome)
 
                 passed = outcome.payload.value if isinstance(outcome.payload.value, bool) else None
                 set_span_attrs(
@@ -297,6 +334,7 @@ def create_owasp_evaluator(
                 if outcome.error_kind is not None or outcome.payload is None:
                     return Prediction(
                         error=outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'error'),
+                        token_usage=outcome.token_usage,
                         endpoint=outcome.endpoint,
                     )
                 return Prediction(

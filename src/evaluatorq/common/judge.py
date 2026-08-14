@@ -34,7 +34,7 @@ from evaluatorq.contracts import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from openai import AsyncOpenAI
     from pydantic import BaseModel as _BaseModel
@@ -370,8 +370,18 @@ async def _json_object_judge(
     span: Any,
     temp: float | None,
     inject_model: type[_BaseModel] | None = None,
+    usage_sink: Callable[[TokenUsage | None], None] | None = None,
 ) -> tuple[EvaluatorResponsePayload, TokenUsage | None, str]:
-    """Call the judge using the legacy json_object completion path; optionally injects model's JSON schema into system prompt."""
+    """Call the judge using the legacy json_object completion path; optionally injects model's JSON schema into system prompt.
+
+    ``usage_sink``, if given, is invoked with the call's usage immediately after
+    the completion returns — before either ``model_validate_json`` below, both of
+    which can raise ``ValidationError`` on a malformed verdict. Without it, a
+    caller whose own parse of this function's tuple return never happens (because
+    this function raised) has no way to learn what was billed; a caller that owns
+    an outer-scoped ``usage`` (e.g. ``run_judge``'s ``_chat_verdict``) passes a
+    callback that records it there so the tokens aren't lost on a parse failure.
+    """
     sys = system_prompt
     if inject_model is not None:
         schema = json.dumps(inject_model.model_json_schema(), indent=2)
@@ -391,6 +401,8 @@ async def _json_object_judge(
         response_format={'type': 'json_object'},
         extra_kwargs=cfg.extra_kwargs or None,
     )
+    if usage_sink is not None:
+        usage_sink(usage)
     raw = response.choices[0].message.content or '{}'
     # Routed Anthropic/Gemini sometimes ignore json_object and wrap the verdict in
     # a ```json fence; strip it before parsing (raw stays original for the trace).
@@ -447,6 +459,14 @@ async def run_judge(
 
     client = _without_client_retries(client, cfg.retry_count)
     raw_content = '{}'
+    # Scoped the same way as `raw_content`: the legacy json_object path's usage is
+    # otherwise a local inside `_chat_verdict` that has gone out of scope by the
+    # time the outer `except ValidationError` handler below runs on a parse
+    # failure, so the call's billed tokens would be silently dropped even though
+    # the structured-output paths above deliberately keep theirs on the same
+    # failure (see the comments at their `JudgeOutcome(error_kind=JudgeError.PARSE, ...)`
+    # returns).
+    usage: TokenUsage | None = None
     # Resolved before the span opens so the span carries the operation and the model
     # id this call actually sends — `responses openai/gpt-5-mini`, not `chat gpt-5-mini`
     # — the way every other inference path in the codebase labels its own.
@@ -459,12 +479,15 @@ async def run_judge(
         logger.debug('Judge [{}] cannot use the Responses endpoint; using chat completions', model)
 
     async def _attempt() -> JudgeOutcome:
-        nonlocal raw_content, responses_model
-        # Each attempt starts from a clean slate: `raw_content` is a closure variable
-        # read by the ValidationError handler below, so without this reset a failure
-        # on attempt 3 gets logged and returned with attempt 2's body — the "raw
-        # (truncated)" line would describe a different call than the one that failed.
+        nonlocal raw_content, usage, responses_model
+        # Each attempt starts from a clean slate: `raw_content` (and `usage`, same
+        # reasoning) are closure variables read by the ValidationError handler
+        # below, so without this reset a failure on attempt 3 gets logged and
+        # returned with attempt 2's body — the "raw (truncated)" line would
+        # describe a different call than the one that failed, and its tokens
+        # would be billed to the wrong attempt.
         raw_content = '{}'
+        usage = None
         # Default for judges: the Responses endpoint is the one the Orq router
         # prices, so a judge call records cost like a target call does (RES-1295).
         # Set `api='chat_completions'` on the evaluator config to opt out.
@@ -525,7 +548,12 @@ async def run_judge(
 
         async def _chat_verdict(span: Any) -> JudgeOutcome:
             """The Chat Completions half: tier-1 `.parse`, then the json_object paths."""
-            nonlocal raw_content
+            nonlocal raw_content, usage
+
+            def _record_usage(u: TokenUsage | None) -> None:
+                nonlocal usage
+                usage = u
+
             if structured_output and response_model is not None:
                 messages = [
                     {'role': 'system', 'content': system_prompt},
@@ -561,6 +589,7 @@ async def run_judge(
                         span=span,
                         temp=temp,
                         inject_model=response_model,
+                        usage_sink=_record_usage,
                     )
                     return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
 
@@ -600,9 +629,14 @@ async def run_judge(
                     span=span,
                     temp=temp,
                     inject_model=response_model,
+                    usage_sink=_record_usage,
                 )
                 return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
-            # Legacy path: byte-identical to original run_judge behavior.
+            # Legacy path: byte-identical to original run_judge behavior, except that
+            # `usage` is now the outer `run_judge`-scoped variable (nonlocal above), so
+            # a ValidationError from model_validate_json below — caught by run_judge's
+            # own `except ValidationError` — still finds the billed usage in scope
+            # instead of the parse failure silently dropping it.
             response, usage = await execute_chat_completion(
                 client=client,
                 model=model,
@@ -651,7 +685,12 @@ async def run_judge(
         )
     except ValidationError as e:
         logger.error('Judge [{}] returned malformed JSON: {} | raw (truncated): {}', model, e, repr(raw_content)[:500])
-        return JudgeOutcome(error_kind=JudgeError.PARSE, error_message=str(e), raw_content=raw_content)
+        # `usage` is scoped like `raw_content` above (see its declaration) precisely
+        # so this branch — the legacy json_object path's unparseable verdict — still
+        # reports the tokens the provider already billed for the call.
+        return JudgeOutcome(
+            error_kind=JudgeError.PARSE, error_message=str(e), token_usage=usage, raw_content=raw_content
+        )
     except (APIConnectionError, APIStatusError) as e:
         kind = _classify(e)
         logger.error('Judge [{}] API error ({}): {}', model, kind.value, e)
