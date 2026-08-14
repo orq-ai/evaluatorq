@@ -270,6 +270,43 @@ class _CriteriaTracker:
         """
         return [criterion_id_for(i) for i in range(len(self._criteria)) if not self._passed(i)]
 
+    @property
+    def unaudited_ids(self) -> frozenset[str]:
+        """Ids the judge never returned an occurrence verdict for.
+
+        Their verdict is the not-observed default, not something the judge said.
+        The complement of `audited_ids` over the scenario's criteria.
+        """
+        return frozenset(cid for cid in self._occurred if cid not in self._seen)
+
+    @property
+    def unconfirmed_ids(self) -> frozenset[str]:
+        """``must_happen`` ids whose occurrence never flipped to ``True``.
+
+        On a run that ended normally these are genuine failures — the conversation
+        had its full chance and the behaviour never appeared. On a run **cut short**
+        (target failure/timeout) they are not knowledge at all: "it hadn't happened
+        yet" is not "the judge confirmed it never happened", so `broken_ids` would
+        report a failure nobody observed. See `confirmed_broken_ids`.
+        """
+        return frozenset(
+            criterion_id_for(i)
+            for i, criterion in enumerate(self._criteria)
+            if criterion.type == 'must_happen' and not self._occurred[criterion_id_for(i)]
+        )
+
+    @property
+    def confirmed_broken_ids(self) -> list[str]:
+        """`broken_ids` restricted to failures the audit actually **observed**.
+
+        For a run cut short before it could finish: a ``must_not_happen`` the judge
+        saw violated is knowledge and stays failed, while a ``must_happen`` that had
+        simply not happened yet drops out (it is reported unknown instead, via
+        `unconfirmed_ids` being withheld from the meta's audited set).
+        """
+        unconfirmed = self.unconfirmed_ids
+        return [cid for cid in self.broken_ids if cid not in unconfirmed]
+
     def resolve(self, judgment: Judgment) -> Judgment:
         """Return ``judgment`` with ``rules_broken`` replaced by the run-level verdict.
 
@@ -300,7 +337,7 @@ class _CriteriaTracker:
                 len(self._criteria),
             )
             return judgment
-        unaudited = [cid for cid in self._occurred if cid not in self._seen]
+        unaudited = self.unaudited_ids
         if unaudited:
             logger.warning(
                 'Judge never reported an occurrence verdict for %s on scenario %r; treating them as '
@@ -1009,21 +1046,23 @@ class SimulationRunner:
         maps to `TerminatedBy.timeout`, everything else to
         `TerminatedBy.error`.
 
-        The criteria audit collected before the target died is **folded in like
-        every other termination branch**, not discarded: a `must_not_happen`
-        violation the judge confirmed on turn 2 has to survive the target dying on
-        turn 4, or it vanishes from the result and the report.
-        `criteria_verified` still comes from the tracker, and this run is scored
-        0.0 by `criteria_met` regardless (it terminated by error/timeout), so the
-        fold adds evidence without letting a dead target claim a clean sheet.
+        The criteria audit collected before the target died is folded in, not
+        discarded: a `must_not_happen` violation the judge confirmed on turn 2 has
+        to survive the target dying on turn 4, or it vanishes from the result and
+        the report. `criteria_verified` still comes from the tracker, and this run
+        is scored 0.0 by `criteria_met` regardless (it terminated by error/timeout),
+        so the fold adds evidence without letting a dead target claim a clean sheet.
 
-        The fold is guarded exactly as `_CriteriaTracker.resolve` guards it: with
-        **no** audit at all there is nothing to fold, and folding the not-observed
-        defaults would report every `must_happen` criterion as a *confirmed*
-        failure the judge never made — the branch's own thesis inverted, with a
-        red row in every report and a phantom entry in the cross-run failure-mode
-        table. No audit is `unknown` (`criteria_verified=False`,
-        `audited=False`, `state='unknown'`), never `fail`.
+        **On this branch only confirmed occurrence is knowledge.** Unlike
+        `_CriteriaTracker.resolve`, the run did not get its full chance, so the fold
+        is `confirmed_broken_ids`, not `broken_ids`: a `must_happen` that has not
+        occurred means "not yet", not "the judge confirmed it never happened", and
+        reporting it as failed would invert the branch's own thesis — a red row in
+        every report and a phantom entry in the cross-run failure-mode table. Those
+        ids are withheld from the meta's audited set as well, so they render
+        `state='unknown'` rather than a green `pass`. With **no** audit at all the
+        same rule empties the fold entirely (`criteria_verified=False`,
+        `audited=False`, `state='unknown'` on every criterion).
         """
         err = call.error
         error_message = err.message if err else 'target failed'
@@ -1040,16 +1079,44 @@ class SimulationRunner:
             },
         )
 
+        scenario_name = scenario.name if scenario else '<none>'
         # `verified` is the same condition `resolve` guards on (an audit arrived, or
         # there are no criteria at all — in which case `broken_ids` is empty anyway).
-        broken = criteria_tracker.broken_ids if criteria_tracker.verified else []
+        # Inside a partial audit, `confirmed_broken_ids` applies the narrower rule
+        # this branch needs: only an observed occurrence is knowledge.
+        unconfirmed = criteria_tracker.unconfirmed_ids
+        broken = criteria_tracker.confirmed_broken_ids if criteria_tracker.verified else []
+        # Withheld from `audited` so the unconfirmed ids render as unknown rather
+        # than as an audited pass — `CriteriaRow.state` is `unknown` only when a
+        # passing criterion is not audited.
+        audited_ids = criteria_tracker.audited_ids - unconfirmed
         if not criteria_tracker.verified:
             logger.warning(
                 'Target failed (%s) before the judge audited any criterion of scenario %r; reporting '
                 'those %d criteria as unknown (unverified), not as failed.',
                 error_type,
-                scenario.name if scenario else '<none>',
+                scenario_name,
                 len(scenario.criteria or []) if scenario else 0,
+            )
+        else:
+            # The same per-id warning `resolve` emits on the normal path; without it
+            # a partial audit's defaulted ids are never named anywhere in the log.
+            unaudited = criteria_tracker.unaudited_ids
+            if unaudited:
+                logger.warning(
+                    'Judge never reported an occurrence verdict for %s on scenario %r before the target '
+                    'failed (%s); they fell to their not-observed default.',
+                    ', '.join(sorted(unaudited)),
+                    scenario_name,
+                    error_type,
+                )
+        if unconfirmed:
+            logger.warning(
+                'Target failed (%s) on scenario %r before %s could occur; reporting them as unknown, '
+                'not as failed — the run was cut short, so "not yet" is not a confirmed failure.',
+                error_type,
+                scenario_name,
+                ', '.join(sorted(unconfirmed)),
             )
         folded = Judgment(
             should_terminate=True,
@@ -1059,14 +1126,12 @@ class SimulationRunner:
             goal_completion_score=0.0,
         )
         criteria_meta = (
-            _build_criteria_meta(scenario, folded, criteria_tracker.audited_ids, criteria_tracker.evidence)
-            if scenario
-            else None
+            _build_criteria_meta(scenario, folded, audited_ids, criteria_tracker.evidence) if scenario else None
         )
         if broken:
             logger.warning(
-                'Target failed (%s) after the judge had already failed %s; keeping those criteria '
-                'verdicts on the errored result.',
+                'Target failed (%s) after the judge had confirmed %s; keeping those criteria verdicts on '
+                'the errored result.',
                 error_type,
                 ', '.join(broken),
             )

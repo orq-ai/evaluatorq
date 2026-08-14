@@ -966,3 +966,68 @@ async def test_a_target_failure_before_any_audit_reports_unknown_not_failed():
 
     # Remediation: an errored run is not remediable, so nothing is suggested.
     assert find_triggers(result) == []
+
+
+@pytest.mark.asyncio
+async def test_a_partially_audited_target_failure_reports_only_confirmed_failures(caplog):
+    """A run cut short knows only what the judge actually observed.
+
+    The judge audits turn 1 — ``criteria_0`` (must_happen) has not occurred *yet*,
+    ``criteria_1`` (must_not_happen) is already violated — and the target dies on
+    turn 2. Folding ``broken_ids`` unlocked the whole run because ``verified`` is
+    run-level, so the unfinished ``must_happen`` came back as a confirmed failure:
+    a red row, a phantom entry in the cross-run failure-mode table and a FAIL on
+    the evaluator detail. The violation is knowledge and stays failed; "hadn't
+    happened yet" is unknown.
+    """
+    from evaluatorq.simulation.api import _sim_evaluation_details
+    from evaluatorq.simulation.reports.sections import _criteria_rows, build_report_sections
+
+    with caplog.at_level('WARNING'):
+        result = await _run_until_target_dies([{'criteria_0': False, 'criteria_1': True}], die_on_turn=2)
+
+    assert result.terminated_by is TerminatedBy.error
+    # Only the confirmed must_not_happen violation survives as a failure.
+    assert result.rules_broken == ['criteria_1']
+    assert result.criteria_verified is True
+
+    rows = {row['id']: row for row in _criteria_rows(result)}
+    assert rows['criteria_0']['state'] == 'unknown'
+    assert rows['criteria_1']['state'] == 'fail'
+    assert rows['criteria_1']['evidence'] == 'q'
+    # `audited` is what makes the unfinished must_happen render unknown rather
+    # than as a green pass.
+    assert rows['criteria_0']['audited'] is False
+
+    # Cross-run failure-mode table: the violation, and nothing else.
+    sections = build_report_sections([result])
+    failure_modes = next(s for s in sections if s.kind == 'failure_mode')
+    assert failure_modes.data['rows'] == [('S: Agent mentions a plan', 1)]
+
+    # Evaluator detail: an errored run reports its own cause and never `pass`.
+    # (The per-criterion lines are not reached at all on this branch — the
+    # terminated-by-error guard returns first — so no `FAIL [required]` can leak.)
+    explanation, passed = _sim_evaluation_details('criteria_met', result)
+    assert passed is False
+    assert explanation is not None
+    assert 'FAIL' not in explanation
+    assert 'unknown, not met' in explanation
+    assert criteria_met_scorer(result) == 0.0
+
+    # The unconfirmed id is named in the log, not folded into an undifferentiated
+    # "these failed" line.
+    assert 'criteria_0' in caplog.text
+    assert 'not yet' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_target_failure_names_the_criteria_that_fell_to_their_default(caplog):
+    """`resolve` warns per id about criteria the judge never audited; the error path
+    builds its result without `resolve`, so it has to emit the same warning itself —
+    otherwise a partial audit's defaulted ids are named nowhere in the log."""
+    with caplog.at_level('WARNING'):
+        result = await _run_until_target_dies([{'criteria_1': False}], die_on_turn=2)
+
+    assert result.rules_broken == []  # nothing confirmed either way
+    assert 'criteria_0' in caplog.text
+    assert 'not-observed default' in caplog.text

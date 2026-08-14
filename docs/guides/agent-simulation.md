@@ -397,9 +397,11 @@ saved before the field existed) keeps the score it always had.
 A run that ends in an error or a timeout never reaches the audit either. Those
 results also score `criteria_met` as `0.0` (not `1.0`) and log a warning, so neither
 a crashed run nor an unaudited one can inflate the average. A target that dies
-mid-run keeps whatever the judge had already confirmed, but a target that dies
-*before* any audit reports its criteria as **unknown** — never as failed. It is not
-the judge's verdict that nothing happened; nobody looked.
+mid-run keeps whatever the judge had already **confirmed** — a `must_not_happen` it
+saw violated stays failed — while a `must_happen` that simply had not happened yet
+is reported as **unknown**, never as failed. The run was cut short before that
+criterion had its chance: it is not the judge's verdict that nothing happened;
+nobody looked.
 
 The callable passed to `target` is the only structural difference from the Orq path —
 personas, scenarios, criteria, and the result shape are identical. Swap the
