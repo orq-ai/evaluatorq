@@ -52,6 +52,13 @@ def delimit(text: str, *, tag: str = 'data') -> str:
         sanitized,
         flags=re.IGNORECASE,
     )
+    tag_prefix = r'\s*'.join(re.escape(character) for character in tag)
+    sanitized = re.sub(
+        rf'<(?=\s*/?\s*{tag_prefix}(?![a-zA-Z0-9_-]))',
+        '&lt;',
+        sanitized,
+        flags=re.IGNORECASE,
+    )
     return f'<{tag}>{sanitized}</{tag}>'
 
 
