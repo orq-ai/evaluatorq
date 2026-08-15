@@ -34,3 +34,16 @@ class TestExtractContentFromResponse:
         assert result == ""
         assert "image" in caplog.text
         assert "Unrecognised deployment response" in caplog.text
+
+    def test_tool_calls_type_with_no_content_warns_without_calling_it_unrecognised(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A pure tool-call turn routinely carries content=None; the type IS recognised,
+        so the warning must say the content was empty, not that the type is unrecognised."""
+        completion = _completion_with_message(SimpleNamespace(type="tool_calls", content=None))
+        with caplog.at_level("WARNING"):
+            result = _extract_content_from_response(completion)
+        assert result == ""
+        assert "tool_calls" in caplog.text
+        assert "no text content" in caplog.text
+        assert "Unrecognised" not in caplog.text
