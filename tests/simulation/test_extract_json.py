@@ -15,6 +15,12 @@ def test_extract_from_code_block_no_lang():
     assert result == '[{"name": "test"}]'
 
 
+def test_skips_non_json_fence_before_json_fence():
+    content = '```python\nprint(1)\n```\n```json\n{"a": 1}\n```'
+    result = extract_json_from_response(content)
+    assert result == '{"a": 1}'
+
+
 def test_extract_plain_array():
     content = 'Here is the result: [{"name": "test"}]'
     result = extract_json_from_response(content)
