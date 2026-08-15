@@ -387,6 +387,11 @@ async def evaluatorq(
                         return_exceptions=True,
                     )
 
+                # A cancellation delivered to the caller while fetching must retain
+                # asyncio's cancellation semantics, even if processing failed too.
+                if isinstance(fetch_error, asyncio.CancelledError):
+                    raise fetch_error
+
                 task_errors = [
                     result
                     for task, result in zip(processing_tasks, processing_results, strict=True)
