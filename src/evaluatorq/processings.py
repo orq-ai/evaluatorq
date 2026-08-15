@@ -3,6 +3,8 @@ from collections.abc import Awaitable
 from inspect import isawaitable
 from typing import TYPE_CHECKING, cast
 
+from loguru import logger
+
 from .job_helper import JobError
 from .progress import Phase, ProgressService
 from .types import (
@@ -45,6 +47,7 @@ async def process_data_point(
     Returns:
         List containing a single DataPointResult with job results and evaluator scores
     """
+    data_point: DataPoint | None = None
     try:
         # Resolve the data point (await if it's awaitable, otherwise use directly)
         if isawaitable(data_promise):
@@ -85,10 +88,14 @@ async def process_data_point(
         ]
 
     except Exception as error:
-        # Return error result with placeholder data point
+        logger.warning('Data point {} failed before job execution: {}', row_index, error)
+        # Preserve the resolved DataPoint's identity when available; only fall
+        # back to a placeholder (tagged with row_index, so concurrent failures
+        # don't collide) when resolution itself failed.
+        fallback = data_point if isinstance(data_point, DataPoint) else DataPoint(inputs={'row_index': row_index})
         return [
             DataPointResult(
-                data_point=DataPoint(inputs={}, expected_output=None),
+                data_point=fallback,
                 error=str(error),
                 job_results=None,
             )
