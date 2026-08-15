@@ -31,6 +31,8 @@ from evaluatorq.openresponses.convert_models import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from langchain_core.messages.tool import ToolCall
 
     from evaluatorq.openresponses import ResponseResourceDict
@@ -61,7 +63,7 @@ CONSTRUCTOR_TYPE_MAP = {
 
 
 def convert_to_open_responses(
-    messages: list[BaseMessage],
+    messages: Sequence[MessageData],
     tools: list[dict[str, Any]] | None = None,
 ) -> ResponseResourceDict:
     """
@@ -104,7 +106,7 @@ def convert_to_open_responses(
             content_text = _get_content(msg_data)
             input_message = Message(
                 type='message',
-                id=msg.id or generate_item_id('msg'),
+                id=_get_attr(msg_data, 'id') or generate_item_id('msg'),
                 role=MessageRole.user,
                 status=MessageStatus.completed,
                 content=[InputTextContent(type='input_text', text=content_text)],
@@ -142,7 +144,7 @@ def convert_to_open_responses(
             if content_text:
                 output_message = Message(
                     type='message',
-                    id=msg.id or generate_item_id('msg'),
+                    id=_get_attr(msg_data, 'id') or generate_item_id('msg'),
                     role=MessageRole.assistant,
                     status=MessageStatus.completed,
                     content=[
@@ -179,7 +181,7 @@ def convert_to_open_responses(
 
             function_call_output = FunctionCallOutput(
                 type='function_call_output',
-                id=msg.id or generate_item_id('fco'),
+                id=_get_attr(msg_data, 'id') or generate_item_id('fco'),
                 call_id=tool_call_id,
                 output=output_content,
                 status=FunctionCallOutputStatusEnum.completed,
@@ -191,7 +193,7 @@ def convert_to_open_responses(
             content_text = _get_content(msg_data)
             input_message = Message(
                 type='message',
-                id=msg.id or generate_item_id('msg'),
+                id=_get_attr(msg_data, 'id') or generate_item_id('msg'),
                 role=MessageRole.system,
                 status=MessageStatus.completed,
                 content=[InputTextContent(type='input_text', text=content_text)],
@@ -282,7 +284,22 @@ def convert_to_open_responses(
     }
 
 
-def _get_message_type(msg: BaseMessage) -> str:
+def _get_message_type(msg: MessageData) -> str:
+    if isinstance(msg, dict):
+        msg_type = msg.get('type')
+
+        # Constructor serialization format: { type: "constructor", id: [..., "AIMessage"], kwargs: {...} }
+        if msg_type == 'constructor':
+            constructor_id = msg.get('id') or []
+            class_name = constructor_id[-1] if constructor_id else None
+            return CONSTRUCTOR_TYPE_MAP.get(class_name, 'unknown') if isinstance(class_name, str) else 'unknown'
+
+        # messages_to_dict() format: { type: "human"|"ai"|..., data: {...} }
+        if msg_type:
+            return msg_type
+
+        return 'unknown'
+
     # LangChain message objects
     type_attr: str | None = getattr(msg, 'type', None)
     if type_attr:
