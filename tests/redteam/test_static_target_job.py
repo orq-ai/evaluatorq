@@ -326,3 +326,92 @@ async def test_hybrid_static_leg_uses_shared_prompt_flattener(monkeypatch: pytes
     assert len(calls) == 1
     assert len(calls[0]) == 1
     assert calls[0][0].content == _extract_static_prompt(static_datapoint)
+
+
+@pytest.mark.parametrize('raises', [False, True])
+async def test_hybrid_static_leg_closes_per_row_target(
+    monkeypatch: pytest.MonkeyPatch,
+    raises: bool,
+) -> None:
+    """The hybrid static leg closes its fresh target after success or failure."""
+    from evaluatorq.contracts import AgentTarget
+    from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities
+    from evaluatorq.redteam.contracts import Pipeline
+    from evaluatorq.redteam.runner import _run_dynamic_or_hybrid
+    from evaluatorq.types import DataPointResult, JobResult
+
+    class _CloseTrackingTarget(AgentTarget):
+        def __init__(self, close_calls: list[int]) -> None:
+            super().__init__()
+            self.close_calls = close_calls
+
+        async def respond(self, messages: list[Message]) -> AgentResponse:
+            if raises:
+                raise RuntimeError('backend exploded')
+            return AgentResponse(text='target response')
+
+        def new(self) -> _CloseTrackingTarget:
+            return _CloseTrackingTarget(self.close_calls)
+
+        async def close(self) -> None:
+            self.close_calls.append(1)
+
+    static_datapoint = DataPoint(
+        inputs={
+            'id': 'hybrid-static-close',
+            'category': 'ASI01',
+            'messages': [{'role': 'user', 'content': 'attack'}],
+        }
+    )
+    close_calls: list[int] = []
+
+    async def fake_evaluatorq(_name: str, *, data: list[DataPoint], jobs: list[Any], **_kwargs: Any) -> list[Any]:
+        static_row = next(dp for dp in data if dp.inputs['hybrid_source'] == 'static')
+        job_result = await jobs[0](static_row, 0)
+        return [
+            DataPointResult(
+                data_point=static_row,
+                job_results=[JobResult(job_name=job_result['name'], output=job_result['output'])],
+            )
+        ]
+
+    monkeypatch.setattr('evaluatorq.evaluatorq', fake_evaluatorq)
+    monkeypatch.setattr(
+        'evaluatorq.redteam.runner.classify_agent_capabilities', AsyncMock(return_value=AgentCapabilities())
+    )
+    monkeypatch.setattr('evaluatorq.redteam.runner.generate_dynamic_datapoints', AsyncMock(return_value=([], {})))
+    monkeypatch.setattr(
+        'evaluatorq.redteam.runner.create_dynamic_redteam_job', MagicMock(return_value=AsyncMock(return_value={}))
+    )
+    monkeypatch.setattr(
+        'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.load_owasp_agentic_dataset',
+        lambda **_kwargs: [static_datapoint],
+    )
+    monkeypatch.setattr('evaluatorq.redteam.runner.create_dynamic_evaluator', MagicMock(return_value={}))
+    monkeypatch.setattr(
+        'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.create_owasp_evaluator', MagicMock(return_value={})
+    )
+    monkeypatch.setattr('evaluatorq.redteam.runner._send_cleaned_results', AsyncMock())
+
+    await _run_dynamic_or_hybrid(
+        targets=[],
+        agent_targets=[_CloseTrackingTarget(close_calls)],
+        mode=Pipeline.HYBRID,
+        categories=['ASI01'],
+        max_turns=1,
+        max_per_category=1,
+        attack_model='test-model',
+        evaluator_model='test-model',
+        parallelism=1,
+        generate_strategies=False,
+        generated_strategy_count=0,
+        max_dynamic_datapoints=None,
+        max_static_datapoints=None,
+        cleanup_memory=False,
+        llm_client=MagicMock(),
+        description=None,
+        dataset='ignored.json',
+        run_id='hybrid-close-run',
+    )
+
+    assert close_calls == [1]
