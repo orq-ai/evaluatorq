@@ -356,7 +356,8 @@ def _content_to_text(content: Any) -> str:
         return '\n'.join(parts)
     if content is None:
         return ''
-    return str(content)
+    logger.warning('Unknown wire content shape %s; JSON-encoding it for trace text', type(content).__name__)
+    return json.dumps(content, default=str)
 
 
 def _normalize_message(raw: Any) -> dict[str, str] | None:
@@ -456,9 +457,12 @@ def _conversation_from_spans(trace_id: str, spans: list[dict[str, Any]]) -> Trac
     for span in ordered:
         messages = _messages_from_value(_span_io(span, 'input'), default_role='user')
         output_messages = _messages_from_value(_span_io(span, 'output'), default_role='assistant')
-        for msg in output_messages:
-            if msg not in messages:
-                messages.append(msg)
+        for overlap in range(min(len(messages), len(output_messages)), 0, -1):
+            if messages[-overlap:] == output_messages[:overlap]:
+                break
+        else:
+            overlap = 0
+        messages.extend(output_messages[overlap:])
         if messages:
             return TraceConversation(trace_id=trace_id, messages=messages)
     return None

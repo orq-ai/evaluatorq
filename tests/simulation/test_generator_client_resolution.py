@@ -1,3 +1,6 @@
+import asyncio
+from typing import Any, cast
+
 import pytest
 
 from evaluatorq.simulation.generators.first_message_generator import FirstMessageGenerator
@@ -73,3 +76,26 @@ def test_datapoint_generator_no_keys_raises(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with pytest.raises(ValueError, match="Missing LLM credentials"):
         DatapointGenerator()
+
+
+def test_datapoint_generator_can_cross_event_loop_boundaries(monkeypatch):
+    from evaluatorq.simulation.generators import datapoint_generator as dpg_mod
+    from evaluatorq.simulation.generators.datapoint_generator import DatapointGenerator
+
+    class FakeFirstMessageGenerator:
+        async def generate(self, persona, scenario):
+            await asyncio.sleep(0)
+            return 'opening message'
+
+    generator = cast(Any, object.__new__(DatapointGenerator))
+    generator._rate_limit_delay = 0.0
+    generator._max_concurrent_calls = 1
+    generator._semaphore = asyncio.Semaphore(1)
+    generator._first_message_generator = FakeFirstMessageGenerator()
+    monkeypatch.setattr(dpg_mod, 'generate_datapoint', lambda *args: object())
+
+    async def generate() -> list[Any]:
+        return await generator.generate_from_combinations([object(), object()], [object()])
+
+    assert len(asyncio.run(generate())) == 2
+    assert len(asyncio.run(generate())) == 2
