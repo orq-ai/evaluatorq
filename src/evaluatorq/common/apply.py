@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from evaluatorq.common.extract_json import extract_json_from_response
 from evaluatorq.common.llm_call import execute_chat_completion
 from evaluatorq.common.sanitize import xml_escape
 
@@ -216,7 +217,7 @@ def _apply_edits(original: str, edits: list[dict[str, str]]) -> str | None:
 def _parse_edits(content: str) -> list[dict[str, str]] | None:
     """Validate the edits-mode response shape; None on anything off-contract."""
     try:
-        raw = json.loads(content).get('edits')
+        raw = json.loads(extract_json_from_response(content)).get('edits')
     except (ValueError, AttributeError):
         return None
     if not isinstance(raw, list) or not raw or len(raw) > _MAX_EDITS:
@@ -320,7 +321,7 @@ async def _merge_instructions(
         llm_client, model, rewrite_system, user_prompt, _MAX_INSTRUCTIONS_TOKENS, cfg, temperature
     )
     try:
-        return str(json.loads(content).get('instructions', '')).strip()
+        return str(json.loads(extract_json_from_response(content)).get('instructions', '')).strip()
     except (ValueError, AttributeError):
         # Off-contract rewrite response (not JSON, or not an object). Treated as
         # an empty merge by the caller, which reports it rather than writing.
