@@ -515,9 +515,10 @@ class TestAttackFragmentView:
         assert html_0 != html_1
 
     def test_out_of_range_idx_handled_gracefully(self, client: TestClient, rid: str) -> None:
-        """idx beyond result count should still return 200 (clamped to 0)."""
-        html = _get(client, f'/r/{rid}/redteam/attack?idx=9999')
-        assert 'Evaluator verdict' in html
+        """idx beyond result count should return a clear 404 fragment."""
+        response = client.get(f'/r/{rid}/redteam/attack?idx=9999')
+        assert response.status_code == 404
+        assert 'No attack at that index' in response.text
 
     def test_hx_get_links_present_for_navigation(self, client: TestClient, rid: str) -> None:
         html = _get(client, f'/r/{rid}/redteam/attack?idx=0')
@@ -759,13 +760,34 @@ class TestViewRoutesHonorFilter:
         assert 'Evaluator verdict' in html_vuln
 
     def test_attack_fragment_stale_idx_clamped_after_filter(self, tmp_path: Path) -> None:
-        """An idx that falls outside the filtered set should be clamped to 0 (not 500)."""
+        """An idx that falls outside the filtered set should return a 404 fragment."""
         client, rid = self._filtered_report(tmp_path)
         # Unfiltered has 4 results (idx 0-3); filtered to Vulnerable has 2 (idx 0-1).
-        # idx=3 is out-of-range for the filtered set — must not 500.
+        # idx=3 is out-of-range for the filtered set — it must not show row 0.
         r = client.get(f'/r/{rid}/redteam/attack?idx=3&result=Vulnerable')
-        assert r.status_code == 200
-        assert 'Evaluator verdict' in r.text
+        assert r.status_code == 404
+        assert 'No attack at that index' in r.text
+
+    def test_attack_fragment_out_of_range_filtered_index_returns_404(self, tmp_path: Path) -> None:
+        """An index beyond a three-row filtered report must not show attack #1."""
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        results = [
+            _make_result(category='ASI01', passed=False, agent_key='agent-a', attack_id='v1'),
+            _make_result(category='ASI01', passed=False, agent_key='agent-a', attack_id='v2'),
+            _make_result(category='ASI01', passed=False, agent_key='agent-a', attack_id='v3'),
+            _make_result(category='LLM01', passed=True, agent_key='agent-a', attack_id='r1'),
+        ]
+        report = _make_report(results, tested_agents=['agent-a'])
+        rp = rt / 'rt_filter_three_vulnerable_20260101.json'
+        rp.write_text(report.model_dump_json())
+        client = TestClient(build_app(roots=[rt]), raise_server_exceptions=True)
+        rid = report_id(rp)
+
+        response = client.get(f'/r/{rid}/redteam/attack?idx=99&result=Vulnerable')
+
+        assert response.status_code == 404
+        assert 'No attack at that index' in response.text
 
     def test_disagreement_filtered_reduces_or_changes_set(self, tmp_path: Path) -> None:
         """Filtering to a single category should change disagreement results."""
