@@ -51,7 +51,7 @@ class TestResolveBackendOpenResponses:
         target = backend.create_target("agent-id")
 
         assert isinstance(target, OrqResponsesTarget)
-        assert target.retry_attempts == 3
+        assert target.retry_attempts == 1
         assert target.retry_statuses == {429, 503}
 
     def test_retry_count_none_uses_default(self):
@@ -59,7 +59,7 @@ class TestResolveBackendOpenResponses:
         backend = resolve_backend("openresponses", llm_client=client)
         target = backend.create_target("agent-id")
         assert isinstance(target, OrqResponsesTarget)
-        assert target.retry_attempts is None
+        assert target.retry_attempts == 1
 
     @pytest.mark.asyncio
     async def test_resolve_context_returns_minimal_agent_context(self):

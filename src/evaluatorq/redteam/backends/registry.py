@@ -141,7 +141,9 @@ def _create_openresponses_backend(
 
     instructions = target_config.system_prompt if target_config else None
     timeout_ms = pipeline_config.target_agent_timeout_ms if pipeline_config else None
-    retry_attempts = pipeline_config.retry_attempts if pipeline_config else None
+    # The orchestrator's call_target_with_retry is the single retry owner for
+    # target calls; keep one inner attempt so a target cannot add a second budget.
+    retry_attempts = 1
     retry_statuses = pipeline_config.retry_on_codes if pipeline_config else None
     return OpenResponsesBackend(
         client=llm_client,

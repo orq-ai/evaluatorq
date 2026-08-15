@@ -614,8 +614,9 @@ class ORQBackend(Backend):
     """Backend for ORQ-hosted agents.
 
     Owns the ORQ SDK client. Creates ``ORQAgentTarget`` instances per job.
-    Performs memory cleanup via the SDK. Maps ORQ exceptions to a normalized
-    error taxonomy.
+    Performs memory cleanup via the SDK. The orchestrator owns target retries,
+    so the SDK client is constructed with ``retry_config=None``. Maps ORQ
+    exceptions to a normalized error taxonomy.
     """
 
     def __init__(
@@ -637,14 +638,13 @@ class ORQBackend(Backend):
                     'ORQ backend requires the orq-ai-sdk package. '
                     'Install with: uv add "evaluatorq[orq]" (or: python -m pip install "evaluatorq[orq]")'
                 )
-            if retry_count is None:
-                retry_count = PIPELINE_CONFIG.retry_count
-                retry_on_codes = PIPELINE_CONFIG.retry_on_codes
             self._orq_client = _orq_cls(
                 api_key=_get_orq_api_key(),
                 server_url=_get_orq_server_url(),
                 timeout_ms=self._timeout_ms,
-                retry_config=_orq_retry_config(retry_count, retry_on_codes, timeout_ms=self._timeout_ms),
+                # The orchestrator owns target retries via call_target_with_retry;
+                # the Orq SDK must not add an inner retry budget.
+                retry_config=None,
             )
 
     def create_target(self, agent_key: str) -> ORQAgentTarget:
@@ -675,8 +675,7 @@ def create_orq_agent_target(
             api_key=_get_orq_api_key(),
             server_url=_get_orq_server_url(),
             timeout_ms=timeout_ms,
-            retry_config=_orq_retry_config(
-                PIPELINE_CONFIG.retry_count, PIPELINE_CONFIG.retry_on_codes, timeout_ms=timeout_ms
-            ),
+            # The orchestrator owns target retries via call_target_with_retry.
+            retry_config=None,
         )
     return ORQAgentTarget(agent_key=agent_key, orq_client=orq_client, timeout_ms=timeout_ms)
