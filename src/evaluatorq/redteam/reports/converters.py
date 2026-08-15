@@ -36,10 +36,12 @@ from evaluatorq.redteam.contracts import (
     RedTeamResult,
     ReportSummary,
     RunError,
+    Severity,
     SeveritySummary,
     TechniqueSummary,
     TokenUsage,
     Turn,
+    TurnType,
     TurnTypeSummary,
     UnifiedEvaluationResult,
     Vulnerability,
@@ -478,6 +480,49 @@ def static_results_to_report(
     )
 
 
+def _placeholder_error_result(result: Any, inputs: dict[str, Any], agent_context: AgentContext) -> RedTeamResult:
+    """Build an error row for a datapoint that never reached job execution.
+
+    ``evaluatorq.processings.process_data_point`` returns
+    ``DataPointResult(data_point=DataPoint(inputs={}), error=str(error), job_results=None)``
+    when the data point itself raises before any job runs — there is no ``strategy``
+    payload to reconstruct ``AttackInfo`` from, only ``result.error`` (and, once
+    Task 10 lands, ``inputs['row_index']``). Mirrors the placeholder ``AttackInfo``
+    shape used for skipped/unparseable rows elsewhere in this module: minimal but
+    schema-valid metadata, ``vulnerable=None`` (never False — the attack did not run,
+    it did not resist), and no ``evaluation_error`` (that field is reserved for a
+    judge failure on a transcript that exists; here there is no transcript).
+    """
+    row_index = inputs.get('row_index')
+    row_label = f'row {row_index}' if row_index is not None else 'unknown row'
+    error = getattr(result, 'error', None) or 'Datapoint failed before job execution (no strategy payload)'
+
+    attack = AttackInfo(
+        id=inputs.get('id') or f'unparseable-strategy-{row_label}',
+        vulnerability='',
+        category=inputs.get('category', 'unknown'),
+        framework=Framework.OWASP_AGENTIC,
+        attack_technique=AttackTechnique.INDIRECT_INJECTION,
+        delivery_methods=[],
+        turn_type=TurnType.SINGLE,
+        severity=Severity.MEDIUM,
+        source=AttackSource.TEMPLATE_DYNAMIC,
+    )
+
+    return RedTeamResult(
+        attack=attack,
+        agent=AgentInfo(
+            key=agent_context.key,
+            model=agent_context.model,
+            display_name=agent_context.display_name,
+        ),
+        messages=[],
+        vulnerable=None,
+        error=error,
+        error_type=_classify_error(error, existing_type=None),
+    )
+
+
 def dynamic_evaluatorq_results_to_report(
     *,
     agent_context: AgentContext,
@@ -496,8 +541,19 @@ def dynamic_evaluatorq_results_to_report(
             continue
 
         inputs = getattr(data_point, 'inputs', {}) or {}
-        strategy_payload = inputs.get('strategy', {})
-        strategy = AttackStrategy.model_validate(strategy_payload)
+        strategy_payload = inputs.get('strategy') or {}
+        try:
+            strategy = AttackStrategy.model_validate(strategy_payload)
+        except ValidationError:
+            # Tolerates both inputs={} (current placeholder shape) and
+            # inputs={'row_index': N} (once Task 10 adds it) — neither carries a
+            # strategy payload, since the datapoint failed before job execution.
+            _converters_logger.warning(
+                'Skipping report row with unparseable strategy payload (datapoint failed before '
+                'job execution); recording as error result'
+            )
+            unified.append(_placeholder_error_result(result, inputs, agent_context))
+            continue
         category = normalize_category(inputs.get('category', strategy.category))
         vulnerability_str = inputs.get('vulnerability', '')
         if not vulnerability_str:
