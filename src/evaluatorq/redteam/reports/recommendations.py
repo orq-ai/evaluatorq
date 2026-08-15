@@ -211,14 +211,39 @@ def _truncate_prompt_at_trace_boundary(text: str, max_chars: int) -> str:
     """Drop the incomplete tail of a prompt rather than cutting an XML trace."""
     if len(text) <= max_chars:
         return text
+    if max_chars <= 0:
+        return ''
 
     prefix = text[:max_chars]
-    trace_end = prefix.rfind('</trace>')
-    if trace_end >= 0:
-        return prefix[: trace_end + len('</trace>')]
+    opening_tag = '<trace>'
+    closing_tag = '</trace>'
+    depth = 0
+    trace_start: int | None = None
+    last_complete_end: int | None = None
+    cursor = 0
+    while cursor < len(prefix):
+        opening = prefix.find(opening_tag, cursor)
+        closing = prefix.find(closing_tag, cursor)
+        if opening < 0 and closing < 0:
+            break
+        if closing < 0 or (opening >= 0 and opening < closing):
+            if depth == 0:
+                trace_start = opening
+            depth += 1
+            cursor = opening + len(opening_tag)
+        elif depth > 0:
+            depth -= 1
+            cursor = closing + len(closing_tag)
+            if depth == 0:
+                last_complete_end = cursor
+        else:
+            cursor = closing + len(closing_tag)
 
-    trace_start = prefix.find('<trace>')
-    return text[:trace_start].rstrip() if trace_start >= 0 else prefix
+    if last_complete_end is not None:
+        return prefix[:last_complete_end]
+    if trace_start is not None:
+        return prefix[:trace_start].rstrip()
+    return prefix
 
 
 async def _condense_attack(

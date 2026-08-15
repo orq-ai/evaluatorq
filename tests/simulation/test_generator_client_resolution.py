@@ -1,5 +1,6 @@
 import asyncio
 from typing import Any, cast
+from weakref import WeakKeyDictionary
 
 import pytest
 
@@ -90,7 +91,7 @@ def test_datapoint_generator_can_cross_event_loop_boundaries(monkeypatch):
     generator = cast(Any, object.__new__(DatapointGenerator))
     generator._rate_limit_delay = 0.0
     generator._max_concurrent_calls = 1
-    generator._semaphore = asyncio.Semaphore(1)
+    generator._semaphores = WeakKeyDictionary()
     generator._first_message_generator = FakeFirstMessageGenerator()
     monkeypatch.setattr(dpg_mod, 'generate_datapoint', lambda *args: object())
 
@@ -99,3 +100,40 @@ def test_datapoint_generator_can_cross_event_loop_boundaries(monkeypatch):
 
     assert len(asyncio.run(generate())) == 2
     assert len(asyncio.run(generate())) == 2
+
+
+def test_datapoint_generator_shares_the_cap_across_concurrent_calls(monkeypatch):
+    from evaluatorq.simulation.generators import datapoint_generator as dpg_mod
+    from evaluatorq.simulation.generators.datapoint_generator import DatapointGenerator
+
+    active = 0
+    peak = 0
+
+    class FakeFirstMessageGenerator:
+        async def generate(self, persona, scenario):
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            try:
+                await asyncio.sleep(0.01)
+                return 'opening message'
+            finally:
+                active -= 1
+
+    generator = cast(Any, object.__new__(DatapointGenerator))
+    generator._rate_limit_delay = 0.0
+    generator._max_concurrent_calls = 2
+    generator._semaphores = WeakKeyDictionary()
+    generator._first_message_generator = FakeFirstMessageGenerator()
+    monkeypatch.setattr(dpg_mod, 'generate_datapoint', lambda *args: object())
+
+    async def generate_concurrently() -> None:
+        combinations = ([object(), object()], [object(), object(), object()])
+        await asyncio.gather(*[
+            generator.generate_from_combinations(personas, [object()])
+            for personas in combinations
+        ])
+
+    asyncio.run(generate_concurrently())
+
+    assert peak == 2
