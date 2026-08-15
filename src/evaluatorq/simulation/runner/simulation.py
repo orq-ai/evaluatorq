@@ -1273,19 +1273,27 @@ class SimulationRunner:
             # A TimeoutError means asyncio cancelled the inner coroutine mid-flight.
             # The caller-owned sinks retain every turn that completed before the
             # cancellation, so the partial transcript is preserved instead of lost.
+            # Usage is summed from the completed turns' deltas rather than reported
+            # as ZERO_USAGE: a timeout must never look like a $0, clean run.
+            reason = f'Simulation timed out after {timeout_s}s'
             return SimulationResult(
                 messages=messages,
                 terminated_by=TerminatedBy.timeout,
-                reason=f'Simulation timed out after {timeout_s}s',
+                reason=reason,
                 goal_achieved=False,
                 goal_completion_score=0,
                 rules_broken=[],
                 turn_count=sum(1 for m in messages if m.role == 'assistant'),
                 turn_metrics=turn_metrics_list,
-                token_usage=ZERO_USAGE.model_copy(),
+                token_usage=sum((tm.token_usage for tm in turn_metrics_list), start=ZERO_USAGE.model_copy()),
                 metadata={
                     'persona': datapoint.persona.name,
                     'scenario': datapoint.scenario.name,
                     'timeout': timeout_s,
+                    # Same key names as `_target_failure_result` (~1183-1184) so
+                    # both timeout producers surface identically to
+                    # `sections._is_errored` and the report layer.
+                    'error': reason,
+                    'error_type': 'TimeoutError',
                 },
             )
