@@ -289,6 +289,54 @@ async def test_streaming_fetch_failure_cancels_in_flight_datapoints(
 
 
 @pytest.mark.asyncio
+async def test_streaming_polling_and_processing_failures_are_both_surfaced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A polling failure must not hide a processing failure from the caller."""
+    evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
+    progress_updates = 0
+
+    class PollingFailureProgress:
+        async def update_progress(self, **_kwargs: object) -> None:
+            nonlocal progress_updates
+            progress_updates += 1
+            if progress_updates == 2:
+                raise RuntimeError('polling failed')
+
+    async def fetch_one_batch(*_args: object, **_kwargs: object):
+        yield DataPointBatch(
+            datapoints=[DataPoint(inputs={'row': 0})],
+            has_more=False,
+            batch_number=1,
+        )
+        await asyncio.sleep(0)
+
+    async def failing_processing(*_args: object, **_kwargs: object) -> list[object]:
+        raise RuntimeError('processing failed')
+
+    async def job(_data: DataPoint, _row: int):
+        return {'name': 'job', 'output': 'output'}
+
+    monkeypatch.setattr(evaluatorq_module, 'ProgressService', PollingFailureProgress)
+    monkeypatch.setattr(evaluatorq_module, 'setup_orq_client', lambda _api_key: object())
+    monkeypatch.setattr(evaluatorq_module, 'fetch_dataset_batches', fetch_one_batch)
+    monkeypatch.setattr(evaluatorq_module, 'process_data_point', failing_processing)
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await evaluatorq_module.evaluatorq(
+            'streaming-multiple-failures',
+            data=DatasetIdInput(dataset_id='dataset'),
+            jobs=[job],
+            print_results=False,
+            _send_results=False,
+        )
+
+    assert 'polling failed' in str(exc_info.value)
+    assert 'processing failed' in str(exc_info.value)
+
+
+@pytest.mark.asyncio
 async def test_evaluatorq_returns_failed_results_to_library_callers() -> None:
     """Library callers receive failed results instead of a process exit."""
 
@@ -320,11 +368,13 @@ async def test_evaluator_parallelism_is_bounded_per_job() -> None:
     """Evaluator fan-out must respect the per-datapoint parallelism cap."""
     concurrent_count = 0
     max_concurrent = 0
+    invocations = 0
     lock = asyncio.Lock()
 
     async def evaluator_scorer(_params: ScorerParameter) -> EvaluationResult:
-        nonlocal concurrent_count, max_concurrent
+        nonlocal concurrent_count, invocations, max_concurrent
         async with lock:
+            invocations += 1
             concurrent_count += 1
             max_concurrent = max(max_concurrent, concurrent_count)
         await asyncio.sleep(0.02)
@@ -346,6 +396,7 @@ async def test_evaluator_parallelism_is_bounded_per_job() -> None:
     )
 
     assert len(results) == 1
+    assert invocations == 8
     assert max_concurrent <= 2
 
 
