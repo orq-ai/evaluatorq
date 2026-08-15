@@ -12,7 +12,7 @@ from loguru import logger
 from pydantic import ValidationError
 
 from evaluatorq import DataPoint, EvaluationResult
-from evaluatorq.common.judge import JudgeError, JudgeOutcome, build_eval_replacements, run_judge
+from evaluatorq.common.judge import JudgeError, JudgeOutcome, build_eval_replacements, judge_error_payload, run_judge
 from evaluatorq.common.jury import Prediction, VerdictKind, _panel_composition_messages, append_jury_summary, run_jury
 from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.common.output_adapters import output_error_text, output_to_messages
@@ -26,7 +26,6 @@ from evaluatorq.redteam.contracts import (
     EvaluatorConfig,
     EvaluatorqEvaluatorConfig,
     LLMCallConfig,
-    PipelineStage,
     RedTeamInput,
     StaticDataset,
     normalize_category,
@@ -172,30 +171,6 @@ def _parse_hf_source(rest: str) -> tuple[str, str]:
 def _error_result(explanation: str) -> EvaluationResult:
     """Inconclusive scorer row: not RESISTANT/VULNERABLE, just unscoreable."""
     return EvaluationResult.model_validate({'value': 'error', 'explanation': explanation, 'pass': None})
-
-
-def _judge_error_payload(outcome: JudgeOutcome, evaluator_id: str) -> dict[str, Any]:
-    """Serialize a failed judge call into the shape converters lift to ``RunError``.
-
-    Mirrors ``AdaptiveEvaluator._judge_error_payload`` (adaptive/evaluator.py):
-    ``stage`` is always 'evaluation' (the attack itself ran, so this is not an
-    execution error), and ``code`` is the JudgeError kind, which is what makes
-    'every judge call was blocked' legible as a single cause in the error rollup
-    rather than N unrelated one-off failures.
-    """
-    return {
-        'message': outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'unknown'),
-        'error_type': outcome.error_kind.value if outcome.error_kind else 'unknown',
-        'stage': PipelineStage.EVALUATION.value,
-        'code': outcome.error_kind.value if outcome.error_kind else None,
-        'details': {
-            'evaluator_id': evaluator_id,
-            # Truncated: the point is to identify the cause, not to store the payload
-            # twice — the untruncated content stays under raw_output['raw_content'].
-            'raw_content': (outcome.raw_content or '')[:500] or None,
-            'timeout_ms': outcome.timeout_ms,
-        },
-    }
 
 
 def create_owasp_evaluator(
@@ -361,7 +336,7 @@ def create_owasp_evaluator(
             # Without this the panel path produced pass=None with no recorded cause,
             # so a whole-panel outage was invisible to the error rollup and the CLI hint.
             if passed is None and last_error is not None:
-                raw_output[EVAL_ERROR_RAW_OUTPUT_KEY] = _judge_error_payload(last_error, category)
+                raw_output[EVAL_ERROR_RAW_OUTPUT_KEY] = judge_error_payload(last_error, category)
             return EvaluationResult.model_validate({
                 'value': passed if passed is not None else 'inconclusive',
                 'explanation': explanation,

@@ -96,6 +96,35 @@ class JudgeOutcome(BaseModel):
     )
 
 
+def judge_error_payload(outcome: JudgeOutcome, evaluator_id: str) -> dict[str, Any]:
+    """Serialize a failed judge call into the shape converters lift to ``RunError``.
+
+    Canonical for every caller that surfaces a judge failure as a structured
+    cause (the adaptive evaluator's panel path and the OWASP static bridge both
+    call this — they drifted into near-identical copies before it was
+    consolidated here). ``stage`` is the literal ``'evaluation'`` rather than
+    the redteam ``PipelineStage`` enum: this module is shared infrastructure and
+    must not import from ``redteam/``; the attack itself ran, so this is not an
+    execution error and must not be conflated with one. ``code`` is the
+    ``JudgeError`` kind, which is what makes 'every judge call was blocked'
+    legible as a single cause in the error rollup rather than N unrelated
+    one-off failures.
+    """
+    return {
+        'message': outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'unknown'),
+        'error_type': outcome.error_kind.value if outcome.error_kind else 'unknown',
+        'stage': 'evaluation',
+        'code': outcome.error_kind.value if outcome.error_kind else None,
+        'details': {
+            'evaluator_id': evaluator_id,
+            # Truncated: the point is to identify the cause, not to store the payload
+            # twice — the untruncated content stays under raw_output['raw_content'].
+            'raw_content': (outcome.raw_content or '')[:500] or None,
+            'timeout_ms': outcome.timeout_ms,
+        },
+    }
+
+
 def _format_output_message(item: OutputMessage) -> dict[str, Any] | None:
     if isinstance(item, TextOutputItem):
         return {'role': 'assistant', 'content': item.text}
