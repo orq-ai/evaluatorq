@@ -720,7 +720,7 @@ next to red teaming in the left rail.
 
 **Agent Sim** lists every simulation job with its target, goal-completion score,
 conversation count and cost. The picker above the list selects two runs to
-compare (step 7).
+compare (step 8).
 
 ![The Agent Sim run list: simulations run, goal completion, average turns and cost per simulation.](../assets/dashboard/sim-02-run-list.png){ .dashboard-shot }
 
@@ -739,9 +739,19 @@ three of them, and *lower* is better for hallucination risk. Factual accuracy is
 only meaningful when the scenario supplies ground truth — without it the judge
 has nothing to check the response against.
 
+"Average score" is the mean `goal_completion_score` — the judge's 0–1 rating of
+how fully the scenario goal was met — not the pass rate. The **CONFIDENCE**
+badge on the summary is a band on that same pass rate rather than an
+independent statistical measure: ≥ 80% of goals achieved reads HIGH, ≥ 50%
+MEDIUM, below that LOW. A LOW badge is telling you the run went badly, not that
+the sample was too small.
+
 Filters sit in the right rail on every tab — goal outcome, rule violations, who
 terminated the conversation, persona, scenario, and score/turn thresholds — and
-the whole page respects them.
+the whole page respects them. "Terminated by" takes four values: `judge` (the
+judge decided the conversation was done), `max_turns` (the turn cap hit first),
+`error`, and `timeout`. A run dominated by `max_turns` means the cap, not the
+agent, decided where the conversations ended.
 
 ![Overview: executive summary, run counts, outcome donut and the four average quality metrics.](../assets/dashboard/sim-03-overview.png){ .dashboard-shot }
 
@@ -766,15 +776,21 @@ instructions from here: preview the merge as a diff, confirm, and the write
 lands as a new minor agent version — see
 [Apply recommendations to the agent](../dashboard.md#apply-recommendations-to-the-agent).
 Runs against a plain model, a deployment or a callback have no instructions to
-write back to, so their suggestions render as plain bullets. This tab is newer
-than the screenshots below, which is why it doesn't appear in them.
+write back to, so their suggestions render as plain bullets.
+
+!!! note "No screenshot for this tab"
+    Recommendations is newer than the screenshots on this page, so it does not
+    appear in them — the tab strip in the shots below is one tab short of what
+    you'll see.
 
 ### 6. Transcripts — the conversations
 
 **Transcripts** lists every conversation with persona, scenario, turn count,
 score, who ended it, and whether the goal was met. Sort by score to put the
 failures on top, and raise the page size (5 / 10 / 25) before scanning a large
-run.
+run. The **TRACES** column is empty in the screenshot because it needs
+`ORQ_WORKSPACE` set to build the deep-link; with it set, each row gets a button
+to the target agent's trace in the Orq UI.
 
 ![Transcripts: all conversations in the run, sortable and paginated.](../assets/dashboard/sim-05-transcripts.png){ .dashboard-shot }
 
@@ -807,7 +823,9 @@ assertiveness, politeness and technical level.
 
 Pick a second run in **Compare with** to diff two runs: KPI deltas, outcomes,
 per-scorer averages, and how conversations ended. Below, goal-achieved is up 74
-points and mean score up 0.41 against the earlier run.
+points and mean score up 0.41 against the earlier run. Both runs carry the same
+name — runs are identified by name *and* timestamp, so re-running the same
+evaluation name is normal and the picker disambiguates by time.
 
 The comparison works on two levels, and the screenshot only earns the first
 one. Run-level KPIs always compare. Per-conversation matching pairs runs up on

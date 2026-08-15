@@ -54,5 +54,10 @@ pairs, so per-conversation matching finds nothing. The KPI deltas are still
 correct — crop the banner, or re-shoot against two runs generated from the same
 persona/scenario set.
 
+The simulation **Recommendations** tab has no screenshot: it landed after this
+set was captured, so every sim shot here shows a tab strip one tab short of the
+current dashboard. Both guides say so in prose; re-shooting the set would drop
+the caveat.
+
 To re-shoot: run `eq dashboard` in a checkout with runs under
 `.evaluatorq/runs/` and `.evaluatorq/sim-runs/`.

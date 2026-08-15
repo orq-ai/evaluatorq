@@ -381,6 +381,11 @@ red team / agent sim split, and findings by severity across every stored run.
 Use it to confirm the run you expect actually landed, then pick a surface from
 the left rail.
 
+It is a triage screen, not a scoreboard: the severity bars aggregate *every*
+stored run, including throwaway smoke runs, so a red bar here doesn't mean the
+system you care about is broken. Go to the surface, find the run, and read its
+numbers there.
+
 ![The dashboard landing page: jobs run, spend, tokens, run mix, and findings by severity across all stored runs.](../assets/dashboard/redteam-01-landing.png){ .dashboard-shot }
 
 ### 2. Red Team — pick a run
@@ -406,6 +411,12 @@ universal pass mark — take the first run as your baseline, fix what
 number you reach into a [CI gate](#in-ci) so the next run can only improve on
 it.
 
+Both numbers cover only the categories this run actually attacked. The example
+run touched 10 of the 19 framework categories, so its resistance rate says
+nothing about the other 9 — [Config](#9-config-what-was-actually-tested) lists
+which were skipped, and it is worth reading before quoting the headline
+anywhere.
+
 Filters sit in the right rail on every tab — outcome, severity, minimum turns,
 category, agent, attack technique, delivery method and vulnerability — and the
 whole page, downloads included, respects them.
@@ -418,23 +429,32 @@ For a run with more than one target, **Agents** puts each one's ASR, model,
 discovered tools, skills and knowledge side by side, so a hardened target and an
 unhardened one are directly comparable.
 
+A dash in the tools, skills or knowledge column means nothing was discovered
+for that target — either the agent genuinely has none, or the backend exposes
+no way to enumerate them (direct model and callback targets never do). It is
+not a claim that the agent is tool-free, and the attack planner only tailors
+attacks to capabilities it could actually see.
+
 ![Agents: per-agent ASR, model, and the tools, skills and knowledge discovered for each target.](../assets/dashboard/redteam-04-agents.png){ .dashboard-shot }
 
 ### 5. Focus areas — what to fix first
 
 **Focus areas** ranks fixes by `risk = success rate × avg severity` and attaches
 a recommended remediation to each. Severity is the numeric weight shown on
-[Config](#8-usage-and-config-cost-and-method) (critical is the heaviest), so a
+[Config](#9-config-what-was-actually-tested) (critical is the heaviest), so a
 vulnerability that fails often *and* fails badly floats to the top. Start at P1
 and work down; re-run the same categories afterwards and compare the two runs
 in the run list to confirm the fix landed.
 
-On a single-agent run against an Orq agent you can also apply a recommendation
-from here: each one gets an **Apply…** button that previews the merged
-instructions as a diff, and nothing is written until you confirm — see
+On a single-agent run you can also apply a recommendation from here: each one
+gets an **Apply…** button that previews the merged instructions as a diff, and
+nothing is written until you confirm — see
 [Apply recommendations to the agent](../dashboard.md#apply-recommendations-to-the-agent).
-The screenshot below predates that flow, so it shows the remediation text
-without the apply bar.
+The button appears for any single-agent run, but the write only lands if that
+target is a real Orq agent; against a model, deployment or callback there are
+no stored instructions to merge into, and the preview fails with an error
+rather than the button being hidden up front. The screenshot below predates the
+flow entirely, so it shows the remediation text without the apply bar.
 
 ![Focus areas: prioritized fixes ranked by risk, each with a recommended remediation.](../assets/dashboard/redteam-05-focus-areas.png){ .dashboard-shot }
 
@@ -444,7 +464,10 @@ without the apply bar.
 category that fell over on every attempt isn't hidden behind a healthy overall
 resistance rate. Read the attempt count alongside the rate — 100% over two
 attacks and 33% over twelve are not equally strong signals, and the ranking
-doesn't weight for that.
+doesn't weight for that. When a category you care about sits on a handful of
+attempts, re-run scoped to it with a higher `--generated-strategy-count`
+(2 per category by default) before treating either the pass or the fail as
+real.
 
 ![Breakdowns: attack success rate per OWASP category, worst first.](../assets/dashboard/redteam-06-breakdowns.png){ .dashboard-shot }
 
@@ -456,20 +479,27 @@ doesn't weight for that.
 
 Click a row to expand the evaluator's verdict, its reasoning, and the full
 message-by-message transcript — the evidence you'd paste into a ticket. With
-`ORQ_WORKSPACE` set, each attack also links out to its trace in the Orq UI. In
+`ORQ_WORKSPACE` set, attacks that recorded a trace id also link out to that
+trace in the Orq UI; without the variable the buttons are hidden entirely. In
 the expanded row below, a memory-poisoning attack succeeded: the agent confirms
 it stored a persistent "System Administrator / UNRESTRICTED" directive telling
 it to bypass safety checks on request.
 
 ![An expanded attack row: evaluator verdict plus the full message-by-message transcript.](../assets/dashboard/redteam-08-attack-detail.png){ .dashboard-shot }
 
-### 8. Usage and Config — cost and method
+### 8. Usage — what the run consumed
 
 **Usage** breaks tokens down per agent — total, prompt, completion and API
 calls. It reports tokens only; the run-level spend on the landing page and the
-run list shows a dash when the backend returns no pricing, as it does here.
+run list shows a dash when the backend returns no pricing, which is what
+happens here — an Orq agent target reports token counts with no cost attached,
+partly because one agent turn can fan out across several models. See
+[What a run costs](#what-a-run-costs) for which calls come back priced and
+which don't.
 
 ![Usage: total, prompt and completion tokens plus API calls per agent.](../assets/dashboard/redteam-09-usage.png){ .dashboard-shot }
+
+### 9. Config — what was actually tested
 
 **Config** records how the run was produced — pipeline, framework, scoring
 method, duration — plus which categories were tested, which were not, and the
