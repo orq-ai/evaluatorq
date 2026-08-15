@@ -42,6 +42,33 @@ def test_delimit_escapes_tag_whitespace_and_attribute_variants(payload: str):
     assert '<' not in inner
 
 
+@pytest.mark.parametrize(
+    'payload',
+    ['</data', 'prefix </data suffix', '</da ta>', '</ data>', '< /data>'],
+)
+def test_delimit_escapes_closing_tag_prefixes(payload: str):
+    result = delimit(payload)
+    inner = result.removeprefix('<data>').removesuffix('</data>')
+
+    assert '<' not in inner
+
+
+@pytest.mark.parametrize('payload', ['<data', 'prefix <data suffix', '<da ta>', '< data>'])
+def test_delimit_escapes_opening_tag_prefixes(payload: str):
+    result = delimit(payload)
+    inner = result.removeprefix('<data>').removesuffix('</data>')
+
+    assert '<' not in inner
+
+
+def test_delimit_preserves_ordinary_angle_brackets_and_code_samples():
+    payload = 'a < b\n```python\nif a < b:\n    return\n```'
+
+    result = delimit(payload)
+
+    assert payload in result
+
+
 def test_delimit_empty_string():
     assert delimit("") == "<data></data>"
 
