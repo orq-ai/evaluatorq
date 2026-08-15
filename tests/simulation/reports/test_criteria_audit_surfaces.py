@@ -382,3 +382,34 @@ def test_a_partly_malformed_criteria_meta_names_the_entries_it_drops() -> None:
 
     assert score == 1.0
     assert any('1 of 2 criteria_meta entries are not mappings' in m for m in messages)
+
+
+def test_the_evaluator_detail_survives_a_criteria_meta_of_non_mappings() -> None:
+    """`_sim_evaluation_details` used to call `.get` on every entry, so a JSON
+    round-tripped string raised AttributeError *outside* the scorer's try/except:
+    the whole `criteria_met` evaluator was recorded errored beside a valid score.
+    It now filters like the scorer and falls through to `criteria_results`."""
+    from evaluatorq.simulation.api import _sim_evaluation_details
+
+    result = _result(
+        criteria_meta=['{"id": "criteria_0"}'],  # pyright: ignore[reportArgumentType]
+        criteria_verified=True,
+        criteria_results={'Agent greets the customer': False},
+    )
+
+    explanation, passed = _sim_evaluation_details('criteria_met', result)
+
+    assert passed is False
+    assert explanation == 'FAIL: Agent greets the customer'
+
+
+def test_the_evaluator_detail_ignores_the_non_mapping_entries_it_cannot_read() -> None:
+    """A partly malformed audit still reports the entries that are usable."""
+    from evaluatorq.simulation.api import _sim_evaluation_details
+
+    result = _result(criteria_meta=[*_meta(audited=True), 'not a mapping'], criteria_verified=True)  # pyright: ignore[reportArgumentType]
+
+    explanation, passed = _sim_evaluation_details('criteria_met', result)
+
+    assert passed is True
+    assert explanation == 'PASS [prohibited]: Agent must not leak the API key'

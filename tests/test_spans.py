@@ -5,7 +5,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from evaluatorq.tracing.spans import set_evaluation_attributes
+from evaluatorq.tracing import spans as spans_module
+from evaluatorq.tracing.spans import (
+    EvaluationSpanOptions,
+    JobSpanOptions,
+    set_evaluation_attributes,
+    with_evaluation_span,
+    with_job_span,
+)
 
 
 @pytest.fixture()
@@ -61,3 +68,32 @@ class TestSetEvaluationAttributes:
     def test_handles_none_span_gracefully(self):
         # Should not throw
         set_evaluation_attributes(None, 1.0, explanation="test", pass_=True)
+
+
+class TestSpanBodyImportError:
+    """An ImportError from the body must reach the caller, not be swallowed.
+
+    The OTel imports are guarded so tracing degrades when opentelemetry is
+    absent; that guard used to wrap the ``yield`` too, so a job lazily importing
+    a missing optional extra was caught and the generator resumed, surfacing as
+    ``RuntimeError: generator didn't stop after athrow()``.
+    """
+
+    @pytest.fixture()
+    def _stub_tracer(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(spans_module, "get_tracer", lambda: MagicMock())
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("_stub_tracer")
+    async def test_job_span_propagates_body_import_error(self):
+        with pytest.raises(ImportError, match="marker"):
+            async with with_job_span(JobSpanOptions(run_id="abc", row_index=0)):
+                raise ImportError("marker")
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("_stub_tracer")
+    async def test_evaluation_span_propagates_body_import_error(self):
+        options = EvaluationSpanOptions(run_id="abc", evaluator_name="judge")
+        with pytest.raises(ImportError, match="marker"):
+            async with with_evaluation_span(options):
+                raise ImportError("marker")

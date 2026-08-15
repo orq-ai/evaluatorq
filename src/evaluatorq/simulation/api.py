@@ -1937,7 +1937,12 @@ def _sim_evaluation_details(name: str, result: SimulationResult) -> tuple[str | 
                 False,
             )
         meta = result.metadata.get('criteria_meta') or []
-        if isinstance(meta, list) and meta:
+        # Non-dict entries (a JSON round-trip can leave strings here — see
+        # `criteria_met_scorer`) are dropped rather than `.get()`-ed: this call site
+        # sits outside the scorer's try/except, so an AttributeError here records the
+        # whole evaluator as errored despite a perfectly good score.
+        entries = [c for c in meta if isinstance(c, dict)] if isinstance(meta, list) else []
+        if entries:
             # Tag each line with the criterion polarity. Without it, a passed
             # 'must_not_happen' rule renders as e.g. "PASS: Agent blames the
             # customer", which reads as if the agent passed *by* misbehaving.
@@ -1953,8 +1958,8 @@ def _sim_evaluation_details(name: str, result: SimulationResult) -> tuple[str | 
                 suffix = ' (not audited)' if verdict == 'UNKNOWN' else ''
                 return f'{verdict} [{polarity}]: {c.get("description", c.get("id", "?"))}{suffix}'
 
-            lines = [_line(c) for c in meta]
-            all_met = all(c.get('passed') and c.get('audited') is not False for c in meta)
+            lines = [_line(c) for c in entries]
+            all_met = all(c.get('passed') and c.get('audited') is not False for c in entries)
             return '\n'.join(lines), all_met
         # Fallback to the lossy criteria_results dict when criteria_meta is absent.
         criteria_results = result.criteria_results or {}

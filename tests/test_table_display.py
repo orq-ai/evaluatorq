@@ -160,6 +160,22 @@ class TestCalculateEvaluatorAverages:
         display_value, _ = data["averages"]["failing"]["job1"]
         assert display_value == "-"
 
+    def test_averages_numeric_scores_ignoring_degraded_strings(
+        self, make_result: Callable[..., DataPointResult]
+    ):
+        # A jury degrading to 'inconclusive' (no error recorded) must neither dilute the
+        # mean nor, by arriving first, render the whole column as '[string]'.
+        results = [
+            make_result("job1", [{"evaluator_name": "accuracy", "value": "inconclusive"}]),
+            make_result("job1", [{"evaluator_name": "accuracy", "value": 0.5}]),
+            make_result("job1", [{"evaluator_name": "accuracy", "value": 1.0}]),
+        ]
+
+        data = calculate_evaluator_averages(results)
+        display_value, style = data["averages"]["accuracy"]["job1"]
+        assert display_value == "0.75"
+        assert style == "yellow"
+
     def test_100_percent_boolean_pass_rate(self, make_result: Callable[..., DataPointResult]):
         results = [
             make_result("job1", [{"evaluator_name": "check", "value": True}]),

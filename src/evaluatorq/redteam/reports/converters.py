@@ -542,7 +542,12 @@ def dynamic_evaluatorq_results_to_report(
                 # reaches the report as an unexplained inconclusive verdict.
                 scorer_error = getattr(evaluator_scores[0], 'error', None)
 
-        error = getattr(result, 'error', None) or job_output.error
+        # A job that raised never produced an output payload — processings.py records
+        # it as JobResult(output=None, error=...), so the cause only survives on the
+        # JobResult. Mirrors the static converter's dp_error/job_result/output chain;
+        # without it a failed job reaches the report as a causeless inconclusive.
+        job_error = getattr(job_result, 'error', None) if job_result is not None else None
+        error = getattr(result, 'error', None) or job_error or job_output.error
         error_type = _classify_error(error, existing_type=job_output.error_type)
         error_stage = job_output.error_stage
         error_code = job_output.error_code

@@ -376,6 +376,98 @@ class TestUpdateContextCalledPerSimulation:
         assert "update_context" in result.reason
 
 
+class TestInjectedJudgeReceivesScenarioContext:
+    """An injected judge is told the datapoint's goal/criteria, like the default one.
+
+    Without it the judge's prompt reads "No specific criteria defined": no criterion
+    is ever audited, `criteria_verified` stays False and `criteria_met` scores 0.0
+    for every datapoint.
+    """
+
+    def test_update_context_puts_the_criteria_in_the_system_prompt(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ORQ_API_KEY", "test-key")
+
+        from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
+        from evaluatorq.simulation.types import Criterion
+
+        judge = JudgeAgent(JudgeAgentConfig(model="test-model"))
+        assert "No specific criteria defined" in judge.system_prompt
+
+        criteria = [Criterion(description="Agent asks for order details", type="must_happen")]
+        judge.update_context(goal="Get a refund", criteria=criteria, ground_truth="The order was late")
+
+        assert "Get a refund" in judge.system_prompt
+        assert "Agent asks for order details" in judge.system_prompt
+        assert "The order was late" in judge.system_prompt
+        assert "No specific criteria defined" not in judge.system_prompt
+        # The copy the runner makes must not share the caller's list.
+        assert judge._criteria is not criteria  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
+
+    @pytest.mark.asyncio
+    async def test_injected_judge_is_given_the_scenario(self, monkeypatch: pytest.MonkeyPatch):
+        """The per-simulation copy of an injected JudgeAgent carries the scenario."""
+        monkeypatch.setenv("ORQ_API_KEY", "test-key")
+
+        from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
+        from evaluatorq.simulation.types import Criterion
+
+        judged: list[JudgeAgent] = []
+
+        async def fake_evaluate(self: JudgeAgent, messages: list[Message]):  # noqa: ANN202
+            judged.append(self)
+            return _make_mock_judgment()
+
+        monkeypatch.setattr(JudgeAgent, "evaluate", fake_evaluate)
+
+        # Constructed with no goal and no criteria, exactly as a user would.
+        judge = JudgeAgent(JudgeAgentConfig(model="test-model"))
+        scenario = Scenario(
+            name="Refund",
+            goal="Get a full refund",
+            criteria=[Criterion(description="Agent asks for order details", type="must_happen")],
+            ground_truth="The item never arrived",
+        )
+
+        runner = _make_runner_with_mocks(
+            user_simulator=_make_mock_user_simulator(),
+            judge=judge,
+            max_turns=1,
+        )
+        result = await runner.run(datapoint=_make_datapoint(scenario=scenario))
+
+        assert result.terminated_by != TerminatedBy.error, result.reason
+        assert judged, "judge.evaluate was never called"
+        prompt = judged[0].system_prompt
+        assert "Get a full refund" in prompt
+        assert "Agent asks for order details" in prompt
+        assert "The item never arrived" in prompt
+        # The user's own instance is left untouched by the per-simulation copy.
+        assert "No specific criteria defined" in judge.system_prompt
+
+    @pytest.mark.asyncio
+    async def test_a_judge_without_update_context_warns_instead_of_crashing(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ):
+        """A custom judge satisfying only the `evaluate` protocol still runs."""
+        monkeypatch.setenv("ORQ_API_KEY", "test-key")
+
+        judge = MagicMock(spec=["evaluate", "get_usage", "reset_usage"])
+        judge.evaluate = AsyncMock(return_value=_make_mock_judgment())
+        judge.get_usage = MagicMock(return_value=TokenUsage())
+
+        runner = _make_runner_with_mocks(
+            user_simulator=_make_mock_user_simulator(),
+            judge=judge,
+            max_turns=1,
+        )
+
+        with caplog.at_level("WARNING"):
+            result = await runner.run(datapoint=_make_datapoint())
+
+        assert result.terminated_by != TerminatedBy.error, result.reason
+        assert "update_context" in caplog.text
+
+
 class TestInvalidUserSimulatorRaisesTypeError:
     """Passing a BaseAgent subclass lacking generate_first_message raises TypeError."""
 

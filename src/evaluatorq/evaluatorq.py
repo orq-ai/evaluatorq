@@ -39,10 +39,12 @@ def check_pass_failures(results: EvaluatorqResult, *, treat_errors_as_failure: b
 
     Args:
         results: The evaluation results to check
-        treat_errors_as_failure: When True, a row whose job errored (e.g. a missing
-            recorded response in no-inference mode) also counts as a failure. Without
-            this, an errored job has no evaluator scores and would be invisible here,
-            letting a run with no usable responses exit successfully.
+        treat_errors_as_failure: When True, a row whose datapoint or job errored (e.g. a
+            missing recorded response in no-inference mode), or whose evaluator errored
+            (e.g. every judge call raised), also counts as a failure. Without this, an
+            errored job has no evaluator scores and an errored evaluator leaves ``pass_``
+            unset, so both would be invisible here, letting a run with no usable
+            responses or no usable scores exit successfully.
 
     Returns:
         True if any evaluator failed (pass_=False), False otherwise
@@ -56,6 +58,8 @@ def check_pass_failures(results: EvaluatorqResult, *, treat_errors_as_failure: b
                     return True
                 if job_result.evaluator_scores:
                     for evaluator_score in job_result.evaluator_scores:
+                        if treat_errors_as_failure and evaluator_score.error:
+                            return True
                         if evaluator_score.score.pass_ is False:
                             return True
     return False
