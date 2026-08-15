@@ -2393,11 +2393,7 @@ async def _run_dynamic_or_hybrid(
                 ) -> Any:
                     """Send a static datapoint to the AgentTarget via respond."""
                     messages = _build_messages(data)
-                    prompt = '\n'.join(
-                        text
-                        for m in messages
-                        if m.get('role') == 'user' and (text := coerce_content_text(m.get('content')))
-                    )
+                    prompt = _extract_static_prompt(data)
                     if not prompt:
                         sample_id = data.inputs.get('id', 'unknown')
                         raise ValueError(
