@@ -1358,11 +1358,7 @@ async def _simulate_core(
             # raise propagates (per the contract) while on_run_complete in the
             # finally still receives the real results, not []. Scores were stamped
             # onto each result's metadata by _stamp_evaluator_scores.
-            for r in results:
-                dp_id = r.metadata.get('datapoint_id', '')
-                evaluator_scores = r.metadata.get('evaluator_scores') or {}
-                for evaluator_name, score in evaluator_scores.items():
-                    await await_maybe(resolved_hooks.on_evaluator_complete(dp_id, evaluator_name, score, r))
+            await _notify_evaluator_complete(results, resolved_hooks)
         except SimulationDroppedError as dropped:
             # exit_on_failure aborted the run, but the rows that succeeded are real
             # results — hand them to on_run_complete (via the finally) instead of [].
@@ -2118,6 +2114,17 @@ async def _simulate_via_evaluatorq(
     return results
 
 
+async def _notify_evaluator_complete(results: list[SimulationResult], hooks: SimulationHooks) -> None:
+    """Send stamped evaluator scores through the real completion-hook seam."""
+    from evaluatorq.common.async_utils import await_maybe
+
+    for result in results:
+        datapoint_id = result.metadata.get('datapoint_id', '')
+        evaluator_scores = result.metadata.get('evaluator_scores') or {}
+        for evaluator_name, score in evaluator_scores.items():
+            await await_maybe(hooks.on_evaluator_complete(datapoint_id, evaluator_name, score, result))
+
+
 def _stamp_evaluator_scores(
     eq_results: list[DataPointResult],
     result_cache: dict[int, SimulationResult],
@@ -2140,7 +2147,11 @@ def _stamp_evaluator_scores(
             continue
         for job_result in dp_result.job_results:
             for score in job_result.evaluator_scores or []:
-                if score.error is not None or not isinstance(score.score.value, (int, float)):
+                if (
+                    score.error is not None
+                    or isinstance(score.score.value, bool)
+                    or not isinstance(score.score.value, (int, float))
+                ):
                     logger.warning(
                         'Skipping evaluator %s score: %s',
                         score.evaluator_name,
