@@ -11,9 +11,11 @@ from evaluatorq.tracing import spans as spans_module
 from evaluatorq.tracing.spans import (
     EvaluationSpanOptions,
     JobSpanOptions,
+    RunSpanOptions,
     set_evaluation_attributes,
     with_evaluation_span,
     with_job_span,
+    with_run_span,
 )
 
 
@@ -105,10 +107,26 @@ class TestSpanCancellation:
     @pytest.fixture()
     def _stub_tracer(self, monkeypatch: pytest.MonkeyPatch):
         tracer = MagicMock()
-        span = MagicMock()
-        tracer.start_as_current_span.return_value.__enter__.return_value = span
+        first_span = MagicMock()
+        spans = [first_span]
+        started = 0
+
+        def _start_span(*args, **kwargs):
+            nonlocal started
+            span = first_span if started == 0 else MagicMock()
+            if started > 0:
+                spans.append(span)
+            started += 1
+            context_manager = MagicMock()
+            context_manager.__enter__.return_value = span
+            context_manager.__exit__.return_value = False
+            return context_manager
+
+        tracer.start_as_current_span.side_effect = _start_span
         monkeypatch.setattr(spans_module, "get_tracer", lambda: tracer)
-        return span
+        monkeypatch.setattr("evaluatorq.common.tracing.get_tracer", lambda: tracer)
+        first_span._all_spans = spans
+        return first_span
 
     @pytest.mark.asyncio
     @pytest.mark.usefixtures("_stub_tracer")
@@ -120,6 +138,23 @@ class TestSpanCancellation:
         status = _stub_tracer.set_status.call_args.args[0]
         assert status.status_code is StatusCode.ERROR
         _stub_tracer.set_attribute.assert_called_once_with("error.type", "CancelledError")
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("_stub_tracer")
+    async def test_nested_cancellation_marks_run_job_and_evaluation_once(self, _stub_tracer: MagicMock):
+        with pytest.raises(asyncio.CancelledError):
+            async with with_run_span(RunSpanOptions(run_id="abc", run_name="run")):
+                async with with_job_span(JobSpanOptions(run_id="abc", row_index=0)):
+                    async with with_evaluation_span(EvaluationSpanOptions(run_id="abc", evaluator_name="judge")):
+                        raise asyncio.CancelledError
+
+        spans = _stub_tracer._all_spans
+        assert len(spans) == 3
+        for span in spans:
+            assert span.set_status.call_count == 1
+            status = span.set_status.call_args.args[0]
+            assert status.status_code is StatusCode.ERROR
+            span.set_attribute.assert_called_once_with("error.type", "CancelledError")
 
     @pytest.mark.asyncio
     @pytest.mark.usefixtures("_stub_tracer")

@@ -582,6 +582,37 @@ async def test_failed_condense_truncates_instead_of_losing_the_area(monkeypatch:
     assert aggregate_prompt.endswith('</trace>')
 
 
+def test_trace_boundary_truncation_keeps_a_closing_tag_at_the_budget() -> None:
+    text = 'preamble\n<trace>\n  <prompt>attack</prompt>\n</trace>\ntrailing'
+    budget = text.index('</trace>') + len('</trace>')
+
+    assert rec_mod._truncate_prompt_at_trace_boundary(text, budget) == text[:budget]
+
+
+def test_trace_boundary_truncation_does_not_split_unicode() -> None:
+    text = 'preamble\n<trace>\n  <prompt>café 🧪</prompt>\n</trace>\ntrailing'
+    budget = text.index('</trace>') + len('</trace>')
+
+    truncated = rec_mod._truncate_prompt_at_trace_boundary(text, budget)
+
+    assert truncated == text[:budget]
+    assert 'café 🧪' in truncated
+    assert len(truncated.encode('utf-8')) > len(truncated)
+
+
+def test_trace_boundary_truncation_matches_nested_trace_tags() -> None:
+    text = 'preamble\n<trace><nested><trace>inner</trace></nested></trace>\ntrailing'
+    budget = text.index('</nested>') + len('</nested>')
+
+    assert rec_mod._truncate_prompt_at_trace_boundary(text, budget) == 'preamble'
+
+
+def test_trace_formatting_omits_a_wrapper_that_cannot_fit() -> None:
+    from evaluatorq.redteam.contracts import RedTeamRecommendationConfig
+
+    assert rec_mod._format_trace_to_budget(_vulnerable_result(), RedTeamRecommendationConfig(), 1) == ''
+
+
 @pytest.mark.asyncio
 async def test_prompt_ceiling_truncates_and_warns(monkeypatch: pytest.MonkeyPatch) -> None:
     """Backstop: condensing that did not shrink enough truncates loudly, never silently."""

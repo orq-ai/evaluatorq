@@ -9,6 +9,7 @@ import asyncio
 import logging
 from itertools import starmap
 from typing import Any
+from weakref import WeakKeyDictionary
 
 from evaluatorq.simulation.generators.first_message_generator import (
     FirstMessageGenerator,
@@ -47,6 +48,10 @@ class DatapointGenerator:
         self._model = model
         self._rate_limit_delay = rate_limit_delay
         self._max_concurrent_calls = max_concurrent_calls
+        # Semaphores bind to the event loop that first waits on them. Keep one
+        # lazily-created semaphore per loop so concurrent calls share the cap
+        # without carrying a semaphore across loop boundaries.
+        self._semaphores: WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = WeakKeyDictionary()
 
         from evaluatorq.openresponses.client import build_simulation_client
 
@@ -165,7 +170,11 @@ class DatapointGenerator:
             len(personas),
             len(scenarios),
         )
-        semaphore = asyncio.Semaphore(self._max_concurrent_calls)
+        loop = asyncio.get_running_loop()
+        semaphore = self._semaphores.get(loop)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(self._max_concurrent_calls)
+            self._semaphores[loop] = semaphore
 
         async def generate_single(persona: Persona, scenario: Scenario) -> SimulationDatapoint:
             async with semaphore:
