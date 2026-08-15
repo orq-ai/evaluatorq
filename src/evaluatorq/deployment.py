@@ -191,6 +191,14 @@ def _extract_content_from_response(completion: object) -> str:
         # Other union arms (e.g. 'tool_calls') still carry a nullable str content
         # field per the SDK schema; surface it instead of silently dropping it.
         content = msg_content
+    elif msg_type in ('content', 'tool_calls'):
+        # A recognised union arm with empty/None content is routine (e.g. a pure
+        # tool-call turn) — not a shape we failed to handle. Note it without
+        # implying the type itself is unrecognised.
+        logger.warning(
+            'Deployment response message type {!r} carried no text content; returning empty reply',
+            msg_type,
+        )
     else:
         logger.warning(
             'Unrecognised deployment response message type {!r}; returning empty content',
