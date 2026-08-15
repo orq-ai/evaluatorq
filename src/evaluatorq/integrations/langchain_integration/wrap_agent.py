@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 from langchain_core.tools import BaseTool
@@ -96,7 +97,7 @@ def wrap_langchain_agent(
         An async function compatible with evaluatorq's Job type.
     """
 
-    async def job(data: DataPoint, _row: int) -> dict[str, Any]:  # noqa: RUF029
+    async def job(data: DataPoint, _row: int) -> dict[str, Any]:
         input_messages = _extract_messages_from_data(data)
         has_messages = input_messages is not None
         prompt = data.inputs.get(prompt_key)
@@ -128,8 +129,12 @@ def wrap_langchain_agent(
                 f'Expected data.inputs.messages (list) or data.inputs.{prompt_key} (str), but neither was provided'
             )
 
-        # Invoke the LangChain agent
-        result = agent.invoke({'messages': messages})
+        # Invoke the LangChain agent off the event loop; prefer the native
+        # async entry point when the agent exposes one.
+        if hasattr(agent, 'ainvoke'):
+            result = await agent.ainvoke({'messages': messages})
+        else:
+            result = await asyncio.to_thread(agent.invoke, {'messages': messages})
 
         # Extract messages from result
         result_messages: list[BaseMessage] = result.get('messages', [])

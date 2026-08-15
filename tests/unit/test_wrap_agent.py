@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -14,8 +16,13 @@ from evaluatorq.types import DataPoint
 # ---------------------------------------------------------------------------
 
 def _make_agent() -> MagicMock:
-    """Create a mock CompiledStateGraph with invoke() returning empty messages."""
-    agent = MagicMock()
+    """Create a mock CompiledStateGraph with invoke() returning empty messages.
+
+    ``spec`` restricts the mock to these attributes so ``hasattr(agent, "ainvoke")``
+    is False, matching a sync-only agent — an unspecced MagicMock auto-creates any
+    attribute on access, which would make the wrapper think ``ainvoke`` exists.
+    """
+    agent = MagicMock(spec=["invoke", "nodes"])
     agent.invoke = MagicMock(return_value={"messages": []})
     agent.nodes = {}
     return agent
@@ -268,6 +275,30 @@ class TestWrapLangChainAgent:
 
         with pytest.raises(ValueError, match="neither was provided"):
             await job(data, 0)
+
+
+class TestWrapAgentDoesNotBlockLoop:
+    @pytest.mark.asyncio
+    async def test_wrapped_agent_does_not_block_loop(self) -> None:
+        """Two concurrent job calls with a slow sync agent should overlap, not serialize."""
+
+        class SlowAgent:
+            nodes: dict[str, object] = {}
+
+            def invoke(self, _payload: dict[str, object]) -> dict[str, object]:
+                time.sleep(0.3)
+                return {"messages": []}
+
+        agent = SlowAgent()
+        job = wrap_langchain_agent(agent, name="t")  # pyright: ignore[reportArgumentType]
+        data = DataPoint(inputs={"prompt": "hi"})
+
+        t0 = time.monotonic()
+        await asyncio.gather(job(data, 0), job(data, 1))
+        elapsed = time.monotonic() - t0
+
+        # Serial execution would take >= 0.6s; concurrent execution should overlap.
+        assert elapsed < 0.55
 
 
 class TestWrapLangGraphAgentAlias:
