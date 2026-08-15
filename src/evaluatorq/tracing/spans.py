@@ -156,8 +156,9 @@ async def with_job_span(  # noqa: RUF029
         try:
             yield span
             span.set_status(Status(StatusCode.OK))
-        except Exception as e:
+        except BaseException as e:
             span.set_status(Status(StatusCode.ERROR, str(e)))
+            span.set_attribute('error.type', type(e).__name__)
             span.record_exception(e)
             raise
 
@@ -214,8 +215,9 @@ async def with_evaluation_span(  # noqa: RUF029
         try:
             yield span
             span.set_status(Status(StatusCode.OK))
-        except Exception as e:
+        except BaseException as e:
             span.set_status(Status(StatusCode.ERROR, str(e)))
+            span.set_attribute('error.type', type(e).__name__)
             span.record_exception(e)
             raise
 
