@@ -75,7 +75,12 @@ def _turns(result: RedTeamResult) -> list[tuple[str, str]]:
     return pairs
 
 
-def _format_trace(result: RedTeamResult, config: RedTeamRecommendationConfig) -> str:
+def _format_trace(
+    result: RedTeamResult,
+    config: RedTeamRecommendationConfig,
+    *,
+    max_content_chars: int | None = None,
+) -> str:
     """Format a single failed attack into a representation for the analysis LLM.
 
     Adversarial prompts and target responses are wrapped in XML delimiters so that the
@@ -88,7 +93,11 @@ def _format_trace(result: RedTeamResult, config: RedTeamRecommendationConfig) ->
     being asked why an agent failed while the part that broke it was missing.
     """
     attack = result.attack
-    explanation = _truncate(result.evaluation.explanation if result.evaluation else '', config.max_explanation_chars)
+    content_limit = config.max_attack_chars if max_content_chars is None else max_content_chars
+    explanation_limit = config.max_explanation_chars
+    if max_content_chars is not None:
+        explanation_limit = min(explanation_limit, max_content_chars)
+    explanation = _truncate(result.evaluation.explanation if result.evaluation else '', explanation_limit)
     turns = _turns(result)
 
     parts = ['<trace>', f'  <technique>{xml_escape(attack.attack_technique.value)}</technique>']
@@ -99,19 +108,39 @@ def _format_trace(result: RedTeamResult, config: RedTeamRecommendationConfig) ->
             reply = result.response if index == len(turns) and result.response else assistant
             parts.extend([
                 f'  <turn index="{index}">',
-                f'    <prompt>{xml_escape(_truncate(user, config.max_attack_chars))}</prompt>',
-                f'    <response>{xml_escape(_truncate(reply, config.max_attack_chars))}</response>',
+                f'    <prompt>{xml_escape(_truncate(user, content_limit))}</prompt>',
+                f'    <response>{xml_escape(_truncate(reply, content_limit))}</response>',
                 '  </turn>',
             ])
     else:
         parts.extend([
-            f'  <prompt>{xml_escape(_truncate(extract_prompt(result), config.max_attack_chars))}</prompt>',
-            f'  <response>{xml_escape(_truncate(extract_response(result), config.max_attack_chars))}</response>',
+            f'  <prompt>{xml_escape(_truncate(extract_prompt(result), content_limit))}</prompt>',
+            f'  <response>{xml_escape(_truncate(extract_response(result), content_limit))}</response>',
         ])
     if explanation:
         parts.append(f'  <evaluator>{xml_escape(explanation)}</evaluator>')
     parts.append('</trace>')
     return '\n'.join(parts)
+
+
+def _format_trace_to_budget(
+    result: RedTeamResult,
+    config: RedTeamRecommendationConfig,
+    max_chars: int,
+) -> str:
+    """Format a complete trace within a character budget, or omit it if impossible."""
+    low = 0
+    high = max_chars
+    best = ''
+    while low <= high:
+        content_limit = (low + high) // 2
+        candidate = _format_trace(result, config, max_content_chars=content_limit)
+        if len(candidate) <= max_chars:
+            best = candidate
+            low = content_limit + 1
+        else:
+            high = content_limit - 1
+    return best
 
 
 class _CondensedAttackLLMResponse(BaseModel):
@@ -178,6 +207,20 @@ def _build_user_prompt(
     )
 
 
+def _truncate_prompt_at_trace_boundary(text: str, max_chars: int) -> str:
+    """Drop the incomplete tail of a prompt rather than cutting an XML trace."""
+    if len(text) <= max_chars:
+        return text
+
+    prefix = text[:max_chars]
+    trace_end = prefix.rfind('</trace>')
+    if trace_end >= 0:
+        return prefix[: trace_end + len('</trace>')]
+
+    trace_start = prefix.find('<trace>')
+    return text[:trace_start].rstrip() if trace_start >= 0 else prefix
+
+
 async def _condense_attack(
     block: str,
     result: RedTeamResult,
@@ -218,7 +261,7 @@ async def _condense_attack(
             f'truncating it to {limits.condense_above_chars} chars instead',
             exc_info=True,
         )
-        return _truncate(block, limits.condense_above_chars)
+        return _format_trace_to_budget(result, limits, limits.condense_above_chars)
 
     return '\n'.join([
         '<trace>',
@@ -353,7 +396,7 @@ async def generate_focus_area_recommendations(
                 f'Focus-area prompt for {area["category"]} is {len(user_prompt)} chars after condensing; '
                 f'truncating to max_area_prompt_chars={limits.max_area_prompt_chars}'
             )
-            user_prompt = _truncate(user_prompt, limits.max_area_prompt_chars)
+            user_prompt = _truncate_prompt_at_trace_boundary(user_prompt, limits.max_area_prompt_chars)
 
         try:
             # extra_kwargs is computed once for the whole run above (RES-1286); no per-area
