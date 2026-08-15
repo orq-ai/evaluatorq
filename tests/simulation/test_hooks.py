@@ -1307,7 +1307,7 @@ async def test_generate_fires_generate_stage_hooks(monkeypatch):
     monkeypatch.setattr(api, '_resolve_or_generate_datapoints', _fake_resolve)
     monkeypatch.setattr(
         'evaluatorq.openresponses.client.build_simulation_client',
-        lambda _client: (object(), False),
+        lambda _client, **_kwargs: (object(), False),
     )
     monkeypatch.setattr('evaluatorq.simulation.tracing.with_simulation_span', _fake_span)
     monkeypatch.setattr('evaluatorq.tracing.tracing_session', _noop_tracing_session)

@@ -182,16 +182,30 @@ def test_openai_backend_disables_sdk_retries_when_auto_built() -> None:
     create.assert_called_once_with(max_retries=0)
 
 
-def test_orq_backend_disables_sdk_retries_when_auto_built(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_orq_backend_preserves_shared_sdk_retries_when_auto_built(monkeypatch: pytest.MonkeyPatch) -> None:
     import evaluatorq.redteam.backends.orq as orq_backend
+
+    calls: list[dict[str, object]] = []
 
     class FakeOrq:
         def __init__(self, **kwargs: object) -> None:
-            self.kwargs = kwargs
+            calls.append(kwargs)
 
     monkeypatch.setattr(orq_backend, "_orq_cls", FakeOrq)
     monkeypatch.setenv("ORQ_API_KEY", "test-key")
 
-    backend = orq_backend.ORQBackend()
+    backend = orq_backend.ORQBackend(retry_count=3, retry_on_codes=[429, 503], timeout_ms=240_000)
 
-    assert backend._orq_client.kwargs["retry_config"] is None
+    assert len(calls) == 1
+    assert calls[0]["retry_config"] is not None
+    assert backend.create_target("agent").orq_client is backend._orq_client
+
+
+def test_orq_backend_warns_when_injected_retry_config_cannot_be_reconfigured() -> None:
+    import evaluatorq.redteam.backends.orq as orq_backend
+
+    with patch.object(orq_backend.logger, "warning") as warning:
+        orq_backend.ORQBackend(orq_client=MagicMock(), retry_count=2, retry_on_codes=[429])
+
+    warning.assert_called_once()
+    assert "injected client" in warning.call_args.args[0]

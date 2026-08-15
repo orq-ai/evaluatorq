@@ -202,7 +202,10 @@ class ORQAgentTarget(AgentTarget):
         Caller contract: ``messages[-1].role == "user"``. A mismatch with the
         server-side history is a caller bug.
 
-        Token usage is accumulated across pending-tool-call continuations.
+        Token usage is accumulated across pending-tool-call continuations. The
+        red-team orchestrator owns target retries via ``call_target_with_retry``;
+        each SDK operation therefore passes ``retries=None`` so the shared
+        client's retry budget remains available to context and cleanup calls.
         """
         if not messages or messages[-1].role != 'user':
             raise ValueError(
@@ -321,6 +324,9 @@ class ORQAgentTarget(AgentTarget):
                     'agent_key': self.agent_key,
                     'message': {'role': 'user', 'parts': [{'kind': 'text', 'text': prompt}]},
                     'background': False,
+                    # call_target_with_retry owns target retries; preserve the
+                    # shared client's configured budget for non-target SDK calls.
+                    'retries': None,
                 }
                 if self._task_id is not None:
                     kwargs['task_id'] = self._task_id
@@ -371,6 +377,8 @@ class ORQAgentTarget(AgentTarget):
                         message={'role': 'tool', 'parts': tool_parts},
                         task_id=self._task_id,
                         background=False,
+                        # The continuation is still one target exchange.
+                        retries=None,
                         **thread_body_param(),
                         **pipeline_metadata_param(),
                     )
@@ -614,9 +622,11 @@ class ORQBackend(Backend):
     """Backend for ORQ-hosted agents.
 
     Owns the ORQ SDK client. Creates ``ORQAgentTarget`` instances per job.
-    Performs memory cleanup via the SDK. The orchestrator owns target retries,
-    so the SDK client is constructed with ``retry_config=None``. Maps ORQ
-    exceptions to a normalized error taxonomy.
+    Performs memory cleanup via the SDK. The shared SDK client keeps the
+    configured retry budget for context retrieval, enrichment, and cleanup;
+    ``ORQAgentTarget`` disables that budget per target operation because the
+    orchestrator owns target retries. Maps ORQ exceptions to a normalized error
+    taxonomy.
     """
 
     def __init__(
@@ -631,6 +641,11 @@ class ORQBackend(Backend):
         timeout_ms = timeout_ms or PIPELINE_CONFIG.target_agent_timeout_ms
         self._timeout_ms = timeout_ms
         if orq_client is not None:
+            if retry_count is not None or retry_on_codes is not None:
+                logger.warning(
+                    'ORQBackend received retry_count/retry_on_codes with an injected client; '
+                    "preserving that client's configured retry budget"
+                )
             self._orq_client = orq_client
         else:
             if _orq_cls is None:
@@ -638,13 +653,16 @@ class ORQBackend(Backend):
                     'ORQ backend requires the orq-ai-sdk package. '
                     'Install with: uv add "evaluatorq[orq]" (or: python -m pip install "evaluatorq[orq]")'
                 )
+            retry_count = PIPELINE_CONFIG.retry_count if retry_count is None else retry_count
+            retry_on_codes = PIPELINE_CONFIG.retry_on_codes if retry_on_codes is None else retry_on_codes
             self._orq_client = _orq_cls(
                 api_key=_get_orq_api_key(),
                 server_url=_get_orq_server_url(),
                 timeout_ms=self._timeout_ms,
-                # The orchestrator owns target retries via call_target_with_retry;
-                # the Orq SDK must not add an inner retry budget.
-                retry_config=None,
+                # This client serves context, enrichment, and cleanup. Target
+                # operations override this per call because the orchestrator
+                # owns their retry budget.
+                retry_config=_orq_retry_config(retry_count, retry_on_codes, timeout_ms=self._timeout_ms),
             )
 
     def create_target(self, agent_key: str) -> ORQAgentTarget:

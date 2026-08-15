@@ -144,6 +144,8 @@ class PersonaGenerator:
         (e.g. ``"angry customer"``); the LLM fills the remaining traits. This is
         the intermediate tier between fully-auto generation and hand-built
         ``Persona`` objects.
+
+        Retry is owned by ``with_retry``; client retries are disabled.
         """
         from evaluatorq.simulation.tracing import with_simulation_span
 

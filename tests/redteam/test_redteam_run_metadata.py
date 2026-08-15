@@ -123,6 +123,7 @@ class TestORQAgentTargetRunMetadata:
 
         assert orq_client.agents.responses.create.call_count == 1
         _, kwargs = orq_client.agents.responses.create.call_args
+        assert kwargs['retries'] is None
         assert kwargs['metadata'] == {
             'evaluatorq_pipeline': 'red_teaming',
             'evaluatorq_run_id': 'rt-run-2',
@@ -150,6 +151,7 @@ class TestORQAgentTargetRunMetadata:
 
         assert orq_client.agents.responses.create.call_count == 2
         _, continuation_kwargs = orq_client.agents.responses.create.call_args_list[1]
+        assert continuation_kwargs['retries'] is None
         assert continuation_kwargs['metadata'] == {
             'evaluatorq_pipeline': 'red_teaming',
             'evaluatorq_run_id': 'rt-run-3',
