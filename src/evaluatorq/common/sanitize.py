@@ -41,8 +41,17 @@ def delimit(text: str, *, tag: str = 'data') -> str:
     if not re.fullmatch(r'[a-zA-Z][a-zA-Z0-9_-]*', tag):
         raise ValueError(f'Invalid tag name: {tag!r}')
     sanitized = text.replace('&', '&amp;')
-    sanitized = re.sub(rf'<{re.escape(tag)}>', f'&lt;{tag}&gt;', sanitized, flags=re.IGNORECASE)
-    sanitized = re.sub(rf'</{re.escape(tag)}>', f'&lt;/{tag}&gt;', sanitized, flags=re.IGNORECASE)
+    sanitized = re.sub(
+        rf'<\s*/?\s*{re.escape(tag)}\b[^>]*>',
+        lambda match: (
+            re
+            .sub(re.escape(tag), tag, match.group(), count=1, flags=re.IGNORECASE)
+            .replace('<', '&lt;')
+            .replace('>', '&gt;')
+        ),
+        sanitized,
+        flags=re.IGNORECASE,
+    )
     return f'<{tag}>{sanitized}</{tag}>'
 
 
