@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -299,6 +299,24 @@ class TestWrapAgentDoesNotBlockLoop:
 
         # Serial execution would take >= 0.6s; concurrent execution should overlap.
         assert elapsed < 0.55
+
+
+class TestWrapAgentPrefersAinvoke:
+    @pytest.mark.asyncio
+    async def test_ainvoke_is_awaited_with_expected_payload_and_invoke_is_skipped(self) -> None:
+        """When the agent exposes ainvoke, the wrapper must await it (not invoke)."""
+        agent = MagicMock(spec=["invoke", "ainvoke", "nodes"])
+        agent.invoke = MagicMock(return_value={"messages": []})
+        agent.ainvoke = AsyncMock(return_value={"messages": []})
+        agent.nodes = {}
+
+        job = wrap_langchain_agent(agent, name="t")
+        data = DataPoint(inputs={"prompt": "hi"})
+
+        await job(data, 0)
+
+        agent.ainvoke.assert_awaited_once_with({"messages": [{"role": "user", "content": "hi"}]})
+        agent.invoke.assert_not_called()
 
 
 class TestWrapLangGraphAgentAlias:
