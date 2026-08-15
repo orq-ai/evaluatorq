@@ -570,10 +570,11 @@ class SimulationRunner:
         )
 
     def _get_shared_client(self) -> AsyncOpenAI:
+        """Return the generation client; ``with_retry`` owns retrying calls."""
         if not self._shared_client:
             from evaluatorq.openresponses.client import build_simulation_client
 
-            self._shared_client, self._client_owned = build_simulation_client()
+            self._shared_client, self._client_owned = build_simulation_client(max_retries=0)
         return self._shared_client
 
     async def run(

@@ -81,7 +81,9 @@ async def _attach_recommendations(
 
     resolved = None
     try:
-        resolved = resolve_llm_client()
+        # Retry is owned by generate_recommendations' with_retry calls; disable
+        # the SDK layer so the two budgets cannot stack.
+        resolved = resolve_llm_client(max_retries=0)
         run.recommendations = await generate_recommendations(run.results, resolved.client, model, config=config) or None
     except Exception:
         logger.warning('Failed to generate remediation suggestions (results still returned)', exc_info=True)
@@ -668,7 +670,7 @@ async def _generate_datapoints_inner(
     from evaluatorq.openresponses.client import build_simulation_client
     from evaluatorq.simulation.hooks import DefaultHooks
 
-    gen_client, gen_owned = build_simulation_client(generation_client)
+    gen_client, gen_owned = build_simulation_client(generation_client, max_retries=0)
     try:
         gen_hooks = hooks or DefaultHooks()
         gen_personas, gen_scenarios = await _generate_personas_scenarios(
@@ -1159,7 +1161,7 @@ async def _generate_personas_scenarios(
     from evaluatorq.simulation.exceptions import SimulationError
     from evaluatorq.simulation.generators import PersonaGenerator, ScenarioGenerator
 
-    gen_client, gen_owned = build_simulation_client(generation_client)
+    gen_client, gen_owned = build_simulation_client(generation_client, max_retries=0)
     try:
         persona_gen = PersonaGenerator(model=model, client=gen_client)
         scenario_gen = ScenarioGenerator(model=model, client=gen_client)
@@ -1647,7 +1649,7 @@ async def _resolve_or_generate_datapoints(
     from evaluatorq.simulation.generators import FirstMessageGenerator
     from evaluatorq.simulation.tracing import with_simulation_span
 
-    gen_client, gen_owned = build_simulation_client(generation_client)
+    gen_client, gen_owned = build_simulation_client(generation_client, max_retries=0)
     try:
         first_msg_gen = FirstMessageGenerator(model=model, client=gen_client)
         pairs = [(p, s) for p in personas for s in scenarios]

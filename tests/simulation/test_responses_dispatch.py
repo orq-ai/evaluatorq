@@ -75,6 +75,14 @@ def _bad_request(message: str) -> BadRequestError:
 
 
 class TestCallLlmDispatch:
+    def test_auto_built_client_disables_sdk_retries(self, monkeypatch):
+        monkeypatch.setenv("ORQ_API_KEY", "orq-test")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+        agent = _ConcreteAgent(LLMCallConfig(model="gpt-4o"))
+
+        assert agent._client.max_retries == 0
+
     @pytest.mark.asyncio
     async def test_chat_completions_api_calls_chat_completions(self):
         """config.api == 'chat_completions' must call _call_chat_completions."""

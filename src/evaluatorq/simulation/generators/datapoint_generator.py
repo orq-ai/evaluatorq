@@ -50,7 +50,7 @@ class DatapointGenerator:
 
         from evaluatorq.openresponses.client import build_simulation_client
 
-        self._shared_client, self._client_owned = build_simulation_client(None)
+        self._shared_client, self._client_owned = build_simulation_client(None, max_retries=0)
         self._persona_generator = PersonaGenerator(model=model, client=self._shared_client)
         self._scenario_generator = ScenarioGenerator(model=model, client=self._shared_client)
         self._first_message_generator = FirstMessageGenerator(model=model, client=self._shared_client)

@@ -305,7 +305,7 @@ async def summarize_conversations(
     from evaluatorq.openresponses.client import build_simulation_client
 
     config = config or TraceAnalysisConfig()
-    llm_client, owned = build_simulation_client(client, extra_api_key=api_key)
+    llm_client, owned = build_simulation_client(client, extra_api_key=api_key, max_retries=0)
     semaphore = asyncio.Semaphore(_INFER_CONCURRENCY)
 
     async def one(conversation: TraceConversation) -> tuple[str, str | None]:
@@ -639,7 +639,7 @@ async def datapoints_from_traces(
     from evaluatorq.simulation.generators.first_message_generator import FirstMessageGenerator
 
     config = config or TraceAnalysisConfig()
-    llm_client, owned = build_simulation_client(client, extra_api_key=api_key)
+    llm_client, owned = build_simulation_client(client, extra_api_key=api_key, max_retries=0)
     first_message_generator = (
         FirstMessageGenerator(model=model, client=llm_client) if config.generate_first_message else None
     )
@@ -791,7 +791,7 @@ async def extend_from_traces(
         raise ValueError('num_datapoints must be >= 1')
 
     config = config or TraceAnalysisConfig()
-    llm_client, owned = build_simulation_client(client, extra_api_key=api_key)
+    llm_client, owned = build_simulation_client(client, extra_api_key=api_key, max_retries=0)
     try:
         sampled = conversations[: config.max_reduce_summaries]
         if len(conversations) > len(sampled):
