@@ -199,6 +199,15 @@ def test_openai_backend_warns_when_target_retry_settings_are_ignored() -> None:
     assert 'retry_on_codes' in message
 
 
+def test_openai_backend_does_not_warn_for_default_pipeline_retry_settings() -> None:
+    from evaluatorq.redteam.backends.registry import _create_openai_backend
+
+    with patch('evaluatorq.redteam.backends.registry.logger.warning') as warning:
+        _create_openai_backend(llm_client=MagicMock(), pipeline_config=LLMConfig())
+
+    warning.assert_not_called()
+
+
 def test_orq_backend_preserves_shared_sdk_retries_when_auto_built(monkeypatch: pytest.MonkeyPatch) -> None:
     import evaluatorq.redteam.backends.orq as orq_backend
 

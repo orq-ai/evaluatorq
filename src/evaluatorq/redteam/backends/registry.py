@@ -104,12 +104,24 @@ def _create_openai_backend(
     **_: object,
 ) -> Backend:
     from evaluatorq.redteam.backends.openai import OpenAIBackend
+    from evaluatorq.redteam.contracts import LLMConfig
 
     system_prompt = target_config.system_prompt if target_config else None
     # The orchestrator's call_target_with_retry is the single retry owner for
     # OpenAI target calls. Do not silently accept pipeline retry settings that
     # cannot affect this target path.
-    if pipeline_config is not None or retry_count is not None or retry_on_codes is not None:
+    default_config = LLMConfig()
+    if (
+        (retry_count is not None and retry_count != default_config.retry_count)
+        or (retry_on_codes is not None and retry_on_codes != default_config.retry_on_codes)
+        or (
+            pipeline_config is not None
+            and (
+                pipeline_config.retry_count != default_config.retry_count
+                or pipeline_config.retry_on_codes != default_config.retry_on_codes
+            )
+        )
+    ):
         logger.warning(
             'Ignoring retry_count and retry_on_codes for OpenAI target calls; '
             'call_target_with_retry owns target retries'
@@ -148,13 +160,18 @@ def _create_openresponses_backend(
     **_: object,  # absorbs unknown kwargs from resolve_backend's uniform signature
 ) -> Backend:
     from evaluatorq.redteam.backends.openresponses import OpenResponsesBackend
+    from evaluatorq.redteam.contracts import LLMConfig
 
     instructions = target_config.system_prompt if target_config else None
     timeout_ms = pipeline_config.target_agent_timeout_ms if pipeline_config else None
     # The orchestrator's call_target_with_retry is the single retry owner for
     # target calls; keep one inner attempt so a target cannot add a second budget.
     # The pipeline retry settings therefore do not apply on this target path.
-    if pipeline_config is not None:
+    default_config = LLMConfig()
+    if pipeline_config is not None and (
+        pipeline_config.retry_count != default_config.retry_count
+        or pipeline_config.retry_on_codes != default_config.retry_on_codes
+    ):
         logger.warning(
             'Ignoring pipeline_config.retry_count and retry_on_codes for OpenResponses target calls; '
             'call_target_with_retry owns target retries'

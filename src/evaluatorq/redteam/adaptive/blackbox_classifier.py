@@ -227,11 +227,11 @@ async def _run_probes(
 
     Every probe goes through ``call_target_with_retry``, which owns the single
     target retry layer, per-call timeout, and target error mapping. The target's
-    own SDK retry budget must therefore be disabled by its backend. Connection /
-    status errors from the target re-raise (a systemic outage is not a per-probe
-    flake — matches the judge path and the white-box classifier); other exhausted
-    probe errors are logged and skipped so one flaky turn does not abort the
-    whole classification.
+    own SDK retry budget must therefore be disabled by its backend. Transient
+    connection / status errors are retried by the shared helper; after
+    exhaustion, all probe errors are logged and skipped so one flaky turn does
+    not abort the whole classification. Non-retryable 4xx errors fail fast
+    inside the helper and are then handled as an unanswered probe.
 
     Returns ``(transcript, unprobed_groups)`` where ``unprobed_groups`` is the
     set of capability groups that received ZERO answered turns (every turn in
@@ -250,8 +250,6 @@ async def _run_probes(
         probe_target = target if target is not None else agent_target
 
         def _map_probe_error(exc: Exception) -> tuple[str, str] | None:
-            if isinstance(exc, (APIConnectionError, APIStatusError)):
-                raise exc
             return probe_target.map_error(exc)
 
         try:
@@ -262,8 +260,6 @@ async def _run_probes(
                 max_target_retries=max_target_retries,
                 map_error=_map_probe_error,
             )
-        except (APIConnectionError, APIStatusError):
-            raise
         except Exception as e:  # one flaky turn must not abort classification  # noqa: BLE001
             logger.warning('Blackbox probe ({}) failed: {}', group, e)
             # Drop the unanswered user turn so it does not pollute the judge
