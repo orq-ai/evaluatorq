@@ -78,3 +78,37 @@ def test_skips_rows_with_no_cached_result():
 
     # No cache entry, no job_results — must not raise.
     _stamp_evaluator_scores(eq_results, {}, '')
+
+
+def test_skips_errored_evaluator_score_and_does_not_notify_callback(caplog):
+    dp = DataPoint(inputs={'datapoint': {}})
+    sim = _sim_result()
+    cache = {id(dp): sim}
+    eq_results = [
+        DataPointResult(
+            data_point=dp,
+            job_results=[
+                JobResult(
+                    job_name='simulation',
+                    output=None,
+                    evaluator_scores=[
+                        EvaluatorScore(
+                            evaluator_name='goal_achieved',
+                            score=EvaluationResult(value=''),
+                            error='judge died',
+                        )
+                    ],
+                )
+            ],
+        )
+    ]
+
+    with caplog.at_level('WARNING', logger='evaluatorq.simulation.api'):
+        _stamp_evaluator_scores(eq_results, cache, 'my-run')
+
+    assert 'evaluator_scores' not in sim.metadata
+    callback_scores = []
+    for evaluator_name, score in sim.metadata.get('evaluator_scores', {}).items():
+        callback_scores.append((evaluator_name, score))
+    assert callback_scores == []
+    assert 'Skipping evaluator goal_achieved score: judge died' in caplog.text
