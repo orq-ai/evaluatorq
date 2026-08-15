@@ -215,6 +215,9 @@ def _truncate_prompt_at_trace_boundary(text: str, max_chars: int) -> str:
         return ''
 
     prefix = text[:max_chars]
+    last_open_angle = prefix.rfind('<')
+    if last_open_angle > prefix.rfind('>'):
+        prefix = prefix[:last_open_angle].rstrip()
     opening_tag = '<trace>'
     closing_tag = '</trace>'
     depth = 0

@@ -589,6 +589,13 @@ def test_trace_boundary_truncation_keeps_a_closing_tag_at_the_budget() -> None:
     assert rec_mod._truncate_prompt_at_trace_boundary(text, budget) == text[:budget]
 
 
+def test_trace_boundary_truncation_drops_a_partial_opening_tag() -> None:
+    text = 'header\n<trace>payload</trace>\ntrailing'
+    budget = text.index('<trace>') + len('<tr')
+
+    assert rec_mod._truncate_prompt_at_trace_boundary(text, budget) == 'header'
+
+
 def test_trace_boundary_truncation_does_not_split_unicode() -> None:
     text = 'preamble\n<trace>\n  <prompt>café 🧪</prompt>\n</trace>\ntrailing'
     budget = text.index('</trace>') + len('</trace>')
