@@ -11,7 +11,7 @@ from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry, default_map_error
 from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pipeline
 from evaluatorq.common.tracing import record_llm_input, record_llm_output, set_span_attrs
-from evaluatorq.contracts import ResponseTrace, TokenUsage
+from evaluatorq.contracts import FunctionCall, ResponseTrace, StrategyToolCall, TokenUsage
 from evaluatorq.integrations.callable_integration import CallableTarget
 from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
 from evaluatorq.simulation.agents.user_simulator import (
@@ -65,6 +65,32 @@ def _invert_roles_for_simulator(messages: list[Message]) -> list[Message]:
         else:
             inverted.append(m)
     return inverted
+
+
+def build_assistant_message(response: AgentResponse) -> Message:
+    """Build the transcript's assistant turn from a target's `AgentResponse`.
+
+    Carries `response.tool_calls` into `Message.tool_calls` so the judge sees what
+    the target actually did, not just any text it produced alongside it — a
+    target that resolves a request purely through tool calls (no text) previously
+    left the judge looking at an empty assistant turn. A tool-only turn is valid
+    but unusual, so it's logged rather than passed through silently.
+    """
+    tool_calls = [
+        StrategyToolCall(
+            id=tc.call_id,
+            function=FunctionCall(name=tc.name, arguments=tc.arguments),
+            item_id=tc.id,
+        )
+        for tc in response.tool_calls
+    ]
+    text = response.text
+    if not text and tool_calls:
+        logger.warning(
+            'Assistant turn has no text but %d tool call(s); transcript keeps the tool calls',
+            len(tool_calls),
+        )
+    return Message(role='assistant', content=text, tool_calls=tool_calls or None)
 
 
 # ---------------------------------------------------------------------------
@@ -846,7 +872,7 @@ class SimulationRunner:
                     record_llm_output(target_span, agent_response_text)
                 # The failed turn IS recorded (mirrors orchestrator.py's
                 # turns_record.append on exhaustion) before terminating.
-                messages.append(Message(role='assistant', content=agent_response_text))
+                messages.append(build_assistant_message(call.response))
 
                 if not call.succeeded:
                     return self._target_failure_result(
