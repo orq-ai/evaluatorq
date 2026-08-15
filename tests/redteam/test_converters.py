@@ -1117,6 +1117,22 @@ class TestStaticEvaluatorqResults:
         assert result.evaluation.token_usage is not None
         assert result.evaluation.token_usage.total_tokens == 6
 
+    def test_scorer_exception_survives_the_static_conversion(self):
+        """A scorer that raises produces ``EvaluatorScore(score=EvaluationResult(value=''), error=...)``.
+
+        That exception message must reach the report as a structured evaluation_error
+        (not the generic 'no_evaluation' cause), with the text intact — mirrors the
+        dynamic path's ``_scorer_error_to_run_error``.
+        """
+        mock_result = _make_static_mock_result(score_value='', score_explanation='')
+        mock_result.job_results[0].evaluator_scores[0].error = 'boom'
+        reports = static_evaluatorq_results_to_reports(results=[mock_result], agent_key='my-agent')
+        result = reports['target-job'].results[0]
+        assert result.vulnerable is None
+        assert result.evaluation_error is not None
+        assert result.evaluation_error.code == 'scorer_exception'
+        assert 'boom' in result.evaluation_error.message
+
 
 # ---------------------------------------------------------------------------
 # TestAggregateTokenUsage

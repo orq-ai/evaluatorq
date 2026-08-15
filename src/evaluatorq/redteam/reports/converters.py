@@ -413,7 +413,12 @@ def static_sample_to_result(
     # ``row.error`` already explains it, in which case the attack never ran and
     # ``error`` is the right field; duplicating it into ``evaluation_error`` would
     # claim the judge failed on a transcript that does not exist.
-    evaluation_error = _extract_evaluation_error(eval_dict.get('raw_output')) if evaluation else None
+    evaluation_error = (
+        _extract_evaluation_error(eval_dict.get('raw_output'))
+        or _scorer_error_to_run_error(eval_dict.get('error'), vulnerable=vulnerable)
+        if evaluation
+        else None
+    )
     if evaluation_error is None and vulnerable is None and not row.error:
         evaluation_error = RunError(
             message='The datapoint produced no evaluation result.',
@@ -776,6 +781,11 @@ def static_evaluatorq_results_to_reports(
                     ),
                     'token_usage': getattr(score, 'token_usage', None),
                     'raw_output': getattr(score, 'raw_output', None),
+                    # An exception escaping the scorer is caught by process_evaluator
+                    # into EvaluatorScore.error with an empty score and no raw_output —
+                    # this is the only place that cause survives. Mirrors the dynamic
+                    # converter's scorer_error read (see scorer_error above line 599).
+                    'error': getattr(scores[0], 'error', None),
                 }
 
             raw_error = dp_error or job_result.error or output_dict.error
