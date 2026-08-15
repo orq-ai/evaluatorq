@@ -64,6 +64,13 @@ class TestResolveBackendOpenResponses:
         assert isinstance(target, OrqResponsesTarget)
         assert target.retry_attempts == 1
 
+    def test_default_pipeline_retry_settings_do_not_warn(self):
+        client = MagicMock()
+        with patch("evaluatorq.redteam.backends.registry.logger.warning") as warning:
+            resolve_backend("openresponses", llm_client=client, pipeline_config=LLMConfig())
+
+        warning.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_resolve_context_returns_minimal_agent_context(self):
         client = MagicMock()
