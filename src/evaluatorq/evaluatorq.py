@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import os
 import sys
 from collections.abc import Awaitable, Sequence
@@ -31,6 +30,15 @@ from .types import (
     ExperimentInput,
     Job,
 )
+
+
+class _StreamingEvaluationError(RuntimeError):
+    """Report multiple failures collected from a streaming evaluation's tasks."""
+
+    def __init__(self, errors: list[BaseException]) -> None:
+        self.errors = errors
+        details = '; '.join(f'{type(error).__name__}: {error}' for error in errors)
+        super().__init__(f'Streaming evaluation failed with {len(errors)} errors: {details}')
 
 
 def check_pass_failures(results: EvaluatorqResult, *, treat_errors_as_failure: bool = False) -> bool:
@@ -158,8 +166,9 @@ async def evaluatorq(
               evaluation is a single trace. Defaults to False, which leaves each row's
               ``orq.job`` as its own root — an N-row run is then N separate traces.
         _exit_on_failure: Whether to exit the process when an evaluator fails.
-              Defaults to False for library callers; CLI entry points opt in
-              explicitly when they need a non-zero process exit.
+              Defaults to False for library callers, who receive the failed result
+              with ``pass_=False`` and no ``SystemExit``. CLI users still get a
+              non-zero exit from the redteam and simulation command failure gates.
 
     Returns:
         List of DataPointResult objects
@@ -340,7 +349,7 @@ async def evaluatorq(
                         await asyncio.sleep(0.1)
 
                 polling_task = asyncio.create_task(poll_progress())
-                completed = False
+                fetch_error: BaseException | None = None
 
                 try:
                     # Fetch and process batches
@@ -353,19 +362,36 @@ async def evaluatorq(
                             processing_tasks.append(task)
                             datapoint_index += 1
 
-                    # Wait for all processing tasks to complete
-                    results_nested = await asyncio.gather(*processing_tasks)
-                    completed = True
+                except asyncio.CancelledError as exc:
+                    fetch_error = exc
+                except Exception as exc:  # noqa: BLE001 - collect fetch failures with task failures
+                    fetch_error = exc
                 finally:
-                    # Stop the polling task
+                    # Stop polling on both success and failure. A fetch failure also
+                    # cancels in-flight processing, but their exceptions are still
+                    # collected by the same gather as the polling task.
                     stop_polling = True
-                    _ = polling_task.cancel()
-                    if not completed:
+                    if fetch_error is not None:
                         for task in processing_tasks:
                             task.cancel()
-                        await asyncio.gather(*processing_tasks, return_exceptions=True)
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await polling_task
+                    _ = polling_task.cancel()
+                    all_tasks: list[asyncio.Task[Any]] = [*processing_tasks, polling_task]
+                    task_results = await asyncio.gather(
+                        *all_tasks,
+                        return_exceptions=True,
+                    )
+
+                task_errors = [
+                    result
+                    for result in task_results
+                    if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError)
+                ]
+                errors = ([fetch_error] if fetch_error is not None else []) + task_errors
+                if errors:
+                    if len(errors) == 1:
+                        raise errors[0]
+                    raise _StreamingEvaluationError(errors)
+                results_nested = cast('list[list[Any]]', task_results[:-1])
 
                 # Final progress update
                 await progress.update_progress(
