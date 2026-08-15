@@ -18,10 +18,6 @@ exclude_docs: |
   superpowers/
   _snippets/
 
-# Build but soft-hide pages that shouldn't appear in the left nav (reachable by direct URL only).
-not_in_nav: |
-  dashboard.md
-
 theme:
   name: material
   custom_dir: overrides   # overrides/main.html: og:/twitter: card (RES-1088) + llms.txt alternate link (RES-1037)
@@ -256,6 +252,7 @@ nav:
       - Structured Results: structured-results.md
       - Framework Integrations: framework-integrations.md
       - Agent Simulation: guides/agent-simulation.md
+      - Dashboard: dashboard.md
       - Red Teaming:
           - Overview: guides/red-teaming.md
           - Custom Evaluators & Frameworks: custom-evaluators-and-frameworks.md

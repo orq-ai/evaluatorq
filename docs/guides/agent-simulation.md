@@ -708,23 +708,27 @@ refund agent — so your own numbers will differ. See the Dashboard reference fo
 [filters](../dashboard.md#filters), [trace links](../dashboard.md#orq-trace-links)
 and [downloads](../dashboard.md#downloads).
 
-### 1. Landing — what has been run at all
+### 1. Landing — what has been run at all { #sim-landing }
 
 `eq dashboard` opens on a cross-surface overview: jobs run, spend, tokens and
 the red team / agent sim split across every stored run. Agent simulation sits
 next to red teaming in the left rail.
 
+Zeros everywhere and an empty rail mean no report files were found, not that
+the run failed — the usual cause is the `save=False` default in the warning
+above. Launch `eq dashboard` from the directory holding `.evaluatorq/`.
+
 ![The dashboard landing page: jobs run, spend, tokens and run mix across all stored runs.](../assets/dashboard/sim-01-landing.png){ .dashboard-shot }
 
-### 2. Agent Sim — pick a run
+### 2. Agent Sim — pick a run { #sim-run-list }
 
 **Agent Sim** lists every simulation job with its target, goal-completion score,
 conversation count and cost. The picker above the list selects two runs to
-compare (step 8).
+compare — see [Compare](#sim-compare).
 
 ![The Agent Sim run list: simulations run, goal completion, average turns and cost per simulation.](../assets/dashboard/sim-02-run-list.png){ .dashboard-shot }
 
-### 3. Overview — the headline
+### 3. Overview — the headline { #sim-overview }
 
 Opening a run lands on **Overview**: a written summary naming the best and worst
 persona × scenario pair, the run's counts (personas, scenarios, conversations,
@@ -739,12 +743,17 @@ three of them, and *lower* is better for hallucination risk. Factual accuracy is
 only meaningful when the scenario supplies ground truth — without it the judge
 has nothing to check the response against.
 
-"Average score" is the mean `goal_completion_score` — the judge's 0–1 rating of
-how fully the scenario goal was met — not the pass rate. The **CONFIDENCE**
-badge on the summary is a band on that same pass rate rather than an
-independent statistical measure: ≥ 80% of goals achieved reads HIGH, ≥ 50%
-MEDIUM, below that LOW. A LOW badge is telling you the run went badly, not that
-the sample was too small.
+Two numbers on this screen are easy to conflate. The **pass rate** is the share
+of conversations where the judge set `goal_achieved` — the donut. **Average
+score** is the mean `goal_completion_score`, the judge's 0–1 rating of *how
+fully* the goal was met, so a run can average 0.7 while passing half its
+conversations.
+
+The **CONFIDENCE** badge is a band on the pass rate, not a statistical
+confidence: ≥ 80% of goals achieved reads HIGH, ≥ 50% MEDIUM, below that LOW.
+It carries no sample-size meaning at all — three conversations that all pass
+still read HIGH. A LOW badge says the run went badly, not that you need more
+data.
 
 Filters sit in the right rail on every tab — goal outcome, rule violations, who
 terminated the conversation, persona, scenario, and score/turn thresholds — and
@@ -755,7 +764,7 @@ agent, decided where the conversations ended.
 
 ![Overview: executive summary, run counts, outcome donut and the four average quality metrics.](../assets/dashboard/sim-03-overview.png){ .dashboard-shot }
 
-### 4. Breakdown — which persona × scenario pair fails
+### 4. Breakdown — which persona × scenario pair fails { #sim-breakdown }
 
 **Breakdown** is the persona × scenario heatmap, usually the fastest read in the
 report. Here every persona clears the straightforward refund paths at 100%,
@@ -767,7 +776,7 @@ Attempt*, 0%) points at that pairing specifically.
 
 ![Breakdown: goal completion per persona and scenario. One column scores far below the rest across nearly every persona.](../assets/dashboard/sim-04-breakdown-heatmap.png){ .dashboard-shot }
 
-### 5. Recommendations — what to change
+### 5. Recommendations — what to change { #sim-recommendations }
 
 **Recommendations** turns the failures into suggested edits, one card per
 suggestion, with the persona, scenario and triggers that produced it. For a run
@@ -776,21 +785,27 @@ instructions from here: preview the merge as a diff, confirm, and the write
 lands as a new minor agent version — see
 [Apply recommendations to the agent](../dashboard.md#apply-recommendations-to-the-agent).
 Runs against a plain model, a deployment or a callback have no instructions to
-write back to, so their suggestions render as plain bullets.
+write back to, so their suggestions render as plain bullets — see
+[Apply recommendations to the agent](../dashboard.md#apply-recommendations-to-the-agent)
+for the full contract. The tab carries a count badge, and it disappears
+entirely when a run generated no recommendations — as does **Turn quality**
+when a run recorded no per-turn metrics. A missing tab here is a property of
+the run, not a broken page.
 
 !!! note "No screenshot for this tab"
     Recommendations is newer than the screenshots on this page, so it does not
     appear in them — the tab strip in the shots below is one tab short of what
     you'll see.
 
-### 6. Transcripts — the conversations
+### 6. Transcripts — the conversations { #sim-transcripts }
 
 **Transcripts** lists every conversation with persona, scenario, turn count,
 score, who ended it, and whether the goal was met. Sort by score to put the
 failures on top, and raise the page size (5 / 10 / 25) before scanning a large
-run. The **TRACES** column is empty in the screenshot because it needs
-`ORQ_WORKSPACE` set to build the deep-link; with it set, each row gets a button
-to the target agent's trace in the Orq UI.
+run. The **TRACES** column is empty in the screenshot because the deep-link
+needs `ORQ_WORKSPACE` set. With it set, a row shows **View Trace** when the
+conversation stored a trace id, **View Traces** (a thread filter) when it only
+stored a thread id, and nothing when it has neither.
 
 ![Transcripts: all conversations in the run, sortable and paginated.](../assets/dashboard/sim-05-transcripts.png){ .dashboard-shot }
 
@@ -802,7 +817,7 @@ evidence instead of resolving the claim.
 
 ![A conversation drawer: criteria, the judge's rationale, and the full transcript.](../assets/dashboard/sim-06-conversation-detail.png){ .dashboard-shot }
 
-### 7. Turn quality and Config — behaviour and setup
+### 7. Turn quality and Config — behaviour and setup { #sim-turn-quality }
 
 **Turn quality** trends the four metrics by turn index, so quality decay over
 longer conversations is visible, alongside the turn-count distribution. The
@@ -819,13 +834,15 @@ assertiveness, politeness and technical level.
 
 ![Config: run metadata and the persona dials used to drive the simulated users.](../assets/dashboard/sim-08-config.png){ .dashboard-shot }
 
-### 8. Compare — did the fix work
+### 8. Compare — did the fix work { #sim-compare }
 
 Pick a second run in **Compare with** to diff two runs: KPI deltas, outcomes,
 per-scorer averages, and how conversations ended. Below, goal-achieved is up 74
 points and mean score up 0.41 against the earlier run. Both runs carry the same
-name — runs are identified by name *and* timestamp, so re-running the same
-evaluation name is normal and the picker disambiguates by time.
+name here, which is a trap worth avoiding: the **Compare with** dropdown lists
+run names only, with no timestamp, so two runs of the same `evaluation_name`
+are indistinguishable in it. Version the name (`refund-agent-v2`) when you
+intend to compare.
 
 The comparison works on two levels, and the screenshot only earns the first
 one. Run-level KPIs always compare. Per-conversation matching pairs runs up on
@@ -839,8 +856,10 @@ gate rather than a headline check.
 ![Run comparison: KPI deltas, outcomes and per-scorer averages for two runs of the same agent.](../assets/dashboard/sim-09-compare.png){ .dashboard-shot }
 
 !!! tip "Exports respect the filters"
-    **Export** downloads the run as standalone HTML, Markdown or JSON. The JSON
-    contains only the conversations left visible by the active filters.
+    **Export** downloads the run as standalone HTML, Markdown or JSON (no CSV
+    on this surface) — the JSON carries only the conversations your filters
+    left visible, so filter first, then export. Formats per surface:
+    [Downloads](../dashboard.md#downloads).
 
 ## External framework demos
 

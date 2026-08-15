@@ -268,6 +268,14 @@ bullets there. Without them the drawer explains what is
 missing instead of failing. The same flow is available programmatically via
 `evaluatorq.redteam.reports.apply.apply_recommendations`.
 
+The two surfaces gate the flow differently, which matters when the target
+isn't an Orq agent. Simulation checks the target kind up front and renders
+plain bullets for anything else. Red team checks only that the run has
+recommendations and exactly one tested agent — so a single-agent run against a
+plain model, a deployment or a callback still shows **Apply…**, and the
+mismatch surfaces as a *Preview failed* drawer when the agent lookup can't
+resolve the target, rather than as a disabled button.
+
 **Agent simulation** reports get the same UI in their **Recommendations**
 tab: one card per simulation recommendation (the persona, scenario, and
 triggers that surfaced it) with per-suggestion Apply buttons and the same

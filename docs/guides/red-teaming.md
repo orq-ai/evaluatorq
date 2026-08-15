@@ -374,7 +374,7 @@ reference for [filters](../dashboard.md#filters),
 [trace links](../dashboard.md#orq-trace-links) and
 [downloads](../dashboard.md#downloads).
 
-### 1. Landing — what has been run at all
+### 1. Landing — what has been run at all { #rt-landing }
 
 `eq dashboard` opens on a cross-surface overview: jobs run, spend, tokens, the
 red team / agent sim split, and findings by severity across every stored run.
@@ -386,9 +386,15 @@ stored run, including throwaway smoke runs, so a red bar here doesn't mean the
 system you care about is broken. Go to the surface, find the run, and read its
 numbers there.
 
+An empty landing page — zeros across the stat band, no runs in either rail —
+means the dashboard found no report files, not that the runs failed. Check you
+launched it from the directory holding `.evaluatorq/`, and that the run was
+saved at all — `red_team()` saves by default, but `--save none` (CLI) or
+`save=SaveMode.NONE` writes nothing.
+
 ![The dashboard landing page: jobs run, spend, tokens, run mix, and findings by severity across all stored runs.](../assets/dashboard/redteam-01-landing.png){ .dashboard-shot }
 
-### 2. Red Team — pick a run
+### 2. Red Team — pick a run { #rt-run-list }
 
 **Red Team** lists every red-team job, newest first, with the target or targets
 it attacked and how many attack cases it ran. The `SCORE` column is the
@@ -396,9 +402,16 @@ resistance rate (higher is better), not the attack success rate — the stat ban
 above totals attacks, ASR and critical findings across those runs, so the two
 directions sit on the same screen.
 
+`STATUS` is the run's lifecycle, not a verdict: **success** for a finished run,
+**running** for one still in flight (the dashboard reads the run manifest, so a
+long run appears here before it has a report), and **error** for one that died
+part-way. Open an **error** run anyway — the attacks that completed before the
+failure are still in it, and the numbers are computed over those alone, so
+treat its resistance rate as a partial sample.
+
 ![The Red Team run list: target, status, score and case count per job.](../assets/dashboard/redteam-02-run-list.png){ .dashboard-shot }
 
-### 3. Overview — the headline
+### 3. Overview — the headline { #rt-overview }
 
 Opening a run lands on **Overview**: a written executive summary, the five
 headline numbers (attacks run, vulnerabilities, attack success rate, resistance
@@ -407,13 +420,13 @@ distribution, and per-agent attack success with the weakest agent first.
 
 Resistance rate and ASR are complements: 78% resistant is 22% ASR. There is no
 universal pass mark — take the first run as your baseline, fix what
-[Focus areas](#5-focus-areas-what-to-fix-first) puts on top, and turn the
+[Focus areas](#rt-focus-areas) puts on top, and turn the
 number you reach into a [CI gate](#in-ci) so the next run can only improve on
 it.
 
 Both numbers cover only the categories this run actually attacked. The example
 run touched 10 of the 19 framework categories, so its resistance rate says
-nothing about the other 9 — [Config](#9-config-what-was-actually-tested) lists
+nothing about the other 9 — [Config](#rt-config) lists
 which were skipped, and it is worth reading before quoting the headline
 anywhere.
 
@@ -423,55 +436,61 @@ whole page, downloads included, respects them.
 
 ![Overview: executive summary, headline metrics, outcome donut, severity split and per-agent attack success.](../assets/dashboard/redteam-03-overview.png){ .dashboard-shot }
 
-### 4. Agents — which target broke
+### 4. Agents — which target broke { #rt-agents }
 
 For a run with more than one target, **Agents** puts each one's ASR, model,
 discovered tools, skills and knowledge side by side, so a hardened target and an
-unhardened one are directly comparable.
+unhardened one are directly comparable. On a single-agent run — the usual first
+run — the tab still renders, as one row: the same capability inventory, no
+comparison. Skip it and read Focus areas instead.
 
 A dash in the tools, skills or knowledge column means nothing was discovered
-for that target — either the agent genuinely has none, or the backend exposes
-no way to enumerate them (direct model and callback targets never do). It is
-not a claim that the agent is tool-free, and the attack planner only tailors
-attacks to capabilities it could actually see.
+for that target, which is not the same as "the agent has none". Only the Orq
+agent backend enumerates capabilities on its own; a direct model target has
+none to enumerate, and a `CallableTarget` reports only what you hand it via
+`agent_context=`. Supplying that context is worth the effort — without it, the
+planner has nothing to filter on and applies every strategy, including ones
+that make no sense for your agent. It falls back to the same optimistic
+inclusion when capability classification fails, so a broad attack set can mean
+"discovery failed", not "your agent does everything".
 
 ![Agents: per-agent ASR, model, and the tools, skills and knowledge discovered for each target.](../assets/dashboard/redteam-04-agents.png){ .dashboard-shot }
 
-### 5. Focus areas — what to fix first
+### 5. Focus areas — what to fix first { #rt-focus-areas }
 
 **Focus areas** ranks fixes by `risk = success rate × avg severity` and attaches
 a recommended remediation to each. Severity is the numeric weight shown on
-[Config](#9-config-what-was-actually-tested) (critical is the heaviest), so a
+[Config](#rt-config) (critical is the heaviest), so a
 vulnerability that fails often *and* fails badly floats to the top. Start at P1
 and work down; re-run the same categories afterwards and compare the two runs
 in the run list to confirm the fix landed.
 
-On a single-agent run you can also apply a recommendation from here: each one
-gets an **Apply…** button that previews the merged instructions as a diff, and
-nothing is written until you confirm — see
-[Apply recommendations to the agent](../dashboard.md#apply-recommendations-to-the-agent).
-The button appears for any single-agent run, but the write only lands if that
-target is a real Orq agent; against a model, deployment or callback there are
-no stored instructions to merge into, and the preview fails with an error
-rather than the button being hidden up front. The screenshot below predates the
-flow entirely, so it shows the remediation text without the apply bar.
+When the run has recommendations and exactly one tested agent, each one also
+gets an **Apply…** button: it previews the merged instructions as a diff, and
+nothing is written until you confirm. Multi-agent runs, and runs whose targets
+aren't Orq agents, are the two cases where this doesn't land —
+[Apply recommendations to the agent](../dashboard.md#apply-recommendations-to-the-agent)
+covers both. The screenshot below predates the flow entirely, so it shows the
+remediation text without the apply bar.
 
 ![Focus areas: prioritized fixes ranked by risk, each with a recommended remediation.](../assets/dashboard/redteam-05-focus-areas.png){ .dashboard-shot }
 
-### 6. Breakdowns — where the weakness sits
+### 6. Breakdowns — where the weakness sits { #rt-breakdowns }
 
 **Breakdowns** gives attack success per framework category, worst first, so a
 category that fell over on every attempt isn't hidden behind a healthy overall
 resistance rate. Read the attempt count alongside the rate — 100% over two
 attacks and 33% over twelve are not equally strong signals, and the ranking
 doesn't weight for that. When a category you care about sits on a handful of
-attempts, re-run scoped to it with a higher `--generated-strategy-count`
-(2 per category by default) before treating either the pass or the fail as
-real.
+attempts, re-run scoped to it (`--category LLM01`) before treating either the
+pass or the fail as real. In dynamic and hybrid mode,
+`--generated-strategy-count` (2 per category) buys more attempts — but only
+while strategy generation is on, and `--max-per-category` still truncates the
+combined curated + generated list afterwards, so raise both or neither.
 
 ![Breakdowns: attack success rate per OWASP category, worst first.](../assets/dashboard/redteam-06-breakdowns.png){ .dashboard-shot }
 
-### 7. Attacks — the evidence
+### 7. Attacks — the evidence { #rt-attacks }
 
 **Attacks** lists every attack with its agent, vector, severity and outcome.
 
@@ -487,7 +506,7 @@ it to bypass safety checks on request.
 
 ![An expanded attack row: evaluator verdict plus the full message-by-message transcript.](../assets/dashboard/redteam-08-attack-detail.png){ .dashboard-shot }
 
-### 8. Usage — what the run consumed
+### 8. Usage — what the run consumed { #rt-usage }
 
 **Usage** breaks tokens down per agent — total, prompt, completion and API
 calls. It reports tokens only; the run-level spend on the landing page and the
@@ -499,7 +518,7 @@ which don't.
 
 ![Usage: total, prompt and completion tokens plus API calls per agent.](../assets/dashboard/redteam-09-usage.png){ .dashboard-shot }
 
-### 9. Config — what was actually tested
+### 9. Config — what was actually tested { #rt-config }
 
 **Config** records how the run was produced — pipeline, framework, scoring
 method, duration — plus which categories were tested, which were not, and the
@@ -509,8 +528,10 @@ high resistance rate as broad coverage.
 ![Config: run configuration, methodology, tested and untested categories, and severity weights.](../assets/dashboard/redteam-10-config.png){ .dashboard-shot }
 
 !!! tip "Exports respect the filters"
-    **Export** downloads the run as standalone HTML, Markdown, CSV or JSON. The
-    CSV and JSON contain only the rows left visible by the active filters.
+    **Export** downloads the run as standalone HTML, Markdown, CSV or JSON —
+    the tabular formats carry only the rows your filters left visible, so
+    filter first, then export. Formats per surface:
+    [Downloads](../dashboard.md#downloads).
 
 ## External agent frameworks
 

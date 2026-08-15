@@ -48,16 +48,27 @@ score 0.86, with one scenario column that clearly fails.
 | `sim-08-config.png` | Report → Config — run metadata and the persona dials |
 | `sim-09-compare.png` | Run comparison — same agent before vs after a fix |
 
-Known issue with `sim-09-compare.png`: the header carries a red "low overlap
-(0%)" banner because the two runs do not share identical (persona, scenario)
-pairs, so per-conversation matching finds nothing. The KPI deltas are still
-correct — crop the banner, or re-shoot against two runs generated from the same
-persona/scenario set.
+## Pending re-shoot
 
-The simulation **Recommendations** tab has no screenshot: it landed after this
-set was captured, so every sim shot here shows a tab strip one tab short of the
-current dashboard. Both guides say so in prose; re-shooting the set would drop
-the caveat.
+Five shots do not show the thing their caption teaches, and both guides
+currently carry prose caveats standing in for them. The decision is to re-shoot
+the set in one purpose-built capture session rather than keep documenting
+around it; until that happens, **do not delete the caveats in the guides** —
+they are the only thing keeping the pages honest.
+
+| Shot | What's wrong | What the capture run needs |
+|---|---|---|
+| `redteam-05-focus-areas.png` | Predates the apply flow — no **Apply…** buttons or apply bar | A single-agent run against a real Orq agent, recommendations enabled; capture the preview drawer with its diff too |
+| *(missing)* sim Recommendations | Tab landed after capture; no shot exists | Any sim run that generated recommendations — the tab drops out otherwise |
+| `sim-05-transcripts.png` | **TRACES** column empty | `ORQ_WORKSPACE=<slug>` set when launching `eq dashboard` |
+| `sim-07-turn-quality.png` | Judge ended most conversations after one turn, so the trend spans two points | Scenarios whose goals need several exchanges, and a higher `max_turns` |
+| `sim-09-compare.png` | Red "low overlap (0%)" banner — the two runs share no (persona, scenario) pairs | Two runs replayed from the same datapoints file, with **distinct run names** (the compare picker shows names only, no timestamps) |
+
+The screenshots that do show a report tab strip (`sim-03` … `sim-08`) are one
+tab short of the current dashboard, since Recommendations sits between
+Breakdown and Transcripts now. `sim-01`, `sim-02` and `sim-09` are outside a
+report and unaffected.
 
 To re-shoot: run `eq dashboard` in a checkout with runs under
-`.evaluatorq/runs/` and `.evaluatorq/sim-runs/`.
+`.evaluatorq/runs/` and `.evaluatorq/sim-runs/`, 1440×900, light theme, to
+match the existing set.
