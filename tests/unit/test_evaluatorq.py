@@ -337,6 +337,45 @@ async def test_streaming_polling_and_processing_failures_are_both_surfaced(
 
 
 @pytest.mark.asyncio
+async def test_streaming_processing_cancellation_is_surfaced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cancelled processing task must not be mistaken for the polling task."""
+    evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
+
+    async def fetch_one_batch(*_args: object, **_kwargs: object):
+        yield DataPointBatch(
+            datapoints=[DataPoint(inputs={'row': 0})],
+            has_more=False,
+            batch_number=1,
+        )
+
+    async def cancelled_processing(*_args: object, **_kwargs: object) -> list[object]:
+        task = asyncio.current_task()
+        assert task is not None
+        task.cancel()
+        await asyncio.sleep(0)
+        return []
+
+    async def job(_data: DataPoint, _row: int):
+        return {'name': 'job', 'output': 'output'}
+
+    monkeypatch.setattr(evaluatorq_module, 'setup_orq_client', lambda _api_key: object())
+    monkeypatch.setattr(evaluatorq_module, 'fetch_dataset_batches', fetch_one_batch)
+    monkeypatch.setattr(evaluatorq_module, 'process_data_point', cancelled_processing)
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+
+    with pytest.raises(asyncio.CancelledError):
+        await evaluatorq_module.evaluatorq(
+            'streaming-processing-cancellation',
+            data=DatasetIdInput(dataset_id='dataset'),
+            jobs=[job],
+            print_results=False,
+            _send_results=False,
+        )
+
+
+@pytest.mark.asyncio
 async def test_evaluatorq_returns_failed_results_to_library_callers() -> None:
     """Library callers receive failed results instead of a process exit."""
 
