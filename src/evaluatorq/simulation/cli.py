@@ -250,7 +250,9 @@ async def _generate_recommendations_async(results: list[Any], model: str) -> lis
     from evaluatorq.simulation.reports.recommendations import generate_recommendations
 
     try:
-        resolved = resolve_llm_client()
+        # Retry is owned by generate_recommendations' with_retry calls; disable
+        # the SDK layer so the two budgets cannot stack.
+        resolved = resolve_llm_client(max_retries=0)
     except Exception as exc:
         typer.echo(f'Warning: remediation suggestion generation failed ({exc}); continuing without.', err=True)
         return None

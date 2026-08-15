@@ -154,6 +154,18 @@ class TestOrqApiKeyEnv:
         assert captured.get("base_url") == "https://my.orq.ai/v3/router"
         assert captured.get("api_key") == "orq-env-key"
 
+    def test_auto_built_client_disables_sdk_retries(self, monkeypatch):
+        """Simulation calls use with_retry, so the SDK retry layer is disabled."""
+        monkeypatch.setenv("ORQ_API_KEY", "orq-env-key")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+        from evaluatorq.openresponses.client import build_simulation_client
+
+        client, owned = build_simulation_client()
+
+        assert owned is True
+        assert client.max_retries == 0
+
 
 # ---------------------------------------------------------------------------
 # Branch 4: OPENAI_API_KEY env only → base_url=None (OpenAI default), owned=True

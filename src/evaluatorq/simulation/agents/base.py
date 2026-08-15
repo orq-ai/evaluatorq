@@ -212,10 +212,13 @@ class BaseAgent(ABC):
            ``ORQ_BASE_URL/v3/router`` (default: ``https://my.orq.ai/v3/router``).
         4. ``OPENAI_API_KEY`` env var — uses the OpenAI SDK default base URL so
            traffic goes to OpenAI directly, not to the Orq router.
+
+        LLM calls retry via ``with_retry``; client retries are disabled.
         """
         client, owned = build_simulation_client(
             self.config.client,
             extra_api_key=api_key,
+            max_retries=0,
         )
         self._client_owned = owned
         return client
@@ -233,7 +236,8 @@ class BaseAgent(ABC):
         """Call the LLM with retry logic, dispatching to chat or responses API.
 
         Retries on rate-limit (429) and server errors (500+). All other errors
-        are raised immediately. ``asyncio.TimeoutError`` is never retried.
+        are raised immediately. ``asyncio.TimeoutError`` is never retried. Retry
+        is owned by ``with_retry``; client retries are disabled.
         """
         if self.config.api == 'responses':
             return await self._call_responses(

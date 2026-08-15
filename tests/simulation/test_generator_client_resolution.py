@@ -18,6 +18,16 @@ def test_openai_key_only_uses_openai_base_url(gen_cls, monkeypatch):
 
 
 @pytest.mark.parametrize("gen_cls", GEN_CLASSES)
+def test_auto_built_generator_client_disables_sdk_retries(gen_cls, monkeypatch):
+    monkeypatch.delenv("ORQ_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    gen = gen_cls()
+
+    assert gen._client.max_retries == 0
+
+
+@pytest.mark.parametrize("gen_cls", GEN_CLASSES)
 def test_orq_key_wins_when_both_set(gen_cls, monkeypatch):
     monkeypatch.setenv("ORQ_API_KEY", "orq-test")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")

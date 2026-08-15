@@ -90,7 +90,11 @@ class PersonaGenerator:
         self._model = model
         from evaluatorq.openresponses.client import build_simulation_client
 
-        self._client, self._client_owned = build_simulation_client(client, extra_api_key=api_key)
+        self._client, self._client_owned = build_simulation_client(
+            client,
+            extra_api_key=api_key,
+            max_retries=0,
+        )
 
     async def close(self) -> None:
         """Close the HTTP client (only if this generator built it)."""
