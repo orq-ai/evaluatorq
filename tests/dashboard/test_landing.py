@@ -247,6 +247,28 @@ class TestMetrics:
         assert row.score == pytest.approx(0.5)
         assert row.stored_score is None  # not re-derived, so nothing to reconcile
 
+    def test_legacy_cost_fallback_warns_when_summary_usage_is_absent(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        report_path = rt / 'legacy.json'
+        report_path.write_text(
+            json.dumps(
+                _legacy_redteam_payload(
+                    'Legacy cost fallback',
+                    created='2026-01-01T00:00:00',
+                    resistance=1.0,
+                    results=[_legacy_result(tokens=100)],
+                )
+            )
+        )
+
+        with caplog.at_level('WARNING'):
+            metrics._redteam_run_stats(str(report_path), report_path.stat().st_mtime_ns)
+
+        assert 'has no summary token_usage_total' in caplog.text
+
     def test_legacy_row_marks_a_rate_it_recalculated(self, tmp_path: Path) -> None:
         # The recorded rate was computed over every attack (1/2); the dashboard
         # counts evaluated-only (1/1). Both numbers stay visible.

@@ -291,11 +291,25 @@ def _outcomes_chart(
 ) -> str:
     """A-vs-B grouped bars for the two headline 0..1 metrics."""
     if not entries_a and not entries_b:
-        return ''
+        return _panel(
+            'Outcomes',
+            'Goal rate and mean score · A vs B',
+            '<p class="sim-empty">No outcome data is available in either run.</p>',
+        )
+    if not entries_a or not entries_b:
+        return _panel(
+            'Outcomes',
+            'Goal rate and mean score · A vs B',
+            '<p class="sim-empty">Outcome data requires entries from both runs.</p>',
+        )
     rate_a, score_a, _ = _agg(entries_a)
     rate_b, score_b, _ = _agg(entries_b)
     if rate_a is None or score_a is None or rate_b is None or score_b is None:
-        return ''
+        return _panel(
+            'Outcomes',
+            'Goal rate and mean score · A vs B',
+            '<p class="sim-empty">Outcome data is incomplete for one or both runs.</p>',
+        )
     spec = vl_grouped_bar(
         categories=['Goal-achieved rate', 'Mean goal score'],
         series=[(name_a, [rate_a, score_a]), (name_b, [rate_b, score_b])],

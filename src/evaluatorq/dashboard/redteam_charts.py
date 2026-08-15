@@ -329,7 +329,8 @@ def _build_breakdown_chart(
             chart_row['asr'] = source_row['asr'] if source_row else 0.0
             chart_row['evaluated'] = source_row['n'] if source_row else 0
         spec['encoding']['tooltip'] = [
-            {'field': 'asr', 'type': 'quantitative', 'title': 'ASR (%)', 'format': '.1f'},
+            {'field': 'value', 'type': 'quantitative', 'title': 'Vulnerable attacks'},
+            {'field': 'asr', 'type': 'quantitative', 'title': 'Segment ASR (%)', 'format': '.1f'},
             {'field': 'evaluated', 'type': 'quantitative', 'title': 'Evaluated attacks'},
         ]
 

@@ -364,7 +364,9 @@ class TestBreakdownView:
         assert sum(row['value'] for row in rows if row['label'] == 'GROUP_B') == 100
         assert [row['label'] for row in rows if row['series'] == rows[0]['series']] == ['GROUP_B', 'GROUP_A']
         assert spec['encoding']['tooltip']
-        assert {item['field'] for item in spec['encoding']['tooltip']} >= {'asr', 'evaluated'}
+        tooltip = spec['encoding']['tooltip']
+        assert {item['field'] for item in tooltip} >= {'value', 'asr', 'evaluated'}
+        assert next(item for item in tooltip if item['field'] == 'value')['title'] == 'Vulnerable attacks'
 
     def test_asr_evaluated_set_denominator_matches_static_report(self, tmp_path: Path) -> None:
         """Regression guard: interactive breakdown ASR == static report ASR on evaluated-set denominator.
@@ -527,6 +529,24 @@ class TestAttackFragmentView:
     def test_missing_report_404(self, client: TestClient) -> None:
         r = client.get('/r/nonexistentxyz/redteam/attack?idx=0')
         assert r.status_code == 404
+
+    @pytest.mark.parametrize('idx', ['', 'not-an-index', '-1', '9999'])
+    def test_invalid_or_absent_idx_matches_sim_route(self, client: TestClient, rid: str, idx: str) -> None:
+        response = client.get(f'/r/{rid}/redteam/attack?idx={idx}')
+        assert response.status_code == (400 if idx in ('', 'not-an-index') else 404)
+
+    def test_idx_into_empty_report_is_404(self, tmp_path: Path) -> None:
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        report_path = rt / 'empty.json'
+        report_path.write_text(_make_report([], []).model_dump_json())
+        empty_rid = report_id(report_path)
+
+        response = TestClient(build_app(roots=[rt]), raise_server_exceptions=True).get(
+            f'/r/{empty_rid}/redteam/attack?idx=0'
+        )
+
+        assert response.status_code == 404
 
 
 # ---------------------------------------------------------------------------
