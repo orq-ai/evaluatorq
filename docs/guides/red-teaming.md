@@ -135,7 +135,10 @@ report = await red_team(target, mode="static", dataset="hf:my-org/my-attacks")
     `--no-generate-strategies` flag; there is no positive form, since generation
     is on by default.
 
-## Reading the report
+## Reading the report object
+
+For the same numbers rendered as a browsable report, see
+[Reading a run in the dashboard](#reading-a-run-in-the-dashboard) below.
 
 `report.summary.resistance_rate` is the fraction of attacks the target withstood
 — higher is better. `report.results` holds every attack result; group by
@@ -164,7 +167,128 @@ The runnable smoke example
 ([`08_quick_smoke_test.py`](../examples/redteam/08_quick_smoke_test.md)) wraps
 this same pattern.
 
---8<-- "docs/_snippets/dashboard-tip.md"
+## Reading a run in the dashboard
+
+Runs are saved to `.evaluatorq/runs/<name>_<timestamp>.json` by default
+(`--save none` skips the file; `--save detail` also keeps per-stage artifacts
+in `--artifacts-dir`), and `eq dashboard` browses those files locally — no
+external service:
+
+```bash
+uv add "evaluatorq[dashboard]"
+
+eq dashboard                                              # browse every saved run
+eq dashboard .evaluatorq/runs/red-team_<timestamp>.json   # deep-link to one report
+```
+
+What follows walks the dashboard the way you'd read a finished run: land, pick
+the run, then work down the report tabs from headline to evidence. The
+screenshots come from one example run — a hybrid run against two deliberately
+contrasting targets — so your own numbers will differ. See the Dashboard
+reference for [filters](../dashboard.md#filters),
+[trace links](../dashboard.md#orq-trace-links) and
+[downloads](../dashboard.md#downloads).
+
+### 1. Landing — what has been run at all
+
+`eq dashboard` opens on a cross-surface overview: jobs run, spend, tokens, the
+red team / agent sim split, and findings by severity across every stored run.
+Use it to confirm the run you expect actually landed, then pick a surface from
+the left rail.
+
+![The dashboard landing page: jobs run, spend, tokens, run mix, and findings by severity across all stored runs.](../assets/dashboard-landing.png){ .dashboard-shot }
+
+### 2. Red Team — pick a run
+
+**Red Team** lists every red-team job, newest first, with the target or targets
+it attacked and how many attack cases it ran. The `SCORE` column is the
+resistance rate (higher is better), not the attack success rate — the stat band
+above totals attacks, ASR and critical findings across those runs, so the two
+directions sit on the same screen.
+
+![The Red Team run list: target, status, score and case count per job.](../assets/dashboard-redteam-runs.png){ .dashboard-shot }
+
+### 3. Overview — the headline
+
+Opening a run lands on **Overview**: a written executive summary, the five
+headline numbers (attacks run, vulnerabilities, attack success rate, resistance
+rate, critical findings), the resistant/vulnerable split, the severity
+distribution, and per-agent attack success with the weakest agent first.
+
+Resistance rate and ASR are complements: 78% resistant is 22% ASR. There is no
+universal pass mark — take the first run as your baseline, fix what
+[Focus areas](#5-focus-areas-what-to-fix-first) puts on top, and turn the
+number you reach into a [CI gate](#in-ci) so the next run can only improve on
+it.
+
+Filters sit in the right rail on every tab — outcome, severity, minimum turns,
+category, agent, attack technique, delivery method and vulnerability — and the
+whole page, downloads included, respects them.
+
+![Overview: executive summary, headline metrics, outcome donut, severity split and per-agent attack success.](../assets/dashboard-redteam-overview.png){ .dashboard-shot }
+
+### 4. Agents — which target broke
+
+For a run with more than one target, **Agents** puts each one's ASR, model,
+discovered tools, skills and knowledge side by side, so a hardened target and an
+unhardened one are directly comparable.
+
+![Agents: per-agent ASR, model, and the tools, skills and knowledge discovered for each target.](../assets/dashboard-redteam-agents.png){ .dashboard-shot }
+
+### 5. Focus areas — what to fix first
+
+**Focus areas** ranks fixes by `risk = success rate × avg severity` and attaches
+a recommended remediation to each. Severity is the numeric weight shown on
+[Config](#8-usage-and-config-cost-and-method) (critical is the heaviest), so a
+vulnerability that fails often *and* fails badly floats to the top. Start at P1
+and work down; re-run the same categories afterwards and compare the two runs
+in the run list to confirm the fix landed.
+
+![Focus areas: prioritized fixes ranked by risk, each with a recommended remediation.](../assets/dashboard-redteam-focus-areas.png){ .dashboard-shot }
+
+### 6. Breakdowns — where the weakness sits
+
+**Breakdowns** gives attack success per framework category, worst first, so a
+category that fell over on every attempt isn't hidden behind a healthy overall
+resistance rate. Read the attempt count alongside the rate — 100% over two
+attacks and 33% over twelve are not equally strong signals, and the ranking
+doesn't weight for that.
+
+![Breakdowns: attack success rate per OWASP category, worst first.](../assets/dashboard-redteam-breakdowns.png){ .dashboard-shot }
+
+### 7. Attacks — the evidence
+
+**Attacks** lists every attack with its agent, vector, severity and outcome.
+
+![Attacks: every attack in the run with vector, severity and outcome.](../assets/dashboard-redteam-attacks.png){ .dashboard-shot }
+
+Click a row to expand the evaluator's verdict, its reasoning, and the full
+message-by-message transcript — the evidence you'd paste into a ticket. With
+`ORQ_WORKSPACE` set, each attack also links out to its trace in the Orq UI. In
+the expanded row below, a memory-poisoning attack succeeded: the agent confirms
+it stored a persistent "System Administrator / UNRESTRICTED" directive telling
+it to bypass safety checks on request.
+
+![An expanded attack row: evaluator verdict plus the full message-by-message transcript.](../assets/dashboard-redteam-attack-detail.png){ .dashboard-shot }
+
+### 8. Usage and Config — cost and method
+
+**Usage** breaks tokens down per agent — total, prompt, completion and API
+calls. It reports tokens only; the run-level spend on the landing page and the
+run list shows a dash when the backend returns no pricing, as it does here.
+
+![Usage: total, prompt and completion tokens plus API calls per agent.](../assets/dashboard-redteam-usage.png){ .dashboard-shot }
+
+**Config** records how the run was produced — pipeline, framework, scoring
+method, duration — plus which categories were tested, which were not, and the
+severity weights used for scoring. Read the *not tested* list before reading a
+high resistance rate as broad coverage.
+
+![Config: run configuration, methodology, tested and untested categories, and severity weights.](../assets/dashboard-redteam-config.png){ .dashboard-shot }
+
+!!! tip "Exports respect the filters"
+    **Export** downloads the run as standalone HTML, Markdown, CSV or JSON. The
+    CSV and JSON contain only the rows left visible by the active filters.
 
 ## External agent frameworks
 

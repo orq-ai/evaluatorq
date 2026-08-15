@@ -475,7 +475,136 @@ the generated cases (`eq sim generate --datapoints`, or `eq sim run
     rather start from real traffic, use `eq sim from-traces` above — it infers the
     personas and scenarios for you.
 
---8<-- "docs/_snippets/dashboard-tip.md"
+## Reading a run in the dashboard
+
+Runs are saved to `.evaluatorq/sim-runs/<name>_<timestamp>.json` — automatically
+by `eq sim run` (unless you pass `--no-save`), and by `simulate()` when called
+with `save=True`. `eq dashboard` browses those files locally, no external
+service:
+
+```bash
+uv add "evaluatorq[dashboard]"
+
+eq dashboard                       # browse every saved run
+eq dashboard .evaluatorq/sim-runs  # scope to simulation runs
+```
+
+!!! warning "The Python examples above don't save by default"
+    `simulate()` and `generate_and_simulate()` default to `save=False`, so a
+    script copy-pasted from earlier on this page leaves the dashboard empty.
+    Pass `save=True`, or drive the run from the CLI (`eq sim run`), which saves
+    unless you pass `--no-save`.
+
+What follows walks the dashboard the way you'd read a finished run: land, pick
+the run, then work down the report tabs from headline to transcript. The
+screenshots come from one example run — 10 personas × 5 scenarios against a
+refund agent — so your own numbers will differ. See the Dashboard reference for
+[filters](../dashboard.md#filters), [trace links](../dashboard.md#orq-trace-links)
+and [downloads](../dashboard.md#downloads).
+
+### 1. Landing — what has been run at all
+
+`eq dashboard` opens on a cross-surface overview: jobs run, spend, tokens and
+the red team / agent sim split across every stored run. Agent simulation sits
+next to red teaming in the left rail.
+
+![The dashboard landing page: jobs run, spend, tokens and run mix across all stored runs.](../assets/dashboard-landing.png){ .dashboard-shot }
+
+### 2. Agent Sim — pick a run
+
+**Agent Sim** lists every simulation job with its target, goal-completion score,
+conversation count and cost. The picker above the list selects two runs to
+compare (step 7).
+
+![The Agent Sim run list: simulations run, goal completion, average turns and cost per simulation.](../assets/dashboard-sim-runs.png){ .dashboard-shot }
+
+### 3. Overview — the headline
+
+Opening a run lands on **Overview**: a written summary naming the best and worst
+persona × scenario pair, the run's counts (personas, scenarios, conversations,
+average score, average turns, errors), the achieved/not-achieved split, and the
+four per-turn quality metrics — response quality, hallucination risk, tone
+appropriateness, factual accuracy.
+
+Those four are scored by the judge on every turn regardless of what you passed
+in `evaluator_names`, which is why they appear even though the Config tab lists
+only `goal_achieved` and `criteria_met`. All four run 0–1; higher is better for
+three of them, and *lower* is better for hallucination risk. Factual accuracy is
+only meaningful when the scenario supplies ground truth — without it the judge
+has nothing to check the response against.
+
+Filters sit in the right rail on every tab — goal outcome, rule violations, who
+terminated the conversation, persona, scenario, and score/turn thresholds — and
+the whole page respects them.
+
+![Overview: executive summary, run counts, outcome donut and the four average quality metrics.](../assets/dashboard-sim-overview.png){ .dashboard-shot }
+
+### 4. Breakdown — which persona × scenario pair fails
+
+**Breakdown** is the persona × scenario heatmap, usually the fastest read in the
+report. Here every persona clears the straightforward refund paths at 100%,
+while one column — *Never Received Claim With Unverified Evidence* — lands
+between 20% and 90% for every one of them. A column that's weak across personas
+points at the scenario; a row that's weak across scenarios points at the
+persona; a single cold cell (*Cautious Low-Tech Senior* × *Duplicate Refund
+Attempt*, 0%) points at that pairing specifically.
+
+![Breakdown: goal completion per persona and scenario. One column scores far below the rest across nearly every persona.](../assets/dashboard-sim-breakdown.png){ .dashboard-shot }
+
+### 5. Transcripts — the conversations
+
+**Transcripts** lists every conversation with persona, scenario, turn count,
+score, who ended it, and whether the goal was met. Sort by score to put the
+failures on top, and raise the page size (5 / 10 / 25) before scanning a large
+run.
+
+![Transcripts: all conversations in the run, sortable and paginated.](../assets/dashboard-sim-transcripts.png){ .dashboard-shot }
+
+Click a row to open the conversation: required and prohibited criteria with
+their pass marks, the judge's rationale, and the full user ↔ agent exchange. The
+example below is the interesting failure mode — all four criteria pass, but the
+judge still marks the goal missed because the agent stopped at requesting
+evidence instead of resolving the claim.
+
+![A conversation drawer: criteria, the judge's rationale, and the full transcript.](../assets/dashboard-sim-conversation.png){ .dashboard-shot }
+
+### 6. Turn quality and Config — behaviour and setup
+
+**Turn quality** trends the four metrics by turn index, so quality decay over
+longer conversations is visible, alongside the turn-count distribution. The
+trend is only worth reading when conversations actually run long — in the
+example run the judge ended most of them after a single turn, so the chart
+spans two points and says little. Raise `max_turns` and give scenarios goals
+that take several exchanges to reach if you want this view to earn its place.
+
+![Turn quality: per-turn trend across the four quality metrics, plus turn-count distribution.](../assets/dashboard-sim-turn-quality.png){ .dashboard-shot }
+
+**Config** records the run metadata — target kind, mode, evaluators, when it ran
+— and the persona table with each simulated user's tone, patience,
+assertiveness, politeness and technical level.
+
+![Config: run metadata and the persona dials used to drive the simulated users.](../assets/dashboard-sim-config.png){ .dashboard-shot }
+
+### 7. Compare — did the fix work
+
+Pick a second run in **Compare with** to diff two runs: KPI deltas, outcomes,
+per-scorer averages, and how conversations ended. Below, goal-achieved is up 74
+points and mean score up 0.41 against the earlier run.
+
+The comparison works on two levels, and the screenshot only earns the first
+one. Run-level KPIs always compare. Per-conversation matching pairs runs up on
+(persona, scenario), and these two runs were generated from different sets, so
+nothing matched — hence the overlap warning in the header. Reuse the same
+personas and scenarios across runs (see
+[Replay stored datapoints](#replay-stored-datapoints)) and you get the
+per-conversation diff too, which is what makes this usable as a regression
+gate rather than a headline check.
+
+![Run comparison: KPI deltas, outcomes and per-scorer averages for two runs of the same agent.](../assets/dashboard-sim-compare.png){ .dashboard-shot }
+
+!!! tip "Exports respect the filters"
+    **Export** downloads the run as standalone HTML, Markdown or JSON. The JSON
+    contains only the conversations left visible by the active filters.
 
 ## External framework demos
 
