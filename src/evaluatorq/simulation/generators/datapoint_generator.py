@@ -46,7 +46,7 @@ class DatapointGenerator:
     ) -> None:
         self._model = model
         self._rate_limit_delay = rate_limit_delay
-        self._semaphore = asyncio.Semaphore(max_concurrent_calls)
+        self._max_concurrent_calls = max_concurrent_calls
 
         from evaluatorq.openresponses.client import build_simulation_client
 
@@ -165,9 +165,10 @@ class DatapointGenerator:
             len(personas),
             len(scenarios),
         )
+        semaphore = asyncio.Semaphore(self._max_concurrent_calls)
 
         async def generate_single(persona: Persona, scenario: Scenario) -> SimulationDatapoint:
-            async with self._semaphore:
+            async with semaphore:
                 first_message = await self._first_message_generator.generate(persona, scenario)
                 await asyncio.sleep(self._rate_limit_delay)
                 return generate_datapoint(persona, scenario, first_message)
