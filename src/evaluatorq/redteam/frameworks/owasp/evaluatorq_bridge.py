@@ -12,12 +12,12 @@ from loguru import logger
 from pydantic import ValidationError
 
 from evaluatorq import DataPoint, EvaluationResult
-from evaluatorq.common.judge import JudgeError, build_eval_replacements, run_judge
+from evaluatorq.common.judge import JudgeError, JudgeOutcome, build_eval_replacements, run_judge
 from evaluatorq.common.jury import Prediction, VerdictKind, _panel_composition_messages, append_jury_summary, run_jury
 from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.common.output_adapters import output_error_text, output_to_messages
 from evaluatorq.common.tracing import set_span_attrs
-from evaluatorq.contracts import JURY_RAW_OUTPUT_KEY
+from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY, JURY_RAW_OUTPUT_KEY
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
@@ -26,6 +26,7 @@ from evaluatorq.redteam.contracts import (
     EvaluatorConfig,
     EvaluatorqEvaluatorConfig,
     LLMCallConfig,
+    PipelineStage,
     RedTeamInput,
     StaticDataset,
     normalize_category,
@@ -173,6 +174,30 @@ def _error_result(explanation: str) -> EvaluationResult:
     return EvaluationResult.model_validate({'value': 'error', 'explanation': explanation, 'pass': None})
 
 
+def _judge_error_payload(outcome: JudgeOutcome, evaluator_id: str) -> dict[str, Any]:
+    """Serialize a failed judge call into the shape converters lift to ``RunError``.
+
+    Mirrors ``AdaptiveEvaluator._judge_error_payload`` (adaptive/evaluator.py):
+    ``stage`` is always 'evaluation' (the attack itself ran, so this is not an
+    execution error), and ``code`` is the JudgeError kind, which is what makes
+    'every judge call was blocked' legible as a single cause in the error rollup
+    rather than N unrelated one-off failures.
+    """
+    return {
+        'message': outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'unknown'),
+        'error_type': outcome.error_kind.value if outcome.error_kind else 'unknown',
+        'stage': PipelineStage.EVALUATION.value,
+        'code': outcome.error_kind.value if outcome.error_kind else None,
+        'details': {
+            'evaluator_id': evaluator_id,
+            # Truncated: the point is to identify the cause, not to store the payload
+            # twice — the untruncated content stays under raw_output['raw_content'].
+            'raw_content': (outcome.raw_content or '')[:500] or None,
+            'timeout_ms': outcome.timeout_ms,
+        },
+    }
+
+
 def create_owasp_evaluator(
     evaluator_model: str = DEFAULT_PIPELINE_MODEL,
     llm_client: AsyncOpenAI | None = None,
@@ -284,7 +309,14 @@ def create_owasp_evaluator(
                     'raw_output': {'raw_content': outcome.raw_content},
                 })
 
+            # Every judge failure is recorded, none re-raised — the static path never
+            # re-raises (see the single-judge branch above). The last failure's kind
+            # is kept so the panel result can name a cause instead of reporting only
+            # "quorum not met". Mirrors AdaptiveEvaluator.evaluate's last_error.
+            last_error: JudgeOutcome | None = None
+
             async def judge_fn(model: str) -> Prediction:
+                nonlocal last_error
                 outcome = await run_judge(
                     client=client,
                     model=model,
@@ -293,8 +325,12 @@ def create_owasp_evaluator(
                     replacements=eval_replacements,
                 )
                 if outcome.error_kind is not None or outcome.payload is None:
+                    last_error = outcome
                     return Prediction(
-                        error=outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'error')
+                        error=outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'error'),
+                        # The judge's tokens were billed whether or not the verdict
+                        # parsed — dropping them here undercounts the run's cost.
+                        token_usage=outcome.token_usage,
                     )
                 return Prediction(
                     value=outcome.payload.value,
@@ -316,16 +352,22 @@ def create_owasp_evaluator(
             explanation = append_jury_summary(deliberation.explanation, deliberation.jury)
             set_span_attrs(evaluation_span, {'orq.redteam.passed': span_pass_state(passed), 'output': explanation})
             set_jury_span_attrs(evaluation_span, deliberation.jury)
+            raw_output: dict[str, Any] = {
+                'value': passed,
+                'explanation': deliberation.explanation,
+                JURY_RAW_OUTPUT_KEY: deliberation.jury.model_dump(mode='json'),
+            }
+            # No verdict from a panel means the quorum was not met, i.e. judges failed.
+            # Without this the panel path produced pass=None with no recorded cause,
+            # so a whole-panel outage was invisible to the error rollup and the CLI hint.
+            if passed is None and last_error is not None:
+                raw_output[EVAL_ERROR_RAW_OUTPUT_KEY] = _judge_error_payload(last_error, category)
             return EvaluationResult.model_validate({
                 'value': passed if passed is not None else 'inconclusive',
                 'explanation': explanation,
                 'pass': passed,
                 'token_usage': deliberation.token_usage,
-                'raw_output': {
-                    'value': passed,
-                    'explanation': deliberation.explanation,
-                    JURY_RAW_OUTPUT_KEY: deliberation.jury.model_dump(mode='json'),
-                },
+                'raw_output': raw_output,
             })
 
     # evaluator_type marks these LLM-judge scorers so the tracing layer emits the
