@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import create_model
 
 import importlib
 
+from evaluatorq.common import judge as judge_mod
 from evaluatorq.common.judge import JudgeOutcome, EvaluatorResponsePayload
 from evaluatorq.llm_jury import llm_jury
 from evaluatorq.types import DataPoint
@@ -243,6 +245,27 @@ async def test_scorer_inconclusive_when_all_judges_abstain():
 
     assert not isinstance(result, dict)
     assert result.value == "inconclusive"
+    assert result.pass_ is None
+
+
+@pytest.mark.asyncio
+async def test_scorer_does_not_count_false_abstain_as_vulnerable():
+    verdict_model = create_model('AbstainingVerdict', value=(bool, ...), explanation=(str, ...), abstain=(bool, ...))
+    message = MagicMock(
+        parsed=verdict_model(value=False, explanation='uncertain', abstain=True),
+        refusal=None,
+    )
+    completion = MagicMock(choices=[MagicMock(message=message, finish_reason='stop')], usage=None)
+    judge_client = MagicMock()
+    judge_client.chat.completions.parse = AsyncMock(return_value=completion)
+    ev = llm_jury(name='x', criteria='c', judges=['m1', 'm2'], client=judge_client)
+
+    with patch.object(llm_jury_mod, 'run_judge', side_effect=judge_mod.run_judge):
+        dp = DataPoint(inputs={'q': '?'}, expected_output='x')
+        result = await ev['scorer']({'data': dp, 'output': 'x'})
+
+    assert not isinstance(result, dict)
+    assert result.value == 'inconclusive'
     assert result.pass_ is None
 
 

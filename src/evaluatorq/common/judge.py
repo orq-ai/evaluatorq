@@ -385,7 +385,14 @@ async def _responses_judge(
             raw_content=raw,
         )
     raw = parsed.model_dump_json()
-    payload = EvaluatorResponsePayload(value=parsed.value, explanation=parsed.explanation)  # pyright: ignore[reportAttributeAccessIssue]
+    if isinstance(parsed, EvaluatorResponsePayload):
+        payload = parsed
+    else:
+        payload = EvaluatorResponsePayload(
+            value=parsed.value,
+            explanation=parsed.explanation,
+            abstain=bool(getattr(parsed, 'abstain', False)),
+        )  # pyright: ignore[reportAttributeAccessIssue]
     return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw)
 
 
@@ -614,7 +621,14 @@ async def run_judge(
                 # always defines `value`/`explanation`, so a miss is a real contract bug
                 # that should raise (-> UNKNOWN) instead of masking as a None abstain.
                 raw_content = parsed.model_dump_json()
-                payload = EvaluatorResponsePayload(value=parsed.value, explanation=parsed.explanation)
+                if isinstance(parsed, EvaluatorResponsePayload):
+                    payload = parsed
+                else:
+                    payload = EvaluatorResponsePayload(
+                        value=parsed.value,
+                        explanation=parsed.explanation,
+                        abstain=bool(getattr(parsed, 'abstain', False)),
+                    )
                 return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
             if response_model is not None:
                 # structured_output disabled, but a verdict model is set: stay on the
