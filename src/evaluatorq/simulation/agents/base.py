@@ -270,7 +270,7 @@ class BaseAgent(ABC):
 
         full_messages: list[dict[str, Any]] = [
             {'role': 'system', 'content': self.system_prompt},
-            *[{'role': m.role, 'content': m.content or ''} for m in messages],
+            *[m.to_chat_completion() for m in messages],
         ]
 
         async with with_llm_span(
