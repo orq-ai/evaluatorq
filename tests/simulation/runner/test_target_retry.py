@@ -172,6 +172,42 @@ def _make_continue_judge() -> MagicMock:
     return j
 
 
+def _make_usage_tracking_user_simulator() -> MagicMock:
+    state = {'usage': TokenUsage()}
+    sim = MagicMock()
+
+    def add_usage(usage: TokenUsage) -> None:
+        state['usage'] = state['usage'] + usage
+
+    async def generate_first_message() -> str:
+        add_usage(TokenUsage(input_tokens=2, output_tokens=1, total_tokens=3))
+        return 'generated first message'
+
+    async def respond_async(messages: list[Message], *, llm_purpose: str | None = None) -> str:
+        add_usage(TokenUsage(input_tokens=1, output_tokens=1, total_tokens=2))
+        return 'continue'
+
+    sim.generate_first_message = AsyncMock(side_effect=generate_first_message)
+    sim.respond_async = AsyncMock(side_effect=respond_async)
+    sim.get_usage = MagicMock(side_effect=lambda: state['usage'])
+    sim.reset_usage = MagicMock(side_effect=lambda: state.update(usage=TokenUsage()))
+    return sim
+
+
+def _make_usage_tracking_judge() -> MagicMock:
+    state = {'usage': TokenUsage()}
+    judge = MagicMock()
+
+    async def evaluate(messages: list[Message]) -> MagicMock:
+        state['usage'] = state['usage'] + TokenUsage(input_tokens=3, output_tokens=1, total_tokens=4)
+        return _make_continue_judgment()
+
+    judge.evaluate = AsyncMock(side_effect=evaluate)
+    judge.get_usage = MagicMock(side_effect=lambda: state['usage'])
+    judge.reset_usage = MagicMock(side_effect=lambda: state.update(usage=TokenUsage()))
+    return judge
+
+
 class _HangSecond(AgentTarget):
     """Answers the first turn quickly, then hangs forever on the second.
 
@@ -223,7 +259,54 @@ async def test_outer_timeout_retains_partial_transcript() -> None:
     assert expected_usage.total_tokens > 0, 'test fixture must produce non-zero usage'
     assert result.token_usage == expected_usage
     assert result.metadata.get('error')
-    assert result.metadata.get('error_type') == 'TimeoutError'
+    assert result.metadata.get('error_type') == 'timeout'
+
+
+async def test_outer_timeout_keeps_total_usage_beyond_completed_turns() -> None:
+    target = _HangSecond()
+    runner = SimulationRunner(
+        target_agent=target,
+        max_target_retries=0,
+        target_agent_timeout_ms=60000,
+        user_simulator=_make_usage_tracking_user_simulator(),
+        judge=_make_usage_tracking_judge(),
+    )
+
+    datapoint = _make_datapoint().model_copy(update={'first_message': ''})
+    result = await runner._run_with_timeout(datapoint, max_turns=5, timeout_s=0.3)
+
+    assert result.terminated_by == TerminatedBy.timeout
+    assert result.token_usage == TokenUsage(input_tokens=11, output_tokens=10, total_tokens=21)
+    assert result.token_usage != sum((tm.token_usage for tm in result.turn_metrics), start=TokenUsage())
+
+
+class _AlwaysHang(AgentTarget):
+    def new(self) -> _AlwaysHang:
+        return _AlwaysHang()
+
+    async def respond(self, messages: list[Message]) -> AgentResponse:
+        await asyncio.sleep(100)
+        raise AssertionError('unreachable')  # pragma: no cover
+
+
+async def test_target_timeout_uses_canonical_marker_and_warns_without_criteria(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    runner = SimulationRunner(
+        target_agent=_AlwaysHang(),
+        max_target_retries=0,
+        target_agent_timeout_ms=1,
+        max_turns=1,
+        user_simulator=_make_mock_user_simulator(),
+        judge=_make_mock_judge(),
+    )
+
+    with caplog.at_level('WARNING', logger='evaluatorq.simulation.runner.simulation'):
+        result = await runner.run(datapoint=_make_datapoint())
+
+    assert result.terminated_by == TerminatedBy.timeout
+    assert result.metadata.get('error_type') == 'timeout'
+    assert any('Target failed (timeout)' in record.getMessage() for record in caplog.records)
 
 
 # ---------------------------------------------------------------------------
