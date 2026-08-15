@@ -182,6 +182,23 @@ def test_openai_backend_disables_sdk_retries_when_auto_built() -> None:
     create.assert_called_once_with(max_retries=0)
 
 
+def test_openai_backend_warns_when_target_retry_settings_are_ignored() -> None:
+    """OpenAI target retries belong to call_target_with_retry, so ignored settings must be visible."""
+    from evaluatorq.redteam.backends.registry import _create_openai_backend
+
+    with patch('evaluatorq.redteam.backends.registry.logger.warning') as warning:
+        _create_openai_backend(
+            llm_client=MagicMock(),
+            retry_count=2,
+            retry_on_codes=[429, 503],
+        )
+
+    warning.assert_called_once()
+    message = warning.call_args.args[0]
+    assert 'retry_count' in message
+    assert 'retry_on_codes' in message
+
+
 def test_orq_backend_preserves_shared_sdk_retries_when_auto_built(monkeypatch: pytest.MonkeyPatch) -> None:
     import evaluatorq.redteam.backends.orq as orq_backend
 

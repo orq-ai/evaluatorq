@@ -48,14 +48,36 @@ def _build(monkeypatch, *, orq_key=None, openai_key=None, base_url=None, **kwarg
 
 
 def _retry_calls(relative_path: str) -> list[ast.Call]:
-    root = Path(__file__).parents[2] / "src" / "evaluatorq" / "simulation"
-    tree = ast.parse((root / relative_path).read_text())
+    root = Path(__file__).parents[2] / 'src' / 'evaluatorq'
+    path = root / relative_path
+    tree = ast.parse(path.read_text(encoding='utf-8'))
+    imported_aliases = {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module in {'evaluatorq.openresponses.client', 'evaluatorq.common.llm_client'}
+        for alias in node.names
+        if alias.name in {'build_simulation_client', 'resolve_llm_client'}
+    }
+
+    def dotted_name(node: ast.expr) -> str:
+        parts: list[str] = []
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        if isinstance(node, ast.Name):
+            parts.append(node.id)
+        return '.'.join(reversed(parts))
+
+    retry_sensitive_names = {'build_simulation_client', 'resolve_llm_client', *imported_aliases}
     return [
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id in {"build_simulation_client", "resolve_llm_client"}
+        and (
+            dotted_name(node.func).rsplit('.', 1)[-1] in retry_sensitive_names
+            or dotted_name(node.func) in retry_sensitive_names
+        )
     ]
 
 
@@ -71,10 +93,10 @@ def _assert_sdk_retries_disabled(calls: list[ast.Call], relative_path: str) -> N
 @pytest.mark.parametrize(
     "relative_path",
     [
-        "api.py",
-        "cli.py",
-        "runner/simulation.py",
-        "traces.py",
+        "simulation/api.py",
+        "simulation/cli.py",
+        "simulation/runner/simulation.py",
+        "simulation/traces.py",
     ],
 )
 def test_primary_simulation_client_build_sites_disable_sdk_retries(relative_path: str) -> None:
@@ -84,12 +106,53 @@ def test_primary_simulation_client_build_sites_disable_sdk_retries(relative_path
 
 def test_every_simulation_client_build_site_disables_sdk_retries() -> None:
     """A newly added simulation build site must explicitly pin the SDK budget to zero."""
-    root = Path(__file__).parents[2] / "src" / "evaluatorq" / "simulation"
-    for path in root.rglob("*.py"):
+    root = Path(__file__).parents[2] / 'src' / 'evaluatorq'
+    excluded_wrappers = {
+        'common/llm_client.py',
+        'openresponses/client.py',
+        'redteam/backends/registry.py',
+    }
+    for path in root.rglob('*.py'):
         relative_path = path.relative_to(root).as_posix()
+        if relative_path in excluded_wrappers:
+            continue
         calls = _retry_calls(relative_path)
         if calls:
             _assert_sdk_retries_disabled(calls, relative_path)
+
+
+@pytest.mark.parametrize(
+    'source',
+    [
+        'from evaluatorq.openresponses.client import build_simulation_client as make_client\nmake_client(max_retries=0)',
+        'import evaluatorq.openresponses.client as client_module\nclient_module.build_simulation_client(max_retries=0)',
+    ],
+)
+def test_client_build_guard_detects_aliased_and_attribute_style_calls(source: str) -> None:
+    """The guard must cover import aliases and module-qualified call sites."""
+    tree = ast.parse(source)
+    assert any(_retry_calls_from_tree(tree))
+
+
+def _retry_calls_from_tree(tree: ast.AST) -> list[ast.Call]:
+    """Find retry-sensitive calls in a parsed source snippet."""
+    imported_aliases = {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+        if alias.name in {'build_simulation_client', 'resolve_llm_client'}
+    }
+    return [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, (ast.Name, ast.Attribute))
+        and (
+            (isinstance(node.func, ast.Name) and node.func.id in imported_aliases)
+            or (isinstance(node.func, ast.Attribute) and node.func.attr in {'build_simulation_client', 'resolve_llm_client'})
+        )
+    ]
 
 
 # ---------------------------------------------------------------------------

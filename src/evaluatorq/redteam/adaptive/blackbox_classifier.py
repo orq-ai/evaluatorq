@@ -43,6 +43,7 @@ from pydantic import BaseModel, Field
 
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.sanitize import delimit
+from evaluatorq.common.target_call import call_target_with_retry
 from evaluatorq.common.tracing import record_llm_response
 from evaluatorq.contracts import Message
 from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities
@@ -205,7 +206,12 @@ the flags directly.
 Return the boolean flags for each capability."""
 
 
-async def _run_probes(agent_target: AgentTarget) -> tuple[list[Message], set[str]]:
+async def _run_probes(
+    agent_target: AgentTarget,
+    *,
+    target_agent_timeout_ms: int,
+    max_target_retries: int,
+) -> tuple[list[Message], set[str]]:
     """Send the probe turns to the agent and collect the running transcript.
 
     Uses ``AgentTarget.respond()`` (the same interface the orchestrator uses) so
@@ -219,10 +225,13 @@ async def _run_probes(agent_target: AgentTarget) -> tuple[list[Message], set[str
     store) read as memory-absent — a truthful-but-conservative miss, versus the
     old behavior where every agent falsely read as memory-capable.
 
-    Connection/status errors from the target re-raise (a systemic outage is not
-    a per-probe flake — matches the judge path and the white-box classifier).
-    Any other single-turn error is logged and skipped so one flaky turn does not
-    abort the whole classification.
+    Every probe goes through ``call_target_with_retry``, which owns the single
+    target retry layer, per-call timeout, and target error mapping. The target's
+    own SDK retry budget must therefore be disabled by its backend. Connection /
+    status errors from the target re-raise (a systemic outage is not a per-probe
+    flake — matches the judge path and the white-box classifier); other exhausted
+    probe errors are logged and skipped so one flaky turn does not abort the
+    whole classification.
 
     Returns ``(transcript, unprobed_groups)`` where ``unprobed_groups`` is the
     set of capability groups that received ZERO answered turns (every turn in
@@ -238,8 +247,21 @@ async def _run_probes(agent_target: AgentTarget) -> tuple[list[Message], set[str
         nonlocal turns
         turns += 1
         convo.append(Message(role='user', content=probe))
+        probe_target = target if target is not None else agent_target
+
+        def _map_probe_error(exc: Exception) -> tuple[str, str] | None:
+            if isinstance(exc, (APIConnectionError, APIStatusError)):
+                raise exc
+            return probe_target.map_error(exc)
+
         try:
-            response = await (target if target is not None else agent_target).respond(convo)
+            result = await call_target_with_retry(
+                probe_target,
+                convo,
+                target_agent_timeout_ms=target_agent_timeout_ms,
+                max_target_retries=max_target_retries,
+                map_error=_map_probe_error,
+            )
         except (APIConnectionError, APIStatusError):
             raise
         except Exception as e:  # one flaky turn must not abort classification  # noqa: BLE001
@@ -248,6 +270,13 @@ async def _run_probes(agent_target: AgentTarget) -> tuple[list[Message], set[str
             # transcript with a question that has no paired reply.
             convo.pop()
             return False
+        if not result.succeeded:
+            logger.warning('Blackbox probe ({}) failed: {}', group, result.error)
+            # Drop the unanswered user turn so it does not pollute the judge
+            # transcript with a question that has no paired reply.
+            convo.pop()
+            return False
+        response = result.response
         answered_by_group[group] += 1
         convo.append(Message(role='assistant', content=response.text or ''))
         return True
@@ -410,7 +439,11 @@ async def classify_agent_capabilities_blackbox(
     """
     cfg = pipeline_config or PIPELINE_CONFIG
 
-    transcript, unprobed_groups = await _run_probes(agent_target)
+    transcript, unprobed_groups = await _run_probes(
+        agent_target,
+        target_agent_timeout_ms=cfg.target_agent_timeout_ms,
+        max_target_retries=cfg.max_target_retries,
+    )
 
     # Mechanism error: every probe turn raised, so there is nothing to judge.
     # Empty capabilities + classification_failed=True → planner stays optimistic.
