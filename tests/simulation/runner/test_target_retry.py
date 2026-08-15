@@ -173,7 +173,11 @@ def _make_continue_judge() -> MagicMock:
 
 
 class _HangSecond(AgentTarget):
-    """Answers the first turn quickly, then hangs forever on the second."""
+    """Answers the first turn quickly, then hangs forever on the second.
+
+    The first response carries non-zero token usage so the timeout test can
+    verify accrued usage is not discarded (RES bug hunt task 11).
+    """
 
     def __init__(self) -> None:
         super().__init__()
@@ -185,7 +189,10 @@ class _HangSecond(AgentTarget):
     async def respond(self, messages: list[Message]) -> AgentResponse:
         self.calls += 1
         if self.calls == 1:
-            return AgentResponse(text='first answer')
+            return AgentResponse(
+                text='first answer',
+                usage=TokenUsage(input_tokens=5, output_tokens=7, total_tokens=12),
+            )
         await asyncio.sleep(100)
         raise AssertionError('unreachable')  # pragma: no cover
 
@@ -207,6 +214,16 @@ async def test_outer_timeout_retains_partial_transcript() -> None:
     # cancellation instead of being discarded as an empty list.
     assert result.messages != []
     assert any(m.content == 'first answer' for m in result.messages)
+
+    # RES bug hunt task 11: a timed-out run must not zero out the usage accrued
+    # before the outer cancellation, and must surface as an error rather than a
+    # clean run (goals_failed).
+    assert result.turn_metrics, 'expected the completed turn to be recorded'
+    expected_usage = sum((tm.token_usage for tm in result.turn_metrics), start=TokenUsage())
+    assert expected_usage.total_tokens > 0, 'test fixture must produce non-zero usage'
+    assert result.token_usage == expected_usage
+    assert result.metadata.get('error')
+    assert result.metadata.get('error_type') == 'TimeoutError'
 
 
 # ---------------------------------------------------------------------------
