@@ -135,6 +135,27 @@ def convert_to_open_responses(
             if message_id:
                 last_ai_message_id = message_id
 
+            # AI message with text content -> output message. Emitted whenever
+            # content is present, independent of whether tool calls are also
+            # present, so assistant prose alongside tool calls is not dropped.
+            content_text = _get_content(msg_data)
+            if content_text:
+                output_message = Message(
+                    type='message',
+                    id=msg.id or generate_item_id('msg'),
+                    role=MessageRole.assistant,
+                    status=MessageStatus.completed,
+                    content=[
+                        OutputTextContent(
+                            type='output_text',
+                            text=content_text,
+                            annotations=[],
+                            logprobs=[],
+                        )
+                    ],
+                )
+                output_items.append(output_message)
+
             # Check for tool calls
             tool_calls = _get_tool_calls(msg_data)
             if tool_calls:
@@ -150,25 +171,6 @@ def convert_to_open_responses(
                         status=FunctionCallStatus.completed,
                     )
                     output_items.append(function_call)
-            else:
-                # Final AI message with text content -> output message
-                content_text = _get_content(msg_data)
-                if content_text:
-                    output_message = Message(
-                        type='message',
-                        id=msg.id or generate_item_id('msg'),
-                        role=MessageRole.assistant,
-                        status=MessageStatus.completed,
-                        content=[
-                            OutputTextContent(
-                                type='output_text',
-                                text=content_text,
-                                annotations=[],
-                                logprobs=[],
-                            )
-                        ],
-                    )
-                    output_items.append(output_message)
 
         elif msg_type == 'tool':
             # Tool output -> function_call_output
