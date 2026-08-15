@@ -76,8 +76,8 @@ class KpiRow:
         return self.b - self.a
 
 
-def _mean(values: list[float]) -> float:
-    return sum(values) / len(values) if values else 0.0
+def _mean(values: list[float]) -> float | None:
+    return sum(values) / len(values) if values else None
 
 
 def compare_kpis(
@@ -224,7 +224,7 @@ def match_entries(entries_a: list[SimulationEntry], entries_b: list[SimulationEn
 # ---------------------------------------------------------------------------
 
 
-def _agg(entries: list[SimulationEntry]) -> tuple[float, float, float]:
+def _agg(entries: list[SimulationEntry]) -> tuple[float | None, float | None, float | None]:
     """(goal-achieved rate, mean goal score, mean turns) for an entry list."""
     return (
         _mean([1.0 if e.goal_achieved else 0.0 for e in entries]),
@@ -245,18 +245,28 @@ def _kpi_band(entries_a: list[SimulationEntry], entries_b: list[SimulationEntry]
     """Headline KPI cards: current (B) value with the delta vs A in the label."""
     rate_a, score_a, turns_a = _agg(entries_a)
     rate_b, score_b, turns_b = _agg(entries_b)
+    rate_delta = rate_b - rate_a if rate_a is not None and rate_b is not None else None
+    score_delta = score_b - score_a if score_a is not None and score_b is not None else None
+    turns_delta = turns_b - turns_a if turns_a is not None and turns_b is not None else None
+    rate_delta_text = 'n/a' if rate_delta is None else f'{rate_delta:+.0%}'
+    score_delta_text = 'n/a' if score_delta is None else f'{score_delta:+.2f}'
+    turns_delta_text = 'n/a' if turns_delta is None else f'{turns_delta:+.1f}'
     cards = [
         {
-            'label': f'Goal-achieved · {rate_b - rate_a:+.0%} vs A',
+            'label': f'Goal-achieved · {rate_delta_text} vs A',
             'value': pct(rate_b),
-            'status': _dir_status(rate_b - rate_a, higher_better=True),
+            'status': 'neutral' if rate_delta is None else _dir_status(rate_delta, higher_better=True),
         },
         {
-            'label': f'Mean score · {score_b - score_a:+.2f} vs A',
-            'value': f'{score_b:.2f}',
-            'status': _dir_status(score_b - score_a, higher_better=True),
+            'label': f'Mean score · {score_delta_text} vs A',
+            'value': 'n/a' if score_b is None else f'{score_b:.2f}',
+            'status': 'neutral' if score_delta is None else _dir_status(score_delta, higher_better=True),
         },
-        {'label': f'Mean turns · {turns_b - turns_a:+.1f} vs A', 'value': f'{turns_b:.1f}', 'status': 'neutral'},
+        {
+            'label': f'Mean turns · {turns_delta_text} vs A',
+            'value': 'n/a' if turns_b is None else f'{turns_b:.1f}',
+            'status': 'neutral',
+        },
         {
             'label': f'Conversations · {len(entries_a)} → {len(entries_b)}',
             'value': str(len(entries_b)),
@@ -280,8 +290,12 @@ def _outcomes_chart(
     entries_a: list[SimulationEntry], entries_b: list[SimulationEntry], name_a: str, name_b: str
 ) -> str:
     """A-vs-B grouped bars for the two headline 0..1 metrics."""
+    if not entries_a and not entries_b:
+        return ''
     rate_a, score_a, _ = _agg(entries_a)
     rate_b, score_b, _ = _agg(entries_b)
+    if rate_a is None or score_a is None or rate_b is None or score_b is None:
+        return ''
     spec = vl_grouped_bar(
         categories=['Goal-achieved rate', 'Mean goal score'],
         series=[(name_a, [rate_a, score_a]), (name_b, [rate_b, score_b])],
@@ -296,8 +310,14 @@ def _scorer_chart(run_a: SimulationRun, run_b: SimulationRun, name_a: str, name_
     sa_a = run_a.scorer_averages or {}
     sa_b = run_b.scorer_averages or {}
     shared = sorted(set(sa_a) & set(sa_b))
+    only = sorted((set(sa_a) | set(sa_b)) - set(shared))
     if not shared:
-        return ''
+        note = (
+            f'<p class="cmp-note">Not compared (measured by one run only): {esc(", ".join(only))}</p>'
+            if only
+            else '<p class="cmp-note">No scorer data was measured by both runs.</p>'
+        )
+        return _panel('Scorer averages', 'Per-scorer mean · shared scorers only', note)
     spec = vl_grouped_bar(
         categories=shared,
         series=[(name_a, [sa_a[k] for k in shared]), (name_b, [sa_b[k] for k in shared])],
@@ -306,7 +326,6 @@ def _scorer_chart(run_a: SimulationRun, run_b: SimulationRun, name_a: str, name_
     svg = render_svg(spec)
     if not svg:
         return ''
-    only = sorted((set(sa_a) | set(sa_b)) - set(shared))
     note = f'<p class="cmp-note">Not compared (measured by one run only): {esc(", ".join(only))}</p>' if only else ''
     return _panel('Scorer averages', 'Per-scorer mean · shared scorers only', svg + note)
 

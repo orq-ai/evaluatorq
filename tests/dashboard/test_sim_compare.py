@@ -221,6 +221,34 @@ def test_compare_absent_scorer_renders_na_not_zero(roots: list[Path]):
     assert 'shared scorers only' in html
 
 
+def test_compare_empty_runs_render_na_kpis_without_failure(tmp_path: Path):
+    sim = tmp_path / 'sim-runs'
+    sim.mkdir()
+    (sim / 'a.json').write_text(_run('empty-A', [], {}).model_dump_json())
+    (sim / 'b.json').write_text(_run('empty-B', [], {}).model_dump_json())
+    rid_a = report_id(sim / 'a.json')
+    rid_b = report_id(sim / 'b.json')
+
+    html = TestClient(build_app([tmp_path / 'runs', sim])).get(f'/compare/sim?a={rid_a}&b={rid_b}').text
+
+    assert html.count('n/a') >= 2
+    assert '-100%' not in html
+    assert 'kpi-card kpi-card--fail' not in html
+
+
+def test_compare_disjoint_scorers_render_measured_by_one_run_note(tmp_path: Path):
+    sim = tmp_path / 'sim-runs'
+    sim.mkdir()
+    (sim / 'a.json').write_text(_run('only-A', [], {'criteria_met': 0.5}).model_dump_json())
+    (sim / 'b.json').write_text(_run('only-B', [], {'safety': 1.0}).model_dump_json())
+    rid_a = report_id(sim / 'a.json')
+    rid_b = report_id(sim / 'b.json')
+
+    html = TestClient(build_app([tmp_path / 'runs', sim])).get(f'/compare/sim?a={rid_a}&b={rid_b}').text
+
+    assert 'measured by one run only' in html
+
+
 def test_compare_corrupt_report_is_422(tmp_path: Path):
     sim = tmp_path / 'sim-runs'
     sim.mkdir()
