@@ -2138,9 +2138,16 @@ def _stamp_evaluator_scores(
         sim_result = result_cache.get(id(dp_result.data_point))
         if sim_result is None or not dp_result.job_results:
             continue
-        scores_dict = sim_result.metadata.setdefault('evaluator_scores', {})
         for job_result in dp_result.job_results:
             for score in job_result.evaluator_scores or []:
+                if score.error is not None or not isinstance(score.score.value, (int, float)):
+                    logger.warning(
+                        'Skipping evaluator %s score: %s',
+                        score.evaluator_name,
+                        score.error or f'non-numeric value {score.score.value!r}',
+                    )
+                    continue
+                scores_dict = sim_result.metadata.setdefault('evaluator_scores', {})
                 if isinstance(scores_dict, dict):
                     scores_dict[score.evaluator_name] = score.score.value
         if evaluation_name:
