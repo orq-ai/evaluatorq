@@ -1223,6 +1223,8 @@ def _deduplicate_target_labels(
 def _extract_static_prompt(data: DataPoint) -> str:
     """Flatten a static datapoint's messages into a single prompt string.
 
+    This is the canonical flattener for static AgentTarget prompts.
+
     Static OWASP datapoints are typically single-turn. When multiple user turns
     are present we join them with blank lines so all adversarial content is
     delivered to the target. System messages are skipped — targets manage
@@ -2401,59 +2403,66 @@ async def _run_dynamic_or_hybrid(
                             f'produced an empty prompt ({len(messages)} messages, none with user content).'
                         )
                     target_instance = _backend.create_target(_label)
-                    attack_attrs = _static_attack_attrs(data)
-                    target_input = truncate_for_span(prompt)
-                    thread_id = build_static_thread_id(run_id, _safe, _row)
-                    async with (
-                        with_redteam_span('orq.redteam.attack', attack_attrs),
-                        with_redteam_span(
-                            'orq.redteam.target_call',
-                            {
-                                **attack_attrs,
-                                'input': target_input,
-                                'orq.redteam.input': target_input,
-                            },
-                        ) as target_span,
-                    ):
-                        with conversation_thread(thread_id):
-                            async with with_redteam_span(
-                                f'agent {_label}',
+                    try:
+                        attack_attrs = _static_attack_attrs(data)
+                        target_input = truncate_for_span(prompt)
+                        thread_id = build_static_thread_id(run_id, _safe, _row)
+                        async with (
+                            with_redteam_span('orq.redteam.attack', attack_attrs),
+                            with_redteam_span(
+                                'orq.redteam.target_call',
                                 {
-                                    'orq.redteam.llm_purpose': 'target',
+                                    **attack_attrs,
                                     'input': target_input,
                                     'orq.redteam.input': target_input,
                                 },
-                            ) as agent_span:
-                                # Same shared call as the non-hybrid static path: without it
-                                # this leg had no retry, no timeout and no ``error`` key at
-                                # all, so a failed target reached the judge as a plain
-                                # ``[ERROR: ...]`` string and got scored as a real answer.
-                                output = await _run_static_target_call(
-                                    target_instance,
-                                    prompt,
-                                    target_agent_timeout_ms=_cfg.target_agent_timeout_ms,
-                                    max_target_retries=_cfg.max_target_retries,
-                                    map_error=_backend.map_error,
-                                )
-                                if output['error'] is not None:
-                                    error_attrs: AttrMap = {
-                                        'orq.redteam.error_type': output['error_type'],
-                                        'orq.redteam.error_code': output['error_code'],
-                                    }
-                                    set_span_attrs(target_span, error_attrs)
-                                    set_span_attrs(agent_span, error_attrs)
-                                else:
-                                    response_text = truncate_for_span(output['response'])
-                                    output_attrs: AttrMap = {
-                                        'output': response_text,
-                                        'orq.redteam.output': response_text,
-                                    }
-                                    set_span_attrs(target_span, output_attrs)
-                                    set_span_attrs(agent_span, output_attrs)
-                    return {
-                        **output,
-                        'thread_id': thread_id,
-                    }
+                            ) as target_span,
+                        ):
+                            with conversation_thread(thread_id):
+                                async with with_redteam_span(
+                                    f'agent {_label}',
+                                    {
+                                        'orq.redteam.llm_purpose': 'target',
+                                        'input': target_input,
+                                        'orq.redteam.input': target_input,
+                                    },
+                                ) as agent_span:
+                                    # Same shared call as the non-hybrid static path: without it
+                                    # this leg had no retry, no timeout and no ``error`` key at
+                                    # all, so a failed target reached the judge as a plain
+                                    # ``[ERROR: ...]`` string and got scored as a real answer.
+                                    output = await _run_static_target_call(
+                                        target_instance,
+                                        prompt,
+                                        target_agent_timeout_ms=_cfg.target_agent_timeout_ms,
+                                        max_target_retries=_cfg.max_target_retries,
+                                        map_error=_backend.map_error,
+                                    )
+                                    if output['error'] is not None:
+                                        error_attrs: AttrMap = {
+                                            'orq.redteam.error_type': output['error_type'],
+                                            'orq.redteam.error_code': output['error_code'],
+                                        }
+                                        set_span_attrs(target_span, error_attrs)
+                                        set_span_attrs(agent_span, error_attrs)
+                                    else:
+                                        response_text = truncate_for_span(output['response'])
+                                        output_attrs: AttrMap = {
+                                            'output': response_text,
+                                            'orq.redteam.output': response_text,
+                                        }
+                                        set_span_attrs(target_span, output_attrs)
+                                        set_span_attrs(agent_span, output_attrs)
+                        return {
+                            **output,
+                            'thread_id': thread_id,
+                        }
+                    finally:
+                        target_close = getattr(target_instance, 'close', None)
+                        if callable(target_close):
+                            maybe = target_close()
+                            if inspect.isawaitable(maybe):
+                                await maybe
 
                 @job(f'redteam:hybrid:{at_safe}')
                 async def at_target_job(
