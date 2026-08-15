@@ -143,14 +143,18 @@ def _create_openresponses_backend(
     timeout_ms = pipeline_config.target_agent_timeout_ms if pipeline_config else None
     # The orchestrator's call_target_with_retry is the single retry owner for
     # target calls; keep one inner attempt so a target cannot add a second budget.
+    # The pipeline retry settings therefore do not apply on this target path.
+    if pipeline_config is not None:
+        logger.warning(
+            'Ignoring pipeline_config.retry_count and retry_on_codes for OpenResponses target calls; '
+            'call_target_with_retry owns target retries'
+        )
     retry_attempts = 1
-    retry_statuses = pipeline_config.retry_on_codes if pipeline_config else None
     return OpenResponsesBackend(
         client=llm_client,
         instructions=instructions,
         timeout_ms=timeout_ms,
         retry_attempts=retry_attempts,
-        retry_statuses=retry_statuses,
     )
 
 

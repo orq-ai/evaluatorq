@@ -41,18 +41,21 @@ class TestResolveBackendOpenResponses:
         assert isinstance(target, OrqResponsesTarget)
         assert target.instructions == "be safe"
 
-    def test_retry_settings_thread_from_pipeline_config(self):
+    def test_pipeline_retry_settings_do_not_stack_on_target_path(self):
         client = MagicMock()
-        backend = resolve_backend(
-            "openresponses",
-            llm_client=client,
-            pipeline_config=LLMConfig(retry_count=2, retry_on_codes=[429, 503]),
-        )
+        with patch("evaluatorq.redteam.backends.registry.logger.warning") as warning:
+            backend = resolve_backend(
+                "openresponses",
+                llm_client=client,
+                pipeline_config=LLMConfig(retry_count=2, retry_on_codes=[429, 503]),
+            )
         target = backend.create_target("agent-id")
 
         assert isinstance(target, OrqResponsesTarget)
         assert target.retry_attempts == 1
-        assert target.retry_statuses == {429, 503}
+        assert target.retry_statuses is None
+        warning.assert_called_once()
+        assert "retry_count and retry_on_codes" in warning.call_args.args[0]
 
     def test_retry_count_none_uses_default(self):
         client = MagicMock()

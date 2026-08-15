@@ -216,6 +216,8 @@ class ScenarioGenerator:
         situation (e.g. ``"disputes a refund denial"``); the LLM fills the goal,
         context, and success/failure criteria. The intermediate tier between
         fully-auto generation and hand-built ``Scenario`` objects.
+
+        Retry is owned by ``with_retry``; client retries are disabled.
         """
         from evaluatorq.simulation.tracing import with_simulation_span
 

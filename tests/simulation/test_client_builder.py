@@ -12,6 +12,8 @@ Covers all resolution branches:
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -43,6 +45,51 @@ def _build(monkeypatch, *, orq_key=None, openai_key=None, base_url=None, **kwarg
     from evaluatorq.openresponses.client import build_simulation_client
 
     return build_simulation_client(**kwargs)
+
+
+def _retry_calls(relative_path: str) -> list[ast.Call]:
+    root = Path(__file__).parents[2] / "src" / "evaluatorq" / "simulation"
+    tree = ast.parse((root / relative_path).read_text())
+    return [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in {"build_simulation_client", "resolve_llm_client"}
+    ]
+
+
+def _assert_sdk_retries_disabled(calls: list[ast.Call], relative_path: str) -> None:
+    assert calls, f"expected a retry-sensitive client build in {relative_path}"
+    for call in calls:
+        max_retries = next((kw.value for kw in call.keywords if kw.arg == "max_retries"), None)
+        assert isinstance(max_retries, ast.Constant) and max_retries.value == 0, (
+            f"{relative_path}:{call.lineno} must pass max_retries=0"
+        )
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "api.py",
+        "cli.py",
+        "runner/simulation.py",
+        "traces.py",
+    ],
+)
+def test_primary_simulation_client_build_sites_disable_sdk_retries(relative_path: str) -> None:
+    """API, CLI, runner, and trace entry points each keep ``with_retry`` single-owner."""
+    _assert_sdk_retries_disabled(_retry_calls(relative_path), relative_path)
+
+
+def test_every_simulation_client_build_site_disables_sdk_retries() -> None:
+    """A newly added simulation build site must explicitly pin the SDK budget to zero."""
+    root = Path(__file__).parents[2] / "src" / "evaluatorq" / "simulation"
+    for path in root.rglob("*.py"):
+        relative_path = path.relative_to(root).as_posix()
+        calls = _retry_calls(relative_path)
+        if calls:
+            _assert_sdk_retries_disabled(calls, relative_path)
 
 
 # ---------------------------------------------------------------------------
