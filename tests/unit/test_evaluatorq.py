@@ -376,6 +376,60 @@ async def test_streaming_processing_cancellation_is_surfaced(
 
 
 @pytest.mark.asyncio
+async def test_streaming_caller_cancellation_wins_over_processing_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Caller cancellation must not be wrapped with a coincident task failure."""
+    evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
+    caller_task = asyncio.current_task()
+    assert caller_task is not None
+    processing_started = asyncio.Event()
+    allow_processing_failure = asyncio.Event()
+    processing_failed = asyncio.Event()
+
+    async def fetch_one_batch(*_args: object, **_kwargs: object):
+        yield DataPointBatch(
+            datapoints=[DataPoint(inputs={'row': 0})],
+            has_more=False,
+            batch_number=1,
+        )
+        await asyncio.Event().wait()
+
+    async def failing_processing(*_args: object, **_kwargs: object) -> list[object]:
+        processing_started.set()
+        await allow_processing_failure.wait()
+        processing_failed.set()
+        raise RuntimeError('processing failed')
+
+    async def cancel_caller() -> None:
+        await processing_started.wait()
+        allow_processing_failure.set()
+        await processing_failed.wait()
+        caller_task.cancel()
+
+    async def job(_data: DataPoint, _row: int):
+        return {'name': 'job', 'output': 'output'}
+
+    monkeypatch.setattr(evaluatorq_module, 'setup_orq_client', lambda _api_key: object())
+    monkeypatch.setattr(evaluatorq_module, 'fetch_dataset_batches', fetch_one_batch)
+    monkeypatch.setattr(evaluatorq_module, 'process_data_point', failing_processing)
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    cancellation_task = asyncio.create_task(cancel_caller())
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await evaluatorq_module.evaluatorq(
+                'streaming-caller-cancellation',
+                data=DatasetIdInput(dataset_id='dataset'),
+                jobs=[job],
+                print_results=False,
+                _send_results=False,
+            )
+    finally:
+        await cancellation_task
+
+
+@pytest.mark.asyncio
 async def test_evaluatorq_returns_failed_results_to_library_callers() -> None:
     """Library callers receive failed results instead of a process exit."""
 
