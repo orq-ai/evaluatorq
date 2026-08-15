@@ -35,7 +35,8 @@ from evaluatorq.contracts import (
     ToolCallOutputItem,
 )
 from evaluatorq.openresponses.client import build_simulation_client
-from evaluatorq.simulation.tracing import with_llm_span
+from evaluatorq.openresponses.input_items import messages_to_responses_input
+from evaluatorq.simulation.tracing import span_message_text, with_llm_span
 from evaluatorq.simulation.types import DEFAULT_MODEL, Message
 
 if TYPE_CHECKING:
@@ -94,11 +95,10 @@ class LLMResult:
 class AgentConfig:
     """Configuration options for constructing an agent.
 
-    .. deprecated::
-        Use :class:`evaluatorq.contracts.LLMCallConfig` instead.
-        ``AgentConfig`` is kept for backwards compatibility and will be
-        removed in a future release.  Subclasses (``JudgeAgentConfig``,
-        ``UserSimulatorAgentConfig``) will be migrated in a subsequent task.
+    Deprecated: use `evaluatorq.contracts.LLMCallConfig` instead. `AgentConfig`
+    is kept for backwards compatibility and will be removed in a future release.
+    Subclasses (`JudgeAgentConfig`, `UserSimulatorAgentConfig`) will be migrated
+    in a subsequent task.
     """
 
     model: str = DEFAULT_MODEL
@@ -202,7 +202,7 @@ class BaseAgent(ABC):
     def _build_client(self, api_key: str | None = None) -> AsyncOpenAI:
         """Construct (or reuse) an ``AsyncOpenAI`` client from ``self.config``.
 
-        Delegates to :func:`evaluatorq.openresponses.client.build_simulation_client`.
+        Delegates to `evaluatorq.openresponses.client.build_simulation_client`.
 
         Resolution order:
         1. ``self.config.client`` — injected client, used as-is (not owned).
@@ -348,7 +348,10 @@ class BaseAgent(ABC):
         """
         timeout_s = timeout or DEFAULT_TIMEOUT_S
 
-        input_messages = [{'role': m.role, 'content': m.content or ''} for m in messages]
+        # Canonical renderer: an assistant turn must arrive as output_text parts or
+        # the Orq router silently drops it, leaving the judge blind to the agent's
+        # replies (RES-1308). Never hand-build this list.
+        input_messages = messages_to_responses_input(messages)
 
         params: dict[str, Any] = {
             'model': self._model,
@@ -380,7 +383,12 @@ class BaseAgent(ABC):
             # which records full_messages including the system entry).
             if span is not None:
                 span.set_attribute('gen_ai.request.instructions', self.system_prompt[:2000])
-            record_llm_input(span, input_messages)
+            # Record from `messages`, NOT from `input_messages`: the wire payload
+            # renders an assistant turn as `[{'type': 'output_text', ...}]`, which
+            # `record_llm_input` would `str()` into a Python repr on the span.
+            # Mirrors runner/simulation.py's target_call span. See CLAUDE.md's
+            # `content_to_text` row.
+            record_llm_input(span, [{'role': m.role, 'content': span_message_text(m.content)} for m in messages])
             trace_headers = await get_trace_context_headers()
 
             async def _do_call() -> LLMResult:

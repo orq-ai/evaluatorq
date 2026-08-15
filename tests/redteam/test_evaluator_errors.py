@@ -20,8 +20,8 @@ import httpx
 import pytest
 from openai import APIConnectionError, APIStatusError
 
-from evaluatorq.contracts import TextOutputItem
-from evaluatorq.redteam.contracts import AttackEvaluationResult, LLMCallConfig, Vulnerability
+from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY, TextOutputItem
+from evaluatorq.redteam.contracts import AttackEvaluationResult, EvaluatorConfig, LLMCallConfig, Vulnerability
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +82,12 @@ class TestRunEvaluatorErrorPaths:
         from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
 
         mock_client = _make_llm_client(content='this is not valid json {{{{')
-        evaluator = OWASPEvaluator(evaluator_model='test-model', llm_client=mock_client)
+        evaluator = OWASPEvaluator(
+            evaluator_model='test-model',
+            llm_client=mock_client,
+            # Error classification, not retry behaviour — skip the backoff waits.
+            cfg=EvaluatorConfig(retry_count=0),
+        )
 
         with contextlib.ExitStack() as es:
             for p in _patch_tracing():
@@ -99,37 +104,130 @@ class TestRunEvaluatorErrorPaths:
         assert 'error' in (result.raw_output or {})
 
     # ------------------------------------------------------------------
-    # 2. APIConnectionError — must propagate
+    # 1b. Parse failure still carries the billed usage (RES-1295)
     # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    async def test_api_connection_error_propagates(self):
-        """APIConnectionError raised by the LLM client must NOT be swallowed;
-        it should propagate out of _run_evaluator() to the caller."""
+    async def test_invalid_json_error_result_still_carries_billed_usage(self):
+        """A judge call that fails to parse was still billed by the provider.
+
+        ``run_judge`` deliberately attaches ``token_usage`` to an error
+        ``JudgeOutcome`` for exactly this reason; the error result built from it
+        must not drop that usage on the floor, or the run's cost total
+        undercounts every failed judge call.
+        """
+        from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
+        from evaluatorq.common.judge import JudgeError, JudgeOutcome
+        from evaluatorq.contracts import Usage
+
+        billed_usage = Usage(input_tokens=42, output_tokens=7, total_tokens=49, calls=1, priced_calls=0)
+
+        async def _parse_error_outcome(*args: Any, **kwargs: Any) -> JudgeOutcome:
+            return JudgeOutcome(
+                error_kind=JudgeError.PARSE,
+                error_message='malformed JSON',
+                token_usage=billed_usage,
+                raw_content='this is not valid json {{{{',
+            )
+
+        mock_client = AsyncMock()
+        evaluator = OWASPEvaluator(
+            evaluator_model='test-model',
+            llm_client=mock_client,
+            cfg=EvaluatorConfig(retry_count=0),
+        )
+
+        with patch('evaluatorq.redteam.adaptive.evaluator.run_judge', side_effect=_parse_error_outcome):
+            result = await evaluator.evaluate_vulnerability(
+                vuln=Vulnerability.GOAL_HIJACKING,
+                messages=[{'role': 'user', 'content': 'attack prompt'}],
+                output_messages=[TextOutputItem(text='agent response', annotations=[])],
+            )
+
+        assert result.passed is None
+        assert result.token_usage is billed_usage
+
+    @pytest.mark.asyncio
+    async def test_timeout_error_result_still_carries_billed_usage(self):
+        """A judge that times out client-side may still have been billed if the
+        provider processed it — ``token_usage`` must survive onto the timeout
+        result the same way it does for a parse error."""
+        from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
+        from evaluatorq.common.judge import JudgeError, JudgeOutcome
+        from evaluatorq.contracts import Usage
+
+        billed_usage = Usage(input_tokens=10, output_tokens=5, total_tokens=15, calls=1, priced_calls=0)
+
+        async def _timeout_outcome(*args: Any, **kwargs: Any) -> JudgeOutcome:
+            return JudgeOutcome(
+                error_kind=JudgeError.TIMEOUT,
+                error_message='timed out',
+                token_usage=billed_usage,
+                timeout_ms=1,
+            )
+
+        mock_client = AsyncMock()
+        evaluator = OWASPEvaluator(
+            evaluator_model='test-model',
+            llm_client=mock_client,
+            cfg=EvaluatorConfig(retry_count=0),
+        )
+
+        with patch('evaluatorq.redteam.adaptive.evaluator.run_judge', side_effect=_timeout_outcome):
+            result = await evaluator.evaluate_vulnerability(
+                vuln=Vulnerability.GOAL_HIJACKING,
+                messages=[{'role': 'user', 'content': 'attack prompt'}],
+                output_messages=[TextOutputItem(text='agent response', annotations=[])],
+            )
+
+        assert result.passed is None
+        assert result.token_usage is billed_usage
+
+    # ------------------------------------------------------------------
+    # 2. APIConnectionError — recorded, not raised
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_api_connection_error_is_recorded_not_raised(self):
+        """A connection failure must reach the result as a structured cause.
+
+        It used to re-raise on a fail-loud policy, but ``run_evaluations`` catches
+        every exception into a bare ``EvaluatorScore.error``, so the run continued
+        anyway and the cause was lost — which is the reported bug. The run-level
+        coverage gate is what fails the run now.
+        """
         from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
 
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(side_effect=APIConnectionError(request=MagicMock()))
-        evaluator = OWASPEvaluator(evaluator_model='test-model', llm_client=mock_client)
+        evaluator = OWASPEvaluator(
+            evaluator_model='test-model',
+            llm_client=mock_client,
+            # Error classification, not retry behaviour — skip the backoff waits.
+            cfg=EvaluatorConfig(retry_count=0),
+        )
 
         with contextlib.ExitStack() as es:
             for p in _patch_tracing():
                 es.enter_context(p)
-            with pytest.raises(APIConnectionError):
-                await evaluator.evaluate_vulnerability(
-                    vuln=Vulnerability.GOAL_HIJACKING,
-                    messages=[{'role': 'user', 'content': 'attack prompt'}],
-                    output_messages=[TextOutputItem(text='agent response', annotations=[])],
-                )
+            result = await evaluator.evaluate_vulnerability(
+                vuln=Vulnerability.GOAL_HIJACKING,
+                messages=[{'role': 'user', 'content': 'attack prompt'}],
+                output_messages=[TextOutputItem(text='agent response', annotations=[])],
+            )
+
+        assert result.passed is None
+        payload = (result.raw_output or {})[EVAL_ERROR_RAW_OUTPUT_KEY]
+        assert payload['code'] == 'api_connection'
+        assert payload['stage'] == 'evaluation'
 
     # ------------------------------------------------------------------
-    # 3. APIStatusError — must propagate
+    # 3. APIStatusError — recorded, not raised
     # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    async def test_api_status_error_propagates(self):
-        """APIStatusError raised by the LLM client must NOT be swallowed;
-        it should propagate out of _run_evaluator() to the caller."""
+    async def test_api_status_error_is_recorded_not_raised(self):
+        """Same policy as the connection error: structured cause, no re-raise."""
         from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
 
         http_response = httpx.Response(
@@ -144,17 +242,26 @@ class TestRunEvaluatorErrorPaths:
                 body={'error': {'message': 'rate limit exceeded'}},
             )
         )
-        evaluator = OWASPEvaluator(evaluator_model='test-model', llm_client=mock_client)
+        evaluator = OWASPEvaluator(
+            evaluator_model='test-model',
+            llm_client=mock_client,
+            # Error classification, not retry behaviour — skip the backoff waits.
+            cfg=EvaluatorConfig(retry_count=0),
+        )
 
         with contextlib.ExitStack() as es:
             for p in _patch_tracing():
                 es.enter_context(p)
-            with pytest.raises(APIStatusError):
-                await evaluator.evaluate_vulnerability(
-                    vuln=Vulnerability.GOAL_HIJACKING,
-                    messages=[{'role': 'user', 'content': 'attack prompt'}],
-                    output_messages=[TextOutputItem(text='agent response', annotations=[])],
-                )
+            result = await evaluator.evaluate_vulnerability(
+                vuln=Vulnerability.GOAL_HIJACKING,
+                messages=[{'role': 'user', 'content': 'attack prompt'}],
+                output_messages=[TextOutputItem(text='agent response', annotations=[])],
+            )
+
+        assert result.passed is None
+        payload = (result.raw_output or {})[EVAL_ERROR_RAW_OUTPUT_KEY]
+        assert payload['code'] == 'api_status'
+        assert 'rate limit exceeded' in payload['message']
 
     # ------------------------------------------------------------------
     # 4. Empty LLM response content — graceful fallback
@@ -170,7 +277,12 @@ class TestRunEvaluatorErrorPaths:
         # content=None triggers the `or '{}'` fallback, which is valid JSON
         # but fails EvaluatorResponsePayload validation (missing required fields).
         mock_client = _make_llm_client(content=None)
-        evaluator = OWASPEvaluator(evaluator_model='test-model', llm_client=mock_client)
+        evaluator = OWASPEvaluator(
+            evaluator_model='test-model',
+            llm_client=mock_client,
+            # Error classification, not retry behaviour — skip the backoff waits.
+            cfg=EvaluatorConfig(retry_count=0),
+        )
 
         with contextlib.ExitStack() as es:
             for p in _patch_tracing():
@@ -215,7 +327,15 @@ class TestRunEvaluatorErrorPaths:
         assert result.passed is None
         assert result.evaluator_id == 'goal_hijacking'
         assert result.explanation == 'Evaluation timed out after 1ms'
-        assert result.raw_output == {'error': 'timeout', 'timeout_ms': 1}
+        assert result.raw_output is not None
+        assert result.raw_output['error'] == 'timeout'
+        assert result.raw_output['timeout_ms'] == 1
+        # The structured reason rides alongside, so converters can lift it onto
+        # RedTeamResult.evaluation_error and it reaches the run's error rollup.
+        err = result.raw_output[EVAL_ERROR_RAW_OUTPUT_KEY]
+        assert err['stage'] == 'evaluation'
+        assert err['code'] == 'timeout'
+        assert err['details']['evaluator_id'] == 'goal_hijacking'
 
     # ------------------------------------------------------------------
     # 5. resolve_category_safe fallback path in evaluate()
@@ -229,7 +349,12 @@ class TestRunEvaluatorErrorPaths:
         from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
 
         mock_client = AsyncMock()
-        evaluator = OWASPEvaluator(evaluator_model='test-model', llm_client=mock_client)
+        evaluator = OWASPEvaluator(
+            evaluator_model='test-model',
+            llm_client=mock_client,
+            # Error classification, not retry behaviour — skip the backoff waits.
+            cfg=EvaluatorConfig(retry_count=0),
+        )
 
         # Patch both registry lookups to simulate a fully unknown category.
         with (
@@ -266,7 +391,12 @@ class TestRunEvaluatorErrorPaths:
 
         valid_json = '{"value": false, "explanation": "The agent revealed sensitive data."}'
         mock_client = _make_llm_client(content=valid_json)
-        evaluator = OWASPEvaluator(evaluator_model='test-model', llm_client=mock_client)
+        evaluator = OWASPEvaluator(
+            evaluator_model='test-model',
+            llm_client=mock_client,
+            # Error classification, not retry behaviour — skip the backoff waits.
+            cfg=EvaluatorConfig(retry_count=0),
+        )
 
         with contextlib.ExitStack() as es:
             es.enter_context(
@@ -303,7 +433,12 @@ class TestRunEvaluatorErrorPaths:
 
         valid_json = '{"value": true, "explanation": "The agent resisted the attack."}'
         mock_client = _make_llm_client(content=valid_json)
-        evaluator = OWASPEvaluator(evaluator_model='test-model', llm_client=mock_client)
+        evaluator = OWASPEvaluator(
+            evaluator_model='test-model',
+            llm_client=mock_client,
+            # Error classification, not retry behaviour — skip the backoff waits.
+            cfg=EvaluatorConfig(retry_count=0),
+        )
 
         with contextlib.ExitStack() as es:
             es.enter_context(

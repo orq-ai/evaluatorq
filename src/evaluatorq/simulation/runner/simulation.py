@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry, default_map_error
 from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pipeline
-from evaluatorq.common.tracing import record_llm_input, record_llm_output, record_token_usage, set_span_attrs
+from evaluatorq.common.tracing import record_llm_input, record_llm_output, set_span_attrs
 from evaluatorq.contracts import ResponseTrace, TokenUsage
 from evaluatorq.integrations.callable_integration import CallableTarget
 from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
@@ -18,9 +18,10 @@ from evaluatorq.simulation.agents.user_simulator import (
     UserSimulatorAgent,
     UserSimulatorAgentConfig,
 )
-from evaluatorq.simulation.tracing import with_simulation_span
+from evaluatorq.simulation.tracing import span_message_text, with_simulation_span
 from evaluatorq.simulation.types import (
     DEFAULT_MODEL,
+    CriterionVerdict,
     Judgment,
     Message,
     Persona,
@@ -29,6 +30,7 @@ from evaluatorq.simulation.types import (
     SimulationResult,
     TerminatedBy,
     TurnMetrics,
+    criterion_id_for,
 )
 from evaluatorq.simulation.utils.prompt_builders import (
     build_datapoint_system_prompt,
@@ -37,7 +39,7 @@ from evaluatorq.simulation.utils.prompt_builders import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Mapping
 
     from openai import AsyncOpenAI
     from opentelemetry.trace import Span
@@ -100,6 +102,9 @@ class SimulationJudge(Protocol):
 # shares the same class (e.g. MagicMock). Duck typing avoids that entirely.
 _USER_SIMULATOR_METHODS = ('generate_first_message', 'respond_async', 'update_context')
 _JUDGE_METHODS = ('evaluate',)
+# Optional, not part of the judge contract: a judge that can be told which criteria
+# are already settled drops them from its per-turn audit. See JudgeAgent.mark_settled.
+_SETTLEABLE_JUDGE_METHODS = ('mark_settled',)
 
 
 def _implements(obj: object, methods: tuple[str, ...]) -> bool:
@@ -143,31 +148,244 @@ def _error_result(
     )
 
 
+class _CriteriaTracker:
+    """Folds the judge's per-turn occurrence audit into one run-level verdict.
+
+    Occurrence is sticky: something that appeared on turn 2 still happened when the
+    run ends on turn 6, so ``occurred`` only ever flips False→True. Pass/fail is
+    then a pure function of occurrence and `Criterion.type` — ``must_happen``
+    passes when it occurred, ``must_not_happen`` when it did not. Reading the final
+    turn's judgment alone (the old behaviour) dropped any violation the judge
+    reported earlier.
+    """
+
+    def __init__(self, scenario: Scenario | None) -> None:
+        self._criteria = list(scenario.criteria or []) if scenario else []
+        self._scenario_name = scenario.name if scenario else '<none>'
+        # Nothing has been observed yet. A criterion the judge never mentions keeps
+        # this default, which is the honest reading for both types: a must_happen
+        # nobody witnessed fails, a must_not_happen nobody witnessed passes.
+        self._occurred: dict[str, bool] = {criterion_id_for(i): False for i in range(len(self._criteria))}
+        self._seen: set[str] = set()
+        # Quote from the turn where occurrence first flipped, so the report can show
+        # WHY a criterion is marked occurred rather than only that it is.
+        self._evidence: dict[str, str] = {}
+        self._any_audit = False
+
+    @property
+    def verified(self) -> bool:
+        """Whether the run's criteria verdicts actually rest on the judge's audit.
+
+        ``False`` means the audit never arrived for any turn, so ``rules_broken``
+        fell back to the judge's free-text list — which cannot fail a
+        ``must_happen`` criterion, the exact defect RES-1308 is about. A run in
+        that state is *unknown*, not passing, and `criteria_met_scorer` scores it
+        0.0. A scenario with no criteria has nothing to verify, so it is ``True``.
+        """
+        return not self._criteria or self._any_audit
+
+    @property
+    def audited_ids(self) -> frozenset[str]:
+        """Ids the judge returned an occurrence verdict for on at least one turn.
+
+        A criterion outside this set was never observed, so its verdict is the
+        not-observed default rather than something the judge actually reported.
+        Reports need the difference: a ``must_happen`` the judge confirmed never
+        occurred and one it silently skipped both render as failed.
+        """
+        return frozenset(self._seen)
+
+    @property
+    def settled_ids(self) -> frozenset[str]:
+        """Ids whose occurrence is already ``True`` and therefore final.
+
+        Occurrence is sticky, so a later turn cannot change these — re-auditing
+        them buys nothing and costs a payload entry per turn. The judge is told to
+        skip them; see `JudgeAgent.mark_settled`.
+        """
+        return frozenset(cid for cid, occurred in self._occurred.items() if occurred)
+
+    @property
+    def evidence(self) -> dict[str, str]:
+        """Quote captured at the turn where each criterion's occurrence first flipped.
+
+        Only ids that actually occurred appear, and only when the judge supplied a
+        quote — an entry here is evidence, never an empty placeholder.
+        """
+        return dict(self._evidence)
+
+    def observe(self, verdicts: list[CriterionVerdict] | None) -> None:
+        """Fold one turn's occurrence audit in.
+
+        Takes the verdict list, not the whole `Judgment`: the audit is the only
+        part of a judgment this tracker may read, and `Judgment.rules_broken` is
+        precisely the channel it exists to stop trusting.
+
+        An empty list is **not** an audit for `verified` purposes. It legitimately
+        means "everything is settled, nothing left to report" — but only once
+        something *has* been reported, which by definition already set the flag. A
+        run whose every turn returned ``[]`` audited nothing, and the judge warns
+        about that at the point it happens (`JudgeAgent._parse_judgment`).
+        Likewise a payload whose every id is unknown to this scenario is a
+        misattributed audit, not a verified one: the flag is set below, after the
+        filter, not before it.
+        """
+        if not verdicts:
+            return
+        unknown = [v.criterion_id for v in verdicts if v.criterion_id not in self._occurred]
+        if unknown:
+            # A valid-shaped entry for a nonexistent id is not counted as malformed
+            # by the judge's parser, so without this it would vanish in silence —
+            # and if it is an off-by-one on the whole payload, the criteria it was
+            # meant for look simply unaudited.
+            logger.warning(
+                'Judge audited unknown criterion id(s) %s on scenario %r, which defines only %s; discarding them.',
+                ', '.join(sorted(unknown)),
+                self._scenario_name,
+                ', '.join(sorted(self._occurred)) or '<none>',
+            )
+        for verdict in verdicts:
+            cid = verdict.criterion_id
+            if cid not in self._occurred:
+                continue
+            self._any_audit = True
+            self._seen.add(cid)
+            # Sticky: the first turn that saw it is the one whose quote is kept, so
+            # later turns cannot overwrite the evidence with a weaker restatement.
+            if verdict.occurred and not self._occurred[cid]:
+                if verdict.evidence:
+                    self._evidence[cid] = verdict.evidence
+                self._occurred[cid] = True
+
+    def _passed(self, index: int) -> bool:
+        occurred = self._occurred[criterion_id_for(index)]
+        return occurred if self._criteria[index].type == 'must_happen' else not occurred
+
+    @property
+    def broken_ids(self) -> list[str]:
+        """Run-level ``rules_broken``: every criterion the folded audit failed.
+
+        The single computation of that list, so `resolve` (normal termination) and
+        the target-failure branch cannot disagree about what the audit said.
+        """
+        return [criterion_id_for(i) for i in range(len(self._criteria)) if not self._passed(i)]
+
+    @property
+    def unaudited_ids(self) -> frozenset[str]:
+        """Ids the judge never returned an occurrence verdict for.
+
+        Their verdict is the not-observed default, not something the judge said.
+        The complement of `audited_ids` over the scenario's criteria.
+        """
+        return frozenset(cid for cid in self._occurred if cid not in self._seen)
+
+    @property
+    def unconfirmed_ids(self) -> frozenset[str]:
+        """``must_happen`` ids whose occurrence never flipped to ``True``.
+
+        On a run that ended normally these are genuine failures — the conversation
+        had its full chance and the behaviour never appeared. On a run **cut short**
+        (target failure/timeout) they are not knowledge at all: "it hadn't happened
+        yet" is not "the judge confirmed it never happened", so `broken_ids` would
+        report a failure nobody observed. See `confirmed_broken_ids`.
+        """
+        return frozenset(
+            criterion_id_for(i)
+            for i, criterion in enumerate(self._criteria)
+            if criterion.type == 'must_happen' and not self._occurred[criterion_id_for(i)]
+        )
+
+    @property
+    def confirmed_broken_ids(self) -> list[str]:
+        """`broken_ids` restricted to failures the audit actually **observed**.
+
+        For a run cut short before it could finish: a ``must_not_happen`` the judge
+        saw violated is knowledge and stays failed, while a ``must_happen`` that had
+        simply not happened yet drops out (it is reported unknown instead, via
+        `unconfirmed_ids` being withheld from the meta's audited set).
+        """
+        unconfirmed = self.unconfirmed_ids
+        return [cid for cid in self.broken_ids if cid not in unconfirmed]
+
+    def resolve(self, judgment: Judgment) -> Judgment:
+        """Return ``judgment`` with ``rules_broken`` replaced by the run-level verdict.
+
+        Everything downstream (``criteria_results``, ``criteria_meta``,
+        ``SimulationResult.rules_broken``, the ``criteria_met`` scorer) derives from
+        this one list, so they cannot disagree.
+
+        Once any audit has arrived, it is the **only** input: the built-in judge's
+        tools no longer ask for a free-text ``rules_broken`` at all, and an
+        incoming one (from a custom judge that fills the field itself) is dropped
+        rather than merged. A criterion the audit skipped keeps its not-observed
+        default, which is the honest reading — rescuing it from free text would put
+        the channel this design exists to stop trusting back in charge of exactly
+        the criteria the audit has no answer for.
+
+        The one exception is a run where **no** audit ever arrived: there is
+        nothing to prefer it to, so the judgment passes through untouched and the
+        run is marked unverified via `verified`.
+        """
+        if not self._criteria:
+            return judgment
+        if not self._any_audit:
+            logger.warning(
+                'Judge returned no criteria audit for any turn of scenario %r; falling back to its '
+                'rules_broken list, which cannot fail a must_happen criterion. Treat these %d '
+                'criteria results as unverified.',
+                self._scenario_name,
+                len(self._criteria),
+            )
+            return judgment
+        unaudited = self.unaudited_ids
+        if unaudited:
+            logger.warning(
+                'Judge never reported an occurrence verdict for %s on scenario %r; treating them as '
+                'not observed (must_happen=failed, must_not_happen=passed).',
+                ', '.join(sorted(unaudited)),
+                self._scenario_name,
+            )
+        return judgment.model_copy(update={'rules_broken': self.broken_ids})
+
+
 def _build_criteria_results(scenario: Scenario, judgment: Judgment) -> dict[str, bool]:
     """Build a human-readable criteria results dict from scenario and judgment."""
     results: dict[str, bool] = {}
     criteria = scenario.criteria or []
     rules_broken = set(judgment.rules_broken)
     for i, criterion in enumerate(criteria):
-        criterion_id = f'criteria_{i}'
+        criterion_id = criterion_id_for(i)
         results[criterion.description] = criterion_id not in rules_broken
     return results
 
 
-def _build_criteria_meta(scenario: Scenario, judgment: Judgment) -> list[dict[str, object]]:
+def _build_criteria_meta(
+    scenario: Scenario,
+    judgment: Judgment,
+    audited_ids: frozenset[str] | None = None,
+    evidence: Mapping[str, str] | None = None,
+) -> list[dict[str, object]]:
     """Id-keyed criteria detail for the report. Stable ids avoid the
     description-collision data loss that ``criteria_results`` (dict-by-description)
-    suffers when two criteria share a description."""
+    suffers when two criteria share a description.
+
+    ``audited`` says whether the judge actually reported an occurrence verdict for
+    that criterion. Without it a ``must_happen`` the judge confirmed never happened
+    and one it silently skipped are the same red row. ``None`` when no tracker was
+    available, which reads as unknown rather than as audited.
+    """
     criteria = scenario.criteria or []
     rules_broken = set(judgment.rules_broken)
     meta: list[dict[str, object]] = []
     for i, criterion in enumerate(criteria):
-        criterion_id = f'criteria_{i}'
+        criterion_id = criterion_id_for(i)
         meta.append({
             'id': criterion_id,
             'description': criterion.description,
             'type': criterion.type,
             'passed': criterion_id not in rules_broken,
+            'audited': criterion_id in audited_ids if audited_ids is not None else None,
+            'evidence': evidence.get(criterion_id, '') if evidence is not None else None,
         })
     return meta
 
@@ -212,9 +430,15 @@ def _max_turns_result(
     scenario: Scenario | None = None,
     last_judgment: Judgment | None = None,
     target_model: str | None = None,
+    *,
+    criteria_verified: bool | None = None,
+    audited_ids: frozenset[str] | None = None,
+    evidence: Mapping[str, str] | None = None,
 ) -> SimulationResult:
     criteria_results = _build_criteria_results(scenario, last_judgment) if scenario and last_judgment else None
-    criteria_meta = _build_criteria_meta(scenario, last_judgment) if scenario and last_judgment else None
+    criteria_meta = (
+        _build_criteria_meta(scenario, last_judgment, audited_ids, evidence) if scenario and last_judgment else None
+    )
     metadata = _build_simulation_metadata(persona, scenario, criteria_meta, target_model)
     return SimulationResult(
         messages=messages,
@@ -227,6 +451,7 @@ def _max_turns_result(
         turn_metrics=turn_metrics,
         token_usage=token_usage,
         criteria_results=criteria_results,
+        criteria_verified=criteria_verified,
         metadata=metadata,
     )
 
@@ -339,7 +564,7 @@ class SimulationRunner:
         ``thread_id`` binds a deterministic, run-scoped Orq observability thread id
         (``f"{run_id}:{index}"``) so every turn of this conversation groups under one
         id in Orq. When ``None`` a fresh uuid is minted. The resolved id is stamped
-        onto the returned :class:`SimulationResult` so the dashboard can deep-link to it.
+        onto the returned `SimulationResult` so the dashboard can deep-link to it.
         """
         # Resolve datapoint
         if datapoint:
@@ -422,12 +647,6 @@ class SimulationRunner:
                                 exc_info=True,
                             )
                             usage = ZERO_USAGE.model_copy()
-                        # `usage=` (vs. individual scalar kwargs) also carries `usage.calls`
-                        # onto this run-level span's `gen_ai.usage.calls`. That's intended: a
-                        # per-run call count is genuine observability richness on these
-                        # aggregate spans, not an accidental leak (see record_token_usage's
-                        # `calls` sentinel, which only suppresses an *explicit* calls=0).
-                        record_token_usage(run_span, usage=usage)
                         set_span_attrs(
                             run_span,
                             {
@@ -572,6 +791,9 @@ class SimulationRunner:
         messages.append(Message(role='user', content=first_msg))
 
         last_judgment: Judgment | None = None
+        # Accumulates every turn's criteria audit; a violation seen on turn 2 must
+        # survive to the final result even if turn 5 is the one that terminates.
+        criteria_tracker = _CriteriaTracker(scenario)
 
         for turn in range(effective_max_turns):
             usage_before = _get_total_usage()
@@ -584,9 +806,12 @@ class SimulationRunner:
                 },
             ) as turn_span:
                 async with with_simulation_span('orq.simulation.target_call', None) as target_span:
+                    # `span_message_text`, not `m.content or ''`: multi-part content
+                    # would otherwise land on the span as a Python repr. Same helper
+                    # the agent LLM spans use, so the two renderings cannot drift.
                     record_llm_input(
                         target_span,
-                        [{'role': m.role, 'content': m.content or ''} for m in messages],
+                        [{'role': m.role, 'content': span_message_text(m.content)} for m in messages],
                     )
                     call = await self._get_target_response(messages, target=conversation_target)
                     agent_response_text = call.response.text
@@ -596,7 +821,6 @@ class SimulationRunner:
                     agent_response_model = call.response.model
                     if agent_response_usage is not None:
                         target_usage_acc['acc'] = target_usage_acc['acc'] + agent_response_usage
-                        record_token_usage(target_span, usage=agent_response_usage)
                     # Capture the first non-None model the target reports; it
                     # should be stable across turns for a given target.
                     if agent_response_model is not None and target_model_holder['model'] is None:
@@ -616,6 +840,7 @@ class SimulationRunner:
                         run_span=run_span,
                         total_usage=_get_total_usage(),
                         target_model=target_model_holder['model'],
+                        criteria_tracker=criteria_tracker,
                     )
 
                 # Record this successful target response's trace/span handles (in
@@ -629,6 +854,13 @@ class SimulationRunner:
 
                 async with with_simulation_span('orq.simulation.judge_evaluation', None):
                     judgment = await judge.evaluate(messages)
+                criteria_tracker.observe(judgment.criteria_verdicts)
+                # Occurrence is sticky, so a confirmed criterion cannot change —
+                # stop paying for it in every remaining turn's audit payload. Duck
+                # typed, per the _implements note above: a custom judge without the
+                # method simply keeps auditing everything.
+                if _implements(judge, _SETTLEABLE_JUDGE_METHODS):
+                    judge.mark_settled(criteria_tracker.settled_ids)
 
                 turn_metrics_list.append(_build_turn_metrics(turn + 1, judgment, usage_before))
                 try:
@@ -660,47 +892,47 @@ class SimulationRunner:
 
             if last_judgment and last_judgment.should_terminate:
                 final_usage = _get_total_usage()
-                # See the calls-attribution note on the error-path record_token_usage
-                # call above: the run-level `gen_ai.usage.calls` this contributes is
-                # intended, not a leak.
-                record_token_usage(run_span, usage=final_usage)
+                # rules_broken is the run-level fold, not just this turn's judgment.
+                resolved = criteria_tracker.resolve(last_judgment)
                 set_span_attrs(
                     run_span,
                     {
                         'orq.simulation.terminated_by': 'judge',
-                        'orq.simulation.goal_achieved': last_judgment.goal_achieved,
+                        'orq.simulation.goal_achieved': resolved.goal_achieved,
                         'orq.simulation.turn_count': turn + 1,
                     },
                 )
                 judge_metadata = _build_simulation_metadata(
                     persona,
                     scenario,
-                    _build_criteria_meta(scenario, last_judgment) if scenario else None,
+                    _build_criteria_meta(scenario, resolved, criteria_tracker.audited_ids, criteria_tracker.evidence)
+                    if scenario
+                    else None,
                     target_model_holder['model'],
                 )
                 return SimulationResult(
                     messages=messages,
                     terminated_by=TerminatedBy.judge,
-                    reason=last_judgment.reason,
-                    goal_achieved=last_judgment.goal_achieved,
-                    goal_completion_score=last_judgment.goal_completion_score,
-                    rules_broken=last_judgment.rules_broken,
+                    reason=resolved.reason,
+                    goal_achieved=resolved.goal_achieved,
+                    goal_completion_score=resolved.goal_completion_score,
+                    rules_broken=resolved.rules_broken,
                     turn_count=turn + 1,
                     turn_metrics=turn_metrics_list,
                     token_usage=final_usage,
-                    criteria_results=self._build_criteria_results(scenario, last_judgment) if scenario else None,  # type: ignore[arg-type]
+                    criteria_results=self._build_criteria_results(scenario, resolved) if scenario else None,  # type: ignore[arg-type]
+                    criteria_verified=criteria_tracker.verified,
                     metadata=judge_metadata,  # type: ignore[union-attr]
                 )
 
         # Max turns reached
         final_usage = _get_total_usage()
-        # Intended run-level `gen_ai.usage.calls` (see error-path note above).
-        record_token_usage(run_span, usage=final_usage)
+        resolved = criteria_tracker.resolve(last_judgment) if last_judgment else None
         set_span_attrs(
             run_span,
             {
                 'orq.simulation.terminated_by': 'max_turns',
-                'orq.simulation.goal_achieved': last_judgment.goal_achieved if last_judgment else False,
+                'orq.simulation.goal_achieved': resolved.goal_achieved if resolved else False,
                 'orq.simulation.turn_count': effective_max_turns,
             },
         )
@@ -711,8 +943,11 @@ class SimulationRunner:
             final_usage,
             persona,
             scenario,
-            last_judgment,
+            resolved,
             target_model=target_model_holder['model'],
+            criteria_verified=criteria_tracker.verified,
+            audited_ids=criteria_tracker.audited_ids,
+            evidence=criteria_tracker.evidence,
         )
 
     async def run_batch(
@@ -800,15 +1035,34 @@ class SimulationRunner:
         run_span: Span | None,
         total_usage: TokenUsage,
         target_model: str | None,
+        criteria_tracker: _CriteriaTracker,
     ) -> SimulationResult:
         """Terminate the run after the target exhausted its retries.
 
         The failed turn is already appended to ``messages``; this builds the
-        terminal :class:`SimulationResult` (no judge call). Mirrors the judge /
+        terminal `SimulationResult` (no judge call). Mirrors the judge /
         max-turns termination branches: records final token usage + span attrs
         and retains prior ``messages``/``turn_metrics``. A ``timeout`` error type
-        maps to :attr:`TerminatedBy.timeout`, everything else to
-        :attr:`TerminatedBy.error`.
+        maps to `TerminatedBy.timeout`, everything else to
+        `TerminatedBy.error`.
+
+        The criteria audit collected before the target died is folded in, not
+        discarded: a `must_not_happen` violation the judge confirmed on turn 2 has
+        to survive the target dying on turn 4, or it vanishes from the result and
+        the report. `criteria_verified` still comes from the tracker, and this run
+        is scored 0.0 by `criteria_met` regardless (it terminated by error/timeout),
+        so the fold adds evidence without letting a dead target claim a clean sheet.
+
+        **On this branch only confirmed occurrence is knowledge.** Unlike
+        `_CriteriaTracker.resolve`, the run did not get its full chance, so the fold
+        is `confirmed_broken_ids`, not `broken_ids`: a `must_happen` that has not
+        occurred means "not yet", not "the judge confirmed it never happened", and
+        reporting it as failed would invert the branch's own thesis — a red row in
+        every report and a phantom entry in the cross-run failure-mode table. Those
+        ids are withheld from the meta's audited set as well, so they render
+        `state='unknown'` rather than a green `pass`. With **no** audit at all the
+        same rule empties the fold entirely (`criteria_verified=False`,
+        `audited=False`, `state='unknown'` on every criterion).
         """
         err = call.error
         error_message = err.message if err else 'target failed'
@@ -816,8 +1070,6 @@ class SimulationRunner:
         terminated_by = TerminatedBy.timeout if error_type == 'timeout' else TerminatedBy.error
         turn_count = sum(1 for m in messages if m.role == 'assistant')
 
-        # Intended run-level `gen_ai.usage.calls` (see error-path note above).
-        record_token_usage(run_span, usage=total_usage)
         set_span_attrs(
             run_span,
             {
@@ -827,7 +1079,63 @@ class SimulationRunner:
             },
         )
 
-        metadata = _build_simulation_metadata(persona, scenario, None, target_model)
+        scenario_name = scenario.name if scenario else '<none>'
+        # `verified` is the same condition `resolve` guards on (an audit arrived, or
+        # there are no criteria at all — in which case `broken_ids` is empty anyway).
+        # Inside a partial audit, `confirmed_broken_ids` applies the narrower rule
+        # this branch needs: only an observed occurrence is knowledge.
+        unconfirmed = criteria_tracker.unconfirmed_ids
+        broken = criteria_tracker.confirmed_broken_ids if criteria_tracker.verified else []
+        # Withheld from `audited` so the unconfirmed ids render as unknown rather
+        # than as an audited pass — `CriteriaRow.state` is `unknown` only when a
+        # passing criterion is not audited.
+        audited_ids = criteria_tracker.audited_ids - unconfirmed
+        if not criteria_tracker.verified:
+            logger.warning(
+                'Target failed (%s) before the judge audited any criterion of scenario %r; reporting '
+                'those %d criteria as unknown (unverified), not as failed.',
+                error_type,
+                scenario_name,
+                len(scenario.criteria or []) if scenario else 0,
+            )
+        else:
+            # The same per-id warning `resolve` emits on the normal path; without it
+            # a partial audit's defaulted ids are never named anywhere in the log.
+            unaudited = criteria_tracker.unaudited_ids
+            if unaudited:
+                logger.warning(
+                    'Judge never reported an occurrence verdict for %s on scenario %r before the target '
+                    'failed (%s); they fell to their not-observed default.',
+                    ', '.join(sorted(unaudited)),
+                    scenario_name,
+                    error_type,
+                )
+        if unconfirmed:
+            logger.warning(
+                'Target failed (%s) on scenario %r before %s could occur; reporting them as unknown, '
+                'not as failed — the run was cut short, so "not yet" is not a confirmed failure.',
+                error_type,
+                scenario_name,
+                ', '.join(sorted(unconfirmed)),
+            )
+        folded = Judgment(
+            should_terminate=True,
+            reason=error_message,
+            goal_achieved=False,
+            rules_broken=broken,
+            goal_completion_score=0.0,
+        )
+        criteria_meta = (
+            _build_criteria_meta(scenario, folded, audited_ids, criteria_tracker.evidence) if scenario else None
+        )
+        if broken:
+            logger.warning(
+                'Target failed (%s) after the judge had confirmed %s; keeping those criteria verdicts on '
+                'the errored result.',
+                error_type,
+                ', '.join(broken),
+            )
+        metadata = _build_simulation_metadata(persona, scenario, criteria_meta, target_model)
         metadata['error'] = error_message
         metadata['error_type'] = error_type
         return SimulationResult(
@@ -836,10 +1144,12 @@ class SimulationRunner:
             reason=error_message,
             goal_achieved=False,
             goal_completion_score=0,
-            rules_broken=[],
+            rules_broken=broken,
             turn_count=turn_count,
             turn_metrics=turn_metrics_list,
             token_usage=total_usage,
+            criteria_results=_build_criteria_results(scenario, folded) if scenario else None,
+            criteria_verified=criteria_tracker.verified,
             metadata=metadata,
         )
 
@@ -849,7 +1159,7 @@ class SimulationRunner:
         Stateful targets (e.g. ``ORQAgentTarget`` threading server-side turns
         via ``_task_id``) race when one instance serves parallel conversations,
         so every ``run()`` gets its own ``new()`` clone. Clones are retained on
-        the runner so :meth:`close` can release resources they own.
+        the runner so `close` can release resources they own.
         """
         if self._effective_target is None:
             return None
@@ -866,7 +1176,7 @@ class SimulationRunner:
         ``_effective_target`` is only a fallback for direct callers of this
         helper. Both target flavours (rich ``target_agent`` and a plain callback
         wrapped in ``CallableTarget``) route through the same helper. The returned
-        :class:`TargetCallResult` carries ``.response`` (always populated — real
+        `TargetCallResult` carries ``.response`` (always populated — real
         or synthetic), ``.succeeded``, and ``.error``. ``response.model`` is the
         model the target reports (``None`` for plain callbacks, which may call any
         provider); NEVER substitute ``self._model`` — that is the user-simulator /

@@ -2,7 +2,7 @@
 
 Mocks both the adversarial LLM endpoint and the target backend, runs a full
 ``MultiTurnOrchestrator.run_attack`` pipeline, and asserts that the final
-aggregated counts on :class:`OrchestratorResult` match the per-call values
+aggregated counts on `OrchestratorResult` match the per-call values
 that were emitted upstream.
 
 The motivation is RES-596 / PR #127: after consolidating ``TokenUsage`` and
@@ -74,7 +74,7 @@ def _make_chat_completion(content: str = 'next attack prompt') -> MagicMock:
 
 
 class _FakeTarget(AgentTarget):
-    """Minimal :class:`AgentTarget` returning fixed token usage each call."""
+    """Minimal `AgentTarget` returning fixed token usage each call."""
 
     def __init__(self, usage: TokenUsage | None) -> None:
         super().__init__()
@@ -362,7 +362,7 @@ def _make_result(
     vulnerable: bool = False,
     source: str = AttackSource.TEMPLATE_DYNAMIC,
 ) -> RedTeamResult:
-    """Build a minimal :class:`RedTeamResult` with explicit usage on each layer."""
+    """Build a minimal `RedTeamResult` with explicit usage on each layer."""
     attack = AttackInfo(
         id=f'{category}-test',
         vulnerability='goal_hijacking',

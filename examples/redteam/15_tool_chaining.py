@@ -97,9 +97,10 @@ async def main() -> None:
         verbosity=1,
     )
 
-    print(f"\nResistance rate: {report.summary.resistance_rate:.0%}")
+    rate = report.summary.resistance_rate
+    print(f"\nResistance rate: {rate:.0%}" if rate is not None else "\nResistance rate: no verdict")
     for result in report.results:
-        status = "RESISTANT" if not result.vulnerable else "VULNERABLE"
+        status = {True: "VULNERABLE", False: "RESISTANT", None: "NOT EVALUATED"}[result.vulnerable]
         print(f"  [{status}] {result.attack.vulnerability}: {result.attack.strategy_name}")
 
 

@@ -9,7 +9,7 @@ from loguru import logger as _converters_logger
 from pydantic import ValidationError
 
 from evaluatorq.common.target_call import classify_error_type
-from evaluatorq.contracts import AgentResponse, Message
+from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY, AgentResponse, Message
 from evaluatorq.redteam.contracts import (
     JURY_RAW_OUTPUT_KEY,
     OWASP_CATEGORY_NAMES,
@@ -31,9 +31,11 @@ from evaluatorq.redteam.contracts import (
     JuryReliability,
     JuryResult,
     Pipeline,
+    PipelineStage,
     RedTeamReport,
     RedTeamResult,
     ReportSummary,
+    RunError,
     SeveritySummary,
     TechniqueSummary,
     TokenUsage,
@@ -80,13 +82,58 @@ def _extract_jury(raw_output: Any) -> JuryResult | None:
         return None
 
 
-def _raw_output_without_jury(raw_output: Any) -> dict[str, Any] | None:
-    """Return ``raw_output`` minus the stashed jury, which is lifted to the typed
-    ``jury`` field — so the per-judge breakdown is not serialized twice (RES-739).
+def _extract_evaluation_error(raw_output: Any) -> RunError | None:
+    """Lift the judge's own failure out of the scorer's ``raw_output``.
+
+    Mirrors `_extract_jury`: the evaluator stashes a structured reason under
+    ``EVAL_ERROR_RAW_OUTPUT_KEY`` when it cannot produce a verdict, and it is
+    reconstructed here onto the typed result so it reaches the run's error rollup.
     """
-    if not isinstance(raw_output, dict) or JURY_RAW_OUTPUT_KEY not in raw_output:
+    if not isinstance(raw_output, dict):
+        return None
+    payload = raw_output.get(EVAL_ERROR_RAW_OUTPUT_KEY)
+    if not isinstance(payload, dict):
+        return None
+    try:
+        return RunError.model_validate(payload)
+    except ValidationError as e:
+        _converters_logger.warning(f'Discarding malformed evaluation-error payload in report conversion: {e}')
+        return None
+
+
+def _scorer_error_to_run_error(scorer_error: str | None, *, vulnerable: bool | None) -> RunError | None:
+    """Fallback for a judge failure that never reached ``raw_output``.
+
+    ``evaluatorq.processings.process_evaluator`` turns any exception out of the
+    scorer into a bare ``EvaluatorScore.error`` string with an empty score, so there
+    is no structured payload to lift — only this message. Restricted to unevaluated results: a
+    scored attack whose evaluator also logged something is not an evaluation
+    failure and must not be counted as one.
+    """
+    if not scorer_error or vulnerable is not None:
+        return None
+    return RunError(
+        message=scorer_error,
+        error_type='scorer_exception',
+        stage=PipelineStage.EVALUATION,
+        code='scorer_exception',
+    )
+
+
+_LIFTED_RAW_OUTPUT_KEYS = (JURY_RAW_OUTPUT_KEY, EVAL_ERROR_RAW_OUTPUT_KEY)
+
+
+def _raw_output_without_lifted(raw_output: Any) -> dict[str, Any] | None:
+    """Return ``raw_output`` minus the blobs promoted to typed fields.
+
+    The jury (RES-739) and the judge's own failure are both stashed in ``raw_output``
+    by writers that have no typed field to put them in, then lifted here onto ``jury``
+    and ``evaluation_error``. Stripping them keeps one copy, so the typed field cannot
+    silently disagree with a stale duplicate underneath it.
+    """
+    if not isinstance(raw_output, dict) or not any(k in raw_output for k in _LIFTED_RAW_OUTPUT_KEYS):
         return raw_output
-    return {k: v for k, v in raw_output.items() if k != JURY_RAW_OUTPUT_KEY}
+    return {k: v for k, v in raw_output.items() if k not in _LIFTED_RAW_OUTPUT_KEYS}
 
 
 # ---------------------------------------------------------------------------
@@ -351,12 +398,27 @@ def static_sample_to_result(
                 'evaluator_name', evaluator_meta.get('evaluator_name', OWASP_CATEGORY_NAMES.get(category))
             ),
             token_usage=evaluation_usage,
-            raw_output=_raw_output_without_jury(eval_dict.get('raw_output')),
+            raw_output=_raw_output_without_lifted(eval_dict.get('raw_output')),
             jury=_extract_jury(eval_dict.get('raw_output')),
         )
 
     # Determine vulnerability status
-    vulnerable = evaluation is not None and evaluation.passed is False
+    # None (not False) when the attack was never evaluated — see RedTeamResult.vulnerable.
+    vulnerable = None if evaluation is None or evaluation.passed is None else evaluation.passed is False
+
+    # ``vulnerable=None`` must always say why. A sample with no evaluation block at all
+    # carries no raw_output to lift a cause from, so name the absence itself — unless
+    # ``row.error`` already explains it, in which case the attack never ran and
+    # ``error`` is the right field; duplicating it into ``evaluation_error`` would
+    # claim the judge failed on a transcript that does not exist.
+    evaluation_error = _extract_evaluation_error(eval_dict.get('raw_output')) if evaluation else None
+    if evaluation_error is None and vulnerable is None and not row.error:
+        evaluation_error = RunError(
+            message='The datapoint produced no evaluation result.',
+            error_type='no_evaluation',
+            stage=PipelineStage.EVALUATION,
+            code='no_evaluation',
+        )
 
     agent = AgentInfo(key=agent_key, model=agent_model)
 
@@ -372,6 +434,7 @@ def static_sample_to_result(
         response=row.response,
         evaluation=evaluation,
         vulnerable=vulnerable,
+        evaluation_error=evaluation_error,
         execution=ExecutionDetails(turns=1, max_turns=1, token_usage=execution_usage),
         error=row.error,
         error_type=_classify_error(row.error, existing_type=row.error_type),
@@ -449,6 +512,7 @@ def dynamic_evaluatorq_results_to_report(
         eval_explanation = ''
         evaluation_usage: TokenUsage | None = None
         evaluation_raw: dict[str, Any] | None = None
+        scorer_error: str | None = None
         job_result = None
 
         job_results = getattr(result, 'job_results', None) or []
@@ -472,13 +536,19 @@ def dynamic_evaluatorq_results_to_report(
                 # result, and these two are optional metadata that other scorers omit.
                 evaluation_usage = _normalize_token_usage(getattr(score, 'token_usage', None))
                 evaluation_raw = getattr(score, 'raw_output', None)
+                # An exception escaping the scorer is caught by process_evaluator
+                # (evaluatorq/processings.py) into EvaluatorScore.error with an empty
+                # score and no raw_output, so this is the only place that cause survives. Without it a judge crash
+                # reaches the report as an unexplained inconclusive verdict.
+                scorer_error = getattr(evaluator_scores[0], 'error', None)
 
         error = getattr(result, 'error', None) or job_output.error
         error_type = _classify_error(error, existing_type=job_output.error_type)
         error_stage = job_output.error_stage
         error_code = job_output.error_code
         error_details = job_output.error_details
-        vulnerable = eval_passed is False
+        # None (not False) when the attack was never evaluated — see RedTeamResult.vulnerable.
+        vulnerable = None if eval_passed is None else eval_passed is False
 
         token_usage = None
         raw_usage = job_output.token_usage
@@ -516,7 +586,7 @@ def dynamic_evaluatorq_results_to_report(
             evaluator_id=evaluator_id,
             evaluator_name=evaluator_name,
             token_usage=evaluation_usage,
-            raw_output=_raw_output_without_jury(evaluation_raw),
+            raw_output=_raw_output_without_lifted(evaluation_raw),
             jury=_extract_jury(evaluation_raw),
         )
 
@@ -543,6 +613,8 @@ def dynamic_evaluatorq_results_to_report(
                 response=_coerce_job_output_text(job_result.output if job_result is not None else job_output),
                 evaluation=evaluation,
                 vulnerable=vulnerable,
+                evaluation_error=_extract_evaluation_error(evaluation_raw)
+                or _scorer_error_to_run_error(scorer_error, vulnerable=vulnerable),
                 execution=execution,
                 error=error,
                 error_type=error_type,
@@ -683,6 +755,17 @@ def _rate(numerator: int, denominator: int, *, default: float = 1.0) -> float:
     return numerator / denominator if denominator > 0 else default
 
 
+def _verdict_rate(numerator: int, denominator: int) -> float | None:
+    """Rate over *evaluated* attacks, or None when nothing in the slice was evaluated.
+
+    Distinct from `_rate` because there is no honest numeric fallback here: 0.0
+    resistance reads as "fully compromised" and 0.0 vulnerability reads as "fully safe",
+    and neither is true when no verdict exists. Coverage rates keep using ``_rate`` —
+    zero coverage really is 0.0.
+    """
+    return numerator / denominator if denominator > 0 else None
+
+
 def _is_evaluated(r: RedTeamResult) -> bool:
     """Return True if the result has a definitive boolean evaluation outcome."""
     return r.evaluation is not None and isinstance(r.evaluation.passed, bool)
@@ -716,7 +799,7 @@ def _aggregate_token_usage_by_source(results: list[RedTeamResult]) -> dict[str, 
     """Group token usage by datapoint source (static/template_dynamic/...).
 
     Each result's execution + evaluation usage is attributed to ``attack.source``,
-    so the per-source values sum exactly to :func:`_aggregate_token_usage`.
+    so the per-source values sum exactly to `_aggregate_token_usage`.
     """
     by_source: dict[str, TokenUsage] = {}
     for r in results:
@@ -785,10 +868,19 @@ def _compute_jury_reliability(results: list[RedTeamResult]) -> JuryReliability |
     return JuryReliability(krippendorff_alpha=alpha, samples=samples)
 
 
-def compute_report_summary(results: list[RedTeamResult]) -> ReportSummary:
-    """Compute summary statistics from unified results."""
+def compute_report_summary(
+    results: list[RedTeamResult],
+    *,
+    min_evaluation_coverage: float | None = None,
+) -> ReportSummary:
+    """Compute summary statistics from unified results.
+
+    ``min_evaluation_coverage`` is recorded on the summary, not applied here — the
+    policy travels with the report so a saved run remembers what it was judged
+    against, and the CLI reads the verdict off ``summary.coverage_below_minimum``.
+    """
     if not results:
-        return ReportSummary()
+        return ReportSummary(min_evaluation_coverage=min_evaluation_coverage)
 
     total = len(results)
     evaluated = [r for r in results if _is_evaluated(r)]
@@ -797,7 +889,7 @@ def compute_report_summary(results: list[RedTeamResult]) -> ReportSummary:
     coverage = _rate(evaluated_total, total, default=0.0)
     vulns = sum(1 for r in evaluated if _is_vulnerable(r))
     resistant = evaluated_total - vulns
-    resistance = _rate(resistant, evaluated_total, default=0.0)
+    resistance = _verdict_rate(resistant, evaluated_total)
 
     total_turns = sum(r.execution.turns for r in results if r.execution)
 
@@ -825,8 +917,8 @@ def compute_report_summary(results: list[RedTeamResult]) -> ReportSummary:
             total_conversations=cat_total,
             total_turns=cat_turns,
             vulnerabilities_found=cat_vulns,
-            vulnerability_rate=_rate(cat_vulns, cat_eval_total, default=0.0),
-            resistance_rate=_rate(cat_resistant, cat_eval_total, default=0.0),
+            vulnerability_rate=_verdict_rate(cat_vulns, cat_eval_total),
+            resistance_rate=_verdict_rate(cat_resistant, cat_eval_total),
             total_errors=cat_errors,
             strategies_used=list({r.attack.strategy_name for r in cat_results if r.attack.strategy_name}),
         )
@@ -864,8 +956,9 @@ def compute_report_summary(results: list[RedTeamResult]) -> ReportSummary:
             vulnerability_name=get_vulnerability_name(vuln_enum),
             domain=vdef.domain.value if vdef else '',
             total_attacks=len(v_results),
+            evaluated_attacks=v_eval_total,
             vulnerabilities_found=v_vulns,
-            resistance_rate=_rate(v_resistant, v_eval_total, default=0.0),
+            resistance_rate=_verdict_rate(v_resistant, v_eval_total),
             strategies_used=list({r.attack.strategy_name for r in v_results if r.attack.strategy_name}),
             framework_categories=get_framework_categories(vuln_enum),
         )
@@ -889,8 +982,8 @@ def compute_report_summary(results: list[RedTeamResult]) -> ReportSummary:
         by_technique[tech] = TechniqueSummary(
             total_attacks=t_total,
             vulnerabilities_found=t_vulns,
-            resistance_rate=_rate(t_resistant, t_eval, default=0.0),
-            vulnerability_rate=_rate(t_vulns, t_eval, default=0.0),
+            resistance_rate=_verdict_rate(t_resistant, t_eval),
+            vulnerability_rate=_verdict_rate(t_vulns, t_eval),
         )
 
     # ── Group by severity ──────────────────────────────────────────────
@@ -912,8 +1005,8 @@ def compute_report_summary(results: list[RedTeamResult]) -> ReportSummary:
         by_severity[sev] = SeveritySummary(
             total_attacks=s_total,
             vulnerabilities_found=s_vulns,
-            resistance_rate=_rate(s_resistant, s_eval, default=0.0),
-            vulnerability_rate=_rate(s_vulns, s_eval, default=0.0),
+            resistance_rate=_verdict_rate(s_resistant, s_eval),
+            vulnerability_rate=_verdict_rate(s_vulns, s_eval),
         )
 
     # ── Group by delivery method ───────────────────────────────────────
@@ -938,8 +1031,8 @@ def compute_report_summary(results: list[RedTeamResult]) -> ReportSummary:
         by_delivery_method[dm] = DeliveryMethodSummary(
             total_attacks=d_total,
             vulnerabilities_found=d_vulns,
-            resistance_rate=_rate(d_resistant, d_eval, default=0.0),
-            vulnerability_rate=_rate(d_vulns, d_eval, default=0.0),
+            resistance_rate=_verdict_rate(d_resistant, d_eval),
+            vulnerability_rate=_verdict_rate(d_vulns, d_eval),
         )
 
     # ── Group by turn type ─────────────────────────────────────────────
@@ -964,8 +1057,8 @@ def compute_report_summary(results: list[RedTeamResult]) -> ReportSummary:
         by_turn_type[tt] = TurnTypeSummary(
             total_attacks=t_total,
             vulnerabilities_found=t_vulns,
-            resistance_rate=_rate(t_resistant, t_eval, default=0.0),
-            vulnerability_rate=_rate(t_vulns, t_eval, default=0.0),
+            resistance_rate=_verdict_rate(t_resistant, t_eval),
+            vulnerability_rate=_verdict_rate(t_vulns, t_eval),
             average_turns=tt_turns.get(tt, 0) / t_total if t_total > 0 else 0.0,
         )
 
@@ -989,8 +1082,8 @@ def compute_report_summary(results: list[RedTeamResult]) -> ReportSummary:
         by_domain[sc] = DomainSummary(
             total_attacks=s_total,
             vulnerabilities_found=s_vulns,
-            resistance_rate=_rate(s_resistant, s_eval, default=0.0),
-            vulnerability_rate=_rate(s_vulns, s_eval, default=0.0),
+            resistance_rate=_verdict_rate(s_resistant, s_eval),
+            vulnerability_rate=_verdict_rate(s_vulns, s_eval),
         )
 
     # ── Group by framework ─────────────────────────────────────────────
@@ -1012,11 +1105,14 @@ def compute_report_summary(results: list[RedTeamResult]) -> ReportSummary:
         by_framework[fw] = FrameworkSummary(
             total_attacks=f_total,
             vulnerabilities_found=f_vulns,
-            resistance_rate=_rate(f_resistant, f_eval, default=0.0),
-            vulnerability_rate=_rate(f_vulns, f_eval, default=0.0),
+            resistance_rate=_verdict_rate(f_resistant, f_eval),
+            vulnerability_rate=_verdict_rate(f_vulns, f_eval),
         )
 
     # ── Count errors by type ───────────────────────────────────────────
+    # Execution failures and judge failures are counted in the same rollup but keyed
+    # apart by stage, so "every judge call was blocked" reads as one named cause
+    # instead of vanishing into N individual attacks' evaluation blobs.
     errors_by_type: dict[str, int] = {}
     total_errors = 0
     for r in results:
@@ -1025,17 +1121,23 @@ def compute_report_summary(results: list[RedTeamResult]) -> ReportSummary:
             # Prefer error_code (specific) over error_type (generic)
             etype = r.error_code or r.error_type or 'unknown'
             errors_by_type[etype] = errors_by_type.get(etype, 0) + 1
+        if r.evaluation_error is not None:
+            total_errors += 1
+            ev = r.evaluation_error
+            etype = f'{PipelineStage.EVALUATION.value}/{ev.code or ev.error_type or "unknown"}'
+            errors_by_type[etype] = errors_by_type.get(etype, 0) + 1
 
     return ReportSummary(
         total_attacks=total,
         evaluated_attacks=evaluated_total,
         unevaluated_attacks=unevaluated_total,
         evaluation_coverage=coverage,
+        min_evaluation_coverage=min_evaluation_coverage,
         total_conversations=total,
         total_turns=total_turns,
         average_turns_per_attack=total_turns / total if total > 0 else 0.0,
         vulnerabilities_found=vulns,
-        vulnerability_rate=_rate(vulns, evaluated_total, default=0.0),
+        vulnerability_rate=_verdict_rate(vulns, evaluated_total),
         resistance_rate=resistance,
         total_errors=total_errors,
         errors_by_type=errors_by_type,
@@ -1086,7 +1188,12 @@ def rebuild_filtered_report(
     return report.model_copy(
         update={
             'results': filtered_results,
-            'summary': compute_report_summary(filtered_results),
+            # Carry the coverage floor over: it is run policy, not a property of
+            # the filtered slice, and dropping it would make a filtered view
+            # report full coverage on a run the gate had already failed.
+            'summary': compute_report_summary(
+                filtered_results, min_evaluation_coverage=report.summary.min_evaluation_coverage
+            ),
             'total_results': len(filtered_results),
             'categories_tested': sorted({r.attack.category for r in filtered_results}),
         }
@@ -1143,7 +1250,14 @@ def merge_reports(
     if len(pipelines) == 1:
         resolved_pipeline = pipelines.pop()
 
-    summary = compute_report_summary(all_results)
+    # Inherit the coverage floor from the sub-reports (they all come from one run
+    # config) so the merged summary carries it without the caller re-stamping.
+    summary = compute_report_summary(
+        all_results,
+        min_evaluation_coverage=next(
+            (r.summary.min_evaluation_coverage for r in reports if r.summary.min_evaluation_coverage is not None), None
+        ),
+    )
 
     # Derive categories from actual results, not sub-report metadata
     all_categories = sorted({r.attack.category for r in all_results})

@@ -57,7 +57,7 @@ async def main() -> None:
     print("-" * 40)
     for label, report in [("Permissive", permissive), ("Restrictive", restrictive)]:
         s = report.summary
-        asr = f"{s.vulnerability_rate:.0%}"
+        asr = f"{s.vulnerability_rate:.0%}" if s.vulnerability_rate is not None else "n/a"
         print(f"{label:<15} {s.total_attacks:>8} {s.vulnerabilities_found:>6} {asr:>6}")
 
 

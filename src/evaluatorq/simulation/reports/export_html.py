@@ -260,12 +260,20 @@ def _criteria_dots(criteria: list[dict[str, Any]]) -> str:
     if not criteria:
         return '<span class="crit-empty">—</span>'
     n_fail = sum(1 for c in criteria if not c['passed'])
+    n_unknown = sum(1 for c in criteria if c.get('state') == 'unknown')
     dots, items = [], []
     for c in criteria:
-        cls = 'safety' if (c.get('safety') and not c['passed']) else ('pass' if c['passed'] else 'fail')
-        dots.append(f'<span class="crit-dot crit-dot--{cls}" title="{_esc(c["description"])}"></span>')
-        items.append(f'<li class="crit-li crit-li--{cls}">{_esc(c["description"])}</li>')
-    label = f'{n_fail} of {len(criteria)} criteria failed — show details'
+        state = c.get('state', 'pass' if c['passed'] else 'fail')
+        # An unaudited criterion is neither a green dot nor a red one — the judge
+        # never reported on it (RES-1308).
+        cls = 'safety' if (c.get('safety') and not c['passed']) else state
+        suffix = ' (not audited)' if state == 'unknown' else ''
+        dots.append(f'<span class="crit-dot crit-dot--{cls}" title="{_esc(c["description"] + suffix)}"></span>')
+        items.append(f'<li class="crit-li crit-li--{cls}">{_esc(c["description"] + suffix)}</li>')
+    label = f'{n_fail} of {len(criteria)} criteria failed'
+    if n_unknown:
+        label += f', {n_unknown} not audited'
+    label += ' — show details'
     return (
         f'<details class="crit-cell">'
         f'<summary class="crit-summary" aria-label="{_esc(label)}" title="{_esc(label)}">'
@@ -566,8 +574,31 @@ def _render_individual_results_html(section: ReportSection) -> str:
 
         criteria_rows = entry.get('criteria', [])
         if criteria_rows:
-            badges = ' '.join(_status_badge(c['description'], 'pass' if c['passed'] else 'fail') for c in criteria_rows)
+            # `state` (not `passed`) drives the colour: a criterion the judge never
+            # audited is neutral, never green — see `_criteria_rows` (RES-1308).
+            badges = ' '.join(
+                _status_badge(
+                    c['description'] + (' (not audited)' if c.get('state') == 'unknown' else ''),
+                    {'pass': 'pass', 'fail': 'fail'}.get(c.get('state', 'pass' if c['passed'] else 'fail'), 'neutral'),
+                )
+                for c in criteria_rows
+            )
             meta_rows.append(['Criteria', badges])
+            if entry.get('criteria_verified') is False:
+                meta_rows.append([
+                    'Criteria audit',
+                    _esc(
+                        'Unverified — the judge returned no per-criterion audit, so these verdicts '
+                        'are defaults and criteria_met scored this run 0.0.'
+                    ),
+                ])
+            evidence_items = [
+                f'<li>{_esc(c["description"])}: &ldquo;{_esc(c["evidence"])}&rdquo;</li>'
+                for c in criteria_rows
+                if c.get('evidence')
+            ]
+            if evidence_items:
+                meta_rows.append(['Evidence', f'<ul class="crit-evidence">{"".join(evidence_items)}</ul>'])
 
         if entry['evaluator_scores']:
             meta_rows.append([

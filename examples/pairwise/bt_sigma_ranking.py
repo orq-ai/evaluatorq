@@ -15,9 +15,11 @@ miniature:
 Cost: questions x 6 pairs x judges x 2 orderings LLM calls (~180 with the
 defaults). Needs ORQ_API_KEY.
 
-Usage::
+Usage:
 
-    python examples/pairwise/bt_sigma_ranking.py [STRONG WEAK_1 WEAK_2]
+```bash
+python examples/pairwise/bt_sigma_ranking.py [STRONG WEAK_1 WEAK_2]
+```
 """
 
 import asyncio

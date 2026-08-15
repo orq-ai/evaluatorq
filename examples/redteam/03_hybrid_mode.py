@@ -42,7 +42,8 @@ async def main() -> None:
     print(f"Pipeline: {report.pipeline}")
     print(f"Total results: {report.total_results}")
     print(f"Categories tested: {', '.join(report.categories_tested)}")
-    print(f"Resistance rate: {report.summary.resistance_rate:.0%}")
+    rate = report.summary.resistance_rate
+    print(f"Resistance rate: {rate:.0%}" if rate is not None else "Resistance rate: no verdict")
     print(f"Vulnerabilities: {report.summary.vulnerabilities_found}")
 
 

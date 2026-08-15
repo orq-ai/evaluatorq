@@ -1,5 +1,7 @@
 """Run lifecycle manifests: track a run's stage + status while it executes.
 
+Canonical run-state record for both surfaces — no sidecar status dict of your own.
+
 Reports only land on disk when a run *completes* — a run that is still running
 or that crashed leaves no artifact. The manifest fills that gap: a tiny record
 written when a run starts (``status='running'``), patched as stages advance, and
@@ -23,11 +25,12 @@ import operator
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 from evaluatorq.contracts import (
+    RUN_SUMMARY_VERSION,
     ManifestStatus,
     RunManifest,
     RunSummary,
@@ -37,7 +40,12 @@ from evaluatorq.contracts import (
     ManifestSurface as Surface,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
 MANIFESTS_DIR_NAME = '.manifests'
+# Stage artifacts (save='detail') sit beside reports but are not runs.
+_ARTIFACT_PREFIXES = ('01_', '02_', '03_')
 
 
 def _manifests_dir(runs_dir: Path) -> Path:
@@ -47,7 +55,7 @@ def _manifests_dir(runs_dir: Path) -> Path:
 class ManifestWriter:
     """Holds one manifest and flushes it to disk on each transition.
 
-    Construct via :func:`start_manifest`. Every method is best-effort: a disk
+    Construct via `start_manifest`. Every method is best-effort: a disk
     failure is logged, never raised, so manifest bookkeeping can't break a run.
     """
 
@@ -130,9 +138,12 @@ class ManifestWriter:
         if report_path is not None:
             self.manifest.report_path = str(report_path)
         # Compact headline stats so a run-list row can be built from the manifest
-        # alone — no full-report read needed for completed runs.
+        # alone — no full-report read needed for completed runs. Stamped with the
+        # shape's version here, the one place a summary is stored, so no writer
+        # can persist an unversioned (or stale-shaped) one.
         if summary is not None:
             self.manifest.summary = summary
+            self.manifest.summary_version = RUN_SUMMARY_VERSION
         self.flush()
 
     def cancel(self) -> None:
@@ -201,6 +212,40 @@ def list_manifests(runs_dir: Path) -> list[RunManifest]:
     return sorted(out, key=lambda m: m.started_at, reverse=True)
 
 
+def summary_is_current(manifest: RunManifest) -> bool:
+    """Whether *manifest* carries a summary of the current shape.
+
+    A stamp comparison, not a shape guess: the summary is usable only when it was
+    written by a ``manifest_summary()`` of today's ``RUN_SUMMARY_VERSION``.
+    Anything older — an unstamped sidecar from before versioning, or the thin
+    ``{'total_results': N}`` an early dashboard backfill wrote — is not usable,
+    so callers fall back to the full report (and the dashboard rewrites the
+    sidecar on its next scan). Bumping ``RUN_SUMMARY_VERSION`` when a surface's
+    summary shape changes re-reads every stored run exactly once.
+    """
+    return bool(manifest.summary) and manifest.summary_version == RUN_SUMMARY_VERSION
+
+
+def iter_report_files(runs_dir: Path) -> Iterator[Path]:
+    """Report files in *runs_dir*, sorted: non-recursive ``*.json`` minus stage artifacts.
+
+    The one definition of "is a report" shared by every reader — the run listings
+    here, the dashboard's scan and its store fingerprint. ``save='detail'`` writes
+    ``01_``/``02_``/``03_`` stage artifacts next to reports; they are not runs, and
+    a reader that globs them lists phantom rows (and invalidates caches) for files
+    nothing renders.
+
+    Yields:
+        Each report file in *runs_dir*, in sorted path order. Nothing when the
+        directory does not exist.
+    """
+    if not runs_dir.is_dir():
+        return
+    for p in sorted(runs_dir.glob('*.json')):
+        if not p.name.startswith(_ARTIFACT_PREFIXES):
+            yield p
+
+
 def list_run_records(runs_dir: Path) -> list[tuple[RunManifest | None, Path | None]]:
     """Unified, manifest-first run listing for a runs dir, newest first.
 
@@ -210,7 +255,10 @@ def list_run_records(runs_dir: Path) -> list[tuple[RunManifest | None, Path | No
       runs carry a ``report_path``; in-flight (running/error/cancelled) runs have
       ``None`` — they render from the manifest's status/stage/summary alone.
     * A LEGACY report with no manifest yields ``(None, report_path)`` — the
-      backwards-compatible path (read the full report for its stats).
+      backwards-compatible path (read the full report for its stats). A completed
+      manifest whose ``summary`` is too thin to build a row (see
+      `summary_is_current`) is demoted to this path rather than listed
+      with blank columns.
 
     Reports already covered by a manifest's ``report_path`` are de-duplicated out
     of the legacy set, so a run is never listed twice. Sorted newest-first by
@@ -219,14 +267,17 @@ def list_run_records(runs_dir: Path) -> list[tuple[RunManifest | None, Path | No
     records: list[tuple[RunManifest | None, Path | None, float]] = []
     covered: set[Path] = set()
     for m in list_manifests(runs_dir):
-        report_path: Path | None = None
-        if m.report_path:
-            report_path = Path(m.report_path)
+        report_path = Path(m.report_path) if m.report_path else None
+        if m.status == ManifestStatus.COMPLETED and report_path is not None and not summary_is_current(m):
+            # Thin sidecar: leave the report uncovered so the legacy full-report
+            # row below carries the run instead of a half-blank manifest row.
+            continue
+        if report_path is not None:
             covered.add(report_path.resolve())
         records.append((m, report_path, m.started_at.timestamp()))
 
     if runs_dir.is_dir():
-        for p in runs_dir.glob('*.json'):
+        for p in iter_report_files(runs_dir):
             try:
                 if p.resolve() in covered:
                     continue

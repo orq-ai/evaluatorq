@@ -32,7 +32,7 @@ from evaluatorq.contracts import (
 
 AISdkMessageFormat = Literal['v4', 'v5']
 """AI SDK tool-message wire format. v5 (current) vs v4 (legacy) differ on tool
-field names — see :func:`_message_to_ai_sdk_message`."""
+field names — see `_message_to_ai_sdk_message`."""
 
 
 class VercelAISdkTarget(AgentTarget):
@@ -42,21 +42,24 @@ class VercelAISdkTarget(AgentTarget):
     ``messages`` in the standard chat format and return a response using
     the AI SDK Data Stream Protocol or plain text.
 
-    Usage::
+    Usage:
 
-        from evaluatorq.integrations.vercel_ai_sdk_integration import VercelAISdkTarget
+    ```python
+    from evaluatorq.integrations.vercel_ai_sdk_integration import VercelAISdkTarget
 
-        # Point to your AI SDK agent endpoint
-        target = VercelAISdkTarget("http://localhost:3000/api/chat")
+    # Point to your AI SDK agent endpoint
+    target = VercelAISdkTarget("http://localhost:3000/api/chat")
 
-        # With custom headers (e.g. authentication)
-        target = VercelAISdkTarget(
-            "https://my-app.vercel.app/api/chat",
-            headers={"Authorization": "Bearer sk-..."},
-        )
+    # With custom headers (e.g. authentication)
+    target = VercelAISdkTarget(
+        "https://my-app.vercel.app/api/chat",
+        headers={"Authorization": "Bearer sk-..."},
+    )
 
-        # Pass to simulation or red teaming
-        config = DynamicRunConfig(targets=[target])
+    # Pass to simulation or red teaming
+    results = await simulate(target=target, ...)
+    report = await red_team(target)
+    ```
     """
 
     def __init__(
@@ -77,7 +80,7 @@ class VercelAISdkTarget(AgentTarget):
             extra_body: Optional extra fields merged into the request body
                 alongside ``messages`` (e.g. ``{"model": "gpt-4o"}``).
             timeout: HTTP request timeout in seconds.
-            agent_context: Optional :class:`AgentContext` describing the
+            agent_context: Optional `AgentContext` describing the
                 remote agent's tools, memory, system prompt, etc. The red
                 teaming pipeline uses this for capability-aware strategy
                 filtering — without it, all strategies (including
@@ -108,7 +111,7 @@ class VercelAISdkTarget(AgentTarget):
         The caller owns conversation continuity — the full ``messages`` list is
         sent as-is in the request body. Tool turns are rendered as AI SDK
         CoreMessage ``tool-call`` / ``tool-result`` content parts (via
-        :func:`_message_to_ai_sdk_message`, in the ``message_format`` selected at
+        `_message_to_ai_sdk_message`, in the ``message_format`` selected at
         construction), so endpoints backed by ``streamText`` / ``generateText``
         see prior tool context; plain turns keep the simple
         ``{"role", "content"}`` shape.
@@ -163,11 +166,13 @@ class VercelAISdkTarget(AgentTarget):
         """Parse an AI SDK response, handling both Data Stream Protocol and plain formats.
 
         The Data Stream Protocol prefixes text chunks with ``0:`` and JSON-encodes
-        them. Example stream::
+        them. Example stream:
 
-            0:"Hello"
-            0:" world"
-            e:{"finishReason":"stop","usage":{"promptTokens":10,"completionTokens":5}}
+        ```text
+        0:"Hello"
+        0:" world"
+        e:{"finishReason":"stop","usage":{"promptTokens":10,"completionTokens":5}}
+        ```
 
         Plain text or JSON responses are returned as-is.
 
@@ -191,7 +196,7 @@ class VercelAISdkTarget(AgentTarget):
 
 
 def _message_to_ai_sdk_message(m: Message, *, version: AISdkMessageFormat = 'v5') -> dict[str, Any]:
-    """Render a :class:`Message` as an AI SDK ModelMessage (v5 default, or v4).
+    """Render a `Message` as an AI SDK ModelMessage (v5 default, or v4).
 
     Plain turns stay ``{"role", "content"}`` (structurally equivalent for text
     turns, identical across versions; ``None`` content is coerced to ``""``).

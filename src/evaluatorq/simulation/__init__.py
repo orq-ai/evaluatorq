@@ -4,24 +4,27 @@ Provides tools to run multi-turn agent simulations with user simulator
 and judge agents, convert results to OpenResponses format, and integrate
 with the evaluatorq evaluation pipeline.
 
-Example::
+Example:
 
-    from evaluatorq.simulation import simulate, generate_and_simulate
+```python
+from evaluatorq.simulation import simulate, generate_and_simulate
+```
 
 Tracing & PII:
-    Simulation emits OpenTelemetry spans for every LLM call, including the
-    message content (conversation turns) by default so the Orq dashboard can
-    render input/output panels. Two env vars control this (shared with red
-    teaming via ``evaluatorq.common.tracing``):
 
-    - ``EVALUATORQ_CAPTURE_MESSAGE_CONTENT`` (default ``true``) — set to
-      ``false`` / ``0`` to keep raw message text (inputs and outputs) off
-      spans while still recording token usage, model, and latency. Use when
-      exporting to a third-party backend or when content may contain PII.
-    - ``EVALUATORQ_SPAN_MAX_TEXT_CHARS`` (default: capture all) — max
-      characters of message text (inputs and outputs) per span attribute
-      before truncation. Set a positive integer (e.g. ``8192``) to cap;
-      ``-1`` / ``0`` / unset all mean capture all.
+Simulation emits OpenTelemetry spans for every LLM call, including the
+message content (conversation turns) by default so the Orq dashboard can
+render input/output panels. Two env vars control this (shared with red
+teaming via ``evaluatorq.common.tracing``):
+
+- ``EVALUATORQ_CAPTURE_MESSAGE_CONTENT`` (default ``true``) — set to
+  ``false`` / ``0`` to keep raw message text (inputs and outputs) off
+  spans while still recording token usage, model, and latency. Use when
+  exporting to a third-party backend or when content may contain PII.
+- ``EVALUATORQ_SPAN_MAX_TEXT_CHARS`` (default: capture all) — max
+  characters of message text (inputs and outputs) per span attribute
+  before truncation. Set a positive integer (e.g. ``8192``) to cap;
+  ``-1`` / ``0`` / unset all mean capture all.
 """
 
 from __future__ import annotations
@@ -48,8 +51,10 @@ if TYPE_CHECKING:
     from evaluatorq.common.replay import ReplayError
     from evaluatorq.contracts import AgentTarget, LLMCallConfig, TokenUsage
     from evaluatorq.integrations.callable_integration import CallableTarget
+    from evaluatorq.integrations.crewai_integration import CrewAITarget
     from evaluatorq.integrations.langgraph_integration import LangGraphTarget
     from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget
+    from evaluatorq.integrations.pydantic_ai_integration import PydanticAITarget
     from evaluatorq.integrations.vercel_ai_sdk_integration import VercelAISdkTarget
     from evaluatorq.openresponses.target import OrqResponsesTarget
     from evaluatorq.simulation.adapters import (
@@ -95,15 +100,19 @@ if TYPE_CHECKING:
     )
     from evaluatorq.simulation.runner.simulation import SimulationRunner
     from evaluatorq.simulation.traces import (
+        TraceAnalysisConfig,
         TraceConversation,
         datapoints_from_traces,
         extend_from_traces,
         fetch_trace_conversations,
+        summarize_conversations,
     )
     from evaluatorq.simulation.types import (
+        CRITERION_ID_PATTERN,
         CommunicationStyle,
         ConversationStrategy,
         Criterion,
+        CriterionVerdict,
         CulturalContext,
         EmotionalArc,
         InputFormat,
@@ -117,6 +126,7 @@ if TYPE_CHECKING:
         StartingEmotion,
         TerminatedBy,
         TurnMetrics,
+        criterion_id_for,
     )
     from evaluatorq.simulation.utils.dataset_export import (
         export_datapoints_to_jsonl,
@@ -202,8 +212,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
     ),
     'AgentTarget': ('evaluatorq.contracts', 'AgentTarget'),
     'CallableTarget': ('evaluatorq.integrations.callable_integration', 'CallableTarget'),
+    'CrewAITarget': ('evaluatorq.integrations.crewai_integration', 'CrewAITarget'),
     'LangGraphTarget': ('evaluatorq.integrations.langgraph_integration', 'LangGraphTarget'),
     'OpenAIAgentTarget': ('evaluatorq.integrations.openai_agents_integration', 'OpenAIAgentTarget'),
+    'PydanticAITarget': ('evaluatorq.integrations.pydantic_ai_integration', 'PydanticAITarget'),
     'VercelAISdkTarget': ('evaluatorq.integrations.vercel_ai_sdk_integration', 'VercelAISdkTarget'),
     'DEFAULT_MODEL': ('evaluatorq.simulation.types', 'DEFAULT_MODEL'),
     'CommunicationStyle': ('evaluatorq.simulation.types', 'CommunicationStyle'),
@@ -212,6 +224,9 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
         'ConversationStrategy',
     ),
     'Criterion': ('evaluatorq.simulation.types', 'Criterion'),
+    'CriterionVerdict': ('evaluatorq.simulation.types', 'CriterionVerdict'),
+    'CRITERION_ID_PATTERN': ('evaluatorq.simulation.types', 'CRITERION_ID_PATTERN'),
+    'criterion_id_for': ('evaluatorq.simulation.types', 'criterion_id_for'),
     'CulturalContext': ('evaluatorq.simulation.types', 'CulturalContext'),
     'SimulationDatapoint': ('evaluatorq.simulation.types', 'SimulationDatapoint'),
     'EmotionalArc': ('evaluatorq.simulation.types', 'EmotionalArc'),
@@ -257,6 +272,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
         'evaluatorq.simulation.utils.prompt_builders',
         'generate_datapoint',
     ),
+    'TraceAnalysisConfig': ('evaluatorq.simulation.traces', 'TraceAnalysisConfig'),
     'TraceConversation': ('evaluatorq.simulation.traces', 'TraceConversation'),
     'fetch_trace_conversations': (
         'evaluatorq.simulation.traces',
@@ -267,6 +283,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
         'datapoints_from_traces',
     ),
     'extend_from_traces': ('evaluatorq.simulation.traces', 'extend_from_traces'),
+    'summarize_conversations': (
+        'evaluatorq.simulation.traces',
+        'summarize_conversations',
+    ),
     'wrap_simulation_agent': (
         'evaluatorq.simulation.wrap_agent',
         'wrap_simulation_agent',
@@ -304,6 +324,7 @@ def __getattr__(name: str) -> Any:
 
 __all__ = [
     # Types
+    'CRITERION_ID_PATTERN',
     'DEFAULT_MODEL',
     # Evaluators
     'SIMULATION_EVALUATORS',
@@ -316,7 +337,9 @@ __all__ = [
     'CallableTarget',
     'CommunicationStyle',
     'ConversationStrategy',
+    'CrewAITarget',
     'Criterion',
+    'CriterionVerdict',
     'CulturalContext',
     # Generators
     'DatapointGenerator',
@@ -338,6 +361,7 @@ __all__ = [
     'PersonaGenerator',
     # Quality
     'PerturbationType',
+    'PydanticAITarget',
     'ReplayError',
     'RichHooks',
     'Scenario',
@@ -359,6 +383,7 @@ __all__ = [
     'TerminatedBy',
     'TokenUsage',
     # Traces input
+    'TraceAnalysisConfig',
     'TraceConversation',
     'TurnMetrics',
     'UserSimulatorAgent',
@@ -368,6 +393,7 @@ __all__ = [
     'apply_random_perturbation',
     'auto_save_run',
     'build_simulation_run',
+    'criterion_id_for',
     # Experiments as input
     'datapoints_from_experiment',
     # Traces as input
@@ -395,6 +421,7 @@ __all__ = [
     'results_to_jsonl',
     # High-level API
     'simulate',
+    'summarize_conversations',
     # Conversion
     'to_open_responses',
     # Job wrapper

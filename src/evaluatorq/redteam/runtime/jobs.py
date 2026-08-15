@@ -11,6 +11,8 @@ from evaluatorq import DataPoint, Job, job
 from evaluatorq.common.llm_call import apply_pipeline_metadata, execute_chat_completion
 from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.messages import coerce_content_text
+from evaluatorq.common.model_catalogue import price_usage
+from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.common.thread_context import build_static_thread_id, conversation_thread, thread_body_param
 from evaluatorq.common.tracing import record_llm_response, set_span_attrs, truncate_for_span
 from evaluatorq.redteam.adaptive.orchestrator import _get_active_progress
@@ -73,19 +75,10 @@ def create_model_job(
     if deployment_key:
         safe_key = _sanitize_job_name(deployment_key)
 
-        try:
-            from orq_ai_sdk import Orq
-        except ImportError as e:
-            msg = (
-                'Deployment jobs require the orq-ai-sdk package. '
-                'Install it with: uv add "evaluatorq[orq]" (or: python -m pip install "evaluatorq[orq]")'
-            )
-            raise ImportError(msg) from e
-
         api_key = os.environ.get('ORQ_API_KEY')
         if not api_key:
             raise CredentialError('ORQ_API_KEY environment variable is not set')
-        deployment_client = Orq(api_key=api_key)
+        deployment_client = resolve_orq_client(api_key)
 
         @job(f'redteam:static:{safe_key}')
         async def deployment_job(data: DataPoint, _row: int) -> dict[str, Any]:
@@ -134,9 +127,20 @@ def create_model_job(
             if active_progress is not None:
                 await active_progress.finish_attack(None)
 
+            # The Orq SDK's deployment client has no AsyncOpenAI to resolve a
+            # per-host catalogue from, so price_usage falls back to
+            # ORQ_BASE_URL — the same host the client above was built with, so
+            # the prices come from the deployment that served the call. Price
+            # against the model the deployment actually ran (completion.model),
+            # not the deployment_key alias (RES-1295).
+            priced_usage = await price_usage(
+                TokenUsage.from_completion(completion),
+                getattr(completion, 'model', deployment_key),
+                None,
+            )
             return {
                 'response': content,
-                'token_usage': TokenUsage.from_completion(completion),
+                'token_usage': priced_usage,
                 'thread_id': thread_id,
             }
 
@@ -183,7 +187,10 @@ def create_model_job(
                         extra_kwargs['extra_body'] = thread_body_param()
                     # ponytail: fixed 300s ceiling (was unbounded); thread a cfg
                     # target timeout through create_model_job if per-run tuning is needed.
-                    response, _ = await execute_chat_completion(
+                    # execute_chat_completion already prices this call's usage
+                    # (RES-1295); keep its returned Usage rather than re-deriving
+                    # an unpriced one from the raw response below.
+                    response, token_usage = await execute_chat_completion(
                         client=client,
                         model=model,
                         messages=messages,
@@ -209,7 +216,7 @@ def create_model_job(
 
         return {
             'response': content,
-            'token_usage': TokenUsage.from_completion(response),
+            'token_usage': token_usage,
             'finish_reason': response.choices[0].finish_reason,
             'thread_id': thread_id,
         }

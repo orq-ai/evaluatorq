@@ -38,6 +38,7 @@ eq redteam run --target agent:<key> [OPTIONS]
 | `--report-md` | `Path \| None` / `None` | Directory for an auto-named Markdown report. |
 | `--report-html` | `Path \| None` / `None` | Directory for an auto-named HTML report. |
 | `--executive-summary` / `--no-executive-summary` | `bool` / `--executive-summary` | Generate an LLM narrative executive summary at the top of the report (needs LLM credentials). Pass `--no-executive-summary` to skip the extra LLM call. |
+| `--recommendations` / `--no-recommendations` | `bool` / `--recommendations` | Generate LLM remediation recommendations for the top focus areas (needs LLM credentials). Pass `--no-recommendations` to skip the extra LLM call. |
 | `--system-prompt` | `str \| None` / `None` | System prompt for the target model/agent. |
 | `--yes` / `-y` | `bool` / `False` | Skip confirmation prompt. |
 | `--verbose` / `-v` | count / `0` | Increase verbosity. `-v` per-attack progress + info logs; `-vv` debug logs. |
@@ -46,6 +47,25 @@ eq redteam run --target agent:<key> [OPTIONS]
 **Delivery methods** (`--delivery-method`): `DAN`, `role-play`, `skeleton-key`, `base64`, `leetspeak`, `multilingual`, `character-spacing`, `crescendo`, `many-shot`, `authority-impersonation`, `refusal-suppression`, `direct-request`, `code-elicitation`, `code-assistance`, `tool-response`, `word-substitution`.
 
 **Saving results.** Persistence is controlled by two flags. `--save` accepts `none` (no files), `final` (summary JSON only), or `detail` (all per-stage artifacts). `--artifacts-dir DIR` sets where JSON is written and is **required** when `--save detail` (`--output-dir` was removed; use `--artifacts-dir`).
+
+**Exit codes.** `eq redteam run` exits `1` — after writing any requested report
+artifacts — in two cases, both read off `report.summary`:
+
+- **Zero verdicts** (`summary.no_verdict`): attacks ran but not one could be
+  evaluated. Always fails; there is no setting that disables this.
+- **Coverage below the floor** (`summary.coverage_below_minimum`): fewer than
+  `--min-evaluation-coverage` (default **`0.8`**) of attacks got a verdict.
+  **A run that finishes at 79% coverage now exits `1`**, not `0` with a warning —
+  the same run used to pass. Pass `--min-evaluation-coverage 0` to warn instead
+  of failing, or a higher value to be stricter. The Python equivalent is
+  `EvaluatorConfig.min_evaluation_coverage` (`None` there also means warn-only)
+  — see [Red Teaming › In CI](../guides/red-teaming.md#in-ci).
+
+Both cases print the dominant failure cause with a sample message before
+exiting: an `evaluation/<code>` (timeout / parse / api_connection / api_status /
+scorer_exception) when the judge failed, or an `execution/<code>` when the
+target failed and there was nothing to judge. Either way a systematically
+blocked run is diagnosable from the CLI output alone.
 
 ---
 

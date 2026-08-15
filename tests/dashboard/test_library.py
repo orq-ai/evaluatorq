@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from evaluatorq.contracts import RUN_SUMMARY_VERSION
 from evaluatorq.dashboard.library import ReportCard, report_id, resolve, scan, sniff_kind
 
 
@@ -145,6 +146,30 @@ def _start_manifest(runs_dir: Path, run_id: str, surface: str, name: str):
     return start_manifest(run_id=run_id, surface=surface, run_name=name, runs_dir=runs_dir)
 
 
+def _strip_summary_version(mpath: Path) -> Path:
+    """Age a sidecar to pre-stamp format, as everything written before versioning is."""
+    data = json.loads(mpath.read_text())
+    data.pop('summary_version', None)
+    mpath.write_text(json.dumps(data))
+    return mpath
+
+
+def _rt_summary(total: int) -> dict:
+    """The summary shape a real red-team run writes (RedTeamReport.manifest_summary).
+
+    A summary carrying only ``total_results`` reads as incomplete and is demoted
+    to a full-report read, so manifest-first tests must use the full shape.
+    """
+    return {
+        'pipeline': 'static',
+        'total_results': total,
+        'total_attacks': total,
+        'vulnerability_rate': 0.0,
+        'resistance_rate': 1.0,
+        'tested_agents': [],
+    }
+
+
 def test_scan_builds_card_from_manifest_without_reading_report(tmp_path):
     # report_path points at a NON-EXISTENT file; the card must still build from
     # the manifest's compact summary (proving no full-report read happens).
@@ -152,7 +177,7 @@ def test_scan_builds_card_from_manifest_without_reading_report(tmp_path):
     rt.mkdir()
     bogus = rt / 'nonexistent_20260101.json'  # deliberately not written
     w = _start_manifest(rt, 'm1', 'redteam', 'from-manifest')
-    w.complete(report_path=bogus, summary={'total_results': 7})
+    w.complete(report_path=bogus, summary=_rt_summary(7))
 
     cards = scan([rt])
     assert len(cards) == 1
@@ -176,13 +201,46 @@ def test_scan_legacy_reports_only_lists_as_before(tmp_path):
     assert cards[0].path is not None
 
 
+def test_scan_backfills_manifest_for_legacy_report(tmp_path):
+    # Second scan must serve the same card from the sidecar, without the report.
+    rt = tmp_path / 'runs'
+    rt.mkdir()
+    report = rt / 'redteam_20260101_000000.json'
+    payload = _redteam_payload()
+    payload['total_results'] = 4
+    _write(report, payload)
+
+    first = scan([rt])
+    assert (rt / '.manifests' / 'redteam_20260101_000000.json').exists()
+
+    report.unlink()  # proves the second scan reads only the manifest
+    second = scan([rt])
+    assert len(second) == 1
+    assert second[0].id == first[0].id
+    assert second[0].name == first[0].name
+    assert second[0].headline == first[0].headline == '4 attacks'
+    assert second[0].status == 'completed'
+
+
+def test_scan_backfill_skips_broken_report(tmp_path):
+    rt = tmp_path / 'runs'
+    rt.mkdir()
+    payload = _redteam_payload()
+    del payload['summary']  # missing required field -> card carries an error
+    _write(rt / 'redteam_20260101_000000.json', payload)
+
+    cards = scan([rt])
+    assert cards[0].error
+    assert not (rt / '.manifests').exists()
+
+
 def test_scan_mixed_dir_dedups_by_report_path(tmp_path):
     rt = tmp_path / 'runs'
     rt.mkdir()
     report = rt / 'covered_20260101_000000.json'
     _write(report, _redteam_payload())
     w = _start_manifest(rt, 'cov', 'redteam', 'covered')
-    w.complete(report_path=report, summary={'total_results': 3})
+    w.complete(report_path=report, summary=_rt_summary(3))
     # A legacy report with no manifest alongside it.
     _write(rt / 'legacy_20250101_000000.json', _redteam_payload())
 
@@ -226,3 +284,85 @@ def test_scan_errored_manifest_without_report_is_listed(tmp_path):
     assert len(cards) == 1
     assert cards[0].status == 'error'
     assert cards[0].path is None
+
+
+def test_fingerprint_changes_when_an_in_flight_manifest_advances(tmp_path):
+    """Reports are write-once, but an in-flight run rewrites its manifest in
+    place — the fingerprint must see that or a running run's row would freeze."""
+    from evaluatorq.dashboard.library import fingerprint
+
+    rt = tmp_path / 'runs'
+    rt.mkdir()
+    w = _start_manifest(rt, 'live', 'sim', 'in-flight')
+    before = fingerprint([rt])
+    w.start_stage('generating')
+    assert fingerprint([rt]) != before
+
+
+def test_fingerprint_changes_when_a_report_lands(tmp_path):
+    from evaluatorq.dashboard.library import fingerprint
+
+    rt = tmp_path / 'runs'
+    rt.mkdir()
+    before = fingerprint([rt])
+    _write(rt / 'redteam_20260101_000000.json', _redteam_payload())
+    assert fingerprint([rt]) != before
+
+
+def test_fingerprint_ignores_stage_artifacts(tmp_path):
+    """Stage artifacts (``01_``…) are excluded from every aggregate, so rewriting
+    one must not invalidate the caches keyed on this fingerprint."""
+    from evaluatorq.dashboard.library import fingerprint
+
+    rt = tmp_path / 'runs'
+    rt.mkdir()
+    _write(rt / 'redteam_20260101_000000.json', _redteam_payload())
+    before = fingerprint([rt])
+    _write(rt / '01_objectives.json', {'objectives': []})
+    assert fingerprint([rt]) == before
+
+
+def test_backfilled_manifest_carries_the_full_writer_summary(tmp_path):
+    """The sidecar must hold every field `eq redteam runs` reads, not just the
+    one the dashboard card renders."""
+    from evaluatorq.redteam.contracts import RedTeamReport
+
+    rt = tmp_path / 'runs'
+    rt.mkdir()
+    payload = _redteam_payload()
+    payload['total_results'] = 4
+    payload['tested_agents'] = ['agent:x']
+    payload['summary'] = {'total_attacks': 4, 'vulnerability_rate': 0.25, 'resistance_rate': 0.75}
+    _write(rt / 'redteam_20260101_000000.json', payload)
+
+    scan([rt])
+
+    written = json.loads((rt / '.manifests' / 'redteam_20260101_000000.json').read_text())
+    assert written['summary'] == RedTeamReport.model_validate(payload).manifest_summary()
+
+
+def test_scan_rewrites_a_thin_sidecar(tmp_path):
+    """A sidecar predating the summary stamp (the thin one the first backfill
+    wrote) must be re-read and upgraded in place, not served as-is forever."""
+    rt = tmp_path / 'runs'
+    rt.mkdir()
+    payload = _redteam_payload()
+    payload['total_results'] = 4
+    payload['summary'] = {'total_attacks': 4, 'vulnerability_rate': 0.25, 'resistance_rate': 0.75}
+    report = rt / 'redteam_20260101_000000.json'
+    _write(report, payload)
+    _start_manifest(rt, report.stem, 'redteam', 'thin').complete(
+        report_path=report, summary={'total_results': 4}
+    )
+    mpath = _strip_summary_version(rt / '.manifests' / f'{report.stem}.json')
+    started_at = json.loads(mpath.read_text())['started_at']
+
+    cards = scan([rt])
+
+    assert len(cards) == 1  # not listed twice
+    written = json.loads(mpath.read_text())
+    assert written['summary']['total_attacks'] == 4
+    assert written['summary']['pipeline'] == 'static'
+    assert written['summary_version'] == RUN_SUMMARY_VERSION
+    # Patched in place: the run's real start time survives the shape upgrade.
+    assert written['started_at'] == started_at

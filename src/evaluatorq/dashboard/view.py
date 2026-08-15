@@ -19,17 +19,23 @@ role-labeled message list as a series of ``<div>`` elements.  Shared by
 
 from __future__ import annotations
 
+import functools
+import hashlib
 from datetime import datetime
 from itertools import starmap
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fasthtml.common import Script
 
+from evaluatorq.common.reports import cost_coverage as _cost_coverage
 from evaluatorq.common.reports import esc
 from evaluatorq.common.reports import fmt_cost as _fmt_cost
 from evaluatorq.simulation.metrics import TURN_METRICS
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from evaluatorq.dashboard.library import ReportCard
     from evaluatorq.dashboard.metrics import Landing, RedTeamOverview, RunRow, SimOverview
 
@@ -39,6 +45,23 @@ SURFACE_LABELS: dict[str, str] = {'redteam': 'Red Team', 'sim': 'Agent Sim', 'pa
 # Allow-listed run-overview page sizes (first entry is the default). Shared with
 # app.py so the query parser and the size picker agree.
 RUN_PAGE_SIZES: tuple[int, ...] = (8, 15, 25)
+
+
+@functools.lru_cache(maxsize=1)
+def _dashboard_js_version() -> str:
+    """Content hash of dashboard.js for cache busting.
+
+    dashboard.js evolves with the pages that depend on it (a swapped fragment
+    and its handler must match), but browsers cache ``/static/`` aggressively:
+    a stale cached copy against a fresh page produced dead UI (the apply
+    drawer's loading state rendered unstyled). A content-derived query string
+    makes every change its own URL, so a plain refresh always gets the pair.
+    """
+    path = Path(__file__).parent / 'static' / 'dashboard.js'
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+    except OSError:  # pragma: no cover - packaging anomaly; fall back to no busting
+        return '0'
 
 
 def head_assets() -> tuple[Script, ...]:
@@ -56,13 +79,32 @@ def head_assets() -> tuple[Script, ...]:
         # defer it executes during <head> parse when document.body is still null and
         # throws, aborting all its handlers (incl. the sim-entity modal). vega stays
         # non-deferred: inline body scripts call vegaEmbed during parse.
-        Script(src='/static/dashboard.js', defer=True),
+        Script(src=f'/static/dashboard.js?v={_dashboard_js_version()}', defer=True),
     )
 
 
 # ---------------------------------------------------------------------------
 # Combined landing + run lists (the Dashboard / Red Team / Agent Sim / Pairwise screens)
 # ---------------------------------------------------------------------------
+
+
+def _coverage(priced_calls: int, calls: int, unknown_calls: int) -> str:
+    """Coverage label for a spend figure the dashboard summed across reports.
+
+    Same "(N of M calls)" qualifier the reports render, plus the case only the
+    dashboard has: reports predating ``priced_calls`` contribute cost whose
+    coverage is unknown. Without naming them an empty label would mean both
+    "every call was priced" and "we have no idea" — opposite claims.
+    """
+    known = _cost_coverage(priced_calls, calls)
+    if not unknown_calls:
+        return known
+    unknown = f'{unknown_calls:,} call{"" if unknown_calls == 1 else "s"} of unknown coverage'
+    if known:
+        return f'{known[:-1]}, {unknown})'
+    if 0 < priced_calls == calls:
+        return f' ({priced_calls:,} of {calls:,} calls priced, {unknown})'
+    return f' ({unknown})'
 
 
 def _score_cls(score: float | None) -> str:
@@ -209,7 +251,16 @@ def _panel(title: str, sub: str, inner: str, *, cls: str = '') -> str:
     )
 
 
-def _bars(rows: list[tuple[str, float]], colors: list[str], *, total_label: str = 'Total', fmt: str = '{}') -> str:
+def _bars(
+    rows: list[tuple[str, float]],
+    colors: list[str],
+    *,
+    total_label: str = 'Total',
+    fmt: str | Callable[[float], str] = '{}',
+) -> str:
+    # A callable lets cost bars reuse fmt_cost instead of a parallel '${:.4f}'
+    # format string that drifted from it (no thousands separator).
+    render = fmt if callable(fmt) else fmt.format
     total = sum(v for _, v in rows) or 1
     parts: list[str] = ['<div class="bars">']
     for i, (name, val) in enumerate(rows):
@@ -232,12 +283,12 @@ def _bars(rows: list[tuple[str, float]], colors: list[str], *, total_label: str 
         parts.append(
             f'<div class="bar-row"><div class="bar-head">'
             f'<span class="bar-name">{esc(name)}</span>'
-            f'<span class="bar-val">{esc(fmt.format(val))} <span class="bar-pct">· {esc(pct_label)}</span></span>'
+            f'<span class="bar-val">{esc(render(val))} <span class="bar-pct">· {esc(pct_label)}</span></span>'
             f'</div><div class="bar-track"><div class="bar-fill" style="width:{width}%;background:{color}"></div></div></div>'
         )
     parts.append(
         f'<div class="bars-total"><span class="t-label">{esc(total_label)}</span>'
-        f'<span class="t-val">{esc(fmt.format(sum(v for _, v in rows)))}</span></div></div>'
+        f'<span class="t-val">{esc(render(sum(v for _, v in rows)))}</span></div></div>'
     )
     return ''.join(parts)
 
@@ -278,6 +329,13 @@ def landing_body(data: Landing) -> str:
     spend_sub = ''
     if data.total_input_cost is not None or data.total_output_cost is not None:
         spend_sub = f'in {_fmt_cost(data.total_input_cost)} / out {_fmt_cost(data.total_output_cost)}'
+    # A spend total only some calls contributed to is a lower bound — say so,
+    # matching the "(N of M calls)" qualifier the markdown/HTML reports render.
+    # Only qualifies a figure that exists — an em dash "no cost recorded" tile
+    # with "(1 of 2 calls)" under it would label a total that was never shown.
+    coverage = _coverage(data.priced_calls, data.cost_calls, data.unknown_calls) if data.total_cost is not None else ''
+    if coverage:
+        spend_sub = f'{spend_sub} ·{coverage}' if spend_sub else coverage.strip()
     band = (
         '<div class="stat-band">'
         + _stat_tile('Jobs run', str(data.total_runs))
@@ -308,7 +366,7 @@ def landing_body(data: Landing) -> str:
     severity_panel = _panel('Findings by severity', 'Vulnerabilities found', sev_inner)
     # Spend by job type — real dollars (cost_usd recorded upstream).
     spend_inner = (
-        _bars(data.cost_by_kind, _kind_colors(data.cost_by_kind), fmt='${:.4f}')
+        _bars(data.cost_by_kind, _kind_colors(data.cost_by_kind), fmt=_fmt_cost)
         if data.cost_by_kind
         else '<p class="rt-panel-loading">No cost recorded.</p>'
     )
@@ -564,6 +622,7 @@ def sim_overview_body(data: SimOverview, compare_choices: list[tuple[str, str]] 
         cost_label, cost_value = 'Avg cost/sim', _fmt_cost(data.avg_cost)
         if data.avg_input_cost is not None or data.avg_output_cost is not None:
             cost_value += f' (in {_fmt_cost(data.avg_input_cost)} / out {_fmt_cost(data.avg_output_cost)})'
+        cost_value += _coverage(data.priced_calls, data.cost_calls, data.unknown_calls)
     else:
         cost_label = 'Avg tokens/sim'
         cost_value = '—' if data.avg_tokens is None else f'{data.avg_tokens:,.0f}'
@@ -620,6 +679,8 @@ def redteam_overview_body(data: RedTeamOverview) -> str:
     spend_value = _fmt_cost(data.total_cost)
     if data.total_input_cost is not None or data.total_output_cost is not None:
         spend_value += f' (in {_fmt_cost(data.total_input_cost)} / out {_fmt_cost(data.total_output_cost)})'
+    if data.total_cost is not None:
+        spend_value += _coverage(data.priced_calls, data.cost_calls, data.unknown_calls)
     band = kpi_cards([
         {'label': 'Attacks run', 'value': str(data.attacks_run)},
         {'label': 'ASR', 'value': asr, 'status': asr_status},
@@ -1346,15 +1407,15 @@ def render_message_list(
 
     Each message produces:
 
-    .. code-block:: html
-
-        <div class="{class_prefix}-msg {class_prefix}-msg-{css_role}">
-          <span class="{class_prefix}-msg-avatar">{label}</span>
-          <div class="{class_prefix}-msg-bubble">
-            <span class="{class_prefix}-msg-role">{label}</span>
-            <pre class="{class_prefix}-msg-content">{esc(content)}</pre>
-          </div>
-        </div>
+    ```html
+    <div class="{class_prefix}-msg {class_prefix}-msg-{css_role}">
+      <span class="{class_prefix}-msg-avatar">{label}</span>
+      <div class="{class_prefix}-msg-bubble">
+        <span class="{class_prefix}-msg-role">{label}</span>
+        <pre class="{class_prefix}-msg-content">{esc(content)}</pre>
+      </div>
+    </div>
+    ```
 
     Where ``{css_role}`` is the raw role value when it is one of
     ``user``, ``assistant``, ``system``, ``tool``; otherwise ``unknown``.

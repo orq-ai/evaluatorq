@@ -2,6 +2,7 @@
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from pydantic import ValidationError
 
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
@@ -57,6 +58,22 @@ def test_llm_config_has_retry_and_timeout_fields():
     assert cfg.retry_count == 3
     assert cfg.cleanup_timeout_ms == 60_000
     assert cfg.max_target_retries == 2
+
+
+def test_evaluator_config_min_evaluation_coverage_defaults_to_0_8():
+    cfg = EvaluatorConfig()
+    assert cfg.min_evaluation_coverage == 0.8
+
+
+@pytest.mark.parametrize('value', [-0.1, 1.1])
+def test_evaluator_config_min_evaluation_coverage_rejects_out_of_range(value):
+    with pytest.raises(ValidationError):
+        EvaluatorConfig(min_evaluation_coverage=value)
+
+
+def test_evaluator_config_min_evaluation_coverage_accepts_none():
+    cfg = EvaluatorConfig(min_evaluation_coverage=None)
+    assert cfg.min_evaluation_coverage is None
 
 
 def test_llm_config_no_backend_field():
@@ -118,18 +135,6 @@ def test_retry_extra_body_empty_for_client_without_base_url():
     cfg = LLMConfig()
     assert cfg.retry_extra_body(_as_client(object())) == {}
     assert cfg.retry_extra_body(None) == {}
-
-
-@pytest.mark.asyncio
-async def test_red_team_accepts_legacy_config_keyword(monkeypatch):
-    from evaluatorq.redteam import red_team
-    from evaluatorq.redteam.exceptions import CredentialError
-
-    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
-    monkeypatch.delenv('ORQ_API_KEY', raising=False)
-
-    with pytest.deprecated_call(match='config= is deprecated'), pytest.raises(CredentialError):
-        await red_team('agent:test', config=LLMConfig())
 
 
 # ---------------------------------------------------------------------------

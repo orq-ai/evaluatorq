@@ -77,7 +77,7 @@ _ROOTS_ENV = 'EVALUATORQ_DASHBOARD_ROOTS'
 def build_app_from_env():
     """uvicorn factory used under ``--reload``.  Runs in the reloader's worker
     subprocess, so it (re)installs the loguru bridge and rebuilds the app from
-    the roots stashed in ``_ROOTS_ENV`` by :func:`serve`."""
+    the roots stashed in ``_ROOTS_ENV`` by `serve`."""
     import json
     import os
 

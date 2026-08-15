@@ -50,7 +50,7 @@ def compose_run_hooks(
     """Normalise, validate, warn, mint the manifest, and compose user hooks.
 
     ``hooks`` may be a single hook, a sequence, or ``None``. Each child is
-    structurally validated (:func:`require_hooks_like`) and checked for the
+    structurally validated (`require_hooks_like`) and checked for the
     sync-hook deprecation nudge BEFORE anything else — once composed the async
     composite would mask a sync child, and validating first means a bad hook
     type never mints a (then-stuck-'running') manifest.

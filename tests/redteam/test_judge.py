@@ -178,7 +178,7 @@ async def test_api_connection_captured_with_exc(monkeypatch: pytest.MonkeyPatch)
     outcome = await run_judge(
         client=client,
         model='m',
-        cfg=LLMCallConfig(),
+        cfg=LLMCallConfig(retry_count=0),  # classification only; retry covered separately
         prompt_template='x',
         replacements={},
     )
@@ -198,7 +198,7 @@ async def test_api_status_captured(monkeypatch: pytest.MonkeyPatch) -> None:
     outcome = await run_judge(
         client=client,
         model='m',
-        cfg=LLMCallConfig(),
+        cfg=LLMCallConfig(retry_count=0),  # classification only; retry covered separately
         prompt_template='x',
         replacements={},
     )

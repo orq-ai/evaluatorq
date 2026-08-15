@@ -68,6 +68,16 @@ def render_attack_fragment(r: RedTeamResult) -> str:
             f'<p class="rt-verdict-body" style="color:var(--red-600)">{esc(r.error)}</p>'
             '</div>'
         )
+    elif r.vulnerable is None:
+        # Distinct neutral branch: no error was recorded, but no verdict exists either
+        # (e.g. judge call failed silently) — must not fall into the green "safe" branch.
+        verdict_html = (
+            '<div class="rt-verdict rt-verdict-unknown" '
+            'style="background:var(--gray-100);border-left:3px solid var(--gray-500)">'
+            '<span class="rt-verdict-label">Evaluator verdict</span>'
+            '<p class="rt-verdict-body">No evaluation available.</p>'
+            '</div>'
+        )
     elif r.vulnerable:
         explanation = r.evaluation.explanation if r.evaluation and r.evaluation.explanation else ''
         body = esc(explanation) if explanation else 'No evaluation available.'
@@ -264,8 +274,13 @@ def _agent_select(
 
 def _render_agent_side(r: RedTeamResult, agent_name: str) -> str:
     """Render one column of a disagreement item (attack prompt, response, eval)."""
-    verdict_class = 'rt-conv-verdict-vuln' if r.vulnerable else 'rt-conv-verdict-safe'
-    verdict_text = 'VULNERABLE' if r.vulnerable else 'RESISTANT'
+    if r.vulnerable is None:
+        # Not evaluated is neither VULNERABLE nor RESISTANT — a distinct neutral state.
+        verdict_class, verdict_text = 'rt-conv-verdict-unknown', 'NOT EVALUATED'
+    elif r.vulnerable:
+        verdict_class, verdict_text = 'rt-conv-verdict-vuln', 'VULNERABLE'
+    else:
+        verdict_class, verdict_text = 'rt-conv-verdict-safe', 'RESISTANT'
 
     header = (
         f'<div class="rt-dis-agent-header">'

@@ -22,10 +22,14 @@ if TYPE_CHECKING:
 ORQ_DEFAULT_BASE_URL = 'https://my.orq.ai'
 
 
-def create_async_llm_client(role_config: LLMCallConfig | None = None) -> AsyncOpenAI:
+def create_async_llm_client(
+    role_config: LLMCallConfig | None = None,
+    *,
+    max_retries: int | None = None,
+) -> AsyncOpenAI:
     """Create an OpenAI-compatible async client.
 
-    Thin red-team wrapper over :func:`evaluatorq.common.llm_client.resolve_llm_client`
+    Thin red-team wrapper over `evaluatorq.common.llm_client.resolve_llm_client`
     (the single source of truth for env-var precedence). If ``role_config.client``
     is set it is returned directly; otherwise the client is auto-detected.
 
@@ -36,6 +40,14 @@ def create_async_llm_client(role_config: LLMCallConfig | None = None) -> AsyncOp
 
     When using ORQ, the router suffix ``/v3/router`` is appended automatically
     to produce the OpenAI-compatible completions endpoint.
+
+    ``max_retries`` feeds the SDK's client-side retry budget (pass
+    ``LLMConfig.retry_count``); ``None`` keeps the SDK default. Callers that own
+    retry themselves — the judge via ``with_retry``, ``OrqResponsesTarget`` — must
+    not stack a second budget underneath their own; ``run_judge``'s
+    ``_without_client_retries`` helper (``evaluatorq.common.judge``) enforces
+    that by disarming the client it is given, so a client built here and handed to
+    a judge comes back with ``max_retries=0``.
     """
     from evaluatorq.common.llm_client import MissingLLMCredentialsError, resolve_llm_client
 
@@ -48,6 +60,7 @@ def create_async_llm_client(role_config: LLMCallConfig | None = None) -> AsyncOp
             config_client,
             default_orq_host=ORQ_DEFAULT_BASE_URL,
             honor_openai_base_url=True,
+            max_retries=max_retries,
         ).client
     except ImportError as exc:
         msg = (
@@ -111,7 +124,11 @@ def _create_orq_backend(
         raise BackendError('ORQ backend requested but ORQ dependencies are unavailable.') from exc
 
     timeout_ms = pipeline_config.target_agent_timeout_ms if pipeline_config else None
-    return ORQBackend(timeout_ms=timeout_ms)
+    return ORQBackend(
+        timeout_ms=timeout_ms,
+        retry_count=pipeline_config.retry_count if pipeline_config else None,
+        retry_on_codes=pipeline_config.retry_on_codes if pipeline_config else None,
+    )
 
 
 def _create_openresponses_backend(
@@ -124,8 +141,7 @@ def _create_openresponses_backend(
 
     instructions = target_config.system_prompt if target_config else None
     timeout_ms = pipeline_config.target_agent_timeout_ms if pipeline_config else None
-    # retry_count is the number of *retries*; OrqResponsesTarget wants total attempts (initial + retries), hence the +1.
-    retry_attempts = pipeline_config.retry_count + 1 if pipeline_config else None
+    retry_attempts = pipeline_config.retry_attempts if pipeline_config else None
     retry_statuses = pipeline_config.retry_on_codes if pipeline_config else None
     return OpenResponsesBackend(
         client=llm_client,

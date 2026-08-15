@@ -1851,6 +1851,45 @@ def test_generate_forwards_sim_model(monkeypatch):
     assert captured["sim_model"] == "gpt-5.4-mini"
 
 
+def test_from_traces_summarizes_once_and_reuses_summary(monkeypatch, tmp_path: Path) -> None:
+    from evaluatorq.simulation import traces as traces_mod
+
+    conversation = object()
+    summaries = {"trace-1": "summary"}
+    captured: dict[str, Any] = {"summarize": [], "datapoints": [], "extend": []}
+
+    async def fake_fetch(**kwargs: Any) -> list[Any]:
+        return [conversation]
+
+    async def fake_summarize(conversations: Any, **kwargs: Any) -> dict[str, str]:
+        captured["summarize"].append((conversations, kwargs))
+        return summaries
+
+    async def fake_datapoints(conversations: Any, **kwargs: Any) -> list[Any]:
+        captured["datapoints"].append((conversations, kwargs))
+        return [object()]
+
+    async def fake_extend(conversations: Any, **kwargs: Any) -> list[Any]:
+        captured["extend"].append((conversations, kwargs))
+        return [object()]
+
+    monkeypatch.setattr(traces_mod, "fetch_trace_conversations", fake_fetch)
+    monkeypatch.setattr(traces_mod, "summarize_conversations", fake_summarize)
+    monkeypatch.setattr(traces_mod, "datapoints_from_traces", fake_datapoints)
+    monkeypatch.setattr(traces_mod, "extend_from_traces", fake_extend)
+    monkeypatch.setattr("evaluatorq.simulation.cli._write_datapoints", lambda *args, **kwargs: None)
+
+    result = CliRunner().invoke(
+        app,
+        ["from-traces", "--output", str(tmp_path / "datapoints.jsonl"), "--extend", "1"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(captured["summarize"]) == 1
+    assert captured["datapoints"][0][1]["summaries"] == summaries
+    assert captured["extend"][0][1]["summaries"] == summaries
+
+
 def test_old_model_flag_rejected(monkeypatch):
     from typer.testing import CliRunner
 
@@ -2193,7 +2232,7 @@ def test_run_recommendations_flag_attaches_to_saved_run(
     assert saved["recommendations"][0]["suggestions"] == ["Fix x."]
 
 
-def test_run_without_recommendations_flag_skips_generation(
+def test_run_defaults_to_recommendations_on(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -2210,6 +2249,33 @@ def test_run_without_recommendations_flag_skips_generation(
             [
                 "run", "--agent-description", "bot", "--openai-model", "gpt-4o",
                 "--no-save",
+            ],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    await_args = mock_impl.await_args
+    assert await_args is not None
+    assert await_args.kwargs['recommendations'] is True
+
+
+def test_run_no_recommendations_flag_skips_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with (
+        patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
+        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
+    ):
+        mock_target.return_value = MagicMock()
+        mock_impl.return_value = _stub_run([_make_result()], mode="run")
+
+        result = runner.invoke(
+            app,
+            [
+                "run", "--agent-description", "bot", "--openai-model", "gpt-4o",
+                "--no-save", "--no-recommendations",
             ],
             env={"OPENAI_API_KEY": "test-key"},
         )

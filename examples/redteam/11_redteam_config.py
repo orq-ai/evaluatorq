@@ -3,7 +3,7 @@
 LLMConfig controls model selection and LLM call tuning for each pipeline role
 (attacker and evaluator). Backend routing is inferred from the target type:
 string targets like ``"agent:<key>"`` route through the ORQ platform, while
-:class:`OpenAIModelTarget` instances call OpenAI directly.
+`OpenAIModelTarget` instances call OpenAI directly.
 
 Key features:
     Role-based config — Use ``attacker`` and ``evaluator`` fields to configure
@@ -70,7 +70,8 @@ async def main() -> None:
         generate_strategies=False,
     )
 
-    print(f"Resistance rate: {report.summary.resistance_rate:.0%}")
+    rate = report.summary.resistance_rate
+    print(f"Resistance rate: {rate:.0%}" if rate is not None else "Resistance rate: no verdict")
 
     # --- Example: Testing an OpenAI model directly -------------------------
     # Use OpenAIModelTarget instead of the removed "llm:<model>" string prefix.
@@ -83,7 +84,12 @@ async def main() -> None:
         max_dynamic_datapoints=3,
     )
 
-    print(f"Direct model resistance rate: {report2.summary.resistance_rate:.0%}")
+    rate2 = report2.summary.resistance_rate
+    print(
+        f"Direct model resistance rate: {rate2:.0%}"
+        if rate2 is not None
+        else "Direct model resistance rate: no verdict"
+    )
 
 
 if __name__ == "__main__":

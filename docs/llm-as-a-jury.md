@@ -109,10 +109,35 @@ of `labels`; omit it and the verdict is still recorded but `passed` is `None`.
 | `judges` | — | Judge model IDs. Two or more makes it a jury. Mutually exclusive with `model`. |
 | `model` | — | Single-judge shorthand for `judges=[model]`. |
 | `repetitions` | `1` | How many times each judge is asked. The judge takes its own majority before the panel votes, which smooths per-call noise. |
+| `assignment` | `"all"` | How judges are allocated across datapoints. `"all"` runs every judge on every datapoint. `"cyclic"` runs exactly one judge per datapoint, rotating through the panel (see below). |
 | `replacement_judges` | `None` | Stand-in models called only when a configured judge fails mechanically. |
 | `min_successful_judges` | `1` | Minimum decisive judges required, otherwise the verdict is **inconclusive**. Must not exceed the panel size. |
 | `threshold` | `0.5` | Numeric mode: `passed` when `score >= threshold`. |
 | `structured_output` | `True` | Use the provider's structured-output API; falls back to a schema-injected `json_object` call for models that reject it. |
+
+### Cyclic assignment (CyclicJudge)
+
+`assignment="cyclic"` gives each datapoint exactly one judge, rotating through
+the panel so every judge covers an equal share of the run. Judge bias still
+cancels in expectation across the dataset, but the run costs the same as a
+single-judge evaluation instead of `len(panel)` times as much.
+
+```python
+jury = llm_jury(
+    name="quality",
+    criteria="Is the answer helpful and correct?",
+    judges=["openai/gpt-5.4-mini", "openai/gpt-5.4-nano", "deepseek/deepseek-v4-flash"],
+    assignment="cyclic",
+)
+```
+
+Use it for run-level scores (a benchmark mean, a pass rate); keep the default
+`"all"` when an individual verdict has to stand on its own, since each per-item
+verdict under `"cyclic"` is one judge's opinion and `stats`/`raw_agreement` come
+back `None`.
+
+See [Cyclic judge assignment](cyclic-judge.md) for how items map to judges,
+auditing the rotation via `raw_output["jury"]`, and the failure semantics.
 
 ## How the verdict is decided
 
@@ -180,6 +205,16 @@ report = await red_team(
     OpenAI target, so the guard passes silently (the healthy case). It would
     raise only if you added an in-family judge such as `"openai/gpt-4o-mini"`.
 
+!!! warning "`min_successful_judges` vs. `min_evaluation_coverage` — two different levels"
+    `min_successful_judges` above is a **per-attack** quorum: it decides whether
+    *this one* jury panel produced enough decisive votes to reach a verdict for
+    *this one* attack. `EvaluatorConfig` also has `min_evaluation_coverage`
+    (default `0.8`), which is a separate, **run-level** floor: the fraction of
+    *all* attacks in the run that must get any verdict at all. A `min_successful_judges`
+    miss on one attack is exactly what produces one of the unevaluated attacks
+    that `min_evaluation_coverage` counts against. Missing the run-level floor
+    makes `eq redteam run` exit `1` — see [Red Teaming › In CI](guides/red-teaming.md#in-ci).
+
 `EvaluatorConfig` adds `strict_panel` (turn panel-composition warnings into hard
 errors) and surfaces a per-attack `jury` breakdown plus a run-level reliability
 statistic:
@@ -211,6 +246,24 @@ they would by chance:
 
 It is `None` when undefined, for example a single-judge run or fewer than two
 multi-judge samples.
+
+## Endpoint and retries
+
+`llm_jury()` and `PairwiseComparator` always send judge calls to the Orq
+router's `responses` endpoint (`api='responses'`) — the endpoint the router
+prices, so a jury verdict records cost the same way the call it judges does.
+There is no config knob to opt out; `run_judge` handles the cases that cannot
+use it on its own, falling back to Chat Completions for a client that does not
+route through the Orq router, a model the catalogue does not qualify for
+Responses, or a model that 400s on the endpoint.
+
+Retries happen at the `run_judge` layer, not the SDK's: with a default budget
+of one retry (`LLMCallConfig.retry_count=1`, i.e. up to two requests per judge
+call), `run_judge` disarms the SDK-level retry budget (`max_retries=0`) on
+whichever client it is given — the one either helper builds for itself when no
+`client=` is passed in, or a client you pass in yourself — so the two retry
+layers never stack. There is no way to keep an injected client's own SDK
+retries active alongside `run_judge`'s.
 
 ## Full example
 

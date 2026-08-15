@@ -19,8 +19,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.llm_client import resolve_results_base_url
+from evaluatorq.common.recommendations import resolve_recommendations
 from evaluatorq.common.thread_context import _evaluatorq_run_scope, build_thread_id, evaluatorq_pipeline
 from evaluatorq.simulation._config import SimulationConfig
+from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig
 from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MAX_TURNS, DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run, build_simulation_run, fetch_agent_info, write_report
 
@@ -48,13 +50,44 @@ if TYPE_CHECKING:
     from evaluatorq.types import DataPoint, DataPointResult, Evaluator
 
     EmitDatapoints = Callable[[list[SimulationDatapoint]], None]
-    RunPostProcessor = Callable[[SimulationRun], Awaitable[None]]
 
 logger = logging.getLogger(__name__)
 
 # Re-exported from here for back-compat (``simulation.__init__`` imports it from
 # api); the canonical definition lives in ``simulation.exceptions``.
 from evaluatorq.simulation.exceptions import SimulationDroppedError
+
+
+async def _attach_recommendations(
+    run: SimulationRun, config: SimulationRecommendationConfig, model: str, *, persisted: bool = True
+) -> None:
+    """Generate remediation suggestions and attach them to ``run``.
+
+    Best-effort, like the executive summary: a simulation without suggestions is still a
+    useful simulation, so credential and LLM failures degrade to a warning. Called from
+    inside the pipeline span so the analysis spans nest under the simulation root and
+    carry the same run metadata.
+
+    ``persisted=False`` means the caller keeps no copy of the run — ``simulate()`` hands
+    back bare results — so the suggestions are generated, paid for and dropped. Cheap next
+    to the simulation itself, but it gets a warning rather than billing in silence.
+    """
+    if not persisted:
+        logger.warning(
+            'recommendations= is on but neither save nor report is set; the suggestions will be generated and discarded'
+        )
+    from evaluatorq.common.llm_client import resolve_llm_client
+    from evaluatorq.simulation.reports.recommendations import generate_recommendations
+
+    resolved = None
+    try:
+        resolved = resolve_llm_client()
+        run.recommendations = await generate_recommendations(run.results, resolved.client, model, config=config) or None
+    except Exception:
+        logger.warning('Failed to generate remediation suggestions (results still returned)', exc_info=True)
+    finally:
+        if resolved is not None and resolved.owned:
+            await resolved.client.close()
 
 
 def _agent_key_of(target: object) -> str | None:
@@ -166,6 +199,7 @@ async def simulate(
     save: bool = False,
     report: str | Path | None = None,
     executive_summary: bool = True,
+    recommendations: bool | SimulationRecommendationConfig = False,
 ) -> list[SimulationResult]:
     """Run agent simulations through the evaluatorq() framework.
 
@@ -194,7 +228,7 @@ async def simulate(
         generation_client: Optional pre-built ``AsyncOpenAI`` used for datapoint
             generation (first-message). When omitted, generation falls back to
             the same env-based provider resolution as
-            :func:`generate_and_simulate` (``ORQ_API_KEY`` → ``OPENAI_API_KEY``).
+            `generate_and_simulate` (``ORQ_API_KEY`` → ``OPENAI_API_KEY``).
         dataset_id: When set, fetch simulation datapoints from the named Orq
             dataset instead of taking them inline. Mutually exclusive with
             ``datapoints``, ``personas``, ``scenarios``. Each dataset row's
@@ -206,7 +240,7 @@ async def simulate(
             rules as ``dataset_id``; rows uploaded by a previous simulation
             run round-trip as-is. Requires ``ORQ_API_KEY``. To generate *new*
             datapoints seeded by an experiment instead, see
-            :func:`evaluatorq.simulation.extend_from_experiment`.
+            `evaluatorq.simulation.extend_from_experiment`.
         experiment_run_id: A specific run (manifest) of ``experiment_id`` to
             load. Latest run when omitted. Only valid with ``experiment_id``.
         memory_entity_id: Memory ``entity_id`` sent with every call to an
@@ -258,6 +292,55 @@ async def simulate(
             saved file — so the dashboard shows saved prose instead of the
             computed fallback sentence. Best-effort: no-op without LLM creds.
             Set ``False`` to skip the extra LLM call.
+        recommendations: Generate per-result remediation suggestions and store
+            them on the run — and in any saved file. Off by default because the
+            returned ``SimulationResult`` list has nowhere to carry them, so
+            they are only observable via ``save``/``report`` or the dashboard.
+            ``True`` uses ``SimulationRecommendationConfig()`` defaults, a
+            config instance tunes the trigger thresholds and prompt budgets.
+            Best-effort, like the summary: no-op without LLM creds.
+
+    Usage:
+
+    ```python
+    import asyncio
+
+    from evaluatorq.simulation import CommunicationStyle, Criterion, Persona, Scenario, simulate
+
+    persona = Persona(
+        name='Impatient Customer',
+        patience=0.2,
+        assertiveness=0.8,
+        politeness=0.4,
+        technical_level=0.3,
+        communication_style=CommunicationStyle.terse,
+        background='Wants a refund urgently',
+    )
+    scenario = Scenario(
+        name='Refund',
+        goal='Get a full refund',
+        criteria=[Criterion(description='Agent asks for order details', type='must_happen')],
+    )
+
+
+    async def support_agent(messages: list) -> str:
+        return 'Thanks for reaching out. How can I assist you today?'
+
+
+    async def main() -> None:
+        results = await simulate(
+            evaluation_name='basic-simulation-example',
+            target=support_agent,
+            personas=[persona],
+            scenarios=[scenario],
+            max_turns=6,
+            evaluator_names=['goal_achieved', 'criteria_met'],
+        )
+        print(f'{sum(r.goal_achieved for r in results)}/{len(results)} reached the goal')
+
+
+    asyncio.run(main())
+    ```
     """
     run = await _simulate_run(
         evaluation_name=evaluation_name,
@@ -285,6 +368,7 @@ async def simulate(
         save=save,
         report=report,
         executive_summary=executive_summary,
+        recommendations=recommendations,
     )
     return run.results
 
@@ -316,11 +400,11 @@ async def _simulate_run(
     save: bool = False,
     report: str | Path | None = None,
     executive_summary: bool = False,
-    post_run: RunPostProcessor | None = None,
+    recommendations: bool | SimulationRecommendationConfig = False,
 ) -> SimulationRun:
-    """Internal counterpart of :func:`simulate` that returns the full ``SimulationRun``.
+    """Internal counterpart of `simulate` that returns the full ``SimulationRun``.
 
-    Same keyword-only signature as :func:`simulate` (which is a thin
+    Same keyword-only signature as `simulate` (which is a thin
     ``.results`` unwrapper around this). Exists so callers that need the full
     run (e.g. the CLI, for its experiment URL / executive summary / save
     plumbing) don't have to rebuild it from the results list.
@@ -393,6 +477,7 @@ async def _simulate_run(
                         save=save,
                         run_output=report,
                         executive_summary=executive_summary,
+                        recommendations=resolve_recommendations(recommendations, SimulationRecommendationConfig),
                         hooks=composed_hooks,
                     )
                     return await _simulate_core(
@@ -401,7 +486,6 @@ async def _simulate_run(
                         pipeline_span=pipeline_span,
                         run_id=run_id,
                         manifest_writer=manifest_writer,
-                        post_run=post_run,
                     )
                 except SimulationCancelledError:
                     if manifest_writer is not None:
@@ -439,13 +523,14 @@ async def generate_and_simulate(
     save: bool = False,
     report: str | Path | None = None,
     executive_summary: bool = True,
+    recommendations: bool | SimulationRecommendationConfig = False,
 ) -> list[SimulationResult]:
     """Generate personas/scenarios, then run simulations via evaluatorq().
 
-    Accepts the same ``target`` shapes as :func:`simulate` — a plain callable,
+    Accepts the same ``target`` shapes as `simulate` — a plain callable,
     an ``AgentTarget`` instance, or a string (``"agent:<key>"`` / bare ``"<key>"``
     for a hosted Orq agent, ``"deployment:<key>"`` for the Orq deployment bridge).
-    ``memory_entity_id`` mirrors :func:`simulate` too: it is sent as the memory
+    ``memory_entity_id`` mirrors `simulate` too: it is sent as the memory
     scope with every call to a string agent target (``agent:<key>`` or bare
     ``<key>``), for agents with a memory store attached. When omitted, a fresh
     per-target id is minted so memory-backed agents still work out of the box.
@@ -456,8 +541,8 @@ async def generate_and_simulate(
     ``sim_model`` drives persona/scenario/first-message generation, the
     user-simulator, and the judge. ``upload_results`` defaults to ``True``; set
     it to ``False`` to skip uploading the final experiment. ``exit_on_failure``
-    defaults to ``True``; see :func:`simulate` for the full semantics of the
-    CI-gate behaviour and how to opt out. ``hooks`` mirrors :func:`simulate`;
+    defaults to ``True``; see `simulate` for the full semantics of the
+    CI-gate behaviour and how to opt out. ``hooks`` mirrors `simulate`;
     note the ``on_confirm`` gate fires AFTER persona/scenario/first-message
     generation, so those generation tokens are already spent when the gate is
     consulted. ``agent_description`` takes precedence when supplied. Otherwise,
@@ -486,6 +571,39 @@ async def generate_and_simulate(
     ``executive_summary``: When ``True`` (the default), generate the LLM
     narrative summary and store it on the returned run — and in any saved file.
     Best-effort: no-op without LLM creds. Set ``False`` to skip the LLM call.
+
+    ``recommendations``: Generate per-result remediation suggestions and store
+    them on the run. Off by default because the returned ``SimulationResult``
+    list has nowhere to carry them — they are observable via ``save``/``report``
+    or the dashboard. ``True`` for defaults, a ``SimulationRecommendationConfig``
+    to tune. Best-effort: no-op without LLM creds.
+
+    Usage:
+
+    ```python
+    import asyncio
+
+    from evaluatorq.simulation import generate_and_simulate
+
+
+    async def main() -> None:
+        results = await generate_and_simulate(
+            evaluation_name='support-agent-sim',
+            target='agent:my-support-agent',  # hosted Orq agent, routed via ORQ_API_KEY
+            agent_description=(
+                'Customer support agent for an e-commerce store; handles refunds, orders, and product questions.'
+            ),
+            num_personas=3,
+            num_scenarios=4,  # -> 12 persona x scenario simulations
+            max_turns=6,
+            evaluator_names=['goal_achieved', 'criteria_met'],
+        )
+        passed = sum(r.goal_achieved for r in results)
+        print(f'Pass rate: {passed}/{len(results)}')
+
+
+    asyncio.run(main())
+    ```
     """
     run = await _generate_and_simulate_run(
         evaluation_name=evaluation_name,
@@ -510,6 +628,7 @@ async def generate_and_simulate(
         save=save,
         report=report,
         executive_summary=executive_summary,
+        recommendations=recommendations,
     )
     return run.results
 
@@ -529,8 +648,8 @@ async def _generate_datapoints_inner(
     """Shared generation trio: personas/scenarios + first-message datapoints.
 
     Builds one shared generation client (mirrors the pattern both callers
-    used inline) and runs the two-step pipeline shared by :func:`generate`
-    and :func:`_generate_and_simulate_run`: ``_generate_personas_scenarios``
+    used inline) and runs the two-step pipeline shared by `generate`
+    and `_generate_and_simulate_run`: ``_generate_personas_scenarios``
     followed by ``_resolve_or_generate_datapoints``, with the
     ``on_generate_inputs_ready`` hook fired in between exactly as both
     callers previously did inline. Must be called from inside the caller's
@@ -538,8 +657,8 @@ async def _generate_datapoints_inner(
     implicit via OTel contextvars).
 
     Returns ``(datapoints, gen_client, gen_owned)``. Callers own closing the
-    client: :func:`generate` has no further use for it and closes it right
-    away, while :func:`_generate_and_simulate_run` keeps it open to pass
+    client: `generate` has no further use for it and closes it right
+    away, while `_generate_and_simulate_run` keeps it open to pass
     into ``SimulationConfig.generation_client`` for the simulate stage and
     closes it only after ``_simulate_core`` returns. On any exception raised
     from within this helper (before the client is handed back to the
@@ -606,12 +725,12 @@ async def _generate_and_simulate_run(
     save: bool = False,
     report: str | Path | None = None,
     executive_summary: bool = False,
-    post_run: RunPostProcessor | None = None,
+    recommendations: bool | SimulationRecommendationConfig = False,
 ) -> SimulationRun:
-    """Internal counterpart of :func:`generate_and_simulate` returning the full ``SimulationRun``.
+    """Internal counterpart of `generate_and_simulate` returning the full ``SimulationRun``.
 
-    Same keyword-only signature as :func:`generate_and_simulate` (which is a
-    thin ``.results`` unwrapper around this). See :func:`_simulate_run` for
+    Same keyword-only signature as `generate_and_simulate` (which is a
+    thin ``.results`` unwrapper around this). See `_simulate_run` for
     why this split exists.
     """
     from evaluatorq.common.async_utils import await_maybe
@@ -715,6 +834,7 @@ async def _generate_and_simulate_run(
                             save=save,
                             run_output=report,
                             executive_summary=executive_summary,
+                            recommendations=resolve_recommendations(recommendations, SimulationRecommendationConfig),
                             hooks=composed_hooks,
                         )
                         return await _simulate_core(
@@ -723,7 +843,6 @@ async def _generate_and_simulate_run(
                             pipeline_span=pipeline_span,
                             run_id=run_id,
                             manifest_writer=manifest_writer,
-                            post_run=post_run,
                         )
                     finally:
                         if gen_owned and gen_client is not None:
@@ -755,7 +874,7 @@ async def generate(
 
     Produces personas and scenarios, then builds one ``SimulationDatapoint`` per
     persona x scenario pair (each with a generated first message). Returns the
-    datapoints without running any simulation — feed them to :func:`simulate`
+    datapoints without running any simulation — feed them to `simulate`
     via ``datapoints=...``, or persist them (e.g. JSONL) and reuse.
 
     Pass ``persona_seeds`` / ``scenario_seeds`` to steer a dimension: each seed
@@ -765,12 +884,12 @@ async def generate(
     the full persona x scenario grid.
 
     This freezes the simulation *inputs* (personas, scenarios, first messages)
-    so every :func:`simulate` run scores the same fixed dataset — useful for
+    so every `simulate` run scores the same fixed dataset — useful for
     apples-to-apples comparison across agent versions. It does **not** make
     simulation deterministic: the agent under test, the user-simulator, and the
     judge remain stochastic at simulate time, so scores still vary run to run.
 
-    Provider resolution matches :func:`generate_and_simulate`: an injected
+    Provider resolution matches `generate_and_simulate`: an injected
     ``generation_client`` → ``ORQ_API_KEY`` (Orq router) → ``OPENAI_API_KEY``
     (with optional ``OPENAI_BASE_URL`` for an OpenAI-compatible endpoint).
     ``sim_model`` drives persona/scenario/first-message generation.
@@ -847,7 +966,7 @@ async def generate_personas(
     """Generate one ``Persona`` per archetype seed (e.g. ``"angry customer"``).
 
     The intermediate tier between fully-auto generation
-    (:func:`generate_and_simulate`) and hand-built ``Persona`` objects: you name
+    (`generate_and_simulate`) and hand-built ``Persona`` objects: you name
     each archetype, the LLM fills every trait. Provider resolves via the shared
     factory (``ORQ_API_KEY`` → ``OPENAI_API_KEY``) unless ``generation_client``
     is injected.
@@ -894,7 +1013,7 @@ async def generate_persona(
 ) -> Persona:
     """Generate one ``Persona`` from a short archetype seed (e.g. ``"angry customer"``).
 
-    See :func:`generate_personas` for the batch form and provider resolution.
+    See `generate_personas` for the batch form and provider resolution.
     """
     personas = await generate_personas(
         [seed],
@@ -916,7 +1035,7 @@ async def generate_scenarios(
 ) -> list[Scenario]:
     """Generate one ``Scenario`` per situation seed (e.g. ``"disputes a refund denial"``).
 
-    The scenario counterpart to :func:`generate_personas`: you name each
+    The scenario counterpart to `generate_personas`: you name each
     situation, the LLM fills the goal, context, and success/failure criteria.
     """
     from evaluatorq.simulation.exceptions import SimulationError
@@ -958,7 +1077,7 @@ async def generate_scenario(
 ) -> Scenario:
     """Generate one ``Scenario`` from a short situation seed.
 
-    See :func:`generate_scenarios` for the batch form and provider resolution.
+    See `generate_scenarios` for the batch form and provider resolution.
     """
     scenarios = await generate_scenarios(
         [seed],
@@ -986,7 +1105,7 @@ async def _resolve_generation_agent_description(
     ``agent:<key>`` target (or a bare agent key) can supply that through the
     Orq agent context; a deployment, callable, and direct model cannot. Keep
     this separate from
-    :func:`_resolve_target`: the execution target is a stateless Responses
+    `_resolve_target`: the execution target is a stateless Responses
     target, while the composite red-team backend resolves platform metadata.
     """
     if agent_description and agent_description.strip():
@@ -1029,7 +1148,7 @@ async def _generate_personas_scenarios(
 ) -> tuple[list[Persona], list[Scenario]]:
     """Generate personas and scenarios concurrently from an agent description.
 
-    Shared by :func:`generate` and :func:`generate_and_simulate`. When
+    Shared by `generate` and `generate_and_simulate`. When
     ``persona_seeds`` / ``scenario_seeds`` are given, that dimension is built one
     object per seed — each seed is an archetype the LLM fleshes out (e.g.
     ``"angry retiree"``) — instead of auto-generating ``num_*``; the other
@@ -1092,7 +1211,6 @@ async def _simulate_core(
     pipeline_span: Span | None,
     run_id: str,
     manifest_writer: ManifestWriter | None = None,
-    post_run: RunPostProcessor | None = None,
 ) -> SimulationRun:
     """Core simulation logic (runs inside the Evaluatorq - Agent Simulation span).
 
@@ -1292,6 +1410,16 @@ async def _simulate_core(
             datapoints=sim_datapoints,
         )
 
+        # Remediation suggestions, generated before persistence so a saved run carries
+        # them, and inside the pipeline span so their LLM calls bind the run metadata.
+        if config.recommendations is not None:
+            await _attach_recommendations(
+                run,
+                config.recommendations,
+                model,
+                persisted=config.save or config.run_output is not None,
+            )
+
         # Generate the LLM narrative before persistence so a saved report carries
         # it. This is best-effort: simulations remain useful without LLM creds or
         # if summary generation itself fails.
@@ -1306,9 +1434,6 @@ async def _simulate_core(
         # CLI-only report enrichments run before persistence while the pipeline
         # span and evaluatorq run context are still active. This keeps their LLM
         # spans under the main simulation root and binds the same run metadata.
-        if post_run is not None:
-            await post_run(run)
-
         # Persist only when the caller opts in (save=True).
         # TODO(RES-963): inline because on_run_complete carries no run metadata and
         # hooks aren't yet composable; move to a save hook once that lands.
@@ -1336,15 +1461,7 @@ async def _simulate_core(
         # compact summary (the exact fields the `runs` table + dashboard sim card
         # render) so a list row needs zero full-report reads.
         if manifest_writer is not None:
-            manifest_writer.complete(
-                report_path=saved_path,
-                summary={
-                    'mode': run.mode,
-                    'target_kind': run.target_kind,
-                    'total_results': run.total_results,
-                    'scorer_averages': dict(run.scorer_averages),
-                },
-            )
+            manifest_writer.complete(report_path=saved_path, summary=run.manifest_summary())
     except SimulationCancelledError:
         # A declined on_confirm is a clean cancel, not a failure (Dec1): the run
         # is 'cancelled' and any already-completed stage (e.g. GENERATE in the
@@ -1739,7 +1856,7 @@ def _adapt_simulation_scorer(
     Note: ``on_evaluator_complete`` is NOT fired here. evaluatorq's
     ``process_evaluator`` wraps this scorer in a try/except, so a hook raising
     inside it would be swallowed (recorded as a scorer error) rather than
-    propagating. The hook is fired from :func:`_stamp_evaluator_scores`, which
+    propagating. The hook is fired from `_stamp_evaluator_scores`, which
     runs outside evaluatorq's guard, preserving the unguarded-propagation
     contract.
     """
@@ -1784,23 +1901,60 @@ def _sim_evaluation_details(name: str, result: SimulationResult) -> tuple[str | 
     Only the default evaluators (``goal_achieved`` / ``criteria_met``) carry a
     reasoning surface today; others return ``(None, None)`` so their span/experiment
     detail is unchanged.
+
+    ``criteria_met``'s ``pass_`` tracks `criteria_met_scorer`: the two states it
+    scores 0.0 (an errored/timed-out run, and one whose criteria were never
+    audited) report ``False`` here with an explanation naming the cause, so the
+    evaluator span and the uploaded experiment cannot show an unaudited run green.
+    An individual unaudited criterion is likewise reported ``UNKNOWN`` rather than
+    ``PASS`` and does not count towards ``pass_`` — the same rule the scorer and
+    the report tallies apply.
     """
+    from evaluatorq.simulation.evaluators.scorers import UNEVALUATED_TERMINATIONS
+
     if name == 'goal_achieved':
         return (result.reason or None), result.goal_achieved
     if name == 'criteria_met':
+        # The two states `criteria_met_scorer` scores 0.0 must not report `pass=True`
+        # here: this flag lands on the evaluator span and the uploaded Orq
+        # experiment, so a run the scorer called unknown would show up green there
+        # (RES-1308). Both branches mirror the scorer's own order and reasons — keep
+        # them in step.
+        if result.terminated_by in UNEVALUATED_TERMINATIONS:
+            return (
+                (
+                    f'Run terminated by {result.terminated_by.value} before the judge could audit any '
+                    'criterion; outcome unknown, not met.'
+                ),
+                False,
+            )
+        if result.criteria_verified is False:
+            return (
+                (
+                    'Judge returned no per-criterion occurrence audit, so these verdicts cannot fail a '
+                    'must_happen criterion; unverified, not met.'
+                ),
+                False,
+            )
         meta = result.metadata.get('criteria_meta') or []
         if isinstance(meta, list) and meta:
             # Tag each line with the criterion polarity. Without it, a passed
             # 'must_not_happen' rule renders as e.g. "PASS: Agent blames the
             # customer", which reads as if the agent passed *by* misbehaving.
             # "[prohibited]" makes clear PASS means the behavior was avoided.
+            # UNKNOWN, not PASS, for a criterion the judge never audited: it is
+            # passing only by its not-observed default, and `criteria_met_scorer`
+            # does not count it as met either. The two must agree, or the score and
+            # the explanation beside it contradict each other on the same span.
             def _line(c: dict[str, object]) -> str:
-                verdict = 'PASS' if c.get('passed') else 'FAIL'
+                passed = bool(c.get('passed'))
+                verdict = ('UNKNOWN' if c.get('audited') is False else 'PASS') if passed else 'FAIL'
                 polarity = 'prohibited' if c.get('type') == 'must_not_happen' else 'required'
-                return f'{verdict} [{polarity}]: {c.get("description", c.get("id", "?"))}'
+                suffix = ' (not audited)' if verdict == 'UNKNOWN' else ''
+                return f'{verdict} [{polarity}]: {c.get("description", c.get("id", "?"))}{suffix}'
 
             lines = [_line(c) for c in meta]
-            all_met = all(c.get('passed') for c in meta)
+            all_met = all(c.get('passed') and c.get('audited') is not False for c in meta)
             return '\n'.join(lines), all_met
         # Fallback to the lossy criteria_results dict when criteria_meta is absent.
         criteria_results = result.criteria_results or {}
@@ -1830,7 +1984,7 @@ async def _simulate_via_evaluatorq(
     """
     from datetime import datetime, timezone
 
-    from evaluatorq.common.tracing import record_token_usage, set_span_attrs
+    from evaluatorq.common.tracing import set_span_attrs
     from evaluatorq.evaluatorq import evaluatorq
     from evaluatorq.simulation.evaluators import get_evaluator
     from evaluatorq.types import DataPoint
@@ -1948,13 +2102,6 @@ async def _simulate_via_evaluatorq(
             raise SimulationDroppedError(msg, partial_results=results)
         logger.warning(msg)
 
-    # Aggregate token usage (including cost breakdown) onto the pipeline span.
-    # This also sets `gen_ai.usage.calls` to the summed per-datapoint call count —
-    # intended: a call count on this pipeline-level aggregate span is genuine
-    # observability richness, not an accidental leak.
-    from evaluatorq.contracts import Usage
-
-    record_token_usage(pipeline_span, usage=sum((r.token_usage for r in results), Usage()))
     set_span_attrs(
         pipeline_span,
         {

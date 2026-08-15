@@ -2,7 +2,7 @@
 
 Two features for deeper analysis of red team results:
 
-1. `generate_recommendations=True` — After the run, an LLM analyzes the
+1. `recommendations=True` — After the run, an LLM analyzes the
    most vulnerable areas and generates actionable remediation advice.
 
 2. `output_dir` — Saves intermediate pipeline artifacts (datapoints,
@@ -41,13 +41,14 @@ async def main() -> None:
         max_dynamic_datapoints=5,
         generate_strategies=False,
         # Generate LLM-based remediation recommendations
-        generate_recommendations=True,
+        recommendations=True,
         # Save intermediate artifacts for debugging
         output_dir=artifacts_dir,
     )
 
     # Print summary
-    print(f"Resistance rate: {report.summary.resistance_rate:.0%}")
+    rate = report.summary.resistance_rate
+    print(f"Resistance rate: {rate:.0%}" if rate is not None else "Resistance rate: no verdict")
 
     # Print recommendations (if generated)
     if report.focus_area_recommendations:

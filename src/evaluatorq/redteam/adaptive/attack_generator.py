@@ -194,6 +194,11 @@ async def adapt_prompt_to_tools(
                 'orq.redteam.num_tools': len(agent_context.tools),
             },
         ) as adapt_span:
+            # RES-1295: `execute_chat_parse` prices this call, but the returned
+            # `Usage` is discarded here — `adapt_prompt_to_tools` returns a bare
+            # `str` prompt, with no sink to carry the usage to a run total.
+            # Real spend, uncounted. See "What the totals do not include" in
+            # docs/guides/red-teaming.md.
             response, _ = await execute_chat_parse(
                 client=llm_client,
                 model=model,
@@ -227,6 +232,6 @@ async def adapt_prompt_to_tools(
 
     except (APIConnectionError, APIStatusError):
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f'Tool adaptation failed, using generic prompt without tool-specific targeting: {e}')
         return base_prompt

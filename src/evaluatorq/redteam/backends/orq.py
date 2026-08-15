@@ -44,7 +44,7 @@ def _get_orq_server_url() -> str:
 
 
 from evaluatorq.common.thread_context import pipeline_metadata_param, thread_body_param
-from evaluatorq.common.tracing import record_token_usage, set_span_attrs, truncate_for_span
+from evaluatorq.common.tracing import record_llm_response, set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentTarget, Message, content_to_text
 from evaluatorq.redteam.backends._errors import extract_provider_error_code, extract_status_code
 from evaluatorq.redteam.backends.base import Backend
@@ -60,7 +60,48 @@ from evaluatorq.redteam.contracts import (
     ToolCallOutputItem,
     ToolInfo,
 )
-from evaluatorq.redteam.tracing import with_redteam_span
+from evaluatorq.redteam.tracing import with_llm_span, with_redteam_span
+
+
+def _orq_retry_config(
+    retry_count: int,
+    retry_on_codes: list[int] | None = None,
+    *,
+    timeout_ms: int | None = None,
+) -> Any:
+    """Client-level retry for the Orq SDK: the configured ``retry_on_codes``
+    (default 429/500/502/503/504, matching the SDK's own per-operation default)
+    plus connection errors, with ``Retry-After`` honored.
+
+    The Speakeasy-generated SDK bounds retries by *total wall clock from before
+    the first attempt* (``max_elapsed_time``), not by attempt count — request
+    duration counts against the window. So the window must budget for the
+    attempts themselves, not just the backoff sleeps: ``retry_count`` failed
+    attempts of up to ``timeout_ms`` each, plus the backoff rounds between them
+    (0.5s initial, doubling, 10s cap). A backoff-only window would let a single
+    slow failure (a 503 behind a slow upstream, a TCP timeout) exhaust the
+    budget on the first attempt and retry nothing.
+
+    ``retry_count=0`` disables. Returns None when disabled or the SDK is
+    unavailable.
+    """
+    if retry_count <= 0 or _orq_cls is None:
+        return None
+    from orq_ai_sdk.utils.retries import BackoffStrategy, RetryConfig
+
+    backoff_window_ms = int(sum(min(500 * 2**i, 10_000) for i in range(retry_count)))
+    attempt_budget_ms = retry_count * (timeout_ms or PIPELINE_CONFIG.target_agent_timeout_ms)
+    return RetryConfig(
+        strategy='backoff',
+        backoff=BackoffStrategy(
+            initial_interval=500,
+            max_interval=10_000,
+            exponent=2,
+            max_elapsed_time=backoff_window_ms + attempt_budget_ms,
+        ),
+        retry_connection_errors=True,
+        status_codes_override=[str(code) for code in retry_on_codes] if retry_on_codes else None,
+    )
 
 
 async def _orq_cleanup_memory(orq_client: Any, ctx: AgentContext, entity_ids: list[str]) -> None:
@@ -77,7 +118,7 @@ async def _orq_cleanup_memory(orq_client: Any, ctx: AgentContext, entity_ids: li
                     memory_entity_id=entity_id,
                 )
                 logger.debug(f'Deleted memory entity {entity_id} from store {ms.key}')
-            except Exception as e:  # noqa: PERF203
+            except Exception as e:  # noqa: BLE001, PERF203
                 if extract_status_code(e) == 404:
                     continue
                 logger.warning(f'Failed to cleanup memory entity {entity_id} from {ms.key}: {e}')
@@ -198,6 +239,26 @@ class ORQAgentTarget(AgentTarget):
                             return text
             return ''
 
+        async def _create_traced(input_messages: list[dict[str, Any]], **kwargs: Any) -> Any:
+            """Run one ``agents.responses.create`` inside its own LLM span.
+
+            The agents endpoint is stateful and loops for tool continuations, so a
+            single ``respond()`` makes several calls. Each gets a span mirroring the
+            chat-completions / responses shape other backends emit, carrying that
+            call's own usage. The enclosing target span deliberately records no
+            usage of its own: a total there would double-count against these.
+            """
+            async with with_llm_span(
+                model=self.model or self.agent_key,
+                operation='agents.responses',
+                provider='orq',
+                input_messages=input_messages,
+                attributes={'orq.redteam.llm_purpose': 'target', 'orq.agent.key': self.agent_key},
+            ) as llm_span:
+                resp = await asyncio.to_thread(self.orq_client.agents.responses.create, **kwargs)
+                record_llm_response(llm_span, resp, output_content=_extract_text(resp))
+                return resp
+
         def _pending_tool_call_ids(resp: object) -> list[str]:
             """Return IDs of pending tool calls from a response."""
             pending = getattr(resp, 'pending_tool_calls', None) or []
@@ -272,7 +333,7 @@ class ORQAgentTarget(AgentTarget):
                 kwargs.update(thread_body_param())
                 kwargs.update(pipeline_metadata_param())
 
-                response = await asyncio.to_thread(self.orq_client.agents.responses.create, **kwargs)
+                response = await _create_traced([{'role': 'user', 'content': prompt}], **kwargs)
 
                 if response.task_id:
                     self._task_id = response.task_id
@@ -304,8 +365,8 @@ class ORQAgentTarget(AgentTarget):
                         }
                         for tool_call_id in pending_ids
                     ]
-                    response = await asyncio.to_thread(
-                        self.orq_client.agents.responses.create,
+                    response = await _create_traced(
+                        [{'role': 'tool', 'content': json.dumps(tool_parts, ensure_ascii=False)}],
                         agent_key=self.agent_key,
                         message={'role': 'tool', 'parts': tool_parts},
                         task_id=self._task_id,
@@ -351,6 +412,10 @@ class ORQAgentTarget(AgentTarget):
                     },
                 )
 
+                # This span records no usage of its own: each `agents.responses.create`
+                # records its own on the LLM span `_create_traced` opens, and a total
+                # here would double-count against them. `accumulated_usage` still rides
+                # on the returned AgentResponse, which is what the reports read.
                 usage = accumulated_usage if accumulated_usage.calls > 0 else None
                 output: list[OutputMessage] = cast('list[OutputMessage]', list(all_tool_calls))
                 output.append(TextOutputItem(text=result_text, annotations=[]))
@@ -367,9 +432,6 @@ class ORQAgentTarget(AgentTarget):
             except Exception as e:
                 logger.error(f'ORQ agent call failed: {e}')
                 raise
-            finally:
-                if accumulated_usage.calls > 0:
-                    record_token_usage(span, usage=accumulated_usage)
 
     def new(self) -> ORQAgentTarget:
         """Return a fresh target instance with isolated state.
@@ -482,7 +544,7 @@ class ORQAgentTarget(AgentTarget):
                 name=getattr(kb, 'key', None),
                 description=getattr(kb, 'description', None) or None,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f'Failed to enrich knowledge base {kb_id}: {e} — attack strategies will use limited context')
             return KnowledgeBaseInfo(id=kb_id)
 
@@ -498,7 +560,7 @@ class ORQAgentTarget(AgentTarget):
                 key=getattr(ms, 'key', ms_key),
                 description=getattr(ms, 'description', None) or None,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f'Failed to enrich memory store {ms_key}: {e} — attack strategies will use limited context')
             return MemoryStoreInfo(id=ms_key)
 
@@ -535,7 +597,7 @@ class ORQAgentTarget(AgentTarget):
                 # SDK returns parameters/schema as a Pydantic model; ToolInfo wants a plain dict.
                 if raw_params is not None:
                     parameters = raw_params.model_dump() if hasattr(raw_params, 'model_dump') else raw_params
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.warning(f'Failed to enrich tool {tool_id}: {e} — attack strategies will use limited context')
         return ToolInfo(name=name, description=description, parameters=parameters, action_type=action_type)
 
@@ -556,7 +618,14 @@ class ORQBackend(Backend):
     error taxonomy.
     """
 
-    def __init__(self, *, orq_client: Any = None, timeout_ms: int | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        orq_client: Any = None,
+        timeout_ms: int | None = None,
+        retry_count: int | None = None,
+        retry_on_codes: list[int] | None = None,
+    ) -> None:
         super().__init__(name='orq')
         timeout_ms = timeout_ms or PIPELINE_CONFIG.target_agent_timeout_ms
         self._timeout_ms = timeout_ms
@@ -568,10 +637,14 @@ class ORQBackend(Backend):
                     'ORQ backend requires the orq-ai-sdk package. '
                     'Install with: uv add "evaluatorq[orq]" (or: python -m pip install "evaluatorq[orq]")'
                 )
+            if retry_count is None:
+                retry_count = PIPELINE_CONFIG.retry_count
+                retry_on_codes = PIPELINE_CONFIG.retry_on_codes
             self._orq_client = _orq_cls(
                 api_key=_get_orq_api_key(),
                 server_url=_get_orq_server_url(),
                 timeout_ms=self._timeout_ms,
+                retry_config=_orq_retry_config(retry_count, retry_on_codes, timeout_ms=self._timeout_ms),
             )
 
     def create_target(self, agent_key: str) -> ORQAgentTarget:
@@ -602,5 +675,8 @@ def create_orq_agent_target(
             api_key=_get_orq_api_key(),
             server_url=_get_orq_server_url(),
             timeout_ms=timeout_ms,
+            retry_config=_orq_retry_config(
+                PIPELINE_CONFIG.retry_count, PIPELINE_CONFIG.retry_on_codes, timeout_ms=timeout_ms
+            ),
         )
     return ORQAgentTarget(agent_key=agent_key, orq_client=orq_client, timeout_ms=timeout_ms)

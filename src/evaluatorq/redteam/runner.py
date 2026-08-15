@@ -23,7 +23,9 @@ from evaluatorq import DataPoint, EvaluationResult, job
 from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.messages import coerce_content_text
+from evaluatorq.common.recommendations import resolve_recommendations
 from evaluatorq.common.replay import REPLAY_VERSION, REPLAY_VERSION_KEY
+from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.common.target_call import call_target_with_retry, default_map_error
 from evaluatorq.common.thread_context import (
@@ -53,7 +55,6 @@ from evaluatorq.redteam.adaptive.strategy_registry import (
 from evaluatorq.redteam.backends.base import (
     Backend,
     BareTargetBackend,
-    _coerce_to_agent_response,
 )
 from evaluatorq.redteam.backends.registry import create_async_llm_client, make_agent_backend, resolve_backend
 from evaluatorq.redteam.contracts import (
@@ -63,6 +64,7 @@ from evaluatorq.redteam.contracts import (
     LLMConfig,
     Pipeline,
     PipelineStage,
+    RedTeamRecommendationConfig,
     RedTeamReport,
     SaveMode,
     TargetConfig,
@@ -119,7 +121,7 @@ def _save_stage(output_dir: Path | None, filename: str, content: str) -> None:
 def _save_report(output_dir: Path | None, filename: str, report: RedTeamReport) -> None:
     """Write a summary report to *output_dir* as flat JSON with ``saved_at``.
 
-    Unlike :func:`_save_stage`, the report is written without an extra
+    Unlike `_save_stage`, the report is written without an extra
     envelope layer — ``saved_at`` is injected directly into the top-level
     dict alongside the existing report fields.
     """
@@ -155,7 +157,7 @@ def _auto_save_run(
     ``run_config`` the execution knobs they don't encode (turn budget, attacker
     steering). Both are stored alongside the report (not part of the report
     model) so the run can later be replayed verbatim via ``previous_run=`` —
-    see :mod:`evaluatorq.redteam.replay`.
+    see `evaluatorq.redteam.replay`.
     """
     try:
         runs_dir = get_runs_dir()
@@ -311,6 +313,46 @@ def _datapoint_breakdown(datapoints: list[Any]) -> dict[str, int]:
     }
 
 
+def _apply_coverage_policy(report: RedTeamReport, pipeline_config: LLMConfig | None) -> None:
+    """Stamp the coverage floor onto the report and warn when it is not met.
+
+    Every pipeline must go through here, not just the dynamic one. The floor is
+    what ``ReportSummary.coverage_below_minimum`` compares against, and that
+    property returns False when the floor is None — so a leg that forgets to
+    stamp does not merely lose a warning, it silently disables the CLI exit gate
+    for its whole mode. Static ran that way until this was extracted.
+
+    Stamping also records on the saved run *what it was judged against*, so a
+    report re-read months later still knows the policy, and every consumer (exit
+    code, warnings, dashboards) reads one value instead of each holding its own
+    idea of "enough".
+    """
+    summary = report.summary
+    summary.min_evaluation_coverage = pipeline_config.evaluator.min_evaluation_coverage if pipeline_config else None
+
+    total_attacks = summary.total_attacks
+    if summary.no_verdict:
+        report.pipeline_warnings.append(
+            f'NO VERDICT: 0/{total_attacks} attacks could be evaluated — the target was not tested. '
+            'Check evaluator model configuration, credentials, and any gateway guardrails rejecting '
+            'judge or target calls.'
+        )
+        logger.error(f'No verdict: 0/{total_attacks} attacks could be evaluated — the target was not tested.')
+    elif summary.coverage_below_minimum:
+        floor = summary.min_evaluation_coverage
+        report.pipeline_warnings.append(
+            f'Evaluation coverage below the configured minimum: '
+            f'{summary.evaluated_attacks}/{total_attacks} attacks scored '
+            f'({pct(summary.evaluation_coverage)} < {pct(floor)}). The rates below are '
+            'computed over that subset only. Check evaluator model configuration and credentials.'
+        )
+        logger.warning(
+            f'Evaluation coverage {pct(summary.evaluation_coverage)} is below the configured '
+            f'minimum {pct(floor)}: {summary.unevaluated_attacks}/{total_attacks} attacks returned '
+            'inconclusive results.'
+        )
+
+
 def _cap_datapoints_balanced(datapoints: list[Any], cap: int) -> list[Any]:
     """Cap datapoints using round-robin across vulnerabilities for balanced coverage.
 
@@ -362,8 +404,8 @@ if TYPE_CHECKING:
 class PreparedTarget:
     """Typed container for all per-target state prepared before a run.
 
-    Returned by :func:`_prepare_target` and consumed by
-    :func:`_run_dynamic_or_hybrid`.
+    Returned by `_prepare_target` and consumed by
+    `_run_dynamic_or_hybrid`.
     """
 
     target: str
@@ -465,12 +507,11 @@ async def red_team(
     hooks: PipelineHooks | None = None,
     artifacts_dir: Path | str | None = None,
     target_config: TargetConfig | None = None,
-    generate_recommendations: bool = False,
+    recommendations: bool | RedTeamRecommendationConfig = True,
     generate_executive_summary: bool = True,
     attacker_instructions: str | None = None,
     verbosity: int = 0,
     save: SaveMode = SaveMode.FINAL,
-    config: LLMConfig | None = None,
 ) -> RedTeamReport:
     """Unified entry point for red teaming.
 
@@ -480,7 +521,7 @@ async def red_team(
 
     Args:
         target: Target identifier(s). A single string like ``"agent:<key>"``,
-            an :class:`AgentTarget` instance, or a list of either for multi-target runs.
+            an `AgentTarget` instance, or a list of either for multi-target runs.
         mode: Execution mode — ``"dynamic"``, ``"static"``, or ``"hybrid"``.
         categories: OWASP categories to test (e.g., ``["ASI01", "ASI03"]``).
             Defaults to all available categories. Ignored if ``vulnerabilities`` is set.
@@ -506,7 +547,7 @@ async def red_team(
             ``vulnerabilities``, ``strategies`` and ``delivery_methods``:
             ``None`` means "no filter", and an empty list means "match nothing"
             — never "match everything". Since an empty selection leaves zero
-            datapoints, ``red_team`` raises :class:`RedTeamError` rather than
+            datapoints, ``red_team`` raises `RedTeamError` rather than
             silently running nothing (or, worse, running the full sweep the
             caller meant to filter down). This is reachable from the SDK only:
             the CLI maps blank/empty input back to ``None`` (``_split_csv``), so
@@ -519,7 +560,6 @@ async def red_team(
             evaluator=LLMCallConfig(...))`` to control model, temperature, and other
             per-role settings. Defaults to ``LLMConfig()`` which uses the default model
             for both attacker and evaluator roles.
-        config: Deprecated alias for ``llm_config``. Retained for backward compatibility.
         parallelism: Maximum concurrent evaluatorq jobs.
         generate_strategies: Whether to generate additional LLM-based strategies.
         generated_strategy_count: Number of strategies to generate per category.
@@ -555,10 +595,13 @@ async def red_team(
             ``02_attack_results.json``, and ``03_summary_report.json`` here.
         target_config: Optional backend-agnostic target configuration (e.g.
             system prompt for OpenAI targets).
-        generate_recommendations: Whether to generate LLM-based actionable
+        recommendations: Whether to generate LLM-based actionable
             recommendations for the top focus areas by analyzing failed traces.
-            Requires an LLM client (explicit or via environment credentials).
-            Defaults to ``False``.
+            ``True`` (the default) uses ``RedTeamRecommendationConfig()`` defaults,
+            ``False`` skips the LLM call, and a ``RedTeamRecommendationConfig``
+            instance tunes how many areas and traces are analyzed. Requires an
+            LLM client (explicit or via environment credentials). Best-effort:
+            failures are swallowed into a pipeline warning.
         generate_executive_summary: Whether to generate an LLM narrative
             executive summary at the top of the report. Best-effort: silently
             skipped (with a pipeline warning) when no LLM credentials are
@@ -580,17 +623,43 @@ async def red_team(
         ValueError: If mode is invalid, required arguments are missing, or
             ``save='detail'`` is passed without ``artifacts_dir``.
         CancelledError: If hooks.on_confirm returns False.
+
+    Usage:
+
+    ```python
+    import asyncio
+
+    from evaluatorq.redteam import red_team
+
+
+    async def main() -> None:
+        # Dynamic run against an ORQ platform agent
+        report = await red_team("agent:YOUR_AGENT_KEY", mode="dynamic", categories=["LLM01", "LLM07"])
+        print(report.summary.resistance_rate)
+
+
+    asyncio.run(main())
+    ```
+
+    ```python
+    import asyncio
+
+    from evaluatorq.redteam import OpenAIModelTarget, red_team
+
+
+    async def main() -> None:
+        # Dynamic run against a direct model target
+        target = OpenAIModelTarget("gpt-5-mini", system_prompt="You are a helpful assistant.")
+        report = await red_team(target, mode="dynamic", categories=["LLM01", "LLM07"])
+        print(report.summary.resistance_rate)
+
+
+    asyncio.run(main())
+    ```
     """
-    if config is not None:
-        if llm_config is not None:
-            msg = "Pass only one of 'config' or 'llm_config'."
-            raise TypeError(msg)
-        warnings.warn(
-            'config= is deprecated and will be removed in 1.4.0. Use llm_config= instead.',
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        llm_config = config
+    # True -> defaults, False -> off, instance -> as given. One resolution here so the
+    # generation site downstream only has to check for None.
+    recommendation_config = resolve_recommendations(recommendations, RedTeamRecommendationConfig)
 
     if isinstance(save, bool):
         warnings.warn(
@@ -802,8 +871,8 @@ async def red_team(
     # registered automated evaluator can be *attacked* but not *scored* by prompt-based
     # red teaming. Without this gate the dynamic leg would burn attacker and target
     # tokens generating attacks that always return inconclusive, and the summary could
-    # not distinguish "unmeasured" from "resisted" (resistance_rate defaults to 0.0 at
-    # zero evaluation coverage, which reads as fully vulnerable). Such vulnerabilities
+    # not distinguish "unmeasured" from "resisted" (every rate is None at zero evaluation
+    # coverage, so the report reads "no verdict" rather than a score). Such vulnerabilities
     # are pruned up front; if NONE of the requested ones are scorable, we raise.
     #
     # As of this writing every vulnerability in the registry HAS an evaluator (all ten
@@ -982,12 +1051,14 @@ async def red_team(
                     'prompt-based red teaming (requires live-system testing).',
                 )
 
-            # Generate LLM-based recommendations for focus areas (opt-in)
-            if generate_recommendations:
+            # Generate LLM-based recommendations for focus areas (on by default)
+            if recommendation_config is not None:
                 try:
                     rec_client = llm_client or config.evaluator.client
                     if rec_client is None:
-                        rec_client = create_async_llm_client(role_config=config.evaluator.as_call_config())
+                        rec_client = create_async_llm_client(
+                            role_config=config.evaluator.as_call_config(), max_retries=config.retry_count
+                        )
 
                     async with with_redteam_span(
                         'orq.redteam.recommendations',
@@ -997,6 +1068,7 @@ async def red_team(
                             report=report,
                             llm_client=rec_client,
                             model=evaluator_model,
+                            recommendations=recommendation_config,
                             cfg=config,
                         )
                 except (TypeError, AttributeError, ImportError, NameError, KeyError):
@@ -1018,7 +1090,9 @@ async def red_team(
                 try:
                     es_client = llm_client or config.evaluator.client
                     if es_client is None:
-                        es_client = create_async_llm_client(role_config=config.evaluator.as_call_config())
+                        es_client = create_async_llm_client(
+                            role_config=config.evaluator.as_call_config(), max_retries=config.retry_count
+                        )
                     async with with_redteam_span(
                         'orq.redteam.executive_summary',
                         {'orq.redteam.model': evaluator_model},
@@ -1085,17 +1159,7 @@ async def red_team(
             # Only mark completion after the user completion hook succeeds.  If
             # it raises, the lifecycle context above records the surfaced error.
             if manifest_writer is not None:
-                manifest_writer.complete(
-                    report_path=run_path,
-                    summary={
-                        'pipeline': report.pipeline.value,
-                        'total_results': report.total_results,
-                        'total_attacks': report.summary.total_attacks,
-                        'vulnerability_rate': report.summary.vulnerability_rate,
-                        'resistance_rate': report.summary.resistance_rate,
-                        'tested_agents': list(report.tested_agents),
-                    },
-                )
+                manifest_writer.complete(report_path=run_path, summary=report.manifest_summary())
 
             return report
 
@@ -1206,7 +1270,7 @@ async def _run_static_target_call(
 
     return {
         'response': result.text,
-        'error': call.error,
+        **call.error_payload(),
         'tool_calls': result.tool_calls,
         'token_usage': result.usage,
         'finish_reason': result.finish_reason,
@@ -1221,7 +1285,7 @@ def _create_static_job_for_agent_target(
     *,
     run_id: str | None = None,
 ) -> Any:
-    """Create an evaluatorq static job that drives an :class:`AgentTarget`.
+    """Create an evaluatorq static job that drives an `AgentTarget`.
 
     ``target_factory`` mints a fresh, isolated target per attack; the job closes
     it afterwards (a no-op for externally-injected, caller-owned clients). Callers
@@ -1266,11 +1330,10 @@ def _create_static_job_for_agent_target(
                             target_agent_timeout_ms=cfg.target_agent_timeout_ms,
                             max_target_retries=cfg.max_target_retries,
                         )
-                        error = output['error']
-                        if error is not None:
+                        if output['error'] is not None:
                             error_attrs: AttrMap = {
-                                'orq.redteam.error_type': error.error_type,
-                                'orq.redteam.error_code': error.code,
+                                'orq.redteam.error_type': output['error_type'],
+                                'orq.redteam.error_code': output['error_code'],
                             }
                             set_span_attrs(target_span, error_attrs)
                             set_span_attrs(agent_span, error_attrs)
@@ -1304,7 +1367,10 @@ def _resolve_attacker_llm_client(
     if pipeline_config is not None and pipeline_config.attacker.client is not None:
         return pipeline_config.attacker.client
     if create_if_missing:
-        return create_async_llm_client(role_config=pipeline_config.attacker if pipeline_config is not None else None)
+        return create_async_llm_client(
+            role_config=pipeline_config.attacker if pipeline_config is not None else None,
+            max_retries=pipeline_config.retry_count if pipeline_config is not None else None,
+        )
     return None
 
 
@@ -1319,11 +1385,11 @@ def _create_job_for_target(
 
     Dispatches on the target kind (``agent``, ``deployment``, or fallback to
     model) and returns the appropriate
-    :func:`~evaluatorq.redteam.runtime.jobs.create_model_job` result.
+    `create_model_job` result.
 
     Args:
         target:        Full target string, e.g. ``"agent:my-key"``.
-        llm_client:    Optional pre-configured :class:`openai.AsyncOpenAI`
+        llm_client:    Optional pre-configured `openai.AsyncOpenAI`
                        client.
         system_prompt: Optional system prompt to pass to the job.
         pipeline_config: Optional ``LLMConfig`` for ``target_max_tokens``.
@@ -1362,7 +1428,7 @@ def _check_filter_results(
     """Surface strategy/delivery-method filter mismatches; fail on an empty run.
 
     Warns for any requested strategy name or delivery method that matched no
-    datapoint, then raises :class:`RedTeamError` when a user-supplied filter
+    datapoint, then raises `RedTeamError` when a user-supplied filter
     leaves zero datapoints to run — a silent zero-attack run that still exits 0
     is the worst outcome for an attack tool. Called on the *final* per-target
     datapoint set (dynamic + static combined) so warnings and the empty-run
@@ -1495,7 +1561,7 @@ async def _prepare_target(
     dynamic job wrapper.
 
     Returns:
-        A :class:`PreparedTarget` instance with all per-target state.
+        A `PreparedTarget` instance with all per-target state.
     """
     target_kind, target_value = parse_target(target)
     safe_target = _make_safe_target(target_value)
@@ -1774,7 +1840,7 @@ async def _run_dynamic_or_hybrid(
 ) -> tuple[RedTeamReport, RedTeamRunMetrics]:
     """Run dynamic or hybrid red teaming for multiple targets in a single evaluatorq call.
 
-    For each target, :func:`_prepare_target` retrieves agent context, generates
+    For each target, `_prepare_target` retrieves agent context, generates
     agent-specific dynamic datapoints, and produces a job closure.  The first
     target generates shared datapoints; subsequent targets reuse them to avoid
     redundant LLM calls.  For hybrid mode an additional static dataset is loaded
@@ -1782,7 +1848,7 @@ async def _run_dynamic_or_hybrid(
     ``evaluatorq()`` call.
 
     After execution, results are split by ``job_name`` (matching each target's
-    ``safe_target`` slug) and converted to per-target :class:`RedTeamReport`
+    ``safe_target`` slug) and converted to per-target `RedTeamReport`
     instances, which are merged into one unified report.
 
     Args:
@@ -1888,7 +1954,9 @@ async def _run_dynamic_or_hybrid(
             cap_llm_client = pipeline_config.attacker.client
         if cap_llm_client is None:
             try:
-                cap_llm_client = create_async_llm_client()
+                cap_llm_client = create_async_llm_client(
+                    max_retries=pipeline_config.retry_count if pipeline_config is not None else None,
+                )
             except Exception as exc:
                 logger.debug(f'No LLM client available for capability classification: {exc}')
                 cap_llm_client = None
@@ -2321,6 +2389,7 @@ async def _run_dynamic_or_hybrid(
                     _backend: Any = at_backend,
                     _label: str = at_label,
                     _safe: str = at_safe,
+                    _cfg: LLMConfig = pipeline_config or PIPELINE_CONFIG,
                 ) -> Any:
                     """Send a static datapoint to the AgentTarget via respond."""
                     messages = _build_messages(data)
@@ -2359,29 +2428,34 @@ async def _run_dynamic_or_hybrid(
                                     'orq.redteam.input': target_input,
                                 },
                             ) as agent_span:
-                                raw = await target_instance.respond([Message(role='user', content=prompt)])
-                                result = _coerce_to_agent_response(raw)
-                                if result.error is not None:
+                                # Same shared call as the non-hybrid static path: without it
+                                # this leg had no retry, no timeout and no ``error`` key at
+                                # all, so a failed target reached the judge as a plain
+                                # ``[ERROR: ...]`` string and got scored as a real answer.
+                                output = await _run_static_target_call(
+                                    target_instance,
+                                    prompt,
+                                    target_agent_timeout_ms=_cfg.target_agent_timeout_ms,
+                                    max_target_retries=_cfg.max_target_retries,
+                                    map_error=_backend.map_error,
+                                )
+                                if output['error'] is not None:
                                     error_attrs: AttrMap = {
-                                        'orq.redteam.error_type': result.error.error_type,
-                                        'orq.redteam.error_code': result.error.code,
+                                        'orq.redteam.error_type': output['error_type'],
+                                        'orq.redteam.error_code': output['error_code'],
                                     }
                                     set_span_attrs(target_span, error_attrs)
                                     set_span_attrs(agent_span, error_attrs)
                                 else:
-                                    output = truncate_for_span(result.text)
-                                    output_attrs: AttrMap = {'output': output, 'orq.redteam.output': output}
+                                    response_text = truncate_for_span(output['response'])
+                                    output_attrs: AttrMap = {
+                                        'output': response_text,
+                                        'orq.redteam.output': response_text,
+                                    }
                                     set_span_attrs(target_span, output_attrs)
                                     set_span_attrs(agent_span, output_attrs)
-                    active_progress = _get_active_progress()
-                    if active_progress is not None:
-                        await active_progress.finish_attack(None)
                     return {
-                        'response': result.text,
-                        'tool_calls': result.tool_calls,
-                        'token_usage': result.usage,
-                        'finish_reason': result.finish_reason,
-                        'model': result.model,
+                        **output,
                         'thread_id': thread_id,
                     }
 
@@ -2737,16 +2811,7 @@ async def _run_dynamic_or_hybrid(
                         f'Category {cat_key!r}: zero strategies selected — no applicable strategies found for this agent.'
                     )
 
-    total_attacks = merged.summary.total_attacks
-    unevaluated_attacks = merged.summary.unevaluated_attacks
-    if total_attacks > 0 and unevaluated_attacks / total_attacks > 0.5:
-        merged.pipeline_warnings.append(
-            f'High evaluation failure rate: {unevaluated_attacks}/{total_attacks} attacks could not be evaluated. '
-            'Check evaluator model configuration and credentials.'
-        )
-        logger.warning(
-            f'High evaluation failure rate: {unevaluated_attacks}/{total_attacks} attacks returned inconclusive results.'
-        )
+    _apply_coverage_policy(merged, pipeline_config)
 
     await await_maybe(
         resolved_hooks.on_stage_end(
@@ -3114,6 +3179,8 @@ async def _run_static(
     merged.run_id = run_id
     if agent_contexts:
         merged.agent_contexts = agent_contexts
+    # Before the report is persisted below, so the saved JSON records the policy too.
+    _apply_coverage_policy(merged, pipeline_config)
     await await_maybe(
         resolved_hooks.on_stage_end(
             PipelineStage.REPORT_GENERATION,

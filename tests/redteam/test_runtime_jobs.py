@@ -4,11 +4,14 @@
 
 from __future__ import annotations
 
+import sys
+from types import ModuleType
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from evaluatorq.common import model_catalogue
 from evaluatorq.redteam.contracts import Message, TokenUsage
 
 # ===========================================================================
@@ -281,3 +284,115 @@ class TestCreateModelJob:
 
         with pytest.raises(ValueError, match="Provide one of: 'model' or 'deployment_key'"):
             create_model_job()
+
+    @pytest.mark.asyncio
+    async def test_deployment_job_prices_usage_from_catalogue(self, monkeypatch: pytest.MonkeyPatch):
+        """RES-1295: deployments.invoke_async usage comes back priced, keyed on
+        the model the deployment actually ran, with no AsyncOpenAI client
+        available to resolve the catalogue against (falls back to ORQ_BASE_URL,
+        which is the host the deployment client itself was built with)."""
+        from evaluatorq import DataPoint
+        from evaluatorq.redteam.runtime.jobs import create_model_job
+
+        model_catalogue.reset_catalogue_cache()
+
+        async def fake_load(client=None):  # noqa: ANN001, ARG001
+            assert client is None
+            return {'gpt-4o-mini': model_catalogue.ModelInfo(0.00025, 0.002, 'openai', supports_responses=True)}
+
+        monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
+
+        completion = MagicMock()
+        completion.choices = [MagicMock()]
+        completion.choices[0].message.content = 'mock target response'
+        completion.model = 'gpt-4o-mini'
+        completion.usage = MagicMock(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+        deployments = MagicMock()
+        deployments.invoke_async = AsyncMock(return_value=completion)
+        module = ModuleType('orq_ai_sdk')
+        module.Orq = MagicMock(return_value=MagicMock(deployments=deployments))  # pyright: ignore[reportAttributeAccessIssue]
+        monkeypatch.setitem(sys.modules, 'orq_ai_sdk', module)
+        monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+
+        job_fn = create_model_job(deployment_key='test-deployment', run_id='static-run')
+        result = await job_fn(
+            DataPoint(
+                inputs={
+                    'id': 'deployment-1',
+                    'category': 'ASI01',
+                    'messages': [{'role': 'user', 'content': 'hello'}],
+                }
+            ),
+            0,
+        )
+
+        usage = result['output']['token_usage']
+        assert usage is not None
+        assert usage.calls == usage.priced_calls == 1
+        assert usage.total_cost is not None
+        assert usage.total_cost > 0
+
+        model_catalogue.reset_catalogue_cache()
+
+    @pytest.mark.asyncio
+    async def test_deployment_client_targets_the_configured_host(self, monkeypatch: pytest.MonkeyPatch):
+        """The deployment client must be built with ORQ_BASE_URL, not the SDK's prod default.
+
+        Without server_url the call goes to my.orq.ai while price_usage looks the model
+        up in the ORQ_BASE_URL host's catalogue — a staging run priced off prod (RES-1295).
+        """
+        from evaluatorq.redteam.runtime.jobs import create_model_job
+
+        module = ModuleType('orq_ai_sdk')
+        module.Orq = MagicMock(return_value=MagicMock(deployments=MagicMock()))  # pyright: ignore[reportAttributeAccessIssue]
+        monkeypatch.setitem(sys.modules, 'orq_ai_sdk', module)
+        monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+        monkeypatch.setenv('ORQ_BASE_URL', 'https://staging.orq.ai')
+
+        create_model_job(deployment_key='test-deployment')
+
+        module.Orq.assert_called_once_with(api_key='test-key', server_url='https://staging.orq.ai')  # pyright: ignore[reportAttributeAccessIssue]
+
+    @pytest.mark.asyncio
+    async def test_router_job_returns_priced_usage(self, monkeypatch: pytest.MonkeyPatch):
+        """RES-1295: router_job must return the priced Usage execute_chat_completion
+        already computed, not re-derive an unpriced one from the raw response —
+        that re-derivation was the exact counted-but-unpriced defect this task closes."""
+        from evaluatorq import DataPoint
+        from evaluatorq.redteam.runtime.jobs import create_model_job
+
+        model_catalogue.reset_catalogue_cache()
+
+        async def fake_load(client=None):  # noqa: ANN001, ARG001
+            return {'gpt-4o-mini': model_catalogue.ModelInfo(0.00025, 0.002, 'openai', supports_responses=True)}
+
+        monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
+
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.content = 'mock target response'
+        response.choices[0].finish_reason = 'stop'
+        response.usage = MagicMock(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+        client = AsyncMock()
+        client.base_url = 'https://api.openai.com/v1'
+        client.chat.completions.create = AsyncMock(return_value=response)
+
+        job_fn = create_model_job(model='gpt-4o-mini', llm_client=client, run_id='static-run')
+        result = await job_fn(
+            DataPoint(
+                inputs={
+                    'id': 'router-1',
+                    'category': 'ASI01',
+                    'messages': [{'role': 'user', 'content': 'hello'}],
+                }
+            ),
+            0,
+        )
+
+        usage = result['output']['token_usage']
+        assert usage is not None
+        assert usage.calls == usage.priced_calls == 1
+        assert usage.total_cost is not None
+        assert usage.total_cost > 0
+
+        model_catalogue.reset_catalogue_cache()

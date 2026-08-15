@@ -54,7 +54,7 @@ class MissingLLMCredentialsError(ValueError):
 
 
 class ResolvedClient(NamedTuple):
-    """Result of :func:`resolve_llm_client`."""
+    """Result of `resolve_llm_client`."""
 
     client: AsyncOpenAI
     owned: bool
@@ -110,6 +110,7 @@ def resolve_llm_client(
     default_orq_host: str = ORQ_DEFAULT_HOST,
     honor_openai_base_url: bool = True,
     require_orq: bool = False,
+    max_retries: int | None = None,
 ) -> ResolvedClient:
     """Resolve an ``AsyncOpenAI`` client from an injected client or env vars.
 
@@ -125,6 +126,17 @@ def resolve_llm_client(
             ``extra_api_key``, or ``ORQ_API_KEY``). Used by ORQ-agent targets
             whose ``agent/<key>`` model id only resolves on the Orq router, so an
             ``OPENAI_API_KEY`` left in the env must never silently capture them.
+        max_retries: Client-side retry budget (number of *retries*, not attempts)
+            for clients built here. The OpenAI SDK retries 408/409/429/5xx and
+            connection errors with ``Retry-After`` support. A caller that passes
+            an explicit ``max_retries`` makes this the single client-side retry
+            layer and must not add its own wrapper on top; a caller that owns
+            retry itself must pass ``0`` so the layers cannot stack (see
+            ``OrqResponsesTarget``, which wraps its calls in ``with_retry``).
+            Legacy simulation paths that still wrap ``with_retry`` around an
+            SDK-default client predate this rule and are tracked to migrate.
+            ``None`` keeps the SDK default (2). Ignored for an injected
+            ``config_client``, which is used exactly as the caller built it.
 
     Raises:
         MissingLLMCredentialsError: No injected client and no usable ORQ key
@@ -137,14 +149,16 @@ def resolve_llm_client(
             routes_through_orq=client_routes_through_orq(config_client),
         )
 
-    from openai import AsyncOpenAI
+    from openai import DEFAULT_MAX_RETRIES, AsyncOpenAI
+
+    retries = max_retries if max_retries is not None else DEFAULT_MAX_RETRIES
 
     orq_api_key = extra_api_key or os.environ.get('ORQ_API_KEY')
     if orq_api_key:
         host = os.environ.get('ORQ_BASE_URL', default_orq_host).rstrip('/')
         router_url = f'{host}{ORQ_ROUTER_SUFFIX}'
         return ResolvedClient(
-            client=AsyncOpenAI(api_key=orq_api_key, base_url=router_url),
+            client=AsyncOpenAI(api_key=orq_api_key, base_url=router_url, max_retries=retries),
             owned=True,
             routes_through_orq=True,
         )
@@ -161,7 +175,9 @@ def resolve_llm_client(
     if openai_api_key:
         base_url = os.environ.get('OPENAI_BASE_URL') if honor_openai_base_url else None
         client = (
-            AsyncOpenAI(api_key=openai_api_key, base_url=base_url) if base_url else AsyncOpenAI(api_key=openai_api_key)
+            AsyncOpenAI(api_key=openai_api_key, base_url=base_url, max_retries=retries)
+            if base_url
+            else AsyncOpenAI(api_key=openai_api_key, max_retries=retries)
         )
         return ResolvedClient(
             client=client,

@@ -105,7 +105,37 @@ orq.job                          # one per DataPoint — root when no ambient tr
 
 All `orq.job` spans from a single `evaluatorq()` call share the same `orq.run_id`
 attribute, which ties them together as a logical run without requiring a common
-parent span.
+parent span. Because there is no common parent, though, an N-row run arrives as
+**N separate traces** — one rooted at each `orq.job`.
+
+#### One trace per run: `single_trace=True`
+
+Pass `single_trace=True` to bracket the whole run in one `evaluatorq.run` span,
+so every row lands in a single trace:
+
+```python
+await evaluatorq("my-eval", data=rows, jobs=[my_job], single_trace=True)
+```
+
+```
+evaluatorq.run                   # one per evaluatorq() call — the root
+  └── orq.job                    # one per DataPoint, now a child rather than a root
+      └── orq.evaluation
+```
+
+It defaults to `False` so existing traces keep their shape. Red teaming and
+simulation do not need the flag — they already open their own root spans
+(`Evaluatorq - Red Teaming` / `Evaluatorq - Agent Simulation`), and `orq.job`
+nests under those.
+
+Span attributes on `evaluatorq.run`:
+
+| Attribute | Value |
+|---|---|
+| `orq.trace_type` | `"evaluatorq"` |
+| `orq.run_id` | UUID for this evaluation run — the same one every `orq.job` carries |
+| `orq.run_name` | The `name` passed to `evaluatorq()` |
+| `orq.evaluatorq_run_id` | Same UUID again, under the key every evaluatorq root span uses, so one query finds a run's root whatever the surface |
 
 Span attributes on `orq.job`:
 
@@ -159,9 +189,33 @@ LLM spans (`chat ...`) carry standard GenAI attributes:
 | `gen_ai.request.model` | Model identifier |
 | `gen_ai.usage.input_tokens` | Prompt token count |
 | `gen_ai.usage.output_tokens` | Completion token count |
+| `gen_ai.usage.total_tokens` | Total token count |
+| `gen_ai.usage.calls` | Number of LLM calls rolled into this span (omitted when zero) |
+| `gen_ai.usage.cost` | Total cost in USD, only when the provider reported one (also emitted as `gen_ai.usage.total_cost`; `gen_ai.usage.input_cost` / `gen_ai.usage.output_cost` when the provider breaks it down) |
+| `gen_ai.usage.cache_read.input_tokens` | Cached prompt tokens, when the provider reports them |
+| `gen_ai.usage.cache_creation.input_tokens` | Cache-write prompt tokens, when the provider reports them |
+| `gen_ai.usage.reasoning.output_tokens` | Reasoning tokens, when the provider reports them |
 | `gen_ai.input.messages` | JSON serialised input messages (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
 | `gen_ai.output.messages` | JSON serialised output messages (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
 | `orq.llm.purpose` | Cross-domain purpose tag (e.g. `"adversarial"`, `"evaluation"`, `"target"`) |
+
+!!! note "Attribute aliases removed (August 2026, RES-985)"
+    Earlier releases emitted every token count under up to three names: the
+    canonical `gen_ai.usage.*` key above, a legacy alias
+    (`gen_ai.usage.prompt_tokens`, `gen_ai.usage.completion_tokens`,
+    `gen_ai.usage.prompt_tokens_details.cached_tokens`), and a bare
+    un-namespaced key (`prompt_tokens`, `completion_tokens`, `input_tokens`,
+    `output_tokens`, `total_tokens`, `calls`). The aliases and bare keys are no
+    longer emitted. This was verified against the Orq platform's OTel ingest
+    (`extractCommonUsage` in `orquesta-web` `apps/traces-api`): its attribute
+    pattern lists try the canonical `gen_ai.usage.*` spellings first, cache
+    counts are read from the `cache_read.input_tokens` /
+    `cache_creation.input_tokens` keys kept here, and the bare keys and `calls`
+    are read nowhere. Reasoning tokens moved from
+    `gen_ai.usage.completion_tokens_details.reasoning_tokens` (a spelling the
+    platform never read) to `gen_ai.usage.reasoning.output_tokens`, the one it
+    does. Third-party OTLP consumers that matched the removed aliases must
+    switch to the canonical keys.
 
 The root `Evaluatorq - Red Teaming` span additionally carries:
 
@@ -258,6 +312,128 @@ exist purely to scope the nested LLM call (and, for `target_call`, the target's 
 input/output recording). LLM spans nested under `judge_evaluation` and
 `user_simulator_call` carry the same GenAI attributes as the red teaming LLM spans
 above, tagged via `orq.llm.purpose`.
+
+### Judge-panel spans
+
+`llm_jury()`, `run_jury()`, and `run_pairwise()` (`src/evaluatorq/common/jury.py`,
+`src/evaluatorq/pairwise.py`) run a panel of judges under a shared span
+hierarchy:
+
+```
+orq.evaluation {evaluator}         # from the core runner, when a jury backs an evaluator
+  └── orq.jury                     # one per deliberation (orq.pairwise_jury in comparative mode)
+        └── orq.judge              # one per judge (x2 in comparative mode — see below)
+              └── chat {model}     # the judge's own LLM call(s), tagged orq.llm.purpose="judge"
+```
+
+The panel opens no span of its own outside `orq.jury` — it can equally be
+called standalone (not nested under `orq.evaluation`), in which case `orq.jury`
+is the root. All jury/judge spans are opened via `evaluatorq.common.tracing`'s
+`with_span()`, so — like every other span in this document — they are a no-op
+when tracing is disabled; verdicts and aggregation are unaffected either way.
+
+A judge whose call failed leaves its `orq.judge` span with OTel status `ERROR`
+(via `set_span_error`), but the failure is swallowed at the panel level — the
+jury carries on with whatever judges succeeded (or promotes a replacement) and
+the parent `orq.jury` span stays OK.
+
+Span attributes on `orq.judge`:
+
+| Attribute | Value |
+|---|---|
+| `judge.name` | Judge model ID |
+| `judge.model` | Judge model ID (same value as `judge.name`) |
+| `judge.verdict` | Stringified verdict, always in the canonical frame (bool / float / str all coerce to `str`); unset when the vote has no value |
+| `judge.success` | Whether the judge produced a usable outcome (decisive or abstained) |
+| `judge.abstained` | Whether the judge explicitly abstained |
+| `judge.replacement` | Whether this judge stood in for a failed configured judge |
+| `judge.label_swapped` | Comparative (pairwise) mode only — which ordering this vote was cast in |
+| `judge.latency_ms` | Wall-clock time for this judge's repetitions |
+| `judge.error` | Error string when the judge failed (truncated per `EVALUATORQ_SPAN_MAX_TEXT_CHARS`) |
+| `judge.repetitions_failed` | Count of failed repetitions out of the judge's configured repetition count |
+
+No token usage or cost here: those are recorded once, on the `chat` spans
+underneath, and rolled up by the consumer. Stamping them on every ancestor as
+well made the same tokens appear three times in one trace.
+
+`judge.label_swapped` is only ever set (`True`/`False`) in comparative mode —
+in plain `run_jury()` deliberations it is absent, since each judge votes once.
+
+Span attributes on `orq.jury`:
+
+| Attribute | Value |
+|---|---|
+| `jury.verdict` | Stringified panel verdict |
+| `jury.aggregator` | Consensus rule name: one of the `aggregator=` keywords (`mode`, `majority`, `mean_std`, `median`, `min`, `max`), `custom` for a caller-supplied callable, or `pairwise_plurality` — see the note below |
+| `jury.min_successful_judges` | Configured quorum |
+| `jury.raw_agreement` | Modal-vote share among decisive votes; unset when inconclusive |
+| `jury.judges_configured` | Panel size |
+| `jury.judges_succeeded` | Judges that cast a decisive vote |
+| `jury.judges_failed` | Judges that failed outright |
+| `jury.replacements_used` | Number of stand-in judges promoted |
+| `jury.tie` | Whether the verdict came from a tie-break |
+| `jury.inconclusive` | Whether the panel failed to reach quorum |
+
+`pairwise_plurality` is a **reported value, not an accepted argument** — you
+cannot pass it to `aggregator=`, and `validate_aggregator()` rejects it. It
+names the rule `run_pairwise()` applies internally: `pairwise_consensus()`,
+a strict plurality over *reconciled pair* votes, run after judges that flipped
+across the two orderings have already been dropped to abstentions. The six
+`aggregator=` keywords reduce raw per-judge votes instead, so labelling this
+one `mode` would name it after a function it does not call.
+
+#### Comparative (pairwise) mode
+
+`run_pairwise()` compares two responses (A vs. B) and, to control for position
+bias, runs every judge in **both** label orderings. This changes the span
+shape from the plain jury case:
+
+- **One `orq.pairwise_jury` span covers the whole comparison** — both orderings
+  drive the same span rather than each minting its own; `run_pairwise` calls the
+  internal `_run_jury_core` directly (not `run_jury`) so it doesn't open a
+  second jury span per ordering.
+- **Each judge appears twice** under that one `orq.pairwise_jury` span — one
+  `orq.judge` span per ordering, distinguished by `judge.label_swapped`
+  (`False` for the A/B ordering, `True` for the swapped B/A ordering).
+- **The span is named `orq.pairwise_jury`, not `orq.jury`** — it aggregates
+  reconciled *pair* votes rather than raw per-judge votes, so it gets its own
+  name rather than masquerading as a plain jury. Its attributes stay in the
+  `jury.*` namespace, plus these comparative-only extras:
+
+| Attribute | Value |
+|---|---|
+| `jury.flipped` | Count of judges that contradicted themselves across the two orderings (position bias) |
+| `jury.flipped_judges` | Comma-separated model names of the flipped judges |
+| `jury.swap` | Whether the comparison ran both orderings (`swap=True`, the default) or only one |
+
+**`judge.verdict` is already un-swapped in comparative mode.** The labels a judge
+returns there name a *position*, not a response: a judge that picks the same
+response both times says `A` in one ordering and `B` in the other, which reads as
+a self-contradiction and is in fact the opposite, a perfectly consistent judge.
+`label_swapped=True` spans are mapped back to the canonical frame before the
+attribute is written, so "how often did this judge pick response A" is answerable
+from `judge.verdict` alone, with no join against `judge.label_swapped`.
+
+There is deliberately no raw-frame twin. The text the verdict was parsed from is
+one level down, on the `chat` child's `gen_ai.output.messages`, so a second
+attribute here would only restate what the trace already holds — the same
+reasoning as the alias removal noted above.
+
+Un-swapping is per-ordering and needs nothing but `label_swapped`. *Flip
+detection* is what needs both orderings, and it stays on the parent —
+`jury.flipped_judges` names the judges that really did follow slot order.
+
+`jury.flipped` counts judges that answered in both orderings but disagreed
+with themselves — that is position bias, not a failure, so a flipped judge is
+deliberately excluded from `jury.judges_failed`: `judges_failed` counts only
+judges with no reconciled vote *and* no flip (i.e. one or both orderings
+raised an error). A judge can be flipped, failed, or a normal decisive vote,
+but never counted under more than one of those buckets.
+
+`orq.evaluation`, `orq.jury` / `orq.pairwise_jury`, `orq.judge`, and the nested `chat {model}` LLM
+spans follow the ambient OTel context — nothing threads an explicit parent
+across the `orq.evaluation` → `orq.jury` seam, so a jury backing a custom
+evaluator's scorer nests correctly without extra plumbing.
 
 ## Run correlation
 

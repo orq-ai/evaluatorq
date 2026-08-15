@@ -1507,6 +1507,8 @@ _SIM_REPORT_OVERRIDES_CSS = """
 .sim-report .crit-dot--pass { background: var(--green-600); }
 .sim-report .crit-dot--fail { background: var(--red-600); }
 .sim-report .crit-dot--safety { background: var(--orange-500); }
+/* Unaudited: hollow, so it reads as "unknown" rather than as a pass. */
+.sim-report .crit-dot--unknown { background: var(--surface-sunken); box-shadow: inset 0 0 0 1px var(--border-strong); }
 .sim-report .crit-caret {
     width: 13px; height: 13px; flex: none; color: var(--text-faint);
     transition: transform .2s ease, color .15s ease;
@@ -1536,6 +1538,8 @@ _SIM_REPORT_OVERRIDES_CSS = """
 .sim-report .crit-li--pass::before { background: var(--green-600); }
 .sim-report .crit-li--fail::before { background: var(--red-600); }
 .sim-report .crit-li--safety::before { background: var(--orange-500); }
+.sim-report .crit-li--unknown::before { background: var(--text-faint); }
+.sim-report .crit-evidence { margin: 4px 0 0; padding-left: 18px; font-size: 12px; font-style: italic; color: var(--text-muted); }
 @media (prefers-reduced-motion: reduce) {
     .sim-report .crit-summary, .sim-report .crit-dot, .sim-report .crit-caret,
     .sim-report .crit-cell::details-content { transition: none; }
@@ -2063,7 +2067,8 @@ _SIM_TRANSCRIPT_OVERRIDES_CSS = """
 /* Scoped to the criteria list so it no longer collides with the Scenarios-panel
    .sim-criterion rule above. Plain gapped column (no dividers). */
 .sim-report .sim-criteria-list .sim-criterion {
-    display: flex; align-items: center; gap: 8px;
+    /* wraps so the evidence quote drops onto its own full-width line under the row */
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
     /* Reset the row-divider + padding the legacy `.sim-criterion` rule adds; the
        criteria list is a plain gapped column so only the section-level rules
        (general info ↔ criteria ↔ conversation) draw dividers. */
@@ -2080,6 +2085,33 @@ _SIM_TRANSCRIPT_OVERRIDES_CSS = """
 }
 .sim-report .sim-ctype-unsafe {
     color: var(--red-600); background: var(--red-100); border-color: transparent;
+}
+/* Unaudited criteria read as neither pass nor fail: a muted "?" tile, a "not
+   audited" chip and a run-level note, so an unverified run can never look like a
+   clean one (RES-1308). */
+.sim-report .sim-criterion-unknown .sim-criterion-icon {
+    background: var(--surface-sunken); color: var(--text-faint);
+    border: 1px solid var(--border-subtle);
+}
+.sim-report .sim-criterion-unaudited {
+    flex-shrink: 0; font-family: var(--font-sans); font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.03em; white-space: nowrap;
+    color: var(--text-faint);
+}
+.sim-report .sim-criterion-evidence {
+    flex: 1 1 100%; font-size: 12px; font-style: italic; color: var(--text-muted);
+    padding-left: 26px;
+}
+.sim-report .sim-criteria-unknown {
+    font-family: var(--font-sans); font-size: 12px; color: var(--text-faint); white-space: nowrap;
+}
+.sim-report .sim-criteria-unverified {
+    margin: 0 0 10px; font-size: 12px; line-height: 1.5; color: var(--text-muted);
+    padding: 8px 10px; border-radius: 6px;
+    background: var(--surface-sunken); border: 1px solid var(--border-subtle);
+}
+.sim-report .sim-criteria-empty {
+    margin: 0; font-size: 13px; color: var(--text-faint);
 }
 """
 
@@ -2099,11 +2131,15 @@ _RT_REPORT_CSS = """
     background: var(--surface-sunken); color: var(--text-muted);
     border-radius: 999px; padding: 2px 8px;
 }
-.rt-hero-agent-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+/* Occupies the same slot as `.report-hero-sub` on the sim report — the line
+   under the run name answering "what was tested?" — so it carries that rule's
+   13px size and `4px 0 16px` margins. The mono 12px sub is a nested element
+   here (sim has no equivalent), one step down from the pill's own 13px. */
+.rt-hero-agent-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 16px; }
 .rt-hero-pill {
     display: inline-flex; align-items: center; gap: 6px;
     background: var(--surface-card); border: 1px solid var(--border-subtle);
-    border-radius: 999px; padding: 3px 10px; font-size: 12px;
+    border-radius: 999px; padding: 3px 10px; font-size: 13px;
 }
 .rt-hero-dot { display: inline-block; width: 7px; height: 7px; border-radius: 999px; }
 .rt-hero-dot--critical { background: var(--red-600); }
@@ -2111,7 +2147,7 @@ _RT_REPORT_CSS = """
 .rt-hero-dot--clean { background: var(--green-600); }
 .rt-hero-pill-name { color: var(--text-strong); }
 .rt-hero-pill-sub {
-    font-family: var(--font-mono); font-size: 10.5px; color: var(--text-faint);
+    font-family: var(--font-mono); font-size: 12px; color: var(--text-faint);
 }
 
 /* ---- Overview tab (spec §Overview.4) ---- */
@@ -2193,37 +2229,210 @@ _RT_REPORT_CSS = """
 .rt-report .rt-agent-card-chip-empty { color: var(--text-faint); font-size: 12px; }
 
 /* ---- Focus areas tab (spec §Focus areas) ---- */
-.rt-report .rt-focus-intro { font-size: 13px; color: var(--text-muted); margin: 0 0 16px; max-width: 720px; }
-.rt-report .rt-focus-intro code { font-family: var(--font-mono); }
-.rt-report .rt-focus-card { display: flex; gap: 16px; margin-bottom: 22px; }
-.rt-report .rt-focus-main { flex: 1 1 auto; min-width: 0; }
-.rt-report .rt-focus-tier-row { display: flex; align-items: center; gap: 8px; }
-.rt-report .rt-focus-tier-dot { width: 8px; height: 8px; border-radius: 999px; display: inline-block; }
-.rt-report .rt-focus-tier-label {
+.report-aligned .rt-focus-intro { font-size: 13px; color: var(--text-muted); margin: 0 0 16px; max-width: 720px; }
+.report-aligned .rt-focus-intro code { font-family: var(--font-mono); }
+.report-aligned .rt-focus-card { display: flex; flex-direction: column; margin-bottom: 22px; padding: 0; overflow: hidden; }
+.report-aligned .rt-focus-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 20px;
+    padding: 14px 18px; border-bottom: 1px solid var(--border-subtle);
+}
+.report-aligned .rt-focus-head-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.report-aligned .rt-focus-head-stats {
+    display: flex; align-items: center; flex: 0 0 auto;
+    background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 9px;
+    padding: 6px 0;
+}
+.report-aligned .rt-focus-stat {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 2px; padding: 0 16px; min-width: 64px;
+}
+.report-aligned .rt-focus-stat + .rt-focus-stat { border-left: 1px solid var(--border-default); }
+.report-aligned .rt-focus-stat--dial { padding: 0 10px; }
+.report-aligned .rt-focus-body { display: flex; flex-direction: column; gap: 12px; padding: 14px 18px 16px; }
+.report-aligned .rt-focus-tier-row { display: flex; align-items: center; gap: 8px; }
+.report-aligned .rt-focus-tier-dot { width: 8px; height: 8px; border-radius: 999px; display: inline-block; }
+.report-aligned .rt-focus-tier-label {
     font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; text-transform: uppercase;
     letter-spacing: 0.07em;
 }
-.rt-report .rt-focus-category-name { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin-top: 6px; }
-.rt-report .rt-focus-category-code { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); margin-top: 2px; }
-.rt-report .rt-focus-patterns {
+.report-aligned .rt-focus-category-name { font-family: var(--font-display); font-size: 17px; font-weight: 600; }
+.report-aligned .rt-focus-category-code { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); font-weight: 400; margin-left: 4px; }
+.report-aligned .rt-focus-patterns {
     display: flex; align-items: center; gap: 8px; font-size: 12px; background: var(--surface-sunken);
-    border-radius: 6px; padding: 3px 9px; margin-top: 12px; width: fit-content;
+    border-radius: 6px; padding: 4px 10px; width: fit-content; margin: 0;
 }
-.rt-report .rt-focus-pattern-dot { width: 5px; height: 5px; border-radius: 999px; display: inline-block; flex: 0 0 auto; }
-.rt-report .rt-focus-fixbox { background: var(--surface-sunken); border-radius: 8px; padding: 12px 14px; margin-top: 12px; }
-.rt-report .rt-focus-fixbox-label {
+.report-aligned .rt-focus-pattern-dot { width: 5px; height: 5px; border-radius: 999px; display: inline-block; flex: 0 0 auto; }
+.report-aligned .rt-focus-fixbox { background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin: 0; }
+.report-aligned .rt-focus-fixbox-label {
     font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; color: var(--accent-hover);
     letter-spacing: 0.05em;
 }
-.rt-report .rt-focus-fixbox-body { font-size: 13px; line-height: 1.55; margin-top: 6px; }
-.rt-report .rt-focus-right { flex: 0 0 100px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
-.rt-report .rt-focus-mini-stats { display: flex; flex-direction: column; gap: 6px; width: 100%; }
-.rt-report .rt-focus-mini-stat { display: flex; justify-content: space-between; align-items: baseline; }
-.rt-report .rt-focus-mini-key {
+.report-aligned .rt-focus-fixbox-body { font-size: 13px; line-height: 1.55; margin-top: 6px; }
+.report-aligned .rt-focus-mini-key {
     font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em;
     color: var(--text-faint);
 }
-.rt-report .rt-focus-mini-value { font-family: var(--font-mono); font-size: 14px; font-weight: 600; }
+.report-aligned .rt-focus-mini-value { font-family: var(--font-mono); font-size: 14px; font-weight: 600; }
+
+/* ---- Apply recommendations: bar, bullets, right drawer (RES-1143) ---- */
+.report-aligned .rt-focus-recs-section { display: flex; flex-direction: column; gap: 6px; }
+.report-aligned .rt-focus-recs-label { margin: 0; }
+/* One grouped list, hairline dividers between rows — not a stack of boxes. */
+.report-aligned .rt-focus-recs {
+    list-style: none; margin: 6px 0 0; padding: 0;
+    border: 1px solid var(--border-default); border-radius: 8px; background: var(--surface-card, #fdfcfb);
+    overflow: hidden;
+}
+.report-aligned .rt-focus-rec {
+    font-size: 13px; line-height: 1.5; display: flex; align-items: center; gap: 14px;
+    padding: 10px 12px;
+}
+.report-aligned .rt-focus-rec + .rt-focus-rec { border-top: 1px solid var(--border-subtle); }
+.report-aligned .rt-focus-rec:hover { background: var(--surface-sunken); }
+.report-aligned .rt-focus-rec-text { flex: 1 1 auto; min-width: 0; }
+/* The action slot is a fixed-width right rail so every button and applied
+   pill lines up down the column regardless of text length. */
+.report-aligned .rt-focus-rec-apply {
+    flex: 0 0 auto; margin: 0 0 0 auto; width: 76px; display: flex; justify-content: flex-end;
+}
+.rt-apply-btn--sm {
+    font-size: 11px; font-weight: 600; padding: 4px 12px; border-radius: 6px;
+    background: transparent; color: var(--accent); border: 1px solid var(--accent);
+}
+.rt-apply-btn--sm:hover { background: var(--accent); color: #fff; }
+.report-aligned .rt-focus-rec--applied .rt-focus-rec-text { color: var(--text-muted); }
+.report-aligned .rt-focus-rec-applied {
+    font-family: var(--font-mono); font-size: 10px; color: var(--green-600, #16a34a);
+    background: color-mix(in srgb, #16a34a 12%, transparent);
+    border-radius: 999px; padding: 2px 9px; margin-left: auto; white-space: nowrap;
+    flex: 0 0 auto;
+}
+.report-aligned .rt-apply-bar {
+    display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap;
+    /* Raised like the cards, not sunken: this is the tab's primary action,
+       and the recessed background read as a backdrop (review feedback). The
+       accent edge marks it as the call to action. */
+    background: var(--surface-card, #fdfcfb); border: 1px solid var(--border-default);
+    border-left: 3px solid var(--accent);
+    border-radius: 10px; padding: 14px 18px; margin: 0 0 16px;
+    box-shadow: 0 1px 2px rgba(20, 18, 15, 0.05);
+}
+/* Cap the text column so the action side stays on the same row on wide
+   screens instead of wrapping underneath. */
+.report-aligned .rt-apply-bar-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 320px; max-width: 640px; }
+.report-aligned .rt-apply-count { font-size: 13px; font-weight: 600; }
+.report-aligned .rt-apply-count--done { color: var(--green-600, #16a34a); }
+.report-aligned .rt-apply-hint { font-size: 12px; color: var(--text-muted); }
+.report-aligned .rt-apply-form { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; margin-left: auto; }
+.rt-apply-btn {
+    font-size: 13px; font-weight: 600; padding: 7px 14px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--accent); background: var(--accent); color: #fff;
+}
+.rt-apply-btn:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.rt-apply-btn--confirm { background: var(--green-600, #16a34a); border-color: var(--green-600, #16a34a); }
+.rt-apply-btn--confirm:hover { filter: brightness(0.92); background: var(--green-600, #16a34a); }
+.rt-apply-btn--ghost { background: transparent; color: inherit; border-color: var(--border-default); }
+.rt-apply-btn--ghost:hover { background: var(--surface-sunken); border-color: var(--border-default); }
+.rt-drawer-overlay {
+    position: fixed; inset: 0; background: rgba(15, 15, 15, 0.42); z-index: 90; cursor: pointer;
+}
+.rt-drawer {
+    position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 92vw); z-index: 91;
+    background: var(--surface-card, #fdfcfb); border-left: 1px solid var(--border-default);
+    box-shadow: -18px 0 48px rgba(0, 0, 0, 0.18);
+    display: flex; flex-direction: column;
+    animation: rt-drawer-in 0.18s ease-out;
+}
+@keyframes rt-drawer-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+.rt-drawer-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 20px; border-bottom: 1px solid var(--border-subtle); flex: 0 0 auto;
+}
+.rt-drawer-title { margin: 0; font-size: 15px; font-weight: 700; }
+.rt-drawer-close {
+    border: none; background: transparent; color: var(--text-muted); font-size: 22px; line-height: 1;
+    cursor: pointer; padding: 2px 6px; border-radius: 6px;
+}
+.rt-drawer-close:hover { background: var(--surface-sunken); color: inherit; }
+.rt-drawer-body { padding: 16px 20px; overflow-y: auto; flex: 1 1 auto; }
+.rt-drawer-section-label {
+    font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--accent-hover); margin: 14px 0 6px;
+}
+.rt-drawer-section-label:first-child { margin-top: 0; }
+.rt-drawer-agent { font-family: var(--font-mono); font-size: 13px; }
+.rt-drawer-area {
+    display: flex; flex-direction: column; gap: 3px;
+    background: var(--surface-sunken); border: 1px solid var(--border-default);
+    border-radius: 8px; padding: 10px 12px;
+}
+.rt-drawer-area-tier { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+.rt-drawer-area-name { font-size: 13px; font-weight: 600; }
+.rt-drawer-area-code { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); font-weight: 400; }
+.rt-drawer-area-meta { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+.rt-drawer-patterns { font-size: 12px; color: var(--text-muted); line-height: 1.5; margin-top: 4px; }
+.rt-drawer-recs { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px; }
+.rt-drawer-recs li { font-size: 13px; line-height: 1.5; }
+.rt-drawer-error { color: var(--sev-high, #dc2626); font-size: 13px; line-height: 1.55; }
+/* Read-the-diff callout above the preview diff: the merge is an LLM rewrite of a
+   live prompt, and the diff is the only thing standing between it and the agent. */
+.rt-drawer-review {
+    display: flex; gap: 9px; align-items: flex-start;
+    background: var(--surface-sunken); border: 1px solid var(--border-default);
+    border-left: 3px solid var(--sev-medium, #d97706);
+    border-radius: 8px; padding: 10px 12px; margin-bottom: 10px;
+}
+.rt-drawer-review-icon { font-size: 14px; line-height: 1.4; }
+.rt-drawer-review-text { font-size: 12px; line-height: 1.55; color: var(--text-default); }
+.rt-drawer-review-text b { font-weight: 600; }
+.rt-drawer-success { font-size: 14px; line-height: 1.6; }
+/* Applied celebration screen: centered, green check drawn in (RES-1143). */
+.rt-drawer-body--applied {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; gap: 6px; padding: 56px 24px 32px; min-height: 60%;
+}
+.rt-applied-check { width: 84px; height: 84px; margin-bottom: 14px; animation: rt-applied-pop 0.45s cubic-bezier(0.22, 1.4, 0.36, 1); }
+.rt-applied-check-ring {
+    stroke: var(--green-600, #299D8F); stroke-dasharray: 202; stroke-dashoffset: 202;
+    animation: rt-draw 0.6s ease-out 0.1s forwards;
+}
+.rt-applied-check-mark {
+    stroke: var(--green-600, #299D8F); stroke-dasharray: 44; stroke-dashoffset: 44;
+    animation: rt-draw 0.35s ease-out 0.55s forwards;
+}
+@keyframes rt-draw { to { stroke-dashoffset: 0; } }
+@keyframes rt-applied-pop { from { transform: scale(0.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.rt-applied-headline { font-family: var(--font-display); font-size: 19px; font-weight: 700; margin: 0; }
+.rt-applied-target { font-size: 14px; color: var(--text-muted); margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+.rt-applied-version {
+    font-family: var(--font-mono); font-size: 11px; color: var(--green-600, #299D8F);
+    background: color-mix(in srgb, #299D8F 12%, transparent);
+    border-radius: 999px; padding: 2px 9px;
+}
+.rt-drawer-body--applied .rt-drawer-note { max-width: 360px; }
+.rt-drawer-note { font-size: 12px; color: var(--text-muted); line-height: 1.55; }
+.rt-diff {
+    font-family: var(--font-mono); font-size: 11.5px; line-height: 1.5; margin: 0;
+    background: var(--surface-sunken); border: 1px solid var(--border-default); border-radius: 8px;
+    padding: 10px 12px; overflow-x: auto; display: flex; flex-direction: column;
+}
+.rt-diff-line { white-space: pre; }
+.rt-diff-add { color: var(--green-600, #16a34a); background: color-mix(in srgb, #16a34a 9%, transparent); }
+.rt-diff-del { color: var(--sev-high, #dc2626); background: color-mix(in srgb, #dc2626 8%, transparent); }
+.rt-diff-hunk { color: var(--accent-hover); }
+.rt-diff-file { color: var(--text-faint); }
+.rt-drawer-footer {
+    display: flex; align-items: center; gap: 10px; padding: 14px 20px;
+    border-top: 1px solid var(--border-subtle); flex: 0 0 auto;
+}
+.rt-drawer-footnote { font-size: 11px; color: var(--text-faint); margin-left: auto; text-align: right; }
+/* Loading-drawer styles live in dashboard.js (injected with the markup) so a
+   cached page can never render the spinner unstyled. */
+/* htmx tags the in-flight form; freeze its button so a double-click cannot
+   queue a second merge. */
+.rt-apply-form.htmx-request .rt-apply-btn,
+.rt-focus-rec-apply.htmx-request .rt-apply-btn,
+.rt-drawer-footer form.htmx-request .rt-apply-btn { opacity: 0.55; pointer-events: none; }
 
 /* ---- Attack evidence fragment (spec §Attacks, Task 13) ---- */
 .rt-report .rt-attack-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }

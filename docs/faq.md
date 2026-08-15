@@ -10,7 +10,7 @@ A Python library for testing LLM apps and agents, with three modes:
 
 - **Evaluations** — run jobs over your data in parallel and score them with built-in or custom evaluators; gate CI on pass/fail.
 - **Agent simulation** — a user-simulator LLM drives your agent through multi-turn conversations while a judge scores whether it met its goals.
-- **Red teaming** — adaptive adversarial attacks mapped to the OWASP LLM Top 10 and Agentic Security Initiative.
+- **Red teaming** — adaptive adversarial attacks mapped to the OWASP LLM Top 10 and OWASP Agentic Top 10.
 
 The Orq platform is optional — it stores results and routes LLMs when `ORQ_API_KEY` is set, but you can run entirely on OpenAI.
 
@@ -72,7 +72,7 @@ Simulator/attacker/judge LLM calls go to OpenAI or the Orq router. Results uploa
 
 ### How much does a run cost, and how do I keep it cheap?
 
-Cost and wall-clock scale with cases × turns × LLM calls. The levers are how many cases you run (`max_dynamic_datapoints` / `max_static_datapoints` for red teaming, `num_personas` × `num_scenarios` for simulation), `max_turns`, and `parallelism` (default 10 for red teaming, 5 for simulation — lower it if your provider rate-limits). Red teaming's report tracks spend in `report.summary.token_usage_total`.
+Cost and wall-clock scale with cases × turns × LLM calls. The levers are how many cases you run (`max_dynamic_datapoints` / `max_static_datapoints` for red teaming, `num_personas` × `num_scenarios` for simulation), `max_turns`, and `parallelism` (default 10 for `evaluatorq()` and red teaming, 5 for simulation — lower it if your provider rate-limits). Red teaming's report tracks spend in `report.summary.token_usage_total`.
 
 ### Where do results go, and how do I view a past run?
 
@@ -128,7 +128,7 @@ Red teaming generates multi-turn attacks by default (`max_turns=`) precisely so 
 Attacks and LLM-judge evaluators mapped to three frameworks:
 
 - **OWASP LLM Top 10** — prompt injection, system-prompt leakage, and the rest.
-- **OWASP Agentic Security Initiative (ASI)** — agent-specific risks: tool abuse, excessive agency, trust exploitation.
+- **OWASP Agentic Top 10 (ASI)** — agent-specific risks: tool abuse, excessive agency, trust exploitation.
 - **Responsible AI** — fairness/bias, liability (legal, medical), content policy, harmful content.
 
 Pass the ones you care about via `categories=["LLM01", "ASI01", ...]`. The full list of codes is in the [redteam API reference](reference/evaluatorq/redteam.md).
@@ -176,7 +176,8 @@ class MyAgent(AgentTarget):
 
 
 report = await red_team(target=MyAgent(), mode="dynamic", max_turns=4)
-print(f"resistance: {report.summary.resistance_rate:.0%}")
+rate = report.summary.resistance_rate    # None when no attack could be evaluated
+print(f"resistance: {rate:.0%}" if rate is not None else "resistance: no verdict")
 ```
 
 Or point it at an Orq agent by key (`"agent:<key>"`), or drive it from the CLI with `eq redteam run --target agent:<key>`. See [Red Teaming › Red-team your target](guides/red-teaming.md#red-team-your-target) and [`examples/redteam/15_tool_chaining.py`](examples/redteam/15_tool_chaining.md) for a full custom target.
@@ -187,11 +188,17 @@ Yes. The target runs its own tools, so a successful attack triggers real side ef
 
 ### The report says my agent is vulnerable — what do I change?
 
-Usually the system prompt. The load-bearing fixes are an explicit instruction hierarchy (data the agent *reads* is never a command), a confirmation gate before risky tools, and refusing authority claims — then rerun and watch the resistance rate climb. Pass `generate_recommendations=True` to have the run attach LLM-generated focus-area recommendations to the report.
+Usually the system prompt. The load-bearing fixes are an explicit instruction hierarchy (data the agent *reads* is never a command), a confirmation gate before risky tools, and refusing authority claims — then rerun and watch the resistance rate climb. Every run attaches LLM-generated focus-area recommendations to the report by default; pass `recommendations=False` (or `--no-recommendations`) to skip that extra LLM call, or `recommendations=RedTeamRecommendationConfig(max_areas=3, max_attacks=20)` (importable from `evaluatorq.redteam`) to tune how much gets analyzed. A *focus area* is a framework category the run broke on, analyzed in risk order with one LLM call each — so `max_areas` decides how many categories get advice, and `max_suggestions` (default `5`) how much advice each one gets. `max_attacks` is how many of that category's failed attacks are sampled into the prompt. The config also carries the prompt truncation budgets and the analysis call's `max_tokens`. Because the focus-area call is a single request carrying every sampled attack, an attack whose formatted block exceeds `condense_above_chars` (default `1000`) is summarized by its own small LLM call first, so one long agentic transcript can't push the aggregate past the model's context — short attacks go in verbatim and cost no extra call.
 
 ### What does `passed=True` mean?
 
-The agent **resisted** the attack (the attack failed). `passed=False` means the attack succeeded: the agent is **vulnerable**. `resistance_rate` is the fraction of attacks that came back `passed=True`.
+The agent **resisted** the attack (the attack failed). `passed=False` means the attack succeeded: the agent is **vulnerable**. `passed=None` is a third outcome: the attack could not be evaluated (the target call or the judge call failed) — it is neither a pass nor a fail, and `r.vulnerable` is `None` for it. `resistance_rate` is the fraction of *evaluated* attacks that came back `passed=True`, and is `None` when none could be evaluated.
+
+### My run shows no results / `eq redteam run` failed — why?
+
+Check `result.evaluation_error` on the affected results (or `report.summary.errors_by_type`, which groups judge failures under `evaluation/<code>` keys such as `evaluation/api_status`) — it records why the judge couldn't return a verdict (`timeout`, `parse`, `api_connection`, `api_status`, `unknown`), separate from `result.error`, which means the attack itself never ran. The CLI prints the dominant code and a sample message on failure.
+
+Two conditions make `eq redteam run` exit `1`: **zero verdicts** (`report.summary.no_verdict` — nothing could be scored, so a "100% resistant" or `0.0` rate would be a lie) and, as of the coverage gate, **low verdict coverage** — `EvaluatorConfig.min_evaluation_coverage` (default `0.8`) means a run where fewer than 80% of attacks got any verdict now fails too, not just warns. This is a behaviour change: a 79%-coverage run used to exit `0`. Pass `--min-evaluation-coverage 0` (or set `min_evaluation_coverage=None` in Python) to go back to warn-only. It's distinct from `min_successful_judges`, the per-attack jury quorum that's what *creates* unevaluated attacks in the first place — see [Red Teaming › In CI](guides/red-teaming.md#in-ci).
 
 ## Agent Simulation
 
@@ -219,6 +226,38 @@ print(f"pass rate: {sum(r.goal_achieved for r in results)}/{len(results)}")
 ```
 
 See [Agent Simulation](guides/agent-simulation.md).
+
+### Can I tune when a simulation result gets recommendations?
+
+Yes — pass a `SimulationRecommendationConfig`. Only results with a fixable failure signal get an LLM call; the metric thresholds that decide that, plus the prompt budgets, the result cap and the suggestion cap, are fields on the config. It's the same `recommendations=` flag red teaming uses: `True` for defaults, `False` to skip the LLM call, an instance to tune.
+
+`eq sim run` generates them in-run (`--recommendations` is on by default). From Python, `simulate()` takes the same flag — it defaults to `False` there because the returned `SimulationResult` list has nowhere to carry suggestions, so they are only observable through `save=True` / `report=`, or the dashboard:
+
+```python
+from evaluatorq.simulation import simulate
+from evaluatorq.simulation.reports import SimulationRecommendationConfig
+
+results = await simulate(
+    target="agent:my-support-agent",
+    save=True,
+    recommendations=SimulationRecommendationConfig(factual_accuracy_below=0.7, max_suggestions=5),
+)
+```
+
+To analyze results you already have, call the generator directly with the same config:
+
+```python
+from evaluatorq.simulation.reports import SimulationRecommendationConfig, generate_recommendations
+
+recs = await generate_recommendations(
+    results, client, "gpt-5.6-luna",
+    config=SimulationRecommendationConfig(factual_accuracy_below=0.7, max_suggestions=5),
+)
+```
+
+Defaults: thresholds `0.5` on the judge's 0-1 scales, `max_results=10`, `max_transcript_chars=3000`, `max_message_chars=400`, `max_suggestions=3`, `max_tokens=800`. Values outside the valid range raise at construction, and an unknown field name raises too, rather than silently disabling a trigger.
+
+The endpoints of each threshold's range disable that one check on purpose: a judge score is never below `0.0` or above `1.0`, so `factual_accuracy_below=0.0`, `tone_appropriateness_below=0.0` and `hallucination_risk_above=1.0` each mean "never trigger on this metric". Use them to narrow which signals produce suggestions; the other triggers (broken rules, failed criteria) are unaffected.
 
 ### Where do the personas and scenarios come from?
 

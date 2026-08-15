@@ -587,7 +587,7 @@ class TestSimFilterRailCounter:
 
         opts = {
             'category': ['ASI01', 'LLM01'],
-            'result': ['Vulnerable', 'Resistant', 'Error'],
+            'result': ['Vulnerable', 'Resistant', 'Not evaluated', 'Error'],
             'agent': ['a'],
             'max_turns': ['1'],
         }
@@ -633,7 +633,7 @@ def _rt_run(results):
     return r
 
 
-@pytest.mark.parametrize('sel,expect_all', [([], True), (['Vulnerable', 'Resistant', 'Error'], True)])
+@pytest.mark.parametrize('sel,expect_all', [([], True), (['Vulnerable', 'Resistant', 'Not evaluated', 'Error'], True)])
 def test_rt_result_zero_or_all_is_all(rt_results, sel, expect_all):
     from evaluatorq.dashboard.filters import _rt_apply
 
@@ -667,7 +667,7 @@ def test_rt_options_include_max_turns_without_all_sentinel(rt_results):
     from evaluatorq.dashboard.filters import _rt_options_from_results
 
     opts = _rt_options_from_results(rt_results)
-    assert opts['result'] == ['Vulnerable', 'Resistant', 'Error']
+    assert opts['result'] == ['Vulnerable', 'Resistant', 'Not evaluated', 'Error']
     assert 'max_turns' in opts
 
 
@@ -675,7 +675,7 @@ def test_rt_rail_has_slider_and_more_expander():
     from evaluatorq.dashboard.view import _render_redteam_filter_rail
 
     opts = {
-        'result': ['Vulnerable', 'Resistant', 'Error'],
+        'result': ['Vulnerable', 'Resistant', 'Not evaluated', 'Error'],
         'severity': ['critical'],
         'category': ['ASI01'],
         'agent': ['a', 'b'],
@@ -697,7 +697,7 @@ def test_rt_rail_slider_engaged_only_when_off_default():
     from evaluatorq.dashboard.view import _render_redteam_filter_rail
 
     opts = {
-        'result': ['Vulnerable', 'Resistant', 'Error'],
+        'result': ['Vulnerable', 'Resistant', 'Not evaluated', 'Error'],
         'severity': ['critical'],
         'category': ['ASI01'],
         'agent': ['a'],
@@ -716,7 +716,7 @@ def test_rt_rail_hides_slider_when_max_turns_one():
     from evaluatorq.dashboard.view import _render_redteam_filter_rail
 
     opts = {
-        'result': ['Vulnerable', 'Resistant', 'Error'],
+        'result': ['Vulnerable', 'Resistant', 'Not evaluated', 'Error'],
         'severity': ['critical'],
         'category': ['ASI01'],
         'agent': ['a'],
@@ -733,7 +733,7 @@ def test_rt_options_no_all_sentinel(rt_results):
     from evaluatorq.dashboard.filters import _rt_options_from_results
 
     opts = _rt_options_from_results(rt_results)
-    assert opts['result'] == ['Vulnerable', 'Resistant', 'Error']  # no 'All' sentinel
+    assert opts['result'] == ['Vulnerable', 'Resistant', 'Not evaluated', 'Error']  # no 'All' sentinel
 
 
 # ---------------------------------------------------------------------------

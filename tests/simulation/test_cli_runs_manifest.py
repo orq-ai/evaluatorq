@@ -85,3 +85,42 @@ def test_runs_legacy_fallback_still_works(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     assert 'legacy-sim' in result.stdout
     assert 'completed' in result.stdout
+
+
+def test_backfilled_sidecar_keeps_the_full_read_stats(tmp_path: Path) -> None:
+    """Opening the dashboard writes a manifest sidecar for a legacy sim run; the
+    `runs` row must then carry the same stats it carried from the full read.
+
+    Mirror of the red-team case — the backfill is surface-agnostic, so sim needs
+    its own guard or a sim-only regression would ship unnoticed.
+    """
+    from evaluatorq.dashboard.library import scan
+
+    runs = tmp_path / 'sim-runs'
+    runs.mkdir()
+    (runs / 'sim_20260101_000000.json').write_text(
+        json.dumps({
+            'run_name': 'legacy-sim',
+            'created_at': '2026-01-01T00:00:00+00:00',
+            'mode': 'simulate',
+            'target_kind': 'openai_model',
+            'evaluator_names': [],
+            'total_results': 3,
+            'scorer_averages': {'goal_achieved': 0.5},
+            'results': [],
+        }),
+        encoding='utf-8',
+    )
+    stats = ('mode', 'target_kind', 'total_results', 'scorer_averages')
+
+    def _row() -> dict[str, object]:
+        result = runner.invoke(sim_app, ['runs', str(runs), '--json'])
+        assert result.exit_code == 0, result.output
+        rows = json.loads(result.stdout)
+        assert len(rows) == 1
+        return {k: rows[0][k] for k in stats}
+
+    before = _row()
+    scan([runs])  # the dashboard visit that backfills the sidecar
+    assert (runs / '.manifests' / 'sim_20260101_000000.json').exists()
+    assert _row() == before

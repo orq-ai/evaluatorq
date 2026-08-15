@@ -31,7 +31,7 @@ from loguru import logger
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.contracts import ReportSection, Usage
 from evaluatorq.simulation.metrics import TURN_METRICS
-from evaluatorq.simulation.types import CriteriaRow, SimulationEntry, TranscriptMessage
+from evaluatorq.simulation.types import CriteriaRow, SimulationEntry, TranscriptMessage, criterion_id_for
 
 if TYPE_CHECKING:
     from evaluatorq.simulation.types import SimulationRecommendation, SimulationResult
@@ -83,7 +83,7 @@ def _criteria_meta(result: SimulationResult) -> list[dict[str, Any]]:
     logger.debug('criteria_meta absent; safety classification unavailable, falling back to criteria_results')
     cr = result.criteria_results or {}
     return [
-        {'id': f'criteria_{i}', 'description': desc, 'type': None, 'passed': bool(passed)}
+        {'id': criterion_id_for(i), 'description': desc, 'type': None, 'passed': bool(passed)}
         for i, (desc, passed) in enumerate(cr.items())
     ]
 
@@ -124,16 +124,49 @@ def _scenario_cohort_id(result: SimulationResult) -> str:
 
 
 def _criteria_rows(result: SimulationResult) -> list[dict[str, Any]]:
+    """One row per criterion, carrying the audit provenance every renderer needs.
+
+    ``audited`` and ``evidence`` come straight from ``criteria_meta`` (``None`` on
+    runs saved before those keys existed). ``state`` — the rendering verdict no
+    surface may recompute — is `CriteriaRow`'s computed field, which is why these
+    rows are built as `CriteriaRow` objects and dumped rather than hand-assembled:
+    the dict and the model then cannot disagree.
+
+    A malformed ``audited`` or ``evidence`` degrades to ``None`` (unknown) **with a
+    warning**: this is the field whose whole purpose is separating *unknown* from
+    *checked*, so coercing it in silence would recreate the defect it exists to
+    expose (CLAUDE.md: a degraded path announces itself).
+    """
     rows = []
     for c in _criteria_meta(result):
-        is_safety = (c.get('type') == 'must_not_happen') and not c.get('passed', True)
-        rows.append({
-            'id': c['id'],
-            'description': c.get('description', c['id']),
-            'type': c.get('type'),
-            'passed': bool(c.get('passed', True)),
-            'safety': is_safety,
-        })
+        passed = bool(c.get('passed', True))
+        audited = c.get('audited')
+        if audited is not None and not isinstance(audited, bool):
+            logger.warning(
+                "criteria_meta entry {!r} has a non-boolean 'audited' ({!r}); reporting it as unknown "
+                'rather than as audited.',
+                c.get('id'),
+                audited,
+            )
+            audited = None
+        evidence = c.get('evidence')
+        if evidence is not None and not isinstance(evidence, str):
+            logger.warning(
+                "criteria_meta entry {!r} has a non-string 'evidence' ({}); rendering its repr.",
+                c.get('id'),
+                type(evidence).__name__,
+            )
+        rows.append(
+            CriteriaRow(
+                id=c['id'],
+                description=c.get('description', c['id']),
+                type=c.get('type'),
+                passed=passed,
+                safety=(c.get('type') == 'must_not_happen') and not passed,
+                audited=audited,
+                evidence=str(evidence) if evidence else None,
+            ).model_dump(mode='json')
+        )
     return rows
 
 
@@ -246,7 +279,15 @@ def _build_failures_first_section(results: list[SimulationResult]) -> ReportSect
             # All criteria (pass + fail) for the collapsible dot view; ``violated``
             # is kept for the markdown renderer.
             'criteria': [
-                {'description': c['description'], 'passed': c['passed'], 'safety': c['safety']} for c in rows_c
+                {
+                    'description': c['description'],
+                    'passed': c['passed'],
+                    'safety': c['safety'],
+                    # Carried so the dot view can paint an unaudited criterion
+                    # neutral instead of green (RES-1308).
+                    'state': c['state'],
+                }
+                for c in rows_c
             ],
             'has_safety': any(c['safety'] for c in rows_c),
             'terminated_by': r.terminated_by.value,
@@ -424,6 +465,11 @@ def _build_token_usage_section(results: list[SimulationResult]) -> ReportSection
             'input_cost': usage_total.input_cost,
             'output_cost': usage_total.output_cost,
             'total_cost': usage_total.total_cost,
+            # Cost coverage: without these the renderer's cost_coverage() call
+            # always sees 0 and silently drops the "(N of M calls)" qualifier,
+            # so a partial total reads as authoritative.
+            'calls': usage_total.calls,
+            'priced_calls': usage_total.priced_calls,
         },
     )
 
@@ -451,6 +497,7 @@ def individual_entries(results: list[SimulationResult]) -> list[SimulationEntry]
                 goal_completion_score=r.goal_completion_score,
                 rules_broken=list(r.rules_broken),
                 criteria=[CriteriaRow(**row) for row in _criteria_rows(r)],
+                criteria_verified=r.criteria_verified,
                 turn_count=r.turn_count,
                 total_tokens=r.token_usage.total_tokens,
                 judge_reason=r.reason,
@@ -615,7 +662,10 @@ def _build_failure_mode_section(results: list[SimulationResult]) -> ReportSectio
             continue
         scen = _scenario_name(r)
         for c in _criteria_rows(r):
-            if not c['passed']:
+            # `state`, not `passed`: a criterion nobody audited is unknown, and a
+            # cross-run failure-mode tally is exactly where an unknown must not be
+            # counted as a recurring failure.
+            if c['state'] == 'fail':
                 counts[f'{scen}: {c["description"]}'] += 1
     return ReportSection(
         kind='failure_mode',

@@ -21,16 +21,20 @@ from evaluatorq.common.jury import (
     VerdictValue,
     _agreement_rate,
     _plurality_vote,
+    _run_jury_core,
     _sum_usage,
+    _unswap,
     as_semaphore,
     resolve_panel,
-    run_jury,
 )
+from evaluatorq.common.tracing import current_otel_context, set_span_attrs, with_span
 from evaluatorq.contracts import TokenUsage  # noqa: TC001  # runtime-needed: pydantic field type on PairwiseComparison
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
     from typing import Any
+
+    from opentelemetry.trace import Span
 
     from evaluatorq.contracts import JuryVote
 
@@ -230,7 +234,7 @@ def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAg
 
     Judges whose decisive votes are unanimous are excluded from the reliability
     weighting: in the two-item collapse their sigma measures one-sidedness, not
-    reliability (see :class:`BTSigmaAggregation`). They vote with the median
+    reliability (see `BTSigmaAggregation`). They vote with the median
     weight of the remaining judges (or uniformly when no judge remains), and
     ``fit_warnings`` names them.
     """
@@ -391,7 +395,6 @@ def build_report(comparisons: Sequence[PairwiseComparison], *, aggregation: str 
     )
 
 
-_UNSWAP = {'A': 'B', 'B': 'A'}
 _PAIRWISE_VALUES = frozenset({'A', 'B', 'tie'})
 
 
@@ -408,13 +411,6 @@ def _decisive_value(vote: JuryVote) -> VerdictValue | None:
     if vote.value not in _PAIRWISE_VALUES:
         raise ValueError(f"pairwise judge returned {vote.value!r}; expected 'A', 'B', or 'tie'")
     return vote.value
-
-
-def _unswap(value: VerdictValue | None) -> VerdictValue | None:
-    """Map a verdict from the swapped ordering back to the canonical A/B frame."""
-    if value is None:
-        return None
-    return _UNSWAP.get(str(value), value)
 
 
 def _reconciled_explanation(
@@ -445,9 +441,9 @@ async def run_pairwise(
 ) -> PairwiseComparison:
     """Run a panel over one A-vs-B comparison and reconcile it into a verdict.
 
-    Each judge runs through the shared :func:`run_jury`. When ``swap`` is on
+    Each judge runs through the shared `run_jury`. When ``swap`` is on
     (default) every judge is also run with A and B exchanged; the two verdicts
-    are un-swapped and passed through :func:`reconcile_pair`, so a judge that
+    are un-swapped and passed through `reconcile_pair`, so a judge that
     just follows slot order abstains and is recorded as a flip.
 
     Both orderings run concurrently. Replacement judges are promoted at the pair
@@ -461,22 +457,36 @@ async def run_pairwise(
     comparison (judges x orderings x repetitions, replacements included). Pass
     an existing ``asyncio.Semaphore`` to share one budget across several
     comparisons. ``None`` (default) keeps the fan-out unbounded.
+
+    Tracing: the whole comparison is ONE ``orq.pairwise_jury`` span (RES-985). Each
+    ordering drives ``_run_jury_core`` rather than ``run_jury`` so it doesn't
+    mint a second jury span whose aggregates describe half a comparison; every
+    judge span hangs off this one, tagged ``judge.label_swapped``.
     """
     # Normalized once so both orderings (and the replacement pass) draw from
     # the same budget rather than each minting their own.
     semaphore = as_semaphore(max_concurrency)
     resolved_panel = resolve_panel(panel)
+    jury_ctx: object | None = None
 
-    async def _ordering(models: Sequence[str], *, swapped: bool) -> tuple[dict[str, JuryVote], TokenUsage | None]:
+    async def _ordering(
+        models: Sequence[str], *, swapped: bool, replacement: bool
+    ) -> tuple[dict[str, JuryVote], TokenUsage | None]:
         async def _fn(model: str) -> Prediction:
             return await (
                 judge_fn(response_b, response_a, model) if swapped else judge_fn(response_a, response_b, model)
             )
 
-        # Replacements are handled here at the pair level, not inside run_jury, so
-        # a stand-in gets a fair shot in both orderings rather than being promoted
-        # independently per ordering (and then silently dropped in reconciliation).
-        deliberation = await run_jury(
+        # _run_jury_core, not run_jury: this comparison owns ONE orq.pairwise_jury span
+        # across both orderings, and run_jury would open a second one per
+        # ordering. Everything below the span (fan-out, per-judge spans,
+        # repetition collapse) is identical.
+        #
+        # Replacements are handled here at the pair level, not inside the core,
+        # so a stand-in gets a fair shot in both orderings rather than being
+        # promoted independently per ordering (and then silently dropped in
+        # reconciliation).
+        deliberation = await _run_jury_core(
             judge_fn=_fn,
             panel=models,
             repetitions=repetitions,
@@ -484,71 +494,88 @@ async def run_pairwise(
             min_successful_judges=1,
             propagate_errors=propagate_errors,
             max_concurrency=semaphore,
+            label_swapped=swapped,
+            parent_context=jury_ctx,
+            replacement=replacement,
         )
         return {v.model: v for v in deliberation.jury.votes}, deliberation.token_usage
 
-    async def _both(models: Sequence[str]) -> tuple[dict[str, JuryVote], dict[str, JuryVote], list[TokenUsage]]:
+    async def _both(
+        models: Sequence[str], *, replacement: bool = False
+    ) -> tuple[dict[str, JuryVote], dict[str, JuryVote], list[TokenUsage]]:
         if not swap:
-            first_votes, first_usage = await _ordering(models, swapped=False)
+            first_votes, first_usage = await _ordering(models, swapped=False, replacement=replacement)
             return first_votes, {}, [u for u in (first_usage,) if u]
         (first_votes, first_usage), (second_votes, second_usage) = await asyncio.gather(
-            _ordering(models, swapped=False),
-            _ordering(models, swapped=True),
+            _ordering(models, swapped=False, replacement=replacement),
+            _ordering(models, swapped=True, replacement=replacement),
         )
         return first_votes, second_votes, [u for u in (first_usage, second_usage) if u]
 
-    first_votes, second_votes, usages = await _both(resolved_panel)
+    async with with_span('orq.pairwise_jury') as jury_span:
+        # Captured before any judge runs so every judge span (both orderings,
+        # replacements included) parents to this one comparison-level span.
+        jury_ctx = current_otel_context()
+        first_votes, second_votes, usages = await _both(resolved_panel)
 
-    def _failed(model: str) -> bool:
-        first = first_votes.get(model)
-        if first is None or not first.success:
-            return True
-        if swap:
-            second = second_votes.get(model)
-            return second is None or not second.success
-        return False
+        def _failed(model: str) -> bool:
+            first = first_votes.get(model)
+            if first is None or not first.success:
+                return True
+            if swap:
+                second = second_votes.get(model)
+                return second is None or not second.success
+            return False
 
-    num_failed = sum(1 for model in resolved_panel if _failed(model))
-    seen = set(resolved_panel)
-    stand_ins: list[str] = []
-    for candidate in replacement_judges or []:
-        if candidate and candidate not in seen:
-            stand_ins.append(candidate)
-            seen.add(candidate)
-    stand_ins = stand_ins[:num_failed]
+        num_failed = sum(1 for model in resolved_panel if _failed(model))
+        seen = set(resolved_panel)
+        stand_ins: list[str] = []
+        for candidate in replacement_judges or []:
+            if candidate and candidate not in seen:
+                stand_ins.append(candidate)
+                seen.add(candidate)
+        stand_ins = stand_ins[:num_failed]
 
-    stand_in_set = set(stand_ins)
-    if stand_ins:
-        rep_first, rep_second, rep_usages = await _both(stand_ins)
-        first_votes.update(rep_first)
-        second_votes.update(rep_second)
-        usages.extend(rep_usages)
+        stand_in_set = set(stand_ins)
+        if stand_ins:
+            rep_first, rep_second, rep_usages = await _both(stand_ins, replacement=True)
+            first_votes.update(rep_first)
+            second_votes.update(rep_second)
+            usages.extend(rep_usages)
 
-    votes: list[PairwiseVote] = []
-    for model in (*resolved_panel, *stand_ins):
-        first_vote = first_votes.get(model)
-        second_vote = second_votes.get(model)
-        first_value = _decisive_value(first_vote) if first_vote else None
-        if swap:
-            second_value = _unswap(_decisive_value(second_vote)) if second_vote else None
-            vote, flipped = reconcile_pair(first_value, second_value)
-            completed = first_value is not None and second_value is not None
-        else:
-            vote, flipped, completed = first_value, False, False
-        votes.append(
-            PairwiseVote(
-                model=model,
-                vote=_as_vote(vote),
-                flipped=flipped,
-                completed=completed,
-                replacement=model in stand_in_set,
-                explanation=_reconciled_explanation(vote, first_vote, second_vote),
+        votes: list[PairwiseVote] = []
+        for model in (*resolved_panel, *stand_ins):
+            first_vote = first_votes.get(model)
+            second_vote = second_votes.get(model)
+            first_value = _decisive_value(first_vote) if first_vote else None
+            if swap:
+                second_value = _unswap(_decisive_value(second_vote)) if second_vote else None
+                vote, flipped = reconcile_pair(first_value, second_value)
+                completed = first_value is not None and second_value is not None
+            else:
+                vote, flipped, completed = first_value, False, False
+            votes.append(
+                PairwiseVote(
+                    model=model,
+                    vote=_as_vote(vote),
+                    flipped=flipped,
+                    completed=completed,
+                    replacement=model in stand_in_set,
+                    explanation=_reconciled_explanation(vote, first_vote, second_vote),
+                )
             )
-        )
 
-    decisive = [v.vote for v in votes if v.vote is not None]
-    winner = 'inconclusive' if len(decisive) < max(1, min_successful_judges) else pairwise_consensus(decisive)
-    return PairwiseComparison(winner=winner, votes=votes, token_usage=_sum_usage(usages))
+        decisive = [v.vote for v in votes if v.vote is not None]
+        winner = 'inconclusive' if len(decisive) < max(1, min_successful_judges) else pairwise_consensus(decisive)
+        comparison = PairwiseComparison(winner=winner, votes=votes, token_usage=_sum_usage(usages))
+        _record_pairwise_span(
+            jury_span,
+            comparison,
+            panel_size=len(resolved_panel),
+            min_successful_judges=min_successful_judges,
+            swap=swap,
+        )
+    return comparison
 
 
 def _as_vote(value: VerdictValue | None) -> Literal['A', 'B', 'tie'] | None:
@@ -564,3 +591,49 @@ def _as_vote(value: VerdictValue | None) -> Literal['A', 'B', 'tie'] | None:
     if s not in _PAIRWISE_VALUES:
         raise ValueError(f"pairwise vote {s!r} outside the contract; expected 'A', 'B', or 'tie'")
     return cast("Literal['A', 'B', 'tie']", s)
+
+
+def _record_pairwise_span(
+    span: Span | None,
+    comparison: PairwiseComparison,
+    *,
+    panel_size: int,
+    min_successful_judges: int,
+    swap: bool,
+) -> None:
+    """Stamp the comparison-level attributes on the ``orq.pairwise_jury`` span.
+
+    Deliberately reuses the ``jury.*`` namespace so one dashboard reads both
+    modes: ``jury.verdict`` is the winner, ``judges_succeeded`` counts judges
+    that cast a reconciled vote. ``jury.flipped`` / ``jury.flipped_judges`` are
+    comparative-only — judges that contradicted themselves across the two
+    orderings, i.e. position bias.
+
+    ``jury.judges_failed`` counts only judges with NO reconciled vote and no
+    flip: a flipped judge answered both times, so that is position bias, not a
+    failure. Counting it as failed would give one attribute two different
+    meanings across the two modes.
+    """
+    flipped = [v.model for v in comparison.votes if v.flipped]
+    decisive = [v.vote for v in comparison.votes if v.vote is not None]
+    set_span_attrs(
+        span,
+        {
+            'jury.verdict': comparison.winner,
+            'jury.aggregator': 'pairwise_plurality',
+            'jury.min_successful_judges': min_successful_judges,
+            'jury.raw_agreement': _agreement_rate(decisive),
+            'jury.judges_configured': panel_size,
+            'jury.judges_succeeded': len(decisive),
+            'jury.judges_failed': sum(
+                1 for v in comparison.votes if not v.replacement and v.vote is None and not v.flipped
+            ),
+            'jury.replacements_used': sum(1 for v in comparison.votes if v.replacement),
+            'jury.inconclusive': comparison.winner == 'inconclusive',
+            'jury.flipped': len(flipped),
+            # Which judges, not just how many: a per-judge attribute is impossible
+            # (a judge span closes before the other ordering reconciles against it).
+            'jury.flipped_judges': ','.join(sorted(flipped)) or None,
+            'jury.swap': swap,
+        },
+    )

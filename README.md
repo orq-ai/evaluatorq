@@ -1,1044 +1,254 @@
-# evaluatorq
+<p align="center">
+  <img src="docs/assets/evaluatorq-splash.svg" alt="evaluatorq — LLM evals, red teaming, agent simulation" width="100%">
+</p>
 
-[![PyPI version](https://img.shields.io/pypi/v/evaluatorq.svg)](https://pypi.org/project/evaluatorq/)
-[![Python versions](https://img.shields.io/pypi/pyversions/evaluatorq.svg)](https://pypi.org/project/evaluatorq/)
-[![CI](https://github.com/orq-ai/evaluatorq/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/orq-ai/evaluatorq/actions/workflows/ci.yml)
-[![Coverage](https://raw.githubusercontent.com/orq-ai/evaluatorq/python-coverage-comment-action-data/badge.svg)](https://htmlpreview.github.io/?https://github.com/orq-ai/evaluatorq/blob/python-coverage-comment-action-data/htmlcov/index.html)
-[![Docs CI](https://img.shields.io/github/actions/workflow/status/orq-ai/evaluatorq/docs.yml?branch=main&label=Docs%20CI)](https://github.com/orq-ai/evaluatorq/actions/workflows/docs.yml)
-[![Docs Site](https://img.shields.io/badge/Docs-Live%20Site-0A7B83)](https://orq-ai.github.io/evaluatorq/)
-[![Release](https://github.com/orq-ai/evaluatorq/actions/workflows/release.yml/badge.svg)](https://github.com/orq-ai/evaluatorq/actions/workflows/release.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/orq-ai/evaluatorq/blob/main/LICENSE)
+<p align="center">
+  <a href="https://pypi.org/project/evaluatorq/"><img src="https://img.shields.io/pypi/v/evaluatorq.svg" alt="PyPI version"></a>
+  <a href="https://pypi.org/project/evaluatorq/"><img src="https://img.shields.io/pypi/pyversions/evaluatorq.svg" alt="Python versions"></a>
+  <a href="https://github.com/orq-ai/evaluatorq/actions/workflows/ci.yml"><img src="https://github.com/orq-ai/evaluatorq/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://htmlpreview.github.io/?https://github.com/orq-ai/evaluatorq/blob/python-coverage-comment-action-data/htmlcov/index.html"><img src="https://raw.githubusercontent.com/orq-ai/evaluatorq/python-coverage-comment-action-data/badge.svg" alt="Coverage"></a>
+  <a href="https://orq-ai.github.io/evaluatorq/"><img src="https://img.shields.io/badge/Docs-Live%20Site-0A7B83" alt="Docs"></a>
+  <a href="https://github.com/orq-ai/evaluatorq/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT"></a>
+</p>
 
-An evaluation framework library for Python that provides a flexible way to run parallel evaluations and optionally integrate with the Orq AI platform.
+<p align="center">
+  <b>Find out how your AI agent breaks — before your users do.</b>
+</p>
 
-## Why evaluatorq?
+<p align="center">
+  <a href="https://orq-ai.github.io/evaluatorq/">Documentation</a> ·
+  <a href="https://orq-ai.github.io/evaluatorq/guides/getting-started/">Get Started</a> ·
+  <a href="https://orq-ai.github.io/evaluatorq/guides/red-teaming/">Red Teaming</a> ·
+  <a href="https://orq-ai.github.io/evaluatorq/guides/agent-simulation/">Agent Simulation</a> ·
+  <a href="https://orq-ai.github.io/evaluatorq/dashboard/">Dashboard</a>
+</p>
 
-Orq's built-in experiment runner works well for evaluating deployments hosted on the platform, but it has limits: you can only target Orq-managed agents and deployments, and evaluation logic is constrained to what the UI exposes.
+Shipping an agent means answering three questions no test suite answers: does it give good answers, can it be talked into doing something it shouldn't, and does it hold up over a real conversation with an impatient human? evaluatorq answers all three from Python. It scores your agent's outputs against your data, attacks it the way a bad actor would — jailbreaks, prompt injection, tool abuse, data exfiltration — and puts a simulated user in front of it for a few dozen turns. Then it hands you a report naming what broke and what to do about it.
 
-`evaluatorq` was built to remove those limits. It gives you a full Python evaluation loop you control entirely — bring your own agent, your own data, your own scorers. The Orq platform becomes optional infrastructure for storing results and datasets, not a hard requirement.
+It runs locally against any agent — LangChain, LangGraph, OpenAI Agents SDK, PydanticAI, CrewAI, a plain async function, or an Orq-hosted agent. Nothing leaves your machine unless you opt into the [Orq](https://orq.ai) platform.
 
-**When to use evaluatorq instead of the built-in experiment runner:**
+![Red team report: 40 attacks across 10 OWASP categories, 78% resistance, 9 vulnerabilities of which 3 critical, broken down by outcome, severity and agent](docs/assets/dashboard/redteam-03-overview.png)
 
-- Your agent runs outside Orq (LangChain, LangGraph, OpenAI Agents SDK, a custom HTTP service, anything)
-- You need custom evaluation logic — LLM-as-judge, multi-criteria rubrics, programmatic checks, or external APIs
-- You want CI/CD integration with pass/fail signals and exit codes
-- You need to compare multiple agent implementations side by side in the same run
-- You want full observability via OpenTelemetry into exactly what ran and how long it took
-
-The library is deliberately lightweight: async-first, typed end-to-end, and usable standalone or wired into Orq for result storage and dataset management.
-
-## 🎯 Features
-
-- **Parallel Execution**: Run multiple evaluation jobs concurrently with progress tracking
-- **Flexible Data Sources**: Support for inline data, async iterables, and Orq platform datasets
-- **Type-safe**: Fully typed with Python type hints and Pydantic models with runtime validation
-- **Rich Terminal UI**: Beautiful progress indicators and result tables powered by Rich
-- **Orq Platform Integration**: Seamlessly fetch and evaluate datasets from Orq AI (optional)
-- **OpenTelemetry Tracing**: Built-in observability with automatic span creation for jobs and evaluators
-- **Pass/Fail Tracking**: Evaluators can return pass/fail status for CI/CD integration
-- **Built-in Evaluators**: Common evaluators like `string_contains_evaluator` included
-- **Integrations**: LangChain, LangGraph, OpenAI Agents SDK, and custom callable support
-- **[Red Teaming](src/evaluatorq/redteam/README.md)**: Adaptive OWASP-mapped adversarial security testing for AI agents
-- **[Agent Simulation](src/evaluatorq/simulation/README.md)**: Multi-turn, persona-driven conversation testing with an LLM judge
-
-## 📖 Table of Contents
-
-- [Installation](#-installation)
-- [Getting Started](#-getting-started)
-- [Quick Start](#-quick-start)
-- [Integrations](#-langchain-integration)
-- [Red Teaming](#-red-teaming)
-- [Agent Simulation](#-agent-simulation)
-- [Configuration](#-configuration)
-- [Orq Platform Integration](#-orq-platform-integration)
-- [OpenTelemetry Tracing](#-opentelemetry-tracing)
-- [Pass/Fail Tracking](#-passfail-tracking)
-- [API Reference](#-api-reference)
-
-## 📥 Installation
+## Install
 
 ```bash
-uv add evaluatorq
+uv add evaluatorq                     # core evaluation
+uv add "evaluatorq[redteam]"          # + adversarial red teaming
+uv add "evaluatorq[simulation]"       # + multi-turn agent simulation
+uv add "evaluatorq[all]"              # everything, including the dashboard
 ```
 
-`uv add` installs into the current project. If you don't have a project, use
-`uv pip install evaluatorq` in an existing virtual environment instead.
+New here? Take the first line — it and the quick start below need no API key and no account (set `ORQ_API_KEY` and results also upload to Orq). On pip: `python -m pip install evaluatorq`.
 
-Then run your evaluation and the CLI through the same project environment:
+## Quick start
 
-```bash
-uv run my_eval.py
-uv run eq --help          # `uv run evaluatorq` works too
-```
-
-`uv run` resolves the project's environment before executing, so the code you
-run and the packages you installed can't drift apart. With pip, name the
-interpreter explicitly to get the same guarantee:
-
-```bash
-python -m pip install evaluatorq
-python my_eval.py
-```
-
-Poetry (`poetry add evaluatorq`, `poetry run python my_eval.py`) works the same way.
-
-### Optional Dependencies
-
-If you want to use the Orq platform integration:
-
-```bash
-uv add "evaluatorq[orq]"          # or the SDK on its own: uv add orq-ai-sdk
-```
-
-For OpenTelemetry tracing (optional):
-
-```bash
-uv add "evaluatorq[otel]"
-```
-
-For LangChain/LangGraph integration:
-
-```bash
-uv add "evaluatorq[langchain]"    # or bring your own: uv add langchain langgraph
-```
-
-Each extra works with pip too — `python -m pip install "evaluatorq[orq]"`.
-
-## 🏁 Getting Started
-
-New to evaluatorq? Follow this path to get up and running:
-
-| Step | What you'll learn | Example |
-|------|------------------|---------|
-| 1. **Basic eval** | Run your first evaluation with inline data | [`pass_fail_simple.py`](examples/lib/basics/pass_fail_simple.py) |
-| 2. **Multiple jobs** | Run multiple jobs in parallel on each data point | [`example_runners.py`](examples/lib/basics/example_runners.py) |
-| 3. **Reusable patterns** | Create reusable jobs and evaluators | [`eval_reuse.py`](examples/lib/basics/eval_reuse.py) |
-| 4. **Datasets** | Load data from the Orq platform | [`dataset_example.py`](examples/lib/datasets/dataset_example.py) |
-| 5. **Structured scores** | Return multi-dimensional metrics | [`structured_rubric_eval.py`](examples/lib/structured/structured_rubric_eval.py) |
-| 6. **LangChain agent** | Evaluate a LangChain/LangGraph agent | [`langchain_integration_example.py`](examples/lib/integrations/langchain/langchain_integration_example.py) |
-
-> **Tip:** Start with step 1 and work your way up. Each example builds on concepts from the previous one.
-
-## 🚀 Quick Start
-
-### Basic Usage
+Two versions of a support agent, the same questions, one table telling you which one to ship:
 
 ```python
 import asyncio
-from evaluatorq import evaluatorq, job, DataPoint, EvaluationResult
 
-@job("text-analyzer")
-async def text_analyzer(data: DataPoint, row: int):
-    """Analyze text data and return analysis results."""
-    text = data.inputs["text"]
-    analysis = {
-        "length": len(text),
-        "word_count": len(text.split()),
-        "uppercase": text.upper(),
-    }
+from evaluatorq import DataPoint, evaluatorq, job, string_contains_evaluator
 
-    return analysis
+POLICY = {
+    "refund": "Refunds are available within 30 days of delivery.",
+    "ship": "Orders ship within 2 business days.",
+    "warranty": "Every device carries a 12 months warranty.",
+}
 
-async def length_check_scorer(params):
-    """Evaluate if output length is sufficient."""
-    output = params["output"]
-    passes_check = output["length"] > 10
 
-    return EvaluationResult(
-        value=1 if passes_check else 0,
-        explanation=(
-            "Output length is sufficient"
-            if passes_check
-            else f"Output too short ({output['length']} chars, need >10)"
-        )
-    )
+@job("agent-v1")
+async def agent_v1(data: DataPoint, _row: int) -> str:
+    """Answers from memory — so it only really knows about refunds."""
+    question = str(data.inputs["question"]).lower()
+    if "refund" in question:
+        return "Sure — you can request a refund within 30 days of delivery."
+    return "Our support team is happy to help with that."
+
+
+@job("agent-v2")
+async def agent_v2(data: DataPoint, _row: int) -> str:
+    """Looks the answer up in the support policy first."""
+    question = str(data.inputs["question"]).lower()
+    for topic, answer in POLICY.items():
+        if topic in question:
+            return answer
+    return "Our support team is happy to help with that."
+
 
 async def main():
+    data = [
+        DataPoint(inputs={"question": "How do I get a refund?"}, expected_output="30 days"),
+        DataPoint(inputs={"question": "When will my order ship?"}, expected_output="2 business days"),
+        DataPoint(inputs={"question": "How long is the warranty?"}, expected_output="12 months"),
+    ]
     await evaluatorq(
-        "text-analysis",
-        data=[
-            DataPoint(inputs={"text": "Hello world"}),
-            DataPoint(inputs={"text": "Testing evaluation"}),
-        ],
-        jobs=[text_analyzer],
-        evaluators=[
-            {
-                "name": "length-check",
-                "scorer": length_check_scorer,
-            }
-        ],
+        "support-agent-eval",
+        data=data,
+        jobs=[agent_v1, agent_v2],
+        evaluators=[string_contains_evaluator()],
+        parallelism=3,
     )
 
-if __name__ == "__main__":
-    asyncio.run(main())
+
+asyncio.run(main())
 ```
 
-> **Tip:** The `@job()` decorator preserves the job name in error messages. Always prefer `@job("name")` over raw functions for better debugging.
-
-### Using Orq Platform Datasets
-
-```python
-import asyncio
-from evaluatorq import evaluatorq, job, DataPoint, DatasetIdInput
-
-@job("processor")
-async def processor(data: DataPoint, row: int):
-    """Process each data point from the dataset."""
-    result = await process_data(data)
-    return result
-
-async def accuracy_scorer(params):
-    """Calculate accuracy by comparing output with expected results."""
-    data = params["data"]
-    output = params["output"]
-
-    score = calculate_score(output, data.expected_output)
-
-    if score > 0.8:
-        explanation = "High accuracy match"
-    elif score > 0.5:
-        explanation = "Partial match"
-    else:
-        explanation = "Low accuracy match"
-
-    return {"value": score, "explanation": explanation}
-
-async def main():
-    # Requires ORQ_API_KEY environment variable
-    await evaluatorq(
-        "dataset-evaluation",
-        data=DatasetIdInput(dataset_id="your-dataset-id"),  # From Orq platform
-        jobs=[processor],
-        evaluators=[
-            {
-                "name": "accuracy",
-                "scorer": accuracy_scorer,
-            }
-        ],
-    )
-
-if __name__ == "__main__":
-    asyncio.run(main())
+```bash
+uv run support_agent_eval.py
 ```
 
-> **Tip:** Use `parallelism` to control how many data points are processed concurrently. Start with a low value (3-5) when calling external APIs to avoid rate limits.
+<img src="docs/assets/readme-eval-terminal.svg" alt="Terminal output: summary table and a Detailed Results table scoring agent-v1 at 0.33 against agent-v2 at 1.00 on the string-contains evaluator" width="720">
 
-### Advanced Features
+Every job runs against every data point, so adding a variant adds a column. Swap the two function bodies for real model or agent calls and nothing else changes. Any evaluator that returns `pass_=False` exits the process non-zero, so the same script gates CI — which is why this run ends with status 1.
 
-#### Multiple Jobs
+This is the repo's [`examples/lib/basics/support_agent_eval.py`](examples/lib/basics/support_agent_eval.py), minus its `__main__` guard.
 
-Run multiple jobs in parallel for each data point:
+→ [Getting Started](https://orq-ai.github.io/evaluatorq/guides/getting-started/) ·
+[Evaluation reference](https://orq-ai.github.io/evaluatorq/evaluation-reference/) ·
+[Structured scores](https://orq-ai.github.io/evaluatorq/structured-results/) ·
+[LLM as a jury](https://orq-ai.github.io/evaluatorq/llm-as-a-jury/)
 
-```python
-from evaluatorq import job
+## Red teaming
 
-@job("preprocessor")
-async def preprocessor(data: DataPoint, row: int):
-    result = await preprocess(data)
-    return result
+**19 OWASP categories · 18 vulnerabilities · 45 curated attack strategies · 16 delivery methods · 18 LLM judges.** evaluatorq inspects the target, picks attack strategies per vulnerability, generates the prompts, runs them (single- or multi-turn), and judges each response with an evaluator written for that specific vulnerability.
 
-@job("analyzer")
-async def analyzer(data: DataPoint, row: int):
-    result = await analyze(data)
-    return result
+| OWASP Agentic Top 10 | OWASP LLM Top 10 |
+|---|---|
+| ASI01 Agent Goal Hijacking | LLM01 Prompt Injection |
+| ASI02 Tool Misuse & Exploitation | LLM02 Sensitive Information Disclosure |
+| ASI03 Identity & Privilege Abuse | LLM03 Supply Chain Vulnerabilities |
+| ASI04 Supply Chain Vulnerabilities | LLM04 Data and Model Poisoning |
+| ASI05 Unexpected Code Execution | LLM05 Improper Output Handling |
+| ASI06 Memory & Context Poisoning | LLM06 Excessive Agency |
+| ASI07 Insecure Inter-Agent Communication | LLM07 System Prompt Leakage |
+| ASI08 Cascading Failures | LLM08 Vector and Embedding Weaknesses |
+| ASI09 Human-Agent Trust Exploitation | LLM09 Misinformation |
+| ASI10 Rogue Agents | |
 
-@job("transformer")
-async def transformer(data: DataPoint, row: int):
-    result = await transform(data)
-    return result
-
-await evaluatorq(
-    "multi-job-eval",
-    data=[...],
-    jobs=[preprocessor, analyzer, transformer],
-    evaluators=[...],
-)
-```
-
-#### The `@job()` Decorator
-
-The `@job()` decorator provides two key benefits:
-
-1. **Eliminates boilerplate** - No need to manually wrap returns with `{"name": ..., "output": ...}`
-2. **Preserves job names in errors** - When a job fails, the error will include the job name for better debugging
-
-**Decorator pattern (recommended):**
-```python
-from evaluatorq import job
-
-@job("text-processor")
-async def process_text(data: DataPoint, row: int):
-    # Clean return - just the data!
-    return {"result": data.inputs["text"].upper()}
-```
-
-**Functional pattern (for lambdas):**
-```python
-from evaluatorq import job
-
-# Simple transformations with lambda
-uppercase_job = job("uppercase", lambda data, row: data.inputs["text"].upper())
-word_count_job = job("word-count", lambda data, row: len(data.inputs["text"].split()))
-```
-
-#### Deployment Helper
-
-Easily invoke Orq deployments within your evaluation jobs:
-
-```python
-from evaluatorq import evaluatorq, job, invoke, deployment, DatasetIdInput
-
-# Simple one-liner with invoke()
-@job("summarizer")
-async def summarize_job(data, row):
-    text = data.inputs["text"]
-    return await invoke("my-deployment", inputs={"text": text})
-
-# Full response with deployment()
-@job("analyzer")
-async def analyze_job(data, row):
-    response = await deployment(
-        "my-deployment",
-        inputs={"text": data.inputs["text"]},
-        metadata={"source": "evaluatorq"},
-    )
-    print("Raw:", response.raw)
-    return response.content
-
-# Chat-style with messages
-@job("chatbot")
-async def chat_job(data, row):
-    return await invoke(
-        "chatbot",
-        messages=[{"role": "user", "content": data.inputs["question"]}],
-    )
-
-# Thread tracking for conversations
-@job("assistant")
-async def conversation_job(data, row):
-    return await invoke(
-        "assistant",
-        inputs={"query": data.inputs["query"]},
-        thread={"id": "conversation-123"},
-    )
-```
-
-The `invoke()` function returns the text content directly, while `deployment()` returns an object with both `content` and `raw` response for more control.
-
-#### Built-in Evaluators
-
-Use the included evaluators for common use cases:
-
-```python
-from evaluatorq import evaluatorq, job, string_contains_evaluator, DatasetIdInput
-
-@job("country-lookup")
-async def country_lookup_job(data, row):
-    country = data.inputs["country"]
-    return await invoke("country-capitals", inputs={"country": country})
-
-await evaluatorq(
-    "country-unit-test",
-    data=DatasetIdInput(dataset_id="your-dataset-id"),
-    jobs=[country_lookup_job],
-    evaluators=[string_contains_evaluator()],  # Checks if output contains expected_output
-    parallelism=6,
-)
-```
-
-Available built-in evaluators:
-
-- **`string_contains_evaluator()`** - Checks if output contains expected_output (case-insensitive by default)
-- **`exact_match_evaluator()`** - Checks if output exactly matches expected_output
-
-```python
-# Case-sensitive matching
-strict_evaluator = string_contains_evaluator(case_insensitive=False)
-
-# Custom name
-my_evaluator = string_contains_evaluator(name="my-contains-check")
-```
-
-#### Automatic Error Handling
-
-The `@job()` decorator automatically preserves job names even when errors occur:
-
-```python
-from evaluatorq import job
-
-@job("risky-job")
-async def risky_operation(data: DataPoint, row: int):
-    # If this raises an error, the job name "risky-job" will be preserved
-    result = await potentially_failing_operation(data)
-    return result
-
-await evaluatorq(
-    "error-handling",
-    data=[...],
-    jobs=[risky_operation],
-    evaluators=[...],
-)
-
-# Error output will show: "Job 'risky-job' failed: <error details>"
-# Without @job decorator, you'd only see: "<error details>"
-```
-
-#### Async Data Sources
+Each category maps to a vulnerability with its own judge. Categories without curated strategies get them generated per-run against the target's actual tools and system prompt — see the [strategy coverage table](https://orq-ai.github.io/evaluatorq/guides/red-teaming/#coverage).
 
 ```python
 import asyncio
 
-# Create an array of coroutines for async data
-async def get_data_point(i: int) -> DataPoint:
-    await asyncio.sleep(0.01)  # Simulate async data fetching
-    return DataPoint(inputs={"value": i})
-
-data_promises = [get_data_point(i) for i in range(1000)]
-
-await evaluatorq(
-    "async-eval",
-    data=data_promises,
-    jobs=[...],
-    evaluators=[...],
-)
-```
-
-#### Structured Evaluation Results
-
-Evaluators can return structured, multi-dimensional metrics using `EvaluationResultCell`. This is useful for metrics like BERT scores, ROUGE-N scores, or any evaluation that produces multiple sub-scores.
-
-##### Multi-criteria Rubric
-
-Return multiple quality sub-scores in a single evaluator:
-
-```python
-from evaluatorq import evaluatorq, job, DataPoint, EvaluationResult, EvaluationResultCell
-
-@job("echo")
-async def echo_job(data: DataPoint, row: int):
-    return data.inputs["text"]
-
-async def rubric_scorer(params):
-    text = str(params["output"])
-    return EvaluationResult(
-        value=EvaluationResultCell(
-            type="rubric",
-            value={
-                "relevance": min(len(text) / 100, 1),
-                "coherence": 0.9 if "." in text else 0.4,
-                "fluency": 0.85 if len(text.split()) > 5 else 0.5,
-            },
-        ),
-        explanation="Multi-criteria quality rubric",
-    )
-
-await evaluatorq(
-    "structured-rubric",
-    data=[
-        DataPoint(inputs={"text": "The quick brown fox jumps over the lazy dog."}),
-        DataPoint(inputs={"text": "Hi"}),
-    ],
-    jobs=[echo_job],
-    evaluators=[{"name": "rubric", "scorer": rubric_scorer}],
-)
-```
-
-##### Sentiment Distribution
-
-Break down sentiment across categories:
-
-```python
-async def sentiment_scorer(params):
-    text = str(params["output"]).lower()
-    positive_words = ["good", "great", "excellent", "happy", "love"]
-    negative_words = ["bad", "terrible", "awful", "sad", "hate"]
-    pos_count = sum(1 for w in positive_words if w in text)
-    neg_count = sum(1 for w in negative_words if w in text)
-    total = max(pos_count + neg_count, 1)
-
-    return EvaluationResult(
-        value=EvaluationResultCell(
-            type="sentiment",
-            value={
-                "positive": pos_count / total,
-                "negative": neg_count / total,
-                "neutral": 1 - (pos_count + neg_count) / total,
-            },
-        ),
-        explanation="Sentiment distribution across categories",
-    )
-```
-
-##### Safety Scores with Pass/Fail
-
-Combine structured scores with pass/fail tracking for CI/CD:
-
-```python
-async def safety_scorer(params):
-    text = str(params["output"]).lower()
-    categories = {
-        "hate_speech": 0.8 if "hate" in text else 0.1,
-        "violence": 0.7 if ("kill" in text or "fight" in text) else 0.05,
-        "profanity": 0.5 if "damn" in text else 0.02,
-    }
-
-    return EvaluationResult(
-        value=EvaluationResultCell(
-            type="safety",
-            value=categories,
-        ),
-        pass_=all(score < 0.5 for score in categories.values()),
-        explanation="Content safety severity scores per category",
-    )
-```
-
-See the runnable Python examples in the `examples/` directory:
-
-- [`structured_rubric_eval.py`](examples/lib/structured/structured_rubric_eval.py) - Multi-criteria quality rubric
-- [`structured_sentiment_eval.py`](examples/lib/structured/structured_sentiment_eval.py) - Sentiment distribution breakdown
-- [`structured_safety_eval.py`](examples/lib/structured/structured_safety_eval.py) - Safety scores with pass/fail tracking
-
-> **Note:** Structured results display as `[structured]` in the terminal summary table but are preserved in full when sent to the Orq platform and OpenTelemetry spans.
-
-#### Controlling Parallelism
-
-```python
-await evaluatorq(
-    "parallel-eval",
-    data=[...],
-    jobs=[...],
-    evaluators=[...],
-    parallelism=10,  # Run up to 10 jobs concurrently
-)
-```
-
-#### Dashboard Organization with `path`
-
-Use the `path` parameter to organize evaluation results into folders on the Orq dashboard:
-
-```python
-await evaluatorq(
-    "my-evaluation",
-    path="MyProject/Evaluations/Unit Tests",
-    data=[...],
-    jobs=[...],
-    evaluators=[...],
-)
-```
-
-> **Tip:** Use paths like `"Team/Sprint-42/Feature-X"` to keep experiments organized across teams and sprints.
-
-See [`path_organization.py`](examples/lib/structured/path_organization.py) for a complete example.
-
-#### Evaluation Description
-
-Add a description to document the purpose of each evaluation run:
-
-```python
-await evaluatorq(
-    "model-comparison",
-    description="Compare GPT-4o vs Claude on customer support responses",
-    data=[...],
-    jobs=[...],
-    evaluators=[...],
-)
-```
-
-#### Disable Progress Display
-
-```python
-# Get raw results without terminal output
-results = await evaluatorq(
-    "silent-eval",
-    data=[...],
-    jobs=[...],
-    evaluators=[...],
-    print_results=False,  # Disable progress and table display
-)
-
-# Process results programmatically
-for result in results:
-    print(result.data_point.inputs)
-    for job_result in result.job_results:
-        print(f"{job_result.job_name}: {job_result.output}")
-```
-
-## 🔧 Configuration
-
-### Environment Variables
-
-- `ORQ_API_KEY`: API key for Orq platform integration (required for dataset access and sending results). Also enables automatic OTEL tracing to Orq.
-- `ORQ_BASE_URL`: Base URL for Orq platform (default: `https://my.orq.ai`)
-- `OTEL_EXPORTER_OTLP_ENDPOINT`: Custom OpenTelemetry collector endpoint (overrides default Orq endpoint)
-- `OTEL_EXPORTER_OTLP_HEADERS`: Headers for OTEL exporter (format: `key1=value1,key2=value2`)
-- `ORQ_DISABLE_TRACING`: Set to `1` or `true` to disable automatic tracing
-- `ORQ_DEBUG`: Enable debug logging for tracing setup
-- `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`: Whether to write LLM message text (prompts + responses) onto trace spans. **Defaults to `true`** so the Orq dashboard's input/output panels render. Set to `false` (or `0`) to keep raw message content — including any PII — out of traces while still recording token usage, model, and latency. Applies to both agent simulation and red teaming spans.
-- `EVALUATORQ_SPAN_MAX_TEXT_CHARS`: Max characters of message text (both inputs and outputs) stored per span attribute before truncation (marker `... [truncated]`). **Defaults to capturing all content (no truncation).** Set a positive integer (e.g. `8192`) to cap; `-1`, `0`, or unset all mean capture all. Applies identically to the Python (agent-sim + red teaming) and TypeScript simulation tracing layers.
-
-### Evaluation Parameters
-
-Parameters are validated at runtime using Pydantic. The `evaluatorq` function supports three calling styles:
-
-```python
-from evaluatorq import evaluatorq, EvaluatorParams
-
-# 1. Keyword arguments (recommended)
-await evaluatorq(
-    "my-eval",
-    data=[...],
-    jobs=[...],
-    parallelism=5,
-)
-
-# 2. Dict style
-await evaluatorq("my-eval", {
-    "data": [...],
-    "jobs": [...],
-    "parallelism": 5,
-})
-
-# 3. EvaluatorParams instance
-await evaluatorq("my-eval", EvaluatorParams(
-    data=[...],
-    jobs=[...],
-    parallelism=5,
-))
-```
-
-#### Parameter Reference
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `data` | `list[DataPoint]` \| `list[Awaitable[DataPoint]]` \| `DatasetIdInput` | **required** | Data to evaluate |
-| `jobs` | `list[Job]` | **required** | Jobs to run on each data point |
-| `evaluators` | `list[Evaluator]` \| `None` | `None` | Evaluators to score job outputs |
-| `parallelism` | `int` (≥1) | `1` | Number of concurrent jobs |
-| `print_results` | `bool` | `True` | Display progress and results table |
-| `description` | `str` \| `None` | `None` | Optional evaluation description |
-| `path` | `str` \| `None` | `None` | Path for organizing results on the Orq dashboard (e.g., `"Project/Category"`) |
-
-## 📊 Orq Platform Integration
-
-### Automatic Result Sending
-
-When the `ORQ_API_KEY` environment variable is set, evaluatorq automatically sends evaluation results to the Orq platform for visualization and analysis.
-
-```python
-# Results are automatically sent when ORQ_API_KEY is set
-await evaluatorq(
-    "my-evaluation",
-    data=[...],
-    jobs=[...],
-    evaluators=[...],
-)
-```
-
-#### What Gets Sent
-
-When the `ORQ_API_KEY` is set, the following information is sent to Orq:
-- Evaluation name
-- Dataset ID (when using Orq datasets)
-- Job results with outputs and errors
-- Evaluator scores with values and explanations
-- Execution timing information
-
-Note: Evaluator explanations are included in the data sent to Orq but are not displayed in the terminal output to keep the console clean.
-
-#### Result Visualization
-
-After successful submission, you'll see a console message with a link to view your results:
-
-```
-📊 View your evaluation results at: <url to the evaluation>
-```
-
-The Orq platform provides:
-- Interactive result tables
-- Score statistics
-- Performance metrics
-- Historical comparisons
-
-## 🔍 OpenTelemetry Tracing
-
-Evaluatorq automatically creates OpenTelemetry spans for observability into your evaluation runs.
-
-### Span Hierarchy
-
-```
-orq.job (independent root per job execution)
-└── orq.evaluation (child span per evaluator)
-```
-
-### Auto-Enable with Orq
-
-When `ORQ_API_KEY` is set, traces are automatically sent to the Orq platform:
-
-```bash
-ORQ_API_KEY=your-api-key python my_eval.py
-```
-
-### Custom OTEL Endpoint
-
-Send traces to any OpenTelemetry-compatible backend:
-
-```bash
-OTEL_EXPORTER_OTLP_ENDPOINT=https://your-collector:4318 \
-OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer token" \
-uv run my_eval.py
-```
-
-### Disable Tracing
-
-If you want to disable tracing even when `ORQ_API_KEY` is set:
-
-```bash
-ORQ_DISABLE_TRACING=1 python my_eval.py
-```
-
-## ✅ Pass/Fail Tracking
-
-Evaluators can return a `pass_` field to indicate pass/fail status:
-
-```python
-async def quality_scorer(params):
-    """Quality check evaluator with pass/fail."""
-    output = params["output"]
-    score = calculate_quality(output)
-
-    return {
-        "value": score,
-        "pass_": score >= 0.8,  # Pass if meets threshold
-        "explanation": f"Quality score: {score}",
-    }
-```
-
-**CI/CD Integration:** When any evaluator returns `pass_: False`, the process exits with code 1. This enables fail-fast behavior in CI/CD pipelines.
-
-**Pass Rate Display:** The summary table shows pass rate when evaluators use the `pass_` field:
-
-```
-┌──────────────────────┬─────────────────┐
-│ Pass Rate            │ 75% (3/4)       │
-└──────────────────────┴─────────────────┘
-```
-
-## 🔗 LangChain Integration
-
-Evaluatorq provides integration with LangChain and LangGraph agents, converting their outputs to the OpenResponses format for standardized evaluation.
-
-### Overview
-
-The LangChain integration allows you to:
-- Wrap LangChain agents created with `create_agent()` for use in evaluatorq jobs
-- Wrap LangGraph compiled graphs for stateful agent evaluation
-- Automatically convert agent outputs to OpenResponses format
-- Evaluate agent behavior using standard evaluatorq evaluators
-
-### System Instructions
-
-Use the `instructions` parameter to inject a system prompt into the agent. It can be a static string or a callable that builds instructions dynamically from the dataset row:
-
-```python
-from evaluatorq.integrations.langchain_integration import wrap_langchain_agent
-
-# Static instructions
-agent_job = wrap_langchain_agent(
-    agent,
-    name="my-agent",
-    instructions="You are a helpful weather assistant.",
-)
-
-# Dynamic instructions from dataset inputs
-agent_job = wrap_langchain_agent(
-    agent,
-    name="research-agent",
-    instructions=lambda data: (
-        f"Research the topic: {data.inputs['topic']}. "
-        f"Focus on {data.inputs['focus']}."
-    ),
-)
-```
-
-### Input Modes
-
-The wrapper reads the user input from `data.inputs` in three ways:
-
-- **`prompt`** (default): `data.inputs["prompt"]` — a single string, sent as one user message.
-- **`messages`**: `data.inputs["messages"]` — a list of `{"role": ..., "content": ...}` dicts, sent as-is.
-- **Both**: when both are present, `messages` are sent first, followed by `prompt` as a final user message.
-
-Change the prompt key with the `prompt_key` parameter (e.g., `prompt_key="question"`).
-
-### Examples
-
-Complete examples are available in the examples folder:
-
-- **LangChain Agent**: [`langchain_integration_example.py`](examples/lib/integrations/langchain/langchain_integration_example.py) — Basic agent with weather tools using `wrap_langchain_agent`
-- **LangGraph Agent**: [`langgraph_integration_example.py`](examples/lib/integrations/langchain/langgraph_integration_example.py) — LangGraph compiled graph with StateGraph pattern
-- **LangGraph Research Agent (advanced)**: [`langgraph_research_eval.py`](examples/lib/integrations/langchain/langgraph_research_eval.py) — Dataset-driven research agent with dynamic `instructions` and multi-criteria evaluators
-
-> **Tip:** Pass the `instructions` parameter to `wrap_langchain_agent` for dynamic system prompts — no need to write a custom job function.
-
-## 🔴 Red Teaming
-
-Run adversarial attacks against an LLM or agent and measure how well it resists. Attacks are generated dynamically by an attacker LLM and mapped to OWASP vulnerability categories (LLM Top 10 and Agentic Security Initiative).
-
-```bash
-uv add "evaluatorq[redteam]"
-```
-
-Point `red_team()` at an orq.ai agent — `"agent:<key>"` auto-selects the ORQ backend and discovers the agent's tools, memory, and system prompt:
-
-```python
 from evaluatorq.redteam import red_team
 
-report = await red_team(
-    "agent:my-agent-key",
-    categories=["LLM01", "ASI01", "ASI02"],  # injection + agentic tool/memory abuse
-    max_dynamic_datapoints=5,
-    max_turns=3,
-)
-print(f"Resistance rate: {report.summary.resistance_rate:.0%}")
-print(f"Vulnerabilities found: {report.summary.vulnerabilities_found}")
+
+async def main():
+    report = await red_team(
+        "agent:my-agent-key",
+        categories=["LLM01", "ASI01", "ASI02"],  # injection + agentic tool/memory abuse
+        max_dynamic_datapoints=5,
+        max_turns=3,
+    )
+    rate = report.summary.resistance_rate  # None when no attack could be evaluated
+    print(f"Resistance rate: {rate:.0%}" if rate is not None else "Resistance rate: no verdict")
+    print(f"Vulnerabilities found: {report.summary.vulnerabilities_found}")
+
+
+asyncio.run(main())
 ```
 
-No deployment? Red-team a raw model with `OpenAIModelTarget("openai/gpt-5.4-mini", system_prompt=...)` instead of the `"agent:<key>"` string. (Model IDs route through the ORQ router — use the `openai/` prefix; drop it if you target OpenAI directly.)
+Targets can be an Orq agent (`"agent:<key>"`), an Orq deployment (`"deployment:<key>"`), a raw model (`OpenAIModelTarget("openai/gpt-5.4-mini")`), or an agent from an external framework. Every attack, response and verdict is browsable afterwards:
 
-**Target types:** `"agent:<key>"` (ORQ agent), `"deployment:<key>"` (ORQ deployment), `OpenAIModelTarget(...)` (raw model, Python API only). Agents from **external frameworks** (LangGraph, OpenAI Agents SDK, custom callables) are wrapped into a target too.
+![Attack detail: a memory-poisoning attack that got the agent to store an "UNRESTRICTED System Administrator" directive, with the judge's verdict above the transcript](docs/assets/dashboard/redteam-08-attack-detail.png)
 
-**Learn more:**
+Findings come back ranked by `risk = attack success rate × average severity`, each with a recommended fix — see [Focus areas](docs/assets/dashboard/redteam-05-focus-areas.png).
 
-- 📓 [Red teaming intro notebook](examples/red_teaming_intro.ipynb) — runnable 5-minute SDK walkthrough
-- 📘 [Concepts, modes, full parameters, external frameworks, CLI](src/evaluatorq/redteam/README.md)
-- 🧪 [Runnable example scripts](examples/redteam/) — static datasets, hybrid mode, multi-target, custom hooks
+### What a run costs
 
-> **Note:** The built-in frameworks (OWASP LLM Top 10, OWASP ASI) and their vulnerabilities, evaluators, and attack strategies are not runtime-extendable yet. Adding custom vulnerabilities currently requires modifying the package source. A runtime registration API is planned for a future release.
+Measured wall clock and token counts from two runs against Orq-hosted agents, attacked and judged by `gpt-5-mini` at `parallelism=10`:
 
-## 🎭 Agent Simulation
+| Run | Attacks | Wall clock | Tokens | Tokens per attack |
+|---|---|---|---|---|
+| Hybrid, 10 categories, 2 agents | 40 | 2m 26s | 481k | 12k |
+| Dynamic, 3 categories, 1 agent | 10 | 2m 12s | 88k | 9k |
 
-Stress-test an agent against *real users* before they do. A **user-simulator LLM** plays a persona pursuing a goal across a multi-turn conversation, and a **judge LLM** scores each run against your criteria. The non-adversarial counterpart to red teaming.
+Attacks run concurrently, so wall clock tracks the slowest attack far more than the attack count — quadrupling the sweep cost twelve seconds. Budget a few cents for a run this size at `gpt-5-mini` prices; roughly 40% of the tokens are the judge's, and both the attacker and judge models are configurable, so pointing them at a cheaper model moves the bill directly. Two runs is not a benchmark — treat these as an order of magnitude.
 
-```bash
-uv add "evaluatorq[simulation]"
+→ [Red teaming guide](https://orq-ai.github.io/evaluatorq/guides/red-teaming/) ·
+[Intro notebook](examples/red_teaming_intro.ipynb) ·
+[Example scripts](examples/redteam/)
+
+## Agent simulation
+
+The non-adversarial counterpart: a user-simulator LLM plays a persona pursuing a goal across a multi-turn conversation, and a judge LLM scores each run against your criteria. Cross every persona with every scenario and the weak spot names itself:
+
+![Goal completion heatmap, 10 personas by 5 scenarios: every persona clears the straightforward refund paths, and the "never received, unverified evidence" column collapses to 0–40%](docs/assets/dashboard/sim-04-breakdown-heatmap.png)
+
+An agent that looks fine on four scenarios falls over on the fifth. Fix it, re-run the same frozen set, and the difference is the point — and because the conversation runs to eight turns, it catches the failures that only appear deep in a dialogue, where single-prompt testing never looks.
+
+```mermaid
+flowchart LR
+    P["Persona<br/>impatient, terse"] --> U["User simulator LLM"]
+    S["Scenario<br/>goal + criteria"] --> U
+    U <--> A["Your agent"]
+    U --> J["Judge LLM"]
+    A --> J
+    J --> R["goal_achieved<br/>criteria_met<br/>rules_broken"]
 ```
-
-Define who the user is (`Persona`) and what they want (`Scenario`), then simulate — against a hosted orq.ai agent (`target="agent:<key>"`) or a local callable:
 
 ```python
 from evaluatorq.simulation import simulate
-from evaluatorq.simulation.types import CommunicationStyle, Criterion, Persona, Scenario
 
 results = await simulate(
     evaluation_name="support-agent-sim",
-    target="agent:my-support-agent",  # hosted Orq agent; or target=<async fn> for a local agent
-    personas=[Persona(
-        name="Impatient Customer",
-        patience=0.2,
-        assertiveness=0.8,
-        politeness=0.4,
-        technical_level=0.3,
-        communication_style=CommunicationStyle.terse,
-        background="Received the wrong item and wants a refund urgently",
-    )],
-    scenarios=[Scenario(
-        name="Wrong Item Refund",
-        goal="Get a full refund for the wrong item received",
-        criteria=[Criterion(description="Agent asks for order details", type="must_happen")],
-    )],
+    target="agent:my-support-agent",   # or any local async callable
+    personas=[persona],
+    scenarios=[scenario],
     max_turns=8,
 )
-result = results[0]
-print(f"Goal achieved: {result.goal_achieved} (score {result.goal_completion_score:.2f})")
+print(results[0].goal_achieved, results[0].goal_completion_score)
 ```
 
-No personas yet? `generate_and_simulate(agent_description=...)` invents personas and scenarios for you. With a hosted target (`target="agent:<key>"`), it uses the agent's stored description if you omit `agent_description`; it raises an error when neither source has one. Runs exit non-zero on failure by default (`exit_on_failure=True`) — drop straight into CI.
+Runs exit non-zero on failure by default (`exit_on_failure=True`), so they drop straight into CI. The target can be an Orq agent or any local async callable, including agents built with the OpenAI Agents SDK, LangGraph, CrewAI or PydanticAI — [the examples](examples/agent_simulation/) cover each, with screen recordings.
 
-**Learn more:**
+→ [Agent simulation guide](https://orq-ai.github.io/evaluatorq/guides/agent-simulation/) ·
+[Intro notebook](examples/agent_simulation_intro.ipynb) ·
+[Example scripts](examples/agent_simulation/)
 
-- 📓 [Agent simulation intro notebook](examples/agent_simulation_intro.ipynb) — runnable 5-minute SDK walkthrough
-- 📘 [Concepts, entry points, datasets, CLI](src/evaluatorq/simulation/README.md)
-- 🧪 [Runnable example scripts](examples/agent_simulation/) — orq agent & deployment targets, tool-using agents, hardening loop, CI gating
+## Dashboard
 
-## 📚 API Reference
-
-### `evaluatorq(name, params?, *, data?, jobs?, evaluators?, parallelism?, print_results?, description?, path?) -> EvaluatorqResult`
-
-Main async function to run evaluations.
-
-#### Signature:
-
-```python
-async def evaluatorq(
-    name: str,
-    params: EvaluatorParams | dict[str, Any] | None = None,
-    *,
-    data: DatasetIdInput | Sequence[Awaitable[DataPoint] | DataPoint] | None = None,
-    jobs: list[Job] | None = None,
-    evaluators: list[Evaluator] | None = None,
-    parallelism: int = 1,
-    print_results: bool = True,
-    description: str | None = None,
-    path: str | None = None,
-) -> EvaluatorqResult
-```
-
-#### Parameters:
-
-- `name`: String identifier for the evaluation run
-- `params`: (Optional) `EvaluatorParams` instance or dict with evaluation parameters
-- `data`: List of DataPoint objects, awaitables, or `DatasetIdInput`
-- `jobs`: List of job functions to run on each data point
-- `evaluators`: Optional list of evaluator configurations
-- `parallelism`: Number of concurrent jobs (default: 1, must be ≥1)
-- `print_results`: Whether to display progress and results (default: True)
-- `description`: Optional description for the evaluation run
-
-> **Note:** Parameters can be passed either via the `params` argument (as dict or `EvaluatorParams`) or as keyword arguments. Keyword arguments take precedence over `params` values.
-
-#### Returns:
-
-`EvaluatorqResult` - List of `DataPointResult` objects containing job outputs and evaluator scores.
-
-### Types
-
-```python
-from typing import Any, Callable, Awaitable
-from pydantic import BaseModel, Field
-from typing_extensions import TypedDict
-
-# Output type alias
-Output = str | int | float | bool | dict[str, Any] | None
-
-class DataPoint(BaseModel):
-    """A data point for evaluation."""
-    inputs: dict[str, Any]
-    expected_output: Output | None = None
-
-EvaluationResultCellValue = str | int | float | dict[str, "str | float | dict[str, str | float]"]
-
-class EvaluationResultCell(BaseModel):
-    """Structured evaluation result with multi-dimensional metrics."""
-    type: str
-    value: dict[str, EvaluationResultCellValue]
-
-class EvaluationResult(BaseModel):
-    """Result from an evaluator."""
-    value: str | int | float | bool | EvaluationResultCell | dict[str, Any]
-    explanation: str | None = None
-    pass_: bool | None = None  # Optional pass/fail indicator for CI/CD integration
-
-class EvaluatorScore(BaseModel):
-    """Score from an evaluator for a job output."""
-    evaluator_name: str
-    score: EvaluationResult
-    error: str | None = None
-
-class JobResult(BaseModel):
-    """Result from a job execution."""
-    job_name: str
-    output: Output
-    error: str | None = None
-    evaluator_scores: list[EvaluatorScore] | None = None
-
-class DataPointResult(BaseModel):
-    """Result for a single data point."""
-    data_point: DataPoint
-    error: str | None = None
-    job_results: list[JobResult] | None = None
-
-# Type aliases
-EvaluatorqResult = list[DataPointResult]
-
-class DatasetIdInput(BaseModel):
-    """Input for fetching a dataset from Orq platform."""
-    dataset_id: str
-
-class EvaluatorParams(BaseModel):
-    """Parameters for running an evaluation (validated at runtime)."""
-    data: DatasetIdInput | Sequence[Awaitable[DataPoint] | DataPoint]
-    jobs: list[Job]
-    evaluators: list[Evaluator] | None = None
-    parallelism: int = Field(default=1, ge=1)
-    print_results: bool = True
-    description: str | None = None
-
-class JobReturn(TypedDict):
-    """Job return structure."""
-    name: str
-    output: Output
-
-Job = Callable[[DataPoint, int], Awaitable[JobReturn]]
-
-class ScorerParameter(TypedDict):
-    """Parameters passed to scorer functions."""
-    data: DataPoint
-    output: Output
-
-Scorer = Callable[[ScorerParameter], Awaitable[EvaluationResult | dict[str, Any]]]
-
-class Evaluator(TypedDict):
-    """Evaluator configuration."""
-    name: str
-    scorer: Scorer
-
-# Deployment helper types
-@dataclass
-class DeploymentResponse:
-    """Response from a deployment invocation."""
-    content: str  # Text content of the response
-    raw: Any      # Raw API response
-
-# Invoke deployment and get text content
-async def invoke(
-    key: str,
-    inputs: dict[str, Any] | None = None,
-    context: dict[str, Any] | None = None,
-    metadata: dict[str, Any] | None = None,
-    thread: dict[str, Any] | None = None,  # Must include 'id' key
-    messages: list[dict[str, str]] | None = None,
-) -> str: ...
-
-# Invoke deployment and get full response
-async def deployment(
-    key: str,
-    inputs: dict[str, Any] | None = None,
-    context: dict[str, Any] | None = None,
-    metadata: dict[str, Any] | None = None,
-    thread: dict[str, Any] | None = None,  # Must include 'id' key
-    messages: list[dict[str, str]] | None = None,
-) -> DeploymentResponse: ...
-
-# Built-in evaluators
-def string_contains_evaluator(
-    case_insensitive: bool = True,
-    name: str = "string-contains",
-) -> Evaluator: ...
-
-def exact_match_evaluator(
-    case_insensitive: bool = False,
-    name: str = "exact-match",
-) -> Evaluator: ...
-```
-
-## 🛠️ Development
+Every red team and simulation run is saved locally. `eq dashboard` serves them all — filter findings, read transcripts, compare runs, export HTML/CSV/JSON.
 
 ```bash
-# Install dependencies
-uv sync
-
-# Run type checking
-uv run basedpyright
-
-# Format code
-uv run ruff format
-
-# Lint code
-uv run ruff check
-
-# Serve the documentation site locally (live-reload at http://127.0.0.1:8000/evaluatorq/)
-uv run --group docs mkdocs serve
-
-# Build the documentation site (strict — fails on warnings, as CI does)
-uv run --group docs mkdocs build --strict
+eq dashboard
 ```
+
+![Dashboard landing: 21 jobs run, average cost per job, total spend and tokens, runs split by type, and findings by severity](docs/assets/dashboard/redteam-01-landing.png)
+
+→ [Dashboard guide](https://orq-ai.github.io/evaluatorq/dashboard/)
+
+## CLI
+
+The package installs `eq` (and its longer alias `evaluatorq`):
+
+```bash
+eq redteam run --target agent:my-agent   # red team an agent
+eq sim run --target agent:my-agent       # generate personas/scenarios and simulate
+eq dashboard                             # browse saved runs
+eq --help
+```
+
+→ [CLI reference](https://orq-ai.github.io/evaluatorq/cli-reference/overview/)
+
+## Configuration
+
+Everything is environment variables; none are required for local evaluation. `ORQ_API_KEY` unlocks Orq datasets, result upload and automatic tracing; `OPENAI_API_KEY` backs red teaming and simulation without Orq.
+
+→ [Configuration](https://orq-ai.github.io/evaluatorq/configuration/) ·
+[Tracing](https://orq-ai.github.io/evaluatorq/tracing/)
+
+## Development
+
+[uv](https://docs.astral.sh/uv/) manages the environment, [ruff](https://docs.astral.sh/ruff/) lints and formats, [basedpyright](https://docs.basedpyright.com/) type-checks, and pytest runs the suite:
+
+```bash
+uv sync --all-extras --all-groups   # every extra plus the dev tooling
+uv run pytest -m 'not integration'  # the unit suite; integration tests need ORQ_API_KEY
+uv run ruff check src && uv run ruff format src
+uv run basedpyright                 # the whole repo, tests included
+```
+
+CI runs exactly those four commands, so a clean local run is a clean PR. The package supports Python 3.10 and up, and releases are cut from git tags — commit messages follow [Conventional Commits](https://www.conventionalcommits.org) and decide the next version, so `feat:` and `fix:` ship and `docs:` does not.
+
+Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). MIT licensed.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -73,7 +74,7 @@ def content_to_text(content: str | list[ContentPart] | None) -> str:
 
     For targets that accept only text: a string (or ``None``) passes through; a
     multi-part list is concatenated from its text parts (no separator), but a
-    non-text part (image or file) raises :class:`NotImplementedError` with a clear
+    non-text part (image or file) raises `NotImplementedError` with a clear
     message rather than silently dropping content.
     """
     if content is None:
@@ -160,6 +161,14 @@ class LLMCallConfig(BaseModel):
     timeout_ms: int = Field(default=90_000, gt=0)
     extra_kwargs: dict[str, Any] = Field(default_factory=dict)
     client: _Client = None
+    retry_count: int = Field(
+        default=1,
+        ge=0,
+        description='Retries after the initial call, for callers that own retry via with_retry '
+        '— currently the judge. Same semantics as LLMConfig.retry_count: 0 disables retry. The '
+        "owning caller disarms the client's own retry budget for the duration (see run_judge) so "
+        'the two cannot multiply.',
+    )
 
     def completion_params(self, **params: Any) -> dict[str, Any]:
         """Merged kwargs for a chat-completions call: sampling fields first,
@@ -254,7 +263,7 @@ class StrategyToolCall(BaseModel):
     function: FunctionCall = Field(description='Function call details')
     # Responses-API item id (e.g. ``fc_abc123``), distinct from ``id`` (which maps to
     # the chat-completions / Responses ``call_id``). Preserved through transcript
-    # replay so :class:`OpenAIAgentTarget` can echo the original ``function_call``
+    # replay so `OpenAIAgentTarget` can echo the original ``function_call``
     # item back to the Responses API on subsequent turns. ``None`` for tool calls
     # that did not originate from a Responses-API turn.
     item_id: str | None = Field(default=None, description='Responses-API function_call item id (fc_*)')
@@ -334,10 +343,23 @@ def _usage_first_int(usage: Any, keys: tuple[str, ...]) -> int:
 
     Only genuine ``int``/``float`` values count; ``None`` and non-numeric stand-ins
     (e.g. a bare ``MagicMock`` attribute) are skipped so the next alias is tried.
+
+    Unusable numbers — negative, NaN, ±inf — are skipped the same way rather than
+    raising. ``Usage.extract`` runs from ``record_llm_response`` on the *success*
+    path of every LLM call, so a hostile payload must degrade to 0, never turn a
+    good response into a failure: ``int(nan)`` raises ValueError, ``int(-inf)``
+    raises OverflowError, and a negative would trip the ``ge=0`` field constraint.
+    Skipping (rather than clamping in place) also lets a valid later alias win, so
+    ``{'input_tokens': -1, 'prompt_tokens': 10}`` still reads 10.
     """
     for key in keys:
         val = _usage_get(usage, key)
         if isinstance(val, (int, float)) and not isinstance(val, bool):
+            if not math.isfinite(val) or val < 0:
+                # debug, not warning: a provider that reports something unusable does so on
+                # every call, and one line per LLM call drowns the log it belongs to.
+                logger.debug('Usage.extract: ignoring unusable {} value {!r}', key, val)
+                continue
             return int(val)
     return 0
 
@@ -360,10 +382,18 @@ def _usage_detail_int(usage: Any, containers: tuple[str, ...], keys: tuple[str, 
 
 
 def _usage_first_float(usage: Any, keys: tuple[str, ...]) -> float | None:
-    """First numeric value across ``keys`` coerced to float, or None if absent."""
+    """First numeric value across ``keys`` coerced to float, or None if absent.
+
+    Non-finite values are skipped: NaN fails the ``ge=0`` cost constraint (``nan >= 0``
+    is False) and ``_clamped_cost`` cannot catch it (``nan < 0`` is False either), so
+    it would raise out of the telemetry path. See ``_usage_first_int``.
+    """
     for key in keys:
         val = _usage_get(usage, key)
         if isinstance(val, (int, float)) and not isinstance(val, bool):
+            if not math.isfinite(val):
+                logger.debug('Usage.extract: ignoring non-finite {} value {!r}', key, val)
+                continue
             return float(val)
     return None
 
@@ -378,7 +408,7 @@ def _clamped_cost(usage: Any, keys: tuple[str, ...]) -> float | None:
     """
     raw = _usage_first_float(usage, keys)
     if raw is not None and raw < 0:
-        logger.warning('Usage.extract: provider reported negative cost {!r} for {}; clamping to 0.0', raw, keys[0])
+        logger.debug('Usage.extract: provider reported negative cost {!r} for {}; clamping to 0.0', raw, keys[0])
         return 0.0
     return raw
 
@@ -487,17 +517,17 @@ class Usage(BaseModel):
 
     @property
     def prompt_tokens(self) -> int:
-        """Deprecated alias for :attr:`input_tokens`."""
+        """Deprecated alias for `input_tokens`."""
         return self.input_tokens
 
     @property
     def completion_tokens(self) -> int:
-        """Deprecated alias for :attr:`output_tokens`."""
+        """Deprecated alias for `output_tokens`."""
         return self.output_tokens
 
     @property
     def cost_usd(self) -> float | None:
-        """Deprecated alias for :attr:`total_cost`."""
+        """Deprecated alias for `total_cost`."""
         return self.total_cost
 
     @property
@@ -517,12 +547,12 @@ class Usage(BaseModel):
         return self.total_cost is not None and 0 < self.priced_calls < self.calls
 
     def with_calls(self, calls: int) -> Usage:
-        """Stamp the call count, keeping :attr:`priced_calls` consistent.
+        """Stamp the call count, keeping `priced_calls` consistent.
 
         ``from_openresponses`` parses with ``calls=0`` and leaves the real count to
         the caller that knows the call was billed. A bare
         ``model_copy(update={'calls': 1})`` would leave ``priced_calls`` at 0, which
-        :attr:`cost_is_partial` reads as legacy untracked data — use this instead.
+        `cost_is_partial` reads as legacy untracked data — use this instead.
         """
         return self.model_copy(update={'calls': calls, 'priced_calls': calls if self.total_cost is not None else 0})
 
@@ -719,6 +749,12 @@ TokenUsage = Usage
 # result models. Shared so writers/readers cannot drift.
 JURY_RAW_OUTPUT_KEY = 'jury'
 
+# Same mechanism for the judge's own failure. A judge that could not return a verdict
+# records why here, and converters lift it onto the typed result as ``evaluation_error``
+# — so a blocked or unparseable judge shows up in the run's error rollup instead of
+# being buried in one attack's explanation string.
+EVAL_ERROR_RAW_OUTPUT_KEY = 'evaluation_error'
+
 
 class JuryVote(BaseModel):
     """A single judge's aggregate vote within a jury.
@@ -832,7 +868,7 @@ class JuryResult(BaseModel):
 
 
 class AgentResponseError(BaseModel):
-    """A per-response error marker on :class:`AgentResponse`.
+    """A per-response error marker on `AgentResponse`.
 
     Set when a target (or simulation agent) failed to produce a real response,
     e.g. a timeout or backend exception. The orchestrator uses its presence to
@@ -844,13 +880,13 @@ class AgentResponseError(BaseModel):
     error's *presence*, not its value, so the field is intentionally not an
     enum. The orchestrator sets ``"timeout"`` on the timeout path and otherwise
     classifies the failure via
-    :func:`evaluatorq.common.target_call.classify_error_type`, which yields one
+    `evaluatorq.common.target_call.classify_error_type`, which yields one
     of ``content_filter``, ``rate_limit``, ``timeout``, ``network_error``,
     ``server_error``, ``client_error``, or ``target_error`` (fallback for an
     unmatched error). Other producers may set their own values.
 
     This is the leaf, per-response error. The whole-run rollup is
-    :class:`evaluatorq.redteam.contracts.RunError`.
+    `evaluatorq.redteam.contracts.RunError`.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -885,15 +921,15 @@ class ResponseTrace(BaseModel):
 class AgentResponse(BaseModel):
     """Structured response from a target agent as an ordered list of output messages.
 
-    Each item in ``output`` is a :class:`TextOutputItem`, :class:`ToolCallOutputItem`,
-    or :class:`ReasoningOutputItem`, preserving the order in which they were produced.
+    Each item in ``output`` is a `TextOutputItem`, `ToolCallOutputItem`,
+    or `ReasoningOutputItem`, preserving the order in which they were produced.
     Item ``type`` discriminators align with the OpenResponses intermediate data format
     (``output_text``, ``function_call``, ``reasoning``).
 
     Accessors:
         ``.text``       — all ``TextOutputItem`` contents concatenated, or ``""`` if none
-        ``.tool_calls`` — list of :class:`ToolCallOutputItem` filtered from
-        :attr:`output` in order
+        ``.tool_calls`` — list of `ToolCallOutputItem` filtered from
+        `output` in order
     """
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
@@ -1405,6 +1441,17 @@ class ManifestStatus(StrEnum):
 # populate — a typo here can't silently read back as 0.
 RUN_SUMMARY_TOTAL_KEY = 'total_results'
 
+RUN_SUMMARY_VERSION = 1
+"""Format version of ``RunManifest.summary``, stamped by ``ManifestWriter.complete()``.
+
+**Bump this whenever a surface's ``manifest_summary()`` changes shape** (a key
+added, renamed, or dropped). Readers compare the stamp instead of guessing
+whether a stored summary is current: an older or unstamped summary is re-read
+from the full report rather than rendered with blank columns. Without it a
+partially-populated summary reads as complete forever, which is how a thin
+backfill silently blanked the ``runs`` tables (RES-1276).
+"""
+
 
 class RunSummary(TypedDict, total=False):
     """Compact headline stats stashed on ``RunManifest.summary`` at completion.
@@ -1418,8 +1465,9 @@ class RunSummary(TypedDict, total=False):
     # Red-team extras
     pipeline: str
     total_attacks: int
-    vulnerability_rate: float
-    resistance_rate: float
+    # Both None when no attack could be evaluated — see ReportSummary._RATE_NONE_DOC.
+    vulnerability_rate: float | None
+    resistance_rate: float | None
     tested_agents: list[str]
     # Sim extras
     mode: str
@@ -1469,6 +1517,15 @@ class RunManifest(BaseModel):
             'without reading the full report. Small scalars / short lists only — never full results.'
         ),
     )
+    summary_version: int | None = Field(
+        default=None,
+        description=(
+            'Format version of the summary above (see RUN_SUMMARY_VERSION), stamped when it is '
+            'written. None for manifests saved before versioning, and for a manifest with no '
+            'summary at all; either way a reader treats the summary as not current and falls back '
+            'to the full report.'
+        ),
+    )
 
     @property
     def duration_seconds(self) -> float | None:
@@ -1483,6 +1540,7 @@ __all__ = [
     'DEFAULT_TARGET_TIMEOUT_MS',
     'JURY_RAW_OUTPUT_KEY',
     'RUN_SUMMARY_TOTAL_KEY',
+    'RUN_SUMMARY_VERSION',
     'AgentContext',
     'AgentResponse',
     'AgentResponseError',

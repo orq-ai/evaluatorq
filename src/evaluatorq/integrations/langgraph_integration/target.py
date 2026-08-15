@@ -130,20 +130,23 @@ class LangGraphTarget(AgentTarget):
     attacks never share thread state. The pipeline reads ``memory_entity_id``
     off the target rather than injecting it.
 
-    Usage::
+    Usage:
 
-        # NOTE: langgraph < 2.0 path. create_react_agent moved to
-        # `langchain.agents.create_agent` in langgraph V1.0 and is removed in V2.0.
-        # LangGraphTarget wraps whatever compiled graph you pass, so no change is
-        # needed here — only update this import when you bump to langgraph 2.x.
-        from langgraph.prebuilt import create_react_agent
-        from evaluatorq.integrations.langgraph_integration import LangGraphTarget
+    ```python
+    # NOTE: langgraph < 2.0 path. create_react_agent moved to
+    # `langchain.agents.create_agent` in langgraph V1.0 and is removed in V2.0.
+    # LangGraphTarget wraps whatever compiled graph you pass, so no change is
+    # needed here — only update this import when you bump to langgraph 2.x.
+    from langgraph.prebuilt import create_react_agent
+    from evaluatorq.integrations.langgraph_integration import LangGraphTarget
 
-        graph = create_react_agent(model, tools=[...])
-        target = LangGraphTarget(graph)
+    graph = create_react_agent(model, tools=[...])
+    target = LangGraphTarget(graph)
 
-        # Pass to simulation or red teaming
-        config = DynamicRunConfig(targets=[target])
+    # Pass to simulation or red teaming
+    results = await simulate(target=target, ...)
+    report = await red_team(target)
+    ```
     """
 
     def __init__(
@@ -160,9 +163,9 @@ class LangGraphTarget(AgentTarget):
             config: Optional extra LangGraph RunnableConfig keys
                 (e.g. ``{"recursion_limit": 50}``). The ``thread_id``
                 is managed automatically — do not pass it here.
-            agent_context: Optional :class:`AgentContext` override. When
+            agent_context: Optional `AgentContext` override. When
                 provided, this context is returned from
-                :meth:`get_agent_context` verbatim. When omitted, the target
+                `get_agent_context` verbatim. When omitted, the target
                 introspects the compiled graph (tools from a ``ToolNode``,
                 checkpointer presence) on a best-effort basis.
         """

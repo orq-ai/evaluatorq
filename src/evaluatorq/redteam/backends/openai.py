@@ -9,6 +9,7 @@ from loguru import logger
 
 from evaluatorq.common.llm_call import apply_pipeline_metadata
 from evaluatorq.common.llm_client import client_routes_through_orq
+from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.thread_context import thread_body_param
 from evaluatorq.common.tracing import record_llm_response
 from evaluatorq.contracts import AgentTarget, Message
@@ -33,7 +34,7 @@ if TYPE_CHECKING:
 
 
 def create_async_llm_client(role_config=None) -> AsyncOpenAI:
-    """Lazy proxy to :func:`~evaluatorq.redteam.backends.registry.create_async_llm_client`.
+    """Lazy proxy to `create_async_llm_client`.
 
     Defined here so that tests can patch
     ``evaluatorq.redteam.backends.openai.create_async_llm_client`` and to avoid
@@ -64,7 +65,25 @@ def _openai_map_error(exc: Exception) -> tuple[str, str]:
 
 
 class OpenAIModelTarget(AgentTarget):
-    """Target adapter that treats ``agent_key`` as an OpenAI model identifier."""
+    """Target adapter that treats ``agent_key`` as an OpenAI model identifier.
+
+    Usage:
+
+    ```python
+    import asyncio
+
+    from evaluatorq.redteam import OpenAIModelTarget, red_team
+
+
+    async def main() -> None:
+        target = OpenAIModelTarget("gpt-5-mini", system_prompt="You are a customer support assistant.")
+        report = await red_team(target, mode="dynamic", categories=["LLM01", "LLM07"])
+        print(report.summary.resistance_rate)
+
+
+    asyncio.run(main())
+    ```
+    """
 
     def __init__(
         self,
@@ -78,7 +97,7 @@ class OpenAIModelTarget(AgentTarget):
         """Initialize the target with a model name, optional async client, and optional system prompt.
 
         If ``client`` is not provided, one is created automatically via
-        :func:`~evaluatorq.redteam.backends.registry.create_async_llm_client`.
+        `create_async_llm_client`.
         OpenAI models are stateless — no server-side memory to isolate.
         """
         super().__init__(memory_entity_id=None)
@@ -95,7 +114,7 @@ class OpenAIModelTarget(AgentTarget):
         prepended, so any leading ``system`` messages in ``messages`` are
         stripped to avoid a double system prompt. Assistant ``tool_calls`` and
         ``tool`` results in the transcript are preserved (rendered as OpenAI
-        chat params via :meth:`~evaluatorq.contracts.Message.to_chat_completion`), so
+        chat params via `to_chat_completion`), so
         multi-turn tool-using transcripts replay faithfully.
         """
         user_visible = [m for m in messages if m.role != 'system']
@@ -149,7 +168,10 @@ class OpenAIModelTarget(AgentTarget):
                     kwargs['id'] = tc_id
                 tool_call_items.append(ToolCallOutputItem(**kwargs))
 
-            usage = TokenUsage.from_completion(response)
+            # Not routed through execute_chat_completion: this path extracts
+            # tool_calls/response_id/finish_reason the shared executor doesn't
+            # surface, so price this call's usage directly (RES-1295).
+            usage = await price_usage(TokenUsage.from_completion(response), self.model, self.client)
             response_id = getattr(response, 'id', None)
             finish_reason = None
             choices = getattr(response, 'choices', None) or []

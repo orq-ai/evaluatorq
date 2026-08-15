@@ -33,6 +33,18 @@ def _json_default(obj: Any) -> Any:
 
 
 class EvaluationResult(BaseModel):
+    """The score a scorer function returns for one job output.
+
+    Example:
+        ```python
+        from evaluatorq import EvaluationResult
+
+        async def length_check_scorer(params):
+            output = params["output"]
+            return EvaluationResult(value=1 if len(output) > 10 else 0)
+        ```
+    """
+
     model_config: ClassVar[ConfigDict] = {'populate_by_name': True}
 
     value: str | int | float | bool | EvaluationResultCell | dict[str, Any]
@@ -98,6 +110,13 @@ class DataPoint(BaseModel):
         inputs: The inputs to pass to the job.
         expected_output: The expected output of the data point.
                         Used for evaluation and comparing the output of the job.
+
+    Example:
+        ```python
+        from evaluatorq import DataPoint
+
+        DataPoint(inputs={"text": "Hello world"}, expected_output="HELLO WORLD")
+        ```
     """
 
     inputs: dict[str, Any]
@@ -130,20 +149,39 @@ Job = Callable[[DataPoint, int], Awaitable[dict[str, Any]]]
 
 
 class ScorerParameter(TypedDict):
-    """Parameters passed to a scorer function
+    """Parameters passed to a scorer function.
+
     Args:
         data: The data point being evaluated.
         output: The output produced by the job for the data point.
+        row: Zero-based dataset index of the data point. Present when the
+            scorer runs inside ``evaluatorq()``; absent on direct invocation.
+            Lets evaluators key per-item decisions (e.g. cyclic judge
+            assignment) on the dataset position rather than call-arrival order.
     """
 
     data: DataPoint
     output: Output
+    row: NotRequired[int]
 
 
 Scorer = Callable[[ScorerParameter], Awaitable[EvaluationResult | dict[str, Any]]]
 
 
 class Evaluator(TypedDict):
+    """A named scorer passed to `evaluatorq`'s ``evaluators`` list.
+
+    Example:
+        ```python
+        from evaluatorq import EvaluationResult
+
+        async def length_check_scorer(params):
+            return EvaluationResult(value=1 if len(params["output"]) > 10 else 0)
+
+        evaluator = {"name": "length-check", "scorer": length_check_scorer}
+        ```
+    """
+
     name: str
     scorer: Scorer
     # Optional evaluator kind (e.g. "code_eval"). When set, the tracing layer
@@ -187,12 +225,16 @@ class EvaluatorParams(BaseModel):
               inference=False), or a list of DataPoint instances/awaitables.
         jobs: The jobs to run on the data.
         evaluators: The evaluators to use. If not provided, only jobs will run.
-        parallelism: Number of jobs to run in parallel. Defaults to 1 (sequential).
+        parallelism: Number of jobs to run in parallel. Defaults to 10; set to 1 for
+              sequential execution, or lower it if your provider rate-limits.
         print_results: Whether to print results table to console. Defaults to True.
                        Also accepts "print" as an alias.
         description: Optional description for the evaluation run.
         path: Optional path (e.g. "MyProject/MyFolder") to place the experiment
               in a specific project and folder on the Orq platform.
+        single_trace: Group every row of the run under one ``evaluatorq.run``
+              span, so the whole evaluation is a single trace. Off by default:
+              each row's ``orq.job`` is its own root, i.e. one trace per row.
     """
 
     model_config: ClassVar[ConfigDict] = {
@@ -203,13 +245,16 @@ class EvaluatorParams(BaseModel):
     data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput]
     jobs: list[Job] | None = None
     evaluators: list[Evaluator] | None = None
-    parallelism: int = Field(default=1, ge=1)
+    parallelism: int = Field(default=10, ge=1)
     print_results: bool = Field(default=True, validation_alias='print')
     description: str | None = None
     path: str | None = None
     inference: bool = True
     """When False, skip generation and evaluate the pre-recorded response in each
     row's ``messages`` column instead of running ``jobs``."""
+    single_trace: bool = False
+    """When True, open one ``evaluatorq.run`` span for the whole run so every row
+    shares a trace. Default False keeps each row's ``orq.job`` as its own root."""
 
     @model_validator(mode='after')
     def _require_jobs_when_inferring(self) -> 'EvaluatorParams':

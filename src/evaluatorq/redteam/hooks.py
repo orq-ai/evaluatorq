@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Protocol, TypedDict, runtime_checkable
 from loguru import logger
 
 from evaluatorq.common.async_utils import combine_confirm, fan_out
+from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.redteam.contracts import AgentCapability, PipelineStage
 from evaluatorq.redteam.reports.display import print_report_summary
 
@@ -257,11 +258,18 @@ class DefaultHooks:
             logger.warning(f'[redteam] PIPELINE WARNING: {warning}')
 
         summary = report.summary
-        logger.info(
-            f'[redteam] Run complete — resistance_rate={summary.resistance_rate:.0%} '
-            f'vulnerabilities={summary.vulnerabilities_found} '
-            f'attacks={summary.total_attacks}'
-        )
+        if summary.no_verdict:
+            logger.error(
+                f'[redteam] Run complete — NO VERDICT: 0/{summary.total_attacks} attacks could be '
+                f'evaluated. The target was not tested.'
+            )
+        else:
+            logger.info(
+                f'[redteam] Run complete — resistance_rate={pct(summary.resistance_rate)} '
+                f'({summary.evaluated_attacks}/{summary.total_attacks} evaluated) '
+                f'vulnerabilities={summary.vulnerabilities_found} '
+                f'attacks={summary.total_attacks}'
+            )
         if output_dir:
             dashboard_dir = output_dir
         elif auto_save_path:
@@ -280,7 +288,7 @@ class CompositePipelineHooks:
     """Fan every ``PipelineHooks`` call out to a list of child hooks.
 
     Implements ``PipelineHooks`` structurally. Void methods delegate to the
-    shared :func:`~evaluatorq.common.async_utils.fan_out` policy: run ALL
+    shared `fan_out` policy: run ALL
     children, capture the first exception, re-raise it after the loop. So a
     child that raises never prevents a later child from running.
 
@@ -314,12 +322,12 @@ class CompositePipelineHooks:
 
 
 class ManifestStageHooks:
-    """Record pipeline stage transitions into a :class:`ManifestWriter`.
+    """Record pipeline stage transitions into a `ManifestWriter`.
 
     Implements ``PipelineHooks`` structurally with no-op bodies for every method
     except ``on_stage_start``/``on_stage_end`` (which delegate to the writer) and
     ``on_confirm`` (which always returns ``True`` — the manifest never vetoes the
-    confirm gate). It deliberately does **not** subclass :class:`DefaultHooks`,
+    confirm gate). It deliberately does **not** subclass `DefaultHooks`,
     whose methods log; composing both would double every log line.
 
     Registered *first* in the composite so a stage's status is durable before any
@@ -355,10 +363,10 @@ class RichHooks:
     """Rich terminal hook implementation for the evaluatorq CLI.
 
     Renders stage banners, a detailed confirmation table, and delegates the
-    final report summary to :func:`~evaluatorq.redteam.reports.display.print_report_summary`.
+    final report summary to `print_report_summary`.
 
     Args:
-        console:      A :class:`rich.console.Console` instance.  A new one is
+        console:      A `rich.console.Console` instance.  A new one is
                       created when ``None`` is passed (default).
         skip_confirm: When ``True``, renders the plan but skips the interactive
                       ``typer.confirm`` prompt and returns ``True`` automatically.

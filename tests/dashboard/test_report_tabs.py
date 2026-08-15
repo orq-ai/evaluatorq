@@ -666,6 +666,75 @@ def test_redteam_hero_has_no_kpi_band(rt_report_single):
     assert 'kpi-band' not in html and 'kpi-card' not in html
 
 
+def test_redteam_hero_separates_run_agent_and_model(rt_report_single):
+    """Run name, agent name and model each get their own slot: the title is the
+    run name with the runner's `(target) (pipeline)` suffixes stripped, the
+    pipeline sits in the kicker, and the agent pill carries name + model."""
+    from evaluatorq.dashboard.report_tabs import _redteam_hero, _rt_by_kind
+
+    report = rt_report_single.model_copy(
+        update={'description': 'Nightly sweep (agent-a) (static)'},
+    )
+    for r in report.results:
+        r.agent.display_name = 'Support agent'
+        r.agent.model = 'gpt-4o'
+
+    html = _redteam_hero(_rt_by_kind(report).get('summary'), report)
+    assert '>Nightly sweep<' in html or 'Nightly sweep</h2>' in html
+    assert '(agent-a)' not in html and '(static)' not in html
+    assert 'Red Team · Static' in html
+    assert 'Support agent' in html
+    assert 'gpt-4o' in html
+
+
+def test_redteam_hero_keeps_unrecognised_parenthetical(rt_report_single):
+    from evaluatorq.dashboard.report_tabs import _rt_run_name
+
+    report = rt_report_single.model_copy(update={'description': 'Q3 sweep (post-patch)'})
+    assert _rt_run_name(report) == 'Q3 sweep (post-patch)'
+
+
+@pytest.mark.parametrize(
+    'description',
+    [
+        # The runner interpolates PreparedTarget.target, which is the full
+        # target string, not the bare key held in tested_agents.
+        'Nightly sweep (agent:agent-a) (dynamic)',
+        'Nightly sweep (agent-a)',
+        'Nightly sweep (2 targets)',
+        'Nightly sweep (1 target)',
+    ],
+)
+def test_rt_run_name_strips_runner_suffixes(rt_report_single, description):
+    from evaluatorq.dashboard.report_tabs import _rt_run_name
+
+    report = rt_report_single.model_copy(update={'description': description})
+    assert _rt_run_name(report) == 'Nightly sweep'
+
+
+def test_redteam_hero_pill_carries_own_model_per_agent(rt_report_multi):
+    """Each pill shows its own agent's model — a global lookup would paste the
+    first agent's model onto every pill."""
+    import re as _re
+
+    from evaluatorq.dashboard.report_tabs import _redteam_hero, _rt_by_kind
+
+    models: dict[str, str] = {}
+    for r in rt_report_multi.results:
+        r.agent.display_name = f'Agent {r.agent.key}'
+        r.agent.model = f'model-{r.agent.key}'
+        models[r.agent.display_name] = r.agent.model
+
+    html = _redteam_hero(_rt_by_kind(rt_report_multi).get('summary'), rt_report_multi)
+    pills = _re.findall(
+        r'rt-hero-pill-name">([^<]*)</span><span class="rt-hero-pill-sub">([^<]*)<',
+        html,
+    )
+    assert len(pills) == len(models) >= 2
+    for name, sub in pills:
+        assert sub.startswith(f'{models[name]} · ')
+
+
 def test_redteam_hero_shows_agent_pills_multi(rt_report_multi):
     from evaluatorq.dashboard.report_tabs import _redteam_hero, _rt_by_kind
 
@@ -814,7 +883,7 @@ def test_rt_config_no_agent_context(rt_report_single):
 def test_rt_focus_tiers_and_dials(rt_report_multi):
     from evaluatorq.dashboard.report_tabs import _rt_by_kind, _rt_focus
 
-    html = _rt_focus(_rt_by_kind(rt_report_multi))
+    html = _rt_focus(_rt_by_kind(rt_report_multi), 'rid', rt_report_multi)
     assert 'RISK' in html  # risk dial sub-label
     assert 'Recommended fix' in html or 'remediation' in html.lower()
 
@@ -822,14 +891,14 @@ def test_rt_focus_tiers_and_dials(rt_report_multi):
 def test_rt_focus_empty_on_clean_run(rt_report_clean):
     from evaluatorq.dashboard.report_tabs import _rt_by_kind, _rt_focus
 
-    assert _rt_focus(_rt_by_kind(rt_report_clean)) == ''
+    assert _rt_focus(_rt_by_kind(rt_report_clean), 'rid', rt_report_clean) == ''
 
 
 def test_rt_focus_handles_absent_llm_recs(rt_report_static):
     from evaluatorq.dashboard.report_tabs import _rt_by_kind, _rt_focus
 
     # must not KeyError when 'llm_recommendations' key is absent
-    _rt_focus(_rt_by_kind(rt_report_static))
+    _rt_focus(_rt_by_kind(rt_report_static), 'rid', rt_report_static)
 
 
 def test_rt_report_empty_run_does_not_crash(rt_report_empty):

@@ -30,6 +30,7 @@ from evaluatorq.common.jury import (
     _plurality_vote,
     provider_family,
 )
+from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY
 from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
 
 
@@ -39,7 +40,7 @@ def _majority_vote(votes: list[bool | None]) -> tuple[bool | float | str | None,
     if not decisive:
         return None, False
     return _plurality_vote(decisive)
-from evaluatorq.redteam.contracts import AttackEvaluationResult, TextOutputItem, Vulnerability
+from evaluatorq.redteam.contracts import AttackEvaluationResult, EvaluatorConfig, TextOutputItem, Vulnerability
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -353,8 +354,12 @@ class TestJury:
         assert votes['judge-r'] == (True, True)
 
     @pytest.mark.asyncio
-    async def test_single_judge_api_error_still_propagates(self):
-        """The single-judge fast path keeps the original fail-loud behaviour."""
+    async def test_single_judge_api_error_is_recorded_not_raised(self):
+        """The single-judge fast path records the cause instead of re-raising.
+
+        Fail-loud was dropped because nothing upstream honoured it — see
+        OWASPEvaluator._single_outcome_to_result.
+        """
         import httpx
         from openai import APIStatusError
 
@@ -366,10 +371,18 @@ class TestJury:
                 body=None,
             )
         )
-        evaluator = OWASPEvaluator(evaluator_model='judge-a', llm_client=client)
+        evaluator = OWASPEvaluator(
+            evaluator_model='judge-a',
+            llm_client=client,
+            # Error classification, not retry behaviour — skip the backoff waits.
+            cfg=EvaluatorConfig(retry_count=0),
+        )
 
-        with pytest.raises(APIStatusError):
-            await _evaluate(evaluator)
+        result = await _evaluate(evaluator)
+
+        assert result.passed is None
+        payload = (result.raw_output or {})[EVAL_ERROR_RAW_OUTPUT_KEY]
+        assert payload['code'] == 'api_status'
 
     @pytest.mark.asyncio
     async def test_min_successful_judges_floor_inconclusive(self):
@@ -397,6 +410,31 @@ class TestJury:
         assert result.jury.inconclusive is True
         assert result.jury.stats is None
         assert result.jury.raw_agreement is None
+
+    @pytest.mark.asyncio
+    async def test_sub_quorum_records_the_judge_failure(self):
+        """A panel that cannot reach quorum must say *why*, not just "no verdict".
+
+        The panel path built its raw_output without the error key, so a whole-panel
+        outage produced passed=None with no recorded cause — invisible to the error
+        rollup and to the CLI's diagnostic hint, which is the reported bug.
+        """
+        client = _model_client({
+            'judge-a': [_verdict_json(True)],
+            'judge-b': ['__raise__'],
+        })
+        evaluator = OWASPEvaluator(
+            evaluator_model='judge-a',
+            llm_client=client,
+            judges=['judge-b'],
+            min_successful_judges=2,
+        )
+
+        result = await _evaluate(evaluator)
+
+        payload = (result.raw_output or {})[EVAL_ERROR_RAW_OUTPUT_KEY]
+        assert payload['stage'] == 'evaluation'
+        assert payload['code']
 
     def test_min_successful_judges_validated_against_deduped_panel(self):
         """min_successful_judges must be checked against the *effective* panel.
@@ -773,7 +811,7 @@ class TestJuryRawOutputCarrier:
 
     def test_shared_key_constant_is_used_end_to_end(self):
         from evaluatorq.redteam.contracts import JURY_RAW_OUTPUT_KEY, JuryResult, JuryVote
-        from evaluatorq.redteam.reports.converters import _extract_jury, _raw_output_without_jury
+        from evaluatorq.redteam.reports.converters import _extract_jury, _raw_output_without_lifted
 
         jury = JuryResult(
             judges_configured=2,
@@ -788,13 +826,71 @@ class TestJuryRawOutputCarrier:
         lifted = _extract_jury(raw)
         assert lifted is not None and len(lifted.votes) == 2
         # ...and stripped from raw_output so it is not stored twice.
-        stripped = _raw_output_without_jury(raw)
+        stripped = _raw_output_without_lifted(raw)
         assert stripped is not None
         assert JURY_RAW_OUTPUT_KEY not in stripped
         assert stripped['value'] is False and stripped['explanation'] == 'x'
 
-    def test_raw_output_without_jury_passthrough_when_absent(self):
-        from evaluatorq.redteam.reports.converters import _raw_output_without_jury
+    def test_raw_output_without_lifted_passthrough_when_absent(self):
+        from evaluatorq.redteam.reports.converters import _raw_output_without_lifted
 
-        assert _raw_output_without_jury({'value': True}) == {'value': True}
-        assert _raw_output_without_jury(None) is None
+        assert _raw_output_without_lifted({'value': True}) == {'value': True}
+        assert _raw_output_without_lifted(None) is None
+
+    def test_raw_output_without_lifted_strips_both_jury_and_evaluation_error_keys(self):
+        """The judge's own failure (EVAL_ERROR_RAW_OUTPUT_KEY) rides the same carrier
+        mechanism as the jury and must be stripped alongside it, so neither is stored
+        twice once lifted onto the typed fields.
+        """
+        from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY, JURY_RAW_OUTPUT_KEY
+        from evaluatorq.redteam.reports.converters import _raw_output_without_lifted
+
+        raw = {
+            'value': None,
+            JURY_RAW_OUTPUT_KEY: {'some': 'jury-blob'},
+            EVAL_ERROR_RAW_OUTPUT_KEY: {'message': 'blocked', 'error_type': 'timeout'},
+        }
+        stripped = _raw_output_without_lifted(raw)
+        assert stripped is not None
+        assert JURY_RAW_OUTPUT_KEY not in stripped
+        assert EVAL_ERROR_RAW_OUTPUT_KEY not in stripped
+        assert stripped == {'value': None}
+
+
+class TestExtractEvaluationError:
+    """_extract_evaluation_error mirrors _extract_jury: lifts the judge's own
+    failure out of raw_output onto the typed ``evaluation_error`` field.
+    """
+
+    def test_valid_payload_lifted_to_run_error(self):
+        from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY
+        from evaluatorq.redteam.reports.converters import _extract_evaluation_error
+
+        raw = {
+            'value': None,
+            EVAL_ERROR_RAW_OUTPUT_KEY: {
+                'message': 'judge call timed out',
+                'error_type': 'timeout',
+                'stage': 'evaluation',
+                'code': 'timeout',
+            },
+        }
+        err = _extract_evaluation_error(raw)
+        assert err is not None
+        assert err.stage == 'evaluation'
+        assert err.code == 'timeout'
+        assert err.message == 'judge call timed out'
+
+    def test_malformed_payload_returns_none_without_raising(self):
+        from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY
+        from evaluatorq.redteam.reports.converters import _extract_evaluation_error
+
+        # Missing the required `message`/`error_type` fields.
+        raw = {EVAL_ERROR_RAW_OUTPUT_KEY: {'code': 'timeout'}}
+        assert _extract_evaluation_error(raw) is None
+
+    def test_absent_key_returns_none(self):
+        from evaluatorq.redteam.reports.converters import _extract_evaluation_error
+
+        assert _extract_evaluation_error({'value': True}) is None
+        assert _extract_evaluation_error(None) is None

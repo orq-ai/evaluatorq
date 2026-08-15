@@ -18,16 +18,18 @@ rate, severity, token usage) when nothing in a store reported cost.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, NamedTuple
+import functools
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+from typing import TYPE_CHECKING, NamedTuple, TypeVar
 
 from loguru import logger
 
 from evaluatorq.dashboard import library
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from datetime import datetime
-    from pathlib import Path
 
 # Severity buckets in display order (matches the report severity scale).
 SEVERITY_ORDER = ('critical', 'high', 'medium', 'low')
@@ -79,7 +81,26 @@ class Landing:
     cost_by_kind: list[tuple[str, float]] = field(default_factory=list)  # non-zero only
     total_input_cost: float | None = None  # summed input_cost across all stores; None when unrecorded
     total_output_cost: float | None = None  # summed output_cost across all stores; None when unrecorded
+    priced_calls: int = 0  # LLM calls that reported a cost, across all stores
+    cost_calls: int = 0  # calls seen alongside those, for the "N of M calls" coverage label
+    unknown_calls: int = 0  # costed calls from reports predating priced_calls — coverage unknown
     recent: list[RunRow] = field(default_factory=list)
+
+
+def _roots_key(roots: list[Path] | None) -> tuple[str, ...]:
+    """Hashable, resolved form of *roots* for the aggregate caches."""
+    return tuple(str(r.resolve()) for r in (roots or library.default_roots()))
+
+
+_Stats = TypeVar('_Stats')
+
+
+def _cached_stats(path: Path, distil: Callable[[str, int], _Stats | None]) -> _Stats | None:
+    """Call an mtime-keyed stats distiller for *path*. ``None`` when it can't be stat'd."""
+    try:
+        return distil(str(path.resolve()), path.stat().st_mtime_ns)
+    except OSError:
+        return None
 
 
 def _as_float(v: object, default: float = 0.0) -> float:
@@ -141,15 +162,42 @@ def _cost_usd(usage: object) -> float | None:
 
 def _input_cost(usage: object) -> float | None:
     """Sibling reader for the ``input_cost`` component. Same ``None`` semantics
-    as :func:`_cost_usd`."""
+    as `_cost_usd`."""
     if not isinstance(usage, dict):
         return None
     return _as_float_or_none(usage.get('input_cost'))
 
 
+def _cost_calls(usage: object) -> tuple[int, int, int]:
+    """``(priced_calls, calls, unknown_calls)`` from a Usage-shaped dict.
+
+    A cost summed over calls where only some reported one is a *lower bound*,
+    not a total. Reports render "(N of M calls)" next to such a figure via
+    ``cost_coverage``; the dashboard reads the same two fields so both surfaces
+    agree.
+
+    Reports written before ``priced_calls`` existed count into the third slot
+    instead. Their coverage is *unknown*, not "nothing was priced", so folding
+    them into the denominator would report "1 of 11 calls" for one new call
+    beside ten legacy ones whose prices may all have been known. Dropping them
+    silently is the opposite lie: the dashboard sums across reports, so an empty
+    label would then mean both "everything was priced" and "we have no idea".
+    Counting them separately lets the renderer say which.
+    """
+    if not isinstance(usage, dict):
+        return (0, 0, 0)
+    if usage.get('priced_calls') is None:
+        # A legacy report with no cost at all contributes nothing to the total,
+        # so it has no coverage to be unknown about.
+        if _cost_usd(usage) is None:
+            return (0, 0, 0)
+        return (0, 0, _as_int(usage.get('calls')) or 1)
+    return (_as_int(usage.get('priced_calls')), _as_int(usage.get('calls')), 0)
+
+
 def _output_cost(usage: object) -> float | None:
     """Sibling reader for the ``output_cost`` component. Same ``None`` semantics
-    as :func:`_cost_usd`."""
+    as `_cost_usd`."""
     if not isinstance(usage, dict):
         return None
     return _as_float_or_none(usage.get('output_cost'))
@@ -161,8 +209,18 @@ def zero_evaluated_attacks(summary: dict[str, object]) -> bool:
     The schema default ``resistance_rate`` (1.0) then carries no signal and
     must never render as a perfect score. An absent field (legacy reports
     predating it) is False — those keep their recorded rate.
+
+    Mirrors `ReportSummary.no_verdict`, including its ``total_attacks > 0``
+    guard: a report that ran nothing is empty, not unscored, and the two must not
+    disagree just because one side reads a dict and the other a model. The guard
+    only applies when ``total_attacks`` is actually recorded — an absent field
+    (again, legacy reports) must not silently switch the check off.
     """
-    return summary.get('evaluated_attacks') is not None and _as_int(summary.get('evaluated_attacks')) == 0
+    if summary.get('evaluated_attacks') is None:
+        return False
+    if summary.get('total_attacks') is not None and _as_int(summary.get('total_attacks')) == 0:
+        return False
+    return _as_int(summary.get('evaluated_attacks')) == 0
 
 
 def _lifecycle_status(*, broken: bool, all_errored: bool = False) -> str:
@@ -175,7 +233,13 @@ def _lifecycle_status(*, broken: bool, all_errored: bool = False) -> str:
 def _redteam_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
     summary = data.get('summary')
     summary = summary if isinstance(summary, dict) else {}
-    resistance = _as_float(summary.get('resistance_rate'), default=1.0) if summary else None
+    # An explicit null rate means "no verdict" and must stay None; only an *absent*
+    # field (legacy reports predating the nullable rates) takes the 1.0 default.
+    # An explicit null rate means "no verdict" and must stay None; only an *absent*
+    # field (legacy reports predating the nullable rates) takes the 1.0 default.
+    resistance = (
+        _as_float_or_none(summary['resistance_rate']) if 'resistance_rate' in summary else (1.0 if summary else None)
+    )
     evaluated = _as_int(summary.get('evaluated_attacks')) if summary else 0
     errors = _as_int(summary.get('total_errors')) if summary else 0
     total = _as_int(summary.get('total_attacks')) if summary else 0
@@ -337,6 +401,9 @@ def landing(roots: list[Path] | None = None) -> Landing:
     pw_cost = 0.0
     input_cost_total = 0.0
     output_cost_total = 0.0
+    priced_calls_total = 0
+    cost_calls_total = 0
+    unknown_calls_total = 0
     has_input_cost = False
     has_output_cost = False
     resistant = 0
@@ -397,6 +464,10 @@ def landing(roots: list[Path] | None = None) -> Landing:
                 if run_output is not None:
                     output_cost_total += run_output
                     has_output_cost = True
+                run_priced, run_calls, run_unknown = _cost_calls(usage)
+                priced_calls_total += run_priced
+                cost_calls_total += run_calls
+                unknown_calls_total += run_unknown
                 by_sev = _summary_severity(summary)
             for sev, n in by_sev.items():
                 severity_counts[sev] = severity_counts.get(sev, 0) + n
@@ -418,6 +489,11 @@ def landing(roots: list[Path] | None = None) -> Landing:
             if outputs:
                 output_cost_total += sum(outputs)
                 has_output_cost = True
+            for u in usages:
+                res_priced, res_calls, res_unknown = _cost_calls(u)
+                priced_calls_total += res_priced
+                cost_calls_total += res_calls
+                unknown_calls_total += res_unknown
         elif card.surface == 'pairwise':
             usages = [_comparison_usage(entry) for entry in _entries(data)]
             tok = sum(_tokens_total(u) for u in usages)
@@ -435,6 +511,11 @@ def landing(roots: list[Path] | None = None) -> Landing:
             if outputs:
                 output_cost_total += sum(outputs)
                 has_output_cost = True
+            for u in usages:
+                res_priced, res_calls, res_unknown = _cost_calls(u)
+                priced_calls_total += res_priced
+                cost_calls_total += res_calls
+                unknown_calls_total += res_unknown
 
     # Unknown sorts last, after the real scale, and only appears when non-zero.
     severity = [(sev, severity_counts[sev]) for sev in (*SEVERITY_ORDER, UNKNOWN_SEVERITY) if severity_counts.get(sev)]
@@ -470,6 +551,9 @@ def landing(roots: list[Path] | None = None) -> Landing:
         cost_by_kind=cost_by_kind,
         total_input_cost=input_cost_total if has_input_cost else None,
         total_output_cost=output_cost_total if has_output_cost else None,
+        priced_calls=priced_calls_total,
+        cost_calls=cost_calls_total,
+        unknown_calls=unknown_calls_total,
         recent=rows[:5],
     )
 
@@ -721,6 +805,9 @@ class SimOverview:
     avg_cost: float | None  # mean cost_usd per sim
     avg_input_cost: float | None  # mean input_cost per sim, averaged over costed sims only
     avg_output_cost: float | None  # mean output_cost per sim, averaged over costed sims only
+    priced_calls: int  # LLM calls that reported a cost
+    cost_calls: int  # LLM calls seen alongside those, for the coverage label
+    unknown_calls: int  # costed calls whose coverage predates priced_calls
     achieved: int  # outcomes donut segments
     not_achieved: int
     errors: int
@@ -738,11 +825,114 @@ def _sim_run_score(data: dict[str, object]) -> float | None:
     return sum(vals) / len(vals) if vals else None
 
 
-def sim_overview(roots: list[Path] | None = None, *, page: int = 1, per_page: int = 8) -> SimOverview:
-    """Aggregate the sim run store into headline KPIs plus a run-level table
-    (one row per full simulation run). Rows are newest-first, sliced to the
-    requested page of ``per_page`` (``total_runs`` carries the full count)."""
-    page = max(1, page)
+@dataclass(frozen=True)
+class _SimRunStats:
+    """One sim run's contribution to `sim_overview`, distilled from its report.
+
+    Every field is a scalar the overview only ever sums or displays — the point
+    is that the (large) report JSON can be dropped once this exists.
+    """
+
+    cases: int
+    errors: int
+    achieved: int
+    not_achieved: int
+    turns: int
+    tokens: int
+    cost: float | None  # run total; ``None`` when no result carried a cost
+    costed: int  # per-result counts — the KPI averages divide by these
+    input_cost: float
+    input_costed: int
+    output_cost: float
+    output_costed: int
+    priced_calls: int
+    cost_calls: int
+    unknown_calls: int
+    score: float | None
+    target: tuple[str, str]
+
+
+@functools.lru_cache(maxsize=4096)
+def _sim_run_stats(path_str: str, mtime_ns: int) -> _SimRunStats | None:  # mtime_ns is only the cache key
+    """Distil one sim report into overview stats, mtime-keyed like ``read_json``.
+
+    The KPI row is a sum over *every* run, so the overview must visit all of them
+    however few rows a page shows — paging can't avoid the reads. Caching the
+    distilled scalars can: the second page load re-sums ~20 floats per run
+    instead of re-parsing megabytes of transcripts. ``None`` means unreadable.
+    """
+    try:
+        data = library.read_json_cached(Path(path_str))
+    except (OSError, ValueError):
+        return None
+    cases = errors = achieved = not_achieved = turns = tokens = 0
+    costed = input_costed = output_costed = 0
+    input_cost_total = output_cost_total = 0.0
+    priced = calls = unknown = 0
+    run_costs: list[float] = []
+    for res in _results(data):
+        cases += 1
+        turns += _as_int(res.get('turn_count'))
+        tokens += _result_tokens(res)
+        usage = res.get('token_usage')
+        cost = _cost_usd(usage)
+        if cost is not None:
+            run_costs.append(cost)
+            costed += 1
+        input_cost = _input_cost(usage)
+        if input_cost is not None:
+            input_cost_total += input_cost
+            input_costed += 1
+        output_cost = _output_cost(usage)
+        if output_cost is not None:
+            output_cost_total += output_cost
+            output_costed += 1
+        res_priced, res_calls, res_unknown = _cost_calls(usage)
+        priced += res_priced
+        calls += res_calls
+        unknown += res_unknown
+        # Mirror the donut segments (goal_achieved / error) exactly.
+        if str(res.get('terminated_by') or '') == 'error':
+            errors += 1
+        elif bool(res.get('goal_achieved')):
+            achieved += 1
+        else:
+            not_achieved += 1
+    return _SimRunStats(
+        cases=cases,
+        errors=errors,
+        achieved=achieved,
+        not_achieved=not_achieved,
+        turns=turns,
+        tokens=tokens,
+        cost=sum(run_costs) if run_costs else None,
+        costed=costed,
+        input_cost=input_cost_total,
+        input_costed=input_costed,
+        output_cost=output_cost_total,
+        output_costed=output_costed,
+        priced_calls=priced,
+        cost_calls=calls,
+        unknown_calls=unknown,
+        score=_sim_run_score(data),
+        target=_sim_target(data),
+    )
+
+
+@functools.lru_cache(maxsize=4)
+def _sim_aggregate(roots_key: tuple[str, ...], fingerprint: tuple[int, int]) -> SimOverview:
+    """Unpaged sim aggregate, cached against the run stores' fingerprint.
+
+    The KPI band sums over every run, so paging can't shrink the work — but
+    nothing in a run store changes between two page clicks, and *that* can be
+    checked with one stat sweep instead of redoing the sum. ``fingerprint`` is
+    the key only (see `library.fingerprint`); a new run or an advancing
+    in-flight stage changes it and this recomputes.
+
+    ``recent`` holds ALL runs here; `sim_overview` slices it. Callers must
+    treat the returned object as read-only — it is shared across requests.
+    """
+    roots = [Path(r) for r in roots_key]
     runs: list[SimRunRow] = []
     turns_total = 0
     tokens_total = 0
@@ -752,65 +942,48 @@ def sim_overview(roots: list[Path] | None = None, *, page: int = 1, per_page: in
     input_costed = 0
     output_cost_total = 0.0
     output_costed = 0
+    priced_calls_total = 0
+    cost_calls_total = 0
+    unknown_calls_total = 0
     achieved = not_achieved = errors = 0
     total = 0
 
     for card in library.scan(roots):
         if card.surface != 'sim' or card.path is None:
             continue
-        try:
-            data = library.read_json_cached(card.path)
-        except (OSError, ValueError):
+        stats = _cached_stats(card.path, _sim_run_stats)
+        if stats is None:
             continue
 
-        run_costs: list[float] = []
-        run_cases = 0
-        run_errors = 0
-        for res in _results(data):
-            total += 1
-            run_cases += 1
-            is_error = str(res.get('terminated_by') or '') == 'error'
-            goal = bool(res.get('goal_achieved'))
-            turns_total += _as_int(res.get('turn_count'))
-            tokens_total += _result_tokens(res)
-            usage = res.get('token_usage')
-            cost = _cost_usd(usage)
-            if cost is not None:
-                run_costs.append(cost)
-                costed += 1
-            input_cost = _input_cost(usage)
-            if input_cost is not None:
-                input_cost_total += input_cost
-                input_costed += 1
-            output_cost = _output_cost(usage)
-            if output_cost is not None:
-                output_cost_total += output_cost
-                output_costed += 1
-            # Mirror the donut segments (goal_achieved / error) exactly.
-            if is_error:
-                errors += 1
-                run_errors += 1
-            elif goal:
-                achieved += 1
-            else:
-                not_achieved += 1
-        run_cost = sum(run_costs) if run_costs else None
-        if run_cost is not None:
-            cost_total += run_cost
+        total += stats.cases
+        turns_total += stats.turns
+        tokens_total += stats.tokens
+        costed += stats.costed
+        input_cost_total += stats.input_cost
+        input_costed += stats.input_costed
+        output_cost_total += stats.output_cost
+        output_costed += stats.output_costed
+        priced_calls_total += stats.priced_calls
+        cost_calls_total += stats.cost_calls
+        unknown_calls_total += stats.unknown_calls
+        achieved += stats.achieved
+        not_achieved += stats.not_achieved
+        errors += stats.errors
+        if stats.cost is not None:
+            cost_total += stats.cost
 
-        score = _sim_run_score(data)
         runs.append(
             SimRunRow(
                 rid=card.id,
                 name=card.name,
                 when=card.created_at,
-                targets=[_sim_target(data)],
+                targets=[stats.target],
                 status=_lifecycle_status(
-                    broken=bool(card.error), all_errored=(run_cases > 0 and run_errors == run_cases)
+                    broken=bool(card.error), all_errored=(stats.cases > 0 and stats.errors == stats.cases)
                 ),
-                score=score,
-                cases=run_cases,
-                cost=run_cost,
+                score=stats.score,
+                cases=stats.cases,
+                cost=stats.cost,
                 error=bool(card.error),
             )
         )
@@ -824,14 +997,24 @@ def sim_overview(roots: list[Path] | None = None, *, page: int = 1, per_page: in
         avg_cost=(cost_total / costed) if costed else None,
         avg_input_cost=(input_cost_total / input_costed) if input_costed else None,
         avg_output_cost=(output_cost_total / output_costed) if output_costed else None,
+        priced_calls=priced_calls_total,
+        cost_calls=cost_calls_total,
+        unknown_calls=unknown_calls_total,
         achieved=achieved,
         not_achieved=not_achieved,
         errors=errors,
-        recent=runs[(page - 1) * per_page : page * per_page],
+        recent=runs,
         total_runs=len(runs),
-        page=page,
-        per_page=per_page,
     )
+
+
+def sim_overview(roots: list[Path] | None = None, *, page: int = 1, per_page: int = 8) -> SimOverview:
+    """Aggregate the sim run store into headline KPIs plus a run-level table
+    (one row per full simulation run). Rows are newest-first, sliced to the
+    requested page of ``per_page`` (``total_runs`` carries the full count)."""
+    page = max(1, page)
+    agg = _sim_aggregate(_roots_key(roots), library.fingerprint(roots))
+    return replace(agg, recent=agg.recent[(page - 1) * per_page : page * per_page], page=page, per_page=per_page)
 
 
 # ---------------------------------------------------------------------------
@@ -865,6 +1048,9 @@ class RedTeamOverview:
     total_cost: float | None  # summed cost_usd across red team runs
     total_input_cost: float | None = None  # summed input_cost across red team runs
     total_output_cost: float | None = None  # summed output_cost across red team runs
+    priced_calls: int = 0  # LLM calls that reported a cost
+    cost_calls: int = 0  # LLM calls seen alongside those, for the coverage label
+    unknown_calls: int = 0  # costed calls whose coverage predates priced_calls
     recent: list[RedTeamRunRow] = field(default_factory=list)  # newest run first, current page
     total_runs: int = 0  # total runs before paging (for the pager)
     page: int = 1
@@ -908,11 +1094,69 @@ def _redteam_targets(data: dict[str, object]) -> list[tuple[str, str]]:
     return out or [('unknown', 'other')]
 
 
-def redteam_overview(roots: list[Path] | None = None, *, page: int = 1, per_page: int = 8) -> RedTeamOverview:
-    """Aggregate the red team run store into headline KPIs plus a run-level table
-    (one row per full red team run). Rows are newest-first, sliced to the requested
-    page of ``per_page`` (``total_runs`` carries the full count)."""
-    page = max(1, page)
+@dataclass(frozen=True)
+class _RedTeamRunStats:
+    """One red team run's contribution to `redteam_overview`.
+
+    Same trick as `_SimRunStats`: scalars only, so the report JSON behind
+    them can be dropped.
+    """
+
+    attacks: int
+    evaluated: int
+    vulnerable: int
+    critical: int
+    errors: int
+    cost: float | None
+    input_cost: float | None
+    output_cost: float | None
+    priced_calls: int
+    cost_calls: int
+    unknown_calls: int
+    resistance: float | None
+    cases: int
+    targets: tuple[tuple[str, str], ...]
+
+
+@functools.lru_cache(maxsize=4096)
+def _redteam_run_stats(path_str: str, mtime_ns: int) -> _RedTeamRunStats | None:  # mtime_ns is only the cache key
+    """Distil one red team report into overview stats. See `_sim_run_stats`."""
+    try:
+        data = library.read_json_cached(Path(path_str))
+    except (OSError, ValueError):
+        return None
+    summary = data.get('summary')
+    summary = summary if isinstance(summary, dict) else {}
+    usage = summary.get('token_usage_total')
+    priced, calls, unknown = _cost_calls(usage)
+    counts = _redteam_counts(data)
+    resistance = _as_float(summary.get('resistance_rate')) if 'resistance_rate' in summary else None
+    if zero_evaluated_attacks(summary):
+        # Same no-score rule as the landing rows: zero evaluated attacks
+        # means the rate is only the schema default, never a real score.
+        resistance = None
+    return _RedTeamRunStats(
+        attacks=counts.attacks,
+        evaluated=counts.evaluated,
+        vulnerable=counts.vulnerable,
+        critical=counts.by_severity.get('critical', 0),
+        errors=counts.errors,
+        cost=_cost_usd(usage),
+        input_cost=_input_cost(usage),
+        output_cost=_output_cost(usage),
+        priced_calls=priced,
+        cost_calls=calls,
+        unknown_calls=unknown,
+        resistance=resistance,
+        cases=_as_int(summary.get('total_attacks')) or counts.attacks,
+        targets=tuple(_redteam_targets(data)),
+    )
+
+
+@functools.lru_cache(maxsize=4)
+def _redteam_aggregate(roots_key: tuple[str, ...], fingerprint: tuple[int, int]) -> RedTeamOverview:
+    """Unpaged red team aggregate, cached on fingerprint. See `_sim_aggregate`."""
+    roots = [Path(r) for r in roots_key]
     runs: list[RedTeamRunRow] = []
     evaluated = 0
     vulnerable = 0
@@ -924,57 +1168,49 @@ def redteam_overview(roots: list[Path] | None = None, *, page: int = 1, per_page
     has_input_cost = False
     output_cost_total = 0.0
     has_output_cost = False
+    priced_calls_total = 0
+    cost_calls_total = 0
+    unknown_calls_total = 0
     total_attacks = 0
 
     for card in library.scan(roots):
         if card.surface != 'redteam' or card.path is None:
             continue
-        try:
-            data = library.read_json_cached(card.path)
-        except (OSError, ValueError):
+        stats = _cached_stats(card.path, _redteam_run_stats)
+        if stats is None:
             continue
 
-        summary = data.get('summary')
-        summary = summary if isinstance(summary, dict) else {}
-        usage = summary.get('token_usage_total')
-        run_cost = _cost_usd(usage)
-        if run_cost is not None:
-            cost_total += run_cost
+        if stats.cost is not None:
+            cost_total += stats.cost
             has_cost = True
-        run_input = _input_cost(usage)
-        if run_input is not None:
-            input_cost_total += run_input
+        if stats.input_cost is not None:
+            input_cost_total += stats.input_cost
             has_input_cost = True
-        run_output = _output_cost(usage)
-        if run_output is not None:
-            output_cost_total += run_output
+        if stats.output_cost is not None:
+            output_cost_total += stats.output_cost
             has_output_cost = True
+        priced_calls_total += stats.priced_calls
+        cost_calls_total += stats.cost_calls
+        unknown_calls_total += stats.unknown_calls
 
-        counts = _redteam_counts(data)
-        total_attacks += counts.attacks
-        evaluated += counts.evaluated
-        vulnerable += counts.vulnerable
-        resistant += counts.evaluated - counts.vulnerable
-        critical += counts.by_severity.get('critical', 0)
+        total_attacks += stats.attacks
+        evaluated += stats.evaluated
+        vulnerable += stats.vulnerable
+        resistant += stats.evaluated - stats.vulnerable
+        critical += stats.critical
 
-        resistance = _as_float(summary.get('resistance_rate')) if 'resistance_rate' in summary else None
-        if zero_evaluated_attacks(summary):
-            # Same no-score rule as the landing rows: zero evaluated attacks
-            # means the rate is only the schema default, never a real score.
-            resistance = None
-        cases = _as_int(summary.get('total_attacks')) or counts.attacks
         runs.append(
             RedTeamRunRow(
                 rid=card.id,
                 name=card.name,
                 when=card.created_at,
-                targets=_redteam_targets(data),
+                targets=list(stats.targets),
                 status=_lifecycle_status(
-                    broken=bool(card.error), all_errored=(counts.attacks > 0 and counts.errors == counts.attacks)
+                    broken=bool(card.error), all_errored=(stats.attacks > 0 and stats.errors == stats.attacks)
                 ),
-                score=resistance,
-                cases=cases,
-                cost=run_cost,
+                score=stats.resistance,
+                cases=stats.cases,
+                cost=stats.cost,
                 error=bool(card.error),
             )
         )
@@ -988,8 +1224,18 @@ def redteam_overview(roots: list[Path] | None = None, *, page: int = 1, per_page
         total_cost=cost_total if has_cost else None,
         total_input_cost=input_cost_total if has_input_cost else None,
         total_output_cost=output_cost_total if has_output_cost else None,
-        recent=runs[(page - 1) * per_page : page * per_page],
+        priced_calls=priced_calls_total,
+        cost_calls=cost_calls_total,
+        unknown_calls=unknown_calls_total,
+        recent=runs,
         total_runs=len(runs),
-        page=page,
-        per_page=per_page,
     )
+
+
+def redteam_overview(roots: list[Path] | None = None, *, page: int = 1, per_page: int = 8) -> RedTeamOverview:
+    """Aggregate the red team run store into headline KPIs plus a run-level table
+    (one row per full red team run). Rows are newest-first, sliced to the requested
+    page of ``per_page`` (``total_runs`` carries the full count)."""
+    page = max(1, page)
+    agg = _redteam_aggregate(_roots_key(roots), library.fingerprint(roots))
+    return replace(agg, recent=agg.recent[(page - 1) * per_page : page * per_page], page=page, per_page=per_page)
