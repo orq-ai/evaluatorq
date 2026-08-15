@@ -90,6 +90,34 @@ def _legacy_result(
     return res
 
 
+def test_legacy_redteam_stats_match_landing_cost_and_derive_resistance(tmp_path: Path) -> None:
+    """Legacy result usage and verdicts feed both overview surfaces identically."""
+    rt = tmp_path / 'runs'
+    rt.mkdir()
+    payload = _legacy_redteam_payload(
+        'Legacy cost and resistance',
+        created='2026-06-29T10:00:00',
+        resistance=0.0,
+        results=[
+            _legacy_result(vulnerable=True, tokens=10),
+            _legacy_result(vulnerable=False, tokens=20),
+        ],
+    )
+    payload['summary']['resistance_rate'] = None
+    report = rt / 'legacy.json'
+    report.write_text(json.dumps(payload))
+
+    counts = metrics._redteam_counts(payload)
+    stats = metrics._redteam_run_stats(str(report.resolve()), report.stat().st_mtime_ns)
+    assert stats is not None
+    landing = metrics.landing([rt])
+
+    assert counts.cost == pytest.approx(0.03)
+    assert stats.cost == pytest.approx(counts.cost)
+    assert landing.total_cost == pytest.approx(counts.cost)
+    assert stats.resistance == pytest.approx(0.5)
+
+
 def _sim_payload(name: str, *, created: str, averages: dict[str, float], n: int, tok_each: int) -> dict:
     return {
         'mode': 'run',
