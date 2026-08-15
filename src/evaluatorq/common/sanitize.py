@@ -42,7 +42,7 @@ def delimit(text: str, *, tag: str = 'data') -> str:
         raise ValueError(f'Invalid tag name: {tag!r}')
     sanitized = text.replace('&', '&amp;')
     sanitized = re.sub(
-        rf'<\s*/?\s*{re.escape(tag)}\b[^>]*>',
+        rf'<\s*/?\s*{re.escape(tag)}(?![a-zA-Z0-9_-])[^>]*>',
         lambda match: (
             re
             .sub(re.escape(tag), tag, match.group(), count=1, flags=re.IGNORECASE)

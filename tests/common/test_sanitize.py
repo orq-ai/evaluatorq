@@ -77,6 +77,16 @@ def test_delimit_custom_tag_case_insensitive():
     assert "<target_response>" not in inner.lower()
 
 
+@pytest.mark.parametrize('tag', ['target-', 'target1', 'target_'])
+def test_delimit_custom_tag_escapes_all_legal_trailing_characters(tag: str):
+    result = delimit(f'<{tag}>injection</{tag}>', tag=tag)
+    inner = result.removeprefix(f'<{tag}>').removesuffix(f'</{tag}>')
+
+    assert f'&lt;{tag}&gt;' in inner
+    assert f'&lt;/{tag}&gt;' in inner
+    assert '<' not in inner
+
+
 def test_delimit_custom_tag_does_not_escape_other_tags():
     result = delimit("<data>keep</data>", tag="target_response")
     assert "<data>keep</data>" in result
