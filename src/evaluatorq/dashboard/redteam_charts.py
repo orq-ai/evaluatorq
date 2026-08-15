@@ -282,12 +282,23 @@ def _build_breakdown_chart(
         stacked_rows: list[dict[str, Any]] = []
         for (g, s), counts in groups_stacked.items():
             asr = (counts['vuln'] / counts['evaluated'] * 100) if counts['evaluated'] else 0.0
-            stacked_rows.append({'dimension': g, 'stack': s, 'asr': round(asr, 1), 'n': counts['evaluated']})
+            stacked_rows.append({
+                'dimension': g,
+                'stack': s,
+                'asr': round(asr, 1),
+                'n': counts['evaluated'],
+                'vuln': counts['vuln'],
+            })
 
-        dim_asr: dict[str, list[float]] = defaultdict(list)
+        dim_totals: dict[str, dict[str, int]] = defaultdict(lambda: {'vuln': 0, 'evaluated': 0})
         for row in stacked_rows:
-            dim_asr[row['dimension']].append(row['asr'])
-        dim_order = sorted(dim_asr.keys(), key=lambda d: sum(dim_asr[d]) / max(len(dim_asr[d]), 1), reverse=True)
+            dim_totals[row['dimension']]['vuln'] += row['vuln']
+            dim_totals[row['dimension']]['evaluated'] += row['n']
+        dim_order = sorted(
+            dim_totals,
+            key=lambda d: dim_totals[d]['vuln'] / max(dim_totals[d]['evaluated'], 1),
+            reverse=True,
+        )
 
         stack_vals = sorted({row['stack'] for row in stacked_rows})
 
@@ -300,8 +311,8 @@ def _build_breakdown_chart(
             sv_vals: list[float] = []
             sv_texts: list[str] = []
             for d in dim_order:
-                row = row_by_gs.get((d, sv), {'asr': 0.0, 'n': 0})
-                sv_vals.append(row['asr'])
+                row = row_by_gs.get((d, sv), {'asr': 0.0, 'n': 0, 'vuln': 0})
+                sv_vals.append(row['vuln'])
                 n = row['n']
                 sv_texts.append(f'n={n}' if n else '')
             series.append((sv, sv_vals))
@@ -310,9 +321,17 @@ def _build_breakdown_chart(
         spec = vl_stacked_bar(
             labels=dim_order,
             series=series,
-            x_title='ASR (%)',
+            x_title='Vulnerable attacks',
             value_labels=stacked_value_labels,
         )
+        for chart_row in spec['data']['values']:
+            source_row = row_by_gs.get((chart_row['label'], chart_row['series']))
+            chart_row['asr'] = source_row['asr'] if source_row else 0.0
+            chart_row['evaluated'] = source_row['n'] if source_row else 0
+        spec['encoding']['tooltip'] = [
+            {'field': 'asr', 'type': 'quantitative', 'title': 'ASR (%)', 'format': '.1f'},
+            {'field': 'evaluated', 'type': 'quantitative', 'title': 'Evaluated attacks'},
+        ]
 
     return render_embed(spec, chart_id)
 
