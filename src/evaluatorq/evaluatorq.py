@@ -350,6 +350,7 @@ async def evaluatorq(
 
                 polling_task = asyncio.create_task(poll_progress())
                 fetch_error: BaseException | None = None
+                cancelled_for_fetch: set[asyncio.Task[Any]] = set()
 
                 try:
                     # Fetch and process batches
@@ -369,29 +370,40 @@ async def evaluatorq(
                 finally:
                     # Stop polling on both success and failure. A fetch failure also
                     # cancels in-flight processing, but their exceptions are still
-                    # collected by the same gather as the polling task.
+                    # collected separately from the deliberately cancelled poller.
                     stop_polling = True
                     if fetch_error is not None:
                         for task in processing_tasks:
-                            task.cancel()
+                            if not task.done() and task.cancelling() == 0:
+                                task.cancel()
+                                cancelled_for_fetch.add(task)
                     _ = polling_task.cancel()
-                    all_tasks: list[asyncio.Task[Any]] = [*processing_tasks, polling_task]
-                    task_results = await asyncio.gather(
-                        *all_tasks,
+                    processing_results = await asyncio.gather(
+                        *processing_tasks,
+                        return_exceptions=True,
+                    )
+                    polling_result = await asyncio.gather(
+                        polling_task,
                         return_exceptions=True,
                     )
 
                 task_errors = [
                     result
-                    for result in task_results
-                    if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError)
+                    for task, result in zip(processing_tasks, processing_results, strict=True)
+                    if isinstance(result, BaseException)
+                    and not (isinstance(result, asyncio.CancelledError) and task in cancelled_for_fetch)
                 ]
+                task_errors.extend(
+                    result
+                    for result in polling_result
+                    if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError)
+                )
                 errors = ([fetch_error] if fetch_error is not None else []) + task_errors
                 if errors:
                     if len(errors) == 1:
                         raise errors[0]
                     raise _StreamingEvaluationError(errors)
-                results_nested = cast('list[list[Any]]', task_results[:-1])
+                results_nested = cast('list[list[Any]]', processing_results)
 
                 # Final progress update
                 await progress.update_progress(
