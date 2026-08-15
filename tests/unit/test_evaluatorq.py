@@ -1,6 +1,7 @@
 """Test that evaluatorq runs correctly with various scenarios."""
 
 import asyncio
+import importlib
 import inspect
 import random
 
@@ -8,8 +9,10 @@ import pytest
 
 from evaluatorq import evaluatorq
 from evaluatorq.evaluatorq import check_pass_failures
+from evaluatorq.fetch_data import DataPointBatch
 from evaluatorq.types import (
     DataPoint,
+    DatasetIdInput,
     DataPointResult,
     EvaluationResult,
     EvaluatorParams,
@@ -222,6 +225,128 @@ async def test_evaluatorq_stress():
 
     assert results is not None
     assert len(results) == 300
+
+
+@pytest.mark.asyncio
+async def test_streaming_fetch_failure_cancels_in_flight_datapoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fetch failure must not leave processing tasks running or unobserved."""
+    evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
+
+    created_tasks: list[asyncio.Task[object]] = []
+    unhandled: list[dict[str, object]] = []
+    loop = asyncio.get_running_loop()
+    previous_exception_handler = loop.get_exception_handler()
+
+    def capture_unhandled(_loop: asyncio.AbstractEventLoop, context: dict[str, object]) -> None:
+        unhandled.append(context)
+
+    async def failing_fetch(*_args: object, **_kwargs: object):
+        yield DataPointBatch(
+            datapoints=[DataPoint(inputs={'row': index}) for index in range(3)],
+            has_more=True,
+            batch_number=1,
+        )
+        await asyncio.sleep(0)
+        raise RuntimeError('fetch failed after first batch')
+
+    async def slow_job(_data: DataPoint, _row: int):
+        await asyncio.Event().wait()
+        return {'name': 'slow', 'output': 'unreachable'}
+
+    async def track_processing(*_args: object, **_kwargs: object) -> list[object]:
+        task = asyncio.current_task()
+        assert task is not None
+        created_tasks.append(task)
+        await asyncio.Event().wait()
+        return []
+
+    monkeypatch.setattr(evaluatorq_module, 'setup_orq_client', lambda _api_key: object())
+    monkeypatch.setattr(evaluatorq_module, 'fetch_dataset_batches', failing_fetch)
+    monkeypatch.setattr(evaluatorq_module, 'process_data_point', track_processing)
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    loop.set_exception_handler(capture_unhandled)
+
+    try:
+        with pytest.raises(RuntimeError, match='fetch failed after first batch'):
+            await evaluatorq_module.evaluatorq(
+                'streaming-fetch-failure',
+                data=DatasetIdInput(dataset_id='dataset'),
+                jobs=[slow_job],
+                print_results=False,
+                _send_results=False,
+            )
+
+        assert len(created_tasks) == 3
+        assert all(task.done() and task.cancelled() for task in created_tasks)
+        assert unhandled == []
+    finally:
+        loop.set_exception_handler(previous_exception_handler)
+        for task in created_tasks:
+            task.cancel()
+        await asyncio.gather(*created_tasks, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_evaluatorq_returns_failed_results_to_library_callers() -> None:
+    """Library callers receive failed results instead of a process exit."""
+
+    async def job(_data: DataPoint, _row: int):
+        return {'name': 'job', 'output': 'output'}
+
+    async def failing_scorer(_params: ScorerParameter) -> EvaluationResult:
+        return EvaluationResult.model_validate({'value': 0, 'pass': False})
+
+    results = await evaluatorq(
+        'library-failure',
+        data=[DataPoint(inputs={'text': 'value'})],
+        jobs=[job],
+        evaluators=[{'name': 'failing', 'scorer': failing_scorer}],
+        print_results=False,
+        _send_results=False,
+    )
+
+    assert len(results) == 1
+    job_results = results[0].job_results
+    assert job_results is not None
+    evaluator_scores = job_results[0].evaluator_scores
+    assert evaluator_scores is not None
+    assert evaluator_scores[0].score.pass_ is False
+
+
+@pytest.mark.asyncio
+async def test_evaluator_parallelism_is_bounded_per_job() -> None:
+    """Evaluator fan-out must respect the per-datapoint parallelism cap."""
+    concurrent_count = 0
+    max_concurrent = 0
+    lock = asyncio.Lock()
+
+    async def evaluator_scorer(_params: ScorerParameter) -> EvaluationResult:
+        nonlocal concurrent_count, max_concurrent
+        async with lock:
+            concurrent_count += 1
+            max_concurrent = max(max_concurrent, concurrent_count)
+        await asyncio.sleep(0.02)
+        async with lock:
+            concurrent_count -= 1
+        return EvaluationResult.model_validate({'value': 1, 'pass': True})
+
+    async def job(_data: DataPoint, _row: int):
+        return {'name': 'job', 'output': 'output'}
+
+    results = await evaluatorq(
+        'evaluator-parallelism',
+        data=[DataPoint(inputs={'text': 'value'})],
+        jobs=[job],
+        evaluators=[{'name': f'evaluator-{index}', 'scorer': evaluator_scorer} for index in range(8)],
+        parallelism=2,
+        print_results=False,
+        _send_results=False,
+    )
+
+    assert len(results) == 1
+    assert max_concurrent <= 2
 
 
 def test_check_pass_failures_counts_evaluator_errors():
