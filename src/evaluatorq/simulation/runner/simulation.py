@@ -587,6 +587,7 @@ class SimulationRunner:
         thread_id: str | None = None,
         messages: list[Message] | None = None,
         turn_metrics_list: list[TurnMetrics] | None = None,
+        usage_holder: dict[str, Callable[[], TokenUsage]] | None = None,
     ) -> SimulationResult:
         """Run a single simulation. Never throws -- returns error SimulationResult on failure.
 
@@ -616,7 +617,7 @@ class SimulationRunner:
         turn_metrics_list = turn_metrics_list if turn_metrics_list is not None else []
         # Holder so the outer except can read partial token usage from agents
         # created inside _run_inner (mirrors TS getTotalUsage closure).
-        usage_holder: dict[str, Callable[[], TokenUsage]] = {}
+        usage_holder = usage_holder if usage_holder is not None else {}
         # Captured for the error path below (out of the `with` scope), so error
         # results still carry the thread id for the dashboard deep-link.
         bound_thread_id: str | None = None
@@ -1124,6 +1125,12 @@ class SimulationRunner:
         )
 
         scenario_name = scenario.name if scenario else '<none>'
+        logger.warning(
+            'Target failed (%s) for scenario %r: %s',
+            error_type,
+            scenario_name,
+            error_message,
+        )
         # `verified` is the same condition `resolve` guards on (an audit arrived, or
         # there are no criteria at all — in which case `broken_ids` is empty anyway).
         # Inside a partial audit, `confirmed_broken_ids` applies the narrower rule
@@ -1254,6 +1261,7 @@ class SimulationRunner:
         # cancellation of the inner coroutine (asyncio cannot roll back appends).
         messages: list[Message] = []
         turn_metrics_list: list[TurnMetrics] = []
+        usage_holder: dict[str, Callable[[], TokenUsage]] = {}
         try:
             return await asyncio.wait_for(
                 self.run(
@@ -1261,6 +1269,7 @@ class SimulationRunner:
                     max_turns=max_turns,
                     messages=messages,
                     turn_metrics_list=turn_metrics_list,
+                    usage_holder=usage_holder,
                 ),
                 timeout=timeout_s,
             )
@@ -1273,9 +1282,24 @@ class SimulationRunner:
             # A TimeoutError means asyncio cancelled the inner coroutine mid-flight.
             # The caller-owned sinks retain every turn that completed before the
             # cancellation, so the partial transcript is preserved instead of lost.
-            # Usage is summed from the completed turns' deltas rather than reported
-            # as ZERO_USAGE: a timeout must never look like a $0, clean run.
+            # Usage includes all calls completed before cancellation rather than
+            # being reported as ZERO_USAGE: a timeout must never look like a $0,
+            # clean run.
             reason = f'Simulation timed out after {timeout_s}s'
+            get_total_usage = usage_holder.get('get_total_usage')
+            try:
+                usage = (
+                    get_total_usage()
+                    if get_total_usage
+                    else sum((tm.token_usage for tm in turn_metrics_list), start=ZERO_USAGE.model_copy())
+                )
+            except Exception as usage_err:
+                logger.error(
+                    'Failed to collect token usage during timeout path: %s',
+                    usage_err,
+                    exc_info=True,
+                )
+                usage = sum((tm.token_usage for tm in turn_metrics_list), start=ZERO_USAGE.model_copy())
             return SimulationResult(
                 messages=messages,
                 terminated_by=TerminatedBy.timeout,
@@ -1285,7 +1309,7 @@ class SimulationRunner:
                 rules_broken=[],
                 turn_count=sum(1 for m in messages if m.role == 'assistant'),
                 turn_metrics=turn_metrics_list,
-                token_usage=sum((tm.token_usage for tm in turn_metrics_list), start=ZERO_USAGE.model_copy()),
+                token_usage=usage,
                 metadata={
                     'persona': datapoint.persona.name,
                     'scenario': datapoint.scenario.name,
@@ -1294,6 +1318,6 @@ class SimulationRunner:
                     # both timeout producers surface identically to
                     # `sections._is_errored` and the report layer.
                     'error': reason,
-                    'error_type': 'TimeoutError',
+                    'error_type': 'timeout',
                 },
             )
