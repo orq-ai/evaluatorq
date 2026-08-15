@@ -114,7 +114,7 @@ async def evaluatorq(
     path: str | None = None,
     inference: bool = True,
     single_trace: bool = False,
-    _exit_on_failure: bool = True,
+    _exit_on_failure: bool = False,
     _send_results: bool = True,
     _base_url: str | None = None,
     _trace_type: str = 'evaluatorq',
@@ -144,7 +144,8 @@ async def evaluatorq(
               inference=False), or a list of DataPoint instances/awaitables.
         jobs: The jobs to run on the data.
         evaluators: The evaluators to use. If not provided, only jobs will run.
-        parallelism: Number of jobs to run in parallel. Defaults to 10; set to 1 for
+        parallelism: Maximum concurrency for each of three scopes: datapoints,
+              jobs per datapoint, and evaluators per job. Defaults to 10; set to 1 for
               sequential execution, or lower it if your provider rate-limits.
         print_results: Whether to print results table to console. Defaults to True.
         description: Optional description for the evaluation run.
@@ -156,6 +157,9 @@ async def evaluatorq(
         single_trace: Group every row under one ``evaluatorq.run`` span so the whole
               evaluation is a single trace. Defaults to False, which leaves each row's
               ``orq.job`` as its own root — an N-row run is then N separate traces.
+        _exit_on_failure: Whether to exit the process when an evaluator fails.
+              Defaults to False for library callers; CLI entry points opt in
+              explicitly when they need a non-zero process exit.
 
     Returns:
         List of DataPointResult objects
@@ -336,6 +340,7 @@ async def evaluatorq(
                         await asyncio.sleep(0.1)
 
                 polling_task = asyncio.create_task(poll_progress())
+                completed = False
 
                 try:
                     # Fetch and process batches
@@ -350,10 +355,15 @@ async def evaluatorq(
 
                     # Wait for all processing tasks to complete
                     results_nested = await asyncio.gather(*processing_tasks)
+                    completed = True
                 finally:
                     # Stop the polling task
                     stop_polling = True
                     _ = polling_task.cancel()
+                    if not completed:
+                        for task in processing_tasks:
+                            task.cancel()
+                        await asyncio.gather(*processing_tasks, return_exceptions=True)
                     with contextlib.suppress(asyncio.CancelledError):
                         await polling_task
 
