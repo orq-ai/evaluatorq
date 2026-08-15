@@ -1,9 +1,11 @@
 """Tests for set_evaluation_attributes in tracing/spans."""
 
+import asyncio
 import json
 from unittest.mock import MagicMock
 
 import pytest
+from opentelemetry.trace import StatusCode
 
 from evaluatorq.tracing import spans as spans_module
 from evaluatorq.tracing.spans import (
@@ -97,3 +99,36 @@ class TestSpanBodyImportError:
         with pytest.raises(ImportError, match="marker"):
             async with with_evaluation_span(options):
                 raise ImportError("marker")
+
+
+class TestSpanCancellation:
+    @pytest.fixture()
+    def _stub_tracer(self, monkeypatch: pytest.MonkeyPatch):
+        tracer = MagicMock()
+        span = MagicMock()
+        tracer.start_as_current_span.return_value.__enter__.return_value = span
+        monkeypatch.setattr(spans_module, "get_tracer", lambda: tracer)
+        return span
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("_stub_tracer")
+    async def test_job_span_marks_cancellation_as_error(self, _stub_tracer: MagicMock):
+        with pytest.raises(asyncio.CancelledError):
+            async with with_job_span(JobSpanOptions(run_id="abc", row_index=0)):
+                raise asyncio.CancelledError
+
+        status = _stub_tracer.set_status.call_args.args[0]
+        assert status.status_code is StatusCode.ERROR
+        _stub_tracer.set_attribute.assert_called_once_with("error.type", "CancelledError")
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("_stub_tracer")
+    async def test_evaluation_span_marks_cancellation_as_error(self, _stub_tracer: MagicMock):
+        options = EvaluationSpanOptions(run_id="abc", evaluator_name="judge")
+        with pytest.raises(asyncio.CancelledError):
+            async with with_evaluation_span(options):
+                raise asyncio.CancelledError
+
+        status = _stub_tracer.set_status.call_args.args[0]
+        assert status.status_code is StatusCode.ERROR
+        _stub_tracer.set_attribute.assert_called_once_with("error.type", "CancelledError")
