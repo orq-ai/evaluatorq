@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from loguru import logger
+
 from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.contracts import TokenUsage
 
@@ -185,6 +187,15 @@ def _extract_content_from_response(completion: object) -> str:
             elif hasattr(part, 'type') and getattr(part, 'type', None) == 'text':
                 text_parts.append(str(getattr(part, 'text', '')))
         content = '\n'.join(text_parts)
+    elif isinstance(msg_content, str) and msg_content:
+        # Other union arms (e.g. 'tool_calls') still carry a nullable str content
+        # field per the SDK schema; surface it instead of silently dropping it.
+        content = msg_content
+    else:
+        logger.warning(
+            'Unrecognised deployment response message type {!r}; returning empty content',
+            msg_type,
+        )
 
     return content
 
