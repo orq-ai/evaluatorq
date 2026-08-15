@@ -686,6 +686,31 @@ class JudgeAgent(BaseAgent):
         """
         self._settled = frozenset(ids)
 
+    def update_context(
+        self,
+        goal: str | None = None,
+        criteria: list[Criterion] | None = None,
+        ground_truth: str | None = None,
+    ) -> None:
+        """Update the scenario context the judge evaluates against.
+
+        The runner shallow-copies an injected judge per simulation and calls this
+        with the datapoint's scenario — without it the judge keeps whatever it was
+        constructed with (usually nothing), so the system prompt says "No specific
+        criteria defined" and every criterion goes unaudited.
+
+        ``criteria`` is copied into a fresh list rather than stored by reference:
+        the per-simulation copy is shallow, so keeping the caller's list would let
+        concurrent runs share (and mutate) the same object. ``system_prompt`` is
+        computed on read, so there is no cached prompt to invalidate.
+        """
+        if goal is not None:
+            self._goal = goal
+        if criteria is not None:
+            self._criteria = list(criteria)
+        if ground_truth is not None:
+            self._ground_truth = ground_truth
+
     @property
     def system_prompt(self) -> str:
         criteria_text = self._format_criteria()

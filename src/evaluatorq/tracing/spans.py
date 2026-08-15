@@ -124,38 +124,42 @@ async def with_job_span(  # noqa: RUF029
         yield None
         return
 
+    # Import outside the block that contains the yield: an ImportError raised by the
+    # *body* (a job lazily importing an optional extra) must propagate, not be caught
+    # here — catching it makes the generator yield twice and the real cause is lost
+    # behind "generator didn't stop after athrow()". Mirrors common.tracing.with_span.
     try:
         from opentelemetry import context as otel_context
         from opentelemetry.trace import SpanKind, Status, StatusCode
-
-        # Use parent context if provided, otherwise use active context
-        parent_ctx = options.parent_context or otel_context.get_current()
-
-        attributes: dict[str, Any] = {
-            'orq.trace_type': options.trace_type,
-            'orq.run_id': options.run_id,
-            'orq.row_index': options.row_index,
-        }
-        if options.job_name:
-            attributes['orq.job_name'] = options.job_name
-
-        with tracer.start_as_current_span(
-            'orq.job',
-            context=parent_ctx,
-            kind=SpanKind.INTERNAL,
-            attributes=attributes,
-        ) as span:
-            try:
-                yield span
-                span.set_status(Status(StatusCode.OK))
-            except Exception as e:
-                span.set_status(Status(StatusCode.ERROR, str(e)))
-                span.record_exception(e)
-                raise
-
     except ImportError:
         # OTEL not available, run without span
         yield None
+        return
+
+    # Use parent context if provided, otherwise use active context
+    parent_ctx = options.parent_context or otel_context.get_current()
+
+    attributes: dict[str, Any] = {
+        'orq.trace_type': options.trace_type,
+        'orq.run_id': options.run_id,
+        'orq.row_index': options.row_index,
+    }
+    if options.job_name:
+        attributes['orq.job_name'] = options.job_name
+
+    with tracer.start_as_current_span(
+        'orq.job',
+        context=parent_ctx,
+        kind=SpanKind.INTERNAL,
+        attributes=attributes,
+    ) as span:
+        try:
+            yield span
+            span.set_status(Status(StatusCode.OK))
+        except Exception as e:
+            span.set_status(Status(StatusCode.ERROR, str(e)))
+            span.record_exception(e)
+            raise
 
 
 @asynccontextmanager
@@ -187,31 +191,33 @@ async def with_evaluation_span(  # noqa: RUF029
         yield None
         return
 
+    # Guard only the import — see with_job_span: an ImportError from the body must
+    # propagate rather than make this generator yield a second time.
     try:
         from opentelemetry.trace import SpanKind, Status, StatusCode
-
-        with tracer.start_as_current_span(
-            # Include the evaluator name so concurrent evaluator spans are
-            # distinguishable in the trace tree / UI (mirrors `chat {model}`)
-            # rather than N identical `orq.evaluation` rows.
-            f'orq.evaluation {options.evaluator_name}',
-            kind=SpanKind.INTERNAL,
-            attributes={
-                'orq.run_id': options.run_id,
-                'orq.evaluator_name': options.evaluator_name,
-            },
-        ) as span:
-            try:
-                yield span
-                span.set_status(Status(StatusCode.OK))
-            except Exception as e:
-                span.set_status(Status(StatusCode.ERROR, str(e)))
-                span.record_exception(e)
-                raise
-
     except ImportError:
         # OTEL not available, run without span
         yield None
+        return
+
+    with tracer.start_as_current_span(
+        # Include the evaluator name so concurrent evaluator spans are
+        # distinguishable in the trace tree / UI (mirrors `chat {model}`)
+        # rather than N identical `orq.evaluation` rows.
+        f'orq.evaluation {options.evaluator_name}',
+        kind=SpanKind.INTERNAL,
+        attributes={
+            'orq.run_id': options.run_id,
+            'orq.evaluator_name': options.evaluator_name,
+        },
+    ) as span:
+        try:
+            yield span
+            span.set_status(Status(StatusCode.OK))
+        except Exception as e:
+            span.set_status(Status(StatusCode.ERROR, str(e)))
+            span.record_exception(e)
+            raise
 
 
 def set_evaluation_attributes(

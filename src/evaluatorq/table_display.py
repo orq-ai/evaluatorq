@@ -127,6 +127,10 @@ def calculate_evaluator_averages(
                 evaluator_averages[job_name] = ('-', 'dim')
             else:
                 first_score = scores[0]
+                # A degraded score (e.g. a jury returning 'inconclusive') is a string
+                # among numbers: it must neither dilute the mean nor, when it lands
+                # first, hide the numeric column behind a '[string]' placeholder.
+                numeric = [s for s in scores if isinstance(s, (int, float)) and not isinstance(s, bool)]
 
                 if isinstance(first_score, EvaluationResultCell):
                     # Structured result cell, show placeholder
@@ -146,9 +150,9 @@ def calculate_evaluator_averages(
 
                     evaluator_averages[job_name] = (f'{pass_rate:.1f}%', style)
 
-                elif isinstance(first_score, (int, float)):
-                    # Calculate average for numeric scores
-                    avg = sum(float(s) for s in scores if isinstance(s, (int, float))) / len(scores)
+                elif numeric:
+                    # Calculate average over the numeric scores only
+                    avg = sum(float(s) for s in numeric) / len(numeric)
                     evaluator_averages[job_name] = (f'{avg:.2f}', 'yellow')
 
                 elif isinstance(first_score, dict):

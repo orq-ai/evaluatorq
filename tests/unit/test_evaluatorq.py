@@ -7,7 +7,16 @@ import random
 import pytest
 
 from evaluatorq import evaluatorq
-from evaluatorq.types import DataPoint, EvaluationResult, EvaluatorParams, ScorerParameter
+from evaluatorq.evaluatorq import check_pass_failures
+from evaluatorq.types import (
+    DataPoint,
+    DataPointResult,
+    EvaluationResult,
+    EvaluatorParams,
+    EvaluatorScore,
+    JobResult,
+    ScorerParameter,
+)
 
 # Sample text data
 SAMPLE_TEXTS = [
@@ -213,3 +222,28 @@ async def test_evaluatorq_stress():
 
     assert results is not None
     assert len(results) == 300
+
+
+def test_check_pass_failures_counts_evaluator_errors():
+    """An evaluator whose judge call raised leaves ``pass_`` unset — the run must not exit 0."""
+    results = [
+        DataPointResult(
+            data_point=DataPoint(inputs={"text": "x"}),
+            job_results=[
+                JobResult(
+                    job_name="job1",
+                    output="output",
+                    evaluator_scores=[
+                        EvaluatorScore(
+                            evaluator_name="judge",
+                            score=EvaluationResult(value=""),
+                            error="judge call failed",
+                        ),
+                    ],
+                ),
+            ],
+        ),
+    ]
+
+    assert check_pass_failures(results) is False
+    assert check_pass_failures(results, treat_errors_as_failure=True) is True

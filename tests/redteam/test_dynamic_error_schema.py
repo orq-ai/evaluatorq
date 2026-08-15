@@ -48,6 +48,50 @@ def test_job_output_payload_coercion_keeps_structured_error_fields() -> None:
     assert payload.error_details == {'status_code': 504, 'raw_message': 'gateway timeout'}
 
 
+def test_dynamic_results_to_report_surfaces_job_result_error_without_output() -> None:
+    """A job that raised has no output payload — the cause lives on JobResult.error."""
+    result = _FakeResult(
+        data_point=_FakeDataPoint(
+            inputs={
+                'id': 'asi01-test-002',
+                'category': 'ASI01',
+                'strategy': {
+                    'category': 'ASI01',
+                    'name': 'tool_output_hijack',
+                    'description': 'test strategy',
+                    'attack_technique': 'direct-injection',
+                    'delivery_methods': ['direct-request'],
+                    'turn_type': 'single',
+                    'severity': 'medium',
+                    'objective_template': 'test objective',
+                    'prompt_template': 'test prompt',
+                    'is_generated': False,
+                },
+                'objective': 'induce harmful action',
+            }
+        ),
+        job_results=[
+            _FakeJobResult(
+                job_name='dynamic:redteam:agent:custom-1',
+                output=None,
+                error='CredentialError: ORQ_API_KEY missing',
+            )
+        ],
+    )
+
+    report = dynamic_evaluatorq_results_to_report(
+        agent_context=AgentContext(key='custom-1'),
+        categories_tested=['ASI01'],
+        results=[result],
+        duration_seconds=0.1,
+        description='dynamic job error test',
+    )
+
+    row = report.results[0]
+    assert row.error == 'CredentialError: ORQ_API_KEY missing'
+    assert row.vulnerable is None
+
+
 def test_dynamic_results_to_report_maps_error_stage_code_and_details() -> None:
     score = SimpleNamespace(value=False, explanation='Evaluator marked this vulnerable')
     evaluator_score = SimpleNamespace(score=score)

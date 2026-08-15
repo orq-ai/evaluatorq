@@ -105,6 +105,9 @@ _JUDGE_METHODS = ('evaluate',)
 # Optional, not part of the judge contract: a judge that can be told which criteria
 # are already settled drops them from its per-turn audit. See JudgeAgent.mark_settled.
 _SETTLEABLE_JUDGE_METHODS = ('mark_settled',)
+# Optional, not part of the judge contract: a judge that can be told the scenario's
+# goal/criteria/ground_truth gets them per simulation. See JudgeAgent.update_context.
+_CONTEXTUAL_JUDGE_METHODS = ('update_context',)
 
 
 def _implements(obj: object, methods: tuple[str, ...]) -> bool:
@@ -739,6 +742,21 @@ class SimulationRunner:
             # Isolate per-sim state — see user_simulator comment above.
             judge: JudgeAgent = copy.copy(self._injected_judge)  # pyright: ignore[reportAssignmentType]
             judge.reset_usage()
+            # Without the scenario context the judge's prompt says "No specific
+            # criteria defined": criteria_verdicts stays empty, criteria_verified
+            # is False and criteria_met scores 0.0 for every datapoint.
+            if _implements(judge, _CONTEXTUAL_JUDGE_METHODS):
+                judge.update_context(
+                    goal=scenario.goal if scenario else '',
+                    criteria=list(scenario.criteria) if scenario and scenario.criteria else [],
+                    ground_truth=(scenario.ground_truth or '') if scenario else '',
+                )
+            else:
+                logger.warning(
+                    'Injected judge %s has no update_context(); it will not receive the scenario goal, '
+                    'criteria or ground truth, so no criterion can be audited (criteria_met scores 0.0).',
+                    type(self._injected_judge).__name__,
+                )
         else:
             if client is None:
                 client = self._get_shared_client()
