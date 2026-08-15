@@ -124,7 +124,7 @@ def register_redteam_view_routes(app: Any, roots: list[Any] | None = None) -> No
         try:
             idx = int(req.query_params.get('idx', '0'))
         except (ValueError, TypeError):
-            idx = 0
+            idx = -1
         report = _load_report(rid, roots)
         if report is None:
             return Response(_404(f'Report {rid} not found'), status_code=404, media_type='text/html')
@@ -133,7 +133,7 @@ def register_redteam_view_routes(app: Any, roots: list[Any] | None = None) -> No
         if not filtered:
             return Response('<p class="rt-view-empty">No attack.</p>', media_type='text/html')
         if idx < 0 or idx >= len(filtered):
-            idx = 0
+            return Response(_404('No attack at that index'), status_code=404, media_type='text/html')
         from evaluatorq.dashboard.redteam_transcripts import render_attack_fragment
 
         return Response(render_attack_fragment(filtered[idx]), media_type='text/html')
