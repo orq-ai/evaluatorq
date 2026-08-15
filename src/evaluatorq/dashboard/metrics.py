@@ -1130,18 +1130,25 @@ def _redteam_run_stats(path_str: str, mtime_ns: int) -> _RedTeamRunStats | None:
     usage = summary.get('token_usage_total')
     priced, calls, unknown = _cost_calls(usage)
     counts = _redteam_counts(data)
-    resistance = _as_float(summary.get('resistance_rate')) if 'resistance_rate' in summary else None
+    resistance = _as_float_or_none(summary.get('resistance_rate')) if 'resistance_rate' in summary else None
+    if resistance is None and counts.evaluated:
+        resistance = (counts.evaluated - counts.vulnerable) / counts.evaluated
     if zero_evaluated_attacks(summary):
         # Same no-score rule as the landing rows: zero evaluated attacks
         # means the rate is only the schema default, never a real score.
         resistance = None
+    cost = _cost_usd(usage)
+    if cost is None and usage is None:
+        # Legacy reports keep usage on each result rather than in the summary.
+        # A zero derived total means no readable cost was recorded, not a free run.
+        cost = counts.cost or None
     return _RedTeamRunStats(
         attacks=counts.attacks,
         evaluated=counts.evaluated,
         vulnerable=counts.vulnerable,
         critical=counts.by_severity.get('critical', 0),
         errors=counts.errors,
-        cost=_cost_usd(usage),
+        cost=cost,
         input_cost=_input_cost(usage),
         output_cost=_output_cost(usage),
         priced_calls=priced,
