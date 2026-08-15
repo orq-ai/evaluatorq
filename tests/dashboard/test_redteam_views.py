@@ -309,6 +309,63 @@ class TestBreakdownView:
         # Also verify the text label contains "50.0%"
         assert '50.0%' in asi01_row.get('text', ''), f"Expected '50.0%' in text label, got {asi01_row.get('text')!r}"
 
+    def test_stacked_breakdown_uses_vulnerable_counts_and_pooled_order(self, tmp_path: Path) -> None:
+        """Stacked bars must add vulnerable attacks, while ordering uses pooled ASR."""
+        import json
+        import re
+
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        results: list[RedTeamResult] = []
+
+        # Group A has two 100% stacks with one attack each and one large safe
+        # stack: its unweighted mean is higher, but its pooled ASR is lower.
+        results.extend(
+            [
+                _make_result(category='GROUP_A', severity=Severity.HIGH, passed=False, attack_id='a-high'),
+                _make_result(category='GROUP_A', severity=Severity.MEDIUM, passed=False, attack_id='a-medium'),
+            ]
+        )
+        results.extend(
+            _make_result(
+                category='GROUP_A', severity=Severity.LOW, passed=True, attack_id=f'a-low-{i}'
+            )
+            for i in range(100)
+        )
+
+        # Group B has a large vulnerable stack and two small safe stacks: its
+        # pooled ASR is higher despite its lower unweighted stack mean.
+        results.extend(
+            _make_result(category='GROUP_B', severity=Severity.HIGH, passed=False, attack_id=f'b-high-{i}')
+            for i in range(100)
+        )
+        results.extend(
+            [
+                _make_result(category='GROUP_B', severity=Severity.MEDIUM, passed=True, attack_id='b-medium'),
+                _make_result(category='GROUP_B', severity=Severity.LOW, passed=True, attack_id='b-low'),
+            ]
+        )
+
+        report = _make_report(results, tested_agents=['agent-a'])
+        rp = rt / 'rt_stacked_counts_20260101.json'
+        rp.write_text(report.model_dump_json())
+        app = build_app(roots=[rt])
+        rid = report_id(rp)
+        html = TestClient(app, raise_server_exceptions=True).get(
+            f'/r/{rid}/view/breakdown?group_by=category&stack_by=severity'
+        ).text
+        specs = re.findall(r'<script[^>]+data-vega-for[^>]*>(.*?)</script>', html, re.DOTALL)
+        assert specs, f'No embedded Vega spec found in HTML:\n{html[:800]}'
+        spec = json.loads(specs[0].replace('<\\/', '</'))
+
+        assert spec['encoding']['x']['title'] == 'Vulnerable attacks'
+        rows = spec['data']['values']
+        assert sum(row['value'] for row in rows if row['label'] == 'GROUP_A') == 2
+        assert sum(row['value'] for row in rows if row['label'] == 'GROUP_B') == 100
+        assert [row['label'] for row in rows if row['series'] == rows[0]['series']] == ['GROUP_B', 'GROUP_A']
+        assert spec['encoding']['tooltip']
+        assert {item['field'] for item in spec['encoding']['tooltip']} >= {'asr', 'evaluated'}
+
     def test_asr_evaluated_set_denominator_matches_static_report(self, tmp_path: Path) -> None:
         """Regression guard: interactive breakdown ASR == static report ASR on evaluated-set denominator.
 
