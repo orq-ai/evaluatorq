@@ -12,6 +12,7 @@ import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -119,6 +120,45 @@ class TestSimRecommendationsTab:
 
 
 class TestSimPreview:
+    def test_preview_applies_fenced_edits_response(self, sim_apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
+        client, rid, path = sim_apply_client
+
+        class FakeAgents:
+            def retrieve(self, agent_key):
+                return SimpleNamespace(instructions='Old rules.')
+
+        fake_orq = SimpleNamespace(agents=FakeAgents())
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda: (fake_orq, object(), 'm'))
+
+        from evaluatorq.common import apply as common_apply
+
+        chat = AsyncMock(
+            return_value=(
+                SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            message=SimpleNamespace(
+                                content='```json\n{"edits": [{"find": "Old rules.", "replace": "Old rules.\\nRefund policy first."}]}\n```'
+                            )
+                        )
+                    ]
+                ),
+                None,
+            )
+        )
+        monkeypatch.setattr(common_apply, 'execute_chat_completion', chat)
+
+        r = client.post(
+            f'/r/{rid}/sim/apply/preview',
+            data={apply_mod.CSRF_FIELD: apply_mod._CSRF_TOKEN, 'agent_key': 'agent-sim'},
+        )
+
+        assert r.status_code == 200
+        assert 'Refund policy first.' in r.text
+        assert 'rt-diff' in r.text
+        assert chat.await_count == 1
+        assert json.loads(path.read_text()).get('applied_suggestions', []) == []
+
     def test_preview_renders_diff_and_sim_confirm(self, sim_apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
         client, rid, path = sim_apply_client
         monkeypatch.setattr(apply_mod, '_build_clients', lambda: (object(), object(), 'm'))
