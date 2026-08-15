@@ -1141,6 +1141,10 @@ def _redteam_run_stats(path_str: str, mtime_ns: int) -> _RedTeamRunStats | None:
     if cost is None and usage is None:
         # Legacy reports keep usage on each result rather than in the summary.
         # A zero derived total means no readable cost was recorded, not a free run.
+        logger.warning(
+            'redteam run {} has no summary token_usage_total; falling back to legacy per-result cost',
+            path_str,
+        )
         cost = counts.cost or None
     return _RedTeamRunStats(
         attacks=counts.attacks,

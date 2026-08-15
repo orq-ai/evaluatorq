@@ -234,6 +234,22 @@ def test_compare_empty_runs_render_na_kpis_without_failure(tmp_path: Path):
     assert html.count('n/a') >= 2
     assert '-100%' not in html
     assert 'kpi-card kpi-card--fail' not in html
+    assert 'Outcomes' in html
+    assert 'No outcome data' in html
+
+
+def test_compare_partially_empty_run_keeps_outcomes_panel(tmp_path: Path):
+    sim = tmp_path / 'sim-runs'
+    sim.mkdir()
+    (sim / 'a.json').write_text(_run('empty-A', [], {}).model_dump_json())
+    (sim / 'b.json').write_text(_run('nonempty-B', [_result('alice', 'billing', goal=True, score=1.0, turns=1)], {}).model_dump_json())
+    rid_a = report_id(sim / 'a.json')
+    rid_b = report_id(sim / 'b.json')
+
+    html = TestClient(build_app([tmp_path / 'runs', sim])).get(f'/compare/sim?a={rid_a}&b={rid_b}').text
+
+    assert 'Outcomes' in html
+    assert 'Outcome data requires entries from both runs' in html
 
 
 def test_compare_disjoint_scorers_render_measured_by_one_run_note(tmp_path: Path):
