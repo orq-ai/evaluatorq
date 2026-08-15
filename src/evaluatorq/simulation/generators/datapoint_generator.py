@@ -9,7 +9,7 @@ import asyncio
 import logging
 from itertools import starmap
 from typing import Any
-from weakref import WeakKeyDictionary
+from weakref import WeakValueDictionary
 
 from evaluatorq.simulation.generators.first_message_generator import (
     FirstMessageGenerator,
@@ -51,7 +51,7 @@ class DatapointGenerator:
         # Semaphores bind to the event loop that first waits on them. Keep one
         # lazily-created semaphore per loop so concurrent calls share the cap
         # without carrying a semaphore across loop boundaries.
-        self._semaphores: WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = WeakKeyDictionary()
+        self._semaphores: WeakValueDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = WeakValueDictionary()
 
         from evaluatorq.openresponses.client import build_simulation_client
 

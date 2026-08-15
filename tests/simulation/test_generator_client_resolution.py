@@ -1,6 +1,7 @@
 import asyncio
+import gc
 from typing import Any, cast
-from weakref import WeakKeyDictionary
+from weakref import WeakValueDictionary
 
 import pytest
 
@@ -91,7 +92,7 @@ def test_datapoint_generator_can_cross_event_loop_boundaries(monkeypatch):
     generator = cast(Any, object.__new__(DatapointGenerator))
     generator._rate_limit_delay = 0.0
     generator._max_concurrent_calls = 1
-    generator._semaphores = WeakKeyDictionary()
+    generator._semaphores = WeakValueDictionary()
     generator._first_message_generator = FakeFirstMessageGenerator()
     monkeypatch.setattr(dpg_mod, 'generate_datapoint', lambda *args: object())
 
@@ -100,6 +101,32 @@ def test_datapoint_generator_can_cross_event_loop_boundaries(monkeypatch):
 
     assert len(asyncio.run(generate())) == 2
     assert len(asyncio.run(generate())) == 2
+
+
+def test_datapoint_generator_releases_closed_loop_semaphores(monkeypatch):
+    from evaluatorq.simulation.generators import datapoint_generator as dpg_mod
+    from evaluatorq.simulation.generators.datapoint_generator import DatapointGenerator
+
+    class FakeFirstMessageGenerator:
+        async def generate(self, persona, scenario):
+            await asyncio.sleep(0)
+            return 'opening message'
+
+    generator = cast(Any, object.__new__(DatapointGenerator))
+    generator._rate_limit_delay = 0.0
+    generator._max_concurrent_calls = 1
+    generator._semaphores = WeakValueDictionary()
+    generator._first_message_generator = FakeFirstMessageGenerator()
+    monkeypatch.setattr(dpg_mod, 'generate_datapoint', lambda *args: object())
+
+    async def generate() -> list[Any]:
+        return await generator.generate_from_combinations([object(), object()], [object()])
+
+    for _ in range(3):
+        asyncio.run(generate())
+
+    gc.collect()
+    assert len(generator._semaphores) == 0
 
 
 def test_datapoint_generator_shares_the_cap_across_concurrent_calls(monkeypatch):
@@ -123,7 +150,7 @@ def test_datapoint_generator_shares_the_cap_across_concurrent_calls(monkeypatch)
     generator = cast(Any, object.__new__(DatapointGenerator))
     generator._rate_limit_delay = 0.0
     generator._max_concurrent_calls = 2
-    generator._semaphores = WeakKeyDictionary()
+    generator._semaphores = WeakValueDictionary()
     generator._first_message_generator = FakeFirstMessageGenerator()
     monkeypatch.setattr(dpg_mod, 'generate_datapoint', lambda *args: object())
 
