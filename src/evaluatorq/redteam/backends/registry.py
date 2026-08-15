@@ -99,11 +99,21 @@ def _create_openai_backend(
     llm_client: AsyncOpenAI | None = None,
     target_config: TargetConfig | None = None,
     pipeline_config: LLMConfig | None = None,
+    retry_count: int | None = None,
+    retry_on_codes: list[int] | None = None,
     **_: object,
 ) -> Backend:
     from evaluatorq.redteam.backends.openai import OpenAIBackend
 
     system_prompt = target_config.system_prompt if target_config else None
+    # The orchestrator's call_target_with_retry is the single retry owner for
+    # OpenAI target calls. Do not silently accept pipeline retry settings that
+    # cannot affect this target path.
+    if pipeline_config is not None or retry_count is not None or retry_on_codes is not None:
+        logger.warning(
+            'Ignoring retry_count and retry_on_codes for OpenAI target calls; '
+            'call_target_with_retry owns target retries'
+        )
     # Forward the pipeline timeout like the orq/openresponses factories do —
     # without it the backend's timeout_ms plumbing is never fed from config.
     # max_tokens stays unfed on purpose: LLMConfig has no target-level token

@@ -7,6 +7,8 @@ deterministic ``BlackboxCapabilityInference``. No network, no real agent.
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -281,7 +283,7 @@ async def test_one_flaky_probe_does_not_abort_classification() -> None:
 
         async def respond(self, messages: list[Message]) -> AgentResponse:
             self.n += 1
-            if self.n == 1:
+            if self.n <= 3:
                 raise RuntimeError('transient')
             return AgentResponse(text='ok')
 
@@ -293,9 +295,9 @@ async def test_one_flaky_probe_does_not_abort_classification() -> None:
 
     result = await classify_agent_capabilities_blackbox(target, client, model='m')
 
-    # The failing turn is the memory WRITE: without it the recall tests
-    # nothing, so memory is a coverage gap and the flag goes optimistic —
-    # but classification still completes and the other groups still report.
+    # The failing turn exhausts the helper's three-attempt budget: without a
+    # successful write the recall tests nothing, so memory is a coverage gap
+    # and the flag goes optimistic — but other groups still report.
     assert result.classification_failed is True
     assert result.all_capabilities() == {'knowledge_retrieval'}
     # The judge was still called despite the one failure.
@@ -401,7 +403,11 @@ async def test_flaky_probe_turn_not_left_in_transcript() -> None:
         def new(self) -> AgentTarget:
             return _SecondFails()
 
-    transcript, _ = await _run_probes(_SecondFails())
+    transcript, _ = await _run_probes(
+        _SecondFails(),
+        target_agent_timeout_ms=240_000,
+        max_target_retries=2,
+    )
 
     users = sum(1 for m in transcript if m.role == 'user')
     assistants = sum(1 for m in transcript if m.role == 'assistant')
@@ -567,3 +573,18 @@ async def test_target_status_error_propagates() -> None:
 
     with pytest.raises(APIStatusError):
         await classify_agent_capabilities_blackbox(_StatusError(), _judge(), model='m')
+
+
+def test_probe_path_routes_target_calls_through_shared_helper() -> None:
+    """Probe code must not regain a direct ``AgentTarget.respond`` call."""
+    source_path = Path(__file__).parents[2] / 'src/evaluatorq/redteam/adaptive/blackbox_classifier.py'
+    tree = ast.parse(source_path.read_text(encoding='utf-8'))
+    direct_calls = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'respond'
+    ]
+    assert direct_calls == [], (
+        f'{source_path.name} contains direct target.respond() call(s) on line(s) {direct_calls}; '
+        'use common.target_call.call_target_with_retry'
+    )
