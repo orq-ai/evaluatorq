@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from openai import APIConnectionError, BadRequestError
@@ -18,6 +19,12 @@ from evaluatorq.contracts import LLMCallConfig
 class Verdict(BaseModel):
     value: bool
     explanation: str
+
+
+class AbstainingVerdict(BaseModel):
+    value: bool
+    explanation: str
+    abstain: bool
 
 
 ORQ_URL = 'https://my.orq.ai/v3/router'
@@ -119,6 +126,30 @@ async def test_orq_client_uses_responses_and_qualifies_the_model():
     assert client.models == ['openai/gpt-5-mini']
     assert outcome.payload is not None and outcome.payload.value is True
     assert outcome.token_usage is not None and outcome.token_usage.total_cost == 0.25
+
+
+@pytest.mark.asyncio
+async def test_responses_payload_rebuild_preserves_abstain(monkeypatch: pytest.MonkeyPatch):
+    parsed = AbstainingVerdict(value=False, explanation='uncertain', abstain=True)
+
+    async def fake_execute_response(**_kwargs: Any) -> tuple[Any, Any]:
+        return SimpleNamespace(output_parsed=parsed, output_text=parsed.model_dump_json()), None
+
+    monkeypatch.setattr(judge_mod, 'execute_response', fake_execute_response)
+    outcome = await judge_mod._responses_judge(
+        client=MagicMock(),
+        model='m',
+        cfg=LLMCallConfig(),
+        system_prompt='sys',
+        user_prompt='user',
+        span=None,
+        temp=None,
+        response_model=AbstainingVerdict,
+    )
+
+    assert outcome.payload is not None
+    assert outcome.payload.value is False
+    assert outcome.payload.abstain is True
 
 
 @pytest.mark.asyncio
