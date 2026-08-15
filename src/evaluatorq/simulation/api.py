@@ -670,7 +670,7 @@ async def _generate_datapoints_inner(
     from evaluatorq.openresponses.client import build_simulation_client
     from evaluatorq.simulation.hooks import DefaultHooks
 
-    gen_client, gen_owned = build_simulation_client(generation_client, max_retries=0)
+    gen_client, gen_owned = build_simulation_client(generation_client)
     try:
         gen_hooks = hooks or DefaultHooks()
         gen_personas, gen_scenarios = await _generate_personas_scenarios(
@@ -1161,7 +1161,7 @@ async def _generate_personas_scenarios(
     from evaluatorq.simulation.exceptions import SimulationError
     from evaluatorq.simulation.generators import PersonaGenerator, ScenarioGenerator
 
-    gen_client, gen_owned = build_simulation_client(generation_client, max_retries=0)
+    gen_client, gen_owned = build_simulation_client(generation_client)
     try:
         persona_gen = PersonaGenerator(model=model, client=gen_client)
         scenario_gen = ScenarioGenerator(model=model, client=gen_client)
@@ -1649,7 +1649,7 @@ async def _resolve_or_generate_datapoints(
     from evaluatorq.simulation.generators import FirstMessageGenerator
     from evaluatorq.simulation.tracing import with_simulation_span
 
-    gen_client, gen_owned = build_simulation_client(generation_client, max_retries=0)
+    gen_client, gen_owned = build_simulation_client(generation_client)
     try:
         first_msg_gen = FirstMessageGenerator(model=model, client=gen_client)
         pairs = [(p, s) for p in personas for s in scenarios]

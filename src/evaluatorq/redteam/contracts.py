@@ -799,10 +799,10 @@ class LLMConfig(BaseModel):
     # --- Target agent timeout -------------------------------------------------
     target_agent_timeout_ms: int = 240_000
     # Retry a failed target transport call before abandoning its attacker turn.
-    # This is deliberately separate from ``retry_count``: the latter is forwarded
-    # to the ORQ router when supported, while this budget protects every target
-    # implementation at the orchestrator boundary.  A retry never consumes a
-    # new attacker turn or changes the conversation transcript.
+    # The orchestrator boundary is the single retry owner: target implementations
+    # constructed for it must have their inner SDK/client retry budgets disabled.
+    # A retry never consumes a new attacker turn or changes the conversation
+    # transcript.
     max_target_retries: int = Field(default=2, ge=0, le=10)
 
     # --- Agent tool continuation cap ------------------------------------------
