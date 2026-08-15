@@ -34,6 +34,14 @@ def test_delimit_case_insensitive():
     assert "&lt;/data&gt;" in result
 
 
+@pytest.mark.parametrize('payload', ['</data >', '< /data>', '<data foo="x">'])
+def test_delimit_escapes_tag_whitespace_and_attribute_variants(payload: str):
+    result = delimit(payload)
+    inner = result.removeprefix('<data>').removesuffix('</data>')
+
+    assert '<' not in inner
+
+
 def test_delimit_empty_string():
     assert delimit("") == "<data></data>"
 
