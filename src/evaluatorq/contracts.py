@@ -119,6 +119,8 @@ else:
 
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from openai import AsyncOpenAI
 
     _Client: TypeAlias = AsyncOpenAI | None
@@ -329,6 +331,39 @@ class Message(BaseModel):
                 ],
             }
         return {'role': self.role, 'content': _render_chat_content(self.content)}
+
+
+def render_tool_call(
+    item: ToolCallOutputItem,
+    *,
+    warn: Callable[[str], None] | None = None,
+) -> tuple[StrategyToolCall, Message] | None:
+    """Render one completed tool call as its paired transcript messages.
+
+    A function call without a result cannot be replayed safely: emitting its
+    assistant row would leave an unpaired ``function_call`` on either provider
+    contract. Such calls are dropped and logged. An empty string is a valid result
+    and is therefore retained.
+    """
+    if item.result is None:
+        warning = warn or logger.warning
+        warning(
+            f'Dropping tool call {item.call_id!r} ({item.name!r}): result is None, '
+            'so no paired tool message can be emitted.'
+        )
+        return None
+    tool_call = StrategyToolCall(
+        id=item.call_id,
+        item_id=item.id or None,
+        function=FunctionCall(name=item.name, arguments=item.arguments),
+    )
+    tool_message = Message(
+        role='tool',
+        tool_call_id=item.call_id,
+        name=item.name,
+        content=item.result,
+    )
+    return tool_call, tool_message
 
 
 def _usage_get(usage: Any, key: str, default: Any = None) -> Any:
@@ -1570,5 +1605,6 @@ __all__ = [
     'ToolInfo',
     'Usage',
     'content_to_text',
+    'render_tool_call',
     'tool_result_to_text',
 ]

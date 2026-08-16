@@ -405,6 +405,7 @@ from evaluatorq.contracts import (  # noqa: F401
     StrategyToolCall,
     TextOutputItem,
     ToolCallOutputItem,
+    render_tool_call,
 )
 
 # ---------------------------------------------------------------------------
@@ -1055,10 +1056,11 @@ def turns_to_messages(turns: list[Turn], *, skip_errors: bool = False) -> list[M
 
     Each turn becomes a ``user`` message (the attacker prompt) followed by the
     target's output rows: consecutive text runs collapse into one ``assistant``
-    message; each tool call becomes an ``assistant`` message with one
-    ``tool_calls`` entry, plus a following ``tool`` row when ``result`` is set;
-    reasoning items are dropped. An empty target output still emits an empty
-    ``assistant`` row so consumers can rely on a user/assistant pair per turn.
+    message; each completed tool call becomes an ``assistant`` message with one
+    ``tool_calls`` entry plus its following ``tool`` row; calls without a result
+    are dropped because they cannot form a valid pair. Reasoning items are
+    dropped. An empty target output still emits an empty ``assistant`` row so
+    consumers can rely on a user/assistant pair per turn.
 
     When ``skip_errors`` is True, turns whose target carries an
     `evaluatorq.contracts.AgentResponseError` are omitted entirely — used
@@ -1083,28 +1085,18 @@ def turns_to_messages(turns: list[Turn], *, skip_errors: bool = False) -> list[M
                 text_buffer.append(item.text)
             elif isinstance(item, ToolCallOutputItem):
                 _flush_text()
-                out.append(
+                rendered = render_tool_call(item)
+                if rendered is None:
+                    continue
+                tool_call, tool_message = rendered
+                out.extend([
                     Message(
                         role='assistant',
                         content=None,
-                        tool_calls=[
-                            StrategyToolCall(
-                                id=item.call_id,
-                                item_id=item.id or None,
-                                function=FunctionCall(name=item.name, arguments=item.arguments),
-                            )
-                        ],
-                    )
-                )
-                if item.result is not None:
-                    out.append(
-                        Message(
-                            role='tool',
-                            tool_call_id=item.call_id,
-                            name=item.name,
-                            content=item.result,
-                        )
-                    )
+                        tool_calls=[tool_call],
+                    ),
+                    tool_message,
+                ])
             # ReasoningOutputItem intentionally dropped.
         _flush_text()
         # Alternation invariant: every user row must be followed by an assistant row.
