@@ -291,8 +291,9 @@ async def test_streaming_fetch_failure_cancels_in_flight_datapoints(
 @pytest.mark.asyncio
 async def test_streaming_polling_and_processing_failures_are_both_surfaced(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A polling failure must not hide a processing failure from the caller."""
+    """A polling failure is logged without hiding a processing failure from the caller."""
     evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
     progress_updates = 0
 
@@ -323,7 +324,7 @@ async def test_streaming_polling_and_processing_failures_are_both_surfaced(
     monkeypatch.setattr(evaluatorq_module, 'process_data_point', failing_processing)
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
 
-    with pytest.raises(RuntimeError) as exc_info:
+    with caplog.at_level('WARNING'), pytest.raises(RuntimeError) as exc_info:
         await evaluatorq_module.evaluatorq(
             'streaming-multiple-failures',
             data=DatasetIdInput(dataset_id='dataset'),
@@ -332,16 +333,29 @@ async def test_streaming_polling_and_processing_failures_are_both_surfaced(
             _send_results=False,
         )
 
-    assert 'polling failed' in str(exc_info.value)
     assert 'processing failed' in str(exc_info.value)
+    assert 'polling failed' not in str(exc_info.value)
+    assert 'Progress polling stopped after display failure' in caplog.text
+    assert 'RuntimeError' in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_streaming_processing_cancellation_is_surfaced(
+async def test_streaming_progress_failure_returns_completed_results(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A cancelled processing task must not be mistaken for the polling task."""
+    """A progress display fault degrades to a warning after processing completes."""
     evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
+    progress_failed = asyncio.Event()
+    progress_updates = 0
+
+    class ProgressFailureService:
+        async def update_progress(self, **_kwargs: object) -> None:
+            nonlocal progress_updates
+            progress_updates += 1
+            if progress_updates == 2:
+                progress_failed.set()
+                raise BrokenPipeError('progress pipe closed')
 
     async def fetch_one_batch(*_args: object, **_kwargs: object):
         yield DataPointBatch(
@@ -349,12 +363,57 @@ async def test_streaming_processing_cancellation_is_surfaced(
             has_more=False,
             batch_number=1,
         )
+        await progress_failed.wait()
 
-    async def cancelled_processing(*_args: object, **_kwargs: object) -> list[object]:
+    async def job(_data: DataPoint, _row: int):
+        return {'name': 'job', 'output': 'output'}
+
+    monkeypatch.setattr(evaluatorq_module, 'ProgressService', ProgressFailureService)
+    monkeypatch.setattr(evaluatorq_module, 'setup_orq_client', lambda _api_key: object())
+    monkeypatch.setattr(evaluatorq_module, 'fetch_dataset_batches', fetch_one_batch)
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+
+    with caplog.at_level('WARNING'):
+        results = await evaluatorq_module.evaluatorq(
+            'streaming-progress-failure',
+            data=DatasetIdInput(dataset_id='dataset'),
+            jobs=[job],
+            print_results=False,
+            _send_results=False,
+        )
+
+    assert len(results) == 1
+    assert 'Progress polling stopped after display failure' in caplog.text
+    assert 'BrokenPipeError' in caplog.text
+    assert 'progress pipe closed' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_streaming_processing_cancellation_is_surfaced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A self-cancelled task is surfaced while fetch- and poller-cancelled tasks are filtered."""
+    evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
+    processing_cancelled = asyncio.Event()
+
+    async def fetch_one_batch(*_args: object, **_kwargs: object):
+        yield DataPointBatch(
+            datapoints=[DataPoint(inputs={'row': 0}), DataPoint(inputs={'row': 1})],
+            has_more=False,
+            batch_number=1,
+        )
+        await processing_cancelled.wait()
+        await asyncio.sleep(0)
+        raise RuntimeError('fetch failed after processing cancellation')
+
+    async def cancelled_processing(_data: DataPoint, row: int, *_args: object) -> list[object]:
         task = asyncio.current_task()
         assert task is not None
-        task.cancel()
-        await asyncio.sleep(0)
+        if row == 0:
+            task.cancel()
+            processing_cancelled.set()
+            await asyncio.sleep(0)
+        await asyncio.Event().wait()
         return []
 
     async def job(_data: DataPoint, _row: int):
@@ -365,7 +424,7 @@ async def test_streaming_processing_cancellation_is_surfaced(
     monkeypatch.setattr(evaluatorq_module, 'process_data_point', cancelled_processing)
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
 
-    with pytest.raises(asyncio.CancelledError):
+    with pytest.raises(RuntimeError) as exc_info:
         await evaluatorq_module.evaluatorq(
             'streaming-processing-cancellation',
             data=DatasetIdInput(dataset_id='dataset'),
@@ -374,10 +433,20 @@ async def test_streaming_processing_cancellation_is_surfaced(
             _send_results=False,
         )
 
+    streaming_error_type = getattr(evaluatorq_module, '_StreamingEvaluationError', None)
+    assert streaming_error_type is not None
+    assert isinstance(exc_info.value, streaming_error_type)
+    streaming_errors = getattr(exc_info.value, 'errors', None)
+    assert isinstance(streaming_errors, list)
+    assert len(streaming_errors) == 2
+    assert any(isinstance(error, RuntimeError) and 'fetch failed' in str(error) for error in streaming_errors)
+    assert sum(isinstance(error, asyncio.CancelledError) for error in streaming_errors) == 1
+
 
 @pytest.mark.asyncio
 async def test_streaming_caller_cancellation_wins_over_processing_failure(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Caller cancellation must not be wrapped with a coincident task failure."""
     evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
@@ -417,7 +486,7 @@ async def test_streaming_caller_cancellation_wins_over_processing_failure(
     cancellation_task = asyncio.create_task(cancel_caller())
 
     try:
-        with pytest.raises(asyncio.CancelledError):
+        with caplog.at_level('WARNING'), pytest.raises(asyncio.CancelledError) as exc_info:
             await evaluatorq_module.evaluatorq(
                 'streaming-caller-cancellation',
                 data=DatasetIdInput(dataset_id='dataset'),
@@ -425,6 +494,10 @@ async def test_streaming_caller_cancellation_wins_over_processing_failure(
                 print_results=False,
                 _send_results=False,
             )
+        streaming_error_type = getattr(evaluatorq_module, '_StreamingEvaluationError', ())
+        assert not isinstance(exc_info.value, streaming_error_type)
+        assert 'RuntimeError' in caplog.text
+        assert 'processing failed' in caplog.text
     finally:
         await cancellation_task
 

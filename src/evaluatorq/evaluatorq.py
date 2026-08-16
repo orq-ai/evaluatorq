@@ -1,6 +1,5 @@
 import asyncio
 import os
-import sys
 from collections.abc import Awaitable, Sequence
 from contextlib import AsyncExitStack
 from datetime import datetime, timezone
@@ -122,7 +121,6 @@ async def evaluatorq(
     path: str | None = None,
     inference: bool = True,
     single_trace: bool = False,
-    _exit_on_failure: bool = False,
     _send_results: bool = True,
     _base_url: str | None = None,
     _trace_type: str = 'evaluatorq',
@@ -165,10 +163,6 @@ async def evaluatorq(
         single_trace: Group every row under one ``evaluatorq.run`` span so the whole
               evaluation is a single trace. Defaults to False, which leaves each row's
               ``orq.job`` as its own root — an N-row run is then N separate traces.
-        _exit_on_failure: Whether to exit the process when an evaluator fails.
-              Defaults to False for library callers, who receive the failed result
-              with ``pass_=False`` and no ``SystemExit``. CLI users still get a
-              non-zero exit from the redteam and simulation command failure gates.
 
     Returns:
         List of DataPointResult objects
@@ -340,13 +334,22 @@ async def evaluatorq(
                 stop_polling = False
 
                 async def poll_progress():
-                    while not stop_polling:
-                        await progress.update_progress(
-                            total_data_points=total_datapoints,
-                            current_data_point=progress_ref['processed'],
-                            phase=Phase.PROCESSING if progress_ref['processed'] > 0 else Phase.FETCHING,
+                    try:
+                        while not stop_polling:
+                            await progress.update_progress(
+                                total_data_points=total_datapoints,
+                                current_data_point=progress_ref['processed'],
+                                phase=Phase.PROCESSING if progress_ref['processed'] > 0 else Phase.FETCHING,
+                            )
+                            await asyncio.sleep(0.1)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 - display faults must not fail a completed run
+                        logger.warning(
+                            'Progress polling stopped after display failure: {}: {}',
+                            type(exc).__name__,
+                            exc,
                         )
-                        await asyncio.sleep(0.1)
 
                 polling_task = asyncio.create_task(poll_progress())
                 fetch_error: BaseException | None = None
@@ -374,7 +377,7 @@ async def evaluatorq(
                     stop_polling = True
                     if fetch_error is not None:
                         for task in processing_tasks:
-                            if not task.done() and task.cancelling() == 0:
+                            if not task.done():
                                 task.cancel()
                                 cancelled_for_fetch.add(task)
                     _ = polling_task.cancel()
@@ -389,20 +392,21 @@ async def evaluatorq(
 
                 # A cancellation delivered to the caller while fetching must retain
                 # asyncio's cancellation semantics, even if processing failed too.
-                if isinstance(fetch_error, asyncio.CancelledError):
-                    raise fetch_error
-
                 task_errors = [
                     result
                     for task, result in zip(processing_tasks, processing_results, strict=True)
                     if isinstance(result, BaseException)
                     and not (isinstance(result, asyncio.CancelledError) and task in cancelled_for_fetch)
                 ]
-                task_errors.extend(
-                    result
-                    for result in polling_result
-                    if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError)
-                )
+                if isinstance(fetch_error, asyncio.CancelledError):
+                    for error in task_errors:
+                        logger.warning(
+                            'Discarding processing task error while caller cancellation wins: {}: {}',
+                            type(error).__name__,
+                            error,
+                        )
+                    raise fetch_error
+
                 errors = ([fetch_error] if fetch_error is not None else []) + task_errors
                 if errors:
                     if len(errors) == 1:
@@ -489,12 +493,5 @@ async def evaluatorq(
             # sink list (e.g. simulation persists it on the SimulationRun report).
             if _experiment_url_out is not None and upload_response is not None and upload_response.experiment_url:
                 _experiment_url_out.append(upload_response.experiment_url)
-
-        # Check for pass failures and exit if any. In no-inference mode a row that has no
-        # usable recorded response surfaces as a job error rather than an evaluator score,
-        # so count those errors as failures too (the mode must fail loudly, not exit 0).
-        has_failures = check_pass_failures(results, treat_errors_as_failure=not inference)
-        if has_failures and _exit_on_failure:
-            sys.exit(1)
 
         return results
