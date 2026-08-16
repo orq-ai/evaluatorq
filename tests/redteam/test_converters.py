@@ -1115,6 +1115,23 @@ class TestStaticEvaluatorqResults:
         assert result.evaluation.value is True
         assert result.evaluation.passed is True
 
+    def test_result_without_job_results_is_retained_as_pre_execution_error(self):
+        result = SimpleNamespace(
+            data_point=SimpleNamespace(inputs={'id': 'static-pre-execution-001', 'category': 'ASI01'}),
+            job_results=[],
+            error='RuntimeError: static row failed before execution',
+        )
+
+        reports = static_evaluatorq_results_to_reports(results=[result], agent_key='my-agent')
+
+        assert set(reports) == {'pre-execution'}
+        report = reports['pre-execution']
+        assert report.results == []
+        assert len(report.errors) == 1
+        assert report.errors[0].message == 'RuntimeError: static row failed before execution'
+        assert report.summary.pre_execution_errors == 1
+        assert report.summary.total_errors == 1
+
     def test_multiple_jobs_produce_separate_reports(self):
         mock_a = _make_static_mock_result(job_name='job-a', final_response='resp-a')
         mock_b = _make_static_mock_result(job_name='job-b', final_response='resp-b')

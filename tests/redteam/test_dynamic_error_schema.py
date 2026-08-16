@@ -92,6 +92,28 @@ def test_dynamic_results_to_report_surfaces_job_result_error_without_output() ->
     assert row.vulnerable is None
 
 
+def test_dynamic_results_to_report_retains_result_without_data_point(caplog: Any) -> None:
+    result = _FakeResult(
+        data_point=None,  # type: ignore[arg-type]
+        job_results=[],
+        error='RuntimeError: data point construction failed',
+    )
+
+    with caplog.at_level('WARNING'):
+        report = dynamic_evaluatorq_results_to_report(
+            agent_context=AgentContext(key='custom-1'),
+            results=[result],
+            description='missing data point test',
+        )
+
+    assert report.results == []
+    assert len(report.errors) == 1
+    assert report.errors[0].message == 'RuntimeError: data point construction failed'
+    assert report.summary.pre_execution_errors == 1
+    assert report.summary.total_errors == 1
+    assert any('without a data point' in record.message.lower() for record in caplog.records)
+
+
 def test_dynamic_results_to_report_reports_pre_execution_row_without_an_attack(caplog: Any) -> None:
     """processings.py's process_data_point returns DataPointResult(data_point=DataPoint(inputs={}),
     error=str(error), job_results=None) when the data point itself raised before any job ran.
@@ -158,6 +180,9 @@ def test_dynamic_results_to_report_reports_pre_execution_row_without_an_attack(c
     assert good_row.vulnerable is False
 
     assert any('strategy' in record.message.lower() for record in caplog.records)
+
+    category_total = sum(category.total_attacks for category in report.summary.by_category.values())
+    assert category_total == report.summary.total_attacks
 
 
 def test_dynamic_results_to_report_maps_error_stage_code_and_details() -> None:

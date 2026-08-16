@@ -269,11 +269,18 @@ def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
         # AgentResponse.output is a list[OutputMessage], which does not validate against
         # JobOutputPayload.output: str | None — map the fields explicitly instead of
         # letting model_validate fail and fall through to an empty payload.
+        error_fields = TargetCallResult(
+            response=raw_output,
+            succeeded=raw_output.error is None,
+            attempts=1,
+            error=raw_output.error,
+            error_details=None,
+        ).error_payload()
         return JobOutputPayload(
             final_response=raw_output.text,
             response=raw_output.text,
             token_usage=raw_output.usage,
-            error=raw_output.error.message if raw_output.error else None,
+            **error_fields,
             # ponytail: the assistant turn only. An AgentResponse carries no request
             # side, so there is no fuller conversation to reconstruct here.
             conversation=[Message(role='assistant', content=raw_output.text)] if raw_output.text else [],
@@ -510,6 +517,7 @@ def static_results_to_report(
     agent_model: str | None = None,
     agent_key: str | None = None,
     description: str | None = None,
+    run_errors: list[RunError] | None = None,
 ) -> RedTeamReport:
     """Bulk-convert static pipeline results to a unified RedTeamReport.
 
@@ -522,7 +530,8 @@ def static_results_to_report(
         RedTeamReport with computed summary.
     """
     unified = [static_sample_to_result(s, agent_model=agent_model, agent_key=agent_key) for s in results]
-    summary = compute_report_summary(unified)
+    run_errors = run_errors or []
+    summary = compute_report_summary(unified, run_errors=run_errors)
     categories = sorted({r.attack.category for r in unified})
 
     return RedTeamReport(
@@ -533,6 +542,7 @@ def static_results_to_report(
         categories_tested=categories,
         tested_agents=[agent_key] if agent_key else [],
         total_results=len(unified),
+        errors=run_errors,
         results=unified,
         summary=summary,
     )
@@ -567,6 +577,10 @@ def dynamic_evaluatorq_results_to_report(
     for result in results:
         data_point = getattr(result, 'data_point', None)
         if data_point is None:
+            _converters_logger.warning(
+                'Skipping dynamic result without a data point; recording as pre-execution run error'
+            )
+            run_errors.append(_pre_execution_error(result, {}))
             continue
 
         inputs = getattr(data_point, 'inputs', {}) or {}
@@ -750,10 +764,19 @@ def static_evaluatorq_results_to_reports(
 ) -> dict[str, RedTeamReport]:
     """Convert evaluatorq static results into per-job unified reports."""
     samples_by_job: dict[str, list[dict[str, Any]]] = {}
+    errors_by_job: dict[str, list[RunError]] = {}
 
     for result in results:
         data_point = getattr(result, 'data_point', None)
         inputs = getattr(data_point, 'inputs', {}) if data_point is not None else {}
+        job_results = getattr(result, 'job_results', None) or []
+        if not job_results:
+            job_name = getattr(result, 'job_name', None) or 'pre-execution'
+            _converters_logger.warning(
+                'Static result for job %r has no job results; recording as pre-execution run error', job_name
+            )
+            errors_by_job.setdefault(job_name, []).append(_pre_execution_error(result, inputs))
+            continue
         normalized_category = normalize_category(inputs.get('category', ''))
         evaluator_meta = get_evaluator_metadata_for_category(normalized_category) or {}
         vuln = resolve_category_safe(normalized_category)
@@ -778,7 +801,6 @@ def static_evaluatorq_results_to_reports(
         }
 
         dp_error = getattr(result, 'error', None)
-        job_results = getattr(result, 'job_results', None) or []
         for job_result in job_results:
             job_name = job_result.job_name
 
@@ -827,12 +849,13 @@ def static_evaluatorq_results_to_reports(
             samples_by_job.setdefault(job_name, []).append(sample)
 
     reports: dict[str, RedTeamReport] = {}
-    for job_name, samples in samples_by_job.items():
+    for job_name in sorted(set(samples_by_job) | set(errors_by_job)):
         reports[job_name] = static_results_to_report(
-            samples,
+            samples_by_job.get(job_name, []),
             agent_model=agent_model,
             agent_key=agent_key,
             description=f'{description or "Static red teaming"} ({job_name})',
+            run_errors=errors_by_job.get(job_name),
         )
 
     return reports

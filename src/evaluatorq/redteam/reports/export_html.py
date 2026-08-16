@@ -72,13 +72,16 @@ def _render_donut_chart(summary_data: dict[str, Any]) -> str:
     """Donut: resistant vs vulnerable vs errors for the executive summary."""
     vuln = summary_data.get('vulnerabilities_found', 0)
     total = summary_data.get('total_attacks', 0)
-    errors = summary_data.get('total_errors', 0)
-    resistant = max(0, total - vuln - errors)
+    evaluated = summary_data.get('evaluated_attacks')
+    attack_errors = summary_data.get('unevaluated_attacks')
+    if attack_errors is None:
+        attack_errors = max(0, total - (evaluated or 0))
+    resistant = max(0, total - vuln - attack_errors)
     if total == 0:
         return ''
     return _render_donut_chart_common(
         labels=['Resistant', 'Vulnerable', 'Error'],
-        values=[resistant, vuln, errors],
+        values=[resistant, vuln, attack_errors],
         colors=[
             _STATUS_COLORS['resistant'],
             _STATUS_COLORS['vulnerable'],
