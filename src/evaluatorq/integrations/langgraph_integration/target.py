@@ -25,6 +25,7 @@ from evaluatorq.contracts import (
     ToolCallOutputItem,
     ToolInfo,
     content_to_text,
+    tool_result_to_text,
 )
 
 if TYPE_CHECKING:
@@ -50,7 +51,7 @@ def _lc_content_to_text(content: Any) -> str:
     if isinstance(content, str):
         return content
     if not isinstance(content, list):
-        return str(content)
+        return tool_result_to_text(content)
     parts: list[str] = []
     for block in content:
         if isinstance(block, str):

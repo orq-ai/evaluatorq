@@ -250,6 +250,9 @@ class TestOpenAIAgentTarget:
         import json
 
         from pydantic import BaseModel
+        from evaluatorq.contracts import tool_result_to_text
+
+        import evaluatorq.integrations.openai_agents_integration.target as target_module
 
         class Answer(BaseModel):
             field: str
@@ -263,6 +266,13 @@ class TestOpenAIAgentTarget:
         runner = MagicMock()
         runner.run = AsyncMock(return_value=result)
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
+        rendered: list[object] = []
+
+        def _render(value: object) -> str:
+            rendered.append(value)
+            return tool_result_to_text(value)
+
+        monkeypatch.setattr(target_module, 'tool_result_to_text', _render, raising=False)
 
         target = OpenAIAgentTarget(MagicMock())
         response = await target.respond([Message(role="user", content="hello")])
@@ -271,6 +281,7 @@ class TestOpenAIAgentTarget:
         assert "Answer(" not in response.text
         parsed = json.loads(response.text)
         assert parsed == {"field": "x"}
+        assert rendered == [Answer(field='x')]
 
     @pytest.mark.asyncio
     async def test_runner_error_is_wrapped_with_context(self, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -104,6 +104,9 @@ def tool_result_to_text(result: object) -> str:
     """
     if isinstance(result, str):
         return result
+    model_dump_json = getattr(result, 'model_dump_json', None)
+    if callable(model_dump_json):
+        return model_dump_json()
     # default=str: a value JSON cannot encode degrades to its repr rather than
     # failing the whole response over one odd tool return.
     return json.dumps(result, default=str)

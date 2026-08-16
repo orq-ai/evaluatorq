@@ -5,13 +5,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from evaluatorq.contracts import (
     AgentResponse,
     ReasoningOutputItem,
     TextOutputItem,
     ToolCallOutputItem,
+    tool_result_to_text,
 )
 from evaluatorq.dashboard.library import load_model_cached
 from evaluatorq.redteam.contracts import (
@@ -58,6 +59,13 @@ class TestNormalizeCategory:
 
     def test_llm_prefix(self) -> None:
         assert normalize_category('OWASP-LLM01') == 'LLM01'
+
+
+def test_tool_result_to_text_serializes_pydantic_models_as_json() -> None:
+    class Answer(BaseModel):
+        field: str
+
+    assert tool_result_to_text(Answer(field='x')) == '{"field":"x"}'
 
 
 class TestInferFramework:
