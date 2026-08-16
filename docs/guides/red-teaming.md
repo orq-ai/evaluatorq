@@ -190,6 +190,11 @@ rate. Individual results follow the same rule: `r.vulnerable` is `None`, not
 `report.summary.by_vulnerability` contains pre-aggregated
 `VulnerabilitySummary` statistics keyed by vulnerability identifier.
 
+A datapoint that fails before its strategy can create an attack is not counted as
+an attack result. Its structured `RunError` is stored in `report.errors`, and
+`report.summary.pre_execution_errors` records how many rows failed at that stage;
+the dashboard surfaces that count separately from executed attacks.
+
 When a judge fails to return a verdict, the reason is captured on
 `result.evaluation_error` (a `RunError` with a `code` like `timeout`, `parse`,
 `api_connection`, `api_status`, or `unknown`). It is deliberately separate from

@@ -203,11 +203,12 @@ def render_breakdown(
         container_id=container_id,
     )
 
-    if not results:
+    if not results or not any(_is_evaluated(r) for r in results):
+        empty_message = 'No results to display.' if not results else 'No evaluated results to display.'
         return (
             f'<div class="rt-breakdown" id="{esc(container_id)}">'
             f'{group_selector}{stack_selector}'
-            '<p class="rt-view-empty">No results to display.</p>'
+            f'<p class="rt-view-empty">{empty_message}</p>'
             '</div>'
         )
 
@@ -323,16 +324,15 @@ def _build_breakdown_chart(
             series=series,
             x_title='Vulnerable attacks',
             value_labels=stacked_value_labels,
+            extra_fields={
+                (row['dimension'], row['stack']): {'asr': row['asr'], 'evaluated': row['n']} for row in stacked_rows
+            },
+            tooltip=[
+                {'field': 'value', 'type': 'quantitative', 'title': 'Vulnerable attacks'},
+                {'field': 'asr', 'type': 'quantitative', 'title': 'Segment ASR (%)', 'format': '.1f'},
+                {'field': 'evaluated', 'type': 'quantitative', 'title': 'Evaluated attacks'},
+            ],
         )
-        for chart_row in spec['data']['values']:
-            source_row = row_by_gs.get((chart_row['label'], chart_row['series']))
-            chart_row['asr'] = source_row['asr'] if source_row else 0.0
-            chart_row['evaluated'] = source_row['n'] if source_row else 0
-        spec['encoding']['tooltip'] = [
-            {'field': 'value', 'type': 'quantitative', 'title': 'Vulnerable attacks'},
-            {'field': 'asr', 'type': 'quantitative', 'title': 'Segment ASR (%)', 'format': '.1f'},
-            {'field': 'evaluated', 'type': 'quantitative', 'title': 'Evaluated attacks'},
-        ]
 
     return render_embed(spec, chart_id)
 

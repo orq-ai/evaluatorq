@@ -132,7 +132,7 @@ def register_redteam_view_routes(app: Any, roots: list[Any] | None = None) -> No
         filtered = apply_or_all(report, 'redteam', selections)
         if idx is None or not filtered or idx < 0 or idx >= len(filtered):
             return Response(
-                '<p class="sim-empty">No attack at that index.</p>',
+                '<p class="rt-view-empty">No attack at that index.</p>',
                 status_code=200,
                 media_type='text/html',
             )

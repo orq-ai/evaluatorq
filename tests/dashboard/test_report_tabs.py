@@ -763,6 +763,40 @@ def test_rt_exec_summary_zero_vuln_fallback(rt_report_clean):
     assert 'vulnerabilit' not in html.lower() or 'resisted all' in html.lower()
 
 
+def test_rt_exec_summary_reports_pre_execution_rows() -> None:
+    from evaluatorq.dashboard.report_tabs import _rt_exec_summary
+
+    html = _rt_exec_summary({'total_attacks': 0, 'pre_execution_errors': 2}, {})
+
+    assert 'rows failed before execution' in html
+    assert '<strong>2</strong>' in html
+
+
+def test_redteam_error_analysis_includes_pre_execution_rows(rt_report_clean) -> None:
+    from evaluatorq.dashboard.report_tabs import redteam_report_tabs
+    from evaluatorq.redteam.contracts import RunError
+
+    report = rt_report_clean.model_copy(
+        update={
+            'errors': [
+                RunError(
+                    message='strategy generation failed',
+                    error_type='unknown',
+                    stage='datapoint_generation',
+                    code='datapoint_error',
+                )
+            ],
+            'summary': rt_report_clean.summary.model_copy(
+                update={'total_errors': 1, 'pre_execution_errors': 1}
+            ),
+        }
+    )
+
+    html = redteam_report_tabs('rid', report)
+
+    assert 'strategy generation failed' in html
+
+
 def test_rt_kpi_band_zero_evaluated_shows_na_not_perfect(rt_report_clean):
     """A zero-evaluated run's detail view must not render the schema-default
     resistance as a perfect 100% — same no-score rule as the landing rows."""

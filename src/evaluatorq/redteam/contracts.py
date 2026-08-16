@@ -1644,6 +1644,10 @@ class ReportSummary(BaseModel):
     vulnerability_rate: float | None = Field(default=None, ge=0.0, le=1.0, description=_RATE_NONE_DOC)
     resistance_rate: float | None = Field(default=None, ge=0.0, le=1.0, description=_RATE_NONE_DOC)
     total_errors: int = 0
+    pre_execution_errors: int = Field(
+        default=0,
+        description='Rows that failed before an attack job could execute',
+    )
     errors_by_type: dict[str, int] = Field(default_factory=dict, description='Error counts grouped by type')
     token_usage_total: TokenUsage | None = Field(default=None, description='Aggregated token usage across all results')
     token_usage_by_source: dict[str, TokenUsage] = Field(
@@ -1736,6 +1740,11 @@ class RedTeamReport(BaseModel):
     categories_tested: list[str]
     tested_agents: list[str] = Field(default_factory=list, description='Names/keys of tested agents in this report')
     total_results: int
+
+    errors: list[RunError] = Field(
+        default_factory=list,
+        description='Run-level errors for datapoints that never became attack results',
+    )
 
     agent_contexts: dict[str, AgentContext] = Field(
         default_factory=dict, description='Per-agent context keyed by agent key'

@@ -8,8 +8,8 @@ from typing import Any, cast
 from loguru import logger as _converters_logger
 from pydantic import ValidationError
 
-from evaluatorq.common.target_call import classify_error_type
-from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY, AgentResponse, Message
+from evaluatorq.common.target_call import TargetCallResult, classify_error_type
+from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY, AgentResponse, AgentResponseError, Message
 from evaluatorq.redteam.contracts import (
     JURY_RAW_OUTPUT_KEY,
     OWASP_CATEGORY_NAMES,
@@ -36,12 +36,10 @@ from evaluatorq.redteam.contracts import (
     RedTeamResult,
     ReportSummary,
     RunError,
-    Severity,
     SeveritySummary,
     TechniqueSummary,
     TokenUsage,
     Turn,
-    TurnType,
     TurnTypeSummary,
     UnifiedEvaluationResult,
     Vulnerability,
@@ -191,13 +189,68 @@ def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
 
     def _normalize_output_dict(d: dict[str, Any]) -> dict[str, Any]:
         """Unwrap nested 'output' keys and merge top-level fields into a flat dict."""
+
+        def _flatten_error_fields(output: dict[str, Any]) -> dict[str, Any]:
+            raw_error = output.get('error')
+            if raw_error is None or isinstance(raw_error, str):
+                return output
+
+            if isinstance(raw_error, AgentResponseError):
+                error_data = raw_error.model_dump(mode='json')
+            elif isinstance(raw_error, dict):
+                error_data = dict(raw_error)
+            else:
+                error_data = {
+                    field: getattr(raw_error, field, None)
+                    for field in (
+                        'message',
+                        'error_type',
+                        'code',
+                        'error_stage',
+                        'error_code',
+                        'error_turn',
+                        'error_details',
+                    )
+                }
+
+            message = error_data.get('message') or error_data.get('error')
+            error_type = error_data.get('error_type')
+            if not isinstance(message, str) or not isinstance(error_type, str):
+                _converters_logger.warning(
+                    'Flattening an unrecognized job output error shape as an unknown target error: {}',
+                    type(raw_error).__name__,
+                )
+                message = str(raw_error)
+                error_type = 'unknown'
+                error_data = {}
+
+            error = AgentResponseError(
+                message=message,
+                error_type=error_type,
+                code=error_data.get('code') if isinstance(error_data.get('code'), str) else None,
+            )
+            flattened = TargetCallResult(
+                response=AgentResponse(),
+                succeeded=False,
+                attempts=1,
+                error=error,
+                error_details=error_data.get('error_details') or error_data.get('details'),
+            ).error_payload(turn=error_data.get('error_turn') or error_data.get('turn') or 1)
+            for field in flattened:
+                if field in error_data and error_data[field] is not None:
+                    flattened[field] = error_data[field]
+
+            normalized = dict(output)
+            normalized.update(flattened)
+            return normalized
+
         wrapped = d.get('output')
         if isinstance(wrapped, dict):
             merged = dict(wrapped)
             for k, v in d.items():
                 if k != 'output' and k not in merged:
                     merged[k] = v
-            return _flatten_turns(merged)
+            return _flatten_error_fields(_flatten_turns(merged))
         if isinstance(wrapped, str):
             nested = _coerce_job_output_payload(wrapped).model_dump(mode='json')
             if nested:
@@ -205,8 +258,8 @@ def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
                 for k, v in d.items():
                     if k != 'output' and k not in merged:
                         merged[k] = v
-                return _flatten_turns(merged)
-        return _flatten_turns(d)
+                return _flatten_error_fields(_flatten_turns(merged))
+        return _flatten_error_fields(_flatten_turns(d))
 
     if isinstance(raw_output, dict):
         return JobOutputPayload.model_validate(_normalize_output_dict(raw_output))
@@ -485,46 +538,16 @@ def static_results_to_report(
     )
 
 
-def _placeholder_error_result(result: Any, inputs: dict[str, Any], agent_context: AgentContext) -> RedTeamResult:
-    """Build an error row for a datapoint that never reached job execution.
-
-    ``evaluatorq.processings.process_data_point`` returns
-    ``DataPointResult(data_point=DataPoint(inputs={}), error=str(error), job_results=None)``
-    when the data point itself raises before any job runs — there is no ``strategy``
-    payload to reconstruct ``AttackInfo`` from, only ``result.error`` (and, once
-    Task 10 lands, ``inputs['row_index']``). Mirrors the placeholder ``AttackInfo``
-    shape used for skipped/unparseable rows elsewhere in this module: minimal but
-    schema-valid metadata, ``vulnerable=None`` (never False — the attack did not run,
-    it did not resist), and no ``evaluation_error`` (that field is reserved for a
-    judge failure on a transcript that exists; here there is no transcript).
-    """
+def _pre_execution_error(result: Any, inputs: dict[str, Any]) -> RunError:
+    """Build the run-level error for a datapoint that never reached job execution."""
     row_index = inputs.get('row_index')
-    row_label = f'row {row_index}' if row_index is not None else 'unknown row'
     error = getattr(result, 'error', None) or 'Datapoint failed before job execution (no strategy payload)'
-
-    attack = AttackInfo(
-        id=inputs.get('id') or f'unparseable-strategy-{row_label}',
-        vulnerability='',
-        category=inputs.get('category', 'unknown'),
-        framework=Framework.OWASP_AGENTIC,
-        attack_technique=AttackTechnique.INDIRECT_INJECTION,
-        delivery_methods=[],
-        turn_type=TurnType.SINGLE,
-        severity=Severity.MEDIUM,
-        source=AttackSource.TEMPLATE_DYNAMIC,
-    )
-
-    return RedTeamResult(
-        attack=attack,
-        agent=AgentInfo(
-            key=agent_context.key,
-            model=agent_context.model,
-            display_name=agent_context.display_name,
-        ),
-        messages=[],
-        vulnerable=None,
-        error=error,
-        error_type=_classify_error(error, existing_type=None),
+    return RunError(
+        message=error,
+        error_type=_classify_error(error, existing_type=None) or 'unknown',
+        stage=PipelineStage.DATAPOINT_GENERATION,
+        code='datapoint_error',
+        details={'row_index': row_index} if row_index is not None else None,
     )
 
 
@@ -539,6 +562,7 @@ def dynamic_evaluatorq_results_to_report(
 ) -> RedTeamReport:
     """Convert evaluatorq dynamic results to a unified RedTeamReport."""
     unified: list[RedTeamResult] = []
+    run_errors: list[RunError] = []
 
     for result in results:
         data_point = getattr(result, 'data_point', None)
@@ -550,14 +574,11 @@ def dynamic_evaluatorq_results_to_report(
         try:
             strategy = AttackStrategy.model_validate(strategy_payload)
         except ValidationError:
-            # Tolerates both inputs={} (current placeholder shape) and
-            # inputs={'row_index': N} (once Task 10 adds it) — neither carries a
-            # strategy payload, since the datapoint failed before job execution.
             _converters_logger.warning(
                 'Skipping report row with unparseable strategy payload (datapoint failed before '
-                'job execution); recording as error result'
+                'job execution); recording as run error'
             )
-            unified.append(_placeholder_error_result(result, inputs, agent_context))
+            run_errors.append(_pre_execution_error(result, inputs))
             continue
         category = normalize_category(inputs.get('category', strategy.category))
         vulnerability_str = inputs.get('vulnerability', '')
@@ -692,7 +713,7 @@ def dynamic_evaluatorq_results_to_report(
             )
         )
 
-    summary = compute_report_summary(unified)
+    summary = compute_report_summary(unified, run_errors=run_errors)
     # Derive categories from actual results; fall back to caller-provided list
     # when all results were skipped (e.g. missing data_point).
     categories = sorted({r.attack.category for r in unified})
@@ -711,6 +732,7 @@ def dynamic_evaluatorq_results_to_report(
         categories_tested=categories,
         tested_agents=[agent_context.key or agent_context.display_name or 'unknown'],
         total_results=len(unified),
+        errors=run_errors,
         agent_contexts={(agent_context.key or agent_context.display_name or 'unknown'): agent_context},
         results=unified,
         summary=summary,
@@ -943,6 +965,7 @@ def compute_report_summary(
     results: list[RedTeamResult],
     *,
     min_evaluation_coverage: float | None = None,
+    run_errors: list[RunError] | None = None,
 ) -> ReportSummary:
     """Compute summary statistics from unified results.
 
@@ -950,8 +973,18 @@ def compute_report_summary(
     policy travels with the report so a saved run remembers what it was judged
     against, and the CLI reads the verdict off ``summary.coverage_below_minimum``.
     """
+    run_errors = run_errors or []
+    run_errors_by_type: dict[str, int] = {}
+    for error in run_errors:
+        etype = error.code or error.error_type or 'unknown'
+        run_errors_by_type[etype] = run_errors_by_type.get(etype, 0) + 1
     if not results:
-        return ReportSummary(min_evaluation_coverage=min_evaluation_coverage)
+        return ReportSummary(
+            min_evaluation_coverage=min_evaluation_coverage,
+            total_errors=len(run_errors),
+            pre_execution_errors=len(run_errors),
+            errors_by_type=run_errors_by_type,
+        )
 
     total = len(results)
     evaluated = [r for r in results if _is_evaluated(r)]
@@ -1192,11 +1225,17 @@ def compute_report_summary(
             # Prefer error_code (specific) over error_type (generic)
             etype = r.error_code or r.error_type or 'unknown'
             errors_by_type[etype] = errors_by_type.get(etype, 0) + 1
+
         if r.evaluation_error is not None:
             total_errors += 1
             ev = r.evaluation_error
             etype = f'{PipelineStage.EVALUATION.value}/{ev.code or ev.error_type or "unknown"}'
             errors_by_type[etype] = errors_by_type.get(etype, 0) + 1
+
+    for error in run_errors:
+        total_errors += 1
+        etype = error.code or error.error_type or 'unknown'
+        errors_by_type[etype] = errors_by_type.get(etype, 0) + 1
 
     return ReportSummary(
         total_attacks=total,
@@ -1211,6 +1250,7 @@ def compute_report_summary(
         vulnerability_rate=_verdict_rate(vulns, evaluated_total),
         resistance_rate=resistance,
         total_errors=total_errors,
+        pre_execution_errors=len(run_errors),
         errors_by_type=errors_by_type,
         token_usage_total=_aggregate_token_usage(results),
         token_usage_by_source=_aggregate_token_usage_by_source(results),
@@ -1263,7 +1303,9 @@ def rebuild_filtered_report(
             # the filtered slice, and dropping it would make a filtered view
             # report full coverage on a run the gate had already failed.
             'summary': compute_report_summary(
-                filtered_results, min_evaluation_coverage=report.summary.min_evaluation_coverage
+                filtered_results,
+                min_evaluation_coverage=report.summary.min_evaluation_coverage,
+                run_errors=report.errors,
             ),
             'total_results': len(filtered_results),
             'categories_tested': sorted({r.attack.category for r in filtered_results}),
@@ -1298,12 +1340,14 @@ def merge_reports(
         return reports[0]
 
     all_results: list[RedTeamResult] = []
+    all_errors: list[RunError] = []
     frameworks: set[Framework | None] = set()
     pipelines: set[Pipeline] = set()
     merged_agent_contexts: dict[str, AgentContext] = {}
 
     for report in reports:
         all_results.extend(report.results)
+        all_errors.extend(report.errors)
         frameworks.add(report.framework)
         pipelines.add(report.pipeline)
         # Collect agent_contexts from all sub-reports
@@ -1328,6 +1372,7 @@ def merge_reports(
         min_evaluation_coverage=next(
             (r.summary.min_evaluation_coverage for r in reports if r.summary.min_evaluation_coverage is not None), None
         ),
+        run_errors=all_errors,
     )
 
     # Derive categories from actual results, not sub-report metadata
@@ -1347,6 +1392,7 @@ def merge_reports(
         categories_tested=all_categories,
         tested_agents=all_agents,
         total_results=len(all_results),
+        errors=all_errors,
         agent_contexts=merged_agent_contexts,
         results=all_results,
         summary=summary,

@@ -92,7 +92,7 @@ def test_dynamic_results_to_report_surfaces_job_result_error_without_output() ->
     assert row.vulnerable is None
 
 
-def test_dynamic_results_to_report_survives_placeholder_row_with_empty_inputs(caplog: Any) -> None:
+def test_dynamic_results_to_report_reports_pre_execution_row_without_an_attack(caplog: Any) -> None:
     """processings.py's process_data_point returns DataPointResult(data_point=DataPoint(inputs={}),
     error=str(error), job_results=None) when the data point itself raised before any job ran.
     ``inputs={}`` has no ``strategy`` key, so AttackStrategy.model_validate({}) raises
@@ -147,14 +147,12 @@ def test_dynamic_results_to_report_survives_placeholder_row_with_empty_inputs(ca
             description='dynamic placeholder row test',
         )
 
-    assert report.total_results == 2
-    assert len(report.results) == 2
-
-    error_rows = [r for r in report.results if r.error]
-    assert len(error_rows) == 1
-    error_row = error_rows[0]
-    assert error_row.vulnerable is None
-    assert error_row.error == 'RuntimeError: dataset row failed to resolve'
+    assert report.total_results == 1
+    assert len(report.results) == 1
+    assert len(report.errors) == 1
+    assert report.errors[0].message == 'RuntimeError: dataset row failed to resolve'
+    assert report.summary.pre_execution_errors == 1
+    assert report.summary.total_errors == 1
 
     good_row = next(r for r in report.results if r.attack.id == 'asi01-test-003')
     assert good_row.vulnerable is False
