@@ -178,6 +178,12 @@ def rid(roots: list[Path]) -> str:
     return report_id(roots[0] / 'rt_multi_agent_20260101_000000.json')
 
 
+def _assert_empty_attack_fragment(response) -> None:
+    assert response.status_code == 200
+    assert response.text == '<p class="sim-empty">No attack at that index.</p>'
+    assert 'Evaluator verdict' not in response.text
+
+
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
@@ -517,10 +523,9 @@ class TestAttackFragmentView:
         assert html_0 != html_1
 
     def test_out_of_range_idx_handled_gracefully(self, client: TestClient, rid: str) -> None:
-        """idx beyond result count should return a clear 404 fragment."""
+        """idx beyond result count should return a visible empty fragment."""
         response = client.get(f'/r/{rid}/redteam/attack?idx=9999')
-        assert response.status_code == 404
-        assert 'No attack at that index' in response.text
+        _assert_empty_attack_fragment(response)
 
     def test_hx_get_links_present_for_navigation(self, client: TestClient, rid: str) -> None:
         html = _get(client, f'/r/{rid}/redteam/attack?idx=0')
@@ -533,9 +538,9 @@ class TestAttackFragmentView:
     @pytest.mark.parametrize('idx', ['', 'not-an-index', '-1', '9999'])
     def test_invalid_or_absent_idx_matches_sim_route(self, client: TestClient, rid: str, idx: str) -> None:
         response = client.get(f'/r/{rid}/redteam/attack?idx={idx}')
-        assert response.status_code == (400 if idx in ('', 'not-an-index') else 404)
+        _assert_empty_attack_fragment(response)
 
-    def test_idx_into_empty_report_is_404(self, tmp_path: Path) -> None:
+    def test_idx_into_empty_report_is_empty_fragment(self, tmp_path: Path) -> None:
         rt = tmp_path / 'runs'
         rt.mkdir()
         report_path = rt / 'empty.json'
@@ -546,7 +551,7 @@ class TestAttackFragmentView:
             f'/r/{empty_rid}/redteam/attack?idx=0'
         )
 
-        assert response.status_code == 404
+        _assert_empty_attack_fragment(response)
 
 
 # ---------------------------------------------------------------------------
@@ -779,16 +784,15 @@ class TestViewRoutesHonorFilter:
         assert 'Evaluator verdict' in html_all
         assert 'Evaluator verdict' in html_vuln
 
-    def test_attack_fragment_stale_idx_clamped_after_filter(self, tmp_path: Path) -> None:
-        """An idx that falls outside the filtered set should return a 404 fragment."""
+    def test_attack_fragment_stale_idx_after_filter_is_empty(self, tmp_path: Path) -> None:
+        """An idx outside the filtered set should return a visible empty fragment."""
         client, rid = self._filtered_report(tmp_path)
         # Unfiltered has 4 results (idx 0-3); filtered to Vulnerable has 2 (idx 0-1).
         # idx=3 is out-of-range for the filtered set — it must not show row 0.
         r = client.get(f'/r/{rid}/redteam/attack?idx=3&result=Vulnerable')
-        assert r.status_code == 404
-        assert 'No attack at that index' in r.text
+        _assert_empty_attack_fragment(r)
 
-    def test_attack_fragment_out_of_range_filtered_index_returns_404(self, tmp_path: Path) -> None:
+    def test_attack_fragment_out_of_range_filtered_index_is_empty(self, tmp_path: Path) -> None:
         """An index beyond a three-row filtered report must not show attack #1."""
         rt = tmp_path / 'runs'
         rt.mkdir()
@@ -806,8 +810,7 @@ class TestViewRoutesHonorFilter:
 
         response = client.get(f'/r/{rid}/redteam/attack?idx=99&result=Vulnerable')
 
-        assert response.status_code == 404
-        assert 'No attack at that index' in response.text
+        _assert_empty_attack_fragment(response)
 
     def test_disagreement_filtered_reduces_or_changes_set(self, tmp_path: Path) -> None:
         """Filtering to a single category should change disagreement results."""
