@@ -27,6 +27,45 @@ def _run_judge_path() -> str:
 
 class TestOwaspBridgePanelErrorVisibility:
     @pytest.mark.asyncio
+    async def test_single_judge_failure_keeps_usage_and_structured_cause(self) -> None:
+        """The default single-judge path must preserve billed failure metadata."""
+        from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
+
+        mock_evaluator_entity = MagicMock()
+        mock_evaluator_entity.prompt = 'response: {{output.response}}'
+        failing_outcome = JudgeOutcome(
+            error_kind=JudgeError.TIMEOUT,
+            error_message='timed out',
+            timeout_ms=30_000,
+            token_usage=TokenUsage(input_tokens=5, output_tokens=3, total_tokens=8, calls=1),
+        )
+
+        with (
+            patch(
+                'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.get_evaluator_for_category',
+                return_value=mock_evaluator_entity,
+            ),
+            patch(_run_judge_path(), new=AsyncMock(return_value=failing_outcome)),
+        ):
+            evaluator_config = create_owasp_evaluator(
+                evaluator_model='judge-a',
+                llm_client=AsyncMock(),
+            )
+            result: EvaluationResult = await evaluator_config['scorer']({
+                'data': DataPoint(inputs={'category': 'ASI01', 'messages': []}),
+                'output': {'response': 'target output'},
+            })
+
+        assert result.pass_ is None
+        assert result.token_usage is not None
+        assert result.token_usage.total_tokens == 8
+        assert result.raw_output is not None
+        payload = result.raw_output[EVAL_ERROR_RAW_OUTPUT_KEY]
+        assert payload['code'] == 'timeout'
+        assert payload['stage'] == 'evaluation'
+        assert payload['details']['timeout_ms'] == 30_000
+
+    @pytest.mark.asyncio
     async def test_failed_judge_prediction_keeps_token_usage(self) -> None:
         """A judge call that errors must not drop the tokens it already spent.
 
