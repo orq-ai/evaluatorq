@@ -329,22 +329,18 @@ def test_a_malformed_audited_value_degrades_to_unknown_with_a_warning() -> None:
     messages: list[str] = []
     sink_id = logger.add(lambda m: messages.append(m), level='WARNING')
     try:
-        (row,) = _criteria_rows(
-            _result(criteria_meta=_meta(audited='yes'), criteria_verified=True)  # pyright: ignore[reportArgumentType]
-        )
+        result = _result(criteria_meta=_meta(audited='yes'), criteria_verified=True)  # pyright: ignore[reportArgumentType]
+        rows = _criteria_rows(result)
     finally:
         logger.remove(sink_id)
 
-    assert row['audited'] is None
-    assert row['state'] == 'pass'  # unknown provenance, so scored as it always was
-    assert any("non-boolean 'audited'" in m for m in messages)
+    assert rows == []
+    assert result.metadata['criteria_errors']
+    assert any('criteria_meta entry is invalid' in m for m in messages)
 
 
-def test_a_criteria_meta_of_non_mappings_does_not_score_a_silent_one() -> None:
-    """``criteria_meta`` that round-tripped as a list of JSON strings used to enter
-    the meta branch, filter to zero usable entries and return a perfect 1.0 — an
-    optimistic default on an unknown shape, beside `criteria_results` holding a real
-    failure. It warns and falls through to `criteria_results` instead."""
+def test_a_criteria_meta_of_non_mappings_is_an_error_not_a_silent_pass() -> None:
+    """A malformed entry is an error and makes the criteria verdict unknown."""
     from loguru import logger
 
     result = _result(
@@ -360,14 +356,12 @@ def test_a_criteria_meta_of_non_mappings_does_not_score_a_silent_one() -> None:
     finally:
         logger.remove(sink_id)
 
-    assert score == 0.5  # from criteria_results, not a silent 1.0
-    assert any('falling back to criteria_results' in m for m in messages)
-    assert any('not mappings' in m for m in messages)
+    assert score == 0.0
+    assert any('criteria_meta entry is invalid' in m for m in messages)
 
 
-def test_a_partly_malformed_criteria_meta_names_the_entries_it_drops() -> None:
-    """One usable entry still scores from the meta (it carries the audit
-    provenance ``criteria_results`` lacks), but the dropped ones are announced."""
+def test_a_partly_malformed_criteria_meta_is_an_error_even_with_valid_entries() -> None:
+    """One malformed entry prevents a mixed list from claiming a clean pass."""
     from loguru import logger
 
     meta = [*_meta(audited=True), 'not a mapping']
@@ -380,15 +374,12 @@ def test_a_partly_malformed_criteria_meta_names_the_entries_it_drops() -> None:
     finally:
         logger.remove(sink_id)
 
-    assert score == 1.0
-    assert any('1 of 2 criteria_meta entries are not mappings' in m for m in messages)
+    assert score == 0.0
+    assert any('criteria_meta entry is invalid' in m for m in messages)
 
 
-def test_the_evaluator_detail_survives_a_criteria_meta_of_non_mappings() -> None:
-    """`_sim_evaluation_details` used to call `.get` on every entry, so a JSON
-    round-tripped string raised AttributeError *outside* the scorer's try/except:
-    the whole `criteria_met` evaluator was recorded errored beside a valid score.
-    It now filters like the scorer and falls through to `criteria_results`."""
+def test_the_evaluator_detail_marks_a_non_mapping_as_unknown() -> None:
+    """The evaluator detail must not turn an unreadable entry into a pass."""
     from evaluatorq.simulation.api import _sim_evaluation_details
 
     result = _result(
@@ -399,17 +390,31 @@ def test_the_evaluator_detail_survives_a_criteria_meta_of_non_mappings() -> None
 
     explanation, passed = _sim_evaluation_details('criteria_met', result)
 
-    assert passed is False
-    assert explanation == 'FAIL: Agent greets the customer'
+    assert passed is None
+    assert explanation is not None
+    assert 'ERROR: invalid criteria_meta entry' in explanation
 
 
-def test_the_evaluator_detail_ignores_the_non_mapping_entries_it_cannot_read() -> None:
-    """A partly malformed audit still reports the entries that are usable."""
+def test_the_evaluator_detail_reports_mixed_meta_as_unknown() -> None:
+    """A valid entry beside malformed metadata is still an unknown verdict."""
     from evaluatorq.simulation.api import _sim_evaluation_details
 
     result = _result(criteria_meta=[*_meta(audited=True), 'not a mapping'], criteria_verified=True)  # pyright: ignore[reportArgumentType]
 
     explanation, passed = _sim_evaluation_details('criteria_met', result)
 
-    assert passed is True
-    assert explanation == 'PASS [prohibited]: Agent must not leak the API key'
+    assert passed is None
+    assert explanation is not None
+    assert 'ERROR: invalid criteria_meta entry' in explanation
+    assert 'PASS [prohibited]: Agent must not leak the API key' in explanation
+
+
+def test_malformed_criteria_meta_surfaces_in_the_errors_report() -> None:
+    from evaluatorq.simulation.reports.sections import build_report_sections
+
+    result = _result(criteria_meta=[*_meta(audited=True), 'garbage'], criteria_verified=True)  # pyright: ignore[reportArgumentType]
+    sections = build_report_sections([result])
+
+    errors = next(section for section in sections if section.kind == 'errors')
+    assert errors.data['total_errored'] == 1
+    assert any('criteria_meta entry is invalid' in message for message in errors.data['by_message'])

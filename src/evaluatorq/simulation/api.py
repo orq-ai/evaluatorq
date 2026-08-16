@@ -1934,12 +1934,18 @@ def _sim_evaluation_details(name: str, result: SimulationResult) -> tuple[str | 
                 ),
                 False,
             )
-        meta = result.metadata.get('criteria_meta') or []
-        # Non-dict entries (a JSON round-trip can leave strings here — see
-        # `criteria_met_scorer`) are dropped rather than `.get()`-ed: this call site
-        # sits outside the scorer's try/except, so an AttributeError here records the
-        # whole evaluator as errored despite a perfectly good score.
-        entries = [c for c in meta if isinstance(c, dict)] if isinstance(meta, list) else []
+        from evaluatorq.simulation.evaluators.scorers import read_criteria_meta
+        from evaluatorq.simulation.types import CriteriaMeta
+
+        entries, invalid = read_criteria_meta(result)
+        if invalid:
+            lines = [f'ERROR: invalid criteria_meta entry: {entry!r}' for entry in invalid]
+            lines.extend(
+                f'{"PASS" if c.passed else "FAIL"} [{"prohibited" if c.type == "must_not_happen" else "required"}]: '
+                f'{c.description}'
+                for c in entries
+            )
+            return '\n'.join(lines), None
         if entries:
             # Tag each line with the criterion polarity. Without it, a passed
             # 'must_not_happen' rule renders as e.g. "PASS: Agent blames the
@@ -1949,15 +1955,14 @@ def _sim_evaluation_details(name: str, result: SimulationResult) -> tuple[str | 
             # passing only by its not-observed default, and `criteria_met_scorer`
             # does not count it as met either. The two must agree, or the score and
             # the explanation beside it contradict each other on the same span.
-            def _line(c: dict[str, object]) -> str:
-                passed = bool(c.get('passed'))
-                verdict = ('UNKNOWN' if c.get('audited') is False else 'PASS') if passed else 'FAIL'
-                polarity = 'prohibited' if c.get('type') == 'must_not_happen' else 'required'
+            def _line(c: CriteriaMeta) -> str:
+                verdict = ('UNKNOWN' if c.audited is False else 'PASS') if c.passed else 'FAIL'
+                polarity = 'prohibited' if c.type == 'must_not_happen' else 'required'
                 suffix = ' (not audited)' if verdict == 'UNKNOWN' else ''
-                return f'{verdict} [{polarity}]: {c.get("description", c.get("id", "?"))}{suffix}'
+                return f'{verdict} [{polarity}]: {c.description}{suffix}'
 
             lines = [_line(c) for c in entries]
-            all_met = all(c.get('passed') and c.get('audited') is not False for c in entries)
+            all_met = all(c.passed and c.audited is not False for c in entries)
             return '\n'.join(lines), all_met
         # Fallback to the lossy criteria_results dict when criteria_meta is absent.
         criteria_results = result.criteria_results or {}

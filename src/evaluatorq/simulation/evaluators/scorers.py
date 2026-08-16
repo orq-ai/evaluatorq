@@ -10,7 +10,7 @@ from collections.abc import Callable
 
 from loguru import logger
 
-from evaluatorq.simulation.types import SimulationResult, TerminatedBy
+from evaluatorq.simulation.types import CriteriaMeta, SimulationResult, TerminatedBy, parse_criteria_meta
 
 # A run that ended this way never reached the judge's criteria audit, so its
 # criteria outcome is unknown — not met. Shared with `api._sim_evaluation_details`
@@ -18,6 +18,21 @@ from evaluatorq.simulation.types import SimulationResult, TerminatedBy
 UNEVALUATED_TERMINATIONS = (TerminatedBy.error, TerminatedBy.timeout)
 
 SimulationScorer = Callable[[SimulationResult], float]
+
+
+def read_criteria_meta(result: SimulationResult) -> tuple[list[CriteriaMeta], list[object]]:
+    """Read the persisted criteria contract and record malformed entries."""
+    valid, invalid = parse_criteria_meta(result.metadata.get('criteria_meta'))
+    if invalid:
+        errors = result.metadata.setdefault('criteria_errors', [])
+        if not isinstance(errors, list):
+            errors = result.metadata['criteria_errors'] = []
+        for entry in invalid:
+            message = f'criteria_meta entry is invalid: {entry!r}'
+            logger.warning(message)
+            if message not in errors:
+                errors.append(message)
+    return valid, invalid
 
 
 # ---------------------------------------------------------------------------
@@ -51,9 +66,8 @@ def criteria_met_scorer(result: SimulationResult) -> float:
     (`_CriteriaTracker` records a verdict before it can become settled), so
     `JudgeAgent.mark_settled` never costs a run a point.
 
-    A ``criteria_meta`` list with no usable (mapping) entry is an unknown shape:
-    it warns and falls through to ``criteria_results`` rather than scoring the
-    empty tally 1.0.
+    A malformed ``criteria_meta`` entry is an error: it is logged, recorded on
+    the result for downstream reports, and scores 0.0 rather than being dropped.
     """
     if result.terminated_by in UNEVALUATED_TERMINATIONS:
         logger.warning(
@@ -70,27 +84,14 @@ def criteria_met_scorer(result: SimulationResult) -> float:
         )
         return 0.0
 
-    meta = result.metadata.get('criteria_meta')
-    if isinstance(meta, list) and meta:
-        entries = [c for c in meta if isinstance(c, dict)]
-        if len(entries) != len(meta):
-            logger.warning(
-                'criteria_met: {} of {} criteria_meta entries are not mappings (e.g. {}); ignoring them.',
-                len(meta) - len(entries),
-                len(meta),
-                type(next(c for c in meta if not isinstance(c, dict))).__name__,
-            )
-        # No usable entry is an unknown shape, not a perfect score: returning 1.0
-        # here scored a run whose criteria_meta round-tripped as JSON strings a
-        # clean 1.0 while criteria_results held real failures.
-        if not entries:
-            logger.warning(
-                'criteria_met: criteria_meta holds {} entries but none is a mapping; falling back to '
-                'criteria_results, which carries no audit provenance.',
-                len(meta),
-            )
-        else:
-            unaudited = [c for c in entries if c.get('audited') is False and c.get('passed')]
+    raw_meta = result.metadata.get('criteria_meta')
+    if raw_meta is not None:
+        entries, invalid = read_criteria_meta(result)
+        if invalid:
+            logger.warning('criteria_met: invalid criteria_meta is an error; scoring 0.0 (unknown, not met).')
+            return 0.0
+        if entries:
+            unaudited = [c for c in entries if c.audited is False and c.passed]
             if unaudited:
                 logger.warning(
                     'criteria_met: {} of {} criteria passed only by default (the judge never audited them); '
@@ -98,7 +99,7 @@ def criteria_met_scorer(result: SimulationResult) -> float:
                     len(unaudited),
                     len(entries),
                 )
-            met = sum(1 for c in entries if c.get('passed') and c.get('audited') is not False)
+            met = sum(1 for c in entries if c.passed and c.audited is not False)
             return met / len(entries)
 
     criteria_results = result.criteria_results or {}
