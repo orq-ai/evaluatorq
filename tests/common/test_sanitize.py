@@ -53,6 +53,13 @@ def test_delimit_escapes_closing_tag_prefixes(payload: str):
     assert '<' not in inner
 
 
+def test_delimit_escapes_nested_angle_bracket_in_closing_tag_like_input():
+    result = delimit('</data<foo>')
+    inner = result.removeprefix('<data>').removesuffix('</data>')
+
+    assert '<' not in inner
+
+
 def test_delimit_preserves_whitespace_split_closing_tag_name():
     payload = '</da ta>'
 
