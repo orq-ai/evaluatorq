@@ -106,14 +106,23 @@ def tool_result_to_text(result: object) -> str:
         return result
     model_dump_json = getattr(result, 'model_dump_json', None)
     if callable(model_dump_json):
-        rendered = model_dump_json()
-        if isinstance(rendered, str):
-            return rendered
-        logger.warning(
-            'tool_result_to_text: {}.model_dump_json() returned {}; falling back to JSON encoding',
-            type(result).__name__,
-            type(rendered).__name__,
-        )
+        try:
+            rendered = model_dump_json()
+        except Exception as exc:  # noqa: BLE001 - any renderer failure must reach the text fallback
+            logger.warning(
+                'tool_result_to_text: {}.model_dump_json() failed with {}: {}; falling back to JSON encoding',
+                type(result).__name__,
+                type(exc).__name__,
+                exc,
+            )
+        else:
+            if isinstance(rendered, str):
+                return rendered
+            logger.warning(
+                'tool_result_to_text: {}.model_dump_json() returned {}; falling back to JSON encoding',
+                type(result).__name__,
+                type(rendered).__name__,
+            )
     # default=str: a value JSON cannot encode degrades to its repr rather than
     # failing the whole response over one odd tool return.
     return json.dumps(result, default=str)

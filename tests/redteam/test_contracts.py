@@ -3,9 +3,10 @@
 import json
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from evaluatorq.contracts import (
     AgentResponse,
@@ -66,6 +67,42 @@ def test_tool_result_to_text_serializes_pydantic_models_as_json() -> None:
         field: str
 
     assert tool_result_to_text(Answer(field='x')) == '{"field":"x"}'
+
+
+def test_tool_result_to_text_falls_back_when_pydantic_serialization_fails() -> None:
+    class Answer(BaseModel):
+        model_config = ConfigDict(arbitrary_types_allowed=True)
+        field: object
+
+        def __str__(self) -> str:
+            return 'answer fallback'
+
+    with patch('evaluatorq.contracts.logger.warning') as warning:
+        rendered = tool_result_to_text(Answer(field=object()))
+
+    assert rendered == '"answer fallback"'
+    warning.assert_called_once()
+    assert 'model_dump_json() failed' in warning.call_args.args[0]
+    assert warning.call_args.args[2] == 'PydanticSerializationError'
+
+
+def test_tool_result_to_text_warns_and_falls_back_for_non_string_renderer() -> None:
+    class NonStringRenderer:
+        def __str__(self) -> str:
+            return 'renderer fallback'
+
+        def model_dump_json(self) -> object:
+            return 42
+
+    with patch('evaluatorq.contracts.logger.warning') as warning:
+        rendered = tool_result_to_text(NonStringRenderer())
+
+    assert rendered == '"renderer fallback"'
+    warning.assert_called_once_with(
+        'tool_result_to_text: {}.model_dump_json() returned {}; falling back to JSON encoding',
+        'NonStringRenderer',
+        'int',
+    )
 
 
 class TestInferFramework:
