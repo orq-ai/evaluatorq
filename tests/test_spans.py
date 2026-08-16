@@ -6,7 +6,11 @@ from unittest.mock import MagicMock
 
 import pytest
 from opentelemetry.trace import StatusCode
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from evaluatorq.common.tracing import set_span_error
 from evaluatorq.tracing import spans as spans_module
 from evaluatorq.tracing.spans import (
     EvaluationSpanOptions,
@@ -101,6 +105,24 @@ class TestSpanBodyImportError:
         with pytest.raises(ImportError, match="marker"):
             async with with_evaluation_span(options):
                 raise ImportError("marker")
+
+
+@pytest.mark.asyncio
+async def test_job_span_preserves_deliberate_error_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer('test')
+    monkeypatch.setattr(spans_module, 'get_tracer', lambda: tracer)
+    monkeypatch.setattr('evaluatorq.common.tracing.get_tracer', lambda: tracer)
+
+    async with with_job_span(JobSpanOptions(run_id='abc', row_index=0)) as span:
+        set_span_error(span, 'judge failed but was handled')
+
+    provider.shutdown()
+    finished = exporter.get_finished_spans()
+    assert len(finished) == 1
+    assert finished[0].status.status_code is StatusCode.ERROR
 
 
 class TestSpanCancellation:
