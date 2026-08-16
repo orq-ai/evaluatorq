@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 
-from evaluatorq.progress import Phase, with_progress
+from evaluatorq.progress import Phase, ProgressService, with_progress
 
 
 @pytest.mark.asyncio
@@ -24,7 +26,9 @@ async def test_with_progress_final_update_failure_returns_result(caplog: pytest.
         return ['completed']
 
     with caplog.at_level('WARNING'):
-        result = await with_progress(completed_work(), FinalUpdateFailureService())
+        result = await with_progress(
+            cast('Any', completed_work()), cast('ProgressService', cast('object', FinalUpdateFailureService()))
+        )
 
     assert result == ['completed']
     assert 'completion progress pipe closed' in caplog.text

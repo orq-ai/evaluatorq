@@ -9,6 +9,7 @@ the Orq-SDK backend derives an equivalent client-level ``RetryConfig``.
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -331,6 +332,9 @@ async def test_retry_paths_make_exactly_three_http_attempts(
     sdk_client = AsyncOpenAI(api_key='test-key', max_retries=2, http_client=http_client)
     monkeypatch.setattr('evaluatorq.common.retry.asyncio.sleep', AsyncMock())
 
+    target: Any = None
+    sync_client: httpx.Client | None = None
+
     if path == 'openai-auto':
         from evaluatorq.redteam.backends.openai import OpenAIBackend
 
@@ -366,7 +370,7 @@ async def test_retry_paths_make_exactly_three_http_attempts(
 
         sync_client = httpx.Client(transport=httpx.MockTransport(handler), base_url='https://example.test/v1')
         if path == 'orq-auto':
-            def create_orq(**kwargs: object) -> Orq:
+            def create_orq(**kwargs: Any) -> Orq:
                 return Orq(client=sync_client, **kwargs)
 
             monkeypatch.setattr(orq_backend, '_orq_cls', create_orq)
@@ -384,10 +388,10 @@ async def test_retry_paths_make_exactly_three_http_attempts(
         from evaluatorq.simulation.agents import base as base_module
         from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgent
 
-        async def bounded_retry(fn: object, **kwargs: object) -> object:
+        async def bounded_retry(fn: Any, **kwargs: Any) -> object:
             from evaluatorq.common.retry import with_retry
 
-            return await with_retry(fn, max_attempts=expected_attempts, **kwargs)  # type: ignore[arg-type]
+            return await with_retry(fn, max_attempts=expected_attempts, **kwargs)
 
         monkeypatch.setattr(base_module, 'with_retry', bounded_retry)
         agent = UserSimulatorAgent(LLMCallConfig(model='gpt-4o', client=sdk_client))
@@ -418,6 +422,6 @@ async def test_retry_paths_make_exactly_three_http_attempts(
         assert result.succeeded is False
         assert result.attempts == expected_attempts
 
-    if path.startswith('orq'):
+    if sync_client is not None:
         sync_client.close()
     assert attempts == expected_attempts
