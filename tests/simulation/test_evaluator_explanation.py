@@ -44,7 +44,10 @@ def span_collector():
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     tracer = provider.get_tracer('test')
-    with patch('evaluatorq.tracing.spans.get_tracer', return_value=tracer):
+    with (
+        patch('evaluatorq.tracing.spans.get_tracer', return_value=tracer),
+        patch('evaluatorq.common.tracing.get_tracer', return_value=tracer),
+    ):
         yield exporter
     provider.shutdown()
 
