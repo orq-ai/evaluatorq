@@ -9,6 +9,7 @@ those depend on this module, not the reverse.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
 from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass
@@ -53,6 +54,19 @@ def classify_error_type(error: str | None, *, existing_type: str | None = None) 
 def default_map_error(exc: Exception) -> tuple[str, str]:
     """Fallback (code, message) mapping; identical to ``Backend.map_error`` base."""
     return 'target_error', f'{type(exc).__name__}: {exc}'
+
+
+async def close_target(target: object) -> None:
+    """Best-effort close a target without letting cleanup replace its result."""
+    try:
+        target_close = getattr(target, 'close', None)
+        if not callable(target_close):
+            return
+        maybe = target_close()
+        if inspect.isawaitable(maybe):
+            await maybe
+    except Exception as exc:
+        logger.warning('Failed to close target {}: {}', type(target).__name__, exc)
 
 
 _STATUS_CHAIN_DEPTH = 5  # how far down __cause__ to look for a wrapped HTTP error

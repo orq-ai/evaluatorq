@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import inspect
 import time
 import traceback
 from contextlib import asynccontextmanager
@@ -24,7 +23,7 @@ from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, Job, job
 from evaluatorq.common.jury import append_jury_summary
-from evaluatorq.common.target_call import call_target_with_retry
+from evaluatorq.common.target_call import call_target_with_retry, close_target
 from evaluatorq.common.thread_context import build_thread_id, conversation_thread
 from evaluatorq.common.tracing import set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentResponse, Message
@@ -382,15 +381,7 @@ def create_dynamic_redteam_job(
             # Register HTTP-client cleanup for targets that own a client
             # (e.g. OrqResponsesTarget). Plain callable targets have no
             # close(); duck-type to avoid coupling.
-            target_close = getattr(target, 'close', None)
-            if callable(target_close):
-
-                async def _close_target() -> None:
-                    maybe = target_close()
-                    if inspect.isawaitable(maybe):
-                        await maybe
-
-                cleanup_stack.push_async_callback(_close_target)
+            cleanup_stack.push_async_callback(close_target, target)
             # Targets own their memory_entity_id — track it for cleanup.
             target_memory_id = getattr(target, 'memory_entity_id', None)
             if target_memory_id is not None and memory_entity_ids is not None:

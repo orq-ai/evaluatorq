@@ -328,12 +328,16 @@ async def test_hybrid_static_leg_uses_shared_prompt_flattener(monkeypatch: pytes
     assert calls[0][0].content == _extract_static_prompt(static_datapoint)
 
 
-@pytest.mark.parametrize('raises', [False, True])
+@pytest.mark.parametrize(
+    ('raises', 'close_raises'),
+    [(False, False), (True, False), (False, True)],
+)
 async def test_hybrid_static_leg_closes_per_row_target(
     monkeypatch: pytest.MonkeyPatch,
     raises: bool,
+    close_raises: bool,
 ) -> None:
-    """The hybrid static leg closes its fresh target after success or failure."""
+    """The hybrid static leg always attempts best-effort target cleanup."""
     from evaluatorq.contracts import AgentTarget
     from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities
     from evaluatorq.redteam.contracts import Pipeline
@@ -355,6 +359,8 @@ async def test_hybrid_static_leg_closes_per_row_target(
 
         async def close(self) -> None:
             self.close_calls.append(1)
+            if close_raises:
+                raise RuntimeError('close exploded')
 
     static_datapoint = DataPoint(
         inputs={
