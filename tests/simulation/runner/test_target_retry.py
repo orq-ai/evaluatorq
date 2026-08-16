@@ -26,6 +26,9 @@ from evaluatorq.contracts import (
 from evaluatorq.simulation.runner.simulation import SimulationRunner
 from evaluatorq.simulation.types import (
     CommunicationStyle,
+    Criterion,
+    CriterionVerdict,
+    Judgment,
     Persona,
     Scenario,
     SimulationDatapoint,
@@ -119,6 +122,18 @@ class _FlakyTarget(AgentTarget):
         return AgentResponse(text='ok')
 
 
+class _BilledErrorTarget(AgentTarget):
+    def new(self) -> _BilledErrorTarget:
+        return _BilledErrorTarget()
+
+    async def respond(self, messages: list[Message]) -> AgentResponse:
+        return AgentResponse(
+            text='[ERROR]',
+            error=AgentResponseError(message='provider rejected the request', error_type='target_error'),
+            usage=TokenUsage(input_tokens=4, output_tokens=5, total_tokens=9, calls=1),
+        )
+
+
 async def test_target_retries_then_succeeds() -> None:
     target = _FlakyTarget(fail_times=1)
     runner = SimulationRunner(
@@ -153,6 +168,48 @@ async def test_target_exhausted_terminates_with_error_and_failed_turn() -> None:
     # The failed turn IS recorded: an assistant message is present.
     assert any(m.role == 'assistant' for m in result.messages)
     assert result.metadata.get('error')
+
+
+async def test_billed_target_error_keeps_response_usage() -> None:
+    runner = SimulationRunner(
+        target_agent=_BilledErrorTarget(),
+        max_target_retries=0,
+        target_agent_timeout_ms=5000,
+        max_turns=1,
+        user_simulator=_make_mock_user_simulator(),
+        judge=_make_mock_judge(),
+    )
+
+    result = await runner.run(datapoint=_make_datapoint())
+
+    assert result.terminated_by is TerminatedBy.error
+    assert result.token_usage.total_tokens == 9
+
+
+async def test_usage_collection_failure_is_unknown_not_zero(caplog: pytest.LogCaptureFixture) -> None:
+    user_simulator = _make_mock_user_simulator()
+    user_simulator.get_usage = MagicMock(side_effect=RuntimeError('usage endpoint unavailable'))
+    runner = SimulationRunner(
+        target_agent=_BilledErrorTarget(),
+        max_target_retries=0,
+        target_agent_timeout_ms=5000,
+        max_turns=1,
+        user_simulator=user_simulator,
+        judge=_make_mock_judge(),
+    )
+
+    with caplog.at_level('WARNING'):
+        result = await runner.run(datapoint=_make_datapoint())
+
+    assert result.token_usage.total_tokens == 9
+    assert result.token_usage_known is False
+    assert result.metadata['token_usage_unknown'] is True
+    assert 'reporting partial usage as unknown' in caplog.text
+    from evaluatorq.simulation.reports.sections import build_report_sections
+    from evaluatorq.simulation.reports.token_usage import build_token_usage_rows
+
+    token_section = next(section for section in build_report_sections([result]) if section.kind == 'token_usage')
+    assert ['Usage Coverage', 'unknown for 1 conversation'] in build_token_usage_rows(token_section.data)
 
 
 def _make_continue_judgment() -> MagicMock:
@@ -260,6 +317,51 @@ async def test_outer_timeout_retains_partial_transcript() -> None:
     assert result.token_usage == expected_usage
     assert result.metadata.get('error')
     assert result.metadata.get('error_type') == 'timeout'
+
+
+class _AuditingContinueJudge:
+    def reset_usage(self) -> None: ...
+
+    def get_usage(self) -> TokenUsage:
+        return TokenUsage()
+
+    async def evaluate(self, messages: list[Message]) -> Judgment:
+        return Judgment(
+            should_terminate=False,
+            reason='continue',
+            goal_achieved=False,
+            rules_broken=[],
+            goal_completion_score=0.0,
+            criteria_verdicts=[CriterionVerdict(criterion_id='criteria_0', occurred=True, evidence='first answer')],
+        )
+
+
+async def test_outer_timeout_preserves_criteria_state_and_partial_usage() -> None:
+    target = _HangSecond()
+    datapoint = _make_datapoint().model_copy(
+        update={
+            'scenario': _make_datapoint().scenario.model_copy(
+                update={
+                    'criteria': [Criterion(description='Agent answers the user', type='must_happen')],
+                }
+            ),
+        }
+    )
+    runner = SimulationRunner(
+        target_agent=target,
+        max_target_retries=0,
+        target_agent_timeout_ms=60000,
+        user_simulator=_make_mock_user_simulator(),
+        judge=_AuditingContinueJudge(),  # pyright: ignore[reportArgumentType]
+    )
+
+    result = await runner._run_with_timeout(datapoint, max_turns=5, timeout_s=0.3)
+
+    assert result.terminated_by is TerminatedBy.timeout
+    assert result.criteria_verified is True
+    assert result.criteria_results == {'Agent answers the user': True}
+    assert result.metadata['criteria_meta'][0]['evidence'] == 'first answer'
+    assert result.token_usage.total_tokens == 12
 
 
 async def test_outer_timeout_keeps_total_usage_beyond_completed_turns() -> None:
