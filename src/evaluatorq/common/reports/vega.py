@@ -425,6 +425,8 @@ def vl_stacked_bar(
     series: list[tuple[str, list[float]]],
     x_title: str,
     value_labels: list[list[str]] | None = None,
+    extra_fields: dict[tuple[str, str], dict[str, Any]] | None = None,
+    tooltip: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Stacked horizontal bar chart for multi-series breakdowns.
 
@@ -436,6 +438,10 @@ def vl_stacked_bar(
     ``series`` is a list of ``(series_name, values_per_label)`` tuples.
     ``value_labels`` is optional per-series/per-label text labels; omitted
     labels fall back to the numeric value.
+
+    ``extra_fields`` adds fields to each generated row, keyed by
+    ``(label, series_name)``. ``tooltip`` configures the chart tooltip from
+    those generated rows.
 
     Returns ``{}`` when *labels* or *series* is empty.
     """
@@ -451,7 +457,10 @@ def vl_stacked_bar(
                 text = value_labels[si][li]
             else:
                 text = f'{v:g}'
-            rows.append({'label': label, 'series': name, 'value': v, 'text': text})
+            row = {'label': label, 'series': name, 'value': v, 'text': text}
+            if extra_fields is not None:
+                row.update(extra_fields.get((label, name), {}))
+            rows.append(row)
 
     base: dict[str, Any] = {
         'data': {'values': rows},
@@ -468,6 +477,8 @@ def vl_stacked_bar(
         'width': 420,
         'height': {'step': 24},
     }
+    if tooltip is not None:
+        base['encoding']['tooltip'] = tooltip
     bar_layer: dict[str, Any] = {
         'mark': {'type': 'bar'},
     }

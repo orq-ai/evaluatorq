@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel
 
+from evaluatorq.contracts import AgentResponseError
 from evaluatorq.redteam.contracts import (
     AgentContext,
     AgentInfo,
@@ -574,6 +575,43 @@ def _make_agent_context(key: str = 'test-agent', model: str = 'gpt-4o') -> Agent
 class TestCoerceJobOutputPayload:
     """Tests for _coerce_job_output_payload()."""
 
+    def test_object_shaped_error_is_flattened_before_validation(self):
+        raw = {
+            'response': '[ERROR: boom]',
+            'error': AgentResponseError(message='boom', error_type='target_error', code='boom-code'),
+        }
+
+        result = _coerce_job_output_payload(raw)
+
+        assert result.error == 'Target agent failed after 1 attempt(s): boom'
+        assert result.error_type == 'target_error'
+        assert result.error_stage == 'target_call'
+        assert result.error_code == 'boom-code'
+        assert result.error_turn == 1
+        assert result.error_details is None
+
+    def test_serialized_error_payload_is_flattened_before_validation(self):
+        raw = {
+            'response': '[ERROR: boom]',
+            'error': {
+                'error': 'boom',
+                'error_type': 'provider_error',
+                'error_stage': 'target_call',
+                'error_code': 'provider-boom',
+                'error_turn': 3,
+                'error_details': {'provider': 'example'},
+            },
+        }
+
+        result = _coerce_job_output_payload(raw)
+
+        assert result.error == 'boom'
+        assert result.error_type == 'provider_error'
+        assert result.error_stage == 'target_call'
+        assert result.error_code == 'provider-boom'
+        assert result.error_turn == 3
+        assert result.error_details == {'provider': 'example'}
+
     def test_dict_input_with_final_response(self):
         raw = {'final_response': 'Hello there', 'turns': 3}
         result = _coerce_job_output_payload(raw)
@@ -713,6 +751,28 @@ class TestCoerceJobOutputPayload:
 
 class TestDynamicConverterValuePropagation:
     """Tests for dynamic_evaluatorq_results_to_report()."""
+
+    def test_pre_execution_datapoint_is_reported_as_run_error_not_attack(self):
+        failed = SimpleNamespace(
+            data_point=SimpleNamespace(inputs={'row_index': 7}),
+            error='strategy generation failed',
+            job_results=None,
+        )
+
+        report = dynamic_evaluatorq_results_to_report(
+            agent_context=_make_agent_context(),
+            categories_tested=['ASI01'],
+            results=[failed],
+        )
+
+        assert report.results == []
+        assert report.total_results == 0
+        assert len(report.errors) == 1
+        assert report.errors[0].message == 'strategy generation failed'
+        assert report.errors[0].stage == PipelineStage.DATAPOINT_GENERATION
+        assert report.summary.pre_execution_errors == 1
+        assert report.summary.total_errors == 1
+        assert report.summary.total_attacks == 0
 
     def test_value_field_propagated_to_evaluation(self):
         mock_result = _make_dynamic_mock_result(score_value=True, score_explanation='Agent resisted')

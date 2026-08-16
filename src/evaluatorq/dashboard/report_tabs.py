@@ -1597,8 +1597,17 @@ def _rt_exec_summary(summary_data: dict[str, Any], by_kind: dict[str, Any]) -> s
     from evaluatorq.dashboard.report_kit import callout
 
     total = summary_data.get('total_attacks', 0)
-    if not total:
+    pre_execution_errors = summary_data.get('pre_execution_errors', 0)
+    if not total and not pre_execution_errors:
         return ''
+
+    if not total:
+        return callout(
+            f'<strong>{pre_execution_errors}</strong> row'
+            f'{"s" if pre_execution_errors != 1 else ""} failed before execution. '
+            'No attack results were produced for this run.',
+            confidence=summary_data.get('confidence'),
+        )
 
     if zero_evaluated_attacks(summary_data):
         sentence = (
@@ -1653,6 +1662,8 @@ def _rt_exec_summary(summary_data: dict[str, Any], by_kind: dict[str, Any]) -> s
     total_errors = summary_data.get('total_errors', 0)
     if total_errors:
         sentence += f' {total_errors} attack{"s" if total_errors != 1 else ""} errored and were not evaluated.'
+    if pre_execution_errors:
+        sentence += f' {pre_execution_errors} row{"s" if pre_execution_errors != 1 else ""} failed before execution.'
 
     return callout(sentence, confidence=summary_data.get('confidence'))
 

@@ -180,7 +180,7 @@ def rid(roots: list[Path]) -> str:
 
 def _assert_empty_attack_fragment(response) -> None:
     assert response.status_code == 200
-    assert response.text == '<p class="sim-empty">No attack at that index.</p>'
+    assert response.text == '<p class="rt-view-empty">No attack at that index.</p>'
     assert 'Evaluator verdict' not in response.text
 
 
@@ -202,6 +202,27 @@ def _get(client: TestClient, url: str) -> str:
 
 class TestBreakdownView:
     """GET /r/{rid}/view/breakdown"""
+
+    def test_all_errored_report_renders_breakdown_empty_state(self, tmp_path: Path) -> None:
+        errored = _make_result(category='ASI01', passed=None, attack_id='errored').model_copy(
+            update={'error': 'target unavailable'}
+        )
+        report = _make_report([errored], tested_agents=['agent-a'])
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        report_path = rt / 'rt_all_errored_20260101.json'
+        report_path.write_text(report.model_dump_json())
+
+        app = build_app(roots=[rt])
+        rid = report_id(report_path)
+        response = TestClient(app, raise_server_exceptions=True).get(
+            f'/r/{rid}/view/breakdown?group_by=vulnerability&stack_by=severity'
+        )
+
+        assert response.status_code == 200
+        assert 'rt-view-empty' in response.text
+        assert 'No evaluated results to display.' in response.text
+        assert 'data-vega-for' not in response.text
 
     def test_returns_200(self, client: TestClient, rid: str) -> None:
         _get(client, f'/r/{rid}/view/breakdown?group_by=vulnerability')
