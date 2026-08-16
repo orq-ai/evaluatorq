@@ -109,9 +109,11 @@ uv run support_agent_eval.py
 against `agent-v2`'s 1.00. Every job runs against every data point, so adding a
 third variant adds a column.
 
-Because `agent-v1` fails two rows, the script exits with status 1: that is the
-CI gate firing, not a crash. Swap the two function bodies for your own model or
-agent call and that same pass/fail signal gates quality regressions in CI.
+Because `agent-v1` fails two rows, its results contain `pass_=False`, but the
+library does not exit the process. For a CI gate, check `pass_` with
+`check_pass_failures(results)` and raise `SystemExit(1)` yourself. Swap the two
+function bodies for your own model or agent call and that same pass/fail signal
+can gate quality regressions in CI.
 
 ## Where to next
 

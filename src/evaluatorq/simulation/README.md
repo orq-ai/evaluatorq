@@ -83,11 +83,11 @@ Each result carries `goal_achieved`, `goal_completion_score`, `turn_count`,
 `terminated_by`, `rules_broken`, `criteria_results`, and the full `messages`
 transcript.
 
-`exit_on_failure=True` (default) makes a run exit non-zero when any datapoint or
-evaluator fails — drop it straight into a CI step. Score-based failures go
-through evaluatorq's own gate; dropped jobs raise `SimulationDroppedError`. Pass
-`exit_on_failure=False` for interactive runs where failures should surface as
-warnings instead.
+`exit_on_failure=True` (default) makes a run raise `SimulationDroppedError` when
+a datapoint is dropped — drop it straight into a CI step. Evaluator score
+failures are returned in the results for callers to inspect. Pass
+`exit_on_failure=False` for interactive runs where dropped rows should surface
+as warnings instead.
 
 ## Datasets
 

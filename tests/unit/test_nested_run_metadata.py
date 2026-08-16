@@ -77,9 +77,8 @@ async def test_llm_call_inside_nested_evaluatorq_carries_outer_run_id() -> None:
             data=[DataPoint(inputs={'text': 'x'})],
             jobs=[job],
             evaluators=[],
-            print_results=False,
-            _send_results=False,
-            _exit_on_failure=False,
+        print_results=False,
+        _send_results=False,
         )
 
     assert len(requests) == 1
@@ -105,9 +104,8 @@ async def test_nested_evaluatorq_run_id_survives_parallel_datapoints() -> None:
             jobs=[job],
             evaluators=[],
             parallelism=5,
-            print_results=False,
-            _send_results=False,
-            _exit_on_failure=False,
+        print_results=False,
+        _send_results=False,
         )
 
     assert len(requests) == 5

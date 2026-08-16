@@ -153,9 +153,19 @@ async def quality_scorer(params):
     }
 ```
 
-When any evaluator returns `pass_: False`, the process exits with code 1 — drop
-the script into a CI job and it fails the build. The results table gains a pass
-rate row — `Pass Rate | 75% (3/4)`.
+When any evaluator returns `pass_: False`, `evaluatorq()` returns the results;
+the library never exits the process. To make a script a CI gate, inspect the
+results and exit explicitly:
+
+```python
+from evaluatorq.evaluatorq import check_pass_failures
+
+results = await evaluatorq(...)
+if check_pass_failures(results):
+    raise SystemExit(1)
+```
+
+The results table gains a pass rate row — `Pass Rate | 75% (3/4)`.
 
 ## Controlling the run
 

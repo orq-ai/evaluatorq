@@ -72,7 +72,6 @@ async def _run(*, single_trace: bool, data=DATA, parallelism: int = 1):
         parallelism=parallelism,
         print_results=False,
         _send_results=False,
-        _exit_on_failure=False,
     )
 
 
