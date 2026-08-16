@@ -773,7 +773,7 @@ def static_evaluatorq_results_to_reports(
         if not job_results:
             job_name = getattr(result, 'job_name', None) or 'pre-execution'
             _converters_logger.warning(
-                'Static result for job %r has no job results; recording as pre-execution run error', job_name
+                'Static result for job {!r} has no job results; recording as pre-execution run error', job_name
             )
             errors_by_job.setdefault(job_name, []).append(_pre_execution_error(result, inputs))
             continue
