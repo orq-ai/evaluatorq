@@ -8,8 +8,7 @@ from evaluatorq.types import DataPoint
 
 
 class _FailingAfterResolveProgressService(ProgressService):
-    """Raises once the data point has already resolved, simulating a failure
-    that happens after resolution but before job execution."""
+    """Raises when the progress display is updated after resolution."""
 
     async def update_progress(
         self,
@@ -23,10 +22,8 @@ class _FailingAfterResolveProgressService(ProgressService):
 
 
 @pytest.mark.asyncio
-async def test_process_data_point_logs_and_preserves_resolved_datapoint(caplog) -> None:
-    """When a data point resolves but something before job execution fails, the
-    resolved DataPoint identity must be preserved on the error result, and a
-    warning naming the row index must be logged."""
+async def test_process_data_point_ignores_progress_display_failure(caplog) -> None:
+    """A progress display failure must not prevent the resolved data point from running."""
 
     resolved = DataPoint(inputs={'text': 'hello'})
 
@@ -34,7 +31,7 @@ async def test_process_data_point_logs_and_preserves_resolved_datapoint(caplog) 
         return resolved
 
     def job(_data: DataPoint, _row: int):
-        raise AssertionError('job should never run')
+        return {'name': 'job', 'output': 'output'}
 
     with caplog.at_level('WARNING'):
         results = await process_data_point(
@@ -48,13 +45,11 @@ async def test_process_data_point_logs_and_preserves_resolved_datapoint(caplog) 
 
     assert len(results) == 1
     result = results[0]
-    assert result.error is not None
-    # The resolved DataPoint identity must be preserved, not collapsed to an
-    # empty placeholder.
+    assert result.error is None
     assert result.data_point is resolved
     assert result.data_point.inputs == {'text': 'hello'}
-
-    assert any('3' in record.getMessage() for record in caplog.records)
+    assert 'Progress display datapoint update failed; continuing' in caplog.text
+    assert 'RuntimeError' in caplog.text
 
 
 @pytest.mark.asyncio

@@ -10,8 +10,9 @@ also uploads its results to Orq — unset it for a purely local run.) The two
 model call, a LangChain agent, or an HTTP request to your service, and the
 evaluation loop is unchanged.
 
-The script exits non-zero: `agent-v1` misses two of the three questions, and a
-failing evaluator fails the run. That is the CI gate working, not a bug.
+The script exits 0 even though `agent-v1` misses two of the three questions:
+evaluator failures are returned in the results for callers to inspect. To make
+this a CI gate, check the results and raise an exit error in your own script.
 
 Usage:
     # from the evaluatorq repository root
