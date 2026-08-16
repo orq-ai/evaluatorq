@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import inspect
 import json
 import os
 import re
@@ -27,7 +26,7 @@ from evaluatorq.common.recommendations import resolve_recommendations
 from evaluatorq.common.replay import REPLAY_VERSION, REPLAY_VERSION_KEY
 from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.common.run_store_dir import get_store_dir
-from evaluatorq.common.target_call import call_target_with_retry, default_map_error
+from evaluatorq.common.target_call import call_target_with_retry, close_target, default_map_error
 from evaluatorq.common.thread_context import (
     _evaluatorq_run_scope,
     build_static_thread_id,
@@ -1347,11 +1346,7 @@ def _create_static_job_for_agent_target(
 
             return {**output, 'thread_id': thread_id}
         finally:
-            target_close = getattr(target, 'close', None)
-            if callable(target_close):
-                maybe = target_close()
-                if inspect.isawaitable(maybe):
-                    await maybe
+            await close_target(target)
 
     return agent_target_job
 
@@ -2458,11 +2453,7 @@ async def _run_dynamic_or_hybrid(
                             'thread_id': thread_id,
                         }
                     finally:
-                        target_close = getattr(target_instance, 'close', None)
-                        if callable(target_close):
-                            maybe = target_close()
-                            if inspect.isawaitable(maybe):
-                                await maybe
+                        await close_target(target_instance)
 
                 @job(f'redteam:hybrid:{at_safe}')
                 async def at_target_job(
