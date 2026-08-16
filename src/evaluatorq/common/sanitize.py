@@ -41,8 +41,10 @@ def delimit(text: str, *, tag: str = 'data') -> str:
     if not re.fullmatch(r'[a-zA-Z][a-zA-Z0-9_-]*', tag):
         raise ValueError(f'Invalid tag name: {tag!r}')
     sanitized = text.replace('&', '&amp;')
+    # Keep slash/no-slash whitespace alternatives separate to avoid quadratic
+    # backtracking on long near-misses; stop at another '<' for the same reason.
     sanitized = re.sub(
-        rf'<\s*/?\s*{re.escape(tag)}(?![a-zA-Z0-9_-])[^>]*>',
+        rf'<(?:\s*/\s*|\s*){re.escape(tag)}(?![a-zA-Z0-9_-])[^<>]*>',
         lambda match: (
             re
             .sub(re.escape(tag), tag, match.group(), count=1, flags=re.IGNORECASE)
@@ -52,9 +54,8 @@ def delimit(text: str, *, tag: str = 'data') -> str:
         sanitized,
         flags=re.IGNORECASE,
     )
-    tag_prefix = r'\s*'.join(re.escape(character) for character in tag)
     sanitized = re.sub(
-        rf'<(?=\s*/?\s*{tag_prefix}(?![a-zA-Z0-9_-]))',
+        rf'<(?=(?:\s*/\s*|\s*){re.escape(tag)}(?![a-zA-Z0-9_-]))',
         '&lt;',
         sanitized,
         flags=re.IGNORECASE,

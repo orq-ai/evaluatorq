@@ -44,7 +44,7 @@ def test_delimit_escapes_tag_whitespace_and_attribute_variants(payload: str):
 
 @pytest.mark.parametrize(
     'payload',
-    ['</data', 'prefix </data suffix', '</da ta>', '</ data>', '< /data>'],
+    ['</data', 'prefix </data', 'prefix </data suffix', '</ data>', '< /data>'],
 )
 def test_delimit_escapes_closing_tag_prefixes(payload: str):
     result = delimit(payload)
@@ -53,7 +53,16 @@ def test_delimit_escapes_closing_tag_prefixes(payload: str):
     assert '<' not in inner
 
 
-@pytest.mark.parametrize('payload', ['<data', 'prefix <data suffix', '<da ta>', '< data>'])
+def test_delimit_preserves_whitespace_split_closing_tag_name():
+    payload = '</da ta>'
+
+    result = delimit(payload)
+
+    # A whitespace-split tag name is not a closing tag to any parser, so leave it alone.
+    assert payload in result
+
+
+@pytest.mark.parametrize('payload', ['<data', 'prefix <data suffix', '< data>'])
 def test_delimit_escapes_opening_tag_prefixes(payload: str):
     result = delimit(payload)
     inner = result.removeprefix('<data>').removesuffix('</data>')
@@ -61,12 +70,39 @@ def test_delimit_escapes_opening_tag_prefixes(payload: str):
     assert '<' not in inner
 
 
-def test_delimit_preserves_ordinary_angle_brackets_and_code_samples():
-    payload = 'a < b\n```python\nif a < b:\n    return\n```'
+@pytest.mark.parametrize(
+    'payload',
+    [
+        '< d a t a',
+        'a < b',
+        '<database>',
+        '<dat>',
+        '```html\n<div>literal</div>\n```',
+    ],
+)
+def test_delimit_preserves_ordinary_angle_brackets_and_code_samples(payload: str):
 
     result = delimit(payload)
 
     assert payload in result
+
+
+@pytest.mark.parametrize(
+    'payload',
+    [
+        '<' + ' ' * 50_000 + 'x',
+        ('<' + ' ' * 998 + 'x') * 250,
+        '<data' * 50_000,
+    ],
+)
+def test_delimit_rejects_superlinear_tag_prefix_scans(payload: str):
+    """Large near-misses must not make untrusted prompt content expensive."""
+    from time import perf_counter
+
+    start = perf_counter()
+    delimit(payload)
+
+    assert perf_counter() - start < 1.0
 
 
 def test_delimit_empty_string():
