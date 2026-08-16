@@ -19,6 +19,7 @@ from evaluatorq.contracts import (
     TokenUsage,
     ToolCallOutputItem,
     ToolInfo,
+    tool_result_to_text,
 )
 from evaluatorq.openresponses.input_items import message_to_responses_input_items
 
@@ -184,12 +185,7 @@ class OpenAIAgentTarget(AgentTarget):
         # not `str(...)`'s Python repr (`Answer(field='x')` is not valid JSON
         # and is not what the agent actually said).
         final = result.final_output
-        if isinstance(final, str):
-            final_text = final
-        elif hasattr(final, 'model_dump_json'):
-            final_text = final.model_dump_json()
-        else:
-            final_text = json.dumps(final, default=str)
+        final_text = tool_result_to_text(final)
         last_text = next(
             (item.text for item in reversed(output_items) if isinstance(item, TextOutputItem)),
             None,

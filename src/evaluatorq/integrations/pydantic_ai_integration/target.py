@@ -113,7 +113,7 @@ class PydanticAITarget(AgentTarget):
         # text if the message objects don't expose the expected parts.
         output: list[OutputMessage] = _build_output(result)
         if not output:
-            text = '' if result.output is None else str(result.output)
+            text = '' if result.output is None else tool_result_to_text(result.output)
             output = [TextOutputItem(text=text, annotations=[])]
         return AgentResponse(output=output, usage=_extract_usage(result))
 
