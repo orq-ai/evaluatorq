@@ -55,8 +55,9 @@ def delimit(text: str, *, tag: str = 'data') -> str:
         flags=re.IGNORECASE,
     )
     sanitized = re.sub(
-        rf'<(?=(?:\s*/\s*|\s*){re.escape(tag)}(?![a-zA-Z0-9_-]))',
-        '&lt;',
+        rf'<(?:\s*/\s*|\s*){re.escape(tag)}(?![a-zA-Z0-9_-])'
+        rf'(?:[^<>]*<[^>]*(?:>|$))?',
+        lambda match: match.group().replace('<', '&lt;').replace('>', '&gt;'),
         sanitized,
         flags=re.IGNORECASE,
     )
