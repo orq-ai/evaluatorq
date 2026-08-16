@@ -772,6 +772,46 @@ def test_rt_exec_summary_reports_pre_execution_rows() -> None:
     assert '<strong>2</strong>' in html
 
 
+def test_rt_overview_outcome_buckets_conserve_attack_total(monkeypatch, rt_report_clean) -> None:
+    from types import SimpleNamespace
+
+    from evaluatorq.dashboard import report_kit
+    from evaluatorq.dashboard.report_tabs import _rt_overview
+
+    captured: dict[str, object] = {}
+
+    def capture_donut(segments, center_label, center_caption):
+        captured['segments'] = segments
+        return ''
+
+    monkeypatch.setattr(report_kit, 'donut', capture_donut)
+    summary = SimpleNamespace(
+        data={
+            'total_attacks': 3,
+            'evaluated_attacks': 2,
+            'unevaluated_attacks': 1,
+            'vulnerabilities_found': 1,
+            'resistance_rate': 0.5,
+            'vulnerability_rate': 0.5,
+            'total_errors': 2,
+            'pre_execution_errors': 1,
+            'by_severity': {},
+        }
+    )
+    category = SimpleNamespace(data={'rows': [{'total_attacks': 3}]})
+
+    _rt_overview({'summary': summary, 'category_breakdown': category}, rt_report_clean)
+
+    segments = captured['segments']
+    assert sum(segment['value'] for segment in segments) == summary.data['total_attacks']
+    assert {segment['label']: segment['value'] for segment in segments} == {
+        'Resistant': 1,
+        'Vulnerable': 1,
+        'Error': 1,
+    }
+    assert sum(row['total_attacks'] for row in category.data['rows']) == summary.data['total_attacks']
+
+
 def test_redteam_error_analysis_includes_pre_execution_rows(rt_report_clean) -> None:
     from evaluatorq.dashboard.report_tabs import redteam_report_tabs
     from evaluatorq.redteam.contracts import RunError

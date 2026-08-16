@@ -1659,9 +1659,12 @@ def _rt_exec_summary(summary_data: dict[str, Any], by_kind: dict[str, Any]) -> s
                     f'{pct(last_rate)} at {last.get("turn_count")} turns.'
                 )
 
-    total_errors = summary_data.get('total_errors', 0)
-    if total_errors:
-        sentence += f' {total_errors} attack{"s" if total_errors != 1 else ""} errored and were not evaluated.'
+    evaluated = summary_data.get('evaluated_attacks', 0)
+    attack_errors = summary_data.get('unevaluated_attacks')
+    if attack_errors is None:
+        attack_errors = max(total - evaluated, 0)
+    if attack_errors:
+        sentence += f' {attack_errors} attack{"s" if attack_errors != 1 else ""} errored and were not evaluated.'
     if pre_execution_errors:
         sentence += f' {pre_execution_errors} row{"s" if pre_execution_errors != 1 else ""} failed before execution.'
 
@@ -1767,7 +1770,9 @@ def _rt_overview(by_kind: dict[str, Any], report: RedTeamReport) -> str:
 
     evaluated = summary_data.get('evaluated_attacks', 0)
     vulns = summary_data.get('vulnerabilities_found', 0)
-    total_errors = summary_data.get('total_errors', 0)
+    attack_errors = summary_data.get('unevaluated_attacks')
+    if attack_errors is None:
+        attack_errors = max(summary_data.get('total_attacks', 0) - evaluated, 0)
     resistant = max(evaluated - vulns, 0)
     resistance_rate = summary_data.get('resistance_rate', 0.0)
 
@@ -1775,7 +1780,7 @@ def _rt_overview(by_kind: dict[str, Any], report: RedTeamReport) -> str:
         [
             {'label': 'Resistant', 'value': resistant, 'color': 'var(--green-600)'},
             {'label': 'Vulnerable', 'value': vulns, 'color': 'var(--red-600)'},
-            {'label': 'Error', 'value': total_errors, 'color': 'var(--amber-600)'},
+            {'label': 'Error', 'value': attack_errors, 'color': 'var(--amber-600)'},
         ],
         pct(resistance_rate),
         'resistant',
