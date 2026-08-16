@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from evaluatorq.redteam.contracts import AgentContext
 from evaluatorq.redteam.reports.converters import (
@@ -94,7 +94,7 @@ def test_dynamic_results_to_report_surfaces_job_result_error_without_output() ->
 
 def test_dynamic_results_to_report_retains_result_without_data_point(caplog: Any) -> None:
     result = _FakeResult(
-        data_point=None,  # type: ignore[arg-type]
+        data_point=cast('Any', None),
         job_results=[],
         error='RuntimeError: data point construction failed',
     )

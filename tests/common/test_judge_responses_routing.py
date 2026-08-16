@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -291,7 +291,7 @@ def test_disarms_client_when_caller_owns_retry_and_client_has_a_budget():
     its own nonzero SDK retry budget must be disarmed or the two multiply."""
     client = _RetryStubClient(max_retries=3)
 
-    result = without_client_retries(client)
+    result = without_client_retries(cast('Any', client))
 
     assert result is not client
     assert client.with_options_calls == [{'max_retries': 0}]
@@ -302,7 +302,7 @@ def test_client_is_disarmed_even_when_the_outer_retry_budget_is_one_attempt():
     """The retry boundary owns the call even when its configured budget is one attempt."""
     client = _RetryStubClient(max_retries=3)
 
-    result = without_client_retries(client)
+    result = without_client_retries(cast('Any', client))
 
     assert result is not client
     assert client.with_options_calls == [{'max_retries': 0}]
@@ -314,7 +314,7 @@ def test_client_passed_through_untouched_when_it_has_no_retry_budget():
     calling ``with_options`` would be a needless extra client object."""
     client = _RetryStubClient(max_retries=0)
 
-    result = without_client_retries(client)
+    result = without_client_retries(cast('Any', client))
 
     assert result is client
     assert client.with_options_calls == []

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Any, cast
 import pytest
 
 from evaluatorq.processings import process_data_point
@@ -37,7 +38,7 @@ async def test_process_data_point_ignores_progress_display_failure(caplog) -> No
         results = await process_data_point(
             data_promise=resolving_promise(),
             row_index=3,
-            jobs=[job],
+            jobs=cast('Any', [job]),
             evaluators=None,
             parallelism=1,
             progress_service=_FailingAfterResolveProgressService(),
