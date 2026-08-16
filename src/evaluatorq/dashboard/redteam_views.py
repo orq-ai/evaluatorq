@@ -122,20 +122,20 @@ def register_redteam_view_routes(app: Any, roots: list[Any] | None = None) -> No
     @app.get('/r/{rid}/redteam/attack')
     def view_attack(rid: str, req: Request) -> Response:
         try:
-            idx = int(req.query_params.get('idx', ''))
+            idx: int | None = int(req.query_params.get('idx', ''))
         except (ValueError, TypeError):
-            return Response(
-                '<p class="rt-view-error">Invalid attack index.</p>', status_code=400, media_type='text/html'
-            )
+            idx = None
         report = _load_report(rid, roots)
         if report is None:
             return Response(_404(f'Report {rid} not found'), status_code=404, media_type='text/html')
         selections = parse_selections(req, 'redteam')
         filtered = apply_or_all(report, 'redteam', selections)
-        if not filtered:
-            return Response(_404('No attack at that index'), status_code=404, media_type='text/html')
-        if idx < 0 or idx >= len(filtered):
-            return Response(_404('No attack at that index'), status_code=404, media_type='text/html')
+        if idx is None or not filtered or idx < 0 or idx >= len(filtered):
+            return Response(
+                '<p class="sim-empty">No attack at that index.</p>',
+                status_code=200,
+                media_type='text/html',
+            )
         from evaluatorq.dashboard.redteam_transcripts import render_attack_fragment
 
         return Response(render_attack_fragment(filtered[idx]), media_type='text/html')
