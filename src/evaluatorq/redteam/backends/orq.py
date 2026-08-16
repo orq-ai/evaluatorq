@@ -43,6 +43,7 @@ def _get_orq_server_url() -> str:
     return url.rstrip('/').removesuffix('/v3/router')
 
 
+from evaluatorq.common.retry import _warn_ignored_target_retries
 from evaluatorq.common.thread_context import pipeline_metadata_param, thread_body_param
 from evaluatorq.common.tracing import record_llm_response, set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentTarget, Message, content_to_text
@@ -640,12 +641,13 @@ class ORQBackend(Backend):
         super().__init__(name='orq')
         timeout_ms = timeout_ms or PIPELINE_CONFIG.target_agent_timeout_ms
         self._timeout_ms = timeout_ms
+        _warn_ignored_target_retries(
+            logger,
+            'ORQ',
+            retry_count=retry_count,
+            retry_on_codes=retry_on_codes,
+        )
         if orq_client is not None:
-            if retry_count is not None or retry_on_codes is not None:
-                logger.warning(
-                    'ORQBackend received retry_count/retry_on_codes with an injected client; '
-                    "preserving that client's configured retry budget"
-                )
             self._orq_client = orq_client
         else:
             if _orq_cls is None:

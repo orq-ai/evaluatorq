@@ -10,6 +10,7 @@ from loguru import logger
 from evaluatorq.common.llm_call import apply_pipeline_metadata
 from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.model_catalogue import price_usage
+from evaluatorq.common.retry import without_client_retries
 from evaluatorq.common.thread_context import thread_body_param
 from evaluatorq.common.tracing import record_llm_response
 from evaluatorq.contracts import AgentTarget, Message
@@ -100,12 +101,13 @@ class OpenAIModelTarget(AgentTarget):
         `create_async_llm_client`.
         OpenAI models are stateless — no server-side memory to isolate.
         The orchestrator owns target retries via ``call_target_with_retry``;
-        an auto-built client therefore has SDK retries disabled.
+        auto-built clients therefore have SDK retries disabled and injected
+        clients are cloned with that budget disabled at the target boundary.
         """
         super().__init__(memory_entity_id=None)
         self.model = model
         # call_target_with_retry is the single retry owner for target calls.
-        self.client = client or create_async_llm_client(max_retries=0)
+        self.client = without_client_retries(client) if client is not None else create_async_llm_client(max_retries=0)
         self.system_prompt = system_prompt or 'You are a helpful assistant.'
         self.max_tokens = max_tokens or DEFAULT_TARGET_MAX_TOKENS
         self.timeout_ms = timeout_ms or DEFAULT_TARGET_TIMEOUT_MS
@@ -240,7 +242,7 @@ class OpenAIBackend(Backend):
     ) -> None:
         super().__init__(name='openai')
         # call_target_with_retry is the single retry owner for target calls.
-        self._client = client or create_async_llm_client(max_retries=0)
+        self._client = without_client_retries(client) if client is not None else create_async_llm_client(max_retries=0)
         self._system_prompt = system_prompt
         self._max_tokens = max_tokens
         self._timeout_ms = timeout_ms

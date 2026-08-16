@@ -9,6 +9,7 @@ the Orq-SDK backend derives an equivalent client-level ``RetryConfig``.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -16,8 +17,10 @@ import pytest
 from openai import AsyncOpenAI
 
 from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.common.retry import without_client_retries
 from evaluatorq.common.target_call import call_target_with_retry
 from evaluatorq.contracts import LLMCallConfig, Message
+from evaluatorq.openresponses.client import build_simulation_client
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import LLMConfig
 
@@ -46,13 +49,35 @@ def test_resolve_llm_client_openai_branch_passes_max_retries(monkeypatch: pytest
     assert client.max_retries == 5
 
 
-def test_injected_client_is_never_reconfigured() -> None:
-    from openai import AsyncOpenAI
+def test_without_client_retries_clones_and_preserves_injected_client_settings() -> None:
+    http_client = httpx.AsyncClient(base_url="https://example.test/v1")
+    injected = AsyncOpenAI(
+        api_key="user-key",
+        base_url="https://example.test/v1",
+        timeout=17.5,
+        max_retries=5,
+        http_client=http_client,
+    )
 
-    injected = AsyncOpenAI(api_key="user-key", max_retries=0)
-    resolved = resolve_llm_client(injected, max_retries=7)
-    assert resolved.client is injected
-    assert resolved.client.max_retries == 0
+    disarmed = without_client_retries(injected)
+
+    assert disarmed is not injected
+    assert disarmed.max_retries == 0
+    assert disarmed.api_key == injected.api_key
+    assert disarmed.base_url == injected.base_url
+    assert disarmed.timeout == injected.timeout
+    assert disarmed._client is injected._client
+
+
+def test_build_simulation_client_disarms_injected_client_at_with_retry_boundary() -> None:
+    injected = AsyncOpenAI(api_key="user-key", max_retries=5)
+
+    client, owned = build_simulation_client(injected, max_retries=0)
+
+    assert client is not injected
+    assert client.max_retries == 0
+    assert injected.max_retries == 5
+    assert owned is False
 
 
 def test_create_async_llm_client_plumbs_retry_count() -> None:
@@ -117,11 +142,14 @@ def test_orq_responses_target_client_carries_no_sdk_retries(monkeypatch: pytest.
     target = OrqResponsesTarget(LLMCallConfig(model="gpt-4o"))
     assert target._client.max_retries == 0
 
-    # An injected client stays exactly as the caller built it.
+    # An injected client is cloned so with_retry remains the sole owner.
     from openai import AsyncOpenAI
 
     injected = AsyncOpenAI(api_key="user-key", max_retries=5)
-    assert OrqResponsesTarget(LLMCallConfig(model="gpt-4o"), client=injected)._client.max_retries == 5
+    target = OrqResponsesTarget(LLMCallConfig(model="gpt-4o"), client=injected)
+    assert target._client is not injected
+    assert target._client.max_retries == 0
+    assert injected.max_retries == 5
 
 
 @pytest.mark.asyncio
@@ -187,11 +215,19 @@ def test_openai_backend_warns_when_target_retry_settings_are_ignored() -> None:
     from evaluatorq.redteam.backends.registry import _create_openai_backend
 
     with patch('evaluatorq.redteam.backends.registry.logger.warning') as warning:
-        _create_openai_backend(
-            llm_client=MagicMock(),
-            retry_count=2,
-            retry_on_codes=[429, 503],
-        )
+        _create_openai_backend(llm_client=MagicMock(), pipeline_config=LLMConfig(retry_count=2))
+
+    warning.assert_called_once()
+    message = warning.call_args.args[0]
+    assert 'retry_count' in message
+    assert 'retry_on_codes' in message
+
+
+def test_openresponses_backend_uses_the_same_ignored_retry_warning() -> None:
+    from evaluatorq.redteam.backends.registry import _create_openresponses_backend
+
+    with patch('evaluatorq.redteam.backends.registry.logger.warning') as warning:
+        _create_openresponses_backend(pipeline_config=LLMConfig(retry_count=2))
 
     warning.assert_called_once()
     message = warning.call_args.args[0]
@@ -234,4 +270,85 @@ def test_orq_backend_warns_when_injected_retry_config_cannot_be_reconfigured() -
         orq_backend.ORQBackend(orq_client=MagicMock(), retry_count=2, retry_on_codes=[429])
 
     warning.assert_called_once()
-    assert "injected client" in warning.call_args.args[0]
+    assert warning.call_args.args[0] == (
+        'Ignoring retry_count and retry_on_codes for ORQ target calls; '
+        'call_target_with_retry owns target retries and the SDK retry budget is '
+        'disabled at the target-call boundary'
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'path',
+    ['openai-auto', 'openai-injected', 'openresponses-auto', 'openresponses-injected', 'orq'],
+)
+async def test_target_paths_make_exactly_one_http_attempt_per_outer_attempt(
+    path: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(
+            429,
+            request=request,
+            headers={'content-type': 'application/json'},
+            json={'error': {'message': 'rate limited', 'type': 'rate_limit_error'}},
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url='https://example.test/v1')
+    sdk_client = AsyncOpenAI(api_key='test-key', max_retries=2, http_client=http_client)
+
+    if path == 'openai-auto':
+        from evaluatorq.redteam.backends.openai import OpenAIBackend
+
+        with patch('evaluatorq.redteam.backends.openai.create_async_llm_client', return_value=sdk_client):
+            target = OpenAIBackend().create_target('gpt-4o')
+    elif path == 'openai-injected':
+        from evaluatorq.redteam.backends.openai import OpenAIBackend
+
+        target = OpenAIBackend(client=sdk_client).create_target('gpt-4o')
+    elif path.startswith('openresponses'):
+        from evaluatorq.redteam.backends.registry import _create_openresponses_backend
+
+        if path == 'openresponses-auto':
+            def build(*_args: object, **kwargs: object) -> tuple[AsyncOpenAI, bool]:
+                assert kwargs['max_retries'] == 0
+                return build_simulation_client(sdk_client, max_retries=0)
+
+            monkeypatch.setattr('evaluatorq.openresponses.target.build_simulation_client', build)
+            backend = _create_openresponses_backend(pipeline_config=LLMConfig())
+        else:
+            backend = _create_openresponses_backend(llm_client=sdk_client, pipeline_config=LLMConfig())
+        target = backend.create_target('gpt-4o')
+    else:
+        from evaluatorq.redteam.backends.orq import ORQBackend
+
+        sync_client = httpx.Client(transport=httpx.MockTransport(handler), base_url='https://example.test/v1')
+        retries_seen: list[object] = []
+
+        def create(**kwargs: object) -> object:
+            retries_seen.append(kwargs.get('retries'))
+            response = sync_client.post('/agents')
+            response.raise_for_status()
+            return SimpleNamespace(output=[])
+
+        orq_client = SimpleNamespace(agents=SimpleNamespace(responses=SimpleNamespace(create=create)))
+        backend = ORQBackend(orq_client=orq_client)
+        target = backend.create_target('agent')
+
+    result = await call_target_with_retry(
+        target,
+        [Message(role='user', content='hello')],
+        target_agent_timeout_ms=10_000,
+        max_target_retries=2,
+    )
+
+    await http_client.aclose()
+    if path == 'orq':
+        sync_client.close()
+        assert retries_seen == [None, None, None]
+    assert result.succeeded is False
+    assert result.attempts == 3
+    assert attempts == 3

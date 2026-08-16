@@ -38,7 +38,9 @@ def build_simulation_client(
     ``max_retries`` feeds the SDK's client-side retry budget; the default ``0``
     keeps ``with_retry`` as the single retry owner for simulation calls. Pass
     ``None`` only for a caller that intentionally owns retries at the SDK layer.
-    Ignored for an injected ``config_client``.
+    When ``max_retries=0``, an injected ``config_client`` is cloned with its SDK
+    retry budget disabled; the caller's client is not mutated and remains
+    unowned.
     """
     from evaluatorq.common.llm_client import resolve_llm_client
 
@@ -49,7 +51,10 @@ def build_simulation_client(
         require_orq=require_orq,
         max_retries=max_retries,
     )
-    return resolved.client, resolved.owned
+    from evaluatorq.common.retry import without_client_retries
+
+    client = without_client_retries(resolved.client) if max_retries == 0 else resolved.client
+    return client, resolved.owned
 
 
 __all__ = ['build_simulation_client']

@@ -14,13 +14,15 @@ from __future__ import annotations
 
 import asyncio
 import random
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from loguru import logger
 from openai import APIConnectionError, APIStatusError
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable
+
+    from openai import AsyncOpenAI
 
 MAX_RETRY_ATTEMPTS = 5
 RETRY_MIN_WAIT_S = 2.0
@@ -39,6 +41,53 @@ _RETRYABLE_NETWORK_ERRORS = (
     'WriteTimeout',
     'PoolTimeout',
 )
+
+
+def without_client_retries(client: AsyncOpenAI) -> AsyncOpenAI:
+    """Return an OpenAI client clone with SDK retries disabled.
+
+    This belongs beside ``with_retry`` because it enforces the boundary between
+    the two retry owners: a caller that wraps an SDK operation in ``with_retry``
+    must disarm the SDK budget first. ``with_options`` creates a new client and
+    reuses the caller's transport, authentication, base URL, headers, and
+    timeout, so an injected client is never mutated and its lifecycle remains
+    caller-owned. Clients that already have no integer retry budget are returned
+    unchanged, which keeps lightweight test doubles usable.
+    """
+    max_retries = getattr(client, 'max_retries', 0)
+    if not isinstance(max_retries, int) or max_retries <= 0:
+        return client
+    return client.with_options(max_retries=0)
+
+
+def _warn_ignored_target_retries(
+    warning_logger: Any,
+    target_name: str,
+    *,
+    retry_count: int | None = None,
+    retry_on_codes: Iterable[int] | None = None,
+) -> None:
+    """Warn when pipeline retry settings do not own target-call retries.
+
+    Target calls are retried by ``call_target_with_retry``. The settings still
+    may configure non-target SDK operations (notably ORQ context and cleanup),
+    but they are intentionally ignored or overridden at the target boundary.
+    Defaults come from the Pydantic field metadata so checking whether a caller
+    changed a setting does not instantiate a configuration object.
+    """
+    from evaluatorq.redteam.contracts import LLMConfig
+
+    default_retry_count = LLMConfig.model_fields['retry_count'].default
+    default_retry_on_codes = LLMConfig.model_fields['retry_on_codes'].default
+    if retry_count is None and retry_on_codes is None:
+        return
+    if retry_count == default_retry_count and retry_on_codes == default_retry_on_codes:
+        return
+    warning_logger.warning(
+        f'Ignoring retry_count and retry_on_codes for {target_name} target calls; '
+        'call_target_with_retry owns target retries and the SDK retry budget is '
+        'disabled at the target-call boundary'
+    )
 
 
 def _is_retryable_status(
