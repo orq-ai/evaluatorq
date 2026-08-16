@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, cast
 from loguru import logger
 
 from .job_helper import JobError
-from .progress import Phase, ProgressService
+from .progress import Phase, ProgressService, safe_update_progress
 from .types import (
     DataPoint,
     DataPointResult,
@@ -57,7 +57,12 @@ async def process_data_point(
 
         # Update progress for this data point
         if progress_service:
-            await progress_service.update_progress(current_data_point=row_index + 1, phase=Phase.PROCESSING)
+            await safe_update_progress(
+                progress_service,
+                operation='datapoint update',
+                current_data_point=row_index + 1,
+                phase=Phase.PROCESSING,
+            )
 
         # Process jobs with concurrency control
         semaphore = asyncio.Semaphore(parallelism)
@@ -161,7 +166,7 @@ async def process_job(
 
             # Update progress with current job name
             if progress_service:
-                await progress_service.update_progress(current_job=job_name)
+                await safe_update_progress(progress_service, operation='job update', current_job=job_name)
 
         except JobError as e:
             # Extract job name from JobError
@@ -193,7 +198,9 @@ async def process_job(
         if evaluators:
             # Update phase to evaluating
             if progress_service:
-                await progress_service.update_progress(phase=Phase.EVALUATING)
+                await safe_update_progress(
+                    progress_service, operation='evaluation phase update', phase=Phase.EVALUATING
+                )
 
             async def run_evaluator_with_semaphore(evaluator: Evaluator) -> EvaluatorScore:
                 if semaphore is None:
@@ -261,7 +268,11 @@ async def process_evaluator(
         try:
             # Update current evaluator in progress
             if progress_service:
-                await progress_service.update_progress(current_evaluator=evaluator_name)
+                await safe_update_progress(
+                    progress_service,
+                    operation='evaluator update',
+                    current_evaluator=evaluator_name,
+                )
 
             # Execute the scorer
             scorer_param: ScorerParameter = {

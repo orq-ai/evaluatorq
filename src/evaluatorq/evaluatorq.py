@@ -15,7 +15,7 @@ from .fetch_data import (
     setup_orq_client,
 )
 from .processings import process_data_point
-from .progress import Phase, ProgressService, with_progress
+from .progress import Phase, ProgressService, safe_update_progress, with_progress
 from .send_results import send_results_to_orq
 from .table_display import display_results_table
 from .tracing import capture_parent_context, tracing_session
@@ -324,7 +324,9 @@ async def evaluatorq(
                         return result
 
                 # Initialize progress with unknown total (streaming mode)
-                await progress.update_progress(
+                await safe_update_progress(
+                    progress,
+                    operation='streaming initialization',
                     total_data_points=0,
                     current_data_point=0,
                     phase=Phase.FETCHING,
@@ -415,7 +417,9 @@ async def evaluatorq(
                 results_nested = cast('list[list[Any]]', processing_results)
 
                 # Final progress update
-                await progress.update_progress(
+                await safe_update_progress(
+                    progress,
+                    operation='streaming final update',
                     total_data_points=total_datapoints,
                     current_data_point=progress_ref['processed'],
                     phase=Phase.PROCESSING,
@@ -435,7 +439,9 @@ async def evaluatorq(
 
             async def run_evaluation() -> EvaluatorqResult:
                 # Initialize progress
-                await progress.update_progress(
+                await safe_update_progress(
+                    progress,
+                    operation='evaluation initialization',
                     total_data_points=len(data_promises),
                     current_data_point=0,
                     phase=Phase.INITIALIZING,

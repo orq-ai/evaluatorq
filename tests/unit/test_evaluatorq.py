@@ -389,6 +389,67 @@ async def test_streaming_progress_failure_returns_completed_results(
 
 
 @pytest.mark.asyncio
+async def test_streaming_final_progress_failure_returns_completed_results(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A final progress display fault must not hide completed streaming results."""
+    evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
+    poll_seen = asyncio.Event()
+    initial_seen = False
+    polling_task: asyncio.Task[object] | None = None
+    progress_updates: list[dict[str, object]] = []
+
+    class FinalProgressFailureService:
+        async def update_progress(self, **kwargs: object) -> None:
+            nonlocal initial_seen, polling_task
+            progress_updates.append(kwargs)
+            current_task = asyncio.current_task()
+            if kwargs.get('total_data_points') == 0 and kwargs.get('current_data_point') == 0:
+                if initial_seen:
+                    polling_task = current_task
+                    poll_seen.set()
+                else:
+                    initial_seen = True
+            elif (
+                kwargs.get('total_data_points') == 1
+                and kwargs.get('current_data_point') == 1
+                and current_task is not polling_task
+            ):
+                raise BrokenPipeError('final progress pipe closed')
+
+    async def fetch_one_batch(*_args: object, **_kwargs: object):
+        await poll_seen.wait()
+        yield DataPointBatch(
+            datapoints=[DataPoint(inputs={'row': 0})],
+            has_more=False,
+            batch_number=1,
+        )
+
+    async def job(_data: DataPoint, _row: int):
+        return {'name': 'job', 'output': 'output'}
+
+    monkeypatch.setattr(evaluatorq_module, 'ProgressService', FinalProgressFailureService)
+    monkeypatch.setattr(evaluatorq_module, 'setup_orq_client', lambda _api_key: object())
+    monkeypatch.setattr(evaluatorq_module, 'fetch_dataset_batches', fetch_one_batch)
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+
+    with caplog.at_level('WARNING'):
+        results = await evaluatorq_module.evaluatorq(
+            'streaming-final-progress-failure',
+            data=DatasetIdInput(dataset_id='dataset'),
+            jobs=[job],
+            print_results=False,
+            _send_results=False,
+        )
+
+    assert len(results) == 1
+    assert len(progress_updates) >= 3
+    assert 'final progress pipe closed' in caplog.text
+    assert 'BrokenPipeError' in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_streaming_processing_cancellation_is_surfaced(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -2057,11 +2057,8 @@ async def _simulate_via_evaluatorq(
             # two concurrent rich.Live regions flicker against each other.
             print_results=False,
             _send_results=upload_results,
-            # Never let evaluatorq's score-based gate (check_pass_failures →
-            # process exit) fire for simulation. Now that scorers report pass_ (a
-            # judge verdict — e.g. goal not achieved), an underperforming but
-            # otherwise healthy run must NOT exit the process. exit_on_failure
-            # for sim means dropped rows only (SimulationDroppedError below).
+            # evaluatorq returns scorer failures as results; simulation handles
+            # dropped rows separately through SimulationDroppedError below.
             _base_url=upload_base_url,
             _experiment_url_out=experiment_url_out,
         )
