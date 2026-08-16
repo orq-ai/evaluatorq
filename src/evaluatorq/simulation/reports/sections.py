@@ -30,6 +30,7 @@ from loguru import logger
 
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.contracts import ReportSection, Usage
+from evaluatorq.simulation.evaluators.scorers import read_criteria_meta
 from evaluatorq.simulation.metrics import TURN_METRICS
 from evaluatorq.simulation.types import CriteriaRow, SimulationEntry, TranscriptMessage, criterion_id_for
 
@@ -63,7 +64,12 @@ def _evaluator_scores(result: SimulationResult) -> dict[str, float]:
 
 def _error_message(result: SimulationResult) -> str | None:
     err = result.metadata.get('error')
-    return str(err) if err else None
+    if err:
+        return str(err)
+    errors = result.metadata.get('criteria_errors')
+    if isinstance(errors, list) and errors:
+        return str(errors[0])
+    return None
 
 
 def _is_errored(result: SimulationResult) -> bool:
@@ -76,8 +82,9 @@ def _is_errored(result: SimulationResult) -> bool:
 
 def _criteria_meta(result: SimulationResult) -> list[dict[str, Any]]:
     raw = result.metadata.get('criteria_meta')
-    if isinstance(raw, list):
-        return [c for c in raw if isinstance(c, dict)]
+    if raw is not None:
+        valid, _ = read_criteria_meta(result)
+        return [c.model_dump(mode='json') for c in valid]
     # Fallback to lossy criteria_results (no ids/type). The safety classification
     # (must_not_happen) is unavailable here, so make the degradation visible.
     logger.debug('criteria_meta absent; safety classification unavailable, falling back to criteria_results')
@@ -139,23 +146,9 @@ def _criteria_rows(result: SimulationResult) -> list[dict[str, Any]]:
     """
     rows = []
     for c in _criteria_meta(result):
-        passed = bool(c.get('passed', True))
+        passed = c['passed']
         audited = c.get('audited')
-        if audited is not None and not isinstance(audited, bool):
-            logger.warning(
-                "criteria_meta entry {!r} has a non-boolean 'audited' ({!r}); reporting it as unknown "
-                'rather than as audited.',
-                c.get('id'),
-                audited,
-            )
-            audited = None
         evidence = c.get('evidence')
-        if evidence is not None and not isinstance(evidence, str):
-            logger.warning(
-                "criteria_meta entry {!r} has a non-string 'evidence' ({}); rendering its repr.",
-                c.get('id'),
-                type(evidence).__name__,
-            )
         rows.append(
             CriteriaRow(
                 id=c['id'],
@@ -470,6 +463,7 @@ def _build_token_usage_section(results: list[SimulationResult]) -> ReportSection
             # so a partial total reads as authoritative.
             'calls': usage_total.calls,
             'priced_calls': usage_total.priced_calls,
+            'unknown_usage_conversations': sum(1 for r in results if not r.token_usage_known),
         },
     )
 
