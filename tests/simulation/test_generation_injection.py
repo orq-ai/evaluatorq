@@ -272,11 +272,13 @@ async def test_simulate_uses_generation_client_for_default_user_and_judge(monkey
     injected = AsyncOpenAI(api_key="sk-test", base_url="https://example.test/v1")
 
     async def fake_user_response(self, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
-        assert self._client is injected
+        assert self._client is not injected
+        assert self._client.max_retries == 0
         return "next user message"
 
     async def fake_judge_evaluate(self, messages):  # noqa: ANN001
-        assert self._client is injected
+        assert self._client is not injected
+        assert self._client.max_retries == 0
         return Judgment(
             should_terminate=True,
             reason="done",
@@ -288,7 +290,7 @@ async def test_simulate_uses_generation_client_for_default_user_and_judge(monkey
     def fake_build_simulation_client(config_client=None, **kwargs):  # noqa: ANN001, ANN003
         if config_client is not injected:
             raise RuntimeError("runner built its own client")
-        return injected, False
+        return injected.with_options(max_retries=0), False
 
     with (
         patch(

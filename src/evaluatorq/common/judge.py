@@ -19,7 +19,7 @@ from evaluatorq.common.llm_call import execute_chat_completion, execute_chat_par
 from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.model_catalogue import qualified_model
-from evaluatorq.common.retry import with_retry
+from evaluatorq.common.retry import with_retry, without_client_retries
 from evaluatorq.common.template_engine import render_template
 from evaluatorq.common.tracing import with_llm_span
 from evaluatorq.contracts import (
@@ -268,31 +268,6 @@ def reset_responses_rejectors() -> None:
     _RESPONSES_REJECTORS.clear()
 
 
-def _without_client_retries(client: AsyncOpenAI, retry_count: int) -> AsyncOpenAI:
-    """``client`` with its own retry budget disarmed, when this call owns retry.
-
-    ``with_retry`` re-runs the whole judge call and the OpenAI SDK retries inside
-    each of those attempts, so the two budgets *multiply*. The shipped red-team
-    path injects the attacker client, built with ``max_retries=LLMConfig.retry_count``
-    (default 3, i.e. up to 4 requests per attempt): under a judge-side
-    ``EvaluatorConfig.retry_count=3`` (4 ``with_retry`` attempts) that is up to
-    16 requests and ~10 minutes of backoff for one rate-limited judgement. The
-    call sites that build their own judge client pass ``max_retries=0`` for
-    exactly this reason, but an injected client — the documented, supported
-    pattern — never went through them.
-
-    ``with_options`` shares the underlying transport, so this is cheap and leaves
-    the caller's own client object untouched. The ``int`` check keeps test doubles
-    (whose every attribute is truthy) on their original object.
-    """
-    if retry_count <= 0:
-        return client
-    max_retries = getattr(client, 'max_retries', 0)
-    if not isinstance(max_retries, int) or max_retries <= 0:
-        return client
-    return client.with_options(max_retries=0)
-
-
 async def _resolve_responses_model(client: AsyncOpenAI, model: str) -> str | None:
     """The model id to send to the Responses endpoint, or None to stay on chat.
 
@@ -472,8 +447,9 @@ async def run_judge(
     **Retry.** The whole attempt — endpoint choice included — runs under
     `with_retry` for ``cfg.retry_count + 1`` attempts, so rate limits, 5xx and
     transport failures back off and try again while everything else raises straight
-    through to the error classification. Clients built by evaluatorq for this path
-    are given ``max_retries=0`` so the two retry layers cannot multiply.
+    through to the error classification. Clients built by evaluatorq for this
+    path are given ``max_retries=0`` and injected clients are cloned with their
+    SDK budget disabled at this boundary, so the two retry layers cannot multiply.
 
     ``temperature`` defaults to ``cfg.temperature`` via the ``_USE_CFG`` sentinel;
     pass ``None`` explicitly to omit the param (e.g. for reasoning models).
@@ -481,7 +457,7 @@ async def run_judge(
     temp: float | None = cfg.temperature if isinstance(temperature, _UseCfg) else temperature
     user_prompt = render_template(prompt_template, replacements)
 
-    client = _without_client_retries(client, cfg.retry_count)
+    client = without_client_retries(client)
     raw_content = '{}'
     # Resolved before the span opens so the span carries the operation and the model
     # id this call actually sends — `responses openai/gpt-5-mini`, not `chat gpt-5-mini`

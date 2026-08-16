@@ -49,14 +49,16 @@ def test_no_keys_raises(gen_cls, monkeypatch):
 
 
 @pytest.mark.parametrize("gen_cls", GEN_CLASSES)
-def test_injected_client_used_as_is(gen_cls, monkeypatch):
+def test_injected_client_is_cloned_at_with_retry_boundary(gen_cls, monkeypatch):
     from openai import AsyncOpenAI
 
     monkeypatch.delenv("ORQ_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     injected = AsyncOpenAI(api_key="sk-x", base_url="https://example.test/v1")
     gen = gen_cls(client=injected)
-    assert gen._client is injected
+    assert gen._client is not injected
+    assert gen._client.max_retries == 0
+    assert injected.max_retries == 2
     assert gen._client_owned is False  # caller owns the lifecycle; generator must not close it
 
 
