@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import time
+import threading
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -281,24 +281,20 @@ class TestWrapAgentDoesNotBlockLoop:
     @pytest.mark.asyncio
     async def test_wrapped_agent_does_not_block_loop(self) -> None:
         """Two concurrent job calls with a slow sync agent should overlap, not serialize."""
+        barrier = threading.Barrier(2, timeout=1.0)
 
         class SlowAgent:
             nodes: dict[str, object] = {}
 
             def invoke(self, _payload: dict[str, object]) -> dict[str, object]:
-                time.sleep(0.3)
+                barrier.wait()
                 return {"messages": []}
 
         agent = SlowAgent()
         job = wrap_langchain_agent(agent, name="t")  # pyright: ignore[reportArgumentType]
         data = DataPoint(inputs={"prompt": "hi"})
 
-        t0 = time.monotonic()
-        await asyncio.gather(job(data, 0), job(data, 1))
-        elapsed = time.monotonic() - t0
-
-        # Serial execution would take >= 0.6s; concurrent execution should overlap.
-        assert elapsed < 0.55
+        await asyncio.wait_for(asyncio.gather(job(data, 0), job(data, 1)), timeout=2.0)
 
 
 class TestWrapAgentPrefersAinvoke:

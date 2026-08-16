@@ -70,7 +70,6 @@ async def test_no_inference_feeds_recorded_response_to_evaluators():
         inference=False,
         print_results=False,
         _send_results=False,
-        _exit_on_failure=False,
     )
 
     assert seen == ["the recorded answer"]
@@ -96,7 +95,6 @@ async def test_no_inference_does_not_run_provided_jobs():
         inference=False,
         print_results=False,
         _send_results=False,
-        _exit_on_failure=False,
     )
 
     assert ran is False
@@ -113,7 +111,6 @@ async def test_no_inference_missing_response_errors_clearly():
         inference=False,
         print_results=False,
         _send_results=False,
-        _exit_on_failure=False,
     )
 
     assert len(results) == 1
@@ -138,5 +135,4 @@ async def test_inference_true_without_jobs_raises():
             evaluators=[],
             print_results=False,
             _send_results=False,
-            _exit_on_failure=False,
         )

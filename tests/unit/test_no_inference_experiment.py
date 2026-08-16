@@ -312,7 +312,6 @@ async def test_evaluatorq_scores_experiment_responses(monkeypatch):
         inference=False,
         print_results=False,
         _send_results=False,
-        _exit_on_failure=False,
     )
 
     assert seen == ["Hello, Ada!"]
@@ -332,5 +331,4 @@ async def test_evaluatorq_experiment_requires_api_key(monkeypatch):
             inference=False,
             print_results=False,
             _send_results=False,
-            _exit_on_failure=False,
         )

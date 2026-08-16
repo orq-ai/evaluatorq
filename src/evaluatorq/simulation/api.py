@@ -2058,11 +2058,10 @@ async def _simulate_via_evaluatorq(
             print_results=False,
             _send_results=upload_results,
             # Never let evaluatorq's score-based gate (check_pass_failures →
-            # sys.exit) fire for simulation. Now that scorers report pass_ (a
+            # process exit) fire for simulation. Now that scorers report pass_ (a
             # judge verdict — e.g. goal not achieved), an underperforming but
             # otherwise healthy run must NOT exit the process. exit_on_failure
             # for sim means dropped rows only (SimulationDroppedError below).
-            _exit_on_failure=False,
             _base_url=upload_base_url,
             _experiment_url_out=experiment_url_out,
         )
