@@ -140,12 +140,12 @@ class LangGraphTarget(AgentTarget):
     from langgraph.prebuilt import create_react_agent
     from evaluatorq.integrations.langgraph_integration import LangGraphTarget
 
-    graph = create_react_agent(model, tools=[...])
-    target = LangGraphTarget(graph)
+    graph = create_react_agent(model=model, tools=[...])
+    target = LangGraphTarget(graph=graph)
 
     # Pass to simulation or red teaming
     results = await simulate(target=target, ...)
-    report = await red_team(target)
+    report = await red_team(target=target)
     ```
     """
 

@@ -67,7 +67,7 @@ from evaluatorq.redteam.backends.registry import resolve_backend
 bundle = resolve_backend("openresponses")
 target = bundle.create_target("my-agent-id")
 
-report = await red_team(target, vulnerabilities=["prompt_injection"])
+report = await red_team(target=target, vulnerabilities=["prompt_injection"])
 ```
 
 Every attack the orchestrator runs is sent over the wire as:

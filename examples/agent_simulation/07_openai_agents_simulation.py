@@ -101,7 +101,7 @@ async def main() -> None:
         raise SystemExit("ORQ_API_KEY is not set - needed for the UserSimulator and Judge LLMs")
 
     # _resolve_target() routes AgentTarget instances to the respond(messages) path.
-    target = OpenAIAgentTarget(build_agent())
+    target = OpenAIAgentTarget(agent=build_agent())
 
     persona = Persona(
         name="Curious Shopper",

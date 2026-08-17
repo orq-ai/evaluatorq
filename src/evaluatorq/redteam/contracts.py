@@ -256,7 +256,7 @@ def parse_target(target: str) -> tuple[TargetKind, str]:
             f'The "{kind}:" target prefix has been removed. '
             f'Use OpenAIModelTarget to test OpenAI models directly:\n'
             f'    from evaluatorq.redteam import OpenAIModelTarget\n'
-            f'    await red_team(OpenAIModelTarget("{value}"))'
+            f'    await red_team(target=OpenAIModelTarget(model="{value}"))'
         )
     try:
         kind_enum = TargetKind(kind.lower())
@@ -1728,7 +1728,7 @@ class RedTeamReport(BaseModel):
     Usage:
 
     ```python
-    report = await red_team("agent:YOUR_AGENT_KEY", mode="dynamic")
+    report = await red_team(target="agent:YOUR_AGENT_KEY", mode="dynamic")
 
     rate = report.summary.resistance_rate
     print(f"Resistance rate: {rate:.0%}" if rate is not None else "no verdict")

@@ -145,7 +145,7 @@ tools = [search, calculator, fact_check]
 
 model = ChatOpenAI(model="gpt-4o", temperature=0)
 
-agent = create_react_agent(model, tools)
+agent = create_react_agent(model=model, tools=tools)
 
 
 # ────────────────────────────────────────────────

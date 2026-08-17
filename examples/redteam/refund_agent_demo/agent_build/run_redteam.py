@@ -115,7 +115,7 @@ async def amain(args: argparse.Namespace) -> int:
         f'attacker={args.attacker_model}, evaluator={args.evaluator_model}) ...'
     )
     report = await red_team(
-        target,
+        target=target,
         vulnerabilities=vulns,
         llm_config=llm_config,
         llm_client=orq_openai_client,

@@ -35,10 +35,11 @@
         breakdown.textContent = `${calls.toLocaleString()} calls at ${formatUsd(callCost)}/call = ${fixedCalls.toLocaleString()} fixed + ${variableCalls.toLocaleString()} attack/turn`;
       };
 
-      calculator.querySelectorAll("input").forEach((field) => {
-        field.addEventListener("input", calculate);
-      });
-      callCostField.addEventListener("input", () => {
+        calculator.querySelectorAll("input").forEach((field) => {
+          field.addEventListener("input", calculate);
+        });
+        calculator.addEventListener("submit", (event) => event.preventDefault());
+        callCostField.addEventListener("input", () => {
         tier.value = "custom";
         calculate();
       });

@@ -33,11 +33,11 @@ class OpenAIAgentTarget(AgentTarget):
     from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget
 
     agent = Agent(name="my-agent", instructions="You are a helpful assistant.")
-    target = OpenAIAgentTarget(agent)
+    target = OpenAIAgentTarget(agent=agent)
 
     # Pass to simulation or red teaming
     results = await simulate(target=target, ...)
-    report = await red_team(target)
+    report = await red_team(target=target)
     ```
     """
 

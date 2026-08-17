@@ -31,11 +31,11 @@ flowchart LR
 
 ```python
 # static mode replays Orq's public attack dataset by default
-report = await red_team(target, mode="static")
+report = await red_team(target=target, mode="static")
 
 # ...or bring your own — a local JSON file or a HuggingFace repo
-report = await red_team(target, mode="static", dataset="./my_attacks.json")
-report = await red_team(target, mode="static", dataset="hf:my-org/my-attacks")
+report = await red_team(target=target, mode="static", dataset="./my_attacks.json")
+report = await red_team(target=target, mode="static", dataset="hf:my-org/my-attacks")
 ```
 
 ## Red-team your target
@@ -131,7 +131,7 @@ run options.
 
     async def main():
         report = await red_team(
-            "agent:your-agent-key",             # Orq agent, routed via ORQ_API_KEY
+            target="agent:your-agent-key",      # Orq agent, routed via ORQ_API_KEY
             mode="dynamic",
             categories=["LLM01", "LLM07"],      # prompt injection, system-prompt leakage
             max_dynamic_datapoints=5,
@@ -171,7 +171,7 @@ run options.
 
     async def main():
         target = OpenAIModelTarget(
-            "gpt-4o-mini",
+            model="gpt-4o-mini",
             system_prompt=(
                 "You are a customer support assistant for Acme Corp. "
                 "Help with orders, returns, and product questions. "
@@ -179,7 +179,7 @@ run options.
             ),
         )
         report = await red_team(
-            target,
+            target=target,
             mode="dynamic",
             categories=["LLM01", "LLM07"],      # prompt injection, system-prompt leakage
             max_dynamic_datapoints=5,
@@ -324,6 +324,16 @@ calls, and actual spend varies with prompt and completion length.
 If you want separate attacker and evaluator model settings rather than one
 default model, see the [`11_redteam_config.py` cookbook](../examples/redteam/11_redteam_config.md).
 
+There is no single fixed-call count for every run. Use these baselines when
+setting the first field: **static and replay runs: 0** setup calls; **dynamic and
+hybrid runs: 1 resource-inference call per target**, plus **1 tool-classification
+call per target when the target exposes tools**. Strategy generation adds **1
+planning call per selected vulnerability** (or unresolved category) when it is
+enabled. The default executive summary adds 1 call. Recommendations add 1 call
+per failed focus area, plus an occasional trace-condensing call for oversized
+attacks. The CLI quickstart above disables strategy generation, recommendations,
+and the executive summary, so its baseline is 0.
+
 ## In CI
 
 For a fast gate, run a small fixed set of attacks and assert a minimum
@@ -331,7 +341,7 @@ resistance rate, failing the build if the target regresses:
 
 ```python
 report = await red_team(
-    OpenAIModelTarget("gpt-4o-mini", system_prompt="..."),
+    target=OpenAIModelTarget(model="gpt-4o-mini", system_prompt="..."),
     mode="static",                 # replay a fixed dataset — deterministic, cheap
     categories=["LLM01", "LLM07"],
     max_static_datapoints=10,
@@ -545,8 +555,11 @@ from langgraph.prebuilt import create_react_agent
 from evaluatorq.integrations.langgraph_integration import LangGraphTarget
 from evaluatorq.redteam import red_team
 
-graph = create_react_agent(ChatOpenAI(model="gpt-4o-mini"), tools=[...], prompt="...")
-report = await red_team(LangGraphTarget(graph), categories=["LLM01", "ASI01"])
+graph = create_react_agent(model=ChatOpenAI(model="gpt-4o-mini"), tools=[...], prompt="...")
+report = await red_team(
+    target=LangGraphTarget(graph=graph),
+    categories=["LLM01", "ASI01"],
+)
 ```
 
 | Framework | Wrapper | Extra | Runnable example |
