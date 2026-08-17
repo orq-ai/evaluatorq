@@ -21,6 +21,7 @@ from evaluatorq.pairwise import (
     build_report,
     pairwise_consensus,
     repetition_consistency,
+    repetition_consistency_raw,
     run_pairwise,
 )
 
@@ -434,11 +435,17 @@ def test_single_repetition_through_pipeline_has_no_consistency() -> None:
     block = bt_sigma_aggregation([comparison])
     assert block.repetition_consistency == {}
     assert block.repetition_consistency_raw == {}
+    # And R=1 must NOT emit the item-8 "repeated passes exist" warning: no ordering held a genuine
+    # repeat, so nothing was skipped (RES-1251 review, item 15 - the warning tripped on the default
+    # path when it was gated on observations existing rather than on an actual repeat).
+    assert not any('repeated passes exist' in w for w in block.fit_warnings)
 
 
 def test_html_judges_table_shows_shrunk_and_raw_consistency(tmp_path) -> None:
-    # The new columns must render (RES-1251 review, item 11): removing the header/value
-    # mapping should fail a test, and the shrunk and raw values must be distinct.
+    # The new columns must render AND map to the right values (RES-1251 review, items 11 + 22):
+    # assert each value under its own header's column index, so swapping the two cells fails.
+    import re
+
     from evaluatorq.pairwise_reports.export_html import _render_judges_html
     from evaluatorq.pairwise_reports.sections import build_report_sections
     from evaluatorq.pairwise_run import new_run
@@ -454,9 +461,15 @@ def test_html_judges_table_shows_shrunk_and_raw_consistency(tmp_path) -> None:
     assert steady['consistency'] < 1.0  # shrunk below the raw value
 
     html = _render_judges_html(judges)
-    assert 'Consistency (shrunk)' in html
-    assert 'Consistency (raw)' in html
-    assert '1.00' in html  # steady's raw self-agreement renders
+    headers = re.findall(r'<th[^>]*>(.*?)</th>', html, re.S)
+    assert 'Consistency (shrunk)' in headers
+    assert 'Consistency (raw)' in headers
+    steady_row = next(r for r in re.findall(r'<tr>(.*?)</tr>', html, re.S) if 'steady' in r)
+    cells = re.findall(r'<td[^>]*>(.*?)</td>', steady_row, re.S)
+    raw_cell = cells[headers.index('Consistency (raw)')]
+    shrunk_cell = cells[headers.index('Consistency (shrunk)')]
+    assert '1.00' in raw_cell  # raw self-agreement is under the raw header
+    assert '1.00' not in shrunk_cell  # the shrunk weight (< 1.0) is under the shrunk header
 
 
 def test_repetition_consistency_raw_is_published_alongside_shrunk() -> None:
@@ -538,3 +551,56 @@ def test_off_contract_repetition_logs_a_warning() -> None:
     finally:
         logger.remove(sink)
     assert any('off-contract' in m for m in messages)
+
+
+def test_repetition_consistency_raw_is_exported_at_top_level() -> None:
+    # The public helper must be importable from the package root and in __all__, like its sibling,
+    # so the generated API reference lists it (RES-1251 review, item 16).
+    import evaluatorq
+
+    assert hasattr(evaluatorq, 'repetition_consistency_raw')
+    assert 'repetition_consistency_raw' in evaluatorq.__all__
+    from evaluatorq import repetition_consistency_raw as _rcr  # must not raise
+
+    assert callable(_rcr)
+
+
+def test_raw_self_agreement_is_not_failure_adjusted() -> None:
+    # A judge that agreed with itself on every completed pass reads RAW 1.0 even with a failed pass;
+    # only the reliability WEIGHT is discounted by the failure (RES-1251 review, item 17). Previously
+    # _repetition_stats applied the discount before returning, so the "raw" field was failure-adjusted.
+    flaky = _vote('flaky', 'A', [_obs('ab', 0, 'A'), _obs('ab', 1, 'A'), _obs('ab', 2, None)], repetition_failures=1)
+    clean = _vote('clean', 'A', [_obs('ab', 0, 'A'), _obs('ab', 1, 'A')])
+    rows = [_comparison([flaky, clean]) for _ in range(4)]
+    raw = repetition_consistency_raw(rows)
+    consistency = repetition_consistency(rows)
+    assert raw['flaky'] == 1.0  # agreed with itself on every completed pass; RAW is not discounted
+    assert consistency['flaky'] < consistency['clean']  # the failure shows up only in the weight
+
+
+def test_raw_diagnostic_is_populated_on_the_uniform_fallback_path() -> None:
+    # repetition_consistency_raw is a diagnostic, not a weight, so it is published even when weighting
+    # is off (RES-1251 review, item 19): a swap=False repetition run still collected the observations.
+    async def judge(a: object, b: object, model: str) -> Prediction:
+        return Prediction(value='A', explanation='ok')
+
+    comparison = asyncio.run(
+        run_pairwise(judge_fn=judge, panel=['j'], response_a='x', response_b='y', repetitions=2, swap=False)
+    )
+    block = bt_sigma_aggregation([comparison] * 4)
+    assert block.repetition_consistency == {}  # weighting off on the single-ordering path
+    assert block.repetition_consistency_raw.get('j') == 1.0  # but the raw diagnostic survives
+
+
+def test_swap_false_repetitions_bypasses_consistency_weighting() -> None:
+    # swap=False is a DOCUMENTED gate: even at repetitions>=2 the single-ordering path takes uniform
+    # plurality before consistency runs, so removing that guard must fail a test (RES-1251 review, item 22).
+    async def judge(a: object, b: object, model: str) -> Prediction:
+        return Prediction(value='A', explanation='ok')
+
+    comparison = asyncio.run(
+        run_pairwise(judge_fn=judge, panel=['a', 'b'], response_a='x', response_b='y', repetitions=2, swap=False)
+    )
+    block = bt_sigma_aggregation([comparison] * 4)
+    assert block.repetition_consistency == {}
+    assert any('single-ordering' in w for w in block.fit_warnings)

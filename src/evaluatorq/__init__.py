@@ -50,6 +50,7 @@ from .pairwise import (
     bt_sigma_aggregation,
     build_report,
     repetition_consistency,
+    repetition_consistency_raw,
     run_pairwise,
 )
 from .ranking import BTFit, JudgedComparison, fit_bt
@@ -126,6 +127,7 @@ __all__ = [
     'llm_jury',
     'llm_jury_pairwise',
     'repetition_consistency',
+    'repetition_consistency_raw',
     'run_pairwise',
     # Built-in evaluators
     'string_contains_evaluator',

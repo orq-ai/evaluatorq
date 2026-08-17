@@ -192,11 +192,13 @@ Notes worth knowing:
 - A perfectly split panel stays inconclusive rather than letting numerical
   noise crown one judge reliable.
 - A judge whose decisive votes are unanimous (always A, or always B) is
-  excluded from the weighting. With only two items such a judge's sigma
+  excluded from the sigma weighting. With only two items such a judge's sigma
   measures one-sidedness, not reliability, and `1/sigma` would hand the most
   degenerate judge on the panel an unbounded weight - the exact shape a
-  position- or verbosity-biased judge takes. It votes with a neutral weight
-  instead, and `fit_warnings` names it.
+  position- or verbosity-biased judge takes. On the pooled-fit path it votes
+  with a neutral (median) weight instead; on the repetition path every weight
+  comes from consistency, so that neutral assignment is replaced by the judge's
+  own consistency weight. Either way `fit_warnings` names it.
 - Check `bt_sigma.converged` (and `fit_warnings`) before trusting sigmas: a
   fit that stopped at the iteration cap still produces numbers.
 - Like all unsupervised aggregation, BT-sigma rewards internal consistency. A
@@ -243,9 +245,10 @@ datapoints. Consequences by construction:
 
 Read `bt_sigma.repetition_consistency` for the per-judge reliability weights.
 These are **shrunk** toward the panel mean (empirical-Bayes, so a judge with one
-lucky R=2 group cannot dominate the run), which means a perfectly self-consistent
-judge reads *below* 1.0 unless the whole panel is at 1.0. The un-shrunk
-self-agreement (1.0 = always agrees with itself) is published beside it as
+lucky R=2 group cannot dominate the run) **and failure-discounted**, which means a
+perfectly self-consistent judge reads *below* 1.0 unless the whole panel is at 1.0.
+The **raw** self-agreement (1.0 = always agreed with itself on every completed pass,
+neither shrunk nor failure-adjusted) is published beside it as
 `bt_sigma.repetition_consistency_raw` and the `Consistency (raw)` report column,
 so compare a judge's raw number within one run — not the shrunk weight across two
 runs with different panels, where the same judge can move without changing.
@@ -257,13 +260,16 @@ repetition capture load fine and keep the previous global-fit behaviour.
 What consistency estimates - and what it must not be read as: it measures a
 judge's self-agreement under fixed conditions. It is NOT task difficulty, NOT
 overall judge quality (a judge can be consistently wrong), and NOT accuracy
-against any ground truth. A **clean** abstention is excluded from consistency, so
-a judge that declines honestly is not penalized: `['A', <abstention>, 'A']` scores
-1.0. But a pass that **errored or came back off-contract** is a failure, not a free
-abstention: it is counted in `repetition_failures` and discounts the score by the
-failed share, so the same-looking `['A', None, 'A']` scores 2/3 when that middle
-`None` is a failure. The two `None`s are identical in the vote list; only
-`repetition_failures` separates a clean abstention from a broken pass.
+against any ground truth. A **clean** abstention is excluded, so a judge that
+declines honestly is not penalized: `['A', <abstention>, 'A']` scores 1.0 in both
+the raw metric and the weight. A pass that **errored or came back off-contract** is
+a failure, not a free abstention: it is counted in `repetition_failures`. The judge
+still *agreed with itself* on every pass it completed, so the **raw** self-agreement
+(`repetition_consistency_raw`) for `['A', None, 'A']` stays **1.0**; only the
+reliability **weight** (`repetition_consistency`) is discounted by the failed share,
+to **2/3**, since a flaky judge is less reliable even when self-consistent. The two
+`None`s are identical in the vote list; only `repetition_failures` separates a clean
+abstention from a broken pass.
 
 Cost: repetitions multiply judge calls linearly (calls = judges x orderings x
 R), so R=2 doubles spend per comparison; wall-clock barely moves because
