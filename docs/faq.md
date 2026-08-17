@@ -76,7 +76,7 @@ Cost and wall-clock scale with cases × turns × LLM calls. The levers are how m
 
 ### Where do results go, and how do I view a past run?
 
-Runs auto-save locally (red-team runs to `.evaluatorq/runs/`; simulation runs to `.evaluatorq/sim-runs/`). Browse them in the multi-run FastHTML dashboard with `eq dashboard` (no path browses both stores; `eq dashboard .evaluatorq/sim-runs` scopes to simulation), or list runs with `eq redteam runs` / `eq sim runs`. The legacy `eq redteam ui` / `eq sim ui` Streamlit views remain callable but are deprecated. See [Dashboard](dashboard.md).
+Runs auto-save locally (red-team runs to `.evaluatorq/runs/`; simulation runs to `.evaluatorq/sim-runs/`). Browse them in the multi-run FastHTML dashboard with `eq dashboard` (no path browses both stores; `eq dashboard .evaluatorq/sim-runs` scopes to simulation), or list runs with `eq redteam runs` / `eq sim runs`. See [Dashboard](dashboard.md).
 
 ### How do I run a plain evaluation?
 

@@ -36,6 +36,36 @@ report = await red_team(target, mode="static", dataset="hf:my-org/my-attacks")
 
 ## Red-team your target
 
+!!! warning "Use a sandbox or test agent"
+    Red-team attacks run the target's real tools. Do not point them at production
+    credentials or an agent that can send messages, move money, modify data, or
+    run commands unless those side effects are isolated and intentional.
+
+### Fastest first run
+
+If you prefer the CLI, start with a small static run against a test agent. Static
+mode uses the built-in attack dataset, so it is a predictable way to verify your
+setup before exploring dynamic or hybrid runs.
+
+```bash
+export ORQ_API_KEY=...
+uv add "evaluatorq[redteam]"
+eq redteam run \
+  --target agent:your-agent-key \
+  --mode static \
+  --category LLM01 \
+  --max-static-datapoints 5 \
+  --no-executive-summary \
+  --no-recommendations \
+  --report redteam-report.json \
+  --yes
+```
+
+The command writes a JSON report and exits non-zero if no attacks receive a
+verdict or evaluation coverage falls below the configured floor. See the
+[CLI reference](../cli-reference/redteam.md) for the other output formats and
+run options.
+
 === "Orq agent"
 
     Requires `ORQ_API_KEY`. Point `red_team()` at an Orq agent by key
@@ -174,121 +204,34 @@ target's actual tools, memory and system prompt. Pass
 your own vulnerabilities, strategies and judges — see
 [Custom Evaluators & Frameworks](../custom-evaluators-and-frameworks.md).
 
-## Reading the report object
+## Inspect results in Python
 
 For the same numbers rendered as a browsable report, see
 [Reading a run in the dashboard](#reading-a-run-in-the-dashboard) below.
 
-`report.summary.resistance_rate` is the fraction of *evaluated* attacks the
-target withstood — higher is better. It is `None` when no attack could be
-evaluated at all (every judge call failed, e.g. a gateway guardrail rejecting
-them): there is no verdict to report, and a `0.0` there would read as "fully
-compromised" when in fact nothing was tested. Check
-`report.summary.evaluated_attacks` against `total_attacks` before trusting a
-rate. Individual results follow the same rule: `r.vulnerable` is `None`, not
-`False`, when that attack could not be evaluated.
+The report fields most users need are:
 
-`report.results` holds every attack result; group by
-`r.attack.vulnerability` for a per-vulnerability breakdown.
-`report.summary.by_vulnerability` contains pre-aggregated
-`VulnerabilitySummary` statistics keyed by vulnerability identifier.
+- `report.summary.resistance_rate`: the fraction of evaluated attacks resisted;
+  higher is better. `None` means no attack received a verdict.
+- `report.summary.evaluated_attacks` and `total_attacks`: check both before
+  trusting a rate. `evaluation_coverage` and `coverage_below_minimum` expose the
+  same check for CI.
+- `report.results`: the per-attack evidence. `result.vulnerable is None` means
+  the attack was not evaluated, not that it was resisted.
+- `report.summary.by_vulnerability`: the pre-aggregated vulnerability breakdown.
 
-When a judge fails to return a verdict, the reason is captured on
-`result.evaluation_error` (a `RunError` with a `code` like `timeout`, `parse`,
-`api_connection`, `api_status`, or `unknown`). It is deliberately separate from
-`result.error`: `error` means the attack itself never ran, `evaluation_error`
-means the attack ran and the transcript exists but no judge could score it. Both
-roll up into `report.summary.errors_by_type`, where judge failures appear under
-`evaluation/<code>` keys (execution failures use the bare code) — so a
-systematically blocked judge shows up as one named cause (`evaluation/api_status:
-40 attacks`) instead of vanishing into forty individual results.
+For failures, `result.error` means the attack did not run; `result.evaluation_error`
+means it ran but the judge could not return a verdict. Both roll up into
+`report.summary.errors_by_type`.
 
 ### What a run costs
 
-`report.summary.token_usage_total` covers every LLM call in a run — attack
-generation, the target, and the judge — with `calls` and `priced_calls` alongside
-the dollar figure. When those two counts differ, some call carries no price and
-the total is a floor rather than the whole bill.
-
-A judge on the Orq router calls its Responses endpoint by default, because that
-is the endpoint the router prices. Verdicts there are schema-enforced
-(`json_schema`), so the provider produces the verdict's own keys rather than
-merely some JSON object. Pass `EvaluatorConfig(api='chat_completions')` to opt
-out; a judge on Chat Completions comes back with tokens but no price, so
-evaluatorq fills the cost in client-side from Orq's model catalogue.
-
-Four conditions have to hold for the Responses default to apply: `cfg.api ==
-'responses'` (the evaluator default; `structured_output` — the `llm_jury(...,
-structured_output=False)` knob — must also be on, since the Responses path here
-is schema-only), the judge client routes through the Orq router, and the model
-appears in the catalogue and reports Responses support. Reading the catalogue
-needs a credential — the client's own `api_key` when the host was resolved from
-an injected client, otherwise `ORQ_API_KEY` from the environment. A judge
-pointed at any other endpoint — a direct OpenAI key, vLLM, a proxy — stays on
-Chat Completions, as does one whose model the catalogue does not list. Both
-layers fall back on their own: a model the router rejects on Responses moves to
-Chat Completions for the rest of the run, and a model missing from the catalogue
-stays honestly unpriced rather than reporting `$0.00`.
-
-Judge calls retry on rate limits, 5xx and transport failures —
-`EvaluatorConfig(retry_count=...)` sets the budget (1 retry by default, 0 to
-disable), same semantics as `LLMConfig.retry_count`: retries after the initial
-call. It is a separate, judge-side budget from `LLMConfig.retry_count`'s
-target-side one; a client evaluatorq is given for judging has its own
-SDK-level retry disarmed for the duration so the two cannot multiply.
-
-#### What the totals do not include
-
-A handful of LLM calls fall outside `report.summary.token_usage_total` (and
-outside the equivalent simulation-side totals) entirely — real spend that no
-total, floor or otherwise, reflects. Each is a deliberate scope call, not an
-oversight left in place by accident:
-
-- **Blackbox capability classification** (`redteam/adaptive/blackbox_classifier.py`)
-  — the judge call that infers an agent's capabilities from probe transcripts
-  extracts no usage. `classify_agent_capabilities_blackbox` returns
-  `BlackboxAgentCapabilities`, which has no usage field, and the function is
-  not currently wired into any pipeline (exported but uncalled outside tests).
-- **Structured-output generation** (`common/structured_output.py`,
-  `simulation/generators/first_message_generator.py`) — persona, scenario, and
-  first-message generation for simulated users extract no usage from either
-  the primary `parse()` call or the `json_object` fallback. The shared
-  `generate_structured` helper is called from 11 sites across the simulation
-  generators, `traces.py`, and both report `recommendations.py` modules, none
-  of which track usage today.
-- **LLM-generated recommendations and executive summaries**
-  (`redteam/reports/recommendations.py`, `simulation/reports/recommendations.py`,
-  `common/reports/executive_summary.py`) — these are opt-in post-processing
-  steps (`generate_focus_area_recommendations` on the red-team side,
-  `generate_recommendations` on the simulation side, and
-  `generate_executive_summary`) that run
-  after a report's usage summary is already finalized. Folding their usage in
-  would mean either widening a public result type or maintaining the
-  documented `token_usage_by_source` sums-to `token_usage_total` invariant
-  across a new source category — both out of scope for this pass.
-- **Adversarial generation calls that discard their priced `Usage`**
-  (`redteam/adaptive/attack_generator.py`, `capability_classifier.py`,
-  `objective_generator.py`) — these already call `execute_chat_parse`, so the
-  call itself is priced, but each site discards the returned `Usage` with
-  `response, _ = await execute_chat_parse(...)` because its function returns a
-  bare parsed model (`ToolAnalysis`, `ResourceCapabilityInference`,
-  `ToolCapabilitiesResponse`, `GeneratedObjectives`) with no usage field.
-  Real spend, uncounted.
-- **Target-side usage from agent and framework backends** — these feed
-  `token_usage_total` unpriced, so `priced_calls < calls` on a run against any
-  of them is expected, not a bug:
-    - The **ORQ agent target** (`redteam/backends/orq.py`) accumulates usage
-      across pending-tool-call continuations with no `price_usage` call. An
-      agent run can fan out over several models per turn, so client-side
-      pricing may genuinely not be possible here even in principle.
-    - The **LangGraph** (`integrations/langgraph_integration/target.py`),
-      **OpenAI Agents SDK** (`integrations/openai_agents_integration/target.py`),
-      and **Vercel AI SDK** (`integrations/vercel_ai_sdk_integration/target.py`)
-      targets all extract token counts from the framework's own usage metadata
-      but attach no cost fields.
-    - A **custom callable target**'s usage, normalized by
-      `redteam/runtime/jobs.py`'s `_normalize_usage`, passes through
-      `TokenUsage.extract` the same way — counted, unpriced.
+`report.summary.token_usage_total` covers usage recorded for attack generation,
+the target, and the judge. It includes `calls` and `priced_calls` alongside token
+counts and the dollar figure. If `priced_calls < calls`, some calls reported
+usage without a provider price, so the displayed cost is a lower bound. Optional
+analysis may also make provider calls outside the run total; use the Usage view
+for evaluatorq's recorded usage and your provider dashboard for billing.
 
 ## In CI
 
@@ -307,46 +250,16 @@ assert rate is not None, "no attack could be evaluated — the target was not te
 assert rate >= 0.9, f"resistance {rate:.0%} below the 0.9 gate"
 ```
 
-The `is not None` check is the part people forget: without it, a run where every
-judge call was rejected produces no rate at all and the gate would crash (or, in
-older versions, silently pass a `0.0`). `eq redteam run` applies the same rule —
-it exits `1` when attacks ran but not one of them could be scored
-(`report.summary.no_verdict`: `total_attacks > 0` and `evaluated_attacks == 0`),
-so a CLI-driven gate fails loudly too. A run with zero attacks (an empty
-category filter, say) is not this condition and does not trigger it.
+The `is not None` check matters: a run where every judge call failed has no
+honest rate. `eq redteam run` exits `1` when attacks ran but none could be
+scored (`report.summary.no_verdict`).
 
-!!! warning "Coverage gate — a run under 80% evaluated now fails, not just warns"
-    `EvaluatorConfig.min_evaluation_coverage` (default **`0.8`**) is a run-level
-    floor on top of `no_verdict`: even when *some* attacks got a verdict,
-    `eq redteam run` exits `1` if fewer than 80% of attacks did
-    (`report.summary.coverage_below_minimum`). **This is a behaviour change** —
-    a run that finished at, say, 79% evaluation coverage used to exit `0` with a
-    warning; it now exits `1`. If you wire `eq redteam run` into CI, a flaky
-    judge/gateway that drops just over a fifth of verdicts will now fail the
-    build. Pass `--min-evaluation-coverage 0` (or set
-    `min_evaluation_coverage=None` on `EvaluatorConfig`) to restore the old
-    warn-only behaviour. Zero coverage (`no_verdict`) always fails regardless
-    of this setting — it isn't a case the floor can raise or lower.
-
-    This is distinct from `EvaluatorConfig.min_successful_judges` (default `1`),
-    which is a **per-attack** quorum: it decides whether one attack's jury panel
-    produced enough decisive votes to reach *that attack's* verdict, and a
-    quorum miss is exactly what produces an unevaluated attack.
-    `min_evaluation_coverage` is the **run-level** floor on how many such
-    unevaluated attacks the whole run can tolerate before its rates are
-    considered untrustworthy. Tightening `min_successful_judges` makes more
-    individual attacks fall through as unevaluated; tightening
-    `min_evaluation_coverage` makes the run less tolerant of however many do.
-
-    Set it from either surface: `eq redteam run --min-evaluation-coverage 0.5`
-    on the CLI (pass `0` for warn-only), or
-    `red_team(llm_config=LLMConfig(evaluator=EvaluatorConfig(min_evaluation_coverage=...)))`
-    in Python (`None` there is warn-only).
-    The Python API itself does not raise on this condition — `red_team()` only
-    appends a `pipeline_warnings` entry and logs; only the `eq redteam run` CLI
-    command turns it into a nonzero exit. A caller using the Python API for its
-    own CI gate should check `report.summary.coverage_below_minimum` explicitly,
-    the same way it already checks `resistance_rate is not None` above.
+!!! warning "Gate on coverage as well as resistance"
+    `EvaluatorConfig.min_evaluation_coverage` defaults to **0.8**. The CLI exits
+    `1` when `report.summary.coverage_below_minimum` is true. The Python API
+    returns the report, so a Python CI gate should check both
+    `summary.no_verdict` / `summary.coverage_below_minimum` and
+    `summary.resistance_rate` before accepting the run.
 
 The runnable smoke example
 ([`08_quick_smoke_test.py`](../examples/redteam/08_quick_smoke_test.md)) wraps
@@ -444,15 +357,11 @@ unhardened one are directly comparable. On a single-agent run — the usual firs
 run — the tab still renders, as one row: the same capability inventory, no
 comparison. Skip it and read Focus areas instead.
 
-A dash in the tools, skills or knowledge column means nothing was discovered
-for that target, which is not the same as "the agent has none". Only the Orq
-agent backend enumerates capabilities on its own; a direct model target has
-none to enumerate, and a `CallableTarget` reports only what you hand it via
-`agent_context=`. Supplying that context is worth the effort — without it, the
-planner has nothing to filter on and applies every strategy, including ones
-that make no sense for your agent. It falls back to the same optimistic
-inclusion when capability classification fails, so a broad attack set can mean
-"discovery failed", not "your agent does everything".
+A dash in the tools, skills or knowledge column means nothing was discovered for
+that target, not that the agent has none. For custom targets, provide
+`agent_context=` if you want evaluatorq to use the capabilities you know about.
+Treat a broad attack set as unknown capability coverage, not evidence that the
+agent supports every tool or skill.
 
 ![Agents: per-agent ASR, model, and the tools, skills and knowledge discovered for each target.](../assets/dashboard/redteam-04-agents.png){ .dashboard-shot }
 
@@ -468,10 +377,9 @@ in the run list to confirm the fix landed.
 When the run has recommendations and exactly one tested agent, each one also
 gets an **Apply…** button: it previews the merged instructions as a diff, and
 nothing is written until you confirm. Multi-agent runs, and runs whose targets
-aren't Orq agents, are the two cases where this doesn't land —
+aren't Orq agents, are not eligible for write-back —
 [Apply recommendations to the agent](../dashboard.md#apply-recommendations-to-the-agent)
-covers both. The screenshot below predates the flow entirely, so it shows the
-remediation text without the apply bar.
+covers the requirements.
 
 ![Focus areas: prioritized fixes ranked by risk, each with a recommended remediation.](../assets/dashboard/redteam-05-focus-areas.png){ .dashboard-shot }
 
@@ -508,13 +416,9 @@ it to bypass safety checks on request.
 
 ### 8. Usage — what the run consumed { #rt-usage }
 
-**Usage** breaks tokens down per agent — total, prompt, completion and API
-calls. It reports tokens only; the run-level spend on the landing page and the
-run list shows a dash when the backend returns no pricing, which is what
-happens here — an Orq agent target reports token counts with no cost attached,
-partly because one agent turn can fan out across several models. See
-[What a run costs](#what-a-run-costs) for which calls come back priced and
-which don't.
+**Usage** breaks recorded tokens down per agent — total, prompt, completion and
+API calls. Spend shows a dash when the provider does not return a price; see
+[What a run costs](#what-a-run-costs) for how to interpret that lower bound.
 
 ![Usage: total, prompt and completion tokens plus API calls per agent.](../assets/dashboard/redteam-09-usage.png){ .dashboard-shot }
 

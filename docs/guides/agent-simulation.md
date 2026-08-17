@@ -149,6 +149,12 @@ precedence: if `ORQ_API_KEY` is set they route through the Orq AI Router;
 otherwise they fall back to OpenAI via `OPENAI_API_KEY` (an explicitly passed
 client always wins). See [Configuration](../configuration.md).
 
+!!! note "CI and local runs"
+    Dropped simulations raise by default; ordinary failed goals remain in the
+    returned results. Set `exit_on_failure=False` for exploratory runs. When
+    `ORQ_API_KEY` is available, results upload to Orq by default; pass
+    `upload_results=False` for a local-only run.
+
 ## Seed by archetype
 
 The middle ground between "just give me five" and specifying every trait: name
@@ -337,51 +343,36 @@ Occurrence is mapped to pass/fail in code, so `rules_broken` is derived, not
 reported. Failures land in `rules_broken` (criterion ids), `criteria_results`
 (description → passed), and the `criteria_met` score.
 
-Once a criterion is confirmed to have occurred it is settled — stickiness means a
-later turn cannot change it — so the judge is told to stop re-auditing it. It stays
-in the prompt (the judge still needs it to decide whether to stop early) but drops
-out of the per-turn audit payload, which otherwise costs an entry with an evidence
-quote per criterion per turn.
-
 Per-criterion detail is in `metadata['criteria_meta']`, where `audited` says whether
 the judge actually returned a verdict for that criterion:
 
 ```python
 for c in result.metadata['criteria_meta']:
-    # `.get('audited') is False` — not `not c['audited']`: `None` (and an absent
-    # key, on a report saved before the field existed) means unknown, not "the
-    # judge skipped it".
     if not c['passed'] and c.get('audited') is False:
-        print(f"{c['id']} failed by default — the judge never reported on it")
+        print(f"{c['id']} was not audited by the judge")
 ```
 
-A `must_happen` the judge confirmed never occurred and one it silently skipped both
-show `passed: False`; only `audited` separates them. It is `None` for runs saved
-before the field existed.
+A `must_happen` the judge confirmed never occurred and one it did not audit both
+show `passed: False`; use `audited` to distinguish them.
 
 Each entry also carries **`evidence`** — the quote from the turn where the
 criterion's occurrence first flipped, taken from the judge's `criteria_verdicts`
 audit. It is `''` when the criterion never occurred (or occurred without a
 tracked quote) and `None` when no tracker was available, same as `audited`.
 
-Both keys reach the reports. A criterion that passed only because nobody audited
-it renders as **not audited** (a neutral `?`, never a green tick) in the dashboard,
-the HTML report and the markdown export, and is counted separately from the
-"N/M criteria met" tally; `evidence` is shown beside the criterion it justifies. A
-run with `criteria_verified = False` says so above the criteria list rather than
-showing a tally that contradicts its `criteria_met` score of `0.0`.
+Both keys reach the reports. A criterion that was not audited renders as **not
+audited** (a neutral `?`, never a green tick) and is counted separately from the
+"N/M criteria met" tally. A run with `criteria_verified = False` says so above
+the criteria list.
 
 The `criteria_met` score applies the same rule: an unaudited criterion is **not
-met**, so the score and the tally beside it agree. A criterion the judge settled
-early still counts — a verdict is what settles it — and `audited: None` (a run
-saved before the field existed) keeps the score it always had.
+met**, so the score and the tally beside it agree.
 
 !!! warning "A custom `judge=` must report per-criterion verdicts"
 
     The built-in `JudgeAgent` audits each unsettled criterion every turn. A custom
-    judge that does not populate `Judgment.criteria_verdicts` falls back to the
-    pre-1.3 behaviour: pass/fail is inferred from its `rules_broken` list, so a
-    `must_happen` criterion **cannot fail**.
+    judge that does not populate `Judgment.criteria_verdicts` cannot provide a
+    reliable per-criterion audit.
 
     That run is marked `SimulationResult.criteria_verified = False`, the runner logs
     a warning naming the scenario, and `criteria_met` scores it `0.0` — unknown, not
@@ -391,8 +382,6 @@ saved before the field existed) keeps the score it always had.
     if result.criteria_verified is False:
         print('criteria unverified — the judge returned no per-criterion audit')
     ```
-
-    `criteria_verified` is `None` on runs saved before the field existed.
 
 A run that ends in an error or a timeout never reaches the audit either. Those
 results also score `criteria_met` as `0.0` (not `1.0`) and log a warning, so neither
@@ -792,11 +781,6 @@ entirely when a run generated no recommendations — as does **Turn quality**
 when a run recorded no per-turn metrics. A missing tab here is a property of
 the run, not a broken page.
 
-!!! note "No screenshot for this tab"
-    Recommendations is newer than the screenshots on this page, so it does not
-    appear in them — the tab strip in the shots below is one tab short of what
-    you'll see.
-
 ### 6. Transcripts — the conversations { #sim-transcripts }
 
 **Transcripts** lists every conversation with persona, scenario, turn count,
@@ -817,16 +801,16 @@ evidence instead of resolving the claim.
 
 ![A conversation drawer: criteria, the judge's rationale, and the full transcript.](../assets/dashboard/sim-06-conversation-detail.png){ .dashboard-shot }
 
-### 7. Turn quality and Config — behaviour and setup { #sim-turn-quality }
+### 7. Turn quality — behaviour over time { #sim-turn-quality }
 
 **Turn quality** trends the four metrics by turn index, so quality decay over
-longer conversations is visible, alongside the turn-count distribution. The
-trend is only worth reading when conversations actually run long — in the
-example run the judge ended most of them after a single turn, so the chart
-spans two points and says little. Raise `max_turns` and give scenarios goals
-that take several exchanges to reach if you want this view to earn its place.
+longer conversations is visible, alongside the turn-count distribution. Use
+multi-turn scenarios and a sufficient `max_turns` value when you want to study
+quality over time.
 
 ![Turn quality: per-turn trend across the four quality metrics, plus turn-count distribution.](../assets/dashboard/sim-07-turn-quality.png){ .dashboard-shot }
+
+### 8. Config — what was tested { #sim-config }
 
 **Config** records the run metadata — target kind, mode, evaluators, when it ran
 — and the persona table with each simulated user's tone, patience,
@@ -834,24 +818,14 @@ assertiveness, politeness and technical level.
 
 ![Config: run metadata and the persona dials used to drive the simulated users.](../assets/dashboard/sim-08-config.png){ .dashboard-shot }
 
-### 8. Compare — did the fix work { #sim-compare }
+### 9. Compare — did the fix work { #sim-compare }
 
 Pick a second run in **Compare with** to diff two runs: KPI deltas, outcomes,
-per-scorer averages, and how conversations ended. Below, goal-achieved is up 74
-points and mean score up 0.41 against the earlier run. Both runs carry the same
-name here, which is a trap worth avoiding: the **Compare with** dropdown lists
-run names only, with no timestamp, so two runs of the same `evaluation_name`
-are indistinguishable in it. Version the name (`refund-agent-v2`) when you
-intend to compare.
-
-The comparison works on two levels, and the screenshot only earns the first
-one. Run-level KPIs always compare. Per-conversation matching pairs runs up on
-(persona, scenario), and these two runs were generated from different sets, so
-nothing matched — hence the overlap warning in the header. Reuse the same
-personas and scenarios across runs (see
+per-scorer averages, and how conversations ended. Run-level KPIs always compare.
+For a per-conversation diff, the runs must share the same `(persona, scenario)`
+pairs. Reuse the same personas and scenarios across runs (see
 [Replay stored datapoints](#replay-stored-datapoints)) and you get the
-per-conversation diff too, which is what makes this usable as a regression
-gate rather than a headline check.
+per-conversation comparison needed for a regression gate.
 
 ![Run comparison: KPI deltas, outcomes and per-scorer averages for two runs of the same agent.](../assets/dashboard/sim-09-compare.png){ .dashboard-shot }
 

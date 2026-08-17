@@ -5,9 +5,7 @@
     saved runs. Its canonical invocation scans a run directory and opens the
     multi-run FastHTML UI — `eq dashboard` (no path) browses both default stores,
     and `eq dashboard .evaluatorq/sim-runs` scopes to simulation. Passing a single
-    JSON report file is an optional direct deep-link to that report. The older
-    `eq redteam ui` / `eq sim ui` remain callable as deprecated legacy Streamlit
-    commands (see the [CLI Reference](cli-reference/overview.md)).
+    JSON report file is an optional direct deep-link to that report.
 
 evaluatorq ships a built-in web dashboard for browsing red team and simulation
 reports.  It is powered by **FastHTML** (a lightweight Python web framework)
@@ -62,7 +60,6 @@ ORQ_WORKSPACE=orq-research eq dashboard
 | `eq dashboard` | Both default stores: `.evaluatorq/runs` (red team) and `.evaluatorq/sim-runs` (simulation) |
 | `eq dashboard <dir>` | Only that directory (e.g. `eq dashboard .evaluatorq/sim-runs`) |
 | `eq dashboard <file>.json` | Optional direct deep-link; prints that report's direct URL so you land straight on it |
-| `eq redteam ui` / `eq sim ui` | Deprecated legacy Streamlit views, scoped to a single surface (see the note below) |
 
 With no `PATH` the server prints the local URL to open. Pointing at a directory
 (`eq dashboard .evaluatorq/sim-runs`) scopes the UI to that store. Passing a
@@ -80,13 +77,6 @@ from `ORQ_API_KEY`. If it is unset, trace-link buttons are hidden.
 `ORQ_WORKSPACE_SLUG` remains supported as an alias. For a self-hosted or
 staging Orq UI, set `ORQ_UI_BASE_URL` as well; otherwise the dashboard uses
 `ORQ_BASE_URL`, then `https://my.orq.ai`.
-
-!!! note "Deprecated legacy Streamlit views"
-    `eq redteam ui` and `eq sim ui` are deprecated legacy Streamlit commands,
-    scoped to a single surface. The FastHTML `eq dashboard` documented here is
-    the primary UI that browses both surfaces together (`eq dashboard` for both
-    stores, `eq dashboard .evaluatorq/sim-runs` for simulation). See the
-    [CLI Reference](cli-reference/overview.md).
 
 ---
 
@@ -106,11 +96,11 @@ keep working.
 
 ### Supported surfaces
 
-| Surface | JSON discriminator | Rendered by |
-|---|---|---|
-| Red team | `"pipeline"` key present | `redteam/reports/export_html.py` |
-| Simulation | `"mode"` key present (`mode` wins over `pipeline`) | `simulation/reports/export_html.py` |
-| Pairwise | `"judging"` key present | `pairwise_reports/export_html.py` |
+| Surface | JSON discriminator |
+|---|---|
+| Red team | `"pipeline"` key present |
+| Simulation | `"mode"` key present (`mode` wins over `pipeline`) |
+| Pairwise | `"judging"` key present |
 
 Files that cannot be parsed (invalid JSON) are silently skipped.  Files that
 parse but fail model validation appear in the index as **broken cards** with an
@@ -119,7 +109,7 @@ traceback.
 
 ---
 
-## Landing (GET /)
+## Landing
 
 `GET /` opens the combined dashboard: a stat band (total runs, per-surface
 counts, attack resistance), runs-by-type and attack-resistance breakdowns,
@@ -140,23 +130,15 @@ judge crashed, timed out or was skipped, is excluded from both sides of the
 ratio rather than counted as resisted.  So a run headlined `100 attacks` can
 show a rate measured over 60; the Score tooltip names both numbers.
 
-Older reports predate the summary fields this rolls up (`evaluated_attacks`,
-`by_severity`, `token_usage_total`), so the dashboard derives their counts,
-severities and token usage from the stored per-attack results instead of
-dropping them from the totals.  Where that derivation lands on a different rate
-than the one recorded in the report itself — usually because the recorded rate
-was computed over a wider denominator — the Score cell is marked with `*` and
-the tooltip gives the recorded value, so a row can always be reconciled against
-that run's own exported report.
+For older reports, the dashboard derives missing summary values from the stored
+per-attack results. If that produces a different rate from the exported report,
+the Score cell is marked with `*` and its tooltip explains the difference.
 
-!!! note "Rates may shift for existing runs"
+!!! note "Rates use evaluated attacks"
 
-    Attacks with no judge verdict were previously counted as resisted.  They are
-    now excluded, so red-team runs recorded before this change can read lower on
-    the dashboard than they did before, and lower than their own exported HTML
-    report.  Nothing about the runs changed — only what the dashboard counts as
-    a measured attack.  Re-exporting a report regenerates it under the current
-    rule.
+    Attacks without a judge verdict are excluded from resistance rates. If an
+    older exported report uses a different denominator, the Score tooltip marks
+    the difference; re-export the report to refresh it under the current rule.
 
 ---
 
@@ -230,61 +212,16 @@ the static report body:
 
 ### Apply recommendations to the agent
 
-Both surfaces share the same apply flow. For red team, on a
-**single-agent** run (recommendations are generated by default; disable with
-`recommendations=False` or `--no-recommendations`),
-the **Focus areas** tab lists each area's actionable recommendations and an apply bar
-showing how many are still pending. Every pending recommendation carries its
-own **Apply…** button; the bar's **Preview & apply all…** takes the whole
-pending set at once. Either way the recommendations are folded into the tested
-agent's instructions with an LLM (the agent is only read at this point) and a
-right-hand drawer opens with the breakdown: for a single recommendation, its
-focus area (priority tier, risk score, traces analyzed, observed patterns),
-the recommendation being merged, and a colorized diff of the instructions
-change.
-Nothing is written until you click **Apply to agent** in the drawer. The
-previewed instructions live server-side, keyed by a single-use token that the
-confirm button posts back — so what lands on the agent is exactly what this
-server previewed, a hand-crafted request cannot choose its own content or
-target, and a replayed confirm is refused. Before writing, the agent's current
-instructions are re-read and compared to the preview's baseline: if the agent
-changed in between, the write is refused and you re-preview against the
-current state. The write is a new **minor agent version**, and the applied
-recommendations are recorded on the report, so applied bullets show a ✓ tick
-and a later preview skips them. All apply forms carry a per-process token as
-a cross-origin defense.
+On an eligible single-agent run, **Focus areas** and **Recommendations** can
+preview suggested instruction changes as a diff. Nothing is written until you
+confirm. Applying a recommendation creates a new minor agent version and marks
+the recommendation as applied on the run.
 
-The merge asks the model for targeted search/replace edits first (output is
-proportional to the change, so previews are fast); if any edit fails to apply
-cleanly it falls back to a full instruction rewrite, so reliability never
-regresses. The merge model is a dashboard config setting: `EVALUATORQ_APPLY_MODEL`
-(default `gpt-5.6-luna`), shown on the Settings page next to the other
-runtime config.
-
-Requirements: `ORQ_API_KEY` in the dashboard's environment and the `orq`
-extra (`orq-ai-sdk`) installed. Multi-agent runs do not show the flow: they
-are aimed at comparing agents, and the recommendations render as plain
-bullets there. Without them the drawer explains what is
-missing instead of failing. The same flow is available programmatically via
-`evaluatorq.redteam.reports.apply.apply_recommendations`.
-
-The two surfaces gate the flow differently, which matters when the target
-isn't an Orq agent. Simulation checks the target kind up front and renders
-plain bullets for anything else. Red team checks only that the run has
-recommendations and exactly one tested agent — so a single-agent run against a
-plain model, a deployment or a callback still shows **Apply…**, and the
-mismatch surfaces as a *Preview failed* drawer when the agent lookup can't
-resolve the target, rather than as a disabled button.
-
-**Agent simulation** reports get the same UI in their **Recommendations**
-tab: one card per simulation recommendation (the persona, scenario, and
-triggers that surfaced it) with per-suggestion Apply buttons and the same
-apply bar, preview drawer, and confirm step. Applied suggestions are recorded
-on the run as `applied_suggestions`. The flow is available for runs that
-targeted an **orq agent**; runs against plain models, deployments, or
-callbacks have no agent instructions to write back to, so their suggestions
-render as plain bullets. Programmatic equivalent:
-`evaluatorq.simulation.reports.apply.apply_suggestions`.
+Write-back requires an Orq agent, `ORQ_API_KEY`, and the `orq` extra
+(`orq-ai-sdk`). Multi-agent runs and runs against plain models, deployments, or
+callbacks still show recommendations, but without an apply action. The same
+flow is available programmatically through the red-team and simulation apply
+helpers.
 
 ### Simulation transcript viewer
 
