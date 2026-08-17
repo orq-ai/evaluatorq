@@ -271,9 +271,8 @@ means it ran but the judge could not return a verdict. Both roll up into
 `report.summary.token_usage_total` covers usage recorded for attack generation,
 the target, and the judge. It includes `calls` and `priced_calls` alongside token
 counts and the dollar figure. If `priced_calls < calls`, some calls reported
-usage without a provider price, so the displayed cost is a lower bound. Optional
-analysis may also make provider calls outside the run total; use the Usage view
-for evaluatorq's recorded usage and your provider dashboard for billing.
+usage without a provider price, so the displayed cost is a lower bound. Use the
+calculator below to include the fixed setup calls in a planning estimate.
 
 #### Ballpark the cost
 
