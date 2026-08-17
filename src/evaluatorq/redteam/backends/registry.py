@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from evaluatorq.common.retry import _warn_ignored_target_retries, without_client_retries
+from evaluatorq.common.retry import without_client_retries
+from evaluatorq.redteam.backends._retry import warn_ignored_target_retries
 from evaluatorq.redteam.exceptions import BackendError, CredentialError
 
 if TYPE_CHECKING:
@@ -116,8 +117,7 @@ def _create_openai_backend(
     # The orchestrator's call_target_with_retry is the single retry owner for
     # OpenAI target calls. Do not silently accept pipeline retry settings that
     # cannot affect this target path.
-    _warn_ignored_target_retries(
-        logger,
+    warn_ignored_target_retries(
         'OpenAI',
         retry_count=retry_count
         if retry_count is not None
@@ -174,8 +174,7 @@ def _create_openresponses_backend(
     # target calls; keep one inner attempt so a target cannot add a second budget.
     # The pipeline retry settings therefore do not apply on this target path.
     if pipeline_config is not None:
-        _warn_ignored_target_retries(
-            logger,
+        warn_ignored_target_retries(
             'OpenResponses',
             retry_count=pipeline_config.retry_count,
             retry_on_codes=pipeline_config.retry_on_codes,

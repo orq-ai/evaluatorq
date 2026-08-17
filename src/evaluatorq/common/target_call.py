@@ -13,7 +13,7 @@ import inspect
 import re
 from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
@@ -72,33 +72,63 @@ async def close_target(target: object) -> None:
 _STATUS_CHAIN_DEPTH = 5  # how far down __cause__ to look for a wrapped HTTP error
 
 
+_STATUS_TEXT_PATTERNS = (
+    r'\bstatus(?:_code)?\s*[=:]\s*(\d{3})\b',
+    r'\bHTTP\s*(\d{3})\b',
+    r'\bcode\s*[=:]\s*(\d{3})\b',
+)
+
+
+def _is_status(value: object) -> bool:
+    """A plausible HTTP status: an int in range, and not a ``bool``."""
+    return isinstance(value, int) and not isinstance(value, bool) and 100 <= value <= 599
+
+
 def extract_status_code(exc: BaseException) -> int | None:
     """Best-effort HTTP status from the heterogeneous exception shapes targets raise.
+
+    **The single status extractor.** Both the retry boundary (which short-circuits
+    on a 4xx) and the backend ``map_error`` implementations that build the reported
+    ``error_code`` go through this function. They used to have separate versions
+    with different coverage, so an exception could be reported as a 4xx while the
+    retry loop still treated it as retryable.
 
     Checks, on the exception and then down its chained originals — explicit
     ``__cause__`` (``raise ... from``) first, falling back to the implicit
     ``__context__`` (a bare ``raise`` inside an ``except`` block):
 
+    * ``exc.response.status_code`` — ``httpx.HTTPStatusError`` (Vercel targets);
     * ``exc.status_code`` — openai ``APIStatusError`` and friends;
-    * ``exc.status`` — aiohttp-style errors;
-    * ``exc.response.status_code`` — ``httpx.HTTPStatusError`` (Vercel targets).
+    * ``exc.status`` — aiohttp-style errors.
 
-    Returns ``None`` when no integer status is found. ``bool`` is excluded
-    (it is an ``int`` subclass but never a status).
+    The response is checked first: when an exception carries both and they
+    disagree, the one attached to the actual HTTP response is authoritative.
+
+    Falls back to parsing ``str(exc)`` for ``status=429`` / ``HTTP 500`` / ``code: 503``
+    shapes, which is the only way to classify backends that stringify their status.
+
+    Returns ``None`` when no plausible status is found. ``bool`` is excluded (it is
+    an ``int`` subclass but never a status), as is any int outside 100-599.
     """
     current: BaseException | None = exc
     for _ in range(_STATUS_CHAIN_DEPTH):
         if current is None:
-            return None
-        for attr in ('status_code', 'status'):
-            value = getattr(current, attr, None)
-            if isinstance(value, int) and not isinstance(value, bool):
-                return value
+            break
         response = getattr(current, 'response', None)
         value = getattr(response, 'status_code', None)
-        if isinstance(value, int) and not isinstance(value, bool):
-            return value
+        if _is_status(value):
+            return cast('int', value)
+        for attr in ('status_code', 'status'):
+            value = getattr(current, attr, None)
+            if _is_status(value):
+                return cast('int', value)
         current = current.__cause__ or current.__context__
+
+    text = str(exc)
+    for pattern in _STATUS_TEXT_PATTERNS:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match and _is_status(int(match.group(1))):
+            return int(match.group(1))
     return None
 
 
@@ -116,15 +146,26 @@ class TargetCallResult:
 
     ``response`` is always populated: the target's real ``AgentResponse`` on
     success or a returned-error attempt, or a synthetic one on timeout/exception.
-    ``error`` is ``None`` iff ``succeeded``. ``error_details`` carries the raw
-    exception info callers persist into ``AttackOutput.error_details``.
+    ``error_details`` carries the raw exception info callers persist into
+    ``AttackOutput.error_details``.
+
+    ``succeeded`` is **derived** from ``error``, not stored. As two independent
+    fields they could be constructed disagreeing, and ``error_payload`` keys off
+    ``error`` — so a result marked ``succeeded=False`` with ``error=None`` emitted
+    an all-``None`` payload and the judge scored a dead target as a genuine reply.
+    That is the exact failure this type exists to prevent; making it underivable
+    is cheaper than testing for it.
     """
 
     response: AgentResponse
-    succeeded: bool
     attempts: int
     error: AgentResponseError | None
     error_details: dict[str, object] | None
+
+    @property
+    def succeeded(self) -> bool:
+        """True iff no error was recorded. Cannot disagree with ``error``."""
+        return self.error is None
 
     def error_payload(self, *, context: str = '', turn: int = 1) -> dict[str, Any]:
         """Return this result's error as the flat fields the report layer stores.
@@ -199,9 +240,7 @@ async def call_target_with_retry(
                 if on_attempt_response is not None:
                     on_attempt_response(attempt_context, resp)
             if resp.error is None:
-                return TargetCallResult(
-                    response=resp, succeeded=True, attempts=attempt + 1, error=None, error_details=None
-                )
+                return TargetCallResult(response=resp, attempts=attempt + 1, error=None, error_details=None)
             last_response = resp
             last_error = resp.error
             last_details = {
@@ -238,6 +277,4 @@ async def call_target_with_retry(
         if attempt + 1 < max_attempts:
             logger.warning(f'Target call failed (attempt {attempt + 1}/{max_attempts}); retrying same exchange')
 
-    return TargetCallResult(
-        response=last_response, succeeded=False, attempts=attempt + 1, error=last_error, error_details=last_details
-    )
+    return TargetCallResult(response=last_response, attempts=attempt + 1, error=last_error, error_details=last_details)

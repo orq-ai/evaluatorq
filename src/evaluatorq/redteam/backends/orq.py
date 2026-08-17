@@ -43,11 +43,11 @@ def _get_orq_server_url() -> str:
     return url.rstrip('/').removesuffix('/v3/router')
 
 
-from evaluatorq.common.retry import _warn_ignored_target_retries
 from evaluatorq.common.thread_context import pipeline_metadata_param, thread_body_param
 from evaluatorq.common.tracing import record_llm_response, set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentTarget, Message, content_to_text
 from evaluatorq.redteam.backends._errors import extract_provider_error_code, extract_status_code
+from evaluatorq.redteam.backends._retry import warn_ignored_target_retries
 from evaluatorq.redteam.backends.base import Backend
 from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
@@ -207,6 +207,13 @@ class ORQAgentTarget(AgentTarget):
         red-team orchestrator owns target retries via ``call_target_with_retry``;
         each SDK operation therefore passes ``retries=None`` so the shared
         client's retry budget remains available to context and cleanup calls.
+
+        ``retries=None`` must be passed **explicitly**. The Speakeasy-generated
+        SDK distinguishes an omitted argument (``UNSET`` — inherit the client's
+        ``retry_config``) from an explicit ``None`` (no retry for this operation).
+        Dropping the kwarg therefore does not mean "no retries"; it re-arms the
+        client budget underneath ``call_target_with_retry`` and the two multiply
+        again. Verified against ``orq_ai_sdk.agents``; re-check on SDK upgrade.
         """
         if not messages or messages[-1].role != 'user':
             raise ValueError(
@@ -641,8 +648,7 @@ class ORQBackend(Backend):
         super().__init__(name='orq')
         timeout_ms = timeout_ms or PIPELINE_CONFIG.target_agent_timeout_ms
         self._timeout_ms = timeout_ms
-        _warn_ignored_target_retries(
-            logger,
+        warn_ignored_target_retries(
             'ORQ',
             retry_count=retry_count,
             retry_on_codes=retry_on_codes,

@@ -133,10 +133,9 @@ async def test_error_payload_keys_are_present_on_both_branches() -> None:
     Call sites index the payload directly (``output['error'] is not None``), so
     dropping the keys on success would turn a clean attack into a ``KeyError``.
     """
-    ok = TargetCallResult(response=AgentResponse(text='hi'), succeeded=True, attempts=1, error=None, error_details=None)
+    ok = TargetCallResult(response=AgentResponse(text='hi'), attempts=1, error=None, error_details=None)
     failed = TargetCallResult(
         response=AgentResponse(text='[ERROR: boom]'),
-        succeeded=False,
         attempts=3,
         error=AgentResponseError(message='boom', error_type='timeout', code=None),
         error_details={'attempts': 3},
