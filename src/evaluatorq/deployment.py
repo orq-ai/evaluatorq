@@ -153,9 +153,25 @@ async def deployment(
     return DeploymentResponse(content=content, raw=completion, usage=usage)
 
 
+def _join_text_parts(parts: list[object]) -> str:
+    """Join the ``text`` parts of a multimodal content array, dict or object form."""
+    text_parts: list[str] = []
+    for part in parts:
+        if isinstance(part, dict) and part.get('type') == 'text':
+            text_parts.append(str(part.get('text', '')))
+        elif getattr(part, 'type', None) == 'text':
+            text_parts.append(str(getattr(part, 'text', '')))
+    return '\n'.join(text_parts)
+
+
 def _extract_content_from_response(completion: object) -> str:
     """
     Extract text content from an Orq deployment response.
+
+    An empty reply always logs: a recognised union arm that carried no text
+    reaches the ``msg_type in ('content', 'tool_calls')`` warning rather than
+    returning ``''`` silently, so the empty-content case is distinguishable in
+    the logs from an unrecognised shape — and from a run that simply worked.
 
     Uses getattr-based introspection because the Orq SDK returns dynamically
     typed response objects. This approach handles various response structures
@@ -176,17 +192,11 @@ def _extract_content_from_response(completion: object) -> str:
     msg_type: str | None = getattr(message, 'type', None)
     msg_content: str | list[object] | None = getattr(message, 'content', None)
 
-    if msg_type == 'content' and isinstance(msg_content, str):
+    if msg_type == 'content' and isinstance(msg_content, str) and msg_content:
         content = msg_content
-    elif msg_type == 'content' and isinstance(msg_content, list):
+    elif msg_type == 'content' and isinstance(msg_content, list) and (text := _join_text_parts(msg_content)):
         # Handle array content (e.g., multimodal responses)
-        text_parts: list[str] = []
-        for part in msg_content:
-            if isinstance(part, dict) and part.get('type') == 'text':
-                text_parts.append(str(part.get('text', '')))
-            elif hasattr(part, 'type') and getattr(part, 'type', None) == 'text':
-                text_parts.append(str(getattr(part, 'text', '')))
-        content = '\n'.join(text_parts)
+        content = text
     elif isinstance(msg_content, str) and msg_content:
         # Other union arms (e.g. 'tool_calls') still carry a nullable str content
         # field per the SDK schema; surface it instead of silently dropping it.
