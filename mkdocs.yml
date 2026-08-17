@@ -62,6 +62,7 @@ hooks:
 
 extra_javascript:
   - js/keyboard.js   # ⌘K / Ctrl+K focuses the search box
+  - js/cost-calculator.js
 
 plugins:
   - search

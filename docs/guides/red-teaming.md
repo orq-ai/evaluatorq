@@ -22,8 +22,12 @@ flowchart LR
 - **static** — replays a fixed dataset of known attacks instead of generating
   them. Deterministic, cheap, good for CI. Runs Orq's public
   [`orq/redteam-vulnerabilities`](https://huggingface.co/datasets/orq/redteam-vulnerabilities)
-  dataset by default; pass `dataset=` to run your own.
-- **hybrid** — static seeds plus dynamic expansion.
+  dataset by default; pass `dataset=` to run your own. The
+  [static dataset cookbook](../examples/redteam/02_static_dataset.md) shows the
+  reproducible version end to end.
+- **hybrid** — static seeds plus dynamic expansion; see the
+  [hybrid mode cookbook](../examples/redteam/03_hybrid_mode.md) when you want
+  both known attacks and generated coverage.
 
 ```python
 # static mode replays Orq's public attack dataset by default
@@ -65,6 +69,44 @@ The command writes a JSON report and exits non-zero if no attacks receive a
 verdict or evaluation coverage falls below the configured floor. See the
 [CLI reference](../cli-reference/redteam.md) for the other output formats and
 run options.
+
+### Choose a cookbook
+
+<div class="grid cards" markdown>
+
+-   :material-rocket-launch:{ .lg .middle } __Start with a smoke test__
+
+    ---
+
+    Run a small, CI-friendly check with an explicit exit-code gate.
+
+    [:octicons-arrow-right-24: `08_quick_smoke_test.py`](../examples/redteam/08_quick_smoke_test.md)
+
+-   :material-database-check:{ .lg .middle } __Make it reproducible__
+
+    ---
+
+    Replay a fixed dataset when you need stable attacks across agent versions.
+
+    [:octicons-arrow-right-24: `02_static_dataset.py`](../examples/redteam/02_static_dataset.md)
+
+-   :material-tune-variant:{ .lg .middle } __Aim attacks at your domain__
+
+    ---
+
+    Add domain context so generated attacks reflect your agent and threat model.
+
+    [:octicons-arrow-right-24: `13_attacker_instructions.py`](../examples/redteam/13_attacker_instructions.md)
+
+-   :material-file-chart-outline:{ .lg .middle } __Inspect what happened__
+
+    ---
+
+    Filter results, inspect verdicts, and export evidence from Python.
+
+    [:octicons-arrow-right-24: `07_report_inspection.py`](../examples/redteam/07_report_inspection.md)
+
+</div>
 
 === "Orq agent"
 
@@ -233,6 +275,55 @@ usage without a provider price, so the displayed cost is a lower bound. Optional
 analysis may also make provider calls outside the run total; use the Usage view
 for evaluatorq's recorded usage and your provider dashboard for billing.
 
+#### Ballpark the cost
+
+Use this calculator for a quick planning estimate. Pick a model tier or enter a
+known per-call price; this is an approximation because providers usually bill by
+tokens, not calls. The defaults are rough heuristics: **Frontier** (for example,
+Sol or Opus) at about $0.01 per call, **Balanced** at one fifth of that, and
+**Cheap** at one fifth again.
+
+<form class="cost-calculator" data-cost-calculator>
+  <div class="cost-calculator__grid">
+    <label>
+      Fixed calls
+      <input type="number" name="fixed-calls" min="0" step="1" value="0">
+    </label>
+    <label>
+      Number of attacks
+      <input type="number" name="attacks" min="0" step="1" value="10">
+    </label>
+    <label>
+      Turns per attack
+      <input type="number" name="turns" min="0" step="1" value="1">
+    </label>
+    <label>
+      Model tier
+      <select name="model-tier">
+        <option value="frontier">Frontier — $0.01/call</option>
+        <option value="balanced">Balanced — $0.002/call</option>
+        <option value="cheap">Cheap — $0.0004/call</option>
+        <option value="custom">Custom</option>
+      </select>
+    </label>
+    <label>
+      Cost per LLM call (USD)
+      <input type="number" name="call-cost" min="0" step="any" value="0.01">
+    </label>
+  </div>
+  <div class="cost-calculator__result" aria-live="polite">
+    <strong>Estimated cost: <span data-cost-total>$0.20</span></strong>
+    <span data-cost-breakdown>20 calls</span>
+  </div>
+</form>
+
+The estimate uses **fixed calls + (attacks × turns × 2)** calls, where the two
+per-turn calls represent the target and the judge. Optional analysis can add
+calls, and actual spend varies with prompt and completion length.
+
+If you want separate attacker and evaluator model settings rather than one
+default model, see the [`11_redteam_config.py` cookbook](../examples/redteam/11_redteam_config.md).
+
 ## In CI
 
 For a fast gate, run a small fixed set of attacks and assert a minimum
@@ -263,7 +354,8 @@ scored (`report.summary.no_verdict`).
 
 The runnable smoke example
 ([`08_quick_smoke_test.py`](../examples/redteam/08_quick_smoke_test.md)) wraps
-this same pattern.
+this same pattern; the [report inspection cookbook](../examples/redteam/07_report_inspection.md)
+shows how to consume the resulting JSON in Python.
 
 ## Reading a run in the dashboard
 
@@ -379,7 +471,9 @@ gets an **Apply…** button: it previews the merged instructions as a diff, and
 nothing is written until you confirm. Multi-agent runs, and runs whose targets
 aren't Orq agents, are not eligible for write-back —
 [Apply recommendations to the agent](../dashboard.md#apply-recommendations-to-the-agent)
-covers the requirements.
+covers the requirements. The
+[`14_recommendations_and_artifacts.py` cookbook](../examples/redteam/14_recommendations_and_artifacts.md)
+shows the corresponding Python configuration.
 
 ![Focus areas: prioritized fixes ranked by risk, each with a recommended remediation.](../assets/dashboard/redteam-05-focus-areas.png){ .dashboard-shot }
 

@@ -179,6 +179,51 @@ html { font-size: 100%; }
   border-color: var(--orq-orange);
 }
 
+/* --- Cost calculator ------------------------------------------------- */
+.cost-calculator {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.4rem;
+  padding: 1rem;
+  background: var(--md-code-bg-color);
+}
+.cost-calculator__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.8rem;
+}
+.cost-calculator label {
+  display: grid;
+  gap: 0.3rem;
+  font-weight: 600;
+}
+.cost-calculator input,
+.cost-calculator select {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.25rem;
+  background: var(--md-default-bg-color);
+  color: var(--md-default-fg-color);
+  font: inherit;
+}
+.cost-calculator__result {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: baseline;
+  margin-top: 1rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--md-default-fg-color--lightest);
+}
+.cost-calculator__result strong {
+  color: var(--orq-teal);
+  font-size: 1.05em;
+}
+[data-md-color-scheme="slate"] .cost-calculator__result strong {
+  color: var(--orq-teal-light);
+}
+
 /* --- Termynal animated terminal ------------------------------------- */
 /* Control links (fast-forward / restart) ship a periwinkle default that's
    off-palette — recolor to brand teal-light. */
