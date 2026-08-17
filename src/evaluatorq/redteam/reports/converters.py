@@ -231,7 +231,6 @@ def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
             )
             flattened = TargetCallResult(
                 response=AgentResponse(),
-                succeeded=False,
                 attempts=1,
                 error=error,
                 error_details=error_data.get('error_details') or error_data.get('details'),
@@ -271,7 +270,6 @@ def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
         # letting model_validate fail and fall through to an empty payload.
         error_fields = TargetCallResult(
             response=raw_output,
-            succeeded=raw_output.error is None,
             attempts=1,
             error=raw_output.error,
             error_details=None,
@@ -771,7 +769,10 @@ def static_evaluatorq_results_to_reports(
         inputs = getattr(data_point, 'inputs', {}) if data_point is not None else {}
         job_results = getattr(result, 'job_results', None) or []
         if not job_results:
-            job_name = getattr(result, 'job_name', None) or 'pre-execution'
+            # No job ran, so there is no job to name: DataPointResult carries
+            # job_name only on its job_results entries, and this branch is the
+            # case where that list is empty.
+            job_name = 'pre-execution'
             _converters_logger.warning(
                 'Static result for job {!r} has no job results; recording as pre-execution run error', job_name
             )
