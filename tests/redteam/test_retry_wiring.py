@@ -385,16 +385,11 @@ async def test_retry_paths_make_exactly_three_http_attempts(
             backend = ORQBackend(orq_client=orq_client)
         target = backend.create_target('agent')
     elif path == 'simulation-client':
-        from evaluatorq.simulation.agents import base as base_module
         from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgent
 
-        async def bounded_retry(fn: Any, **kwargs: Any) -> object:
-            from evaluatorq.common.retry import with_retry
-
-            return await with_retry(fn, max_attempts=expected_attempts, **kwargs)
-
-        monkeypatch.setattr(base_module, 'with_retry', bounded_retry)
-        agent = UserSimulatorAgent(LLMCallConfig(model='gpt-4o', client=sdk_client))
+        # No monkeypatch on with_retry: the budget must come from the agent's own
+        # config, or this leg proves nothing about the production call path.
+        agent = UserSimulatorAgent(LLMCallConfig(model='gpt-4o', client=sdk_client, retry_count=max_target_retries))
         with pytest.raises(APIStatusError):
             await agent.respond_async([Message(role='user', content='hello')])
     else:
