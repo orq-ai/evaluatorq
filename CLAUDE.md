@@ -143,6 +143,7 @@ mode this table exists to prevent.
 | LLM-as-judge | `common.judge.run_judge`; multi-judge via `common.jury` | new judge prompt + parse loop |
 | OTel spans, token usage, cost | `common.tracing` (`with_llm_span`, `record_token_usage`, `record_llm_response`) | `get_tracer` / `start_as_current_span` outside a `tracing.py` module |
 | Surface-specific span naming | `redteam/tracing.py`, `simulation/tracing.py` — thin wrappers that delegate | new span vocabulary |
+| Prompt caching on a replayed conversation | `common.prompt_cache` (`apply_cache_breakpoints`, `responses_cache_body`) | hand-placed `cache_control`, or a `prompt_cache_key` (OpenAI caches automatically; it needs none) |
 | Prompt templating | `common.template_engine.render_template` | f-string prompt assembly |
 | Untrusted text into a prompt | `common.sanitize.delimit` | raw interpolation |
 | Run lifecycle state | `common.run_manifest` (`start_manifest`, `list_manifests`) | new status dict / sidecar file |

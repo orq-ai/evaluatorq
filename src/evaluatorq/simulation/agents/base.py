@@ -22,6 +22,7 @@ from evaluatorq.common.llm_call import (
     strip_known_rejected_responses_reasoning,
 )
 from evaluatorq.common.llm_client import client_routes_through_orq
+from evaluatorq.common.prompt_cache import apply_cache_breakpoints, responses_cache_body
 from evaluatorq.common.retry import with_retry
 from evaluatorq.common.thread_context import pipeline_metadata, thread_body_param
 from evaluatorq.common.tracing import get_trace_context_headers, record_llm_input, record_llm_response
@@ -268,10 +269,13 @@ class BaseAgent(ABC):
         max_tok = max_tokens or DEFAULT_MAX_TOKENS
         timeout_s = timeout or DEFAULT_TIMEOUT_S
 
-        full_messages: list[dict[str, Any]] = [
+        # Breakpoints on the system prompt and the last turn: simulation replays a
+        # growing append-only transcript, so without them Anthropic models re-encode
+        # the whole thing every turn (see common/prompt_cache.py).
+        full_messages: list[dict[str, Any]] = apply_cache_breakpoints([
             {'role': 'system', 'content': self.system_prompt},
             *[{'role': m.role, 'content': m.content or ''} for m in messages],
-        ]
+        ])
 
         async with with_llm_span(
             model=self._model,
@@ -400,7 +404,12 @@ class BaseAgent(ABC):
                 metadata = pipeline_metadata()
                 if metadata:
                     call_kwargs['metadata'] = metadata
-                extra_body = thread_body_param() if client_routes_through_orq(self._client) else {}
+                # Both router-only: the run thread, and the top-level cache_control
+                # that marks the last cacheable block automatically (Anthropic
+                # models only; the router ignores it elsewhere).
+                extra_body = (
+                    {**thread_body_param(), **responses_cache_body()} if client_routes_through_orq(self._client) else {}
+                )
                 if extra_body:
                     call_kwargs['extra_body'] = {**call_kwargs.get('extra_body', {}), **extra_body}
                 # Drop reasoning up front if this model already rejected it once, so

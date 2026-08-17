@@ -8,6 +8,7 @@ across calls.
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -17,6 +18,24 @@ pytest.importorskip("openai")
 from evaluatorq.common import model_catalogue
 from evaluatorq.contracts import AgentResponse, FunctionCall, Message, StrategyToolCall
 from evaluatorq.redteam.backends.openai import OpenAIModelTarget
+
+
+def _flatten(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Undo the prompt-cache breakpoints so a test can assert on plain text.
+
+    The system prompt and the last turn are sent as text blocks carrying
+    ``cache_control`` (see evaluatorq.common.prompt_cache); the wire text is
+    unchanged, which is what these tests are about.
+    """
+    out: list[dict[str, Any]] = []
+    for m in messages:
+        content = m["content"]
+        if isinstance(content, list):
+            for block in content:
+                assert block["cache_control"] == {"type": "ephemeral"}
+            content = "".join(b["text"] for b in content)
+        out.append({**m, "content": content})
+    return out
 
 
 def _make_openai_response(content: str = "reply", model: str = "gpt-4o-mini") -> MagicMock:
@@ -71,7 +90,7 @@ async def test_respond_prepends_single_system_prompt_and_strips_input_system():
             ]
         )
 
-    sent = client.chat.completions.create.call_args.kwargs["messages"]
+    sent = _flatten(client.chat.completions.create.call_args.kwargs["messages"])
     assert sent == [
         {"role": "system", "content": "SYS"},
         {"role": "user", "content": "q1"},
@@ -171,7 +190,7 @@ async def test_respond_is_stateless_across_calls():
         await target.respond([Message(role="user", content="one")])
         await target.respond([Message(role="user", content="two")])
 
-    second_sent = client.chat.completions.create.call_args_list[1].kwargs["messages"]
+    second_sent = _flatten(client.chat.completions.create.call_args_list[1].kwargs["messages"])
     assert second_sent == [
         {"role": "system", "content": "SYS"},
         {"role": "user", "content": "two"},

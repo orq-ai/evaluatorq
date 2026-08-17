@@ -110,5 +110,9 @@ async def test_respond_sends_only_system_and_user() -> None:
     messages = client.chat.completions.create.call_args.kwargs["messages"]
     assert messages[0]["role"] == "system"
     assert messages[1]["role"] == "user"
-    assert messages[1]["content"] == "first message"
+    # System + last turn carry prompt-cache breakpoints, so their content is a
+    # text-block list (see evaluatorq.common.prompt_cache).
+    assert messages[1]["content"] == [
+        {"type": "text", "text": "first message", "cache_control": {"type": "ephemeral"}}
+    ]
     assert len(messages) == 2

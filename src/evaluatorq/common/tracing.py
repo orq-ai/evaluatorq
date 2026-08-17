@@ -114,12 +114,25 @@ def capture_message_content() -> bool:
 _capture_message_content = capture_message_content
 
 
+def _span_content_text(content: Any) -> str:
+    """Flatten message content to text for a span attribute.
+
+    Content arrives as a plain string, or as a list of blocks once a caller has
+    added prompt-cache breakpoints (`common.prompt_cache`). ``str()`` on the
+    list would put a Python repr — quoted keys, ``cache_control`` and all — on
+    the span, so join the text parts instead.
+    """
+    if isinstance(content, list):
+        content = ''.join(part.get('text', '') for part in content if isinstance(part, dict))
+    return truncate_for_span(content)
+
+
 def _serialize_messages(messages: list[dict[str, Any]]) -> str:
     return json.dumps(
         [
             {
                 'role': str(m.get('role', '') if isinstance(m, dict) else getattr(m, 'role', '')),
-                'content': truncate_for_span(
+                'content': _span_content_text(
                     m.get('content', '') if isinstance(m, dict) else getattr(m, 'content', '')
                 ),
             }
