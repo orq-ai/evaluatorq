@@ -101,6 +101,10 @@ def criteria_met_scorer(result: SimulationResult) -> float:
                 )
             met = sum(1 for c in entries if c.passed and c.audited is not False)
             return met / len(entries)
+        logger.warning(
+            'criteria_met: criteria_meta is present but empty; falling back to criteria_results, '
+            'which carries no audit provenance.'
+        )
 
     criteria_results = result.criteria_results or {}
     if not criteria_results:

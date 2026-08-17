@@ -150,9 +150,12 @@ async def evaluatorq(
               inference=False), or a list of DataPoint instances/awaitables.
         jobs: The jobs to run on the data.
         evaluators: The evaluators to use. If not provided, only jobs will run.
-        parallelism: Maximum concurrency for each of three scopes: datapoints,
-              jobs per datapoint, and evaluators per job. Defaults to 10; set to 1 for
-              sequential execution, or lower it if your provider rate-limits.
+        parallelism: Maximum concurrency, applied at two levels: datapoints run
+              at most ``parallelism`` at a time, and within one datapoint a single
+              shared budget of ``parallelism`` bounds its jobs and then its
+              evaluators (the budget is not split between them — a job releases
+              its slot before its evaluators take theirs). Defaults to 10; set to
+              1 for sequential execution, or lower it if your provider rate-limits.
         print_results: Whether to print results table to console. Defaults to True.
         description: Optional description for the evaluation run.
         path: Optional path (e.g. "MyProject/MyFolder") to place the experiment
@@ -387,10 +390,10 @@ async def evaluatorq(
                         *processing_tasks,
                         return_exceptions=True,
                     )
-                    polling_result = await asyncio.gather(
-                        polling_task,
-                        return_exceptions=True,
-                    )
+                    # Awaited for the side effect only: the poller was just
+                    # cancelled deliberately, and poll_progress already logs and
+                    # swallows anything that is not a CancelledError.
+                    _ = await asyncio.gather(polling_task, return_exceptions=True)
 
                 # A cancellation delivered to the caller while fetching must retain
                 # asyncio's cancellation semantics, even if processing failed too.

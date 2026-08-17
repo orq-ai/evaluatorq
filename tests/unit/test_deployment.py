@@ -47,3 +47,37 @@ class TestExtractContentFromResponse:
         assert "tool_calls" in caplog.text
         assert "no text content" in caplog.text
         assert "Unrecognised" not in caplog.text
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            pytest.param("", id="empty-string"),
+            pytest.param([], id="empty-list"),
+            pytest.param([{"type": "image_url", "image_url": {"url": "x"}}], id="list-with-no-text-parts"),
+        ],
+    )
+    def test_content_type_with_no_text_warns_instead_of_returning_empty_silently(
+        self, content: object, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """An empty reply always logs.
+
+        These shapes previously matched the str/list branches, returned '' and
+        logged nothing — so an empty deployment reply was indistinguishable from
+        a working one, while the sibling content=None case on the same msg_type
+        warned. Two adjacent branches must not differ in whether they log.
+        """
+        completion = _completion_with_message(SimpleNamespace(type="content", content=content))
+        with caplog.at_level("WARNING"):
+            result = _extract_content_from_response(completion)
+        assert result == ""
+        assert "no text content" in caplog.text
+        assert "Unrecognised" not in caplog.text
+
+    def test_content_type_with_multimodal_text_parts_still_joins_them(self) -> None:
+        completion = _completion_with_message(
+            SimpleNamespace(
+                type="content",
+                content=[{"type": "text", "text": "one"}, {"type": "text", "text": "two"}],
+            )
+        )
+        assert _extract_content_from_response(completion) == "one\ntwo"
