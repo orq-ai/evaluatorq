@@ -117,7 +117,7 @@ async def evaluatorq(
     jobs: list[Job] | None = None,
     evaluators: list[Evaluator] | None = None,
     parallelism: int = 10,
-    max_concurrent_llm_calls: int | None = None,
+    llm_parallelism: int | None = None,
     print_results: bool = True,
     description: str | None = None,
     path: str | None = None,
@@ -158,7 +158,7 @@ async def evaluatorq(
               evaluators (the budget is not split between them — a job releases
               its slot before its evaluators take theirs). Defaults to 10; set to
               1 for sequential execution, or lower it if your provider rate-limits.
-        max_concurrent_llm_calls: Ceiling on in-flight LLM requests for the whole run,
+        llm_parallelism: Ceiling on in-flight LLM requests for the whole run,
               counted per request rather than per task, so it holds however the
               datapoint/job/evaluator/jury fan-out nests. Unbounded by default. This
               is the knob to set against a provider concurrency limit; ``parallelism``
@@ -213,7 +213,7 @@ async def evaluatorq(
             jobs=jobs,
             evaluators=evaluators,
             parallelism=parallelism,
-            max_concurrent_llm_calls=max_concurrent_llm_calls,
+            llm_parallelism=llm_parallelism,
             print_results=print_results,
             description=description,
             path=path,
@@ -241,7 +241,7 @@ async def evaluatorq(
         jobs = [_replay_recorded_response]
     evaluators_list = validated.evaluators or []
     parallelism = validated.parallelism
-    max_concurrent_llm_calls = validated.max_concurrent_llm_calls
+    llm_parallelism = validated.llm_parallelism
     print_results = validated.print_results
     description = validated.description
     path = validated.path
@@ -252,7 +252,7 @@ async def evaluatorq(
         AsyncExitStack() as span_stack,
     ):
         # Before any fan-out, so every task created below inherits the budget.
-        _ = span_stack.enter_context(llm_concurrency_limit(max_concurrent_llm_calls))
+        _ = span_stack.enter_context(llm_concurrency_limit(llm_parallelism))
         if single_trace:
             from .tracing.spans import RunSpanOptions, with_run_span
 

@@ -227,7 +227,7 @@ class EvaluatorParams(BaseModel):
         evaluators: The evaluators to use. If not provided, only jobs will run.
         parallelism: Number of jobs to run in parallel. Defaults to 10; set to 1 for
               sequential execution, or lower it if your provider rate-limits.
-        max_concurrent_llm_calls: Ceiling on in-flight LLM requests for the whole
+        llm_parallelism: Ceiling on in-flight LLM requests for the whole
               run, counted per request rather than per task. Unbounded by default.
               Use this, not ``parallelism``, against a provider concurrency limit.
         print_results: Whether to print results table to console. Defaults to True.
@@ -249,7 +249,7 @@ class EvaluatorParams(BaseModel):
     jobs: list[Job] | None = None
     evaluators: list[Evaluator] | None = None
     parallelism: int = Field(default=10, ge=1)
-    max_concurrent_llm_calls: int | None = Field(default=None, ge=1)
+    llm_parallelism: int | None = Field(default=None, ge=1)
     print_results: bool = Field(default=True, validation_alias='print')
     description: str | None = None
     path: str | None = None

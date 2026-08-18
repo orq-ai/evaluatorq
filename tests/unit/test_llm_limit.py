@@ -142,8 +142,8 @@ def test_entry_points_expose_the_knob(module: str, func: str) -> None:
     import inspect
 
     parameter = inspect.signature(getattr(importlib.import_module(module), func)).parameters
-    assert 'max_concurrent_llm_calls' in parameter, f'{func} has no LLM concurrency knob'
-    assert parameter['max_concurrent_llm_calls'].default is None
+    assert 'llm_parallelism' in parameter, f'{func} has no LLM concurrency knob'
+    assert parameter['llm_parallelism'].default is None
 
 
 @pytest.mark.asyncio
