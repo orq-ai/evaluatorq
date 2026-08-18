@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_57264865448e6c8c_delivery_method_registry_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.15.4">coverage.py v7.15.4</a>,
-            created at 2026-08-18 15:16 +0000
+            created at 2026-08-18 19:27 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -338,7 +338,7 @@
     <p class="run run2"><span class="n"><a id="t256" href="#t256">256</a></span><span class="t">            <span class="fst">f&#x27;</span><span class="fst">The &quot;</span><span class="op">{</span><span class="nam">kind</span><span class="op">}</span><span class="fst">:&quot; target prefix has been removed. </span><span class="fst">&#x27;</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t257" href="#t257">257</a></span><span class="t">            <span class="fst">f&#x27;</span><span class="fst">Use OpenAIModelTarget to test OpenAI models directly:\n</span><span class="fst">&#x27;</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t258" href="#t258">258</a></span><span class="t">            <span class="fst">f&#x27;</span><span class="fst">    from evaluatorq.redteam import OpenAIModelTarget\n</span><span class="fst">&#x27;</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run run2"><span class="n"><a id="t259" href="#t259">259</a></span><span class="t">            <span class="fst">f&#x27;</span><span class="fst">    await red_team(OpenAIModelTarget(&quot;</span><span class="op">{</span><span class="nam">value</span><span class="op">}</span><span class="fst">&quot;))</span><span class="fst">&#x27;</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t259" href="#t259">259</a></span><span class="t">            <span class="fst">f&#x27;</span><span class="fst">    await red_team(target=OpenAIModelTarget(model=&quot;</span><span class="op">{</span><span class="nam">value</span><span class="op">}</span><span class="fst">&quot;))</span><span class="fst">&#x27;</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t260" href="#t260">260</a></span><span class="t">        <span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t261" href="#t261">261</a></span><span class="t">    <span class="key">try</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t262" href="#t262">262</a></span><span class="t">        <span class="nam">kind_enum</span> <span class="op">=</span> <span class="nam">TargetKind</span><span class="op">(</span><span class="nam">kind</span><span class="op">.</span><span class="nam">lower</span><span class="op">(</span><span class="op">)</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
@@ -1797,7 +1797,7 @@
     <p class="pln"><span class="n"><a id="t1715" href="#t1715">1715</a></span><span class="t"><span class="str">    Usage:</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t1716" href="#t1716">1716</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t1717" href="#t1717">1717</a></span><span class="t"><span class="str">    ```python</span>&nbsp;</span><span class="r"></span></p>
-    <p class="pln"><span class="n"><a id="t1718" href="#t1718">1718</a></span><span class="t"><span class="str">    report = await red_team(&quot;agent:YOUR_AGENT_KEY&quot;, mode=&quot;dynamic&quot;)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t1718" href="#t1718">1718</a></span><span class="t"><span class="str">    report = await red_team(target=&quot;agent:YOUR_AGENT_KEY&quot;, mode=&quot;dynamic&quot;)</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t1719" href="#t1719">1719</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t1720" href="#t1720">1720</a></span><span class="t"><span class="str">    rate = report.summary.resistance_rate</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t1721" href="#t1721">1721</a></span><span class="t"><span class="str">    print(f&quot;Resistance rate: {rate:.0%}&quot; if rate is not None else &quot;no verdict&quot;)</span>&nbsp;</span><span class="r"></span></p>
@@ -2116,7 +2116,7 @@
             <a class="nav" href="z_57264865448e6c8c_delivery_method_registry_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.15.4">coverage.py v7.15.4</a>,
-            created at 2026-08-18 15:16 +0000
+            created at 2026-08-18 19:27 +0000
         </p>
     </div>
 </footer>

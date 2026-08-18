@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_3b48c1b9d2ba39a7_jobs_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.15.4">coverage.py v7.15.4</a>,
-            created at 2026-08-18 15:16 +0000
+            created at 2026-08-18 19:27 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -727,7 +727,7 @@
     <p class="pln"><span class="n"><a id="t645" href="#t645">645</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t646" href="#t646">646</a></span><span class="t"><span class="str">    async def main() -&gt; None:</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t647" href="#t647">647</a></span><span class="t"><span class="str">        # Dynamic run against an ORQ platform agent</span>&nbsp;</span><span class="r"></span></p>
-    <p class="pln"><span class="n"><a id="t648" href="#t648">648</a></span><span class="t"><span class="str">        report = await red_team(&quot;agent:YOUR_AGENT_KEY&quot;, mode=&quot;dynamic&quot;, categories=[&quot;LLM01&quot;, &quot;LLM07&quot;])</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t648" href="#t648">648</a></span><span class="t"><span class="str">        report = await red_team(target=&quot;agent:YOUR_AGENT_KEY&quot;, mode=&quot;dynamic&quot;, categories=[&quot;LLM01&quot;, &quot;LLM07&quot;])</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t649" href="#t649">649</a></span><span class="t"><span class="str">        print(report.summary.resistance_rate)</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t650" href="#t650">650</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t651" href="#t651">651</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
@@ -742,8 +742,8 @@
     <p class="pln"><span class="n"><a id="t660" href="#t660">660</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t661" href="#t661">661</a></span><span class="t"><span class="str">    async def main() -&gt; None:</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t662" href="#t662">662</a></span><span class="t"><span class="str">        # Dynamic run against a direct model target</span>&nbsp;</span><span class="r"></span></p>
-    <p class="pln"><span class="n"><a id="t663" href="#t663">663</a></span><span class="t"><span class="str">        target = OpenAIModelTarget(&quot;gpt-5-mini&quot;, system_prompt=&quot;You are a helpful assistant.&quot;)</span>&nbsp;</span><span class="r"></span></p>
-    <p class="pln"><span class="n"><a id="t664" href="#t664">664</a></span><span class="t"><span class="str">        report = await red_team(target, mode=&quot;dynamic&quot;, categories=[&quot;LLM01&quot;, &quot;LLM07&quot;])</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t663" href="#t663">663</a></span><span class="t"><span class="str">        target = OpenAIModelTarget(model=&quot;gpt-5-mini&quot;, system_prompt=&quot;You are a helpful assistant.&quot;)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t664" href="#t664">664</a></span><span class="t"><span class="str">        report = await red_team(target=target, mode=&quot;dynamic&quot;, categories=[&quot;LLM01&quot;, &quot;LLM07&quot;])</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t665" href="#t665">665</a></span><span class="t"><span class="str">        print(report.summary.resistance_rate)</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t666" href="#t666">666</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t667" href="#t667">667</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
@@ -3313,7 +3313,7 @@
             <a class="nav" href="z_3b48c1b9d2ba39a7_jobs_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.15.4">coverage.py v7.15.4</a>,
-            created at 2026-08-18 15:16 +0000
+            created at 2026-08-18 19:27 +0000
         </p>
     </div>
 </footer>
