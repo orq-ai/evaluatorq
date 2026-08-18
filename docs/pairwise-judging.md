@@ -207,83 +207,72 @@ Notes worth knowing:
 
 ### Repetition-aware reliability
 
-Run comparisons with `repetitions=2` (or more) and the reliability weights stop
-coming from the global two-item fit and start coming from **within-datapoint
-repetition consistency**: how often a judge agrees with itself on repeated
-passes of the same prompt.
+Run each comparison more than once (`repetitions=2` or more) and the reliability
+weights change source. Instead of the global two-item fit, they come from how
+often each judge **agrees with itself** on repeated passes of the same prompt.
 
-Two conditions gate this path, and it falls back to the pooled two-item fit (and
-says so in `fit_warnings`) when either is unmet:
+Two things must be true, and if either is missing the run falls back to the
+two-item fit and says so in `fit_warnings`:
 
-- **Both orderings (`swap=True`, the default).** Consistency is measured per
-  ordering group, so a single-ordering run (`swap=False`) takes the uniform
-  plurality path before repetition weighting runs. Passing `repetitions>=2` with
-  `swap=False` therefore does not enable consistency weighting.
-- **A quorum of at least two judges with repeated decisive passes.** Below the
-  quorum the borrowed fallback for unmeasured judges is effectively one judge's
-  own value, so the whole panel would be weighted off a single judge.
+- **Both orderings must run (`swap=True`, the default).** Self-agreement is
+  measured inside one ordering, so a single-ordering run (`swap=False`) never
+  reaches this path, even at `repetitions=2`.
+- **At least two judges must have repeated decisive passes.** With only one, the
+  fallback weight for every other judge is just that one judge's number, so we
+  do not use it.
 
-Every raw pass is preserved and canonicalized on
-`PairwiseVote.observations` (a swapped-ordering 'B' is recorded as 'A', so
-entries are comparable across orderings), including abstained and failed
-passes as `None`.
+Every pass is kept on `PairwiseVote.observations`, normalized so a swapped-order
+'B' is stored as 'A' and the two orderings line up; abstained and failed passes
+are kept as `None`.
 
-Why this exists: with a single pass per judge, the fitted sigma of the global
-two-item collapse mixes judge noise with datapoint heterogeneity when the run
-spans different questions or response pairs. Repeated passes of the same
-prompt are the one setting where disagreement is unambiguously judge noise, so
-consistency is computed per (judge, comparison, ordering) group, averaged to
-at most ONE observation per judge per datapoint, then averaged across
-datapoints. Consequences by construction:
+**Why self-agreement, not the global fit.** With one pass per judge, the
+two-item fit cannot tell a noisy judge apart from a hard batch of questions.
+Repeating the *same* prompt removes the ambiguity: any disagreement is the judge
+being inconsistent, nothing else. So a judge's consistency is scored on each
+prompt, counted once per judge per datapoint, then averaged. Because of that:
 
-- Different datapoints are never compared to each other, so heterogeneity
-  cannot masquerade as unreliability.
-- Position bias does not read as inconsistency (orderings are separate
-  groups); the swap/reconcile machinery already handles bias.
-- Extra repetitions refine a judge's weight but never multiply its panel
-  weight: each judge still casts exactly one weighted vote per comparison.
+- Different questions are never compared against each other, so a hard batch
+  cannot look like an unreliable judge.
+- Position bias is not mistaken for inconsistency, since each ordering is its
+  own group.
+- Extra repeats sharpen a judge's score but never add weight: each judge still
+  casts one weighted vote per comparison.
 
-Read `bt_sigma.repetition_consistency` for the per-judge reliability weights.
-These are **shrunk** toward the panel mean (empirical-Bayes, so a judge with one
-lucky R=2 group cannot dominate the run) **and failure-discounted**, which means a
-perfectly self-consistent judge reads *below* 1.0 unless the whole panel is at 1.0.
-The **raw** self-agreement (1.0 = always agreed with itself on every completed pass,
-neither shrunk nor failure-adjusted) is published beside it as
-`bt_sigma.repetition_consistency_raw` and the `Consistency (raw)` report column,
-so compare a judge's raw number within one run — not the shrunk weight across two
-runs with different panels, where the same judge can move without changing.
-`p_a_beats_b` still comes from the pooled fit (a run-level headline, not a
-per-judge reliability). Judges without repeated decisive passes vote with the
-median measured weight and are named in `fit_warnings`. Legacy runs saved before
-repetition capture load fine and keep the previous global-fit behaviour.
+**Two numbers, and which to read.** `bt_sigma.repetition_consistency` is the
+reliability **weight**. It is pulled toward the panel average (so one lucky
+2-pass agreement cannot take over the run) and lowered when passes fail, so even
+a perfectly steady judge reads a little under 1.0 unless the whole panel is
+steady. `bt_sigma.repetition_consistency_raw` (and the `Consistency (raw)` report
+column) is the **plain** self-agreement, with no adjustment: 1.0 means the judge
+always agreed with itself. Read the raw number to compare judges inside one run;
+do not compare the weight across two runs with different panels, where the same
+judge can move without changing. `p_a_beats_b` is still the pooled run-level
+headline. A judge with no repeats gets the median of the measured weights and is
+named in `fit_warnings`. Runs saved before this feature existed still load and
+behave as before.
 
-What consistency estimates - and what it must not be read as: it measures a
-judge's self-agreement under fixed conditions. It is NOT task difficulty, NOT
-overall judge quality (a judge can be consistently wrong), and NOT accuracy
-against any ground truth. A **clean** abstention is excluded, so a judge that
-declines honestly is not penalized: `['A', <abstention>, 'A']` scores 1.0 in both
-the raw metric and the weight. A pass that **errored or came back off-contract** is
-a failure, not a free abstention: it is counted in `repetition_failures`. The judge
-still *agreed with itself* on every pass it completed, so the **raw** self-agreement
-(`repetition_consistency_raw`) for `['A', None, 'A']` stays **1.0**; only the
-reliability **weight** (`repetition_consistency`) is discounted by the failed share,
-to **2/3**, since a flaky judge is less reliable even when self-consistent. The two
-`None`s are identical in the vote list; only `repetition_failures` separates a clean
-abstention from a broken pass.
+**What consistency is not.** It is self-agreement under fixed conditions, not
+task difficulty, not judge quality (a judge can be steadily wrong), and not
+accuracy against a ground truth. A clean abstention does not count against a
+judge: `['A', <abstention>, 'A']` scores 1.0 in both numbers. A pass that errored
+or came back off-contract is a failure, not a free abstention, and is counted in
+`repetition_failures`. The judge still agreed with itself on the passes it
+finished, so the **raw** number for `['A', None, 'A']` stays **1.0**; only the
+**weight** drops, to **2/3**, because a flaky judge is less dependable even when
+it agrees with itself. The two `None`s look identical in the vote list; only
+`repetition_failures` tells a clean abstention from a broken pass.
 
-Cost: repetitions multiply judge calls linearly (calls = judges x orderings x
-R), so R=2 doubles spend per comparison; wall-clock barely moves because
-passes fan out concurrently. Storage adds one small observation record per
-pass. R=2 is the recommended default when reliability weighting matters - it
-is the minimum that produces consistency evidence; R=3 only refines the
-per-group agreement scale and costs 50% more.
+**Cost.** Calls scale linearly with judges x orderings x repetitions, so `R=2`
+doubles the calls per comparison. Wall-clock barely moves, since the passes run
+in parallel, and each pass adds one small record. Use `R=2` when reliability
+weighting matters: it is the smallest R that produces any consistency evidence.
+`R=3` only refines the score, for 50% more cost.
 
-For ranking more than two candidates (leaderboard-style), the underlying
-`evaluatorq.ranking.fit_bt()` accepts arbitrary item pairs from any number of
-judges and returns skills, a ranking, and per-judge reliability; `cycle_rate()`
-gives the matching consistency diagnostic. `cycle_rate` is deliberately not
-part of the two-item aggregation above: with two fixed items there are no
-3-cycles to rate, so it only means something on the multi-item ranking path.
+For ranking more than two candidates, use `evaluatorq.ranking.fit_bt()`
+directly: it takes item pairs from any number of judges and returns skills, a
+ranking, and per-judge reliability, with `cycle_rate()` as the matching
+consistency diagnostic. `cycle_rate` does not apply to the two-item case above,
+since two fixed items have no cycles to measure.
 
 ## Saving a run and viewing it in the dashboard
 
