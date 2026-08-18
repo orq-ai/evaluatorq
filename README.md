@@ -86,7 +86,7 @@ async def main():
         data=data,
         jobs=[agent_v1, agent_v2],
         evaluators=[string_contains_evaluator()],
-        parallelism=3,
+        datapoint_parallelism=3,
     )
 
 
@@ -156,7 +156,7 @@ Findings come back ranked by `risk = attack success rate × average severity`, e
 
 ### What a run costs
 
-Measured wall clock and token counts from two runs against Orq-hosted agents, attacked and judged by `gpt-5-mini` at `parallelism=10`:
+Measured wall clock and token counts from two runs against Orq-hosted agents, attacked and judged by `gpt-5-mini` at `datapoint_parallelism=10`:
 
 | Run | Attacks | Wall clock | Tokens | Tokens per attack |
 |---|---|---|---|---|
