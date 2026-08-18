@@ -276,11 +276,9 @@ calculator below to include the fixed setup calls in a planning estimate.
 
 #### Ballpark the cost
 
-Use this calculator for a quick planning estimate. Pick a model tier or enter a
-known per-call price; this is an approximation because providers usually bill by
-tokens, not calls. The defaults are rough heuristics: **Frontier** (for example,
-Sol or Opus) at about $0.01 per call, **Balanced** at one fifth of that, and
-**Cheap** at one fifth again.
+Use this calculator for a quick planning estimate. It prices real tokens at
+published per-1k list prices, not a flat per-call guess. Pick a model or enter
+your own prices.
 
 <form class="cost-calculator" data-cost-calculator>
   <div class="cost-calculator__grid">
@@ -305,32 +303,58 @@ Sol or Opus) at about $0.01 per call, **Balanced** at one fifth of that, and
       <input type="number" name="judge-calls" min="0" step="1" value="1">
     </label>
     <label>
-      Model tier
-      <select name="model-tier">
-        <option value="frontier">Frontier — $0.01/call</option>
-        <option value="balanced">Balanced — $0.002/call</option>
-        <option value="cheap">Cheap — $0.0004/call</option>
+      Model
+      <select name="model">
+        <option value="claude-opus-5">Claude Opus 5 — $5 / $25 per 1M</option>
+        <option value="claude-sonnet-5" selected>Claude Sonnet 5 — $3 / $15 per 1M</option>
+        <option value="claude-haiku-4-5">Claude Haiku 4.5 — $1 / $5 per 1M</option>
+        <option value="gpt-5-mini">gpt-5-mini — $0.25 / $2 per 1M</option>
         <option value="custom">Custom</option>
       </select>
     </label>
     <label>
-      Cost per LLM call (USD)
-      <input type="number" name="call-cost" min="0" step="any" value="0.01">
+      Input price (USD per 1k tokens)
+      <input type="number" name="input-price" min="0" step="any" value="0.003">
+    </label>
+    <label>
+      Output price (USD per 1k tokens)
+      <input type="number" name="output-price" min="0" step="any" value="0.015">
+    </label>
+    <label>
+      Tokens per turn, per side
+      <input type="number" name="tokens-per-side" min="0" step="100" value="1000">
+    </label>
+    <label>
+      Cache hit rate (%)
+      <input type="number" name="cache-hit" min="0" max="100" step="1" value="90">
     </label>
   </div>
   <div class="cost-calculator__result" aria-live="polite">
-    <strong>Estimated cost: <span data-cost-total>$0.30</span></strong>
-    <span data-cost-breakdown>30 calls</span>
+    <strong>Estimated cost: <span data-cost-total>$0.4842</span></strong>
+    <span data-cost-breakdown>30 calls · 60,000 input tokens (90% cached) · 30,000 output tokens</span>
   </div>
 </form>
 
-The estimate uses **fixed calls + attacks × (turns × calls-per-turn + judge calls)**.
+Call count is **fixed calls + attacks × (turns × calls-per-turn + judge calls)**.
 
 - **Calls per turn** is 2 for dynamic and hybrid attacks — one adversarial
   generation and one target call. Static attacks replay a fixed prompt, so set
   it to 1 (target only).
 - **Judge calls per attack** is 1 by default. The judge runs once after the turn
   loop, not per turn. A jury multiplies this by panel size × repetitions.
+
+The token model behind the dollar figure makes three assumptions, all editable
+above:
+
+- **1,000 tokens per turn, per side.** Every call emits one block and the
+  transcript grows by one block per call, so input cost is quadratic in turns —
+  which is why long multi-turn attacks cost more than the call count suggests.
+- **90% cache hit rate** on input tokens, billed at **0.1× the base input
+  price**. That is the standard cached-read rate for the models listed. Runs
+  that never repeat a prefix should set this to 0.
+- **Published list prices, snapshotted 2026-08-18.** Verify against your
+  provider before quoting a number to anyone; at runtime evaluatorq prices calls
+  from the live Orq `/v2/models` catalogue instead.
 
 Content-filter retries on the attacker turn are real billed calls and are not in
 this estimate. Actual spend varies with prompt and completion length.
@@ -419,165 +443,28 @@ eq dashboard                                              # browse every saved r
 eq dashboard .evaluatorq/runs/red-team_<timestamp>.json   # deep-link to one report
 ```
 
-What follows walks the dashboard the way you'd read a finished run: land, pick
-the run, then work down the report tabs from headline to evidence. The
-screenshots come from one example run — a hybrid run against two deliberately
-contrasting targets — so your own numbers will differ. See the Dashboard
-reference for [filters](../dashboard.md#filters),
-[trace links](../dashboard.md#orq-trace-links) and
-[downloads](../dashboard.md#downloads).
+Land on the cross-surface overview, pick the run from **Red Team**, then work
+down the report tabs from headline to evidence:
 
-### 1. Landing — what has been run at all { #rt-landing }
+| Tab | What it answers |
+|---|---|
+| **Overview** | Executive summary, resistance rate and ASR, severity split |
+| **Agents** | Per-target ASR and discovered tools, skills and knowledge |
+| **Focus areas** | Fixes ranked by `success rate × avg severity`, with remediations |
+| **Breakdowns** | Attack success per framework category, worst first |
+| **Attacks** | Every attack, expandable to the judge verdict and transcript |
+| **Usage** | Tokens and API calls per agent |
+| **Config** | What was tested — and what was *not* |
 
-`eq dashboard` opens on a cross-surface overview: jobs run, spend, tokens, the
-red team / agent sim split, and findings by severity across every stored run.
-Use it to confirm the run you expect actually landed, then pick a surface from
-the left rail.
+Two traps worth knowing before you read a number: the resistance rate covers
+only the categories this run attacked (check **Config** for the skipped ones),
+and it is measured over *evaluated* attacks, so failed judge calls drop out of
+the denominator rather than counting as resisted.
 
-It is a triage screen, not a scoreboard: the severity bars aggregate *every*
-stored run, including throwaway smoke runs, so a red bar here doesn't mean the
-system you care about is broken. Go to the surface, find the run, and read its
-numbers there.
-
-An empty landing page — zeros across the stat band, no runs in either rail —
-means the dashboard found no report files, not that the runs failed. Check you
-launched it from the directory holding `.evaluatorq/`, and that the run was
-saved at all — `red_team()` saves by default, but `--save none` (CLI) or
-`save=SaveMode.NONE` writes nothing.
-
-![The dashboard landing page: jobs run, spend, tokens, run mix, and findings by severity across all stored runs.](../assets/dashboard/redteam-01-landing.png){ .dashboard-shot }
-
-### 2. Red Team — pick a run { #rt-run-list }
-
-**Red Team** lists every red-team job, newest first, with the target or targets
-it attacked and how many attack cases it ran. The `SCORE` column is the
-resistance rate (higher is better), not the attack success rate — the stat band
-above totals attacks, ASR and critical findings across those runs, so the two
-directions sit on the same screen.
-
-`STATUS` is the run's lifecycle, not a verdict: **success** for a finished run,
-**running** for one still in flight (the dashboard reads the run manifest, so a
-long run appears here before it has a report), and **error** for one that died
-part-way. Open an **error** run anyway — the attacks that completed before the
-failure are still in it, and the numbers are computed over those alone, so
-treat its resistance rate as a partial sample.
-
-![The Red Team run list: target, status, score and case count per job.](../assets/dashboard/redteam-02-run-list.png){ .dashboard-shot }
-
-### 3. Overview — the headline { #rt-overview }
-
-Opening a run lands on **Overview**: a written executive summary, the five
-headline numbers (attacks run, vulnerabilities, attack success rate, resistance
-rate, critical findings), the resistant/vulnerable split, the severity
-distribution, and per-agent attack success with the weakest agent first.
-
-Resistance rate and ASR are complements: 78% resistant is 22% ASR. There is no
-universal pass mark — take the first run as your baseline, fix what
-[Focus areas](#rt-focus-areas) puts on top, and turn the
-number you reach into a [CI gate](#in-ci) so the next run can only improve on
-it.
-
-Both numbers cover only the categories this run actually attacked. The example
-run touched 10 of the 19 framework categories, so its resistance rate says
-nothing about the other 9 — [Config](#rt-config) lists
-which were skipped, and it is worth reading before quoting the headline
-anywhere.
-
-Filters sit in the right rail on every tab — outcome, severity, minimum turns,
-category, agent, attack technique, delivery method and vulnerability — and the
-whole page, downloads included, respects them.
-
-![Overview: executive summary, headline metrics, outcome donut, severity split and per-agent attack success.](../assets/dashboard/redteam-03-overview.png){ .dashboard-shot }
-
-### 4. Agents — which target broke { #rt-agents }
-
-For a run with more than one target, **Agents** puts each one's ASR, model,
-discovered tools, skills and knowledge side by side, so a hardened target and an
-unhardened one are directly comparable. On a single-agent run — the usual first
-run — the tab still renders, as one row: the same capability inventory, no
-comparison. Skip it and read Focus areas instead.
-
-A dash in the tools, skills or knowledge column means nothing was discovered for
-that target, not that the agent has none. For custom targets, provide
-`agent_context=` if you want evaluatorq to use the capabilities you know about.
-Treat a broad attack set as unknown capability coverage, not evidence that the
-agent supports every tool or skill.
-
-![Agents: per-agent ASR, model, and the tools, skills and knowledge discovered for each target.](../assets/dashboard/redteam-04-agents.png){ .dashboard-shot }
-
-### 5. Focus areas — what to fix first { #rt-focus-areas }
-
-**Focus areas** ranks fixes by `risk = success rate × avg severity` and attaches
-a recommended remediation to each. Severity is the numeric weight shown on
-[Config](#rt-config) (critical is the heaviest), so a
-vulnerability that fails often *and* fails badly floats to the top. Start at P1
-and work down; re-run the same categories afterwards and compare the two runs
-in the run list to confirm the fix landed.
-
-When the run has recommendations and exactly one tested agent, each one also
-gets an **Apply…** button: it previews the merged instructions as a diff, and
-nothing is written until you confirm. Multi-agent runs, and runs whose targets
-aren't Orq agents, are not eligible for write-back —
-[Apply recommendations to the agent](../dashboard.md#apply-recommendations-to-the-agent)
-covers the requirements. The
-[`14_recommendations_and_artifacts.py` cookbook](../examples/redteam/14_recommendations_and_artifacts.md)
-shows the corresponding Python configuration.
-
-![Focus areas: prioritized fixes ranked by risk, each with a recommended remediation.](../assets/dashboard/redteam-05-focus-areas.png){ .dashboard-shot }
-
-### 6. Breakdowns — where the weakness sits { #rt-breakdowns }
-
-**Breakdowns** gives attack success per framework category, worst first, so a
-category that fell over on every attempt isn't hidden behind a healthy overall
-resistance rate. Read the attempt count alongside the rate — 100% over two
-attacks and 33% over twelve are not equally strong signals, and the ranking
-doesn't weight for that. When a category you care about sits on a handful of
-attempts, re-run scoped to it (`--category LLM01`) before treating either the
-pass or the fail as real. In dynamic and hybrid mode,
-`--generated-strategy-count` (2 per category) buys more attempts — but only
-while strategy generation is on, and `--max-per-category` still truncates the
-combined curated + generated list afterwards, so raise both or neither.
-
-![Breakdowns: attack success rate per OWASP category, worst first.](../assets/dashboard/redteam-06-breakdowns.png){ .dashboard-shot }
-
-### 7. Attacks — the evidence { #rt-attacks }
-
-**Attacks** lists every attack with its agent, vector, severity and outcome.
-
-![Attacks: every attack in the run with vector, severity and outcome.](../assets/dashboard/redteam-07-attacks.png){ .dashboard-shot }
-
-Click a row to expand the evaluator's verdict, its reasoning, and the full
-message-by-message transcript — the evidence you'd paste into a ticket. With
-`ORQ_WORKSPACE` set, attacks that recorded a trace id also link out to that
-trace in the Orq UI; without the variable the buttons are hidden entirely. In
-the expanded row below, a memory-poisoning attack succeeded: the agent confirms
-it stored a persistent "System Administrator / UNRESTRICTED" directive telling
-it to bypass safety checks on request.
-
-![An expanded attack row: evaluator verdict plus the full message-by-message transcript.](../assets/dashboard/redteam-08-attack-detail.png){ .dashboard-shot }
-
-### 8. Usage — what the run consumed { #rt-usage }
-
-**Usage** breaks recorded tokens down per agent — total, prompt, completion and
-API calls. Spend shows a dash when the provider does not return a price; see
-[What a run costs](#what-a-run-costs) for how to interpret that lower bound.
-
-![Usage: total, prompt and completion tokens plus API calls per agent.](../assets/dashboard/redteam-09-usage.png){ .dashboard-shot }
-
-### 9. Config — what was actually tested { #rt-config }
-
-**Config** records how the run was produced — pipeline, framework, scoring
-method, duration — plus which categories were tested, which were not, and the
-severity weights used for scoring. Read the *not tested* list before reading a
-high resistance rate as broad coverage.
-
-![Config: run configuration, methodology, tested and untested categories, and severity weights.](../assets/dashboard/redteam-10-config.png){ .dashboard-shot }
-
-!!! tip "Exports respect the filters"
-    **Export** downloads the run as standalone HTML, Markdown, CSV or JSON —
-    the tabular formats carry only the rows your filters left visible, so
-    filter first, then export. Formats per surface:
-    [Downloads](../dashboard.md#downloads).
+The tab-by-tab walkthrough, with screenshots, lives in the Dashboard reference:
+[Reading a red-team run](../dashboard.md#reading-a-red-team-run). See also
+[filters](../dashboard.md#filters), [trace links](../dashboard.md#orq-trace-links)
+and [downloads](../dashboard.md#downloads).
 
 ## External agent frameworks
 

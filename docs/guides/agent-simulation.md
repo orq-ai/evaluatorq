@@ -690,150 +690,29 @@ eq dashboard .evaluatorq/sim-runs  # scope to simulation runs
     Pass `save=True`, or drive the run from the CLI (`eq sim run`), which saves
     unless you pass `--no-save`.
 
-What follows walks the dashboard the way you'd read a finished run: land, pick
-the run, then work down the report tabs from headline to transcript. The
-screenshots come from one example run — 10 personas × 5 scenarios against a
-refund agent — so your own numbers will differ. See the Dashboard reference for
+Land on the cross-surface overview, pick the run from **Agent Sim**, then work
+down the report tabs from headline to transcript:
+
+| Tab | What it answers |
+|---|---|
+| **Overview** | Summary, pass rate, average score, the four per-turn quality metrics |
+| **Breakdown** | Persona × scenario heatmap — usually the fastest read |
+| **Recommendations** | Suggested instruction edits, applicable to an Orq agent |
+| **Transcripts** | Every conversation, expandable to criteria, rationale and messages |
+| **Turn quality** | The four metrics trended by turn index |
+| **Config** | Run metadata plus the persona dials |
+| **Compare** | KPI and per-conversation deltas against a second run |
+
+Two easily conflated numbers: **pass rate** is the share of conversations where
+the judge set `goal_achieved`; **average score** is the mean
+`goal_completion_score`, so a run can average 0.7 while passing half its
+conversations. The **CONFIDENCE** badge is a band on the pass rate, not a
+statistical confidence — it carries no sample-size meaning.
+
+The tab-by-tab walkthrough, with screenshots, lives in the Dashboard reference:
+[Reading a simulation run](../dashboard.md#reading-a-simulation-run). See also
 [filters](../dashboard.md#filters), [trace links](../dashboard.md#orq-trace-links)
 and [downloads](../dashboard.md#downloads).
-
-### 1. Landing — what has been run at all { #sim-landing }
-
-`eq dashboard` opens on a cross-surface overview: jobs run, spend, tokens and
-the red team / agent sim split across every stored run. Agent simulation sits
-next to red teaming in the left rail.
-
-Zeros everywhere and an empty rail mean no report files were found, not that
-the run failed — the usual cause is the `save=False` default in the warning
-above. Launch `eq dashboard` from the directory holding `.evaluatorq/`.
-
-![The dashboard landing page: jobs run, spend, tokens and run mix across all stored runs.](../assets/dashboard/sim-01-landing.png){ .dashboard-shot }
-
-### 2. Agent Sim — pick a run { #sim-run-list }
-
-**Agent Sim** lists every simulation job with its target, goal-completion score,
-conversation count and cost. The picker above the list selects two runs to
-compare — see [Compare](#sim-compare).
-
-![The Agent Sim run list: simulations run, goal completion, average turns and cost per simulation.](../assets/dashboard/sim-02-run-list.png){ .dashboard-shot }
-
-### 3. Overview — the headline { #sim-overview }
-
-Opening a run lands on **Overview**: a written summary naming the best and worst
-persona × scenario pair, the run's counts (personas, scenarios, conversations,
-average score, average turns, errors), the achieved/not-achieved split, and the
-four per-turn quality metrics — response quality, hallucination risk, tone
-appropriateness, factual accuracy.
-
-Those four are scored by the judge on every turn regardless of what you passed
-in `evaluator_names`, which is why they appear even though the Config tab lists
-only `goal_achieved` and `criteria_met`. All four run 0–1; higher is better for
-three of them, and *lower* is better for hallucination risk. Factual accuracy is
-only meaningful when the scenario supplies ground truth — without it the judge
-has nothing to check the response against.
-
-Two numbers on this screen are easy to conflate. The **pass rate** is the share
-of conversations where the judge set `goal_achieved` — the donut. **Average
-score** is the mean `goal_completion_score`, the judge's 0–1 rating of *how
-fully* the goal was met, so a run can average 0.7 while passing half its
-conversations.
-
-The **CONFIDENCE** badge is a band on the pass rate, not a statistical
-confidence: ≥ 80% of goals achieved reads HIGH, ≥ 50% MEDIUM, below that LOW.
-It carries no sample-size meaning at all — three conversations that all pass
-still read HIGH. A LOW badge says the run went badly, not that you need more
-data.
-
-Filters sit in the right rail on every tab — goal outcome, rule violations, who
-terminated the conversation, persona, scenario, and score/turn thresholds — and
-the whole page respects them. "Terminated by" takes four values: `judge` (the
-judge decided the conversation was done), `max_turns` (the turn cap hit first),
-`error`, and `timeout`. A run dominated by `max_turns` means the cap, not the
-agent, decided where the conversations ended.
-
-![Overview: executive summary, run counts, outcome donut and the four average quality metrics.](../assets/dashboard/sim-03-overview.png){ .dashboard-shot }
-
-### 4. Breakdown — which persona × scenario pair fails { #sim-breakdown }
-
-**Breakdown** is the persona × scenario heatmap, usually the fastest read in the
-report. Here every persona clears the straightforward refund paths at 100%,
-while one column — *Never Received Claim With Unverified Evidence* — lands
-between 20% and 90% for every one of them. A column that's weak across personas
-points at the scenario; a row that's weak across scenarios points at the
-persona; a single cold cell (*Cautious Low-Tech Senior* × *Duplicate Refund
-Attempt*, 0%) points at that pairing specifically.
-
-![Breakdown: goal completion per persona and scenario. One column scores far below the rest across nearly every persona.](../assets/dashboard/sim-04-breakdown-heatmap.png){ .dashboard-shot }
-
-### 5. Recommendations — what to change { #sim-recommendations }
-
-**Recommendations** turns the failures into suggested edits, one card per
-suggestion, with the persona, scenario and triggers that produced it. For a run
-that targeted an Orq agent, each suggestion can be applied to the agent's
-instructions from here: preview the merge as a diff, confirm, and the write
-lands as a new minor agent version — see
-[Apply recommendations to the agent](../dashboard.md#apply-recommendations-to-the-agent).
-Runs against a plain model, a deployment or a callback have no instructions to
-write back to, so their suggestions render as plain bullets — see
-[Apply recommendations to the agent](../dashboard.md#apply-recommendations-to-the-agent)
-for the full contract. The tab carries a count badge, and it disappears
-entirely when a run generated no recommendations — as does **Turn quality**
-when a run recorded no per-turn metrics. A missing tab here is a property of
-the run, not a broken page.
-
-### 6. Transcripts — the conversations { #sim-transcripts }
-
-**Transcripts** lists every conversation with persona, scenario, turn count,
-score, who ended it, and whether the goal was met. Sort by score to put the
-failures on top, and raise the page size (5 / 10 / 25) before scanning a large
-run. The **TRACES** column is empty in the screenshot because the deep-link
-needs `ORQ_WORKSPACE` set. With it set, a row shows **View Trace** when the
-conversation stored a trace id, **View Traces** (a thread filter) when it only
-stored a thread id, and nothing when it has neither.
-
-![Transcripts: all conversations in the run, sortable and paginated.](../assets/dashboard/sim-05-transcripts.png){ .dashboard-shot }
-
-Click a row to open the conversation: required and prohibited criteria with
-their pass marks, the judge's rationale, and the full user ↔ agent exchange. The
-example below is the interesting failure mode — all four criteria pass, but the
-judge still marks the goal missed because the agent stopped at requesting
-evidence instead of resolving the claim.
-
-![A conversation drawer: criteria, the judge's rationale, and the full transcript.](../assets/dashboard/sim-06-conversation-detail.png){ .dashboard-shot }
-
-### 7. Turn quality — behaviour over time { #sim-turn-quality }
-
-**Turn quality** trends the four metrics by turn index, so quality decay over
-longer conversations is visible, alongside the turn-count distribution. Use
-multi-turn scenarios and a sufficient `max_turns` value when you want to study
-quality over time.
-
-![Turn quality: per-turn trend across the four quality metrics, plus turn-count distribution.](../assets/dashboard/sim-07-turn-quality.png){ .dashboard-shot }
-
-### 8. Config — what was tested { #sim-config }
-
-**Config** records the run metadata — target kind, mode, evaluators, when it ran
-— and the persona table with each simulated user's tone, patience,
-assertiveness, politeness and technical level.
-
-![Config: run metadata and the persona dials used to drive the simulated users.](../assets/dashboard/sim-08-config.png){ .dashboard-shot }
-
-### 9. Compare — did the fix work { #sim-compare }
-
-Pick a second run in **Compare with** to diff two runs: KPI deltas, outcomes,
-per-scorer averages, and how conversations ended. Run-level KPIs always compare.
-For a per-conversation diff, the runs must share the same `(persona, scenario)`
-pairs. Reuse the same personas and scenarios across runs (see
-[Replay stored datapoints](#replay-stored-datapoints)) and you get the
-per-conversation comparison needed for a regression gate.
-
-![Run comparison: KPI deltas, outcomes and per-scorer averages for two runs of the same agent.](../assets/dashboard/sim-09-compare.png){ .dashboard-shot }
-
-!!! tip "Exports respect the filters"
-    **Export** downloads the run as standalone HTML, Markdown or JSON (no CSV
-    on this surface) — the JSON carries only the conversations your filters
-    left visible, so filter first, then export. Formats per surface:
-    [Downloads](../dashboard.md#downloads).
 
 ## External framework demos
 

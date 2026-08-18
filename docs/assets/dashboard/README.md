@@ -50,11 +50,14 @@ score 0.86, with one scenario column that clearly fails.
 
 ## Pending re-shoot
 
-Five shots do not show the thing their caption teaches, and both guides
-currently carry prose caveats standing in for them. The decision is to re-shoot
-the set in one purpose-built capture session rather than keep documenting
-around it; until that happens, **do not delete the caveats in the guides** —
-they are the only thing keeping the pages honest.
+Five shots do not show the thing their caption teaches. The decision is to
+re-shoot the set in one purpose-built capture session rather than keep
+documenting around it. Until then the four that exist are **unreferenced** —
+their `![...]` lines were removed from
+[`docs/dashboard.md`](../../dashboard.md); the prose stayed. Re-add each one in
+the same commit that replaces the file, not before. The prose caveats standing
+in for them are the only thing keeping the pages honest, so **do not delete
+them either**.
 
 | Shot | What's wrong | What the capture run needs |
 |---|---|---|
