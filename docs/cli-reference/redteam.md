@@ -70,31 +70,6 @@ blocked run is diagnosable from the CLI output alone.
 
 ---
 
-## `eq redteam ui` (deprecated)
-
-!!! warning "Deprecated — use `eq dashboard`"
-    `eq redteam ui` is a deprecated legacy Streamlit command. The primary UI for
-    browsing red-team runs is the multi-run FastHTML dashboard: `eq dashboard`
-    (both stores) or `eq dashboard .evaluatorq/runs` (red team only). Passing a
-    single JSON report file to `eq dashboard` is an optional direct deep-link.
-
-Launch the Streamlit dashboard for a saved red-team run.
-
-```bash
-eq redteam ui [REPORT_PATH] [--latest] [--host HOST] [--port PORT]
-```
-
-| Flag / Argument | Type / Default | Description |
-|---|---|---|
-| `REPORT_PATH` | `Path \| None` / `None` | Saved run to open. Omit to use the latest auto-saved run. |
-| `--latest` / `-l` | `bool` / `False` | Open the most recent run without passing a path. |
-| `--host` | `str` / `localhost` | Host to bind the Streamlit server to. |
-| `--port` | `int` / `8501` | Port for the Streamlit server. |
-
-Requires `evaluatorq[redteam]`.
-
----
-
 ## `eq redteam validate-dataset`
 
 Validate the shape of a red team dataset.
@@ -122,3 +97,4 @@ eq redteam runs [PATH] [--limit N] [--json]
 | `PATH` | `Path \| None` / `None` | Directory containing run reports. Defaults to `.evaluatorq/runs/`. |
 | `--limit` / `-n` | `int` / `20` | Maximum number of runs to show. |
 | `--json` | `bool` / `False` | Emit runs as a JSON array on stdout (machine-readable). |
+

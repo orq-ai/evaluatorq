@@ -92,7 +92,7 @@ async def main():
             "evaluators": [
                 {"name": "output-validator", "scorer": output_validator},
             ],
-            "parallelism": 2,
+            "datapoint_parallelism": 2,
             "print": True,
         },
     )

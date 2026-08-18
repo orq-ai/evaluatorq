@@ -61,7 +61,7 @@ async def main() -> None:
     # Individual params (categories, max_turns, etc.) are still passed
     # directly to red_team(). Config handles the model/LLM layer.
     report = await red_team(
-        "agent:your-agent-key",
+        target="agent:your-agent-key",
         llm_config=config,
         mode="dynamic",
         categories=["LLM07"],
@@ -77,7 +77,7 @@ async def main() -> None:
     # Use OpenAIModelTarget instead of the removed "llm:<model>" string prefix.
     # This allows you to test models directly without the ORQ router.
     report2 = await red_team(
-        OpenAIModelTarget("gpt-4o", system_prompt="You are a helpful assistant."),
+        target=OpenAIModelTarget(model="gpt-4o", system_prompt="You are a helpful assistant."),
         llm_config=LLMConfig(attacker=LLMCallConfig(model="openai/gpt-4o-mini")),
         mode="dynamic",
         categories=["LLM01"],

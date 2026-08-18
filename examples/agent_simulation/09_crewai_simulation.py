@@ -99,7 +99,7 @@ async def main() -> None:
         raise SystemExit("ORQ_API_KEY is not set - needed for the UserSimulator and Judge LLMs")
 
     # Pass crew_factory so parallel datapoints each get an independent crew.
-    target = CrewAITarget(make_crew(), crew_factory=make_crew)
+    target = CrewAITarget(crew=make_crew(), crew_factory=make_crew)
 
     persona = Persona(
         name="Curious Shopper",

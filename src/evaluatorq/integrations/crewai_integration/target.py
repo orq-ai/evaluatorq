@@ -77,7 +77,7 @@ class CrewAITarget(AgentTarget):
                     expected_output="The agent's next reply.", agent=agent)
         return Crew(agents=[agent], tasks=[task])
 
-    target = CrewAITarget(make_crew(), crew_factory=make_crew)
+    target = CrewAITarget(crew=make_crew(), crew_factory=make_crew)
     results = await simulate(target=target, ...)
     ```
     """

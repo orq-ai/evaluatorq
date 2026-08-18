@@ -8,8 +8,7 @@ Three main verbs: `generate` (datapoints only), `simulate` (run against pre-buil
     The recommended way to browse saved simulation runs is the multi-run FastHTML
     dashboard, `eq dashboard .evaluatorq/sim-runs` (scopes to simulation) or
     `eq dashboard` (both stores). Passing a single JSON report file is an optional
-    direct deep-link. The legacy `eq sim ui` Streamlit command remains callable
-    but is deprecated (see below).
+    direct deep-link.
 
 ## `eq sim run`
 
@@ -240,28 +239,3 @@ eq sim runs [DIRECTORY] [--limit N]
 | `--full` / `-f` | `bool` / `False` | Render at full content width; do not truncate columns. |
 | `--json` | `bool` / `False` | Emit runs as a JSON array on stdout. |
 
----
-
-## `eq sim ui` (deprecated)
-
-!!! warning "Deprecated — use `eq dashboard`"
-    `eq sim ui` is a deprecated legacy Streamlit command. The primary UI for
-    browsing simulation runs is the multi-run FastHTML dashboard: `eq dashboard
-    .evaluatorq/sim-runs` (scopes to simulation) or `eq dashboard` (both stores).
-    Passing a single JSON report file to `eq dashboard` is an optional direct
-    deep-link.
-
-Launch the Streamlit dashboard for a saved simulation run.
-
-```bash
-eq sim ui [RUN_PATH] [--latest] [--host HOST] [--port PORT]
-```
-
-| Flag / Argument | Type / Default | Description |
-|---|---|---|
-| `RUN_PATH` | `Path \| None` / `None` | Saved run to open. Omit to use the latest auto-saved run. |
-| `--latest` / `-l` | `bool` / `False` | Open the most recent run without passing a path. |
-| `--host` | `str` / `localhost` | Host to bind the Streamlit server to. |
-| `--port` | `int` / `8501` | Port for the Streamlit server. |
-
-Requires `evaluatorq[simulation]`.

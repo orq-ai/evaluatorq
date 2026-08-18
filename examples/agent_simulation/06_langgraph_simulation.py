@@ -73,7 +73,7 @@ def build_graph() -> object:
         temperature=0,
     )
     return create_react_agent(
-        model,
+        model=model,
         tools=[get_order_status],
         prompt=(
             "You are a customer support agent for an online store. "
@@ -95,7 +95,7 @@ async def main() -> None:
 
     # Wrap the compiled LangGraph app as a unified AgentTarget. _resolve_target()
     # routes AgentTarget instances to the runner's respond(messages) path.
-    target = LangGraphTarget(build_graph())
+    target = LangGraphTarget(graph=build_graph())
 
     persona = Persona(
         name="Curious Shopper",

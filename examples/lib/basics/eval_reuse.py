@@ -49,7 +49,7 @@ async def main():
             ],
             "jobs": [text_analysis_job],
             "evaluators": [max_length_validator(10)],
-            "parallelism": 2,
+            "datapoint_parallelism": 2,
             "print": True,
         },
     )

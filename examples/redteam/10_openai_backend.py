@@ -22,7 +22,7 @@ from evaluatorq.redteam import red_team
 async def main() -> None:
     # Replace with your agent key from the ORQ platform settings page.
     report = await red_team(
-        "agent:YOUR_AGENT_KEY",
+        target="agent:YOUR_AGENT_KEY",
         mode="dynamic",
         categories=["LLM01", "LLM07", "ASI01", "ASI02"],
         max_dynamic_datapoints=5,

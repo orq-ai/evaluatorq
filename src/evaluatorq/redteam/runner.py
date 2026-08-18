@@ -645,7 +645,7 @@ async def red_team(
 
     async def main() -> None:
         # Dynamic run against an ORQ platform agent
-        report = await red_team("agent:YOUR_AGENT_KEY", mode="dynamic", categories=["LLM01", "LLM07"])
+        report = await red_team(target="agent:YOUR_AGENT_KEY", mode="dynamic", categories=["LLM01", "LLM07"])
         print(report.summary.resistance_rate)
 
 
@@ -660,8 +660,8 @@ async def red_team(
 
     async def main() -> None:
         # Dynamic run against a direct model target
-        target = OpenAIModelTarget("gpt-5-mini", system_prompt="You are a helpful assistant.")
-        report = await red_team(target, mode="dynamic", categories=["LLM01", "LLM07"])
+        target = OpenAIModelTarget(model="gpt-5-mini", system_prompt="You are a helpful assistant.")
+        report = await red_team(target=target, mode="dynamic", categories=["LLM01", "LLM07"])
         print(report.summary.resistance_rate)
 
 

@@ -76,7 +76,7 @@ Cost and wall-clock scale with cases × turns × LLM calls. The levers are how m
 
 ### Where do results go, and how do I view a past run?
 
-Runs auto-save locally (red-team runs to `.evaluatorq/runs/`; simulation runs to `.evaluatorq/sim-runs/`). Browse them in the multi-run FastHTML dashboard with `eq dashboard` (no path browses both stores; `eq dashboard .evaluatorq/sim-runs` scopes to simulation), or list runs with `eq redteam runs` / `eq sim runs`. The legacy `eq redteam ui` / `eq sim ui` Streamlit views remain callable but are deprecated. See [Dashboard](dashboard.md).
+Runs auto-save locally (red-team runs to `.evaluatorq/runs/`; simulation runs to `.evaluatorq/sim-runs/`). Browse them in the multi-run FastHTML dashboard with `eq dashboard` (no path browses both stores; `eq dashboard .evaluatorq/sim-runs` scopes to simulation), or list runs with `eq redteam runs` / `eq sim runs`. See [Dashboard](dashboard.md).
 
 ### How do I run a plain evaluation?
 
@@ -198,7 +198,11 @@ The agent **resisted** the attack (the attack failed). `passed=False` means the 
 
 Check `result.evaluation_error` on the affected results (or `report.summary.errors_by_type`, which groups judge failures under `evaluation/<code>` keys such as `evaluation/api_status`) — it records why the judge couldn't return a verdict (`timeout`, `parse`, `api_connection`, `api_status`, `unknown`), separate from `result.error`, which means the attack itself never ran. The CLI prints the dominant code and a sample message on failure.
 
-Two conditions make `eq redteam run` exit `1`: **zero verdicts** (`report.summary.no_verdict` — nothing could be scored, so a "100% resistant" or `0.0` rate would be a lie) and, as of the coverage gate, **low verdict coverage** — `EvaluatorConfig.min_evaluation_coverage` (default `0.8`) means a run where fewer than 80% of attacks got any verdict now fails too, not just warns. This is a behaviour change: a 79%-coverage run used to exit `0`. Pass `--min-evaluation-coverage 0` (or set `min_evaluation_coverage=None` in Python) to go back to warn-only. It's distinct from `min_successful_judges`, the per-attack jury quorum that's what *creates* unevaluated attacks in the first place — see [Red Teaming › In CI](guides/red-teaming.md#in-ci).
+Two conditions make `eq redteam run` exit `1`: **zero verdicts** (`report.summary.no_verdict` — nothing could be scored, so a "100% resistant" or `0.0` rate would be a lie) and, as of the coverage gate, **low verdict coverage** — `EvaluatorConfig.min_evaluation_coverage` (default `0.8`) means a run where fewer than 80% of attacks got any verdict now fails too, not just warns. This is a behaviour change: a 79%-coverage run used to exit `0`. Pass `--min-evaluation-coverage 0` (or set `min_evaluation_coverage=None` in Python) to go back to warn-only. It's distinct from `min_successful_judges`, the per-attack jury quorum that's what *creates* unevaluated attacks in the first place.
+
+### The reported cost says `priced_calls < calls` — how do I price the rest?
+
+Some calls came back with usage but no provider price, so the dollar figure covers a subset and is a lower bound. `EvaluatorConfig.api` defaults to `'responses'` precisely because that is the endpoint the Orq router prices, so judge calls record cost the way target calls do. Two things break that: a model the router cannot resolve on responses falls back to chat completions on its own, and `EvaluatorConfig(api='chat_completions')` opts out deliberately — both leave judge calls unpriced. If the gap matters, check the judge model resolves on the router before changing anything. Compare `priced_calls` against `calls` before quoting a total.
 
 ## Agent Simulation
 

@@ -42,12 +42,12 @@ def build_target() -> OpenAIAgentTarget:
         tools=[issue_refund],
         model=OpenAIChatCompletionsModel(model=MODEL, openai_client=client),
     )
-    return OpenAIAgentTarget(agent)
+    return OpenAIAgentTarget(agent=agent)
 
 
 async def main() -> None:
     report = await red_team(
-        build_target(),
+        target=build_target(),
         mode="dynamic",
         categories=["LLM01", "ASI01"],  # prompt injection + tool misuse
         max_dynamic_datapoints=3,
