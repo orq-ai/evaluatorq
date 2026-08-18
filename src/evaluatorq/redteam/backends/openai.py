@@ -11,6 +11,7 @@ from evaluatorq.common.llm_call import apply_pipeline_metadata
 from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.prompt_cache import apply_cache_breakpoints
+from evaluatorq.common.retry import without_client_retries
 from evaluatorq.common.thread_context import thread_body_param
 from evaluatorq.common.tracing import record_llm_response
 from evaluatorq.contracts import AgentTarget, Message
@@ -34,7 +35,7 @@ if TYPE_CHECKING:
     from openai.types.chat import ChatCompletionMessageParam
 
 
-def create_async_llm_client(role_config=None) -> AsyncOpenAI:
+def create_async_llm_client(role_config=None, *, max_retries: int | None = None) -> AsyncOpenAI:
     """Lazy proxy to `create_async_llm_client`.
 
     Defined here so that tests can patch
@@ -44,7 +45,7 @@ def create_async_llm_client(role_config=None) -> AsyncOpenAI:
     """
     from evaluatorq.redteam.backends.registry import create_async_llm_client as _create
 
-    return _create(role_config)
+    return _create(role_config, max_retries=max_retries)
 
 
 def _openai_map_error(exc: Exception) -> tuple[str, str]:
@@ -100,10 +101,14 @@ class OpenAIModelTarget(AgentTarget):
         If ``client`` is not provided, one is created automatically via
         `create_async_llm_client`.
         OpenAI models are stateless — no server-side memory to isolate.
+        The orchestrator owns target retries via ``call_target_with_retry``;
+        auto-built clients therefore have SDK retries disabled and injected
+        clients are cloned with that budget disabled at the target boundary.
         """
         super().__init__(memory_entity_id=None)
         self.model = model
-        self.client = client or create_async_llm_client()
+        # call_target_with_retry is the single retry owner for target calls.
+        self.client = without_client_retries(client) if client is not None else create_async_llm_client(max_retries=0)
         self.system_prompt = system_prompt or 'You are a helpful assistant.'
         self.max_tokens = max_tokens or DEFAULT_TARGET_MAX_TOKENS
         self.timeout_ms = timeout_ms or DEFAULT_TARGET_TIMEOUT_MS
@@ -246,7 +251,8 @@ class OpenAIBackend(Backend):
         timeout_ms: int | None = None,
     ) -> None:
         super().__init__(name='openai')
-        self._client = client or create_async_llm_client()
+        # call_target_with_retry is the single retry owner for target calls.
+        self._client = without_client_retries(client) if client is not None else create_async_llm_client(max_retries=0)
         self._system_prompt = system_prompt
         self._max_tokens = max_tokens
         self._timeout_ms = timeout_ms

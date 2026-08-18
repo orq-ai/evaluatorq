@@ -104,6 +104,25 @@ def tool_result_to_text(result: object) -> str:
     """
     if isinstance(result, str):
         return result
+    model_dump_json = getattr(result, 'model_dump_json', None)
+    if callable(model_dump_json):
+        try:
+            rendered = model_dump_json()
+        except Exception as exc:  # noqa: BLE001 - any renderer failure must reach the text fallback
+            logger.warning(
+                'tool_result_to_text: {}.model_dump_json() failed with {}: {}; falling back to JSON encoding',
+                type(result).__name__,
+                type(exc).__name__,
+                exc,
+            )
+        else:
+            if isinstance(rendered, str):
+                return rendered
+            logger.warning(
+                'tool_result_to_text: {}.model_dump_json() returned {}; falling back to JSON encoding',
+                type(result).__name__,
+                type(rendered).__name__,
+            )
     # default=str: a value JSON cannot encode degrades to its repr rather than
     # failing the whole response over one odd tool return.
     return json.dumps(result, default=str)
@@ -119,6 +138,8 @@ else:
 
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from openai import AsyncOpenAI
 
     _Client: TypeAlias = AsyncOpenAI | None
@@ -329,6 +350,39 @@ class Message(BaseModel):
                 ],
             }
         return {'role': self.role, 'content': _render_chat_content(self.content)}
+
+
+def render_tool_call(
+    item: ToolCallOutputItem,
+    *,
+    warn: Callable[[str], None] | None = None,
+) -> tuple[StrategyToolCall, Message] | None:
+    """Render one completed tool call as its paired transcript messages.
+
+    A function call without a result cannot be replayed safely: emitting its
+    assistant row would leave an unpaired ``function_call`` on either provider
+    contract. Such calls are dropped and logged. An empty string is a valid result
+    and is therefore retained.
+    """
+    if item.result is None:
+        warning = warn or logger.warning
+        warning(
+            f'Dropping tool call {item.call_id!r} ({item.name!r}): result is None, '
+            'so no paired tool message can be emitted.'
+        )
+        return None
+    tool_call = StrategyToolCall(
+        id=item.call_id,
+        item_id=item.id or None,
+        function=FunctionCall(name=item.name, arguments=item.arguments),
+    )
+    tool_message = Message(
+        role='tool',
+        tool_call_id=item.call_id,
+        name=item.name,
+        content=item.result,
+    )
+    return tool_call, tool_message
 
 
 def _usage_get(usage: Any, key: str, default: Any = None) -> Any:
@@ -780,7 +834,9 @@ class JuryVote(BaseModel):
     repetitions_failed: int = Field(
         default=0,
         ge=0,
-        description='Count of repetitions that raised an error (non-decisive due to error); independent of success/abstained',
+        description='Count of repetitions that failed to produce a usable verdict: an error or a non-decisive, '
+        'non-abstained pass (RES-1251). A clean abstention is not counted. Independent of the aggregate '
+        'success/abstained.',
     )
 
     @model_validator(mode='after')
@@ -1570,5 +1626,6 @@ __all__ = [
     'ToolInfo',
     'Usage',
     'content_to_text',
+    'render_tool_call',
     'tool_result_to_text',
 ]

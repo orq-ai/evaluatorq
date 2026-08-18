@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from openai import BadRequestError
 
+from evaluatorq.common.llm_limit import llm_slot
 from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.thread_context import pipeline_metadata
 from evaluatorq.common.tracing import (
@@ -25,6 +26,8 @@ from evaluatorq.common.tracing import (
 from evaluatorq.contracts import TokenUsage
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable
+
     from openai import AsyncOpenAI
     from openai.types.chat import ChatCompletion, ParsedChatCompletion
     from opentelemetry.trace import Span
@@ -124,6 +127,16 @@ async def apply_trace_headers(params: dict[str, Any]) -> None:
         params['extra_headers'] = {**(params.get('extra_headers') or {}), **headers}
 
 
+async def _bounded_call(request: Awaitable[Any], timeout_s: float) -> Any:
+    """Await one provider request holding an LLM slot.
+
+    ``request`` must be an un-awaited coroutine so no work starts before the slot is
+    held. The timeout runs inside the slot, so queueing never counts against it.
+    """
+    async with llm_slot():
+        return await asyncio.wait_for(request, timeout=timeout_s)
+
+
 async def execute_chat_completion(
     *,
     client: AsyncOpenAI,
@@ -168,7 +181,7 @@ async def execute_chat_completion(
         await apply_trace_headers(params)
 
     try:
-        response = await asyncio.wait_for(client.chat.completions.create(**params), timeout=timeout_s)
+        response = await _bounded_call(client.chat.completions.create(**params), timeout_s)
     except BadRequestError as exc:
         # "where possible": endpoints that don't support reasoning_effort 400 on
         # it — drop the param and retry once rather than failing the call. Gate on
@@ -180,7 +193,7 @@ async def execute_chat_completion(
         _REASONING_EFFORT_REJECTORS.add(_reasoning_key(model, params))
         logger.warning('Model %s rejected reasoning_effort; dropping it and retrying once', model)
         params.pop('reasoning_effort', None)
-        response = await asyncio.wait_for(client.chat.completions.create(**params), timeout=timeout_s)
+        response = await _bounded_call(client.chat.completions.create(**params), timeout_s)
     record_llm_response(span, response)
     # The Orq router prices Responses but not Chat Completions, so usage here carries
     # tokens only; price it from the model catalogue (RES-1295).
@@ -224,14 +237,14 @@ async def execute_chat_parse(
         await apply_trace_headers(params)
 
     try:
-        response = await asyncio.wait_for(client.chat.completions.parse(**params), timeout=timeout_s)
+        response = await _bounded_call(client.chat.completions.parse(**params), timeout_s)
     except BadRequestError as exc:
         if not _is_reasoning_effort_rejection(params, exc):
             raise
         _REASONING_EFFORT_REJECTORS.add(_reasoning_key(model, params))
         logger.warning('Model %s rejected reasoning_effort; dropping it and retrying once', model)
         params.pop('reasoning_effort', None)
-        response = await asyncio.wait_for(client.chat.completions.parse(**params), timeout=timeout_s)
+        response = await _bounded_call(client.chat.completions.parse(**params), timeout_s)
     record_llm_response(span, response)
     return response, await price_usage(TokenUsage.from_completion(response), model, client)
 
@@ -279,10 +292,8 @@ async def execute_response(
 
     async def _call() -> Any:
         if response_model is not None:
-            return await asyncio.wait_for(
-                client.responses.parse(text_format=response_model, **params), timeout=timeout_s
-            )
-        return await asyncio.wait_for(client.responses.create(**params), timeout=timeout_s)
+            return await _bounded_call(client.responses.parse(text_format=response_model, **params), timeout_s)
+        return await _bounded_call(client.responses.create(**params), timeout_s)
 
     try:
         response = await _call()

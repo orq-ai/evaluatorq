@@ -12,12 +12,12 @@ from loguru import logger
 from pydantic import ValidationError
 
 from evaluatorq import DataPoint, EvaluationResult
-from evaluatorq.common.judge import JudgeError, build_eval_replacements, run_judge
+from evaluatorq.common.judge import JudgeError, JudgeOutcome, build_eval_replacements, judge_error_payload, run_judge
 from evaluatorq.common.jury import Prediction, VerdictKind, _panel_composition_messages, append_jury_summary, run_jury
 from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.common.output_adapters import output_error_text, output_to_messages
 from evaluatorq.common.tracing import set_span_attrs
-from evaluatorq.contracts import JURY_RAW_OUTPUT_KEY
+from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY, JURY_RAW_OUTPUT_KEY, TokenUsage
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
@@ -168,9 +168,21 @@ def _parse_hf_source(rest: str) -> tuple[str, str]:
     return f'{parts[0]}/{parts[1]}', DEFAULT_HF_FILENAME
 
 
-def _error_result(explanation: str) -> EvaluationResult:
+def _error_result(
+    explanation: str,
+    *,
+    token_usage: TokenUsage | None = None,
+    error_payload: dict[str, Any] | None = None,
+) -> EvaluationResult:
     """Inconclusive scorer row: not RESISTANT/VULNERABLE, just unscoreable."""
-    return EvaluationResult.model_validate({'value': 'error', 'explanation': explanation, 'pass': None})
+    raw_output = {EVAL_ERROR_RAW_OUTPUT_KEY: error_payload} if error_payload is not None else None
+    return EvaluationResult.model_validate({
+        'value': 'error',
+        'explanation': explanation,
+        'pass': None,
+        'token_usage': token_usage,
+        'raw_output': raw_output,
+    })
 
 
 def create_owasp_evaluator(
@@ -229,9 +241,18 @@ def create_owasp_evaluator(
                 """Encode an absent binary verdict with the shared trace sentinel."""
                 return value if isinstance(value, bool) else 'inconclusive'
 
-            def error_result(explanation: str) -> EvaluationResult:
+            def error_result(
+                explanation: str,
+                *,
+                token_usage: TokenUsage | None = None,
+                error_payload: dict[str, Any] | None = None,
+            ) -> EvaluationResult:
                 set_span_attrs(evaluation_span, {'orq.redteam.passed': 'inconclusive', 'output': explanation})
-                return _error_result(explanation)
+                return _error_result(
+                    explanation,
+                    token_usage=token_usage,
+                    error_payload=error_payload,
+                )
 
             if not category:
                 logger.error("Scorer received datapoint with missing 'category' field")
@@ -267,9 +288,17 @@ def create_owasp_evaluator(
 
                 # Static path swallows ALL errors into an inconclusive row (never re-raises).
                 if outcome.error_kind is JudgeError.TIMEOUT:
-                    return error_result(f'Evaluation timed out after {outcome.timeout_ms}ms')
+                    return error_result(
+                        f'Evaluation timed out after {outcome.timeout_ms}ms',
+                        token_usage=outcome.token_usage,
+                        error_payload=judge_error_payload(outcome, category),
+                    )
                 if outcome.error_kind is not None or outcome.payload is None:
-                    return error_result(f'Evaluation error: {outcome.error_message}')
+                    return error_result(
+                        f'Evaluation error: {outcome.error_message}',
+                        token_usage=outcome.token_usage,
+                        error_payload=judge_error_payload(outcome, category),
+                    )
 
                 passed = outcome.payload.value if isinstance(outcome.payload.value, bool) else None
                 set_span_attrs(
@@ -284,7 +313,11 @@ def create_owasp_evaluator(
                     'raw_output': {'raw_content': outcome.raw_content},
                 })
 
+            # Kept so the panel can name a cause, not just "quorum not met".
+            last_error: JudgeOutcome | None = None
+
             async def judge_fn(model: str) -> Prediction:
+                nonlocal last_error
                 outcome = await run_judge(
                     client=client,
                     model=model,
@@ -293,8 +326,12 @@ def create_owasp_evaluator(
                     replacements=eval_replacements,
                 )
                 if outcome.error_kind is not None or outcome.payload is None:
+                    last_error = outcome
                     return Prediction(
-                        error=outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'error')
+                        error=outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'error'),
+                        # The judge's tokens were billed whether or not the verdict
+                        # parsed — dropping them here undercounts the run's cost.
+                        token_usage=outcome.token_usage,
                     )
                 return Prediction(
                     value=outcome.payload.value,
@@ -316,16 +353,20 @@ def create_owasp_evaluator(
             explanation = append_jury_summary(deliberation.explanation, deliberation.jury)
             set_span_attrs(evaluation_span, {'orq.redteam.passed': span_pass_state(passed), 'output': explanation})
             set_jury_span_attrs(evaluation_span, deliberation.jury)
+            raw_output: dict[str, Any] = {
+                'value': passed,
+                'explanation': deliberation.explanation,
+                JURY_RAW_OUTPUT_KEY: deliberation.jury.model_dump(mode='json'),
+            }
+            # No verdict means the judges failed; record it or the outage is invisible.
+            if passed is None and last_error is not None:
+                raw_output[EVAL_ERROR_RAW_OUTPUT_KEY] = judge_error_payload(last_error, category)
             return EvaluationResult.model_validate({
                 'value': passed if passed is not None else 'inconclusive',
                 'explanation': explanation,
                 'pass': passed,
                 'token_usage': deliberation.token_usage,
-                'raw_output': {
-                    'value': passed,
-                    'explanation': deliberation.explanation,
-                    JURY_RAW_OUTPUT_KEY: deliberation.jury.model_dump(mode='json'),
-                },
+                'raw_output': raw_output,
             })
 
     # evaluator_type marks these LLM-judge scorers so the tracing layer emits the

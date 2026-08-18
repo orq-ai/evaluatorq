@@ -46,8 +46,11 @@ from .pairwise import (
     PairwiseComparison,
     PairwiseReport,
     PairwiseVote,
+    RepetitionObservation,
     bt_sigma_aggregation,
     build_report,
+    repetition_consistency,
+    repetition_consistency_raw,
     run_pairwise,
 )
 from .ranking import BTFit, JudgedComparison, fit_bt
@@ -104,6 +107,7 @@ __all__ = [
     'PairwiseComparison',
     'PairwiseReport',
     'PairwiseVote',
+    'RepetitionObservation',
     'ResponseResourceDict',
     'Scorer',
     'ScorerParameter',
@@ -122,6 +126,8 @@ __all__ = [
     # LLM jury evaluator
     'llm_jury',
     'llm_jury_pairwise',
+    'repetition_consistency',
+    'repetition_consistency_raw',
     'run_pairwise',
     # Built-in evaluators
     'string_contains_evaluator',

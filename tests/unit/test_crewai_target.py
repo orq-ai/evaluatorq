@@ -14,6 +14,7 @@ from typing import Literal
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import BaseModel
 
 pytest.importorskip('crewai')
 
@@ -34,6 +35,16 @@ def _msgs(*pairs: tuple[Literal['user', 'assistant', 'system', 'tool', 'develope
 
 
 class TestCrewAIRespond:
+    @pytest.mark.asyncio
+    async def test_structured_raw_output_is_json_not_repr(self) -> None:
+        class Answer(BaseModel):
+            field: str
+
+        res = await CrewAITarget(_crew(Answer(field='x'))).respond(_msgs(('user', 'hi')))
+
+        assert res.text == '{"field":"x"}'
+        assert 'Answer(' not in res.text
+
     @pytest.mark.asyncio
     async def test_basic_respond(self) -> None:
         target = CrewAITarget(_crew('hi there'))

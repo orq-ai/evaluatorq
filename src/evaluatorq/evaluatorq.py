@@ -1,7 +1,5 @@
 import asyncio
-import contextlib
 import os
-import sys
 from collections.abc import Awaitable, Sequence
 from contextlib import AsyncExitStack
 from datetime import datetime, timezone
@@ -10,14 +8,16 @@ from typing import Any, cast
 
 from loguru import logger
 
+from .common.llm_limit import llm_concurrency_limit
 from .common.messages import coerce_content_text
+from .common.parallelism import resolve_datapoint_parallelism
 from .fetch_data import (
     fetch_dataset_batches,
     fetch_experiment_datapoints,
     setup_orq_client,
 )
 from .processings import process_data_point
-from .progress import Phase, ProgressService, with_progress
+from .progress import Phase, ProgressService, safe_update_progress, with_progress
 from .send_results import send_results_to_orq
 from .table_display import display_results_table
 from .tracing import capture_parent_context, tracing_session
@@ -33,16 +33,27 @@ from .types import (
 )
 
 
+class _StreamingEvaluationError(RuntimeError):
+    """Report multiple failures collected from a streaming evaluation's tasks."""
+
+    def __init__(self, errors: list[BaseException]) -> None:
+        self.errors = errors
+        details = '; '.join(f'{type(error).__name__}: {error}' for error in errors)
+        super().__init__(f'Streaming evaluation failed with {len(errors)} errors: {details}')
+
+
 def check_pass_failures(results: EvaluatorqResult, *, treat_errors_as_failure: bool = False) -> bool:
     """
     Check if any evaluator returned pass_=False.
 
     Args:
         results: The evaluation results to check
-        treat_errors_as_failure: When True, a row whose job errored (e.g. a missing
-            recorded response in no-inference mode) also counts as a failure. Without
-            this, an errored job has no evaluator scores and would be invisible here,
-            letting a run with no usable responses exit successfully.
+        treat_errors_as_failure: When True, a row whose datapoint or job errored (e.g. a
+            missing recorded response in no-inference mode), or whose evaluator errored
+            (e.g. every judge call raised), also counts as a failure. Without this, an
+            errored job has no evaluator scores and an errored evaluator leaves ``pass_``
+            unset, so both would be invisible here, letting a run with no usable
+            responses or no usable scores exit successfully.
 
     Returns:
         True if any evaluator failed (pass_=False), False otherwise
@@ -56,6 +67,8 @@ def check_pass_failures(results: EvaluatorqResult, *, treat_errors_as_failure: b
                     return True
                 if job_result.evaluator_scores:
                     for evaluator_score in job_result.evaluator_scores:
+                        if treat_errors_as_failure and evaluator_score.error:
+                            return True
                         if evaluator_score.score.pass_ is False:
                             return True
     return False
@@ -104,13 +117,14 @@ async def evaluatorq(
     data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None = None,
     jobs: list[Job] | None = None,
     evaluators: list[Evaluator] | None = None,
-    parallelism: int = 10,
+    datapoint_parallelism: int | None = None,
+    llm_parallelism: int | None = None,
+    parallelism: int | None = None,
     print_results: bool = True,
     description: str | None = None,
     path: str | None = None,
     inference: bool = True,
     single_trace: bool = False,
-    _exit_on_failure: bool = True,
     _send_results: bool = True,
     _base_url: str | None = None,
     _trace_type: str = 'evaluatorq',
@@ -123,10 +137,10 @@ async def evaluatorq(
 
     ```python
     # Using keyword arguments (recommended):
-    await evaluatorq("name", data=[...], jobs=[...], parallelism=5)
+    await evaluatorq("name", data=[...], jobs=[...], datapoint_parallelism=5)
 
     # Using a dict:
-    await evaluatorq("name", {"data": [...], "jobs": [...], "parallelism": 5})
+    await evaluatorq("name", {"data": [...], "jobs": [...], "datapoint_parallelism": 5})
 
     # Using EvaluatorParams:
     await evaluatorq("name", EvaluatorParams(data=[...], jobs=[...]))
@@ -140,8 +154,20 @@ async def evaluatorq(
               inference=False), or a list of DataPoint instances/awaitables.
         jobs: The jobs to run on the data.
         evaluators: The evaluators to use. If not provided, only jobs will run.
-        parallelism: Number of jobs to run in parallel. Defaults to 10; set to 1 for
-              sequential execution, or lower it if your provider rate-limits.
+        datapoint_parallelism: Task concurrency, applied at two levels: datapoints run
+              at most ``datapoint_parallelism`` at a time, and within one datapoint a
+              single shared budget of the same size bounds its jobs and then its
+              evaluators (the budget is not split between them — a job releases its
+              slot before its evaluators take theirs). Defaults to 10; set to 1 for
+              sequential execution. Bounds tasks, not requests: see ``llm_parallelism``.
+        parallelism: Deprecated alias for ``datapoint_parallelism``.
+        llm_parallelism: Ceiling on in-flight LLM requests for the whole run,
+              counted per request rather than per task, so it holds however the
+              datapoint/job/evaluator/jury fan-out nests. Unbounded by default. This
+              is the knob to set against a provider concurrency limit; ``datapoint_parallelism``
+              bounds tasks, and one task can issue many requests. Only requests routed
+              through evaluatorq are counted — wrap a job's own provider calls in
+              ``evaluatorq.common.llm_limit.llm_slot()`` to include them.
         print_results: Whether to print results table to console. Defaults to True.
         description: Optional description for the evaluation run.
         path: Optional path (e.g. "MyProject/MyFolder") to place the experiment
@@ -179,6 +205,9 @@ async def evaluatorq(
         )
         ```
     """
+    datapoint_parallelism = resolve_datapoint_parallelism(
+        datapoint_parallelism, parallelism, default=10, caller='evaluatorq'
+    )
     # Handle params dict/object vs kwargs
     if params is not None:
         # Validate params if passed as dict
@@ -189,7 +218,8 @@ async def evaluatorq(
             data=data,
             jobs=jobs,
             evaluators=evaluators,
-            parallelism=parallelism,
+            datapoint_parallelism=datapoint_parallelism,
+            llm_parallelism=llm_parallelism,
             print_results=print_results,
             description=description,
             path=path,
@@ -216,13 +246,19 @@ async def evaluatorq(
             )
         jobs = [_replay_recorded_response]
     evaluators_list = validated.evaluators or []
-    parallelism = validated.parallelism
+    datapoint_parallelism = validated.datapoint_parallelism
+    llm_parallelism = validated.llm_parallelism
     print_results = validated.print_results
     description = validated.description
     path = validated.path
     single_trace = validated.single_trace
 
-    async with tracing_session(name, trace_type=_trace_type) as tracing_context, AsyncExitStack() as span_stack:
+    async with (
+        tracing_session(name, trace_type=_trace_type) as tracing_context,
+        AsyncExitStack() as span_stack,
+    ):
+        # Before any fan-out, so every task created below inherits the budget.
+        _ = span_stack.enter_context(llm_concurrency_limit(llm_parallelism))
         if single_trace:
             from .tracing.spans import RunSpanOptions, with_run_span
 
@@ -295,8 +331,8 @@ async def evaluatorq(
                 # Shared progress state for tracking processed count
                 progress_ref = {'processed': 0}
 
-                # Semaphore for controlling parallelism
-                data_point_semaphore = asyncio.Semaphore(parallelism)
+                # Semaphore bounding concurrent datapoints
+                data_point_semaphore = asyncio.Semaphore(datapoint_parallelism)
 
                 async def process_with_semaphore(index: int, data_promise: DataPoint) -> list[Any]:
                     async with data_point_semaphore:
@@ -305,7 +341,7 @@ async def evaluatorq(
                             index,
                             jobs,
                             evaluators_list,
-                            parallelism,
+                            datapoint_parallelism,
                             None,  # Don't pass progress in streaming mode - use polling instead
                             tracing_context,
                         )
@@ -313,7 +349,9 @@ async def evaluatorq(
                         return result
 
                 # Initialize progress with unknown total (streaming mode)
-                await progress.update_progress(
+                await safe_update_progress(
+                    progress,
+                    operation='streaming initialization',
                     total_data_points=0,
                     current_data_point=0,
                     phase=Phase.FETCHING,
@@ -323,15 +361,26 @@ async def evaluatorq(
                 stop_polling = False
 
                 async def poll_progress():
-                    while not stop_polling:
-                        await progress.update_progress(
-                            total_data_points=total_datapoints,
-                            current_data_point=progress_ref['processed'],
-                            phase=Phase.PROCESSING if progress_ref['processed'] > 0 else Phase.FETCHING,
+                    try:
+                        while not stop_polling:
+                            await progress.update_progress(
+                                total_data_points=total_datapoints,
+                                current_data_point=progress_ref['processed'],
+                                phase=Phase.PROCESSING if progress_ref['processed'] > 0 else Phase.FETCHING,
+                            )
+                            await asyncio.sleep(0.1)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 - display faults must not fail a completed run
+                        logger.warning(
+                            'Progress polling stopped after display failure: {}: {}',
+                            type(exc).__name__,
+                            exc,
                         )
-                        await asyncio.sleep(0.1)
 
                 polling_task = asyncio.create_task(poll_progress())
+                fetch_error: BaseException | None = None
+                cancelled_for_fetch: set[asyncio.Task[Any]] = set()
 
                 try:
                     # Fetch and process batches
@@ -344,17 +393,53 @@ async def evaluatorq(
                             processing_tasks.append(task)
                             datapoint_index += 1
 
-                    # Wait for all processing tasks to complete
-                    results_nested = await asyncio.gather(*processing_tasks)
+                except asyncio.CancelledError as exc:
+                    fetch_error = exc
+                except Exception as exc:  # noqa: BLE001 - collect fetch failures with task failures
+                    fetch_error = exc
                 finally:
-                    # Stop the polling task
+                    # A fetch failure also cancels in-flight processing.
                     stop_polling = True
+                    if fetch_error is not None:
+                        for task in processing_tasks:
+                            if not task.done():
+                                task.cancel()
+                                cancelled_for_fetch.add(task)
                     _ = polling_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await polling_task
+                    processing_results = await asyncio.gather(
+                        *processing_tasks,
+                        return_exceptions=True,
+                    )
+                    # Deliberately cancelled above; poll_progress logs the rest.
+                    _ = await asyncio.gather(polling_task, return_exceptions=True)
+
+                # Tasks we cancelled ourselves are not errors the caller should see.
+                task_errors = [
+                    result
+                    for task, result in zip(processing_tasks, processing_results, strict=True)
+                    if isinstance(result, BaseException)
+                    and not (isinstance(result, asyncio.CancelledError) and task in cancelled_for_fetch)
+                ]
+                if isinstance(fetch_error, asyncio.CancelledError):
+                    for error in task_errors:
+                        logger.warning(
+                            'Discarding processing task error while caller cancellation wins: {}: {}',
+                            type(error).__name__,
+                            error,
+                        )
+                    raise fetch_error
+
+                errors = ([fetch_error] if fetch_error is not None else []) + task_errors
+                if errors:
+                    if len(errors) == 1:
+                        raise errors[0]
+                    raise _StreamingEvaluationError(errors)
+                results_nested = cast('list[list[Any]]', processing_results)
 
                 # Final progress update
-                await progress.update_progress(
+                await safe_update_progress(
+                    progress,
+                    operation='streaming final update',
                     total_data_points=total_datapoints,
                     current_data_point=progress_ref['processed'],
                     phase=Phase.PROCESSING,
@@ -374,14 +459,16 @@ async def evaluatorq(
 
             async def run_evaluation() -> EvaluatorqResult:
                 # Initialize progress
-                await progress.update_progress(
+                await safe_update_progress(
+                    progress,
+                    operation='evaluation initialization',
                     total_data_points=len(data_promises),
                     current_data_point=0,
                     phase=Phase.INITIALIZING,
                 )
 
                 # Process data points with controlled concurrency
-                data_point_semaphore = asyncio.Semaphore(parallelism)
+                data_point_semaphore = asyncio.Semaphore(datapoint_parallelism)
 
                 async def process_with_semaphore(
                     index: int, data_promise: Awaitable[DataPoint] | DataPoint
@@ -392,7 +479,7 @@ async def evaluatorq(
                             index,
                             jobs,
                             evaluators_list,
-                            parallelism,
+                            datapoint_parallelism,
                             progress,
                             tracing_context,
                         )
@@ -432,12 +519,5 @@ async def evaluatorq(
             # sink list (e.g. simulation persists it on the SimulationRun report).
             if _experiment_url_out is not None and upload_response is not None and upload_response.experiment_url:
                 _experiment_url_out.append(upload_response.experiment_url)
-
-        # Check for pass failures and exit if any. In no-inference mode a row that has no
-        # usable recorded response surfaces as a job error rather than an evaluator score,
-        # so count those errors as failures too (the mode must fail loudly, not exit 0).
-        has_failures = check_pass_failures(results, treat_errors_as_failure=not inference)
-        if has_failures and _exit_on_failure:
-            sys.exit(1)
 
         return results

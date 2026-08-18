@@ -56,7 +56,7 @@ async def test_dynamic_run_replays_the_same_attacks(
             mode='dynamic',
             categories=['ASI01'],
             generate_strategies=False,
-            parallelism=2,
+            datapoint_parallelism=2,
             llm_client=client,
             name='replay-source',
         )
@@ -69,7 +69,7 @@ async def test_dynamic_run_replays_the_same_attacks(
         replayed = await red_team(
             'agent:other-agent',
             previous_run='latest',
-            parallelism=2,
+            datapoint_parallelism=2,
             llm_client=client,
             name='replay-run',
         )
@@ -94,7 +94,7 @@ async def test_replay_skips_strategy_generation(
             mode='dynamic',
             categories=['ASI01'],
             generate_strategies=False,
-            parallelism=2,
+            datapoint_parallelism=2,
             llm_client=client,
             name='replay-source',
         )
@@ -108,7 +108,7 @@ async def test_replay_skips_strategy_generation(
         replayed = await red_team(
             'agent:e2e-test-agent',
             previous_run='latest',
-            parallelism=2,
+            datapoint_parallelism=2,
             llm_client=client,
             name='replay-run',
         )
@@ -133,7 +133,7 @@ async def test_replayed_run_is_itself_replayable(
             mode='dynamic',
             categories=['ASI01'],
             generate_strategies=False,
-            parallelism=2,
+            datapoint_parallelism=2,
             llm_client=client,
             name='replay-source',
         )
@@ -143,7 +143,7 @@ async def test_replayed_run_is_itself_replayable(
         await red_team(
             'agent:e2e-test-agent',
             previous_run='replay-source',
-            parallelism=2,
+            datapoint_parallelism=2,
             llm_client=client,
             name='replay-run',
         )
@@ -167,14 +167,14 @@ async def test_hybrid_and_static_replays_keep_their_pipeline_and_split(
             mode='hybrid',
             categories=['ASI01'],
             generate_strategies=False,
-            parallelism=2,
+            datapoint_parallelism=2,
             llm_client=client,
             dataset=str(static_dataset_path),
             name='hybrid-source',
         )
     with _patches(mock_backend_bundle):
         hybrid_replay = await red_team(
-            'agent:e2e-test-agent', previous_run='hybrid-source', parallelism=2, llm_client=client, name='hybrid-replay'
+            'agent:e2e-test-agent', previous_run='hybrid-source', datapoint_parallelism=2, llm_client=client, name='hybrid-replay'
         )
 
     assert hybrid_replay.pipeline == hybrid.pipeline
@@ -186,14 +186,14 @@ async def test_hybrid_and_static_replays_keep_their_pipeline_and_split(
             'agent:e2e-test-agent',
             mode='static',
             categories=['ASI01'],
-            parallelism=2,
+            datapoint_parallelism=2,
             llm_client=client,
             dataset=str(static_dataset_path),
             name='static-source',
         )
     with _patches(mock_backend_bundle):
         static_replay = await red_team(
-            'agent:e2e-test-agent', previous_run='static-source', parallelism=2, llm_client=client, name='static-replay'
+            'agent:e2e-test-agent', previous_run='static-source', datapoint_parallelism=2, llm_client=client, name='static-replay'
         )
 
     assert static_replay.pipeline.value == 'static'
@@ -216,7 +216,7 @@ async def test_replay_restores_the_original_turn_budget(
             generate_strategies=False,
             max_turns=9,
             attacker_instructions='handles refunds',
-            parallelism=2,
+            datapoint_parallelism=2,
             llm_client=client,
             name='turns-source',
         )
@@ -234,7 +234,7 @@ async def test_replay_restores_the_original_turn_budget(
 
     with _patches(mock_backend_bundle), patch.object(runner_mod, 'create_dynamic_redteam_job', _record):
         await red_team(
-            'agent:e2e-test-agent', previous_run='turns-source', parallelism=2, llm_client=client, name='turns-replay'
+            'agent:e2e-test-agent', previous_run='turns-source', datapoint_parallelism=2, llm_client=client, name='turns-replay'
         )
     assert seen == [9], f'replay should run at the original turn budget, got {seen}'
 
@@ -245,7 +245,7 @@ async def test_replay_restores_the_original_turn_budget(
             'agent:e2e-test-agent',
             previous_run='turns-source',
             max_turns=3,
-            parallelism=2,
+            datapoint_parallelism=2,
             llm_client=client,
             name='turns-override',
         )
@@ -265,14 +265,14 @@ async def test_multi_target_replay_runs_every_target_on_the_same_cases(
             mode='dynamic',
             categories=['ASI01'],
             generate_strategies=False,
-            parallelism=2,
+            datapoint_parallelism=2,
             llm_client=client,
             name='multi-source',
         )
 
     with _patches(mock_backend_bundle):
         replayed = await red_team(
-            ['agent:v1', 'agent:v2'], previous_run='multi-source', parallelism=2, llm_client=client, name='multi-replay'
+            ['agent:v1', 'agent:v2'], previous_run='multi-source', datapoint_parallelism=2, llm_client=client, name='multi-replay'
         )
 
     assert sorted(replayed.tested_agents) == ['v1', 'v2']
@@ -304,7 +304,7 @@ async def test_hybrid_replay_against_a_bare_agent_target_keeps_the_static_leg(
             mode='hybrid',
             categories=['ASI01'],
             generate_strategies=False,
-            parallelism=2,
+            datapoint_parallelism=2,
             llm_client=client,
             dataset=str(static_dataset_path),
             name='at-hybrid-source',
@@ -316,7 +316,7 @@ async def test_hybrid_replay_against_a_bare_agent_target_keeps_the_static_leg(
         replayed = await red_team(
             MockAgentTarget('direct-agent'),
             previous_run='at-hybrid-source',
-            parallelism=2,
+            datapoint_parallelism=2,
             llm_client=client,
             name='at-hybrid-replay',
         )
@@ -355,7 +355,7 @@ async def test_mixed_hybrid_run_counts_the_static_leg_once(
             mode='hybrid',
             categories=['ASI01'],
             generate_strategies=False,
-            parallelism=2,
+            datapoint_parallelism=2,
             llm_client=client,
             dataset=str(static_dataset_path),
             name='mixed-hybrid',

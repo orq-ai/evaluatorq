@@ -86,7 +86,11 @@ class FirstMessageGenerator:
         self._model = model
         from evaluatorq.openresponses.client import build_simulation_client
 
-        self._client, self._client_owned = build_simulation_client(client, extra_api_key=api_key)
+        self._client, self._client_owned = build_simulation_client(
+            client,
+            extra_api_key=api_key,
+            max_retries=0,
+        )
 
     async def close(self) -> None:
         """Close the HTTP client (only if this generator built it)."""
@@ -94,7 +98,10 @@ class FirstMessageGenerator:
             await self._client.close()
 
     async def generate(self, persona: Persona, scenario: Scenario) -> str:
-        """Generate a first message for a simulation."""
+        """Generate a first message for a simulation.
+
+        Retry is owned by ``with_retry``; client retries are disabled.
+        """
         persona_context = build_persona_system_prompt(persona)
         scenario_context = build_scenario_user_context(scenario)
 

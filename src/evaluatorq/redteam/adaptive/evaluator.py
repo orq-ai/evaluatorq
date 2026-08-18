@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from evaluatorq.common.judge import JudgeError, JudgeOutcome, build_eval_replacements, run_judge
+from evaluatorq.common.judge import JudgeError, JudgeOutcome, build_eval_replacements, judge_error_payload, run_judge
 from evaluatorq.common.jury import (
     Prediction,
     VerdictKind,
@@ -23,7 +23,6 @@ from evaluatorq.redteam.contracts import (
     EvaluatorConfig,
     LLMCallConfig,
     OutputMessage,
-    PipelineStage,
     Vulnerability,
 )
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category, get_evaluator_for_vulnerability
@@ -283,7 +282,7 @@ class OWASPEvaluator:
         # Without this the panel path produced passed=None with no recorded cause,
         # so a whole-panel outage was invisible to the error rollup and the CLI hint.
         if final_passed is None and last_error is not None:
-            raw_output[EVAL_ERROR_RAW_OUTPUT_KEY] = self._judge_error_payload(last_error, evaluator_id)
+            raw_output[EVAL_ERROR_RAW_OUTPUT_KEY] = judge_error_payload(last_error, evaluator_id)
 
         return AttackEvaluationResult(
             passed=final_passed,
@@ -293,29 +292,6 @@ class OWASPEvaluator:
             raw_output=raw_output,
             jury=deliberation.jury,
         )
-
-    @staticmethod
-    def _judge_error_payload(outcome: JudgeOutcome, evaluator_id: str) -> dict[str, Any]:
-        """Serialize a failed judge call into the shape converters lift to ``RunError``.
-
-        ``stage`` is always 'evaluation': the attack itself ran, so this is not an
-        execution error and must not be conflated with one. ``code`` is the JudgeError
-        kind, which is what makes 'every judge call was blocked' legible as a single
-        cause in the error rollup rather than N unrelated one-off failures.
-        """
-        return {
-            'message': outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'unknown'),
-            'error_type': outcome.error_kind.value if outcome.error_kind else 'unknown',
-            'stage': PipelineStage.EVALUATION.value,
-            'code': outcome.error_kind.value if outcome.error_kind else None,
-            'details': {
-                'evaluator_id': evaluator_id,
-                # Truncated: the point is to identify the cause, not to store the payload
-                # twice — the untruncated content stays under raw_output['raw_content'].
-                'raw_content': (outcome.raw_content or '')[:500] or None,
-                'timeout_ms': outcome.timeout_ms,
-            },
-        }
 
     def _single_outcome_to_result(self, outcome: JudgeOutcome, evaluator_id: str) -> AttackEvaluationResult:
         """Map a single JudgeOutcome to a result — every failure kind is structured.
@@ -337,7 +313,7 @@ class OWASPEvaluator:
                 raw_output={
                     'error': 'timeout',
                     'timeout_ms': outcome.timeout_ms,
-                    EVAL_ERROR_RAW_OUTPUT_KEY: self._judge_error_payload(outcome, evaluator_id),
+                    EVAL_ERROR_RAW_OUTPUT_KEY: judge_error_payload(outcome, evaluator_id),
                 },
             )
         if outcome.error_kind is not None or outcome.payload is None:
@@ -349,7 +325,7 @@ class OWASPEvaluator:
                 raw_output={
                     'error': outcome.error_message,
                     'raw_content': outcome.raw_content,
-                    EVAL_ERROR_RAW_OUTPUT_KEY: self._judge_error_payload(outcome, evaluator_id),
+                    EVAL_ERROR_RAW_OUTPUT_KEY: judge_error_payload(outcome, evaluator_id),
                 },
             )
 

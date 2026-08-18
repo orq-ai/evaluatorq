@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -10,6 +12,7 @@ import pytest
 
 from evaluatorq.simulation.traces import (
     TraceConversation,
+    _content_to_text,
     _conversation_from_spans,
     _messages_from_value,
     _resolve_orq_credentials,
@@ -50,6 +53,16 @@ def _make_conversation(trace_id: str = "t1") -> TraceConversation:
 # ---------------------------------------------------------------------------
 # Message extraction
 # ---------------------------------------------------------------------------
+
+
+def test_content_to_text_json_encodes_unknown_wire_dict(caplog: pytest.LogCaptureFixture) -> None:
+    content = {'kind': 'structured', 'value': 3}
+
+    with caplog.at_level(logging.WARNING, logger='evaluatorq.simulation.traces'):
+        result = _content_to_text(content)
+
+    assert result == json.dumps(content, default=str)
+    assert any('unknown wire content shape' in record.message.lower() for record in caplog.records)
 
 
 def test_messages_from_dict_with_messages() -> None:
@@ -107,6 +120,29 @@ def test_conversation_prefers_root_span() -> None:
         {"role": "assistant", "content": "root answer"},
     ]
     assert conversation.first_user_message == "root question"
+
+
+def test_conversation_keeps_repeated_assistant_messages_in_position() -> None:
+    spans = [
+        {
+            "parent_id": None,
+            "type": "Trace",
+            "input": [{"role": "user", "content": "repeat this"}],
+            "output": [
+                {"role": "assistant", "content": "same answer"},
+                {"role": "assistant", "content": "same answer"},
+            ],
+        }
+    ]
+
+    conversation = _conversation_from_spans("t1", spans)
+
+    assert conversation is not None
+    assert conversation.messages == [
+        {"role": "user", "content": "repeat this"},
+        {"role": "assistant", "content": "same answer"},
+        {"role": "assistant", "content": "same answer"},
+    ]
 
 
 def test_conversation_none_when_no_messages() -> None:

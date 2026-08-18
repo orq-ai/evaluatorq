@@ -102,7 +102,7 @@ def _meta() -> SimulationRunMeta:
         num_datapoints=1,
         model='m',
         max_turns=3,
-        parallelism=1,
+        datapoint_parallelism=1,
         evaluation_name='e',
         evaluator_names=['goal_achieved'],
         target='callback',
@@ -251,7 +251,7 @@ def _stub_generation(monkeypatch, datapoint):
     monkeypatch.setattr(api, '_resolve_or_generate_datapoints', _fake_resolve)
     monkeypatch.setattr(
         'evaluatorq.openresponses.client.build_simulation_client',
-        lambda _client=None: (object(), False),
+        lambda _client=None, **_kwargs: (object(), False),
     )
 
 
@@ -519,7 +519,7 @@ async def test_generate_phase_failure_marks_manifest_error_not_running(datapoint
     monkeypatch.setattr(api, '_resolve_or_generate_datapoints', _boom_resolve)
     monkeypatch.setattr(
         'evaluatorq.openresponses.client.build_simulation_client',
-        lambda _client=None: (object(), False),
+        lambda _client=None, **_kwargs: (object(), False),
     )
 
     with pytest.raises(RuntimeError, match='datapoint generation exploded'):

@@ -162,7 +162,7 @@ async def main() -> None:
         num_scenarios=args.num_scenarios,
         max_turns=args.max_turns,
         evaluator_names=["goal_achieved", "criteria_met"],
-        parallelism=5,
+        datapoint_parallelism=5,
         **target_kwargs,
     )
 

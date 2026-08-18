@@ -579,6 +579,45 @@ async def test_failed_condense_truncates_instead_of_losing_the_area(monkeypatch:
     assert recs[0].recommendations == ['Reduce agent permissions']
     aggregate_prompt = calls[-1]['messages'][1]['content']
     assert 'z' * 1001 not in aggregate_prompt  # hard-truncated to the same budget
+    assert aggregate_prompt.endswith('</trace>')
+
+
+def test_trace_boundary_truncation_keeps_a_closing_tag_at_the_budget() -> None:
+    text = 'preamble\n<trace>\n  <prompt>attack</prompt>\n</trace>\ntrailing'
+    budget = text.index('</trace>') + len('</trace>')
+
+    assert rec_mod._truncate_prompt_at_trace_boundary(text, budget) == text[:budget]
+
+
+def test_trace_boundary_truncation_drops_a_partial_opening_tag() -> None:
+    text = 'header\n<trace>payload</trace>\ntrailing'
+    budget = text.index('<trace>') + len('<tr')
+
+    assert rec_mod._truncate_prompt_at_trace_boundary(text, budget) == 'header'
+
+
+def test_trace_boundary_truncation_does_not_split_unicode() -> None:
+    text = 'preamble\n<trace>\n  <prompt>café 🧪</prompt>\n</trace>\ntrailing'
+    budget = text.index('</trace>') + len('</trace>')
+
+    truncated = rec_mod._truncate_prompt_at_trace_boundary(text, budget)
+
+    assert truncated == text[:budget]
+    assert 'café 🧪' in truncated
+    assert len(truncated.encode('utf-8')) > len(truncated)
+
+
+def test_trace_boundary_truncation_matches_nested_trace_tags() -> None:
+    text = 'preamble\n<trace><nested><trace>inner</trace></nested></trace>\ntrailing'
+    budget = text.index('</nested>') + len('</nested>')
+
+    assert rec_mod._truncate_prompt_at_trace_boundary(text, budget) == 'preamble'
+
+
+def test_trace_formatting_omits_a_wrapper_that_cannot_fit() -> None:
+    from evaluatorq.redteam.contracts import RedTeamRecommendationConfig
+
+    assert rec_mod._format_trace_to_budget(_vulnerable_result(), RedTeamRecommendationConfig(), 1) == ''
 
 
 @pytest.mark.asyncio
@@ -598,7 +637,10 @@ async def test_prompt_ceiling_truncates_and_warns(monkeypatch: pytest.MonkeyPatc
         recommendations=RedTeamRecommendationConfig(condense_above_chars=99_000, max_area_prompt_chars=1_000),
     )
 
-    assert len(calls[-1]['messages'][1]['content']) <= 1_003  # budget + the '...' marker
+    prompt = calls[-1]['messages'][1]['content']
+    assert len(prompt) <= 1_000
+    assert prompt.endswith('</trace>') or '<trace>' not in prompt
+    assert '<prompt>' not in prompt or '</prompt>' in prompt
     assert any('max_area_prompt_chars' in w for w in warnings_seen)
 
 

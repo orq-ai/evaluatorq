@@ -83,7 +83,7 @@ async def safety_scorer(params):
 ```
 
 See [Evaluation Reference](evaluation-reference.md#passfail-and-ci) for how
-`pass_` drives the process exit code.
+to inspect `pass_` and add an explicit process exit in a CI script.
 
 !!! note "Display vs. storage"
     Structured results render as `[structured]` in the terminal table — the

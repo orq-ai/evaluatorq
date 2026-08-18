@@ -43,7 +43,7 @@ async def test_full_hybrid_run(
             mode='hybrid',
             categories=['ASI01'],
             generate_strategies=False,
-            parallelism=2,
+            datapoint_parallelism=2,
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
             dataset=str(static_dataset_path),
             description='E2E hybrid test',
@@ -80,7 +80,7 @@ async def test_hybrid_delivery_filter_threads_to_static(
             categories=['ASI01'],
             generate_strategies=False,
             delivery_methods=[DeliveryMethod.DIRECT_REQUEST],
-            parallelism=2,
+            datapoint_parallelism=2,
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
             dataset=str(static_dataset_path),
         )
@@ -106,7 +106,7 @@ async def test_hybrid_independent_caps(
             generate_strategies=False,
             max_dynamic_datapoints=1,
             max_static_datapoints=1,
-            parallelism=2,
+            datapoint_parallelism=2,
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
             dataset=str(static_dataset_path),
         )

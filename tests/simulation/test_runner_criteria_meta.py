@@ -30,7 +30,7 @@ def test_build_criteria_meta_is_id_keyed_with_type_and_passed():
         frozenset({'criteria_0', 'criteria_1'}),
         {'criteria_1': 'thanks for your patience'},
     )
-    assert meta == [
+    assert [entry.model_dump(mode='json') for entry in meta] == [
         {
             'id': 'criteria_0',
             'description': 'explain charge',
@@ -64,8 +64,8 @@ def test_build_criteria_meta_separates_a_confirmed_failure_from_an_unaudited_one
         goal_completion_score=0.0,
     )
     meta = _build_criteria_meta(_scenario(), judgment, frozenset({'criteria_0'}))
-    assert [m['passed'] for m in meta] == [False, False]
-    assert [m['audited'] for m in meta] == [True, False]
+    assert [m.passed for m in meta] == [False, False]
+    assert [m.audited for m in meta] == [True, False]
 
 
 def test_build_criteria_meta_without_a_tracker_reports_audited_unknown():
@@ -76,7 +76,7 @@ def test_build_criteria_meta_without_a_tracker_reports_audited_unknown():
         rules_broken=[],
         goal_completion_score=0.0,
     )
-    assert [m['audited'] for m in _build_criteria_meta(_scenario(), judgment)] == [None, None]
+    assert [m.audited for m in _build_criteria_meta(_scenario(), judgment)] == [None, None]
 
 
 def test_build_criteria_meta_survives_duplicate_descriptions():
@@ -99,7 +99,7 @@ def test_build_criteria_meta_survives_duplicate_descriptions():
     meta = _build_criteria_meta(scenario, judgment)
     # both criteria preserved despite identical descriptions
     assert len(meta) == 2
-    assert meta[0]['passed'] is True and meta[1]['passed'] is False
+    assert meta[0].passed is True and meta[1].passed is False
 
 
 def test_build_criteria_meta_without_evidence_reports_it_unknown():
@@ -112,4 +112,4 @@ def test_build_criteria_meta_without_evidence_reports_it_unknown():
         rules_broken=[],
         goal_completion_score=0.0,
     )
-    assert [m['evidence'] for m in _build_criteria_meta(_scenario(), judgment)] == [None, None]
+    assert [m.evidence for m in _build_criteria_meta(_scenario(), judgment)] == [None, None]

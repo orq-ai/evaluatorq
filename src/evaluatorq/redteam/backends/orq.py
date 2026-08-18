@@ -47,6 +47,7 @@ from evaluatorq.common.thread_context import pipeline_metadata_param, thread_bod
 from evaluatorq.common.tracing import record_llm_response, set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentTarget, Message, content_to_text
 from evaluatorq.redteam.backends._errors import extract_provider_error_code, extract_status_code
+from evaluatorq.redteam.backends._retry import warn_ignored_target_retries
 from evaluatorq.redteam.backends.base import Backend
 from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
@@ -203,6 +204,11 @@ class ORQAgentTarget(AgentTarget):
         server-side history is a caller bug.
 
         Token usage is accumulated across pending-tool-call continuations.
+
+        Retry owner: ``call_target_with_retry`` in the orchestrator. Each SDK
+        operation passes ``retries=None`` **explicitly** — omitting it means
+        ``UNSET`` (inherit the client budget) in the Speakeasy-generated SDK, not
+        "no retry", so the two layers would multiply.
         """
         if not messages or messages[-1].role != 'user':
             raise ValueError(
@@ -321,6 +327,9 @@ class ORQAgentTarget(AgentTarget):
                     'agent_key': self.agent_key,
                     'message': {'role': 'user', 'parts': [{'kind': 'text', 'text': prompt}]},
                     'background': False,
+                    # call_target_with_retry owns target retries; preserve the
+                    # shared client's configured budget for non-target SDK calls.
+                    'retries': None,
                 }
                 if self._task_id is not None:
                     kwargs['task_id'] = self._task_id
@@ -371,6 +380,8 @@ class ORQAgentTarget(AgentTarget):
                         message={'role': 'tool', 'parts': tool_parts},
                         task_id=self._task_id,
                         background=False,
+                        # The continuation is still one target exchange.
+                        retries=None,
                         **thread_body_param(),
                         **pipeline_metadata_param(),
                     )
@@ -614,8 +625,11 @@ class ORQBackend(Backend):
     """Backend for ORQ-hosted agents.
 
     Owns the ORQ SDK client. Creates ``ORQAgentTarget`` instances per job.
-    Performs memory cleanup via the SDK. Maps ORQ exceptions to a normalized
-    error taxonomy.
+    Performs memory cleanup via the SDK. The shared SDK client keeps the
+    configured retry budget for context retrieval, enrichment, and cleanup;
+    ``ORQAgentTarget`` disables that budget per target operation because the
+    orchestrator owns target retries. Maps ORQ exceptions to a normalized error
+    taxonomy.
     """
 
     def __init__(
@@ -629,6 +643,11 @@ class ORQBackend(Backend):
         super().__init__(name='orq')
         timeout_ms = timeout_ms or PIPELINE_CONFIG.target_agent_timeout_ms
         self._timeout_ms = timeout_ms
+        warn_ignored_target_retries(
+            'ORQ',
+            retry_count=retry_count,
+            retry_on_codes=retry_on_codes,
+        )
         if orq_client is not None:
             self._orq_client = orq_client
         else:
@@ -637,13 +656,13 @@ class ORQBackend(Backend):
                     'ORQ backend requires the orq-ai-sdk package. '
                     'Install with: uv add "evaluatorq[orq]" (or: python -m pip install "evaluatorq[orq]")'
                 )
-            if retry_count is None:
-                retry_count = PIPELINE_CONFIG.retry_count
-                retry_on_codes = PIPELINE_CONFIG.retry_on_codes
+            retry_count = PIPELINE_CONFIG.retry_count if retry_count is None else retry_count
+            retry_on_codes = PIPELINE_CONFIG.retry_on_codes if retry_on_codes is None else retry_on_codes
             self._orq_client = _orq_cls(
                 api_key=_get_orq_api_key(),
                 server_url=_get_orq_server_url(),
                 timeout_ms=self._timeout_ms,
+                # For context, enrichment and cleanup; target calls override per call.
                 retry_config=_orq_retry_config(retry_count, retry_on_codes, timeout_ms=self._timeout_ms),
             )
 
@@ -675,8 +694,7 @@ def create_orq_agent_target(
             api_key=_get_orq_api_key(),
             server_url=_get_orq_server_url(),
             timeout_ms=timeout_ms,
-            retry_config=_orq_retry_config(
-                PIPELINE_CONFIG.retry_count, PIPELINE_CONFIG.retry_on_codes, timeout_ms=timeout_ms
-            ),
+            # The orchestrator owns target retries via call_target_with_retry.
+            retry_config=None,
         )
     return ORQAgentTarget(agent_key=agent_key, orq_client=orq_client, timeout_ms=timeout_ms)

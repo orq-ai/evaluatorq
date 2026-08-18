@@ -177,9 +177,11 @@ fitted `sigma`. The fit is a regularized, unsupervised maximum-likelihood fit on
 the votes the run already collected: no extra LLM calls or training data.
 Identical votes are collapsed into weighted counts before the fit (at most
 three distinct judgements per judge in the A/B setting), so the cost stays flat
-no matter how many comparisons the run holds. The report exposes fit warnings
-and falls back to uniform plurality when the optimizer does not converge; do
-not treat a capped fit as a reliability estimate.
+no matter how many comparisons the run holds. The report exposes fit warnings.
+When the optimizer does not converge it falls back to uniform plurality **only
+without repetition weights**; on a repetition run (below) the winners stay
+consistency-weighted and only the pooled `p_a_beats_b` headline degrades to
+neutral. Do not treat a capped fit as a reliability estimate.
 
 Notes worth knowing:
 
@@ -190,23 +192,87 @@ Notes worth knowing:
 - A perfectly split panel stays inconclusive rather than letting numerical
   noise crown one judge reliable.
 - A judge whose decisive votes are unanimous (always A, or always B) is
-  excluded from the weighting. With only two items such a judge's sigma
+  excluded from the sigma weighting. With only two items such a judge's sigma
   measures one-sidedness, not reliability, and `1/sigma` would hand the most
   degenerate judge on the panel an unbounded weight - the exact shape a
-  position- or verbosity-biased judge takes. It votes with a neutral weight
-  instead, and `fit_warnings` names it.
+  position- or verbosity-biased judge takes. On the pooled-fit path it votes
+  with a neutral (median) weight instead; on the repetition path every weight
+  comes from consistency, so that neutral assignment is replaced by the judge's
+  own consistency weight. Either way `fit_warnings` names it.
 - Check `bt_sigma.converged` (and `fit_warnings`) before trusting sigmas: a
   fit that stopped at the iteration cap still produces numbers.
 - Like all unsupervised aggregation, BT-sigma rewards internal consistency. A
   majority of judges sharing the same systematic bias will still carry the
   vote; it protects against noisy judges, not coordinated ones.
 
-For ranking more than two candidates (leaderboard-style), the underlying
-`evaluatorq.ranking.fit_bt()` accepts arbitrary item pairs from any number of
-judges and returns skills, a ranking, and per-judge reliability; `cycle_rate()`
-gives the matching consistency diagnostic. `cycle_rate` is deliberately not
-part of the two-item aggregation above: with two fixed items there are no
-3-cycles to rate, so it only means something on the multi-item ranking path.
+### Repetition-aware reliability
+
+Run each comparison more than once (`repetitions=2` or more) and the reliability
+weights change source. Instead of the global two-item fit, they come from how
+often each judge **agrees with itself** on repeated passes of the same prompt.
+
+Two things must be true, and if either is missing the run falls back to the
+two-item fit and says so in `fit_warnings`:
+
+- **Both orderings must run (`swap=True`, the default).** Self-agreement is
+  measured inside one ordering, so a single-ordering run (`swap=False`) never
+  reaches this path, even at `repetitions=2`.
+- **At least two judges must have repeated decisive passes.** With only one, the
+  fallback weight for every other judge is just that one judge's number, so we
+  do not use it.
+
+Every pass is kept on `PairwiseVote.observations`, normalized so a swapped-order
+'B' is stored as 'A' and the two orderings line up; abstained and failed passes
+are kept as `None`.
+
+**Why self-agreement, not the global fit.** With one pass per judge, the
+two-item fit cannot tell a noisy judge apart from a hard batch of questions.
+Repeating the *same* prompt removes the ambiguity: any disagreement is the judge
+being inconsistent, nothing else. So a judge's consistency is scored on each
+prompt, counted once per judge per datapoint, then averaged. Because of that:
+
+- Different questions are never compared against each other, so a hard batch
+  cannot look like an unreliable judge.
+- Position bias is not mistaken for inconsistency, since each ordering is its
+  own group.
+- Extra repeats sharpen a judge's score but never add weight: each judge still
+  casts one weighted vote per comparison.
+
+**Two numbers, and which to read.** `bt_sigma.repetition_consistency` is the
+reliability **weight**. It is pulled toward the panel average (so one lucky
+2-pass agreement cannot take over the run) and lowered when passes fail, so even
+a perfectly steady judge reads a little under 1.0 unless the whole panel is
+steady. `bt_sigma.repetition_consistency_raw` (and the `Consistency (raw)` report
+column) is the **plain** self-agreement, with no adjustment: 1.0 means the judge
+always agreed with itself. Read the raw number to compare judges inside one run;
+do not compare the weight across two runs with different panels, where the same
+judge can move without changing. `p_a_beats_b` is still the pooled run-level
+headline. A judge with no repeats gets the median of the measured weights and is
+named in `fit_warnings`. Runs saved before this feature existed still load and
+behave as before.
+
+**What consistency is not.** It is self-agreement under fixed conditions, not
+task difficulty, not judge quality (a judge can be steadily wrong), and not
+accuracy against a ground truth. A clean abstention does not count against a
+judge: `['A', <abstention>, 'A']` scores 1.0 in both numbers. A pass that errored
+or came back off-contract is a failure, not a free abstention, and is counted in
+`repetition_failures`. The judge still agreed with itself on the passes it
+finished, so the **raw** number for `['A', None, 'A']` stays **1.0**; only the
+**weight** drops, to **2/3**, because a flaky judge is less dependable even when
+it agrees with itself. The two `None`s look identical in the vote list; only
+`repetition_failures` tells a clean abstention from a broken pass.
+
+**Cost.** Calls scale linearly with judges x orderings x repetitions, so `R=2`
+doubles the calls per comparison. Wall-clock barely moves, since the passes run
+in parallel, and each pass adds one small record. Use `R=2` when reliability
+weighting matters: it is the smallest R that produces any consistency evidence.
+`R=3` only refines the score, for 50% more cost.
+
+For ranking more than two candidates, use `evaluatorq.ranking.fit_bt()`
+directly: it takes item pairs from any number of judges and returns skills, a
+ranking, and per-judge reliability, with `cycle_rate()` as the matching
+consistency diagnostic. `cycle_rate` does not apply to the two-item case above,
+since two fixed items have no cycles to measure.
 
 ## Saving a run and viewing it in the dashboard
 

@@ -35,7 +35,8 @@ Targets — provide **exactly one**:
 | `--name` / `-n` | `str` / `sim` | Run name for the run-store entry. |
 | `--sim-model` | `str` / `openai/gpt-5.4-mini` | Model for user-simulator, judge, and generation. |
 | `--max-turns` | `int` / `10` | Maximum conversation turns. |
-| `--parallelism` | `int` / `5` | Concurrent simulations. |
+| `--datapoint-parallelism` | `int` / `10` | Concurrent simulations. `--parallelism` is a deprecated alias. |
+| `--llm-parallelism` | `int` / unset | Ceiling on in-flight LLM requests for the whole run. |
 | `--num-personas` | `int` / `5` | Number of personas to generate. |
 | `--num-scenarios` | `int` / `5` | Number of scenarios to generate. |
 | `--evaluator` | `str` (repeatable) / API defaults | Evaluator name(s). Repeatable. |
@@ -76,7 +77,8 @@ by `--experiment-run-id`), or `--from-run`.
 | `--name` / `-n` | `str` / `sim` | Run name for the run-store entry. |
 | `--sim-model` | `str` / `openai/gpt-5.4-mini` | Model for user-simulator and judge. |
 | `--max-turns` | `int` / `10` | Maximum conversation turns. Defaults to the replayed run's cap with `--from-run`. |
-| `--parallelism` | `int` / `5` | Concurrent simulations. |
+| `--datapoint-parallelism` | `int` / `10` | Concurrent simulations. `--parallelism` is a deprecated alias. |
+| `--llm-parallelism` | `int` / unset | Ceiling on in-flight LLM requests for the whole run. |
 | `--evaluator` | `str` (repeatable) / API defaults | Evaluator name(s). Repeatable. |
 | `--no-save` | `bool` / `False` | Skip writing to `.evaluatorq/sim-runs/`. |
 | `--recommendations` / `--no-recommendations` | `bool` / `True` | Generate LLM remediation suggestions for failures, tied to their concrete cause. On by default; `--no-recommendations` skips the extra LLM call. Uses `--sim-model`. |

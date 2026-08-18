@@ -14,7 +14,8 @@ async def evaluatorq(
     data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None = None,
     jobs: list[Job] | None = None,
     evaluators: list[Evaluator] | None = None,
-    parallelism: int = 10,
+    datapoint_parallelism: int = 10,
+    llm_parallelism: int | None = None,
     print_results: bool = True,
     description: str | None = None,
     path: str | None = None,
@@ -27,7 +28,8 @@ async def evaluatorq(
 | `data` | `list[DataPoint \| dict]` \| `list[Awaitable[DataPoint]]` \| `DatasetIdInput` \| `ExperimentInput` | **required** | Data to evaluate — local rows (a `DataPoint` or a plain dict with the same keys), an Orq dataset, or an existing experiment |
 | `jobs` | `list[Job]` | **required** | Jobs to run on each data point |
 | `evaluators` | `list[Evaluator]` \| `None` | `None` | Evaluators that score job outputs |
-| `parallelism` | `int` (≥1) | `10` | Number of concurrent jobs |
+| `datapoint_parallelism` | `int` (≥1) | `10` | Number of concurrent datapoints. The former name `parallelism` still works, deprecated |
+| `llm_parallelism` | `int` (≥1) \| `None` | `None` | Ceiling on in-flight LLM requests for the whole run. Unbounded when unset |
 | `print_results` | `bool` | `True` | Display the progress and results table |
 | `description` | `str` \| `None` | `None` | Optional evaluation description |
 | `path` | `str` \| `None` | `None` | Path for organizing results on the Orq dashboard (e.g. `"Project/Category"`) |
@@ -37,9 +39,9 @@ Parameters can also be passed positionally as an `EvaluatorParams` model or a
 plain dict — the three forms below are equivalent:
 
 ```python
-await evaluatorq("my-eval", data=[...], jobs=[...], parallelism=5)
-await evaluatorq("my-eval", {"data": [...], "jobs": [...], "parallelism": 5})
-await evaluatorq("my-eval", EvaluatorParams(data=[...], jobs=[...], parallelism=5))
+await evaluatorq("my-eval", data=[...], jobs=[...], datapoint_parallelism=5)
+await evaluatorq("my-eval", {"data": [...], "jobs": [...], "datapoint_parallelism": 5})
+await evaluatorq("my-eval", EvaluatorParams(data=[...], jobs=[...], datapoint_parallelism=5))
 ```
 
 Full type signatures live in the [API Reference](reference/evaluatorq.md).
@@ -153,19 +155,64 @@ async def quality_scorer(params):
     }
 ```
 
-When any evaluator returns `pass_: False`, the process exits with code 1 — drop
-the script into a CI job and it fails the build. The results table gains a pass
-rate row — `Pass Rate | 75% (3/4)`.
+When any evaluator returns `pass_: False`, `evaluatorq()` returns the results;
+the library never exits the process. To make a script a CI gate, inspect the
+results and exit explicitly:
+
+```python
+from evaluatorq.evaluatorq import check_pass_failures
+
+results = await evaluatorq(...)
+if check_pass_failures(results):
+    raise SystemExit(1)
+```
+
+The results table gains a pass rate row — `Pass Rate | 75% (3/4)`.
 
 ## Controlling the run
 
 ### Parallelism
 
 ```python
-await evaluatorq("parallel-eval", data=[...], jobs=[...], parallelism=10)
+await evaluatorq("parallel-eval", data=[...], jobs=[...], datapoint_parallelism=10)
 ```
 
-Start low (3–5) when jobs call rate-limited external APIs.
+`datapoint_parallelism` counts **tasks**, and the bounds nest: at most
+`datapoint_parallelism` datapoints run at once, and within each one a separate budget of the same size
+covers its jobs and then its evaluators. Ten datapoints each running ten
+evaluators is a hundred concurrent tasks, not ten.
+
+### Bounding LLM requests
+
+Against a provider concurrency limit, size the request ceiling instead:
+
+```python
+await evaluatorq("bounded-eval", data=[...], jobs=[...], llm_parallelism=10)
+```
+
+This counts requests, not tasks, so it holds however the fan-out nests. It is a
+concurrency bound rather than a rate limit — ten slots against 10s calls is
+about 60 requests/minute, but the same ten slots become 300/minute if the
+provider speeds up to 2s.
+
+Requests evaluatorq issues itself (judges, juries, simulation agents, the
+red-team pipeline) take a slot automatically. A job that calls a provider SDK
+directly is invisible to the budget unless you wrap it:
+
+```python
+from evaluatorq.common.llm_limit import llm_slot
+
+async def my_job(data_point, row_index):
+    async with llm_slot():
+        response = await client.chat.completions.create(...)
+    return {"name": "my-job", "output": response.choices[0].message.content}
+```
+
+Wrap only the request — holding a slot across parsing shrinks the budget
+without reducing load on the provider.
+
+`red_team()`, `simulate()`, `generate_and_simulate()` and `generate()` take the
+same argument, with the same meaning.
 
 ### Organizing results on Orq
 

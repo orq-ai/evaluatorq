@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime  # noqa: TC003
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError, computed_field
 from typing_extensions import TypedDict
 
 from evaluatorq.contracts import Message, ResponseTrace, RunSummary, StrEnum, TokenUsage
@@ -442,6 +442,48 @@ class Judgment(BaseModel):
     factual_accuracy: float | None = None
 
 
+class CriteriaMeta(BaseModel):
+    """Persisted, validated detail for one scenario criterion.
+
+    This is the producer/consumer contract for ``SimulationResult.metadata``.
+    Presentation-only fields such as ``state`` and ``safety`` belong to
+    ``CriteriaRow`` and are derived after this model has been validated.
+    """
+
+    model_config = ConfigDict(extra='forbid')
+
+    id: StrictStr
+    description: StrictStr
+    type: Literal['must_happen', 'must_not_happen']
+    passed: StrictBool
+    audited: StrictBool | None = None
+    evidence: StrictStr | None = None
+
+
+def parse_criteria_meta(raw: object) -> tuple[list[CriteriaMeta], list[object]]:
+    """Validate persisted criteria metadata without inventing defaults."""
+    if raw is None:
+        return [], []
+    if not isinstance(raw, list):
+        return [], [raw]
+    valid: list[CriteriaMeta] = []
+    invalid: list[object] = []
+
+    def parse_entry(entry: object) -> CriteriaMeta | None:
+        try:
+            return CriteriaMeta.model_validate(entry)
+        except ValidationError:
+            return None
+
+    for entry in raw:
+        parsed = parse_entry(entry)
+        if parsed is None:
+            invalid.append(entry)
+        else:
+            valid.append(parsed)
+    return valid, invalid
+
+
 # ---------------------------------------------------------------------------
 # TurnMetrics
 # ---------------------------------------------------------------------------
@@ -471,6 +513,11 @@ class SimulationResult(BaseModel):
     rules_broken: list[str]
     turn_count: int
     token_usage: TokenUsage
+    token_usage_known: bool = Field(
+        default=True,
+        description='Whether token usage was fully collected. False means the result contains partial usage and '
+        'must be treated as unknown rather than as a zero-cost run.',
+    )
     turn_metrics: list[TurnMetrics]
     metadata: dict[str, Any] = Field(default_factory=dict)
     criteria_results: dict[str, bool] | None = None

@@ -135,6 +135,7 @@ def _build_summary_section(report: RedTeamReport) -> ReportSection:
             'resistance_rate': s.resistance_rate,
             'evaluation_coverage': s.evaluation_coverage,
             'total_errors': s.total_errors,
+            'pre_execution_errors': s.pre_execution_errors,
             'duration_seconds': report.duration_seconds,
             'critical_exposure': critical_exposure,
             'by_severity': {k: v.model_dump(mode='json') for k, v in s.by_severity.items()},
@@ -329,7 +330,8 @@ def _build_error_analysis_section(report: RedTeamReport) -> ReportSection:
     s = report.summary
     total_errors = s.total_errors
     total_attacks = s.total_attacks
-    error_rate = total_errors / total_attacks if total_attacks > 0 else 0.0
+    error_rows = total_attacks + s.pre_execution_errors
+    error_rate = total_errors / error_rows if error_rows > 0 else 0.0
 
     # errors_by_type from the summary (dict[str, int])
     errors_by_type: dict[str, int] = dict(s.errors_by_type) if s.errors_by_type else {}
@@ -347,6 +349,17 @@ def _build_error_analysis_section(report: RedTeamReport) -> ReportSection:
         for result in report.results
         if result.error
     ]
+    detail_rows.extend(
+        {
+            'id': f'pre-execution-{index}',
+            'category': '',
+            'technique': '',
+            'error_type': error.error_type,
+            'stage': error.stage or '',
+            'error': error.message,
+        }
+        for index, error in enumerate(report.errors, start=1)
+    )
 
     # If errors_by_type is empty but detail_rows exist, compute it
     if not errors_by_type and detail_rows:

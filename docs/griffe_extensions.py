@@ -15,8 +15,8 @@ _STRIP_PRIVATE_PARAMS = frozenset({"evaluatorq.evaluatorq.evaluatorq"})
 class DropPrivateParameters(griffe.Extension):
     """Hide ``_``-prefixed parameters from the signatures listed in `_STRIP_PRIVATE_PARAMS`.
 
-    `evaluatorq()` takes five internal keyword arguments (``_send_results``,
-    ``_base_url``, ``_trace_type``, ``_exit_on_failure``, ``_experiment_url_out``)
+    `evaluatorq()` takes four internal keyword arguments (``_send_results``,
+    ``_base_url``, ``_trace_type``, ``_experiment_url_out``)
     that the CLI and the simulation/red-team runners pass to each other. They are
     not callable surface, but mkdocstrings renders the signature verbatim, so the
     library's headline function opened on a wall of internals. There is no

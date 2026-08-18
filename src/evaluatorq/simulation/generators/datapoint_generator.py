@@ -9,6 +9,7 @@ import asyncio
 import logging
 from itertools import starmap
 from typing import Any
+from weakref import WeakValueDictionary
 
 from evaluatorq.simulation.generators.first_message_generator import (
     FirstMessageGenerator,
@@ -46,11 +47,13 @@ class DatapointGenerator:
     ) -> None:
         self._model = model
         self._rate_limit_delay = rate_limit_delay
-        self._semaphore = asyncio.Semaphore(max_concurrent_calls)
+        self._max_concurrent_calls = max_concurrent_calls
+        # A semaphore binds to the loop that first waits on it, so keep one per loop.
+        self._semaphores: WeakValueDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = WeakValueDictionary()
 
         from evaluatorq.openresponses.client import build_simulation_client
 
-        self._shared_client, self._client_owned = build_simulation_client(None)
+        self._shared_client, self._client_owned = build_simulation_client(None, max_retries=0)
         self._persona_generator = PersonaGenerator(model=model, client=self._shared_client)
         self._scenario_generator = ScenarioGenerator(model=model, client=self._shared_client)
         self._first_message_generator = FirstMessageGenerator(model=model, client=self._shared_client)
@@ -165,9 +168,14 @@ class DatapointGenerator:
             len(personas),
             len(scenarios),
         )
+        loop = asyncio.get_running_loop()
+        semaphore = self._semaphores.get(loop)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(self._max_concurrent_calls)
+            self._semaphores[loop] = semaphore
 
         async def generate_single(persona: Persona, scenario: Scenario) -> SimulationDatapoint:
-            async with self._semaphore:
+            async with semaphore:
                 first_message = await self._first_message_generator.generate(persona, scenario)
                 await asyncio.sleep(self._rate_limit_delay)
                 return generate_datapoint(persona, scenario, first_message)

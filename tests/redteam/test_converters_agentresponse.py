@@ -19,11 +19,16 @@ def test_coerce_payload_from_agentresponse():
 def test_coerce_payload_from_agentresponse_carries_error_and_usage():
     ar = AgentResponse(
         output=[],
-        error=AgentResponseError(message='timeout', error_type='timeout'),
+        error=AgentResponseError(message='timeout', error_type='timeout', code='provider.timeout'),
         usage=TokenUsage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
     )
     payload = _coerce_job_output_payload(ar)
-    assert payload.error == 'timeout'
+    assert payload.error == 'Target agent failed after 1 attempt(s): timeout'
+    assert payload.error_type == 'timeout'
+    assert payload.error_stage == 'target_call'
+    assert payload.error_code == 'provider.timeout'
+    assert payload.error_turn == 1
+    assert payload.error_details is None
     assert payload.token_usage is not None
     assert payload.token_usage.total_tokens == 3
     assert payload.conversation == []
