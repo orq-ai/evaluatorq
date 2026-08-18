@@ -86,7 +86,7 @@ async def main() -> None:
         data=data,
         jobs=[agent_v1, agent_v2],
         evaluators=[string_contains_evaluator()],
-        parallelism=3,
+        datapoint_parallelism=3,
     )
 
 

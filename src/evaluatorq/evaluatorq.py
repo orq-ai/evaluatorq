@@ -10,6 +10,7 @@ from loguru import logger
 
 from .common.llm_limit import llm_concurrency_limit
 from .common.messages import coerce_content_text
+from .common.parallelism import resolve_datapoint_parallelism
 from .fetch_data import (
     fetch_dataset_batches,
     fetch_experiment_datapoints,
@@ -116,8 +117,9 @@ async def evaluatorq(
     data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None = None,
     jobs: list[Job] | None = None,
     evaluators: list[Evaluator] | None = None,
-    parallelism: int = 10,
+    datapoint_parallelism: int | None = None,
     llm_parallelism: int | None = None,
+    parallelism: int | None = None,
     print_results: bool = True,
     description: str | None = None,
     path: str | None = None,
@@ -135,10 +137,10 @@ async def evaluatorq(
 
     ```python
     # Using keyword arguments (recommended):
-    await evaluatorq("name", data=[...], jobs=[...], parallelism=5)
+    await evaluatorq("name", data=[...], jobs=[...], datapoint_parallelism=5)
 
     # Using a dict:
-    await evaluatorq("name", {"data": [...], "jobs": [...], "parallelism": 5})
+    await evaluatorq("name", {"data": [...], "jobs": [...], "datapoint_parallelism": 5})
 
     # Using EvaluatorParams:
     await evaluatorq("name", EvaluatorParams(data=[...], jobs=[...]))
@@ -152,16 +154,17 @@ async def evaluatorq(
               inference=False), or a list of DataPoint instances/awaitables.
         jobs: The jobs to run on the data.
         evaluators: The evaluators to use. If not provided, only jobs will run.
-        parallelism: Maximum concurrency, applied at two levels: datapoints run
-              at most ``parallelism`` at a time, and within one datapoint a single
-              shared budget of ``parallelism`` bounds its jobs and then its
-              evaluators (the budget is not split between them — a job releases
-              its slot before its evaluators take theirs). Defaults to 10; set to
-              1 for sequential execution, or lower it if your provider rate-limits.
+        datapoint_parallelism: Task concurrency, applied at two levels: datapoints run
+              at most ``datapoint_parallelism`` at a time, and within one datapoint a
+              single shared budget of the same size bounds its jobs and then its
+              evaluators (the budget is not split between them — a job releases its
+              slot before its evaluators take theirs). Defaults to 10; set to 1 for
+              sequential execution. Bounds tasks, not requests: see ``llm_parallelism``.
+        parallelism: Deprecated alias for ``datapoint_parallelism``.
         llm_parallelism: Ceiling on in-flight LLM requests for the whole run,
               counted per request rather than per task, so it holds however the
               datapoint/job/evaluator/jury fan-out nests. Unbounded by default. This
-              is the knob to set against a provider concurrency limit; ``parallelism``
+              is the knob to set against a provider concurrency limit; ``datapoint_parallelism``
               bounds tasks, and one task can issue many requests. Only requests routed
               through evaluatorq are counted — wrap a job's own provider calls in
               ``evaluatorq.common.llm_limit.llm_slot()`` to include them.
@@ -202,6 +205,9 @@ async def evaluatorq(
         )
         ```
     """
+    datapoint_parallelism = resolve_datapoint_parallelism(
+        datapoint_parallelism, parallelism, default=10, caller='evaluatorq'
+    )
     # Handle params dict/object vs kwargs
     if params is not None:
         # Validate params if passed as dict
@@ -212,7 +218,7 @@ async def evaluatorq(
             data=data,
             jobs=jobs,
             evaluators=evaluators,
-            parallelism=parallelism,
+            datapoint_parallelism=datapoint_parallelism,
             llm_parallelism=llm_parallelism,
             print_results=print_results,
             description=description,
@@ -240,7 +246,7 @@ async def evaluatorq(
             )
         jobs = [_replay_recorded_response]
     evaluators_list = validated.evaluators or []
-    parallelism = validated.parallelism
+    datapoint_parallelism = validated.datapoint_parallelism
     llm_parallelism = validated.llm_parallelism
     print_results = validated.print_results
     description = validated.description
@@ -325,8 +331,8 @@ async def evaluatorq(
                 # Shared progress state for tracking processed count
                 progress_ref = {'processed': 0}
 
-                # Semaphore for controlling parallelism
-                data_point_semaphore = asyncio.Semaphore(parallelism)
+                # Semaphore bounding concurrent datapoints
+                data_point_semaphore = asyncio.Semaphore(datapoint_parallelism)
 
                 async def process_with_semaphore(index: int, data_promise: DataPoint) -> list[Any]:
                     async with data_point_semaphore:
@@ -335,7 +341,7 @@ async def evaluatorq(
                             index,
                             jobs,
                             evaluators_list,
-                            parallelism,
+                            datapoint_parallelism,
                             None,  # Don't pass progress in streaming mode - use polling instead
                             tracing_context,
                         )
@@ -462,7 +468,7 @@ async def evaluatorq(
                 )
 
                 # Process data points with controlled concurrency
-                data_point_semaphore = asyncio.Semaphore(parallelism)
+                data_point_semaphore = asyncio.Semaphore(datapoint_parallelism)
 
                 async def process_with_semaphore(
                     index: int, data_promise: Awaitable[DataPoint] | DataPoint
@@ -473,7 +479,7 @@ async def evaluatorq(
                             index,
                             jobs,
                             evaluators_list,
-                            parallelism,
+                            datapoint_parallelism,
                             progress,
                             tracing_context,
                         )

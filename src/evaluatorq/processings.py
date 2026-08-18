@@ -28,7 +28,7 @@ async def process_data_point(
     row_index: int,
     jobs: list[Job],
     evaluators: list[Evaluator] | None,
-    parallelism: int,
+    datapoint_parallelism: int,
     progress_service: ProgressService | None = None,
     tracing_context: 'TracingContext | None' = None,
 ) -> list[DataPointResult]:
@@ -40,7 +40,7 @@ async def process_data_point(
         row_index: Index of this data point in the dataset
         jobs: List of jobs to execute
         evaluators: List of evaluators to run on job outputs
-        parallelism: Number of jobs to run in parallel
+        datapoint_parallelism: Concurrency budget shared by this datapoint's jobs and evaluators
         progress_service: Optional progress tracking service
         tracing_context: Optional tracing context for OTEL spans
 
@@ -65,7 +65,7 @@ async def process_data_point(
             )
 
         # Process jobs with concurrency control
-        semaphore = asyncio.Semaphore(parallelism)
+        semaphore = asyncio.Semaphore(datapoint_parallelism)
 
         async def run_job_with_semaphore(job: Job) -> JobResult:
             return await process_job(
@@ -78,7 +78,7 @@ async def process_data_point(
                 semaphore,
             )
 
-        # Execute all jobs with controlled parallelism
+        # Execute all jobs with controlled concurrency
         job_results = await asyncio.gather(
             *[run_job_with_semaphore(job) for job in jobs],
             return_exceptions=False,

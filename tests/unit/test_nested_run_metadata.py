@@ -103,7 +103,7 @@ async def test_nested_evaluatorq_run_id_survives_parallel_datapoints() -> None:
             data=[DataPoint(inputs={'text': f'x{i}'}) for i in range(5)],
             jobs=[job],
             evaluators=[],
-            parallelism=5,
+            datapoint_parallelism=5,
         print_results=False,
         _send_results=False,
         )

@@ -102,7 +102,7 @@ def _meta() -> SimulationRunMeta:
         num_datapoints=1,
         model='m',
         max_turns=3,
-        parallelism=1,
+        datapoint_parallelism=1,
         evaluation_name='e',
         evaluator_names=['goal_achieved'],
         target='callback',

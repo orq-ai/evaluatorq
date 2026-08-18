@@ -107,7 +107,7 @@ async def main():
         data=[DataPoint(inputs={"id": key}) for key in ANSWERS],
         jobs=[answer],
         evaluators=[all_judges, cyclic],
-        parallelism=4,
+        datapoint_parallelism=4,
         print_results=False,
     )
 

@@ -24,7 +24,8 @@ eq redteam run --target agent:<key> [OPTIONS]
 | `--attack-model` | `str` / `gpt-5-mini` | Model for adversarial prompt generation. |
 | `--attacker-instructions` | `str \| None` / `None` | Domain-specific context to steer attack generation. |
 | `--evaluator-model` | `str` / `gpt-5-mini` | Model for OWASP evaluation scoring. |
-| `--parallelism` | `int` / `10` | Maximum concurrent jobs. |
+| `--datapoint-parallelism` | `int` / `10` | Maximum concurrent datapoints/jobs. `--parallelism` is a deprecated alias. |
+| `--llm-parallelism` | `int` / unset | Ceiling on in-flight LLM requests for the whole run. |
 | `--generated-strategy-count` | `int` / `2` | Number of LLM-generated strategies per category. |
 | `--no-generate-strategies` | `bool` / `False` | Disable LLM-based strategy generation. |
 | `--max-dynamic-datapoints` | `int \| None` / `None` | Cap dynamically generated datapoints. |

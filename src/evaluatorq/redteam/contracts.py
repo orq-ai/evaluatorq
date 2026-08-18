@@ -1935,7 +1935,7 @@ class DynamicRunMetadata(BaseModel):
     max_turns: int | None = None
     max_per_category: int | None = None
     generated_strategy_count: int | None = None
-    parallelism: int | None = None
+    datapoint_parallelism: int | None = None
     timestamp: str | None = None
     duration_seconds: float | None = None
 
