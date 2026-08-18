@@ -15,6 +15,7 @@ async def evaluatorq(
     jobs: list[Job] | None = None,
     evaluators: list[Evaluator] | None = None,
     parallelism: int = 10,
+    max_concurrent_llm_calls: int | None = None,
     print_results: bool = True,
     description: str | None = None,
     path: str | None = None,
@@ -28,6 +29,7 @@ async def evaluatorq(
 | `jobs` | `list[Job]` | **required** | Jobs to run on each data point |
 | `evaluators` | `list[Evaluator]` \| `None` | `None` | Evaluators that score job outputs |
 | `parallelism` | `int` (≥1) | `10` | Number of concurrent jobs |
+| `max_concurrent_llm_calls` | `int` (≥1) \| `None` | `None` | Ceiling on in-flight LLM requests for the whole run. Unbounded when unset |
 | `print_results` | `bool` | `True` | Display the progress and results table |
 | `description` | `str` \| `None` | `None` | Optional evaluation description |
 | `path` | `str` \| `None` | `None` | Path for organizing results on the Orq dashboard (e.g. `"Project/Category"`) |
@@ -175,7 +177,39 @@ The results table gains a pass rate row — `Pass Rate | 75% (3/4)`.
 await evaluatorq("parallel-eval", data=[...], jobs=[...], parallelism=10)
 ```
 
-Start low (3–5) when jobs call rate-limited external APIs.
+`parallelism` counts **tasks**, and the bounds nest: at most `parallelism`
+datapoints run at once, and within each one a separate budget of the same size
+covers its jobs and then its evaluators. Ten datapoints each running ten
+evaluators is a hundred concurrent tasks, not ten.
+
+### Bounding LLM requests
+
+Against a provider concurrency limit, size the request ceiling instead:
+
+```python
+await evaluatorq("bounded-eval", data=[...], jobs=[...], max_concurrent_llm_calls=10)
+```
+
+This counts requests, not tasks, so it holds however the fan-out nests. It is a
+concurrency bound rather than a rate limit — ten slots against 10s calls is
+about 60 requests/minute, but the same ten slots become 300/minute if the
+provider speeds up to 2s.
+
+Requests evaluatorq issues itself (judges, juries, simulation agents, the
+red-team pipeline) take a slot automatically. A job that calls a provider SDK
+directly is invisible to the budget unless you wrap it:
+
+```python
+from evaluatorq.common.llm_limit import llm_slot
+
+async def my_job(data_point, row_index):
+    async with llm_slot():
+        response = await client.chat.completions.create(...)
+    return {"name": "my-job", "output": response.choices[0].message.content}
+```
+
+Wrap only the request — holding a slot across parsing shrinks the budget
+without reducing load on the provider.
 
 ### Organizing results on Orq
 
