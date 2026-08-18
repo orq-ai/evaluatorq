@@ -276,6 +276,50 @@ html { font-size: 100%; }
   box-shadow: -1px 0 0 0 var(--md-typeset-a-color);
 }
 
+/* --- Site navigation (left sidebar) --------------------------------- */
+/* Same problem as the TOC: section labels ("Guides", "Red Teaming") differ from
+   their pages by weight alone and sit at the same indent, so a group reads as a
+   flat list. Scoped to the permanent-sidebar breakpoint — below it the same
+   markup renders as the mobile drawer, where Material's own spacing applies. */
+@media screen and (min-width: 76.25em) {
+  .md-nav--primary .md-nav__item--section > .md-nav__link {
+    font-size: 0.58rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--md-default-fg-color--light);
+    margin-bottom: 0.35rem;
+  }
+  /* Hairline above each group. */
+  .md-nav--primary .md-nav__item--section {
+    margin: 1rem 0 0;
+    padding-top: 0.8rem;
+    border-top: 1px solid var(--md-default-fg-color--lightest);
+  }
+  /* Guide rule down the group, matching the TOC. -0.6rem is Material's own
+     bleed for section children — replace it with the indent. */
+  .md-nav--primary .md-nav__item--section > .md-nav {
+    margin-left: 0;
+    padding-left: 0.6rem;
+    border-left: 1px solid var(--md-default-fg-color--lightest);
+  }
+
+  .md-nav--primary .md-nav__link--active { font-weight: 600; }
+  /* Paint the guide rule accent-coloured next to the current page. */
+  .md-nav--primary .md-nav__item--section > .md-nav .md-nav__link--active {
+    position: relative;
+  }
+  .md-nav--primary .md-nav__item--section > .md-nav .md-nav__link--active::before {
+    content: "";
+    position: absolute;
+    left: -0.6rem;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: var(--md-typeset-a-color);
+  }
+}
+
 /* Dashboard guide screenshots — subtle framing so captures sit apart from prose. */
 .dashboard-shot {
   border-radius: 8px;
