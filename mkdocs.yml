@@ -160,6 +160,7 @@ plugins:
           - cli-reference/overview.md: CLI commands (evaluatorq / eq) overview.
           - cli-reference/redteam.md: CLI reference for the eq redteam command.
           - cli-reference/simulation.md: CLI reference for the eq sim command.
+          - cli-reference/dashboard.md: CLI reference for the eq dashboard command.
         Examples:
           # `**/` is load-bearing under the plugin's fnmatch: it requires a subdirectory, so this
           # matches example CONTENT at any depth (examples/<group>/<page>.md) but excludes the
@@ -269,6 +270,7 @@ nav:
           - Overview: cli-reference/overview.md
           - Red Teaming: cli-reference/redteam.md
           - Simulation: cli-reference/simulation.md
+          - Dashboard: cli-reference/dashboard.md
   - FAQ: faq.md
   - About:
       - Contributing: contributing.md
