@@ -494,7 +494,7 @@ async def red_team(
     max_turns: int | None = None,
     max_per_category: int | None = None,
     parallelism: int = 10,
-    max_concurrent_llm_calls: int | None = None,
+    llm_parallelism: int | None = None,
     generate_strategies: bool = True,
     generated_strategy_count: int = 2,
     max_dynamic_datapoints: int | None = None,
@@ -562,7 +562,7 @@ async def red_team(
             per-role settings. Defaults to ``LLMConfig()`` which uses the default model
             for both attacker and evaluator roles.
         parallelism: Maximum concurrent evaluatorq jobs.
-        max_concurrent_llm_calls: Ceiling on in-flight LLM requests for the whole
+        llm_parallelism: Ceiling on in-flight LLM requests for the whole
             run, counted per request rather than per job. Unbounded by default.
             Set this, not ``parallelism``, against a provider concurrency limit:
             one job issues many requests, so ``parallelism`` cannot be sized
@@ -969,7 +969,7 @@ async def red_team(
     async with (  # noqa: SIM117
         tracing_session(name or 'red-team', trace_type='redteam') as tracing_context,
         _redteam_run_lifecycle(manifest_writer),
-        llm_concurrency_limit(max_concurrent_llm_calls),
+        llm_concurrency_limit(llm_parallelism),
     ):
         async with _redteam_root_scope(
             tracing_context.run_id,

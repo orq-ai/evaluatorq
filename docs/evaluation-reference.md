@@ -15,7 +15,7 @@ async def evaluatorq(
     jobs: list[Job] | None = None,
     evaluators: list[Evaluator] | None = None,
     parallelism: int = 10,
-    max_concurrent_llm_calls: int | None = None,
+    llm_parallelism: int | None = None,
     print_results: bool = True,
     description: str | None = None,
     path: str | None = None,
@@ -29,7 +29,7 @@ async def evaluatorq(
 | `jobs` | `list[Job]` | **required** | Jobs to run on each data point |
 | `evaluators` | `list[Evaluator]` \| `None` | `None` | Evaluators that score job outputs |
 | `parallelism` | `int` (≥1) | `10` | Number of concurrent jobs |
-| `max_concurrent_llm_calls` | `int` (≥1) \| `None` | `None` | Ceiling on in-flight LLM requests for the whole run. Unbounded when unset |
+| `llm_parallelism` | `int` (≥1) \| `None` | `None` | Ceiling on in-flight LLM requests for the whole run. Unbounded when unset |
 | `print_results` | `bool` | `True` | Display the progress and results table |
 | `description` | `str` \| `None` | `None` | Optional evaluation description |
 | `path` | `str` \| `None` | `None` | Path for organizing results on the Orq dashboard (e.g. `"Project/Category"`) |
@@ -187,7 +187,7 @@ evaluators is a hundred concurrent tasks, not ten.
 Against a provider concurrency limit, size the request ceiling instead:
 
 ```python
-await evaluatorq("bounded-eval", data=[...], jobs=[...], max_concurrent_llm_calls=10)
+await evaluatorq("bounded-eval", data=[...], jobs=[...], llm_parallelism=10)
 ```
 
 This counts requests, not tasks, so it holds however the fan-out nests. It is a
