@@ -304,7 +304,10 @@ by the pipeline or by the model's list price.
       <option value="claude-opus-5">Claude Opus 5 — $5 / $25 per 1M</option>
       <option value="claude-sonnet-5" selected>Claude Sonnet 5 — $3 / $15 per 1M</option>
       <option value="claude-haiku-4-5">Claude Haiku 4.5 — $1 / $5 per 1M</option>
+      <option value="gpt-5.6-terra">gpt-5.6-terra — $2 / $12 per 1M</option>
+      <option value="eu.gemini-3.7-flash">Gemini 3.7 Flash (EU) — $0.75 / $3.75 per 1M</option>
       <option value="gpt-5-mini">gpt-5-mini — $0.25 / $2 per 1M</option>
+      <option value="eu.gpt-5.6-luna">gpt-5.6-luna (EU) — $0.22 / $1.32 per 1M</option>
       <option value="custom">Custom — enter prices below</option>
     </select>
   </label>
@@ -371,9 +374,13 @@ values are fixed:
   the same transcript, not five compounding ones.
 - **Setup calls are priced at the full input rate**, one block each way. They
   share no prefix with the attack transcript, so no cache discount applies.
-- **Published list prices, snapshotted 2026-08-18.** Verify against your
-  provider before quoting a number to anyone; at runtime evaluatorq prices calls
-  from the live Orq `/v2/models` catalogue instead.
+- **Prices snapshotted 2026-08-18.** The Claude and gpt-5-mini rows are
+  published list prices; the gpt-5.6 and Gemini rows come from the Orq
+  `/v2/models` catalogue. Two of those exist in the catalogue only as EU-region
+  entries and are marked *(EU)* — EU rates differ from global, so a global
+  deployment of the same model will not match. Verify against your provider
+  before quoting a number to anyone; at runtime evaluatorq prices calls from the
+  live catalogue rather than from this snapshot.
 
 Content-filter retries on the attacker turn are real billed calls and are not in
 this estimate. Actual spend varies with prompt and completion length.
