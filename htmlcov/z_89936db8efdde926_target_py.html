@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_e4383a99cd2ab688___init___py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.15.4">coverage.py v7.15.4</a>,
-            created at 2026-08-18 06:48 +0000
+            created at 2026-08-18 15:14 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -195,7 +195,7 @@
     <p class="pln"><span class="n"><a id="t113" href="#t113">113</a></span><span class="t">        <span class="com"># text if the message objects don&#x27;t expose the expected parts.</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t114" href="#t114">114</a></span><span class="t">        <span class="nam">output</span><span class="op">:</span> <span class="nam">list</span><span class="op">[</span><span class="nam">OutputMessage</span><span class="op">]</span> <span class="op">=</span> <span class="nam">_build_output</span><span class="op">(</span><span class="nam">result</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t115" href="#t115">115</a></span><span class="t">        <span class="key">if</span> <span class="key">not</span> <span class="nam">output</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t116" href="#t116">116</a></span><span class="t">            <span class="nam">text</span> <span class="op">=</span> <span class="str">&#x27;&#x27;</span> <span class="key">if</span> <span class="nam">result</span><span class="op">.</span><span class="nam">output</span> <span class="key">is</span> <span class="key">None</span> <span class="key">else</span> <span class="nam">str</span><span class="op">(</span><span class="nam">result</span><span class="op">.</span><span class="nam">output</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t116" href="#t116">116</a></span><span class="t">            <span class="nam">text</span> <span class="op">=</span> <span class="str">&#x27;&#x27;</span> <span class="key">if</span> <span class="nam">result</span><span class="op">.</span><span class="nam">output</span> <span class="key">is</span> <span class="key">None</span> <span class="key">else</span> <span class="nam">tool_result_to_text</span><span class="op">(</span><span class="nam">result</span><span class="op">.</span><span class="nam">output</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t117" href="#t117">117</a></span><span class="t">            <span class="nam">output</span> <span class="op">=</span> <span class="op">[</span><span class="nam">TextOutputItem</span><span class="op">(</span><span class="nam">text</span><span class="op">=</span><span class="nam">text</span><span class="op">,</span> <span class="nam">annotations</span><span class="op">=</span><span class="op">[</span><span class="op">]</span><span class="op">)</span><span class="op">]</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t118" href="#t118">118</a></span><span class="t">        <span class="key">return</span> <span class="nam">AgentResponse</span><span class="op">(</span><span class="nam">output</span><span class="op">=</span><span class="nam">output</span><span class="op">,</span> <span class="nam">usage</span><span class="op">=</span><span class="nam">_extract_usage</span><span class="op">(</span><span class="nam">result</span><span class="op">)</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t119" href="#t119">119</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
@@ -348,7 +348,7 @@
             <a class="nav" href="z_e4383a99cd2ab688___init___py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.15.4">coverage.py v7.15.4</a>,
-            created at 2026-08-18 06:48 +0000
+            created at 2026-08-18 15:14 +0000
         </p>
     </div>
 </footer>
