@@ -61,6 +61,9 @@
   --orq-orange-text: #c4421a; /* orange for TEXT on light surfaces — ~4.6:1 AA */
   --orq-ink: #25232e;
   --orq-sand: #f9f8f6;
+  /* Sidebar group headings (both rails): dark grey, not near-black — above the
+     muted page links, below the body text. */
+  --eq-nav-heading: color-mix(in srgb, var(--md-default-fg-color) 62%, transparent);
 }
 
 /* Light scheme: teal identity, orange accent. */
@@ -266,7 +269,7 @@ html { font-size: 100%; }
 .md-nav--secondary > .md-nav__list > .md-nav__item > .md-nav__link {
   font-size: 0.72rem;
   font-weight: 600;
-  color: color-mix(in srgb, var(--md-default-fg-color) 76%, transparent);
+  color: var(--eq-nav-heading);
   margin-top: 0.9em;
 }
 
@@ -290,7 +293,7 @@ html { font-size: 100%; }
     font-weight: 600;
     /* Full-strength fg at this weight and size reads as a shout — sit between
        it and the muted page links. */
-    color: color-mix(in srgb, var(--md-default-fg-color) 76%, transparent);
+    color: var(--eq-nav-heading);
     margin-bottom: 0.3rem;
   }
   /* Equal air on both sides of a group, so a nested section does not glue its
