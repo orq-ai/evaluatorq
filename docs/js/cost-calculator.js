@@ -1,9 +1,5 @@
 (() => {
-  // Published list prices in USD per 1k tokens, as of 2026-08-18.
-  // Anthropic: anthropic.com/pricing. gpt-5-mini: the Orq /v2/models payload,
-  // which is what common/model_catalogue.py reads at runtime.
-  // These are a dated snapshot for planning, not a live feed — re-check before
-  // quoting them at anyone.
+  // USD per 1k tokens; provenance and date in docs/guides/red-teaming.md.
   const modelPrices = {
     "claude-opus-5": { input: 0.005, output: 0.025 },
     "claude-sonnet-5": { input: 0.003, output: 0.015 },
@@ -11,13 +7,13 @@
     "gpt-5-mini": { input: 0.00025, output: 0.002 },
   };
 
-  // Cache reads bill at ~0.1x the base input price across the providers above.
   const CACHE_READ_MULTIPLIER = 0.1;
+  const JUDGE_OUTPUT_TOKENS = 200;
 
   const usdFormatter = new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
-    maximumFractionDigits: 4,
+    maximumFractionDigits: 6,
   });
   const formatUsd = (value) => usdFormatter.format(value);
 
@@ -56,28 +52,33 @@
           fields.map(num);
         const [inputPrice, outputPrice] = priceFields.map(num);
         const cacheHit = Math.min(1, cacheHitPct / 100);
-        const effectiveInputPrice =
+        const cachedInputPrice =
           inputPrice * (1 - cacheHit + cacheHit * CACHE_READ_MULTIPLIER);
 
-        // Every call reads the transcript so far and appends tokensPerSide to it.
-        // Seeded with one block so the first call is not free (system prompt +
-        // attack objective). Fixed setup calls do not share the attack transcript,
-        // so each is priced as a single seed-sized exchange.
-        let inputTokens = fixedCalls * tokensPerSide;
-        let outputTokens = fixedCalls * tokensPerSide;
-        const callsPerAttack = turns * callsPerTurn + judgeCalls;
-        for (let attack = 0; attack < attacks; attack += 1) {
-          let transcript = tokensPerSide;
-          for (let call = 0; call < callsPerAttack; call += 1) {
-            inputTokens += transcript;
-            outputTokens += tokensPerSide;
-            transcript += tokensPerSide;
-          }
+        // Turn calls read the transcript so far and append a block to it, seeded
+        // with one block so the first call is not free. Judge calls read the
+        // finished transcript without extending it for each other.
+        const turnCalls = turns * callsPerTurn;
+        let transcript = tokensPerSide;
+        let turnInput = 0;
+        for (let call = 0; call < turnCalls; call += 1) {
+          turnInput += transcript;
+          transcript += tokensPerSide;
         }
+        const attackInput = turnInput + judgeCalls * transcript;
+        const attackOutput = turnCalls * tokensPerSide + judgeCalls * JUDGE_OUTPUT_TOKENS;
 
-        const calls = fixedCalls + attacks * callsPerAttack;
+        // Setup calls share no prefix with the attack transcript, so no cache read.
+        const fixedInput = fixedCalls * tokensPerSide;
+        const fixedOutput = fixedCalls * tokensPerSide;
+        const inputTokens = fixedInput + attacks * attackInput;
+        const outputTokens = fixedOutput + attacks * attackOutput;
+
+        const calls = fixedCalls + attacks * (turnCalls + judgeCalls);
         const cost =
-          (inputTokens / 1000) * effectiveInputPrice + (outputTokens / 1000) * outputPrice;
+          (fixedInput / 1000) * inputPrice +
+          ((attacks * attackInput) / 1000) * cachedInputPrice +
+          (outputTokens / 1000) * outputPrice;
 
         total.textContent = formatUsd(cost);
         breakdown.textContent =

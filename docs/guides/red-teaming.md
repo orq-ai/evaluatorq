@@ -330,8 +330,8 @@ your own prices.
     </label>
   </div>
   <div class="cost-calculator__result" aria-live="polite">
-    <strong>Estimated cost: <span data-cost-total>$0.4842</span></strong>
-    <span data-cost-breakdown>30 calls · 60,000 input tokens (90% cached) · 30,000 output tokens</span>
+    <strong>Estimated cost: <span data-cost-total>$0.3642</span></strong>
+    <span data-cost-breakdown>30 calls · 60,000 input tokens (90% cached) · 22,000 output tokens</span>
   </div>
 </form>
 
@@ -343,15 +343,20 @@ Call count is **fixed calls + attacks × (turns × calls-per-turn + judge calls)
 - **Judge calls per attack** is 1 by default. The judge runs once after the turn
   loop, not per turn. A jury multiplies this by panel size × repetitions.
 
-The token model behind the dollar figure makes three assumptions, all editable
-above:
+The token model behind the dollar figure makes these assumptions. The first two
+are editable above; the rest are fixed:
 
-- **1,000 tokens per turn, per side.** Every call emits one block and the
-  transcript grows by one block per call, so input cost is quadratic in turns —
-  which is why long multi-turn attacks cost more than the call count suggests.
-- **90% cache hit rate** on input tokens, billed at **0.1× the base input
-  price**. That is the standard cached-read rate for the models listed. Runs
-  that never repeat a prefix should set this to 0.
+- **1,000 tokens per turn, per side.** Each turn call emits one block and the
+  transcript grows by one block, so input cost is quadratic in turns — which is
+  why long multi-turn attacks cost more than the call count suggests.
+- **90% cache hit rate** on the attack transcript, billed at **0.1× the base
+  input price** — the standard cached-read rate for the models listed. Runs that
+  never repeat a prefix should set this to 0.
+- **Judge calls read the finished transcript and emit ~200 tokens.** They do not
+  extend the transcript for each other, so a jury of five costs five reads of
+  the same transcript, not five compounding ones.
+- **Fixed setup calls are priced at the full input rate**, one block each way.
+  They share no prefix with the attack transcript, so no cache discount applies.
 - **Published list prices, snapshotted 2026-08-18.** Verify against your
   provider before quoting a number to anyone; at runtime evaluatorq prices calls
   from the live Orq `/v2/models` catalogue instead.

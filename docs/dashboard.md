@@ -576,8 +576,8 @@ the run, not a broken page.
 **Transcripts** lists every conversation with persona, scenario, turn count,
 score, who ended it, and whether the goal was met. Sort by score to put the
 failures on top, and raise the page size (5 / 10 / 25) before scanning a large
-run. The **TRACES** column is empty in the screenshot because the deep-link
-needs `ORQ_WORKSPACE` set. With it set, a row shows **View Trace** when the
+run. The **TRACES** column stays empty until `ORQ_WORKSPACE` is set, since the
+deep-link needs it. With it set, a row shows **View Trace** when the
 conversation stored a trace id, **View Traces** (a thread filter) when it only
 stored a thread id, and nothing when it has neither.
 
