@@ -14,7 +14,7 @@ async def evaluatorq(
     data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None = None,
     jobs: list[Job] | None = None,
     evaluators: list[Evaluator] | None = None,
-    parallelism: int = 10,
+    datapoint_parallelism: int = 10,
     llm_parallelism: int | None = None,
     print_results: bool = True,
     description: str | None = None,
@@ -28,7 +28,7 @@ async def evaluatorq(
 | `data` | `list[DataPoint \| dict]` \| `list[Awaitable[DataPoint]]` \| `DatasetIdInput` \| `ExperimentInput` | **required** | Data to evaluate — local rows (a `DataPoint` or a plain dict with the same keys), an Orq dataset, or an existing experiment |
 | `jobs` | `list[Job]` | **required** | Jobs to run on each data point |
 | `evaluators` | `list[Evaluator]` \| `None` | `None` | Evaluators that score job outputs |
-| `parallelism` | `int` (≥1) | `10` | Number of concurrent jobs |
+| `datapoint_parallelism` | `int` (≥1) | `10` | Number of concurrent datapoints. The former name `parallelism` still works, deprecated |
 | `llm_parallelism` | `int` (≥1) \| `None` | `None` | Ceiling on in-flight LLM requests for the whole run. Unbounded when unset |
 | `print_results` | `bool` | `True` | Display the progress and results table |
 | `description` | `str` \| `None` | `None` | Optional evaluation description |
@@ -39,9 +39,9 @@ Parameters can also be passed positionally as an `EvaluatorParams` model or a
 plain dict — the three forms below are equivalent:
 
 ```python
-await evaluatorq("my-eval", data=[...], jobs=[...], parallelism=5)
-await evaluatorq("my-eval", {"data": [...], "jobs": [...], "parallelism": 5})
-await evaluatorq("my-eval", EvaluatorParams(data=[...], jobs=[...], parallelism=5))
+await evaluatorq("my-eval", data=[...], jobs=[...], datapoint_parallelism=5)
+await evaluatorq("my-eval", {"data": [...], "jobs": [...], "datapoint_parallelism": 5})
+await evaluatorq("my-eval", EvaluatorParams(data=[...], jobs=[...], datapoint_parallelism=5))
 ```
 
 Full type signatures live in the [API Reference](reference/evaluatorq.md).
@@ -174,11 +174,11 @@ The results table gains a pass rate row — `Pass Rate | 75% (3/4)`.
 ### Parallelism
 
 ```python
-await evaluatorq("parallel-eval", data=[...], jobs=[...], parallelism=10)
+await evaluatorq("parallel-eval", data=[...], jobs=[...], datapoint_parallelism=10)
 ```
 
-`parallelism` counts **tasks**, and the bounds nest: at most `parallelism`
-datapoints run at once, and within each one a separate budget of the same size
+`datapoint_parallelism` counts **tasks**, and the bounds nest: at most
+`datapoint_parallelism` datapoints run at once, and within each one a separate budget of the same size
 covers its jobs and then its evaluators. Ten datapoints each running ten
 evaluators is a hundred concurrent tasks, not ten.
 

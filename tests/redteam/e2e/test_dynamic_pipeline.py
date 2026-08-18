@@ -53,7 +53,7 @@ async def test_full_dynamic_run(
             mode='dynamic',
             categories=['ASI01'],
             generate_strategies=False,
-            parallelism=2,
+            datapoint_parallelism=2,
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
             description='E2E dynamic test',
         )
@@ -76,7 +76,7 @@ async def test_dynamic_with_strategy_generation(
             categories=['ASI01'],
             generate_strategies=True,
             generated_strategy_count=1,
-            parallelism=2,
+            datapoint_parallelism=2,
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
             description='E2E dynamic with generation',
         )
@@ -98,7 +98,7 @@ async def test_dynamic_datapoint_capping(
             categories=['ASI01'],
             generate_strategies=False,
             max_dynamic_datapoints=2,
-            parallelism=2,
+            datapoint_parallelism=2,
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
         )
 
@@ -118,7 +118,7 @@ async def test_dynamic_memory_cleanup(
             categories=['ASI01'],
             generate_strategies=False,
             cleanup_memory=True,
-            parallelism=2,
+            datapoint_parallelism=2,
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
         )
 
@@ -149,7 +149,7 @@ async def test_dynamic_memory_cleanup_is_noop_without_memory_stores(
             categories=['ASI01'],
             generate_strategies=False,
             cleanup_memory=True,
-            parallelism=2,
+            datapoint_parallelism=2,
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
             hooks=hooks,
         )
@@ -185,7 +185,7 @@ async def test_dynamic_empty_filter_hard_fails_instead_of_sweeping_everything(
             categories=categories,
             vulnerabilities=vulnerabilities,
             generate_strategies=False,
-            parallelism=2,
+            datapoint_parallelism=2,
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
         )
 

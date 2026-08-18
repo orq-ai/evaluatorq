@@ -2,7 +2,7 @@ import json
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_serializer, model_validator
 from typing_extensions import NotRequired, TypedDict
 
 from evaluatorq.contracts import AgentResponse, TokenUsage
@@ -225,11 +225,13 @@ class EvaluatorParams(BaseModel):
               inference=False), or a list of DataPoint instances/awaitables.
         jobs: The jobs to run on the data.
         evaluators: The evaluators to use. If not provided, only jobs will run.
-        parallelism: Number of jobs to run in parallel. Defaults to 10; set to 1 for
-              sequential execution, or lower it if your provider rate-limits.
+        datapoint_parallelism: Number of datapoints to process in parallel. Defaults
+              to 10; set to 1 for sequential execution. Accepts the former name
+              ``parallelism``, which is deprecated.
         llm_parallelism: Ceiling on in-flight LLM requests for the whole
               run, counted per request rather than per task. Unbounded by default.
-              Use this, not ``parallelism``, against a provider concurrency limit.
+              Use this against a provider concurrency limit — one datapoint can
+              issue many requests, so the datapoint count cannot be sized against one.
         print_results: Whether to print results table to console. Defaults to True.
                        Also accepts "print" as an alias.
         description: Optional description for the evaluation run.
@@ -248,7 +250,11 @@ class EvaluatorParams(BaseModel):
     data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput]
     jobs: list[Job] | None = None
     evaluators: list[Evaluator] | None = None
-    parallelism: int = Field(default=10, ge=1)
+    datapoint_parallelism: int = Field(
+        default=10,
+        ge=1,
+        validation_alias=AliasChoices('datapoint_parallelism', 'parallelism'),
+    )
     llm_parallelism: int | None = Field(default=None, ge=1)
     print_results: bool = Field(default=True, validation_alias='print')
     description: str | None = None

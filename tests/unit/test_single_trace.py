@@ -63,13 +63,13 @@ def _trace_ids(spans: Sequence[ReadableSpan]) -> set[int]:
     return {s.context.trace_id for s in spans if s.context is not None}
 
 
-async def _run(*, single_trace: bool, data=DATA, parallelism: int = 1):
+async def _run(*, single_trace: bool, data=DATA, datapoint_parallelism: int = 1):
     return await evaluatorq(
         'single-trace-test',
         data=data,
         jobs=[echo],
         single_trace=single_trace,
-        parallelism=parallelism,
+        datapoint_parallelism=datapoint_parallelism,
         print_results=False,
         _send_results=False,
     )
@@ -120,7 +120,7 @@ async def test_single_trace_survives_concurrent_rows(span_collector) -> None:
     exporter = span_collector
     data = [DataPoint(inputs={'text': str(i)}) for i in range(6)]
 
-    await _run(single_trace=True, data=data, parallelism=4)
+    await _run(single_trace=True, data=data, datapoint_parallelism=4)
 
     run = _by_name(exporter, 'evaluatorq.run')[0]
     assert run.context is not None

@@ -108,8 +108,8 @@ class ConfirmPayload(TypedDict, total=False):
     max_turns: int
     """Maximum conversation turns per attack."""
 
-    parallelism: int
-    """Maximum concurrent evaluatorq jobs."""
+    datapoint_parallelism: int
+    """Maximum number of concurrent datapoints/jobs (tasks)."""
 
     filtering_metadata: dict[str, Any] | None
     """Strategy filtering metadata from datapoint generation."""
@@ -464,7 +464,7 @@ class RichHooks:
         attack_model = payload.get('attack_model', '?')
         evaluator_model = payload.get('evaluator_model', '?')
         max_turns = payload.get('max_turns', '?')
-        parallelism = payload.get('parallelism', '?')
+        datapoint_parallelism = payload.get('datapoint_parallelism', '?')
         dataset_path = payload.get('dataset_path')
         num_dynamic = payload.get('num_dynamic')
         num_static = payload.get('num_static')
@@ -495,7 +495,7 @@ class RichHooks:
         table.add_row('Attack Model', str(attack_model))
         table.add_row('Evaluator Model', str(evaluator_model))
         table.add_row('Max Turns', str(max_turns))
-        table.add_row('Parallelism', str(parallelism))
+        table.add_row('Parallelism', str(datapoint_parallelism))
 
         if dataset_path:
             table.add_row('Dataset', str(dataset_path))

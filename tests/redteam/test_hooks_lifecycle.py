@@ -206,7 +206,7 @@ class TestStaticPipelineHooks:
                     'attack_model': '',
                     'evaluator_model': 'gpt-4o-mini',
                     'max_turns': 1,
-                    'parallelism': 1,
+                    'datapoint_parallelism': 1,
                     'target': 'agent:gpt-4o-mini',
                     'dataset_path': None,
                     'vulnerabilities': [],
@@ -291,7 +291,7 @@ class TestStaticPipelineHooks:
                 targets=['agent:gpt-4o-mini'],
                 categories=['ASI01'],
                 evaluator_model='gpt-4o-mini',
-                parallelism=2,
+                datapoint_parallelism=2,
                 max_static_datapoints=None,
                 dataset=None,
                 description='test',
@@ -307,14 +307,14 @@ class TestStaticPipelineHooks:
         assert payload['mode'] == 'static'
         assert 'categories' in payload
         assert 'evaluator_model' in payload
-        assert 'parallelism' in payload
+        assert 'datapoint_parallelism' in payload
         assert 'target' in payload
 
         # num_datapoints must match the stub dataset size
         assert payload['num_datapoints'] == 3
 
-        # parallelism passes through correctly
-        assert payload['parallelism'] == 2
+        # datapoint_parallelism passes through correctly
+        assert payload['datapoint_parallelism'] == 2
 
     @pytest.mark.asyncio
     async def test_confirm_rejection_aborts_static(self) -> None:
@@ -345,7 +345,7 @@ class TestStaticPipelineHooks:
                     targets=['agent:gpt-4o-mini'],
                     categories=['ASI01'],
                     evaluator_model='gpt-4o-mini',
-                    parallelism=1,
+                    datapoint_parallelism=1,
                     max_static_datapoints=None,
                     dataset=None,
                     description='test',
@@ -385,7 +385,7 @@ class TestStaticPipelineHooks:
                     targets=['agent:gpt-4o-mini'],
                     categories=['ASI01'],
                     evaluator_model='gpt-4o-mini',
-                    parallelism=1,
+                    datapoint_parallelism=1,
                     max_static_datapoints=None,
                     dataset=None,
                     description='test',
@@ -428,7 +428,7 @@ class TestStaticPipelineHooks:
                 targets=['agent:gpt-4o-mini'],
                 categories=['ASI01'],
                 evaluator_model='gpt-4o-mini',
-                parallelism=1,
+                datapoint_parallelism=1,
                 max_static_datapoints=None,
                 dataset=None,
                 description='test',
@@ -681,7 +681,7 @@ class TestDynamicInternalStageOrdering:
                 resolved_vulns=None,
                 max_turns=1,
                 max_per_category=1,
-                parallelism=1,
+                datapoint_parallelism=1,
                 generate_strategies=False,
                 generated_strategy_count=0,
                 max_dynamic_datapoints=1,
@@ -796,7 +796,7 @@ class TestDynamicInternalStageOrdering:
                 resolved_vulns=None,
                 max_turns=1,
                 max_per_category=1,
-                parallelism=1,
+                datapoint_parallelism=1,
                 generate_strategies=False,
                 generated_strategy_count=0,
                 max_dynamic_datapoints=1,
@@ -905,7 +905,7 @@ class TestDynamicConfirmPayload:
                 resolved_vulns=None,
                 max_turns=3,
                 max_per_category=2,
-                parallelism=4,
+                datapoint_parallelism=4,
                 generate_strategies=False,
                 generated_strategy_count=0,
                 max_dynamic_datapoints=5,
@@ -928,7 +928,7 @@ class TestDynamicConfirmPayload:
             'attack_model',
             'evaluator_model',
             'max_turns',
-            'parallelism',
+            'datapoint_parallelism',
             'mode',
             'target',
         }
@@ -941,8 +941,8 @@ class TestDynamicConfirmPayload:
         # mode must be "dynamic"
         assert payload_dict['mode'] == 'dynamic'
 
-        # parallelism and max_turns pass through unchanged
-        assert payload_dict['parallelism'] == 4
+        # datapoint_parallelism and max_turns pass through unchanged
+        assert payload_dict['datapoint_parallelism'] == 4
         assert payload_dict['max_turns'] == 3
 
         # target reflects the input target string
@@ -1001,7 +1001,7 @@ class TestDynamicConfirmPayload:
                     resolved_vulns=None,
                     max_turns=1,
                     max_per_category=1,
-                    parallelism=1,
+                    datapoint_parallelism=1,
                     generate_strategies=False,
                     generated_strategy_count=0,
                     max_dynamic_datapoints=None,
@@ -1097,7 +1097,7 @@ class TestDynamicConfirmPayload:
                 resolved_vulns=None,
                 max_turns=1,
                 max_per_category=None,
-                parallelism=1,
+                datapoint_parallelism=1,
                 generate_strategies=False,
                 generated_strategy_count=0,
                 max_dynamic_datapoints=None,

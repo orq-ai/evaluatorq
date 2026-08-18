@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.llm_limit import llm_concurrency_limit
+from evaluatorq.common.parallelism import resolve_datapoint_parallelism
 from evaluatorq.common.recommendations import resolve_recommendations
 from evaluatorq.common.thread_context import _evaluatorq_run_scope, build_thread_id, evaluatorq_pipeline
 from evaluatorq.simulation._config import SimulationConfig
@@ -190,8 +191,9 @@ async def simulate(
     max_turns: int | None = None,
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
-    parallelism: int = 5,
+    datapoint_parallelism: int | None = None,
     llm_parallelism: int | None = None,
+    parallelism: int | None = None,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
@@ -225,13 +227,16 @@ async def simulate(
             ``sim_model``. ``sim_model`` drives the user-simulator, the judge,
             and datapoint generators.
         judge: Pre-constructed ``BaseAgent`` used to evaluate each turn.
+        datapoint_parallelism: Maximum number of concurrent simulations (tasks).
+            Defaults to 5.
         llm_parallelism: Ceiling on in-flight LLM requests for the whole
             run, counted per request rather than per simulation. Unbounded by
-            default. Set this, not ``parallelism``, against a provider concurrency
-            limit: one simulation issues a request per turn per agent, so
-            ``parallelism`` cannot be sized against one. Covers the user
-            simulator, the judge and datapoint generation; a target's own calls
-            are not counted.
+            default. Set this, not ``datapoint_parallelism``, against a provider
+            concurrency limit: one simulation issues a request per turn per
+            agent, so ``datapoint_parallelism`` cannot be sized against one.
+            Covers the user simulator, the judge and datapoint generation; a
+            target's own calls are not counted.
+        parallelism: Deprecated alias for ``datapoint_parallelism``.
         hooks: Optional ``SimulationHooks`` for run/datapoint/turn lifecycle
             events. Sync or async; ``async def`` is preferred (a sync hook
             works but emits a one-time ``DeprecationWarning``). Defaults to
@@ -353,6 +358,9 @@ async def simulate(
     asyncio.run(main())
     ```
     """
+    datapoint_parallelism = resolve_datapoint_parallelism(
+        datapoint_parallelism, parallelism, default=5, caller='simulate'
+    )
     run = await _simulate_run(
         evaluation_name=evaluation_name,
         target=target,
@@ -367,7 +375,7 @@ async def simulate(
         max_turns=max_turns,
         sim_model=sim_model,
         evaluator_names=evaluator_names,
-        parallelism=parallelism,
+        datapoint_parallelism=datapoint_parallelism,
         llm_parallelism=llm_parallelism,
         user_simulator=user_simulator,
         judge=judge,
@@ -400,7 +408,7 @@ async def _simulate_run(
     max_turns: int | None = None,
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
-    parallelism: int = 5,
+    datapoint_parallelism: int = 5,
     llm_parallelism: int | None = None,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
@@ -444,7 +452,7 @@ async def _simulate_run(
                 # value, else a replayed run's cap, else the default), and
                 # set_span_attrs drops None — so the resolved value is stamped
                 # there rather than guessed here.
-                'orq.simulation.parallelism': parallelism,
+                'orq.simulation.parallelism': datapoint_parallelism,
             },
         ) as pipeline_span:
             # Compose once; the manifest hook is registered first, and the raw
@@ -483,7 +491,7 @@ async def _simulate_run(
                         max_turns=max_turns,
                         model=sim_model,
                         evaluator_names=evaluator_names,
-                        parallelism=parallelism,
+                        datapoint_parallelism=datapoint_parallelism,
                         user_simulator=user_simulator,
                         judge=judge,
                         generation_client=generation_client,
@@ -527,8 +535,9 @@ async def generate_and_simulate(
     max_turns: int | None = None,
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
-    parallelism: int = 5,
+    datapoint_parallelism: int | None = None,
     llm_parallelism: int | None = None,
+    parallelism: int | None = None,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
@@ -567,6 +576,11 @@ async def generate_and_simulate(
     an ``agent:<key>`` target (or bare agent key) resolves its description from
     Orq; other targets must provide ``agent_description``. A missing or blank
     description from both sources raises ``ValueError`` before generation begins.
+
+    ``datapoint_parallelism``: Maximum number of concurrent simulations (tasks).
+    Defaults to 5. ``llm_parallelism`` bounds concurrent LLM requests instead —
+    see `simulate` for the full distinction. ``parallelism`` is a deprecated
+    alias for ``datapoint_parallelism``.
 
     ``evaluation_description``: Optional human-readable note passed straight
     through to the uploaded experiment (shown as its description in the Orq UI).
@@ -623,6 +637,9 @@ async def generate_and_simulate(
     asyncio.run(main())
     ```
     """
+    datapoint_parallelism = resolve_datapoint_parallelism(
+        datapoint_parallelism, parallelism, default=5, caller='generate_and_simulate'
+    )
     run = await _generate_and_simulate_run(
         evaluation_name=evaluation_name,
         agent_description=agent_description,
@@ -633,7 +650,7 @@ async def generate_and_simulate(
         max_turns=max_turns,
         sim_model=sim_model,
         evaluator_names=evaluator_names,
-        parallelism=parallelism,
+        datapoint_parallelism=datapoint_parallelism,
         llm_parallelism=llm_parallelism,
         user_simulator=user_simulator,
         judge=judge,
@@ -731,7 +748,7 @@ async def _generate_and_simulate_run(
     max_turns: int | None = None,
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
-    parallelism: int = 5,
+    datapoint_parallelism: int = 5,
     llm_parallelism: int | None = None,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
@@ -780,7 +797,7 @@ async def _generate_and_simulate_run(
                 # value, else a replayed run's cap, else the default), and
                 # set_span_attrs drops None — so the resolved value is stamped
                 # there rather than guessed here.
-                'orq.simulation.parallelism': parallelism,
+                'orq.simulation.parallelism': datapoint_parallelism,
             },
         ) as pipeline_span:
             # The raw writer is retained for terminal complete/cancel/fail calls.
@@ -847,7 +864,7 @@ async def _generate_and_simulate_run(
                             max_turns=max_turns,
                             model=sim_model,
                             evaluator_names=evaluator_names,
-                            parallelism=parallelism,
+                            datapoint_parallelism=datapoint_parallelism,
                             user_simulator=user_simulator,
                             judge=judge,
                             generation_client=gen_client,
@@ -1261,7 +1278,7 @@ async def _simulate_core(
 
     evaluation_name = config.evaluation_name
     model = config.model
-    parallelism = config.parallelism
+    datapoint_parallelism = config.datapoint_parallelism
     save = config.save
     run_output = config.run_output
 
@@ -1334,7 +1351,7 @@ async def _simulate_core(
         'num_datapoints': len(sim_datapoints),
         'model': model,
         'max_turns': max_turns,
-        'parallelism': parallelism,
+        'datapoint_parallelism': datapoint_parallelism,
         'evaluation_name': evaluation_name,
         'evaluator_names': resolved_evaluator_names,
         'target': target_label,
@@ -2029,7 +2046,7 @@ async def _simulate_via_evaluatorq(
     # _simulate_core resolves max_turns before calling here; the fallback only
     # covers a direct call that skipped it.
     max_turns = config.max_turns if config.max_turns is not None else DEFAULT_MAX_TURNS
-    parallelism = config.parallelism
+    datapoint_parallelism = config.datapoint_parallelism
     user_simulator = config.user_simulator
     judge = config.judge
     generation_client = config.generation_client
@@ -2076,7 +2093,7 @@ async def _simulate_via_evaluatorq(
             data=eq_datapoints,
             jobs=[job_fn],
             evaluators=evaluators,
-            parallelism=parallelism,
+            datapoint_parallelism=datapoint_parallelism,
             description=evaluation_description,
             path=orq_results_path,
             # Suppress the inner ProgressService spinner + results table: the

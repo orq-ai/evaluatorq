@@ -782,7 +782,7 @@ async def test_hybrid_agent_target_static_leg_traces_attack_and_target_call(
         max_per_category=1,
         attack_model='test-model',
         evaluator_model='test-model',
-        parallelism=1,
+        datapoint_parallelism=1,
         generate_strategies=False,
         generated_strategy_count=0,
         max_dynamic_datapoints=None,

@@ -612,10 +612,19 @@ def simulate(
             help="Maximum conversation turns. Defaults to 10, or to the replayed run's cap with --from-run.",
         ),
     ] = None,
-    parallelism: Annotated[
+    datapoint_parallelism: Annotated[
         int,
-        typer.Option('--parallelism', min=1, help='Concurrent simulations.'),
+        typer.Option('--datapoint-parallelism', '--parallelism', min=1, help='Concurrent simulations.'),
     ] = 5,
+    llm_parallelism: Annotated[
+        int | None,
+        typer.Option(
+            '--llm-parallelism',
+            min=1,
+            help='Ceiling on in-flight LLM requests for the whole run. Unbounded by default; '
+            'size it against your provider concurrency limit.',
+        ),
+    ] = None,
     evaluator: Annotated[
         list[str] | None,
         typer.Option('--evaluator', help='Evaluator name (repeatable). Defaults to API defaults.'),
@@ -761,7 +770,8 @@ def simulate(
                 target=resolved_target,
                 sim_model=sim_model,
                 max_turns=max_turns,
-                parallelism=parallelism,
+                datapoint_parallelism=datapoint_parallelism,
+                llm_parallelism=llm_parallelism,
                 evaluator_names=evaluator_names,
                 evaluation_name=name,
                 hooks=hooks,
@@ -819,7 +829,8 @@ async def _simulate_impl(
     target: Any,
     sim_model: str,
     max_turns: int | None,
-    parallelism: int,
+    datapoint_parallelism: int,
+    llm_parallelism: int | None,
     evaluator_names: list[str] | None,
     evaluation_name: str,
     hooks: Any = None,
@@ -845,7 +856,8 @@ async def _simulate_impl(
         target=target,
         sim_model=sim_model,
         max_turns=max_turns,
-        parallelism=parallelism,
+        datapoint_parallelism=datapoint_parallelism,
+        llm_parallelism=llm_parallelism,
         evaluator_names=evaluator_names,
         evaluation_name=evaluation_name,
         hooks=hooks,
@@ -939,10 +951,19 @@ def run(
         int,
         typer.Option('--max-turns', min=1, help='Maximum conversation turns.'),
     ] = 10,
-    parallelism: Annotated[
+    datapoint_parallelism: Annotated[
         int,
-        typer.Option('--parallelism', min=1, help='Concurrent simulations.'),
+        typer.Option('--datapoint-parallelism', '--parallelism', min=1, help='Concurrent simulations.'),
     ] = 5,
+    llm_parallelism: Annotated[
+        int | None,
+        typer.Option(
+            '--llm-parallelism',
+            min=1,
+            help='Ceiling on in-flight LLM requests for the whole run. Unbounded by default; '
+            'size it against your provider concurrency limit.',
+        ),
+    ] = None,
     num_personas: Annotated[
         int,
         typer.Option('--num-personas', min=1, help='Number of personas to generate.'),
@@ -1077,7 +1098,8 @@ def run(
                 target=resolved_target,
                 sim_model=sim_model,
                 max_turns=max_turns,
-                parallelism=parallelism,
+                datapoint_parallelism=datapoint_parallelism,
+                llm_parallelism=llm_parallelism,
                 num_personas=num_personas,
                 num_scenarios=num_scenarios,
                 evaluator_names=evaluator_names,
@@ -1134,7 +1156,8 @@ async def _run_impl(
     target: Any,
     sim_model: str,
     max_turns: int,
-    parallelism: int,
+    datapoint_parallelism: int,
+    llm_parallelism: int | None,
     num_personas: int,
     num_scenarios: int,
     evaluator_names: list[str] | None,
@@ -1163,7 +1186,8 @@ async def _run_impl(
         target=target,
         sim_model=sim_model,
         max_turns=max_turns,
-        parallelism=parallelism,
+        datapoint_parallelism=datapoint_parallelism,
+        llm_parallelism=llm_parallelism,
         num_personas=num_personas,
         num_scenarios=num_scenarios,
         evaluator_names=evaluator_names,

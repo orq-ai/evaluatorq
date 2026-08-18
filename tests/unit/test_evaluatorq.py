@@ -8,6 +8,7 @@ import random
 import pytest
 
 from evaluatorq import evaluatorq
+from evaluatorq.common.parallelism import resolve_datapoint_parallelism
 from evaluatorq.evaluatorq import check_pass_failures
 from evaluatorq.fetch_data import DataPointBatch
 from evaluatorq.types import (
@@ -80,7 +81,7 @@ async def test_evaluatorq_basic():
                 "scorer": length_check_scorer,
             },
         ],
-        parallelism=5,
+        datapoint_parallelism=5,
         print_results=False,
     )
 
@@ -111,7 +112,7 @@ async def test_evaluatorq_with_parallelism():
                 "scorer": length_check_scorer,
             },
         ],
-        parallelism=10,
+        datapoint_parallelism=10,
         print_results=False,
     )
 
@@ -149,7 +150,7 @@ async def test_evaluatorq_parallelism_limit():
         data=data_points,
         jobs=[tracking_job],
         evaluators=[],
-        parallelism=parallelism,
+        datapoint_parallelism=parallelism,
         print_results=False,
     )
 
@@ -198,10 +199,11 @@ async def test_evaluatorq_defaults_to_concurrent_execution():
     assert max_concurrent > 1, (
         f"bare evaluatorq() ran datapoints serially (max concurrent {max_concurrent})"
     )
-    # The two surfaces must agree — `evaluatorq()`'s signature default and the
-    # `EvaluatorParams` field are separate declarations of the same contract.
-    assert EvaluatorParams.model_fields["parallelism"].default == 10
-    assert inspect.signature(evaluatorq).parameters["parallelism"].default == 10
+    # `evaluatorq()` resolves the deprecated alias before applying a default, so its
+    # signature default is None and the number itself lives on `EvaluatorParams`.
+    assert EvaluatorParams.model_fields["datapoint_parallelism"].default == 10
+    assert inspect.signature(evaluatorq).parameters["datapoint_parallelism"].default is None
+    assert resolve_datapoint_parallelism(None, None, default=10, caller="evaluatorq") == 10
 
 
 @pytest.mark.asyncio
@@ -219,7 +221,7 @@ async def test_evaluatorq_stress():
                 "scorer": length_check_scorer,
             },
         ],
-        parallelism=10,
+        datapoint_parallelism=10,
         print_results=False,
     )
 
@@ -617,7 +619,7 @@ async def test_evaluator_parallelism_is_bounded_per_job() -> None:
         data=[DataPoint(inputs={'text': 'value'})],
         jobs=[job],
         evaluators=[{'name': f'evaluator-{index}', 'scorer': evaluator_scorer} for index in range(8)],
-        parallelism=2,
+        datapoint_parallelism=2,
         print_results=False,
         _send_results=False,
     )

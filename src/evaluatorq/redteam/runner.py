@@ -23,6 +23,7 @@ from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.llm_limit import llm_concurrency_limit
 from evaluatorq.common.messages import coerce_content_text
+from evaluatorq.common.parallelism import resolve_datapoint_parallelism
 from evaluatorq.common.recommendations import resolve_recommendations
 from evaluatorq.common.replay import REPLAY_VERSION, REPLAY_VERSION_KEY
 from evaluatorq.common.reports.html_helpers import pct
@@ -493,8 +494,9 @@ async def red_team(
     delivery_methods: list[DeliveryMethod | str] | None = None,
     max_turns: int | None = None,
     max_per_category: int | None = None,
-    parallelism: int = 10,
+    datapoint_parallelism: int | None = None,
     llm_parallelism: int | None = None,
+    parallelism: int | None = None,
     generate_strategies: bool = True,
     generated_strategy_count: int = 2,
     max_dynamic_datapoints: int | None = None,
@@ -561,12 +563,14 @@ async def red_team(
             evaluator=LLMCallConfig(...))`` to control model, temperature, and other
             per-role settings. Defaults to ``LLMConfig()`` which uses the default model
             for both attacker and evaluator roles.
-        parallelism: Maximum concurrent evaluatorq jobs.
+        datapoint_parallelism: Maximum number of concurrent datapoints/jobs (tasks).
+            Defaults to 10.
+        parallelism: Deprecated alias for ``datapoint_parallelism``.
         llm_parallelism: Ceiling on in-flight LLM requests for the whole
             run, counted per request rather than per job. Unbounded by default.
-            Set this, not ``parallelism``, against a provider concurrency limit:
-            one job issues many requests, so ``parallelism`` cannot be sized
-            against one. Covers the pipeline, judges and strategy generation;
+            Set this, not ``datapoint_parallelism``, against a provider concurrency
+            limit: one job issues many requests, so ``datapoint_parallelism`` cannot
+            be sized against one. Covers the pipeline, judges and strategy generation;
             an ORQ or LangChain target's own calls are not counted.
         generate_strategies: Whether to generate additional LLM-based strategies.
         generated_strategy_count: Number of strategies to generate per category.
@@ -664,6 +668,10 @@ async def red_team(
     asyncio.run(main())
     ```
     """
+    datapoint_parallelism = resolve_datapoint_parallelism(
+        datapoint_parallelism, parallelism, default=10, caller='red_team'
+    )
+
     # True -> defaults, False -> off, instance -> as given. One resolution here so the
     # generation site downstream only has to check for None.
     recommendation_config = resolve_recommendations(recommendations, RedTeamRecommendationConfig)
@@ -963,7 +971,7 @@ async def red_team(
         'orq.redteam.mode': resolved_mode,
         'orq.redteam.backend': backend_label,
         'orq.redteam.max_turns': resolved_max_turns,
-        'orq.redteam.parallelism': parallelism,
+        'orq.redteam.parallelism': datapoint_parallelism,
     }
 
     async with (  # noqa: SIM117
@@ -989,7 +997,7 @@ async def red_team(
                     max_per_category=max_per_category,
                     attack_model=attack_model,
                     evaluator_model=evaluator_model,
-                    parallelism=parallelism,
+                    datapoint_parallelism=datapoint_parallelism,
                     generate_strategies=generate_strategies,
                     generated_strategy_count=generated_strategy_count,
                     max_dynamic_datapoints=max_dynamic_datapoints,
@@ -1019,7 +1027,7 @@ async def red_team(
                     name=name,
                     categories=resolved_categories,
                     evaluator_model=evaluator_model,
-                    parallelism=parallelism,
+                    datapoint_parallelism=datapoint_parallelism,
                     max_static_datapoints=max_static_datapoints,
                     dataset=dataset,
                     description=description,
@@ -1525,7 +1533,7 @@ async def _prepare_target(
     max_turns: int,
     max_per_category: int | None,
     attack_model: str,
-    parallelism: int,
+    datapoint_parallelism: int,
     generate_strategies: bool,
     generated_strategy_count: int,
     max_dynamic_datapoints: int | None,
@@ -1628,7 +1636,7 @@ async def _prepare_target(
                 generated_strategy_count=generated_strategy_count,
                 llm_client=resolved_llm_client,
                 attack_model=attack_model,
-                parallelism=parallelism,
+                datapoint_parallelism=datapoint_parallelism,
                 attacker_instructions=attacker_instructions,
                 pipeline_config=pipeline_config,
                 agent_capabilities=prefetched_agent_capabilities,
@@ -1646,7 +1654,7 @@ async def _prepare_target(
                 generated_strategy_count=generated_strategy_count,
                 llm_client=resolved_llm_client,
                 attack_model=attack_model,
-                parallelism=parallelism,
+                datapoint_parallelism=datapoint_parallelism,
                 attacker_instructions=attacker_instructions,
                 pipeline_config=pipeline_config,
                 agent_capabilities=prefetched_agent_capabilities,
@@ -1823,7 +1831,7 @@ async def _run_dynamic_or_hybrid(
     max_per_category: int | None,
     attack_model: str,
     evaluator_model: str,
-    parallelism: int,
+    datapoint_parallelism: int,
     generate_strategies: bool,
     generated_strategy_count: int,
     max_dynamic_datapoints: int | None,
@@ -2181,7 +2189,7 @@ async def _run_dynamic_or_hybrid(
         'attack_model': attack_model,
         'evaluator_model': evaluator_model,
         'max_turns': max_turns,
-        'parallelism': parallelism,
+        'datapoint_parallelism': datapoint_parallelism,
         'filtering_metadata': None,
         'strategy_breakdown': strategy_breakdown or None,
         'mode': str(mode.value) if hasattr(mode, 'value') else str(mode),
@@ -2204,7 +2212,7 @@ async def _run_dynamic_or_hybrid(
         max_turns=max_turns,
         max_per_category=max_per_category,
         attack_model=attack_model,
-        parallelism=parallelism,
+        datapoint_parallelism=datapoint_parallelism,
         generate_strategies=generate_strategies,
         generated_strategy_count=generated_strategy_count,
         max_dynamic_datapoints=max_dynamic_datapoints,
@@ -2331,7 +2339,7 @@ async def _run_dynamic_or_hybrid(
                         generated_strategy_count=generated_strategy_count,
                         llm_client=at_llm_client,
                         attack_model=attack_model,
-                        parallelism=parallelism,
+                        datapoint_parallelism=datapoint_parallelism,
                         attacker_instructions=attacker_instructions,
                         pipeline_config=pipeline_config,
                         agent_capabilities=at_pref_caps,
@@ -2348,7 +2356,7 @@ async def _run_dynamic_or_hybrid(
                         generated_strategy_count=generated_strategy_count,
                         llm_client=at_llm_client,
                         attack_model=attack_model,
-                        parallelism=parallelism,
+                        datapoint_parallelism=datapoint_parallelism,
                         attacker_instructions=attacker_instructions,
                         pipeline_config=pipeline_config,
                         agent_capabilities=at_pref_caps,
@@ -2613,7 +2621,7 @@ async def _run_dynamic_or_hybrid(
                 data=all_datapoints,
                 jobs=all_jobs,
                 evaluators=evaluators,
-                parallelism=parallelism,
+                datapoint_parallelism=datapoint_parallelism,
                 print_results=False,
                 _send_results=False,
                 _trace_type='evaluatorq',
@@ -2900,7 +2908,7 @@ async def _run_static(
     name: str | None = None,
     categories: list[str] | None,
     evaluator_model: str,
-    parallelism: int,
+    datapoint_parallelism: int,
     max_static_datapoints: int | None,
     dataset: Any,
     description: str | None,
@@ -3057,7 +3065,7 @@ async def _run_static(
         'attack_model': '',
         'evaluator_model': evaluator_model,
         'max_turns': 1,
-        'parallelism': parallelism,
+        'datapoint_parallelism': datapoint_parallelism,
         'filtering_metadata': None,
         'mode': 'static',
         'target': ', '.join(all_target_labels),
@@ -3084,7 +3092,7 @@ async def _run_static(
         data=data,
         jobs=jobs,
         evaluators=[evaluator],
-        parallelism=parallelism,
+        datapoint_parallelism=datapoint_parallelism,
         print_results=False,
         _send_results=False,
         _trace_type='evaluatorq',

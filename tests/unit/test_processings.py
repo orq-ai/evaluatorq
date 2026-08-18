@@ -40,7 +40,7 @@ async def test_process_data_point_ignores_progress_display_failure(caplog) -> No
             row_index=3,
             jobs=cast('Any', [job]),
             evaluators=None,
-            parallelism=1,
+            datapoint_parallelism=1,
             progress_service=_FailingAfterResolveProgressService(),
         )
 
@@ -67,7 +67,7 @@ async def test_process_data_point_fallback_carries_row_index_when_unresolvable()
         row_index=7,
         jobs=[],
         evaluators=None,
-        parallelism=1,
+        datapoint_parallelism=1,
     )
 
     assert len(results) == 1
