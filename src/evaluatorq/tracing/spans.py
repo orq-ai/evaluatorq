@@ -164,9 +164,7 @@ async def with_evaluation_span(
     from evaluatorq.common.tracing import with_span
 
     async with with_span(
-        # Include the evaluator name so concurrent evaluator spans are
-        # distinguishable in the trace tree / UI (mirrors `chat {model}`)
-        # rather than N identical `orq.evaluation` rows.
+        # Named so concurrent spans are distinguishable, mirroring `chat {model}`.
         f'orq.evaluation {options.evaluator_name}',
         {
             'orq.run_id': options.run_id,

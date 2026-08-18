@@ -122,8 +122,7 @@ def register_redteam_view_routes(app: Any, roots: list[Any] | None = None) -> No
     @app.get('/r/{rid}/redteam/attack')
     def view_attack(rid: str, req: Request) -> Response:
         try:
-            # Absent idx means "the first attack", matching the sim transcript
-            # route. Only a malformed value falls through to the empty state.
+            # Absent idx means the first attack; only a malformed one is None.
             idx: int | None = int(req.query_params.get('idx', '0'))
         except (ValueError, TypeError):
             idx = None
@@ -133,9 +132,7 @@ def register_redteam_view_routes(app: Any, roots: list[Any] | None = None) -> No
         selections = parse_selections(req, 'redteam')
         filtered = apply_or_all(report, 'redteam', selections)
         if idx is None or not filtered or idx < 0 or idx >= len(filtered):
-            # 200, not 404: the report exists and only the row is out of range, and
-            # htmx does not swap a non-2xx response — a 404 here would leave the
-            # panel showing the previous attack. Mirrors the sim transcript route.
+            # 200, not 404: htmx does not swap a non-2xx, so the stale panel would stay.
             return Response(
                 '<p class="rt-view-empty">No attack at that index.</p>',
                 status_code=200,

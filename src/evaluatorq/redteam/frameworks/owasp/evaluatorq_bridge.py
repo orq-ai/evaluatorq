@@ -313,10 +313,7 @@ def create_owasp_evaluator(
                     'raw_output': {'raw_content': outcome.raw_content},
                 })
 
-            # Every judge failure is recorded, none re-raised — the static path never
-            # re-raises (see the single-judge branch above). The last failure's kind
-            # is kept so the panel result can name a cause instead of reporting only
-            # "quorum not met". Mirrors AdaptiveEvaluator.evaluate's last_error.
+            # Kept so the panel can name a cause, not just "quorum not met".
             last_error: JudgeOutcome | None = None
 
             async def judge_fn(model: str) -> Prediction:
@@ -361,9 +358,7 @@ def create_owasp_evaluator(
                 'explanation': deliberation.explanation,
                 JURY_RAW_OUTPUT_KEY: deliberation.jury.model_dump(mode='json'),
             }
-            # No verdict from a panel means the quorum was not met, i.e. judges failed.
-            # Without this the panel path produced pass=None with no recorded cause,
-            # so a whole-panel outage was invisible to the error rollup and the CLI hint.
+            # No verdict means the judges failed; record it or the outage is invisible.
             if passed is None and last_error is not None:
                 raw_output[EVAL_ERROR_RAW_OUTPUT_KEY] = judge_error_payload(last_error, category)
             return EvaluationResult.model_validate({

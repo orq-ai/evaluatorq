@@ -137,9 +137,7 @@ def convert_to_open_responses(
             if message_id:
                 last_ai_message_id = message_id
 
-            # AI message with text content -> output message. Emitted whenever
-            # content is present, independent of whether tool calls are also
-            # present, so assistant prose alongside tool calls is not dropped.
+            # Emitted whenever content is present, even alongside tool calls.
             content_text = _get_content(msg_data)
             if content_text:
                 output_message = Message(

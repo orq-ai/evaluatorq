@@ -94,9 +94,7 @@ async def process_data_point(
 
     except Exception as error:
         logger.warning('Data point {} failed before job execution: {}', row_index, error)
-        # Preserve the resolved DataPoint's identity when available; only fall
-        # back to a placeholder (tagged with row_index, so concurrent failures
-        # don't collide) when resolution itself failed.
+        # Placeholder only when resolution itself failed; row_index keeps them distinct.
         fallback = data_point if isinstance(data_point, DataPoint) else DataPoint(inputs={'row_index': row_index})
         return [
             DataPointResult(

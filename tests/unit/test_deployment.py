@@ -38,8 +38,7 @@ class TestExtractContentFromResponse:
     def test_tool_calls_type_with_no_content_warns_without_calling_it_unrecognised(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """A pure tool-call turn routinely carries content=None; the type IS recognised,
-        so the warning must say the content was empty, not that the type is unrecognised."""
+        """A recognised type with no content warns about the content, not the type."""
         completion = _completion_with_message(SimpleNamespace(type="tool_calls", content=None))
         with caplog.at_level("WARNING"):
             result = _extract_content_from_response(completion)
@@ -59,13 +58,7 @@ class TestExtractContentFromResponse:
     def test_content_type_with_no_text_warns_instead_of_returning_empty_silently(
         self, content: object, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """An empty reply always logs.
-
-        These shapes previously matched the str/list branches, returned '' and
-        logged nothing — so an empty deployment reply was indistinguishable from
-        a working one, while the sibling content=None case on the same msg_type
-        warned. Two adjacent branches must not differ in whether they log.
-        """
+        """An empty reply always logs, like the sibling content=None case."""
         completion = _completion_with_message(SimpleNamespace(type="content", content=content))
         with caplog.at_level("WARNING"):
             result = _extract_content_from_response(completion)

@@ -127,9 +127,7 @@ def calculate_evaluator_averages(
                 evaluator_averages[job_name] = ('-', 'dim')
             else:
                 first_score = scores[0]
-                # A degraded score (e.g. a jury returning 'inconclusive') is a string
-                # among numbers: it must neither dilute the mean nor, when it lands
-                # first, hide the numeric column behind a '[string]' placeholder.
+                # A string score ('inconclusive') must not dilute or mask the numeric mean.
                 numeric = [s for s in scores if isinstance(s, (int, float)) and not isinstance(s, bool)]
 
                 if isinstance(first_score, EvaluationResultCell):

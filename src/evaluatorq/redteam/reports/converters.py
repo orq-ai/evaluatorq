@@ -630,16 +630,10 @@ def dynamic_evaluatorq_results_to_report(
                 # result, and these two are optional metadata that other scorers omit.
                 evaluation_usage = _normalize_token_usage(getattr(score, 'token_usage', None))
                 evaluation_raw = getattr(score, 'raw_output', None)
-                # An exception escaping the scorer is caught by process_evaluator
-                # (evaluatorq/processings.py) into EvaluatorScore.error with an empty
-                # score and no raw_output, so this is the only place that cause survives. Without it a judge crash
-                # reaches the report as an unexplained inconclusive verdict.
+                # process_evaluator puts a scorer crash here and nowhere else.
                 scorer_error = getattr(evaluator_scores[0], 'error', None)
 
-        # A job that raised never produced an output payload — processings.py records
-        # it as JobResult(output=None, error=...), so the cause only survives on the
-        # JobResult. Mirrors the static converter's dp_error/job_result/output chain;
-        # without it a failed job reaches the report as a causeless inconclusive.
+        # A job that raised has output=None, so its cause only survives on JobResult.
         job_error = getattr(job_result, 'error', None) if job_result is not None else None
         error = getattr(result, 'error', None) or job_error or job_output.error
         error_type = _classify_error(error, existing_type=job_output.error_type)
@@ -769,9 +763,7 @@ def static_evaluatorq_results_to_reports(
         inputs = getattr(data_point, 'inputs', {}) if data_point is not None else {}
         job_results = getattr(result, 'job_results', None) or []
         if not job_results:
-            # No job ran, so there is no job to name: DataPointResult carries
-            # job_name only on its job_results entries, and this branch is the
-            # case where that list is empty.
+            # No job ran, and job_name lives only on job_results entries.
             job_name = 'pre-execution'
             _converters_logger.warning(
                 'Static result for job {!r} has no job results; recording as pre-execution run error', job_name
@@ -826,10 +818,7 @@ def static_evaluatorq_results_to_reports(
                     ),
                     'token_usage': getattr(score, 'token_usage', None),
                     'raw_output': getattr(score, 'raw_output', None),
-                    # An exception escaping the scorer is caught by process_evaluator
-                    # into EvaluatorScore.error with an empty score and no raw_output —
-                    # this is the only place that cause survives. Mirrors the dynamic
-                    # converter's scorer_error read (see scorer_error above line 599).
+                    # process_evaluator puts a scorer crash here and nowhere else.
                     'error': getattr(scores[0], 'error', None),
                 }
 

@@ -179,11 +179,8 @@ class OpenAIAgentTarget(AgentTarget):
                         tc_id = getattr(tc, 'id', '')
                         _record_tool_call(str(tc_name), tc_args_raw, tc_id, tc_id)
 
-        # Ensure final_output is reflected as a TextOutputItem. Avoid duplicating
-        # if the last text emitted from history already matches. A structured
-        # (pydantic or plain-object) final_output must reach the judge as JSON,
-        # not `str(...)`'s Python repr (`Answer(field='x')` is not valid JSON
-        # and is not what the agent actually said).
+        # Reflect final_output as a TextOutputItem unless history's last text already
+        # matches. tool_result_to_text, not str(): a repr is not what the agent said.
         final = result.final_output
         final_text = tool_result_to_text(final)
         last_text = next(

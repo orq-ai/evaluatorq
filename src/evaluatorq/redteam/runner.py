@@ -2422,10 +2422,7 @@ async def _run_dynamic_or_hybrid(
                                         'orq.redteam.input': target_input,
                                     },
                                 ) as agent_span:
-                                    # Same shared call as the non-hybrid static path: without it
-                                    # this leg had no retry, no timeout and no ``error`` key at
-                                    # all, so a failed target reached the judge as a plain
-                                    # ``[ERROR: ...]`` string and got scored as a real answer.
+                                    # Shared with the non-hybrid static path: retry, timeout, error key.
                                     output = await _run_static_target_call(
                                         target_instance,
                                         prompt,

@@ -776,12 +776,8 @@ class LLMConfig(BaseModel):
     evaluator: EvaluatorConfig = Field(default_factory=EvaluatorConfig)
 
     # --- Retry configuration --------------------------------------------------
-    # Retry budget for pipeline-owned LLM calls (OpenAI SDK ``max_retries`` and,
-    # on the Orq router path, the router-side budget from ``retry_extra_body``).
-    # The ORQ context backend also uses this budget for context retrieval,
-    # enrichment, and memory cleanup. ORQ target operations override the SDK
-    # budget per call because ``call_target_with_retry`` is their sole retry owner.
-    # These are retries after the initial call; 0 disables retry.
+    # Retries after the initial call (0 disables) for pipeline-owned LLM calls and
+    # ORQ context/enrichment/cleanup. Target calls are owned by call_target_with_retry.
     retry_count: int = Field(default=3, ge=0, le=10)
     retry_on_codes: list[int] = Field(default=[429, 500, 502, 503, 504])
     # How many times to regenerate an attacker turn that the attack model
@@ -797,10 +793,8 @@ class LLMConfig(BaseModel):
     # --- Target agent timeout -------------------------------------------------
     target_agent_timeout_ms: int = 240_000
     # Retry a failed target transport call before abandoning its attacker turn.
-    # The orchestrator boundary is the single retry owner: target implementations
-    # constructed for it must have their inner SDK/client retry budgets disabled.
-    # A retry never consumes a new attacker turn or changes the conversation
-    # transcript.
+    # Sole retry owner: targets built for it must disable their own SDK budgets.
+    # A retry never consumes a new attacker turn or changes the transcript.
     max_target_retries: int = Field(default=2, ge=0, le=10)
 
     # --- Agent tool continuation cap ------------------------------------------

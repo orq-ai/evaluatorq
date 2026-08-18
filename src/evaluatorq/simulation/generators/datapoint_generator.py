@@ -48,9 +48,7 @@ class DatapointGenerator:
         self._model = model
         self._rate_limit_delay = rate_limit_delay
         self._max_concurrent_calls = max_concurrent_calls
-        # Semaphores bind to the event loop that first waits on them. Keep one
-        # lazily-created semaphore per loop so concurrent calls share the cap
-        # without carrying a semaphore across loop boundaries.
+        # A semaphore binds to the loop that first waits on it, so keep one per loop.
         self._semaphores: WeakValueDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = WeakValueDictionary()
 
         from evaluatorq.openresponses.client import build_simulation_client
