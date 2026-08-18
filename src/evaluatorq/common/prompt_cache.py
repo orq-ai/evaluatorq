@@ -23,6 +23,25 @@ Placement rules (Orq docs, ``/docs/ai-gateway/features/prompt-caching``): the
 breakpoint marks the *end* of the cacheable prefix, max 4 per request, and
 caching only engages once the prefix clears the model's minimum (1-4k tokens
 depending on the model) — below that it silently does nothing.
+
+Both APIs take a **positioned, per-item** marker — `apply_cache_breakpoints` for
+Chat Completions, `mark_responses_input` for Responses — so `volatile_tail` works
+the same on either. Responses also accepts a *top-level* ``cache_control`` body
+field, which marks the end of the whole input and therefore cannot be kept off a
+rebuilt trailing item; it is deliberately not used here. Measured on
+``anthropic/claude-sonnet-4-6`` with a uuid-salted cold prefix, three judgements
+each (``scripts/manual_tests/prompt_cache_judge_check.py``):
+
+===================  ======  ======  ======
+path                 call 1  call 2  call 3
+===================  ======  ======  ======
+chat_completions          0   6,991   7,881
+responses                 0   7,417   8,304
+responses, top-level      0       0       0
+===================  ======  ======  ======
+
+Never set ``ttl``: 5m is the default, 1h costs more, and only Anthropic honours
+it.
 """
 
 from __future__ import annotations
@@ -57,7 +76,7 @@ def _is_markable(message: dict[str, Any]) -> bool:
     return message.get('role') in _MARKABLE_ROLES and isinstance(content, str) and bool(content)
 
 
-def apply_cache_breakpoints(messages: list[dict[str, Any]], *, volatile_tail: int = 0) -> list[dict[str, Any]]:
+def apply_cache_breakpoints(messages: list[dict[str, Any]], *, volatile_tail: int) -> list[dict[str, Any]]:
     """Return a copy of ``messages`` with breakpoints on the system + prefix end.
 
     Two of the four allowed breakpoints:
@@ -73,6 +92,11 @@ def apply_cache_breakpoints(messages: list[dict[str, Any]], *, volatile_tail: in
     worse than marking nothing: the next turn puts persisted content at that
     position, the prefix diverges immediately after the system message, and the
     whole transcript pays a 1.25x write it can never read back.
+
+    It is **required, with no default**, on purpose: a caller that rebuilds its
+    last message and does not say so gets a silent per-turn write and no read,
+    which is the expensive failure and shows up as a bill rather than a bug. Pass
+    ``0`` when the whole list persists into the next turn.
 
     A message is skipped when its role is not ``system``/``user`` or its content
     is not a non-empty string — a caller that already built content blocks owns
@@ -107,22 +131,58 @@ def apply_cache_breakpoints(messages: list[dict[str, Any]], *, volatile_tail: in
     return out
 
 
-def responses_cache_body() -> dict[str, Any]:
-    """``extra_body`` fragment that enables caching on the Responses API.
+def mark_responses_input(input_items: list[dict[str, Any]], *, volatile_tail: int) -> list[dict[str, Any]]:
+    """Return a copy of a Responses ``input`` list with a positioned breakpoint.
 
-    Verified live against ``anthropic/claude-sonnet-4-6`` on the router with a
-    cold (uuid-salted) prefix: without it, ``cache_creation_tokens`` is 0 on
-    every call; with it, call 1 writes 14,416 tokens and an identical call 2
-    reads all 14,416 back, and a call that *appends* to the transcript reads
-    14,416 and writes only the 11 new tokens.
+    The Responses `input` is a list of items carrying content parts, exactly like
+    a chat message list, and the router honours a **per-item** ``cache_control``
+    on the last part of an item. That is what makes `volatile_tail` work here too
+    — measured against ``anthropic/claude-sonnet-4-6``: marking the end of the
+    persisted prefix reads 4,764 tokens back on the next call, while the
+    top-level switch alone reads 0 because it marks the end of the whole input,
+    including a trailing item the caller rebuilt.
 
-    **It marks the end of the whole input — there is no way to position it.**
-    A caller that rewrites its trailing message every turn (rather than
-    appending) therefore gets a write on every call and a read on none: the
-    previous write ended with a message that is no longer a prefix. On the Chat
-    Completions path `apply_cache_breakpoints` solves this with
-    ``volatile_tail``; here the only fix is to append and never rewrite.
-
-    Router-specific, so callers gate it on ``client_routes_through_orq``.
+    Preferred over the top-level ``cache_control`` body field, which marks the end
+    of the whole input: the two compose, but the top-level one then adds a write
+    at the end that nothing reads back.
     """
-    return {'cache_control': dict(CACHE_CONTROL_EPHEMERAL)}
+    if volatile_tail < 0:
+        raise ValueError(f'volatile_tail must be >= 0, got {volatile_tail}')
+    out = list(input_items)
+    index = len(out) - 1 - volatile_tail
+    while index >= 0 and not _has_markable_parts(out[index]):
+        index -= 1
+    if index < 0:
+        if out:
+            logger.debug(
+                'No cacheable item in the Responses prefix ({} items, volatile_tail={}) — the input '
+                'is re-encoded every turn.',
+                len(out),
+                volatile_tail,
+            )
+        return out
+    content = out[index]['content']
+    # `messages_to_responses_input` renders a plain user turn as a bare string and
+    # only an assistant turn as parts, so both shapes arrive here. A string is
+    # promoted to a single `input_text` part, which the API accepts for every
+    # non-assistant role (an assistant turn is always already a part list).
+    parts: list[dict[str, Any]] = (
+        [{'type': 'input_text', 'text': content}] if isinstance(content, str) else [dict(part) for part in content]
+    )
+    parts[-1]['cache_control'] = dict(CACHE_CONTROL_EPHEMERAL)
+    out[index] = {**out[index], 'content': parts}
+    return out
+
+
+def _has_markable_parts(item: dict[str, Any]) -> bool:
+    """A message item carrying text we can attach a breakpoint to.
+
+    Excludes `function_call` / `function_call_output` items, which have no
+    ``content`` and whose shape is load-bearing for the API.
+    """
+    content = item.get('content')
+    if 'role' not in item:
+        return False
+    if isinstance(content, str):
+        return bool(content)
+    return isinstance(content, list) and bool(content) and all(isinstance(part, dict) for part in content)

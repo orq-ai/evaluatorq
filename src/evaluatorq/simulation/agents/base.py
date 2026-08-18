@@ -22,7 +22,7 @@ from evaluatorq.common.llm_call import (
     strip_known_rejected_responses_reasoning,
 )
 from evaluatorq.common.llm_client import client_routes_through_orq
-from evaluatorq.common.prompt_cache import apply_cache_breakpoints, responses_cache_body
+from evaluatorq.common.prompt_cache import apply_cache_breakpoints, mark_responses_input
 from evaluatorq.common.retry import with_retry
 from evaluatorq.common.thread_context import pipeline_metadata, thread_body_param
 from evaluatorq.common.tracing import get_trace_context_headers, record_llm_input, record_llm_response
@@ -250,6 +250,7 @@ class BaseAgent(ABC):
                 timeout=timeout,
                 tools=tools,
                 llm_purpose=llm_purpose,
+                volatile_tail=volatile_tail,
             )
         return await self._call_chat_completions(
             messages,
@@ -356,6 +357,7 @@ class BaseAgent(ABC):
         timeout: float | None = None,
         tools: list[dict[str, Any]] | None = None,
         llm_purpose: str | None = None,
+        volatile_tail: int = 0,
     ) -> LLMResult:
         """Call the LLM via the OpenAI Responses API with retry logic.
 
@@ -370,6 +372,11 @@ class BaseAgent(ABC):
         # the Orq router silently drops it, leaving the judge blind to the agent's
         # replies (RES-1308). Never hand-build this list.
         input_messages = messages_to_responses_input(messages)
+        # A per-item breakpoint, not the top-level switch: the latter marks the end
+        # of the whole input, so a caller that rebuilds its trailing item (the
+        # judge) writes every turn and reads none. Router-only, as on the chat path.
+        if client_routes_through_orq(self._client):
+            input_messages = mark_responses_input(input_messages, volatile_tail=volatile_tail)
 
         params: dict[str, Any] = {
             'model': self._model,
@@ -418,13 +425,11 @@ class BaseAgent(ABC):
                 metadata = pipeline_metadata()
                 if metadata:
                     call_kwargs['metadata'] = metadata
-                # Both router-only: the run thread, and the prompt-cache switch
-                # (see `common.prompt_cache.responses_cache_body`, whose docstring
-                # carries the caveat — the field is not documented and may be a
-                # no-op).
-                extra_body = (
-                    {**thread_body_param(), **responses_cache_body()} if client_routes_through_orq(self._client) else {}
-                )
+                # Router-only. No `responses_cache_body()` here: the breakpoint is
+                # already positioned per-item above, and the top-level switch would
+                # add a second one at the end of the input — on the rebuilt tail,
+                # which is a write nothing reads back.
+                extra_body = thread_body_param() if client_routes_through_orq(self._client) else {}
                 if extra_body:
                     call_kwargs['extra_body'] = {**call_kwargs.get('extra_body', {}), **extra_body}
                 # Drop reasoning up front if this model already rejected it once, so

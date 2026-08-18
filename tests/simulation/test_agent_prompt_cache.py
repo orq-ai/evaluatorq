@@ -1,9 +1,9 @@
 """`BaseAgent` actually places prompt-cache breakpoints on the wire.
 
 `tests/unit/test_prompt_cache.py` covers the pure placement function; these cover
-the wiring — that `_call_chat_completions` marks the messages it sends, that
-`_call_responses` carries the top-level switch, that both are router-only, and
-that the judge keeps the breakpoint off the instruction it rebuilds every turn.
+the wiring — that `_call_chat_completions` and `_call_responses` both mark the
+end of the persisted prefix, that both are router-only, and that the judge keeps
+the breakpoint off the instruction it rebuilds every turn.
 """
 
 from __future__ import annotations
@@ -98,13 +98,23 @@ async def test_volatile_tail_moves_the_breakpoint_off_the_last_message() -> None
 
 
 @pytest.mark.asyncio
-async def test_responses_sends_the_top_level_cache_switch_on_the_router() -> None:
+async def test_responses_marks_a_positioned_breakpoint_on_the_router() -> None:
+    """Per-item, not the top-level switch: the switch marks the end of the whole
+    input, so a caller that rebuilds its trailing item writes every turn and reads
+    none (measured — see scripts/manual_tests/prompt_cache_responses_probe.py)."""
     client = _responses_client()
     agent = _ConcreteAgent(LLMCallConfig(model='gpt-4o', api='responses', client=client))
 
-    await agent._call_llm([Message(role='user', content='hi')])
+    await agent._call_llm(
+        [Message(role='user', content='persisted'), Message(role='user', content='rebuilt')],
+        volatile_tail=1,
+    )
 
-    assert client.responses.create.call_args.kwargs['extra_body']['cache_control'] == _EPHEMERAL
+    sent = client.responses.create.call_args.kwargs
+    assert sent['input'][0]['content'][-1]['cache_control'] == _EPHEMERAL
+    assert 'cache_control' not in sent['input'][1]['content'][-1]
+    # The top-level switch would add a second, unreadable breakpoint at the end.
+    assert 'cache_control' not in sent.get('extra_body', {})
 
 
 @pytest.mark.asyncio
@@ -114,7 +124,9 @@ async def test_responses_sends_no_cache_switch_to_a_direct_openai_client() -> No
 
     await agent._call_llm([Message(role='user', content='hi')])
 
-    assert 'cache_control' not in client.responses.create.call_args.kwargs.get('extra_body', {})
+    sent = client.responses.create.call_args.kwargs
+    assert 'cache_control' not in sent.get('extra_body', {})
+    assert all('cache_control' not in part for item in sent['input'] for part in item['content'])
 
 
 def _judge(client: MagicMock, api: str = 'chat_completions') -> JudgeAgent:
@@ -161,29 +173,30 @@ async def test_judge_keeps_the_breakpoint_off_its_per_turn_instruction() -> None
 
 
 @pytest.mark.asyncio
-async def test_judge_on_responses_warns_that_the_transcript_cannot_cache(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """The Responses `cache_control` marks the end of the whole input, which the
-    per-turn instruction invalidates — a silent full re-encode every judgement."""
+async def test_judge_on_responses_also_keeps_the_breakpoint_off_the_instruction() -> None:
+    """Same `volatile_tail` guarantee as the chat path: the router honours a
+    per-item `cache_control`, so the transcript caches and the rebuilt
+    instruction stays outside the marked prefix."""
     client = _responses_client()
     judge = _judge(client, api='responses')
 
-    with caplog.at_level('WARNING'):
-        await judge.evaluate([Message(role='user', content='hello')])
-        await judge.evaluate([Message(role='user', content='hello')])
+    await judge.evaluate([Message(role='user', content='hello'), Message(role='assistant', content='hi')])
 
-    warnings = [r for r in caplog.records if 'Responses API' in r.getMessage()]
-    assert len(warnings) == 1, 'warn once per judge, not once per turn'
-    assert "api='chat_completions'" in warnings[0].getMessage()
+    items = client.responses.create.call_args.kwargs['input']
+    assert items[-2]['content'][-1]['cache_control'] == _EPHEMERAL
+    assert all('cache_control' not in part for part in items[-1]['content'])
 
 
 @pytest.mark.asyncio
-async def test_judge_on_responses_stays_quiet_off_the_router(caplog: pytest.LogCaptureFixture) -> None:
+async def test_judge_on_responses_marks_nothing_off_the_router() -> None:
     client = _responses_client('https://api.openai.com/v1')
     judge = _judge(client, api='responses')
 
-    with caplog.at_level('WARNING'):
-        await judge.evaluate([Message(role='user', content='hello')])
+    await judge.evaluate([Message(role='user', content='hello')])
 
-    assert not [r for r in caplog.records if 'Responses API' in r.getMessage()]
+    sent = client.responses.create.call_args.kwargs
+    assert all(
+        'cache_control' not in part
+        for item in sent['input']
+        for part in (item['content'] if isinstance(item['content'], list) else [])
+    )

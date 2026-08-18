@@ -131,7 +131,9 @@ class OpenAIModelTarget(AgentTarget):
         routes_through_orq = client_routes_through_orq(self.client)
         completion_messages = cast(
             'list[ChatCompletionMessageParam]',
-            apply_cache_breakpoints(raw_messages) if routes_through_orq else raw_messages,
+            # volatile_tail=0: the caller owns the transcript and this target only
+            # ever appends to it, so every message here persists into the next turn.
+            apply_cache_breakpoints(raw_messages, volatile_tail=0) if routes_through_orq else raw_messages,
         )
         # Tag the target invocation so its Orq trace is attributable to the run:
         # the pipeline surface + run id via the standard `metadata` property (sent

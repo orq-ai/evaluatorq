@@ -23,7 +23,6 @@ from pydantic import (
     model_validator,
 )
 
-from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.simulation.agents.base import AgentConfig, BaseAgent, LLMResult
 from evaluatorq.simulation.types import Criterion, CriterionVerdict, Judgment, Message, criterion_id_for
@@ -668,7 +667,6 @@ class JudgeAgent(BaseAgent):
             self._criteria: list[Criterion] = []
             self._ground_truth = ''
         self._settled: frozenset[str] = frozenset()
-        self._warned_uncacheable = False
 
     @property
     def name(self) -> str:
@@ -721,33 +719,10 @@ class JudgeAgent(BaseAgent):
         # volatile_tail=1: the instruction above is rebuilt every turn, so it is not
         # part of the cacheable prefix. Marking it would cost a full-transcript write
         # per judgement and read none of it back (see common.prompt_cache).
-        self._warn_once_if_uncacheable()
         result = await self._call_llm(
             eval_messages, temperature=0.0, tools=JUDGE_TOOLS, llm_purpose='judge', volatile_tail=1
         )
         return self._parse_judgment(result)
-
-    def _warn_once_if_uncacheable(self) -> None:
-        """Warn when this judge's API choice defeats prompt caching.
-
-        The judge re-reads the whole transcript every turn, so it is the largest
-        input consumer in a simulation. On Chat Completions the breakpoint is
-        placed before the per-turn instruction and the transcript reads back. The
-        Responses API only accepts a top-level ``cache_control`` marking the end
-        of the *whole* input, which the per-turn instruction then invalidates —
-        so the transcript is re-encoded every judgement.
-        """
-        if self._warned_uncacheable or self.config.api != 'responses':
-            return
-        self._warned_uncacheable = True
-        if not client_routes_through_orq(self._client):
-            return
-        logger.warning(
-            "Judge is on the Responses API, where the cache breakpoint cannot be positioned before the judge's "
-            'per-turn instruction — the transcript is re-encoded on every judgement. Pass '
-            "api='chat_completions' to the judge config to cache it (Responses is the default because it "
-            'supports function tools and reasoning_effort together).'
-        )
 
     # ---------------------------------------------------------------------------
     # Private helpers
