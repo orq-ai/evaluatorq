@@ -61,10 +61,7 @@
   --orq-orange-text: #c4421a; /* orange for TEXT on light surfaces — ~4.6:1 AA */
   --orq-ink: #25232e;
   --orq-sand: #f9f8f6;
-  /* Sidebar group headings (both rails): dark grey, not near-black — above the
-     muted page links, below the body text. color-mix rather than an rgba()
-     literal like the rest of this block, because it fades the theme's own
-     foreground: slate then gets the same relationship without a second rule. */
+  /* Sidebar group headings, both rails. color-mix, not rgba(), so slate follows. */
   --orq-nav-heading: color-mix(in srgb, var(--md-default-fg-color) 70%, transparent);
 }
 
@@ -230,15 +227,10 @@ html { font-size: 100%; }
    A CSS-only override leaves a broken half-state — drawer-mode and sidebar-mode
    render different DOM. Widen the window past ~1220px for the permanent sidebar. */
 
-/* --- Sidebars: one hierarchy rule for both rails --------------------
-   Parent bigger and darker, children indented and lighter. Everything here is
-   behind the permanent-sidebar breakpoint: below it Material folds BOTH rails
-   into the same off-canvas drawer, where this type scale would land 9px links
-   in a touch target. Material's own drawer spacing handles that case. */
+/* --- Sidebars: parent bigger and darker, children indented and lighter -----
+   Desktop only — below this breakpoint both rails become the off-canvas drawer. */
 @media screen and (min-width: 76.25em) {
-  /* -- Table of contents (right) --
-     Material indents TOC levels with cumulative link padding only, on a 12.1rem
-     rail, so a 4-level page reads as one ragged column of wrapped text. */
+  /* -- Table of contents (right). Material's 12.1rem rail wraps every entry. */
   .md-sidebar--secondary { width: 14.5rem; }
 
   .md-nav--secondary .md-nav__title[for="__toc"] {
@@ -249,14 +241,12 @@ html { font-size: 100%; }
     color: var(--md-default-fg-color--light);
   }
 
-  /* One guide rule per nesting level. The TOC earns them where the left nav does
-     not: its levels are a couple of pixels of type size apart, and h2..h6 nests
-     5 deep. The descendant combinator applies this at every depth. */
+  /* A guide rule at every depth — TOC levels are ~1px of type apart, h2..h6 is 5 deep. */
   .md-nav--secondary .md-nav {
     margin-left: 0.75rem;
     border-left: 1px solid var(--md-default-fg-color--lightest);
   }
-  /* Indent now comes from the rules, so drop Material's per-level padding. */
+  /* Indent comes from the rules now — drop Material's per-level padding. */
   .md-nav--secondary .md-nav .md-nav__list { padding-left: 0; }
   .md-nav--secondary .md-nav .md-nav__link {
     padding-left: 0.55rem;
@@ -268,7 +258,7 @@ html { font-size: 100%; }
     line-height: 1.35;
     color: var(--md-default-fg-color--light);
   }
-  /* h2s carry the page structure — heavier and darker than their children. */
+  /* h2s carry the page structure. */
   .md-nav--secondary > .md-nav__list > .md-nav__item > .md-nav__link {
     font-size: 0.72rem;
     font-weight: 600;
@@ -278,23 +268,19 @@ html { font-size: 100%; }
 
   .md-nav--secondary .md-nav__link--active,
   .md-nav--secondary .md-nav__link--active code { font-weight: 600; }
-  /* Paint the guide rule accent-coloured next to the active item. */
+  /* Accent-colour the guide rule next to the active item. */
   .md-nav--secondary .md-nav .md-nav__link--active {
     box-shadow: -1px 0 0 0 var(--md-typeset-a-color);
   }
 
-  /* -- Site navigation (left) --
-     Material sets section labels apart from their pages by font weight alone,
-     at the same indent, so a group reads as a flat list. Size, colour and
-     indent do the work here; the gap around a group replaces the TOC's rules. */
+  /* -- Site navigation (left). Material separates section labels by weight alone. */
   .md-nav--primary .md-nav__item--section > .md-nav__link {
     font-size: 1.08rem;   /* nav links are 1rem here (see .md-nav__link above) */
     font-weight: 600;
     color: var(--orq-nav-heading);
     margin-bottom: 0.3rem;
   }
-  /* Equal air on both sides of a group, so a nested section does not glue its
-     last page to the parent's next one. */
+  /* Equal air both sides, or a nested group glues to the parent's next page. */
   .md-nav--primary .md-nav__item--section { margin: 1.4rem 0; }
   /* -0.6rem is Material's own bleed for section children — indent instead. */
   .md-nav--primary .md-nav__item--section > .md-nav {
