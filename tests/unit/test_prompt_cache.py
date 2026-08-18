@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from evaluatorq.common.prompt_cache import apply_cache_breakpoints, responses_cache_body
+import json
+
+from evaluatorq.common.prompt_cache import CACHE_CONTROL_EPHEMERAL, apply_cache_breakpoints, responses_cache_body
 from evaluatorq.common.tracing import _serialize_messages  # pyright: ignore[reportPrivateUsage]
 
 
@@ -46,6 +48,20 @@ def test_input_is_not_mutated() -> None:
     assert original == [{'role': 'system', 'content': 'rules'}, {'role': 'user', 'content': 'hi'}]
 
 
+def test_empty_list_is_a_no_op() -> None:
+    """`len(out) - 1 == -1` used to leave index 0 in the candidate set."""
+    assert apply_cache_breakpoints([]) == []
+
+
+def test_cache_control_is_copied_not_shared() -> None:
+    """One shared dict under every block is an aliasing trap; also `json.dumps`
+    must accept it, which rules out a MappingProxyType."""
+    a, b = apply_cache_breakpoints([{'role': 'user', 'content': 'x'}]), CACHE_CONTROL_EPHEMERAL
+    marked = _blocks(a[0])[0]['cache_control']
+    assert marked == b and marked is not b
+    json.dumps(a)
+
+
 def test_single_message_is_marked_once() -> None:
     marked = apply_cache_breakpoints([{'role': 'user', 'content': 'hi'}])
     assert len(marked) == 1
@@ -61,4 +77,8 @@ def test_span_serialization_flattens_marked_content() -> None:
 
 
 def test_responses_cache_body_is_the_top_level_switch() -> None:
-    assert responses_cache_body() == {'cache_control': {'type': 'ephemeral'}}
+    body = responses_cache_body()
+    assert body == {'cache_control': {'type': 'ephemeral'}}
+    # Copied, like `cached_text_block`'s: this dict is merged into a caller-owned
+    # `extra_body`, so a shared object would be mutable from every call site.
+    assert body['cache_control'] is not CACHE_CONTROL_EPHEMERAL

@@ -269,13 +269,17 @@ class BaseAgent(ABC):
         max_tok = max_tokens or DEFAULT_MAX_TOKENS
         timeout_s = timeout or DEFAULT_TIMEOUT_S
 
-        # Breakpoints on the system prompt and the last turn: simulation replays a
-        # growing append-only transcript, so without them Anthropic models re-encode
-        # the whole thing every turn (see common/prompt_cache.py).
-        full_messages: list[dict[str, Any]] = apply_cache_breakpoints([
+        full_messages: list[dict[str, Any]] = [
             {'role': 'system', 'content': self.system_prompt},
             *[{'role': m.role, 'content': m.content or ''} for m in messages],
-        ])
+        ]
+        # Breakpoints on the system prompt and the last turn: simulation replays a
+        # growing append-only transcript, so without them Anthropic models re-encode
+        # the whole thing every turn (see common/prompt_cache.py). Router-only, for
+        # the same reason `thread_body_param` is: `cache_control` inside a content
+        # part is outside the direct OpenAI schema.
+        if client_routes_through_orq(self._client):
+            full_messages = apply_cache_breakpoints(full_messages)
 
         async with with_llm_span(
             model=self._model,
@@ -404,9 +408,10 @@ class BaseAgent(ABC):
                 metadata = pipeline_metadata()
                 if metadata:
                     call_kwargs['metadata'] = metadata
-                # Both router-only: the run thread, and the top-level cache_control
-                # that marks the last cacheable block automatically (Anthropic
-                # models only; the router ignores it elsewhere).
+                # Both router-only: the run thread, and the prompt-cache switch
+                # (see `common.prompt_cache.responses_cache_body`, whose docstring
+                # carries the caveat — the field is not documented and may be a
+                # no-op).
                 extra_body = (
                     {**thread_body_param(), **responses_cache_body()} if client_routes_through_orq(self._client) else {}
                 )

@@ -119,15 +119,19 @@ class OpenAIModelTarget(AgentTarget):
         multi-turn tool-using transcripts replay faithfully.
         """
         user_visible = [m for m in messages if m.role != 'system']
+        raw_messages: list[dict[str, Any]] = [
+            {'role': 'system', 'content': self.system_prompt},
+            *[m.to_chat_completion() for m in user_visible],
+        ]
         # Attack threads replay a growing append-only transcript, so mark the
         # system prompt and the latest turn as cache breakpoints — Anthropic does
-        # not cache without them (see common/prompt_cache.py).
+        # not cache without them (see common/prompt_cache.py). Router-only, like
+        # `thread` below: `cache_control` inside a content part is outside the
+        # direct OpenAI schema, and only the Orq router is known to tolerate it.
+        routes_through_orq = client_routes_through_orq(self.client)
         completion_messages = cast(
             'list[ChatCompletionMessageParam]',
-            apply_cache_breakpoints([
-                {'role': 'system', 'content': self.system_prompt},
-                *[m.to_chat_completion() for m in user_visible],
-            ]),
+            apply_cache_breakpoints(raw_messages) if routes_through_orq else raw_messages,
         )
         # Tag the target invocation so its Orq trace is attributable to the run:
         # the pipeline surface + run id via the standard `metadata` property (sent
@@ -140,7 +144,7 @@ class OpenAIModelTarget(AgentTarget):
             'max_tokens': self.max_tokens,
         }
         apply_pipeline_metadata(create_kwargs)
-        if client_routes_through_orq(self.client):
+        if routes_through_orq:
             thread = thread_body_param()
             if thread:
                 create_kwargs['extra_body'] = thread

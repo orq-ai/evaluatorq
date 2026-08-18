@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq.common.fields import get_field as _field
+from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.tracing.setup import get_tracer
 
 if TYPE_CHECKING:
@@ -117,14 +118,13 @@ _capture_message_content = capture_message_content
 def _span_content_text(content: Any) -> str:
     """Flatten message content to text for a span attribute.
 
-    Content arrives as a plain string, or as a list of blocks once a caller has
-    added prompt-cache breakpoints (`common.prompt_cache`). ``str()`` on the
-    list would put a Python repr — quoted keys, ``cache_control`` and all — on
-    the span, so join the text parts instead.
+    Content arrives as a plain string, as ``None``, or as a list of blocks once a
+    caller has added prompt-cache breakpoints (`common.prompt_cache`). ``str()``
+    on the list would put a Python repr — quoted keys, ``cache_control`` and all
+    — on the span, so everything goes through the canonical flattener, which also
+    renders image and file parts as placeholders and ``None`` as ``''``.
     """
-    if isinstance(content, list):
-        content = ''.join(part.get('text', '') for part in content if isinstance(part, dict))
-    return truncate_for_span(content)
+    return truncate_for_span(coerce_content_text(content))
 
 
 def _serialize_messages(messages: list[dict[str, Any]]) -> str:
@@ -476,20 +476,14 @@ async def with_llm_span(  # noqa: RUF029
         genai_attrs['gen_ai.request.temperature'] = float(temperature)
     if max_tokens is not None:
         genai_attrs['gen_ai.request.max_tokens'] = max_tokens
-    if input_messages is not None:
-        recordable = [
-            {
-                'role': str(m.get('role', '') if isinstance(m, dict) else getattr(m, 'role', '')),
-                'content': truncate_for_span(
-                    m.get('content', '') if isinstance(m, dict) else getattr(m, 'content', '')
-                ),
-            }
-            for m in input_messages
-        ]
-        if capture_message_content():
-            serialized = json.dumps(recordable, ensure_ascii=False)
-            genai_attrs['gen_ai.input.messages'] = serialized
-            genai_attrs['input'] = serialized
+    if input_messages is not None and capture_message_content():
+        # Reuse `_serialize_messages` rather than re-inlining it: the inlined
+        # copy that stood here emitted a Python repr for block-list content
+        # (prompt-cache breakpoints, multimodal) because only the other renderer
+        # was ever fixed.
+        serialized = _serialize_messages(input_messages)
+        genai_attrs['gen_ai.input.messages'] = serialized
+        genai_attrs['input'] = serialized
     if attributes:
         genai_attrs.update(attributes)
     # Domain-specific key mapping (e.g. orq.redteam.llm_purpose -> orq.llm.purpose)

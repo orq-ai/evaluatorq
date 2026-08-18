@@ -4,11 +4,16 @@ Anthropic caching is **opt-in**: without a ``cache_control`` breakpoint there is
 no caching at all, however byte-stable the prefix is. An append-only transcript
 buys nothing on its own — it only makes a breakpoint worth placing.
 
-OpenAI and Gemini 2.0+ cache the prefix automatically and the Orq router
-**ignores** ``cache_control`` on them rather than rejecting it, so the markers
-are safe to send unconditionally: no per-provider branch here. For the same
-reason OpenAI's ``prompt_cache_key`` is not set anywhere — it is a routing hint,
-not an enabler, and caching there needs no request change.
+OpenAI and Gemini 2.0+ cache the prefix automatically, so there is no
+per-provider branch here and OpenAI's ``prompt_cache_key`` is not set anywhere
+— it is a routing hint, not an enabler, and caching there needs no request
+change.
+
+**Callers must gate these on** ``llm_client.client_routes_through_orq``. The
+marker is only known to be tolerated by the Orq router; ``cache_control`` inside
+a content part is not in the direct OpenAI schema (the installed SDK's
+``ChatCompletionContentPartTextParam`` defines ``type`` and ``text`` only), and
+no one has checked what a self-hosted OpenAI-compatible server does with it.
 
 Only apply these to a conversation that is replayed with a growing prefix (an
 agent-simulation turn loop, a red-team attack thread). A cache **write** costs
@@ -25,7 +30,14 @@ from __future__ import annotations
 from typing import Any
 
 CACHE_CONTROL_EPHEMERAL: dict[str, str] = {'type': 'ephemeral'}
-"""The only cache type Anthropic supports. Default TTL is 5 minutes."""
+"""The only cache type Anthropic supports. Default TTL is 5 minutes.
+
+Copied — never embedded by reference — into a request body: one shared object
+under every marked block of every in-flight request is an aliasing trap the
+first per-block TTL override would spring. It stays a plain ``dict`` rather
+than a `MappingProxyType` because it is serialised by `json.dumps`, which
+rejects a mapping proxy.
+"""
 
 # Only these carry a plain-text body we can safely re-render as a block list.
 # `tool` and tool-calling `assistant` turns are left alone: their content shape
@@ -35,7 +47,7 @@ _MARKABLE_ROLES = frozenset({'system', 'user'})
 
 def cached_text_block(text: str) -> dict[str, Any]:
     """Render ``text`` as a text content block carrying a cache breakpoint."""
-    return {'type': 'text', 'text': text, 'cache_control': CACHE_CONTROL_EPHEMERAL}
+    return {'type': 'text', 'text': text, 'cache_control': dict(CACHE_CONTROL_EPHEMERAL)}
 
 
 def apply_cache_breakpoints(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -53,9 +65,9 @@ def apply_cache_breakpoints(messages: list[dict[str, Any]]) -> list[dict[str, An
     its own breakpoints, and re-wrapping would clobber them.
     """
     out = list(messages)
-    for index in dict.fromkeys((0, len(out) - 1)):  # dedupe; single-message lists mark once
-        if index < 0:
-            continue
+    # Set, not a pair: dedupes a single-message list and empties out entirely on
+    # an empty one, so neither needs its own guard.
+    for index in {i for i in (0, len(out) - 1) if 0 <= i < len(out)}:
         message = out[index]
         role = message.get('role')
         content = message.get('content')
@@ -66,11 +78,13 @@ def apply_cache_breakpoints(messages: list[dict[str, Any]]) -> list[dict[str, An
 
 
 def responses_cache_body() -> dict[str, Any]:
-    """``extra_body`` fragment enabling automatic caching on the Responses API.
+    """``extra_body`` fragment intended to enable caching on the Responses API.
 
-    The Responses endpoint accepts a **top-level** ``cache_control``, which marks
-    the last cacheable block for you — the closest thing to a conversation-global
-    switch, and the reason the Responses path needs no per-message rewriting.
-    Router-specific, so callers gate it on ``client_routes_through_orq``.
+    **Unverified.** The Orq Responses reference does not document a top-level
+    ``cache_control``; the documented placement is on text blocks in router Chat
+    Completions. Sent as an unknown body field it is most likely ignored — a
+    no-op rather than a cache — so treat the Responses path as uncached until a
+    live trace shows a cache read. Router-specific either way, so callers gate it
+    on ``client_routes_through_orq``.
     """
-    return {'cache_control': CACHE_CONTROL_EPHEMERAL}
+    return {'cache_control': dict(CACHE_CONTROL_EPHEMERAL)}
