@@ -780,7 +780,9 @@ class JuryVote(BaseModel):
     repetitions_failed: int = Field(
         default=0,
         ge=0,
-        description='Count of repetitions that raised an error (non-decisive due to error); independent of success/abstained',
+        description='Count of repetitions that failed to produce a usable verdict: an error or a non-decisive, '
+        'non-abstained pass (RES-1251). A clean abstention is not counted. Independent of the aggregate '
+        'success/abstained.',
     )
 
     @model_validator(mode='after')
