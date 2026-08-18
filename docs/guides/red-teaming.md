@@ -266,7 +266,7 @@ For failures, `result.error` means the attack did not run; `result.evaluation_er
 means it ran but the judge could not return a verdict. Both roll up into
 `report.summary.errors_by_type`.
 
-### What a run costs
+## What a run costs
 
 `report.summary.token_usage_total` covers usage recorded for attack generation,
 the target, and the judge. It includes `calls` and `priced_calls` alongside token
@@ -274,89 +274,90 @@ counts and the dollar figure. If `priced_calls < calls`, some calls reported
 usage without a provider price, so the displayed cost is a lower bound. Use the
 calculator below to include the fixed setup calls in a planning estimate.
 
-#### Ballpark the cost
+### Ballpark the cost
 
-Use this calculator for a quick planning estimate. It prices real tokens at
-published per-1k list prices, not a flat per-call guess. Pick a model or enter
-your own prices.
+Three numbers describe a run: how many setup calls it makes before attacking,
+how many attacks it runs, and how long each attack is. Everything else is fixed
+by the pipeline or by the model's list price.
 
 <form class="cost-calculator" data-cost-calculator>
   <div class="cost-calculator__grid">
     <label>
-      Fixed calls
-      <input type="number" name="fixed-calls" min="0" step="1" value="0">
+      Setup calls
+      <input type="number" name="fixed-calls" min="0" step="1" value="7">
     </label>
     <label>
-      Number of attacks
+      Attacks
       <input type="number" name="attacks" min="0" step="1" value="10">
     </label>
     <label>
       Turns per attack
       <input type="number" name="turns" min="0" step="1" value="1">
     </label>
+  </div>
+  <label class="cost-calculator__wide">
+    Model
+    <select name="model">
+      <option value="claude-opus-5">Claude Opus 5 — $5 / $25 per 1M</option>
+      <option value="claude-sonnet-5" selected>Claude Sonnet 5 — $3 / $15 per 1M</option>
+      <option value="claude-haiku-4-5">Claude Haiku 4.5 — $1 / $5 per 1M</option>
+      <option value="gpt-5-mini">gpt-5-mini — $0.25 / $2 per 1M</option>
+      <option value="custom">Custom — enter prices below</option>
+    </select>
+  </label>
+  <div class="cost-calculator__grid" data-custom-prices hidden>
     <label>
-      LLM calls per turn
-      <input type="number" name="calls-per-turn" min="0" step="1" value="2">
-    </label>
-    <label>
-      Judge calls per attack
-      <input type="number" name="judge-calls" min="0" step="1" value="1">
-    </label>
-    <label>
-      Model
-      <select name="model">
-        <option value="claude-opus-5">Claude Opus 5 — $5 / $25 per 1M</option>
-        <option value="claude-sonnet-5" selected>Claude Sonnet 5 — $3 / $15 per 1M</option>
-        <option value="claude-haiku-4-5">Claude Haiku 4.5 — $1 / $5 per 1M</option>
-        <option value="gpt-5-mini">gpt-5-mini — $0.25 / $2 per 1M</option>
-        <option value="custom">Custom</option>
-      </select>
-    </label>
-    <label>
-      Input price (USD per 1k tokens)
+      Input price (USD / 1k tokens)
       <input type="number" name="input-price" min="0" step="any" value="0.003">
     </label>
     <label>
-      Output price (USD per 1k tokens)
+      Output price (USD / 1k tokens)
       <input type="number" name="output-price" min="0" step="any" value="0.015">
-    </label>
-    <label>
-      Tokens per turn, per side
-      <input type="number" name="tokens-per-side" min="0" step="100" value="1000">
-    </label>
-    <label>
-      Cache hit rate (%)
-      <input type="number" name="cache-hit" min="0" max="100" step="1" value="90">
     </label>
   </div>
   <div class="cost-calculator__result" aria-live="polite">
-    <strong>Estimated cost: <span data-cost-total>$0.3642</span></strong>
-    <span data-cost-breakdown>30 calls · 60,000 input tokens (90% cached) · 22,000 output tokens</span>
+    <strong>Estimated cost: <span data-cost-total>$0.4902</span></strong>
+    <span data-cost-breakdown>37 calls · 67,000 input tokens (90% cached) · 29,000 output tokens</span>
   </div>
 </form>
 
-Call count is **fixed calls + attacks × (turns × calls-per-turn + judge calls)**.
+Call count is **setup calls + attacks × (turns × 2 + 1)**: each turn is one
+adversarial generation plus one target call, and the judge runs once after the
+turn loop, not per turn.
 
-- **Calls per turn** is 2 for dynamic and hybrid attacks — one adversarial
-  generation and one target call. Static attacks replay a fixed prompt, so set
-  it to 1 (target only).
-- **Judge calls per attack** is 1 by default. The judge runs once after the turn
-  loop, not per turn. A jury multiplies this by panel size × repetitions.
+**Setup calls** are the ones that happen before and after the attack loop. The
+default of 7 is a dynamic run against one tool-bearing target with the standard
+report options on:
 
-The token model behind the dollar figure makes these assumptions. The first two
-are editable above; the rest are fixed:
+| Stage | Calls |
+|---|---|
+| Resource inference | 1 per target |
+| Tool classification | 1 per target, only when the target exposes tools |
+| Strategy generation | ~1 per selected vulnerability or unresolved category, batched (more than eight objectives split across calls) |
+| Executive summary | 1, best-effort |
+| Recommendations | 1 per *selected top* focus area — up to `max_areas`, default 5 |
+
+Set it to **0** for static and replay runs: a replay selects nothing, so
+capability classification is skipped entirely. The CLI quickstart above also
+disables strategy generation, recommendations, and the executive summary, so its
+baseline is 0 too. Classification is skipped whenever no LLM client or
+credentials resolve.
+
+The token model behind the dollar figure is a ballpark, not a knob — these
+values are fixed:
 
 - **1,000 tokens per turn, per side.** Each turn call emits one block and the
   transcript grows by one block, so input cost is quadratic in turns — which is
   why long multi-turn attacks cost more than the call count suggests.
 - **90% cache hit rate** on the attack transcript, billed at **0.1× the base
-  input price** — the standard cached-read rate for the models listed. Runs that
-  never repeat a prefix should set this to 0.
-- **Judge calls read the finished transcript and emit ~200 tokens.** They do not
-  extend the transcript for each other, so a jury of five costs five reads of
+  input price** — the standard cached-read rate for the models listed. A run
+  that never repeats a prefix pays more than this estimate.
+- **One judge call per attack**, reading the finished transcript and emitting
+  ~200 tokens. A jury multiplies that by panel size × repetitions; the judges do
+  not extend the transcript for each other, so five judges cost five reads of
   the same transcript, not five compounding ones.
-- **Fixed setup calls are priced at the full input rate**, one block each way.
-  They share no prefix with the attack transcript, so no cache discount applies.
+- **Setup calls are priced at the full input rate**, one block each way. They
+  share no prefix with the attack transcript, so no cache discount applies.
 - **Published list prices, snapshotted 2026-08-18.** Verify against your
   provider before quoting a number to anyone; at runtime evaluatorq prices calls
   from the live Orq `/v2/models` catalogue instead.
@@ -367,26 +368,7 @@ this estimate. Actual spend varies with prompt and completion length.
 If you want separate attacker and evaluator model settings rather than one
 default model, see the [`11_redteam_config.py` cookbook](../examples/redteam/11_redteam_config.md).
 
-There is no single fixed-call count for every run. Use these baselines when
-setting the first field:
-
-- **Static and replay runs: 0.** A replay selects nothing, so capability
-  classification is skipped entirely.
-- **Dynamic and hybrid runs:** 1 resource-inference call per target, plus 1
-  tool-classification call per target when the target exposes tools. Both are
-  skipped when no LLM client or credentials can be resolved.
-- **Strategy generation** (when enabled): roughly 1 planning call per selected
-  vulnerability or unresolved category, batched — more than eight objectives
-  split across several calls rather than one.
-- **Executive summary** (on by default): 1 call, best-effort — skipped silently
-  without credentials.
-- **Recommendations:** 1 call per *selected top* focus area, not per failed area,
-  plus an occasional trace-condensing call for oversized attacks.
-
-The CLI quickstart above disables strategy generation, recommendations, and the
-executive summary, so its baseline is 0.
-
-#### What the totals do not include
+### What the totals do not include
 
 `token_usage_total` records the calls the run makes on the attack path. Setup and
 post-processing calls are real spend that lands outside it:
