@@ -5,9 +5,9 @@
     "claude-sonnet-5": { input: 0.003, output: 0.015 },
     "claude-haiku-4-5": { input: 0.001, output: 0.005 },
     "gpt-5.6-terra": { input: 0.002, output: 0.012 },
-    "eu.gemini-3.7-flash": { input: 0.00075, output: 0.00375 },
+    "gemini-3.7-flash": { input: 0.00075, output: 0.00375 },
     "gpt-5-mini": { input: 0.00025, output: 0.002 },
-    "eu.gpt-5.6-luna": { input: 0.00022, output: 0.00132 },
+    "gpt-5.6-luna": { input: 0.0002, output: 0.0012 },
   };
 
   // Fixed shape of a dynamic/hybrid attack, and the ballpark assumptions the
