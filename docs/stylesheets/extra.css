@@ -266,7 +266,7 @@ html { font-size: 100%; }
 .md-nav--secondary > .md-nav__list > .md-nav__item > .md-nav__link {
   font-size: 0.72rem;
   font-weight: 600;
-  color: var(--md-default-fg-color);
+  color: color-mix(in srgb, var(--md-default-fg-color) 76%, transparent);
   margin-top: 0.9em;
 }
 
@@ -287,8 +287,10 @@ html { font-size: 100%; }
      lighter. Grouping is carried by the label and the gap above it. */
   .md-nav--primary .md-nav__item--section > .md-nav__link {
     font-size: 1.08rem;   /* nav links are 1rem here (see .md-nav__link above) */
-    font-weight: 700;
-    color: var(--md-default-fg-color);
+    font-weight: 600;
+    /* Full-strength fg at this weight and size reads as a shout — sit between
+       it and the muted page links. */
+    color: color-mix(in srgb, var(--md-default-fg-color) 76%, transparent);
     margin-bottom: 0.3rem;
   }
   /* Equal air on both sides of a group, so a nested section does not glue its
