@@ -1,13 +1,11 @@
 (() => {
-  // USD per 1k tokens; provenance and date in docs/guides/red-teaming.md.
+  // USD per 1k tokens. Round price tiers, not named models: a per-model list
+  // goes stale on every provider release, and a planning estimate does not
+  // need the third significant figure. Pick Custom for an exact quote.
   const modelPrices = {
-    "claude-opus-5": { input: 0.005, output: 0.025 },
-    "claude-sonnet-5": { input: 0.003, output: 0.015 },
-    "claude-haiku-4-5": { input: 0.001, output: 0.005 },
-    "gpt-5.6-terra": { input: 0.002, output: 0.012 },
-    "gemini-3.7-flash": { input: 0.00075, output: 0.00375 },
-    "gpt-5-mini": { input: 0.00025, output: 0.002 },
-    "gpt-5.6-luna": { input: 0.0002, output: 0.0012 },
+    frontier: { input: 0.005, output: 0.025 },
+    mid: { input: 0.002, output: 0.01 },
+    cheap: { input: 0.0005, output: 0.0025 },
   };
 
   // Fixed shape of a dynamic/hybrid attack, and the ballpark assumptions the

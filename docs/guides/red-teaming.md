@@ -278,7 +278,7 @@ calculator below to include the fixed setup calls in a planning estimate.
 
 Three numbers describe a run: how many setup calls it makes before attacking,
 how many attacks it runs, and how long each attack is. Everything else is fixed
-by the pipeline or by the model's list price.
+by the pipeline or by the price tier you run at.
 
 <form class="cost-calculator" data-cost-calculator>
   <div class="cost-calculator__grid">
@@ -299,15 +299,11 @@ by the pipeline or by the model's list price.
     </label>
   </div>
   <label class="cost-calculator__wide">
-    Model
+    Price tier
     <select name="model">
-      <option value="claude-opus-5">Claude Opus 5 — $5 / $25 per 1M</option>
-      <option value="claude-sonnet-5" selected>Claude Sonnet 5 — $3 / $15 per 1M</option>
-      <option value="claude-haiku-4-5">Claude Haiku 4.5 — $1 / $5 per 1M</option>
-      <option value="gpt-5.6-terra">gpt-5.6-terra — $2 / $12 per 1M</option>
-      <option value="gemini-3.7-flash">Gemini 3.7 Flash — $0.75 / $3.75 per 1M</option>
-      <option value="gpt-5-mini">gpt-5-mini — $0.25 / $2 per 1M</option>
-      <option value="gpt-5.6-luna">gpt-5.6-luna — $0.20 / $1.20 per 1M</option>
+      <option value="frontier">Frontier — $5 / $25 per 1M</option>
+      <option value="mid" selected>Mid-tier — $2 / $10 per 1M</option>
+      <option value="cheap">Cheap — $0.50 / $2.50 per 1M</option>
       <option value="custom">Custom — enter prices below</option>
     </select>
   </label>
@@ -322,7 +318,7 @@ by the pipeline or by the model's list price.
     </label>
   </div>
   <div class="cost-calculator__result" aria-live="polite">
-    <strong>Estimated cost: <span data-cost-total>$0.4902</span></strong>
+    <strong>Estimated cost: <span data-cost-total>$0.3268</span></strong>
     <span data-cost-breakdown>37 calls · 67,000 input tokens (90% cached) · 29,000 output tokens</span>
   </div>
 </form>
@@ -374,12 +370,15 @@ values are fixed:
   the same transcript, not five compounding ones.
 - **Setup calls are priced at the full input rate**, one block each way. They
   share no prefix with the attack transcript, so no cache discount applies.
-- **Published global list prices, snapshotted 2026-08-18.** EU-region
-  deployments carry an uplift over these (Orq's `eu.gpt-5.6-luna` is $0.22/$1.32
-  against the global $0.20/$1.20), so a European deployment costs more than the
-  figure above. Verify against your provider before quoting a number to anyone;
-  at runtime evaluatorq prices calls from the live Orq `/v2/models` catalogue
-  rather than from this snapshot, so it picks up the region you actually use.
+- **Round price tiers, not named models.** Frontier is the flagship tier
+  (Claude Opus, GPT-5.6-terra); mid-tier is the workhorse most runs use; cheap
+  is the small-and-fast tier (Gemini Flash, GPT-5.6-luna). A named-model list
+  goes stale on every provider release, and a planning estimate does not need
+  the third significant figure — pick **Custom** when you need an exact one.
+  Regional deployments run above these rates: Orq's EU entries carry roughly a
+  10% uplift. At runtime evaluatorq prices calls from the live Orq `/v2/models`
+  catalogue, so reported costs use your actual model and region, not this
+  estimate.
 
 Content-filter retries on the attacker turn are real billed calls and are not in
 this estimate. Actual spend varies with prompt and completion length.
