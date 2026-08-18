@@ -165,6 +165,8 @@ Measured wall clock and token counts from two runs against Orq-hosted agents, at
 
 Attacks run concurrently, so wall clock tracks the slowest attack far more than the attack count — quadrupling the sweep cost twelve seconds. Budget a few cents for a run this size at `gpt-5-mini` prices; roughly 40% of the tokens are the judge's, and both the attacker and judge models are configurable, so pointing them at a cheaper model moves the bill directly. Two runs is not a benchmark — treat these as an order of magnitude.
 
+To price a run you have not made yet, the [cost calculator](https://orq-ai.github.io/evaluatorq/guides/red-teaming/#ballpark-the-cost) takes the three numbers that vary — setup calls, attacks, turns — and a price tier.
+
 → [Red teaming guide](https://orq-ai.github.io/evaluatorq/guides/red-teaming/) ·
 [Intro notebook](examples/red_teaming_intro.ipynb) ·
 [Example scripts](examples/redteam/)
