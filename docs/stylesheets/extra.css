@@ -241,8 +241,12 @@ html { font-size: 100%; }
   color: var(--md-default-fg-color--light);
 }
 
-/* Indent per nesting level — no rules; size and weight carry the hierarchy. */
-.md-nav--secondary .md-nav { margin-left: 0.75rem; }
+/* One guide rule per nesting level. The TOC needs them: its levels differ by a
+   couple of pixels of type size, and a heading can be 4 deep. */
+.md-nav--secondary .md-nav {
+  margin-left: 0.75rem;
+  border-left: 1px solid var(--md-default-fg-color--lightest);
+}
 /* Indent now comes from the rules, so drop Material's per-level padding. */
 .md-nav--secondary .md-nav .md-nav__list { padding-left: 0; }
 .md-nav--secondary .md-nav .md-nav__link,
@@ -268,6 +272,10 @@ html { font-size: 100%; }
 
 .md-nav--secondary .md-nav__link--active,
 .md-nav--secondary .md-nav__link--active code { font-weight: 600; }
+/* Paint the guide rule accent-coloured next to the active item. */
+.md-nav--secondary .md-nav .md-nav__link--active {
+  box-shadow: -1px 0 0 0 var(--md-typeset-a-color);
+}
 
 /* --- Site navigation (left sidebar) --------------------------------- */
 /* Same problem as the TOC: section labels ("Guides", "Red Teaming") differ from
@@ -283,19 +291,23 @@ html { font-size: 100%; }
     color: var(--md-default-fg-color);
     margin-bottom: 0.3rem;
   }
-  .md-nav--primary .md-nav__item--section { margin: 1.6rem 0 0; }
+  /* Equal air on both sides of a group, so a nested section does not glue its
+     last page to the parent's next one. */
+  .md-nav--primary .md-nav__item--section { margin: 1.4rem 0; }
   /* -0.6rem is Material's own bleed for section children — indent instead. */
   .md-nav--primary .md-nav__item--section > .md-nav {
     margin-left: 0;
     padding-left: 0.6rem;
   }
-  .md-nav--primary .md-nav__item--section > .md-nav .md-nav__link {
+  /* Pages only — :not() keeps a nested section's own label at label size. */
+  .md-nav--primary .md-nav__item--section > .md-nav .md-nav__item:not(.md-nav__item--section) > .md-nav__link {
     font-size: 0.94rem;
     color: var(--md-default-fg-color--light);
   }
 
+  /* Same chain as the page rule above, or it loses on specificity. */
   .md-nav--primary .md-nav__link--active,
-  .md-nav--primary .md-nav__item--section > .md-nav .md-nav__link--active {
+  .md-nav--primary .md-nav__item--section > .md-nav .md-nav__item:not(.md-nav__item--section) > .md-nav__link--active {
     font-weight: 600;
     color: var(--md-typeset-a-color);
   }

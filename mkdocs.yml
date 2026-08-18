@@ -255,13 +255,15 @@ nav:
       - Evaluation Reference: evaluation-reference.md
       - Structured Results: structured-results.md
       - Framework Integrations: framework-integrations.md
-      - Agent Simulation: guides/agent-simulation.md
+      - Agent Simulation:
+          - Overview: guides/agent-simulation.md
       - Red Teaming:
           - Overview: guides/red-teaming.md
           - Custom Evaluators & Frameworks: custom-evaluators-and-frameworks.md
-      - LLM as a Jury: llm-as-a-jury.md
-      - Cyclic Judge Assignment: cyclic-judge.md
-      - Pairwise Judging: pairwise-judging.md
+      - LLM as a Jury:
+          - Overview: llm-as-a-jury.md
+          - Cyclic Judge Assignment: cyclic-judge.md
+          - Pairwise Judging: pairwise-judging.md
       - Evaluator Template Variables: evaluator-template-variables.md
   - Examples: examples/
   - API Reference:
