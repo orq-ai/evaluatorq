@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from evaluatorq.common.prompt_cache import CACHE_CONTROL_EPHEMERAL, apply_cache_breakpoints, responses_cache_body
 from evaluatorq.common.tracing import _serialize_messages  # pyright: ignore[reportPrivateUsage]
 
@@ -74,6 +76,51 @@ def test_span_serialization_flattens_marked_content() -> None:
     serialized = _serialize_messages(apply_cache_breakpoints([{'role': 'system', 'content': 'rules'}]))
     assert '"content": "rules"' in serialized
     assert 'cache_control' not in serialized
+
+
+def test_volatile_tail_keeps_the_breakpoint_off_a_per_turn_message() -> None:
+    """The judge rebuilds its trailing instruction every turn. Marked, the next
+    turn puts transcript content at that position and the prefix diverges right
+    after the system message — a full write, read back never."""
+    marked = apply_cache_breakpoints(
+        [
+            {'role': 'system', 'content': 'rules'},
+            {'role': 'user', 'content': 'persisted'},
+            {'role': 'user', 'content': 'rebuilt every turn'},
+        ],
+        volatile_tail=1,
+    )
+
+    assert _blocks(marked[1])[0]['text'] == 'persisted'
+    assert marked[2]['content'] == 'rebuilt every turn'
+
+
+def test_breakpoint_walks_back_past_an_unmarkable_trailing_turn() -> None:
+    """A transcript ending in an assistant reply (or a tool result) would
+    otherwise get no prefix breakpoint at all, silently."""
+    marked = apply_cache_breakpoints([
+        {'role': 'system', 'content': 'rules'},
+        {'role': 'user', 'content': 'question'},
+        {'role': 'assistant', 'content': 'answer'},
+    ])
+
+    assert _blocks(marked[1])[0]['text'] == 'question'
+    assert marked[2]['content'] == 'answer'
+
+
+def test_no_markable_prefix_leaves_everything_alone() -> None:
+    original = [{'role': 'assistant', 'content': 'only turn'}]
+    assert apply_cache_breakpoints(original) == original
+
+
+def test_volatile_tail_longer_than_the_prefix_is_a_no_op() -> None:
+    original = [{'role': 'user', 'content': 'hi'}]
+    assert apply_cache_breakpoints(original, volatile_tail=5) == original
+
+
+def test_negative_volatile_tail_is_rejected() -> None:
+    with pytest.raises(ValueError, match='volatile_tail'):
+        apply_cache_breakpoints([{'role': 'user', 'content': 'hi'}], volatile_tail=-1)
 
 
 def test_responses_cache_body_is_the_top_level_switch() -> None:

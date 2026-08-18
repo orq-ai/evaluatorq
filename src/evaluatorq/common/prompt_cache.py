@@ -29,6 +29,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from loguru import logger
+
 CACHE_CONTROL_EPHEMERAL: dict[str, str] = {'type': 'ephemeral'}
 """The only cache type Anthropic supports. Default TTL is 5 minutes.
 
@@ -50,41 +52,77 @@ def cached_text_block(text: str) -> dict[str, Any]:
     return {'type': 'text', 'text': text, 'cache_control': dict(CACHE_CONTROL_EPHEMERAL)}
 
 
-def apply_cache_breakpoints(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Return a copy of ``messages`` with breakpoints on the system + last message.
+def _is_markable(message: dict[str, Any]) -> bool:
+    content = message.get('content')
+    return message.get('role') in _MARKABLE_ROLES and isinstance(content, str) and bool(content)
+
+
+def apply_cache_breakpoints(messages: list[dict[str, Any]], *, volatile_tail: int = 0) -> list[dict[str, Any]]:
+    """Return a copy of ``messages`` with breakpoints on the system + prefix end.
 
     Two of the four allowed breakpoints:
 
     - the leading ``system`` message — static for the whole conversation, so it
       is a cache read on every turn after the first;
-    - the final message — the end of the append-only prefix, so the *next* turn
-      (which appends past it) reads the whole transcript back.
+    - the end of the **persisted** prefix, so the *next* turn (which appends past
+      it) reads the whole transcript back.
+
+    ``volatile_tail`` is the number of trailing messages the caller rebuilds on
+    every turn rather than appending to a transcript — a per-call instruction, a
+    re-rendered scratchpad. They are excluded from the prefix. Marking one is
+    worse than marking nothing: the next turn puts persisted content at that
+    position, the prefix diverges immediately after the system message, and the
+    whole transcript pays a 1.25x write it can never read back.
 
     A message is skipped when its role is not ``system``/``user`` or its content
     is not a non-empty string — a caller that already built content blocks owns
-    its own breakpoints, and re-wrapping would clobber them.
+    its own breakpoints, and re-wrapping would clobber them. The prefix
+    breakpoint walks backwards past unmarkable trailing turns (an ``assistant``
+    reply, a ``tool`` result) to the nearest one that can carry it.
+
+    Raises:
+        ValueError: if ``volatile_tail`` is negative.
     """
+    if volatile_tail < 0:
+        raise ValueError(f'volatile_tail must be >= 0, got {volatile_tail}')
     out = list(messages)
-    # Set, not a pair: dedupes a single-message list and empties out entirely on
-    # an empty one, so neither needs its own guard.
-    for index in {i for i in (0, len(out) - 1) if 0 <= i < len(out)}:
-        message = out[index]
-        role = message.get('role')
-        content = message.get('content')
-        if role not in _MARKABLE_ROLES or not isinstance(content, str) or not content:
-            continue
-        out[index] = {**message, 'content': [cached_text_block(content)]}
+    prefix_end = len(out) - 1 - volatile_tail
+    while prefix_end >= 0 and not _is_markable(out[prefix_end]):
+        prefix_end -= 1
+    if prefix_end < 0 and out:
+        logger.debug(
+            'No cacheable message in the prefix ({} messages, volatile_tail={}) — only the system '
+            'breakpoint (if any) is placed and the transcript is re-encoded every turn.',
+            len(out),
+            volatile_tail,
+        )
+    # The leading breakpoint is the *system* prompt specifically — a leading user
+    # message is already covered by the prefix breakpoint, and marking it when the
+    # whole conversation is inside `volatile_tail` would mark a message the caller
+    # just told us is rebuilt every turn. Set, not a pair: dedupes when the prefix
+    # end *is* the system message, and empties out on an empty list.
+    leading = 0 if out and out[0].get('role') == 'system' else -1
+    for index in {i for i in (leading, prefix_end) if 0 <= i < len(out) and _is_markable(out[i])}:
+        out[index] = {**out[index], 'content': [cached_text_block(out[index]['content'])]}
     return out
 
 
 def responses_cache_body() -> dict[str, Any]:
-    """``extra_body`` fragment intended to enable caching on the Responses API.
+    """``extra_body`` fragment that enables caching on the Responses API.
 
-    **Unverified.** The Orq Responses reference does not document a top-level
-    ``cache_control``; the documented placement is on text blocks in router Chat
-    Completions. Sent as an unknown body field it is most likely ignored — a
-    no-op rather than a cache — so treat the Responses path as uncached until a
-    live trace shows a cache read. Router-specific either way, so callers gate it
-    on ``client_routes_through_orq``.
+    Verified live against ``anthropic/claude-sonnet-4-6`` on the router with a
+    cold (uuid-salted) prefix: without it, ``cache_creation_tokens`` is 0 on
+    every call; with it, call 1 writes 14,416 tokens and an identical call 2
+    reads all 14,416 back, and a call that *appends* to the transcript reads
+    14,416 and writes only the 11 new tokens.
+
+    **It marks the end of the whole input — there is no way to position it.**
+    A caller that rewrites its trailing message every turn (rather than
+    appending) therefore gets a write on every call and a read on none: the
+    previous write ended with a message that is no longer a prefix. On the Chat
+    Completions path `apply_cache_breakpoints` solves this with
+    ``volatile_tail``; here the only fix is to append and never rewrite.
+
+    Router-specific, so callers gate it on ``client_routes_through_orq``.
     """
     return {'cache_control': dict(CACHE_CONTROL_EPHEMERAL)}

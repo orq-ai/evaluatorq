@@ -230,11 +230,17 @@ class BaseAgent(ABC):
         timeout: float | None = None,
         tools: list[dict[str, Any]] | None = None,
         llm_purpose: str | None = None,
+        volatile_tail: int = 0,
     ) -> LLMResult:
         """Call the LLM with retry logic, dispatching to chat or responses API.
 
         Retries on rate-limit (429) and server errors (500+). All other errors
         are raised immediately. ``asyncio.TimeoutError`` is never retried.
+
+        ``volatile_tail`` is the number of trailing messages this caller rebuilds
+        every turn instead of appending to the transcript — see
+        `common.prompt_cache.apply_cache_breakpoints`, which keeps the cache
+        breakpoint off them.
         """
         if self.config.api == 'responses':
             return await self._call_responses(
@@ -252,6 +258,7 @@ class BaseAgent(ABC):
             timeout=timeout,
             tools=tools,
             llm_purpose=llm_purpose,
+            volatile_tail=volatile_tail,
         )
 
     async def _call_chat_completions(
@@ -263,6 +270,7 @@ class BaseAgent(ABC):
         timeout: float | None = None,
         tools: list[dict[str, Any]] | None = None,
         llm_purpose: str | None = None,
+        volatile_tail: int = 0,
     ) -> LLMResult:
         """Call the LLM via the Chat Completions API with retry logic."""
         temp = temperature if temperature is not None else 0.7
@@ -273,13 +281,15 @@ class BaseAgent(ABC):
             {'role': 'system', 'content': self.system_prompt},
             *[{'role': m.role, 'content': m.content or ''} for m in messages],
         ]
-        # Breakpoints on the system prompt and the last turn: simulation replays a
-        # growing append-only transcript, so without them Anthropic models re-encode
-        # the whole thing every turn (see common/prompt_cache.py). Router-only, for
-        # the same reason `thread_body_param` is: `cache_control` inside a content
-        # part is outside the direct OpenAI schema.
+        # Breakpoints on the system prompt and the end of the persisted transcript:
+        # simulation replays a growing append-only prefix, so without them Anthropic
+        # models re-encode the whole thing every turn (see common/prompt_cache.py).
+        # `volatile_tail` keeps the second breakpoint off per-turn instructions a
+        # caller appends (the judge's). Router-only, for the same reason
+        # `thread_body_param` is: `cache_control` inside a content part is outside
+        # the direct OpenAI schema.
         if client_routes_through_orq(self._client):
-            full_messages = apply_cache_breakpoints(full_messages)
+            full_messages = apply_cache_breakpoints(full_messages, volatile_tail=volatile_tail)
 
         async with with_llm_span(
             model=self._model,
