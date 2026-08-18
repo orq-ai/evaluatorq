@@ -24,7 +24,7 @@ from evaluatorq.redteam import EvaluatorConfig, LLMConfig, OpenAIModelTarget, re
 
 async def main() -> None:
     target = OpenAIModelTarget(
-        "gpt-4o",
+        model="gpt-4o",
         system_prompt="You are a helpful customer support assistant for Acme Corp.",
     )
 
@@ -56,7 +56,7 @@ async def main() -> None:
     )
 
     report = await red_team(
-        target,
+        target=target,
         llm_config=config,
         mode="dynamic",
         categories=["LLM01"],

@@ -29,6 +29,16 @@ def _parsed_completion(value, explanation, refusal=None):
     return comp
 
 
+def _abstaining_completion():
+    verdict_model = create_model('AbstainingVerdict', value=(bool, ...), explanation=(str, ...), abstain=(bool, ...))
+    msg = MagicMock()
+    msg.parsed = verdict_model(value=False, explanation='uncertain', abstain=True)
+    msg.refusal = None
+    choice = MagicMock(); choice.message = msg
+    comp = MagicMock(); comp.choices = [choice]; comp.usage = None
+    return comp, verdict_model
+
+
 @pytest.mark.asyncio
 async def test_tier1_parse_normalizes_to_payload():
     client = MagicMock()
@@ -55,6 +65,20 @@ async def test_tier1_refusal_maps_to_abstain():
     assert out.payload is not None
     assert out.payload.abstain is True
     assert out.payload.value is None
+
+
+@pytest.mark.asyncio
+async def test_tier1_parse_preserves_abstain_on_payload_rebuild():
+    client = MagicMock()
+    completion, verdict_model = _abstaining_completion()
+    client.chat.completions.parse = AsyncMock(return_value=completion)
+    out = await run_judge(
+        client=client, model='m', cfg=_cfg(),
+        prompt_template='t', replacements={}, system_prompt='s', response_model=verdict_model,
+    )
+    assert out.payload is not None
+    assert out.payload.value is False
+    assert out.payload.abstain is True
 
 
 @pytest.mark.asyncio

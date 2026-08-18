@@ -19,6 +19,7 @@ from evaluatorq.contracts import (
     TokenUsage,
     ToolCallOutputItem,
     ToolInfo,
+    tool_result_to_text,
 )
 from evaluatorq.openresponses.input_items import message_to_responses_input_items
 
@@ -33,11 +34,11 @@ class OpenAIAgentTarget(AgentTarget):
     from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget
 
     agent = Agent(name="my-agent", instructions="You are a helpful assistant.")
-    target = OpenAIAgentTarget(agent)
+    target = OpenAIAgentTarget(agent=agent)
 
     # Pass to simulation or red teaming
     results = await simulate(target=target, ...)
-    report = await red_team(target)
+    report = await red_team(target=target)
     ```
     """
 
@@ -178,9 +179,10 @@ class OpenAIAgentTarget(AgentTarget):
                         tc_id = getattr(tc, 'id', '')
                         _record_tool_call(str(tc_name), tc_args_raw, tc_id, tc_id)
 
-        # Ensure final_output is reflected as a TextOutputItem. Avoid duplicating
-        # if the last text emitted from history already matches.
-        final_text = str(result.final_output)
+        # Reflect final_output as a TextOutputItem unless history's last text already
+        # matches. tool_result_to_text, not str(): a repr is not what the agent said.
+        final = result.final_output
+        final_text = tool_result_to_text(final)
         last_text = next(
             (item.text for item in reversed(output_items) if isinstance(item, TextOutputItem)),
             None,

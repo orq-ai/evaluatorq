@@ -87,7 +87,7 @@ async def main() -> None:
         max_dynamic_datapoints=10,
         max_static_datapoints=0,
         attacker_instructions=attacker_instructions,
-        parallelism=20,
+        datapoint_parallelism=20,
         llm_config=LLMConfig(attacker=model, evaluator=model),
         recommendations=True,
         verbosity=0,

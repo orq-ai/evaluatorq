@@ -145,7 +145,7 @@ tools = [search, calculator, fact_check]
 
 model = ChatOpenAI(model="gpt-4o", temperature=0)
 
-agent = create_react_agent(model, tools)
+agent = create_react_agent(model=model, tools=tools)
 
 
 # ────────────────────────────────────────────────
@@ -278,7 +278,7 @@ async def main() -> None:
             "(city + data), custom instructions, and OpenResponses output"
         ),
         path="Integrations/LangChain",
-        parallelism=3,
+        datapoint_parallelism=3,
         data={"dataset_id": DATASET_ID, "include_messages": True},
         jobs=[
             wrap_langgraph_agent(

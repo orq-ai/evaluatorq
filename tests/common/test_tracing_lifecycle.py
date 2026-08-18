@@ -118,7 +118,6 @@ async def test_evaluatorq_passes_the_yielded_session_context_to_processing(
         jobs=[lambda _data, _row: None],
         print_results=False,
         _send_results=False,
-        _exit_on_failure=False,
     )
 
     assert seen_contexts == [

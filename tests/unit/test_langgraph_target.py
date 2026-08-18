@@ -6,6 +6,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import BaseModel
 
 pytest.importorskip('langgraph')
 
@@ -26,6 +27,20 @@ def _make_graph(response_content: str = "I'm fine") -> MagicMock:
 
 
 class TestLangGraphTarget:
+    @pytest.mark.asyncio
+    async def test_structured_fallback_content_is_json_not_repr(self) -> None:
+        class Answer(BaseModel):
+            field: str
+
+        graph = MagicMock()
+        graph.name = 'test_graph'
+        graph.ainvoke = AsyncMock(return_value={'messages': [MagicMock(content=Answer(field='x'))]})
+
+        result = await LangGraphTarget(graph).respond([Message(role='user', content='hi')])
+
+        assert result.text == '{"field":"x"}'
+        assert 'Answer(' not in result.text
+
     @pytest.mark.asyncio
     async def test_respond_returns_response(self) -> None:
         graph = _make_graph('hello back')

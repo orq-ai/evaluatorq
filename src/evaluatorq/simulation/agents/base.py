@@ -212,10 +212,15 @@ class BaseAgent(ABC):
            ``ORQ_BASE_URL/v3/router`` (default: ``https://my.orq.ai/v3/router``).
         4. ``OPENAI_API_KEY`` env var — uses the OpenAI SDK default base URL so
            traffic goes to OpenAI directly, not to the Orq router.
+
+        Retry owner: ``with_retry`` in ``_call_chat_completions`` / ``_call_responses``,
+        bounded at ``config.retry_count + 1`` attempts. The SDK budget is disarmed
+        here (``max_retries=0``) so the two cannot multiply.
         """
         client, owned = build_simulation_client(
             self.config.client,
             extra_api_key=api_key,
+            max_retries=0,
         )
         self._client_owned = owned
         return client
@@ -233,7 +238,8 @@ class BaseAgent(ABC):
         """Call the LLM with retry logic, dispatching to chat or responses API.
 
         Retries on rate-limit (429) and server errors (500+). All other errors
-        are raised immediately. ``asyncio.TimeoutError`` is never retried.
+        are raised immediately. ``asyncio.TimeoutError`` is never retried. Retry
+        is owned by ``with_retry``; client retries are disabled.
         """
         if self.config.api == 'responses':
             return await self._call_responses(
@@ -270,7 +276,7 @@ class BaseAgent(ABC):
 
         full_messages: list[dict[str, Any]] = [
             {'role': 'system', 'content': self.system_prompt},
-            *[{'role': m.role, 'content': m.content or ''} for m in messages],
+            *[m.to_chat_completion() for m in messages],
         ]
 
         async with with_llm_span(
@@ -284,6 +290,7 @@ class BaseAgent(ABC):
 
             async def _do_call() -> LLMResult:
                 finish_reason: str | None = None
+                # Content-level retry inside one transport attempt: costs up to 2x the budget.
                 for attempt in range(2):
                     response, delta = await execute_chat_completion(
                         client=self._client,
@@ -327,7 +334,11 @@ class BaseAgent(ABC):
                     f'(finish_reason={finish_reason}). Check model and prompt.'
                 )
 
-            return await with_retry(_do_call, label=f'{self.name}._call_chat_completions')
+            return await with_retry(
+                _do_call,
+                label=f'{self.name}._call_chat_completions',
+                max_attempts=self.config.retry_count + 1,
+            )
 
     async def _call_responses(
         self,
@@ -471,7 +482,11 @@ class BaseAgent(ABC):
                     ]
                 return result
 
-            return await with_retry(_do_call, label=f'{self.name}._call_responses')
+            return await with_retry(
+                _do_call,
+                label=f'{self.name}._call_responses',
+                max_attempts=self.config.retry_count + 1,
+            )
 
 
 def _responses_tool_schema(tool: dict[str, Any]) -> dict[str, Any]:

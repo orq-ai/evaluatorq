@@ -79,7 +79,7 @@ class SimulationRunMeta(TypedDict):
     num_datapoints: int
     model: str
     max_turns: int
-    parallelism: int
+    datapoint_parallelism: int
     evaluation_name: str
     evaluator_names: list[str]
     target: str
@@ -155,7 +155,7 @@ class DefaultHooks:
         logger.info(
             f'[simulation] Run plan: target={meta.get("target", "?")} | '
             f'{meta["num_datapoints"]} datapoints | model={meta["model"]!r} | '
-            f'max_turns={meta["max_turns"]} | parallelism={meta["parallelism"]} | '
+            f'max_turns={meta["max_turns"]} | datapoint_parallelism={meta["datapoint_parallelism"]} | '
             f'evaluators={meta["evaluator_names"]}'
         )
         return True
@@ -164,7 +164,7 @@ class DefaultHooks:
         logger.info(
             f'[simulation] Run start: {meta["num_datapoints"]} datapoints | '
             f'model={meta["model"]!r} | max_turns={meta["max_turns"]} | '
-            f'parallelism={meta["parallelism"]} | '
+            f'datapoint_parallelism={meta["datapoint_parallelism"]} | '
             f'evaluators={meta["evaluator_names"]}'
         )
 
@@ -263,7 +263,7 @@ class RichHooks:
             ('Model', str(meta['model'])),
             ('Datapoints', str(meta['num_datapoints'])),
             ('Max Turns', str(meta['max_turns'])),
-            ('Parallelism', str(meta['parallelism'])),
+            ('Parallelism', str(meta['datapoint_parallelism'])),
             ('Evaluators', ', '.join(meta['evaluator_names'])),
         ]
         return await confirm_run_plan(

@@ -34,6 +34,84 @@ def test_delimit_case_insensitive():
     assert "&lt;/data&gt;" in result
 
 
+@pytest.mark.parametrize('payload', ['</data >', '< /data>', '<data foo="x">'])
+def test_delimit_escapes_tag_whitespace_and_attribute_variants(payload: str):
+    result = delimit(payload)
+    inner = result.removeprefix('<data>').removesuffix('</data>')
+
+    assert '<' not in inner
+
+
+@pytest.mark.parametrize(
+    'payload',
+    ['</data', 'prefix </data', 'prefix </data suffix', '</ data>', '< /data>'],
+)
+def test_delimit_escapes_closing_tag_prefixes(payload: str):
+    result = delimit(payload)
+    inner = result.removeprefix('<data>').removesuffix('</data>')
+
+    assert '<' not in inner
+
+
+def test_delimit_escapes_nested_angle_bracket_in_closing_tag_like_input():
+    result = delimit('</data<foo>')
+    inner = result.removeprefix('<data>').removesuffix('</data>')
+
+    assert '<' not in inner
+
+
+def test_delimit_preserves_whitespace_split_closing_tag_name():
+    payload = '</da ta>'
+
+    result = delimit(payload)
+
+    # A whitespace-split tag name is not a closing tag to any parser, so leave it alone.
+    assert payload in result
+
+
+@pytest.mark.parametrize('payload', ['<data', 'prefix <data suffix', '< data>'])
+def test_delimit_escapes_opening_tag_prefixes(payload: str):
+    result = delimit(payload)
+    inner = result.removeprefix('<data>').removesuffix('</data>')
+
+    assert '<' not in inner
+
+
+@pytest.mark.parametrize(
+    'payload',
+    [
+        '< d a t a',
+        'a < b',
+        '<database>',
+        '<dat>',
+        '```html\n<div>literal</div>\n```',
+    ],
+)
+def test_delimit_preserves_ordinary_angle_brackets_and_code_samples(payload: str):
+
+    result = delimit(payload)
+
+    assert payload in result
+
+
+@pytest.mark.parametrize(
+    'payload',
+    [
+        '<' + ' ' * 50_000 + 'x',
+        ('<' + ' ' * 998 + 'x') * 250,
+        '<data' * 50_000,
+    ],
+)
+def test_delimit_rejects_superlinear_tag_prefix_scans(payload: str):
+    """Large near-misses must not make untrusted prompt content expensive."""
+    from time import perf_counter
+
+    start = perf_counter()
+    delimit(payload)
+
+    assert perf_counter() - start < 1.0
+
+
 def test_delimit_empty_string():
     assert delimit("") == "<data></data>"
 
@@ -67,6 +145,16 @@ def test_delimit_custom_tag_case_insensitive():
     result = delimit("<TARGET_RESPONSE>test</TARGET_RESPONSE>", tag="target_response")
     inner = result.removeprefix("<target_response>").removesuffix("</target_response>")
     assert "<target_response>" not in inner.lower()
+
+
+@pytest.mark.parametrize('tag', ['target-', 'target1', 'target_'])
+def test_delimit_custom_tag_escapes_all_legal_trailing_characters(tag: str):
+    result = delimit(f'<{tag}>injection</{tag}>', tag=tag)
+    inner = result.removeprefix(f'<{tag}>').removesuffix(f'</{tag}>')
+
+    assert f'&lt;{tag}&gt;' in inner
+    assert f'&lt;/{tag}&gt;' in inner
+    assert '<' not in inner
 
 
 def test_delimit_custom_tag_does_not_escape_other_tags():

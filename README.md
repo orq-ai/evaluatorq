@@ -86,7 +86,7 @@ async def main():
         data=data,
         jobs=[agent_v1, agent_v2],
         evaluators=[string_contains_evaluator()],
-        parallelism=3,
+        datapoint_parallelism=3,
     )
 
 
@@ -99,7 +99,7 @@ uv run support_agent_eval.py
 
 <img src="docs/assets/readme-eval-terminal.svg" alt="Terminal output: summary table and a Detailed Results table scoring agent-v1 at 0.33 against agent-v2 at 1.00 on the string-contains evaluator" width="720">
 
-Every job runs against every data point, so adding a variant adds a column. Swap the two function bodies for real model or agent calls and nothing else changes. Any evaluator that returns `pass_=False` exits the process non-zero, so the same script gates CI — which is why this run ends with status 1.
+Every job runs against every data point, so adding a variant adds a column. Swap the two function bodies for real model or agent calls and nothing else changes. The library returns results even when an evaluator returns `pass_=False`, so this example exits 0. To gate CI, check `pass_` with `check_pass_failures(results)` and raise `SystemExit(1)` in your script.
 
 This is the repo's [`examples/lib/basics/support_agent_eval.py`](examples/lib/basics/support_agent_eval.py), minus its `__main__` guard.
 
@@ -156,7 +156,7 @@ Findings come back ranked by `risk = attack success rate × average severity`, e
 
 ### What a run costs
 
-Measured wall clock and token counts from two runs against Orq-hosted agents, attacked and judged by `gpt-5-mini` at `parallelism=10`:
+Measured wall clock and token counts from two runs against Orq-hosted agents, attacked and judged by `gpt-5-mini` at `datapoint_parallelism=10`:
 
 | Run | Attacks | Wall clock | Tokens | Tokens per attack |
 |---|---|---|---|---|
@@ -164,6 +164,8 @@ Measured wall clock and token counts from two runs against Orq-hosted agents, at
 | Dynamic, 3 categories, 1 agent | 10 | 2m 12s | 88k | 9k |
 
 Attacks run concurrently, so wall clock tracks the slowest attack far more than the attack count — quadrupling the sweep cost twelve seconds. Budget a few cents for a run this size at `gpt-5-mini` prices; roughly 40% of the tokens are the judge's, and both the attacker and judge models are configurable, so pointing them at a cheaper model moves the bill directly. Two runs is not a benchmark — treat these as an order of magnitude.
+
+To price a run you have not made yet, the [cost calculator](https://orq-ai.github.io/evaluatorq/guides/red-teaming/#ballpark-the-cost) takes the three numbers that vary — setup calls, attacks, turns — and a price tier.
 
 → [Red teaming guide](https://orq-ai.github.io/evaluatorq/guides/red-teaming/) ·
 [Intro notebook](examples/red_teaming_intro.ipynb) ·
@@ -200,7 +202,7 @@ results = await simulate(
 print(results[0].goal_achieved, results[0].goal_completion_score)
 ```
 
-Runs exit non-zero on failure by default (`exit_on_failure=True`), so they drop straight into CI. The target can be an Orq agent or any local async callable, including agents built with the OpenAI Agents SDK, LangGraph, CrewAI or PydanticAI — [the examples](examples/agent_simulation/) cover each, with screen recordings.
+Simulation owns its `exit_on_failure=True` gate for dropped rows, so it can drop straight into CI; evaluator score failures remain available in the returned results. The target can be an Orq agent or any local async callable, including agents built with the OpenAI Agents SDK, LangGraph, CrewAI or PydanticAI — [the examples](examples/agent_simulation/) cover each, with screen recordings.
 
 → [Agent simulation guide](https://orq-ai.github.io/evaluatorq/guides/agent-simulation/) ·
 [Intro notebook](examples/agent_simulation_intro.ipynb) ·

@@ -97,7 +97,7 @@ config = LLMConfig(
     ),
 )
 
-report = await red_team("agent:my-agent", llm_config=config)
+report = await red_team(target="agent:my-agent", llm_config=config)
 ```
 
 `red_team(..., config=...)` still works as a deprecated alias for backward compatibility, but new code should use `llm_config=`.
@@ -108,15 +108,15 @@ There are two ways to scope what gets tested:
 **Categories** group tests by OWASP standard (e.g. `LLM01`, `ASI01`). Each category contains multiple vulnerability types.
 
 ```python
-target = OpenAIModelTarget("gpt-5-mini", system_prompt="You are helpful.")
-report = await red_team(target, categories=["LLM01", "ASI01"])
+target = OpenAIModelTarget(model="gpt-5-mini", system_prompt="You are helpful.")
+report = await red_team(target=target, categories=["LLM01", "ASI01"])
 ```
 
 **Vulnerabilities** target specific attack vectors (e.g. `prompt_injection`, `goal_hijacking`). Use `list_available_vulnerabilities()` to discover all IDs.
 
 ```python
 report = await red_team(
-    target,
+    target=target,
     vulnerabilities=["prompt_injection", "goal_hijacking"],
 )
 ```
@@ -144,10 +144,10 @@ OpenAI models are invoked from Python with `OpenAIModelTarget`, for example:
 from evaluatorq.redteam import OpenAIModelTarget, red_team
 
 target = OpenAIModelTarget(
-    "gpt-5-mini",
+    model="gpt-5-mini",
     system_prompt="You are a helpful assistant.",
 )
-report = await red_team(target, categories=["LLM01"])
+report = await red_team(target=target, categories=["LLM01"])
 ```
 
 ### Python OpenAI examples
@@ -156,12 +156,12 @@ report = await red_team(target, categories=["LLM01"])
 from evaluatorq.redteam import OpenAIModelTarget, red_team
 
 target = OpenAIModelTarget(
-    "gpt-5-mini",
+    model="gpt-5-mini",
     system_prompt="You are a helpful assistant.",
 )
 
 report = await red_team(
-    target,
+    target=target,
     categories=["LLM01", "LLM07"],
     max_turns=2,
     max_dynamic_datapoints=5,

@@ -103,7 +103,7 @@ the raw files:
 from evaluatorq.integrations.langgraph_integration import LangGraphTarget
 from evaluatorq.simulation import simulate
 
-results = await simulate(target=LangGraphTarget(graph), personas=[...], scenarios=[...])
+results = await simulate(target=LangGraphTarget(graph=graph), personas=[...], scenarios=[...])
 ```
 
 Custom framework not listed? Wrap any `fn(messages) -> str` with

@@ -28,6 +28,10 @@ def build_token_usage_rows(data: Mapping[str, Any]) -> list[list[str]]:
             f'{token_value(data, "avg_output_per_conversation", "avg_completion_per_conversation"):.0f}',
         ],
     ]
+    unknown = data.get('unknown_usage_conversations', 0)
+    if isinstance(unknown, int) and unknown > 0:
+        label = 'conversation' if unknown == 1 else 'conversations'
+        rows.append(['Usage Coverage', f'unknown for {unknown} {label}'])
     cached = token_value(data, 'cached_tokens')
     if cached:
         rows.append(['Cached Tokens (retrieved)', f'{cached:,}'])

@@ -3,7 +3,8 @@
 Verifies:
 - GET /r/{rid}/sim/transcript?idx=0   → 200, HTML, persona/scenario in output
 - GET /r/{rid}/sim/transcript?idx=N   → graceful empty (no 500) for out-of-range idx
-- Bad idx param (non-integer)         → graceful (falls back to idx=0)
+- Bad idx param (non-integer)         → graceful empty state (200)
+- Missing idx                         → conversation 0 (200)
 - Missing rid                         → 404
 - Transcript messages rendered in markup (role + content)
 - XSS: a message containing <script> appears escaped
@@ -331,10 +332,17 @@ class TestSimTranscriptRoute:
         # Must not 500 — graceful empty or 200 with empty message.
         assert r.status_code != 500
 
-    def test_transcript_non_integer_idx_no_500(self, client: TestClient, roots: list[Path]) -> None:
+    def test_transcript_malformed_idx_is_empty_and_missing_idx_defaults_to_zero(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
         rid = report_id(_sim_path(roots))
-        r = client.get(f'/r/{rid}/sim/transcript?idx=abc')
-        assert r.status_code != 500
+        malformed = client.get(f'/r/{rid}/sim/transcript?idx=abc')
+        assert malformed.status_code == 200
+        assert malformed.text == '<p class="sim-empty">No conversation at that index.</p>'
+
+        missing = client.get(f'/r/{rid}/sim/transcript')
+        assert missing.status_code == 200
+        assert 'Hello, I need help with my order' in missing.text
 
     def test_transcript_missing_rid_returns_404(self, client: TestClient) -> None:
         r = client.get('/r/nonexistent123/sim/transcript?idx=0')

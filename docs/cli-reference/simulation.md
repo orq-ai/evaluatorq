@@ -8,8 +8,7 @@ Three main verbs: `generate` (datapoints only), `simulate` (run against pre-buil
     The recommended way to browse saved simulation runs is the multi-run FastHTML
     dashboard, `eq dashboard .evaluatorq/sim-runs` (scopes to simulation) or
     `eq dashboard` (both stores). Passing a single JSON report file is an optional
-    direct deep-link. The legacy `eq sim ui` Streamlit command remains callable
-    but is deprecated (see below).
+    direct deep-link.
 
 ## `eq sim run`
 
@@ -35,7 +34,8 @@ Targets — provide **exactly one**:
 | `--name` / `-n` | `str` / `sim` | Run name for the run-store entry. |
 | `--sim-model` | `str` / `openai/gpt-5.4-mini` | Model for user-simulator, judge, and generation. |
 | `--max-turns` | `int` / `10` | Maximum conversation turns. |
-| `--parallelism` | `int` / `5` | Concurrent simulations. |
+| `--datapoint-parallelism` | `int` / `10` | Concurrent simulations. `--parallelism` is a deprecated alias. |
+| `--llm-parallelism` | `int` / unset | Ceiling on in-flight LLM requests for the whole run. |
 | `--num-personas` | `int` / `5` | Number of personas to generate. |
 | `--num-scenarios` | `int` / `5` | Number of scenarios to generate. |
 | `--evaluator` | `str` (repeatable) / API defaults | Evaluator name(s). Repeatable. |
@@ -76,7 +76,8 @@ by `--experiment-run-id`), or `--from-run`.
 | `--name` / `-n` | `str` / `sim` | Run name for the run-store entry. |
 | `--sim-model` | `str` / `openai/gpt-5.4-mini` | Model for user-simulator and judge. |
 | `--max-turns` | `int` / `10` | Maximum conversation turns. Defaults to the replayed run's cap with `--from-run`. |
-| `--parallelism` | `int` / `5` | Concurrent simulations. |
+| `--datapoint-parallelism` | `int` / `10` | Concurrent simulations. `--parallelism` is a deprecated alias. |
+| `--llm-parallelism` | `int` / unset | Ceiling on in-flight LLM requests for the whole run. |
 | `--evaluator` | `str` (repeatable) / API defaults | Evaluator name(s). Repeatable. |
 | `--no-save` | `bool` / `False` | Skip writing to `.evaluatorq/sim-runs/`. |
 | `--recommendations` / `--no-recommendations` | `bool` / `True` | Generate LLM remediation suggestions for failures, tied to their concrete cause. On by default; `--no-recommendations` skips the extra LLM call. Uses `--sim-model`. |
@@ -238,28 +239,3 @@ eq sim runs [DIRECTORY] [--limit N]
 | `--full` / `-f` | `bool` / `False` | Render at full content width; do not truncate columns. |
 | `--json` | `bool` / `False` | Emit runs as a JSON array on stdout. |
 
----
-
-## `eq sim ui` (deprecated)
-
-!!! warning "Deprecated — use `eq dashboard`"
-    `eq sim ui` is a deprecated legacy Streamlit command. The primary UI for
-    browsing simulation runs is the multi-run FastHTML dashboard: `eq dashboard
-    .evaluatorq/sim-runs` (scopes to simulation) or `eq dashboard` (both stores).
-    Passing a single JSON report file to `eq dashboard` is an optional direct
-    deep-link.
-
-Launch the Streamlit dashboard for a saved simulation run.
-
-```bash
-eq sim ui [RUN_PATH] [--latest] [--host HOST] [--port PORT]
-```
-
-| Flag / Argument | Type / Default | Description |
-|---|---|---|
-| `RUN_PATH` | `Path \| None` / `None` | Saved run to open. Omit to use the latest auto-saved run. |
-| `--latest` / `-l` | `bool` / `False` | Open the most recent run without passing a path. |
-| `--host` | `str` / `localhost` | Host to bind the Streamlit server to. |
-| `--port` | `int` / `8501` | Port for the Streamlit server. |
-
-Requires `evaluatorq[simulation]`.

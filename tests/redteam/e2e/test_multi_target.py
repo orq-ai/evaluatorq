@@ -29,7 +29,7 @@ async def test_multi_target_static_merge(
     report = await red_team(
         [target_a, target_b],
         mode="static",
-        parallelism=2,
+        datapoint_parallelism=2,
         dataset=str(static_dataset_path),
         llm_client=client,
         description="E2E multi-target test",
@@ -67,7 +67,7 @@ async def test_multi_target_empty_delivery_filter_hard_fails(
             targets,
             mode="static",
             delivery_methods=[DeliveryMethod.BASE64],  # no fixture row uses this
-            parallelism=2,
+            datapoint_parallelism=2,
             dataset=str(static_dataset_path),
             llm_client=client,
         )

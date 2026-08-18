@@ -34,7 +34,7 @@ async def main() -> None:
         print(f"  {cat}")
 
     target = OpenAIModelTarget(
-        "gpt-5-mini",
+        model="gpt-5-mini",
         system_prompt=(
             "You are a helpful customer support assistant for Acme Corp. "
             "You help customers with orders, returns, and product questions. "
@@ -43,7 +43,7 @@ async def main() -> None:
     )
     # Run only prompt injection and system prompt leakage tests
     report = await red_team(
-        target,
+        target=target,
         mode="dynamic",
         categories=["LLM01", "LLM07"],
         max_turns=2,

@@ -8,6 +8,7 @@ import pytest
 from evaluatorq.common.target_call import (
     call_target_with_retry,
     classify_error_type,
+    close_target,
     default_map_error,
     extract_status_code,
 )
@@ -28,6 +29,11 @@ class _Target:
         return item
 
 
+class _ClosingTarget:
+    async def close(self) -> None:
+        raise RuntimeError('close boom')
+
+
 def _ok(text: str) -> AgentResponse:
     return AgentResponse(text=text)
 
@@ -36,6 +42,18 @@ def _err(msg: str) -> AgentResponse:
     return AgentResponse(
         text=msg, error=AgentResponseError(message=msg, error_type='target_error', code='x')
     )
+
+
+@pytest.mark.asyncio
+async def test_close_target_logs_and_swallows_cleanup_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    warnings: list[tuple[object, ...]] = []
+    monkeypatch.setattr('evaluatorq.common.target_call.logger.warning', lambda *args: warnings.append(args))
+
+    await close_target(_ClosingTarget())
+
+    assert len(warnings) == 1
+    assert 'ClosingTarget' in str(warnings[0])
+    assert 'close boom' in str(warnings[0])
 
 
 @pytest.mark.asyncio

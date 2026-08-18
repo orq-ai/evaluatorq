@@ -56,7 +56,7 @@ datapoints concurrently, so "the next judge in the rotation" would otherwise mea
 "whichever judge call happened to arrive first" — non-reproducible between two
 identical runs. Because the key is the row:
 
-- the mapping is identical at `parallelism=1` and `parallelism=32`,
+- the mapping is identical at `datapoint_parallelism=1` and `datapoint_parallelism=32`,
 - re-running the same dataset assigns the same judges again,
 - reusing one `llm_jury(...)` object across several runs does not shift it.
 

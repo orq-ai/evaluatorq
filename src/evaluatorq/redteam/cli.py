@@ -348,10 +348,23 @@ def run(
             'still exits non-zero regardless.',
         ),
     ] = EvaluatorConfig.model_fields['min_evaluation_coverage'].default,
-    parallelism: Annotated[
+    datapoint_parallelism: Annotated[
         int,
-        typer.Option(help='Maximum concurrent evaluatorq jobs.'),
+        typer.Option(
+            '--datapoint-parallelism',
+            '--parallelism',
+            help='Maximum number of concurrent datapoints/jobs (tasks). --parallelism is a deprecated alias.',
+        ),
     ] = 10,
+    llm_parallelism: Annotated[
+        int | None,
+        typer.Option(
+            '--llm-parallelism',
+            min=1,
+            help='Ceiling on in-flight LLM requests for the whole run. Unbounded by default; '
+            'size it against your provider concurrency limit.',
+        ),
+    ] = None,
     generated_strategy_count: Annotated[
         int,
         typer.Option(help='Number of strategies to generate per category.'),
@@ -543,7 +556,8 @@ def run(
                 delivery_methods=resolved_delivery_methods,
                 max_turns=max_turns,
                 max_per_category=max_per_category,
-                parallelism=parallelism,
+                datapoint_parallelism=datapoint_parallelism,
+                llm_parallelism=llm_parallelism,
                 generate_strategies=not no_generate_strategies,
                 generated_strategy_count=generated_strategy_count,
                 max_dynamic_datapoints=max_dynamic_datapoints,

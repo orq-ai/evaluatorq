@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import inspect
 import json
 import os
 import re
@@ -22,12 +21,14 @@ from loguru import logger
 from evaluatorq import DataPoint, EvaluationResult, job
 from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.llm_client import resolve_results_base_url
+from evaluatorq.common.llm_limit import llm_concurrency_limit
 from evaluatorq.common.messages import coerce_content_text
+from evaluatorq.common.parallelism import resolve_datapoint_parallelism
 from evaluatorq.common.recommendations import resolve_recommendations
 from evaluatorq.common.replay import REPLAY_VERSION, REPLAY_VERSION_KEY
 from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.common.run_store_dir import get_store_dir
-from evaluatorq.common.target_call import call_target_with_retry, default_map_error
+from evaluatorq.common.target_call import call_target_with_retry, close_target, default_map_error
 from evaluatorq.common.thread_context import (
     _evaluatorq_run_scope,
     build_static_thread_id,
@@ -493,7 +494,9 @@ async def red_team(
     delivery_methods: list[DeliveryMethod | str] | None = None,
     max_turns: int | None = None,
     max_per_category: int | None = None,
-    parallelism: int = 10,
+    datapoint_parallelism: int | None = None,
+    llm_parallelism: int | None = None,
+    parallelism: int | None = None,
     generate_strategies: bool = True,
     generated_strategy_count: int = 2,
     max_dynamic_datapoints: int | None = None,
@@ -560,7 +563,15 @@ async def red_team(
             evaluator=LLMCallConfig(...))`` to control model, temperature, and other
             per-role settings. Defaults to ``LLMConfig()`` which uses the default model
             for both attacker and evaluator roles.
-        parallelism: Maximum concurrent evaluatorq jobs.
+        datapoint_parallelism: Maximum number of concurrent datapoints/jobs (tasks).
+            Defaults to 10.
+        parallelism: Deprecated alias for ``datapoint_parallelism``.
+        llm_parallelism: Ceiling on in-flight LLM requests for the whole
+            run, counted per request rather than per job. Unbounded by default.
+            Set this, not ``datapoint_parallelism``, against a provider concurrency
+            limit: one job issues many requests, so ``datapoint_parallelism`` cannot
+            be sized against one. Covers the pipeline, judges and strategy generation;
+            an ORQ or LangChain target's own calls are not counted.
         generate_strategies: Whether to generate additional LLM-based strategies.
         generated_strategy_count: Number of strategies to generate per category.
         max_dynamic_datapoints: Cap dynamic (generated) datapoints (None = no cap).
@@ -634,7 +645,7 @@ async def red_team(
 
     async def main() -> None:
         # Dynamic run against an ORQ platform agent
-        report = await red_team("agent:YOUR_AGENT_KEY", mode="dynamic", categories=["LLM01", "LLM07"])
+        report = await red_team(target="agent:YOUR_AGENT_KEY", mode="dynamic", categories=["LLM01", "LLM07"])
         print(report.summary.resistance_rate)
 
 
@@ -649,14 +660,18 @@ async def red_team(
 
     async def main() -> None:
         # Dynamic run against a direct model target
-        target = OpenAIModelTarget("gpt-5-mini", system_prompt="You are a helpful assistant.")
-        report = await red_team(target, mode="dynamic", categories=["LLM01", "LLM07"])
+        target = OpenAIModelTarget(model="gpt-5-mini", system_prompt="You are a helpful assistant.")
+        report = await red_team(target=target, mode="dynamic", categories=["LLM01", "LLM07"])
         print(report.summary.resistance_rate)
 
 
     asyncio.run(main())
     ```
     """
+    datapoint_parallelism = resolve_datapoint_parallelism(
+        datapoint_parallelism, parallelism, default=10, caller='red_team'
+    )
+
     # True -> defaults, False -> off, instance -> as given. One resolution here so the
     # generation site downstream only has to check for None.
     recommendation_config = resolve_recommendations(recommendations, RedTeamRecommendationConfig)
@@ -956,12 +971,13 @@ async def red_team(
         'orq.redteam.mode': resolved_mode,
         'orq.redteam.backend': backend_label,
         'orq.redteam.max_turns': resolved_max_turns,
-        'orq.redteam.parallelism': parallelism,
+        'orq.redteam.parallelism': datapoint_parallelism,
     }
 
     async with (  # noqa: SIM117
         tracing_session(name or 'red-team', trace_type='redteam') as tracing_context,
         _redteam_run_lifecycle(manifest_writer),
+        llm_concurrency_limit(llm_parallelism),
     ):
         async with _redteam_root_scope(
             tracing_context.run_id,
@@ -981,7 +997,7 @@ async def red_team(
                     max_per_category=max_per_category,
                     attack_model=attack_model,
                     evaluator_model=evaluator_model,
-                    parallelism=parallelism,
+                    datapoint_parallelism=datapoint_parallelism,
                     generate_strategies=generate_strategies,
                     generated_strategy_count=generated_strategy_count,
                     max_dynamic_datapoints=max_dynamic_datapoints,
@@ -1011,7 +1027,7 @@ async def red_team(
                     name=name,
                     categories=resolved_categories,
                     evaluator_model=evaluator_model,
-                    parallelism=parallelism,
+                    datapoint_parallelism=datapoint_parallelism,
                     max_static_datapoints=max_static_datapoints,
                     dataset=dataset,
                     description=description,
@@ -1223,6 +1239,8 @@ def _deduplicate_target_labels(
 def _extract_static_prompt(data: DataPoint) -> str:
     """Flatten a static datapoint's messages into a single prompt string.
 
+    This is the canonical flattener for static AgentTarget prompts.
+
     Static OWASP datapoints are typically single-turn. When multiple user turns
     are present we join them with blank lines so all adversarial content is
     delivered to the target. System messages are skipped — targets manage
@@ -1345,11 +1363,7 @@ def _create_static_job_for_agent_target(
 
             return {**output, 'thread_id': thread_id}
         finally:
-            target_close = getattr(target, 'close', None)
-            if callable(target_close):
-                maybe = target_close()
-                if inspect.isawaitable(maybe):
-                    await maybe
+            await close_target(target)
 
     return agent_target_job
 
@@ -1519,7 +1533,7 @@ async def _prepare_target(
     max_turns: int,
     max_per_category: int | None,
     attack_model: str,
-    parallelism: int,
+    datapoint_parallelism: int,
     generate_strategies: bool,
     generated_strategy_count: int,
     max_dynamic_datapoints: int | None,
@@ -1622,7 +1636,7 @@ async def _prepare_target(
                 generated_strategy_count=generated_strategy_count,
                 llm_client=resolved_llm_client,
                 attack_model=attack_model,
-                parallelism=parallelism,
+                datapoint_parallelism=datapoint_parallelism,
                 attacker_instructions=attacker_instructions,
                 pipeline_config=pipeline_config,
                 agent_capabilities=prefetched_agent_capabilities,
@@ -1640,7 +1654,7 @@ async def _prepare_target(
                 generated_strategy_count=generated_strategy_count,
                 llm_client=resolved_llm_client,
                 attack_model=attack_model,
-                parallelism=parallelism,
+                datapoint_parallelism=datapoint_parallelism,
                 attacker_instructions=attacker_instructions,
                 pipeline_config=pipeline_config,
                 agent_capabilities=prefetched_agent_capabilities,
@@ -1817,7 +1831,7 @@ async def _run_dynamic_or_hybrid(
     max_per_category: int | None,
     attack_model: str,
     evaluator_model: str,
-    parallelism: int,
+    datapoint_parallelism: int,
     generate_strategies: bool,
     generated_strategy_count: int,
     max_dynamic_datapoints: int | None,
@@ -2175,7 +2189,7 @@ async def _run_dynamic_or_hybrid(
         'attack_model': attack_model,
         'evaluator_model': evaluator_model,
         'max_turns': max_turns,
-        'parallelism': parallelism,
+        'datapoint_parallelism': datapoint_parallelism,
         'filtering_metadata': None,
         'strategy_breakdown': strategy_breakdown or None,
         'mode': str(mode.value) if hasattr(mode, 'value') else str(mode),
@@ -2198,7 +2212,7 @@ async def _run_dynamic_or_hybrid(
         max_turns=max_turns,
         max_per_category=max_per_category,
         attack_model=attack_model,
-        parallelism=parallelism,
+        datapoint_parallelism=datapoint_parallelism,
         generate_strategies=generate_strategies,
         generated_strategy_count=generated_strategy_count,
         max_dynamic_datapoints=max_dynamic_datapoints,
@@ -2325,7 +2339,7 @@ async def _run_dynamic_or_hybrid(
                         generated_strategy_count=generated_strategy_count,
                         llm_client=at_llm_client,
                         attack_model=attack_model,
-                        parallelism=parallelism,
+                        datapoint_parallelism=datapoint_parallelism,
                         attacker_instructions=attacker_instructions,
                         pipeline_config=pipeline_config,
                         agent_capabilities=at_pref_caps,
@@ -2342,7 +2356,7 @@ async def _run_dynamic_or_hybrid(
                         generated_strategy_count=generated_strategy_count,
                         llm_client=at_llm_client,
                         attack_model=attack_model,
-                        parallelism=parallelism,
+                        datapoint_parallelism=datapoint_parallelism,
                         attacker_instructions=attacker_instructions,
                         pipeline_config=pipeline_config,
                         agent_capabilities=at_pref_caps,
@@ -2393,11 +2407,7 @@ async def _run_dynamic_or_hybrid(
                 ) -> Any:
                     """Send a static datapoint to the AgentTarget via respond."""
                     messages = _build_messages(data)
-                    prompt = '\n'.join(
-                        text
-                        for m in messages
-                        if m.get('role') == 'user' and (text := coerce_content_text(m.get('content')))
-                    )
+                    prompt = _extract_static_prompt(data)
                     if not prompt:
                         sample_id = data.inputs.get('id', 'unknown')
                         raise ValueError(
@@ -2405,59 +2415,59 @@ async def _run_dynamic_or_hybrid(
                             f'produced an empty prompt ({len(messages)} messages, none with user content).'
                         )
                     target_instance = _backend.create_target(_label)
-                    attack_attrs = _static_attack_attrs(data)
-                    target_input = truncate_for_span(prompt)
-                    thread_id = build_static_thread_id(run_id, _safe, _row)
-                    async with (
-                        with_redteam_span('orq.redteam.attack', attack_attrs),
-                        with_redteam_span(
-                            'orq.redteam.target_call',
-                            {
-                                **attack_attrs,
-                                'input': target_input,
-                                'orq.redteam.input': target_input,
-                            },
-                        ) as target_span,
-                    ):
-                        with conversation_thread(thread_id):
-                            async with with_redteam_span(
-                                f'agent {_label}',
+                    try:
+                        attack_attrs = _static_attack_attrs(data)
+                        target_input = truncate_for_span(prompt)
+                        thread_id = build_static_thread_id(run_id, _safe, _row)
+                        async with (
+                            with_redteam_span('orq.redteam.attack', attack_attrs),
+                            with_redteam_span(
+                                'orq.redteam.target_call',
                                 {
-                                    'orq.redteam.llm_purpose': 'target',
+                                    **attack_attrs,
                                     'input': target_input,
                                     'orq.redteam.input': target_input,
                                 },
-                            ) as agent_span:
-                                # Same shared call as the non-hybrid static path: without it
-                                # this leg had no retry, no timeout and no ``error`` key at
-                                # all, so a failed target reached the judge as a plain
-                                # ``[ERROR: ...]`` string and got scored as a real answer.
-                                output = await _run_static_target_call(
-                                    target_instance,
-                                    prompt,
-                                    target_agent_timeout_ms=_cfg.target_agent_timeout_ms,
-                                    max_target_retries=_cfg.max_target_retries,
-                                    map_error=_backend.map_error,
-                                )
-                                if output['error'] is not None:
-                                    error_attrs: AttrMap = {
-                                        'orq.redteam.error_type': output['error_type'],
-                                        'orq.redteam.error_code': output['error_code'],
-                                    }
-                                    set_span_attrs(target_span, error_attrs)
-                                    set_span_attrs(agent_span, error_attrs)
-                                else:
-                                    response_text = truncate_for_span(output['response'])
-                                    output_attrs: AttrMap = {
-                                        'output': response_text,
-                                        'orq.redteam.output': response_text,
-                                    }
-                                    set_span_attrs(target_span, output_attrs)
-                                    set_span_attrs(agent_span, output_attrs)
-                    return {
-                        **output,
-                        'thread_id': thread_id,
-                    }
+                            ) as target_span,
+                        ):
+                            with conversation_thread(thread_id):
+                                async with with_redteam_span(
+                                    f'agent {_label}',
+                                    {
+                                        'orq.redteam.llm_purpose': 'target',
+                                        'input': target_input,
+                                        'orq.redteam.input': target_input,
+                                    },
+                                ) as agent_span:
+                                    # Shared with the non-hybrid static path: retry, timeout, error key.
+                                    output = await _run_static_target_call(
+                                        target_instance,
+                                        prompt,
+                                        target_agent_timeout_ms=_cfg.target_agent_timeout_ms,
+                                        max_target_retries=_cfg.max_target_retries,
+                                        map_error=_backend.map_error,
+                                    )
+                                    if output['error'] is not None:
+                                        error_attrs: AttrMap = {
+                                            'orq.redteam.error_type': output['error_type'],
+                                            'orq.redteam.error_code': output['error_code'],
+                                        }
+                                        set_span_attrs(target_span, error_attrs)
+                                        set_span_attrs(agent_span, error_attrs)
+                                    else:
+                                        response_text = truncate_for_span(output['response'])
+                                        output_attrs: AttrMap = {
+                                            'output': response_text,
+                                            'orq.redteam.output': response_text,
+                                        }
+                                        set_span_attrs(target_span, output_attrs)
+                                        set_span_attrs(agent_span, output_attrs)
+                        return {
+                            **output,
+                            'thread_id': thread_id,
+                        }
+                    finally:
+                        await close_target(target_instance)
 
                 @job(f'redteam:hybrid:{at_safe}')
                 async def at_target_job(
@@ -2611,9 +2621,8 @@ async def _run_dynamic_or_hybrid(
                 data=all_datapoints,
                 jobs=all_jobs,
                 evaluators=evaluators,
-                parallelism=parallelism,
+                datapoint_parallelism=datapoint_parallelism,
                 print_results=False,
-                _exit_on_failure=False,
                 _send_results=False,
                 _trace_type='evaluatorq',
                 description=description or f'{mode.capitalize()} red teaming ({len(all_target_labels)} targets)',
@@ -2899,7 +2908,7 @@ async def _run_static(
     name: str | None = None,
     categories: list[str] | None,
     evaluator_model: str,
-    parallelism: int,
+    datapoint_parallelism: int,
     max_static_datapoints: int | None,
     dataset: Any,
     description: str | None,
@@ -3056,7 +3065,7 @@ async def _run_static(
         'attack_model': '',
         'evaluator_model': evaluator_model,
         'max_turns': 1,
-        'parallelism': parallelism,
+        'datapoint_parallelism': datapoint_parallelism,
         'filtering_metadata': None,
         'mode': 'static',
         'target': ', '.join(all_target_labels),
@@ -3083,9 +3092,8 @@ async def _run_static(
         data=data,
         jobs=jobs,
         evaluators=[evaluator],
-        parallelism=parallelism,
+        datapoint_parallelism=datapoint_parallelism,
         print_results=False,
-        _exit_on_failure=False,
         _send_results=False,
         _trace_type='evaluatorq',
         description=description or f'Static red teaming ({len(all_target_labels)} targets)',

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel
 
+from evaluatorq.contracts import AgentResponseError
 from evaluatorq.redteam.contracts import (
     AgentContext,
     AgentInfo,
@@ -574,6 +575,43 @@ def _make_agent_context(key: str = 'test-agent', model: str = 'gpt-4o') -> Agent
 class TestCoerceJobOutputPayload:
     """Tests for _coerce_job_output_payload()."""
 
+    def test_object_shaped_error_is_flattened_before_validation(self):
+        raw = {
+            'response': '[ERROR: boom]',
+            'error': AgentResponseError(message='boom', error_type='target_error', code='boom-code'),
+        }
+
+        result = _coerce_job_output_payload(raw)
+
+        assert result.error == 'Target agent failed after 1 attempt(s): boom'
+        assert result.error_type == 'target_error'
+        assert result.error_stage == 'target_call'
+        assert result.error_code == 'boom-code'
+        assert result.error_turn == 1
+        assert result.error_details is None
+
+    def test_serialized_error_payload_is_flattened_before_validation(self):
+        raw = {
+            'response': '[ERROR: boom]',
+            'error': {
+                'error': 'boom',
+                'error_type': 'provider_error',
+                'error_stage': 'target_call',
+                'error_code': 'provider-boom',
+                'error_turn': 3,
+                'error_details': {'provider': 'example'},
+            },
+        }
+
+        result = _coerce_job_output_payload(raw)
+
+        assert result.error == 'boom'
+        assert result.error_type == 'provider_error'
+        assert result.error_stage == 'target_call'
+        assert result.error_code == 'provider-boom'
+        assert result.error_turn == 3
+        assert result.error_details == {'provider': 'example'}
+
     def test_dict_input_with_final_response(self):
         raw = {'final_response': 'Hello there', 'turns': 3}
         result = _coerce_job_output_payload(raw)
@@ -713,6 +751,28 @@ class TestCoerceJobOutputPayload:
 
 class TestDynamicConverterValuePropagation:
     """Tests for dynamic_evaluatorq_results_to_report()."""
+
+    def test_pre_execution_datapoint_is_reported_as_run_error_not_attack(self):
+        failed = SimpleNamespace(
+            data_point=SimpleNamespace(inputs={'row_index': 7}),
+            error='strategy generation failed',
+            job_results=None,
+        )
+
+        report = dynamic_evaluatorq_results_to_report(
+            agent_context=_make_agent_context(),
+            categories_tested=['ASI01'],
+            results=[failed],
+        )
+
+        assert report.results == []
+        assert report.total_results == 0
+        assert len(report.errors) == 1
+        assert report.errors[0].message == 'strategy generation failed'
+        assert report.errors[0].stage == PipelineStage.DATAPOINT_GENERATION
+        assert report.summary.pre_execution_errors == 1
+        assert report.summary.total_errors == 1
+        assert report.summary.total_attacks == 0
 
     def test_value_field_propagated_to_evaluation(self):
         mock_result = _make_dynamic_mock_result(score_value=True, score_explanation='Agent resisted')
@@ -1055,6 +1115,23 @@ class TestStaticEvaluatorqResults:
         assert result.evaluation.value is True
         assert result.evaluation.passed is True
 
+    def test_result_without_job_results_is_retained_as_pre_execution_error(self):
+        result = SimpleNamespace(
+            data_point=SimpleNamespace(inputs={'id': 'static-pre-execution-001', 'category': 'ASI01'}),
+            job_results=[],
+            error='RuntimeError: static row failed before execution',
+        )
+
+        reports = static_evaluatorq_results_to_reports(results=[result], agent_key='my-agent')
+
+        assert set(reports) == {'pre-execution'}
+        report = reports['pre-execution']
+        assert report.results == []
+        assert len(report.errors) == 1
+        assert report.errors[0].message == 'RuntimeError: static row failed before execution'
+        assert report.summary.pre_execution_errors == 1
+        assert report.summary.total_errors == 1
+
     def test_multiple_jobs_produce_separate_reports(self):
         mock_a = _make_static_mock_result(job_name='job-a', final_response='resp-a')
         mock_b = _make_static_mock_result(job_name='job-b', final_response='resp-b')
@@ -1116,6 +1193,23 @@ class TestStaticEvaluatorqResults:
         assert result.evaluation is not None
         assert result.evaluation.token_usage is not None
         assert result.evaluation.token_usage.total_tokens == 6
+
+    def test_scorer_exception_survives_the_static_conversion(self):
+        """A scorer that raises produces ``EvaluatorScore(score=EvaluationResult(value=''), error=...)``.
+
+        That exception message must reach the report as a structured evaluation_error
+        (not the generic 'no_evaluation' cause), with the text intact — mirrors the
+        dynamic path's ``_scorer_error_to_run_error``.
+        """
+        mock_result = _make_static_mock_result(score_explanation='')
+        mock_result.job_results[0].evaluator_scores[0].score.value = ''
+        mock_result.job_results[0].evaluator_scores[0].error = 'boom'
+        reports = static_evaluatorq_results_to_reports(results=[mock_result], agent_key='my-agent')
+        result = reports['target-job'].results[0]
+        assert result.vulnerable is None
+        assert result.evaluation_error is not None
+        assert result.evaluation_error.code == 'scorer_exception'
+        assert 'boom' in result.evaluation_error.message
 
 
 # ---------------------------------------------------------------------------

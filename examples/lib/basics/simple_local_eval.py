@@ -34,7 +34,7 @@ async def run():
         data=data,
         jobs=[uppercase_job],
         evaluators=[string_contains_evaluator()],
-        parallelism=3,
+        datapoint_parallelism=3,
         print_results=True,
         description="Simple local evaluation to test tracing",
     )

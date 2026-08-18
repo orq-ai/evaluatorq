@@ -203,11 +203,12 @@ def render_breakdown(
         container_id=container_id,
     )
 
-    if not results:
+    if not results or not any(_is_evaluated(r) for r in results):
+        empty_message = 'No results to display.' if not results else 'No evaluated results to display.'
         return (
             f'<div class="rt-breakdown" id="{esc(container_id)}">'
             f'{group_selector}{stack_selector}'
-            '<p class="rt-view-empty">No results to display.</p>'
+            f'<p class="rt-view-empty">{empty_message}</p>'
             '</div>'
         )
 
@@ -282,12 +283,23 @@ def _build_breakdown_chart(
         stacked_rows: list[dict[str, Any]] = []
         for (g, s), counts in groups_stacked.items():
             asr = (counts['vuln'] / counts['evaluated'] * 100) if counts['evaluated'] else 0.0
-            stacked_rows.append({'dimension': g, 'stack': s, 'asr': round(asr, 1), 'n': counts['evaluated']})
+            stacked_rows.append({
+                'dimension': g,
+                'stack': s,
+                'asr': round(asr, 1),
+                'n': counts['evaluated'],
+                'vuln': counts['vuln'],
+            })
 
-        dim_asr: dict[str, list[float]] = defaultdict(list)
+        dim_totals: dict[str, dict[str, int]] = defaultdict(lambda: {'vuln': 0, 'evaluated': 0})
         for row in stacked_rows:
-            dim_asr[row['dimension']].append(row['asr'])
-        dim_order = sorted(dim_asr.keys(), key=lambda d: sum(dim_asr[d]) / max(len(dim_asr[d]), 1), reverse=True)
+            dim_totals[row['dimension']]['vuln'] += row['vuln']
+            dim_totals[row['dimension']]['evaluated'] += row['n']
+        dim_order = sorted(
+            dim_totals,
+            key=lambda d: dim_totals[d]['vuln'] / max(dim_totals[d]['evaluated'], 1),
+            reverse=True,
+        )
 
         stack_vals = sorted({row['stack'] for row in stacked_rows})
 
@@ -300,8 +312,8 @@ def _build_breakdown_chart(
             sv_vals: list[float] = []
             sv_texts: list[str] = []
             for d in dim_order:
-                row = row_by_gs.get((d, sv), {'asr': 0.0, 'n': 0})
-                sv_vals.append(row['asr'])
+                row = row_by_gs.get((d, sv), {'asr': 0.0, 'n': 0, 'vuln': 0})
+                sv_vals.append(row['vuln'])
                 n = row['n']
                 sv_texts.append(f'n={n}' if n else '')
             series.append((sv, sv_vals))
@@ -310,8 +322,16 @@ def _build_breakdown_chart(
         spec = vl_stacked_bar(
             labels=dim_order,
             series=series,
-            x_title='ASR (%)',
+            x_title='Vulnerable attacks',
             value_labels=stacked_value_labels,
+            extra_fields={
+                (row['dimension'], row['stack']): {'asr': row['asr'], 'evaluated': row['n']} for row in stacked_rows
+            },
+            tooltip=[
+                {'field': 'value', 'type': 'quantitative', 'title': 'Vulnerable attacks'},
+                {'field': 'asr', 'type': 'quantitative', 'title': 'Segment ASR (%)', 'format': '.1f'},
+                {'field': 'evaluated', 'type': 'quantitative', 'title': 'Evaluated attacks'},
+            ],
         )
 
     return render_embed(spec, chart_id)

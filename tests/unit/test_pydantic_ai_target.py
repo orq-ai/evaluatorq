@@ -18,6 +18,7 @@ import pytest
 pytest.importorskip('pydantic_ai')
 
 from pydantic_ai.messages import TextPart, ToolCallPart, ToolReturnPart
+from pydantic import BaseModel
 
 from evaluatorq.contracts import Message, ToolCallOutputItem
 from evaluatorq.integrations.pydantic_ai_integration import PydanticAITarget
@@ -46,6 +47,16 @@ def _user(text: str = 'hi') -> list[Message]:
 
 
 class TestPydanticAIRespond:
+    @pytest.mark.asyncio
+    async def test_structured_output_fallback_is_json_not_repr(self) -> None:
+        class Answer(BaseModel):
+            field: str
+
+        res = await PydanticAITarget(_agent(_result([], output=Answer(field='x')))).respond(_user())
+
+        assert res.text == '{"field":"x"}'
+        assert 'Answer(' not in res.text
+
     @pytest.mark.asyncio
     async def test_text_part_extracted(self) -> None:
         target = PydanticAITarget(_agent(_result([[TextPart(content='hello back')]])))

@@ -28,7 +28,7 @@ from evaluatorq.redteam import OpenAIModelTarget, red_team
 
 async def main() -> None:
     target = OpenAIModelTarget(
-        "gpt-5-mini",
+        model="gpt-5-mini",
         system_prompt=(
             "You are a helpful customer support assistant for Acme Corp. "
             "You help customers with orders, returns, and product questions. "
@@ -36,10 +36,10 @@ async def main() -> None:
         ),
     )
     report = await red_team(
-        target,
+        target=target,
         mode="static",
         dataset="tests/redteam/fixtures/static_e2e_dataset.json",
-        parallelism=3,
+        datapoint_parallelism=3,
     )
 
     print(f"Pipeline: {report.pipeline}")

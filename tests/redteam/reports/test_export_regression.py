@@ -10,6 +10,7 @@ break the redteam HTML export path.  Two cases:
 from __future__ import annotations
 
 import builtins
+import importlib
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 
@@ -25,6 +26,7 @@ from evaluatorq.redteam.contracts import (
     RedTeamReport,
     RedTeamResult,
     ReportSummary,
+    RunError,
     Severity,
     TurnType,
     UnifiedEvaluationResult,
@@ -42,11 +44,12 @@ def _make_result(
     category: str = 'ASI01',
     passed: bool | None = True,
     agent_key: str = 'test-agent',
+    attack_id: str | None = None,
 ) -> RedTeamResult:
     """Build a minimal RedTeamResult for testing."""
     return RedTeamResult(
         attack=AttackInfo(
-            id=f'{category}-regression-001',
+            id=attack_id or f'{category}-regression-001',
             category=category,
             framework=Framework.OWASP_ASI,
             attack_technique=AttackTechnique.INDIRECT_INJECTION,
@@ -132,3 +135,45 @@ def test_redteam_html_renders_without_vl_convert(
     assert '<html' in html and '</html>' in html
     # Degrades to data tables (not empty chart shells) when charts are absent.
     assert '<table' in html
+
+
+def test_redteam_html_preserves_resistant_vulnerable_and_pre_execution_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resistant = _make_result(passed=True, attack_id='resistant-001')
+    vulnerable = _make_result(passed=False, attack_id='vulnerable-001')
+    pre_execution = RunError(
+        message='RuntimeError: row failed before execution',
+        error_type='runtime_error',
+        stage='datapoint_generation',
+        code='datapoint_error',
+    )
+    report = RedTeamReport(
+        created_at=datetime.now(tz=timezone.utc),
+        description='mixed outcomes',
+        pipeline=Pipeline.DYNAMIC,
+        framework=Framework.OWASP_ASI,
+        categories_tested=['ASI01'],
+        tested_agents=['test-agent'],
+        total_results=2,
+        results=[resistant, vulnerable],
+        errors=[pre_execution],
+        summary=compute_report_summary([resistant, vulnerable], run_errors=[pre_execution]),
+    )
+    donut_values: list[int] = []
+
+    def capture_donut(*, labels, values, colors, title):
+        donut_values.extend(values)
+        return ''
+
+    export_html_module = importlib.import_module('evaluatorq.redteam.reports.export_html')
+    monkeypatch.setattr(export_html_module, '_render_donut_chart_common', capture_donut)
+
+    html = export_html(report)
+
+    assert donut_values == [1, 1, 0]
+    assert 'resistant-001' in html
+    assert 'vulnerable-001' in html
+    assert 'row failed before execution' in html
+    assert html.count('badge-resistant') >= 1
+    assert html.count('badge-vulnerable') >= 1

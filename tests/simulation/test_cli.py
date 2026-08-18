@@ -966,7 +966,7 @@ def test_simulate_forwards_flags(tmp_path: Path) -> None:
     kwargs = mock_impl.call_args.kwargs
     assert kwargs["sim_model"] == "custom-model"
     assert kwargs["max_turns"] == 7
-    assert kwargs["parallelism"] == 3
+    assert kwargs["datapoint_parallelism"] == 3
     assert kwargs["evaluator_names"] == ["goal_achieved"]
     assert kwargs["evaluation_name"] == "My Run"
 

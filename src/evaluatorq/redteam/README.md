@@ -21,13 +21,13 @@ The atomic primitive is the **vulnerability**, not the framework category. Each 
 ```python
 from evaluatorq.redteam import OpenAIModelTarget, red_team
 
-target = OpenAIModelTarget("openai/gpt-5.4-mini", system_prompt="You are helpful.")
+target = OpenAIModelTarget(model="openai/gpt-5.4-mini", system_prompt="You are helpful.")
 
 # Target specific vulnerabilities
-report = await red_team(target, vulnerabilities=["prompt_injection", "goal_hijacking"])
+report = await red_team(target=target, vulnerabilities=["prompt_injection", "goal_hijacking"])
 
 # Or filter by framework category
-report = await red_team(target, categories=["LLM01", "ASI01"])
+report = await red_team(target=target, categories=["LLM01", "ASI01"])
 ```
 
 > Model IDs route through the ORQ router by default, so use the provider-prefixed form (`openai/gpt-5.4-mini`). If you target OpenAI directly (only `OPENAI_API_KEY` set), drop the prefix: `gpt-5.4-mini`.
@@ -167,8 +167,8 @@ from langgraph.prebuilt import create_react_agent
 from evaluatorq.integrations.langgraph_integration import LangGraphTarget
 from evaluatorq.redteam import red_team
 
-graph = create_react_agent(model, tools=[...])
-target = LangGraphTarget(graph)  # or LangGraphTarget(graph, config={"recursion_limit": 50})
+graph = create_react_agent(model=model, tools=[...])
+target = LangGraphTarget(graph=graph)  # or LangGraphTarget(graph=graph, config={"recursion_limit": 50})
 report = await red_team(target=target)
 ```
 
@@ -187,7 +187,7 @@ from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget
 from evaluatorq.redteam import red_team
 
 agent = Agent(name="my-agent", instructions="You are a helpful assistant.")
-target = OpenAIAgentTarget(agent)  # or OpenAIAgentTarget(agent, run_kwargs={"max_turns": 10})
+target = OpenAIAgentTarget(agent=agent)  # or OpenAIAgentTarget(agent=agent, run_kwargs={"max_turns": 10})
 report = await red_team(target=target)
 ```
 

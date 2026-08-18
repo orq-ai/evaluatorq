@@ -18,10 +18,6 @@ exclude_docs: |
   superpowers/
   _snippets/
 
-# Build but soft-hide pages that shouldn't appear in the left nav (reachable by direct URL only).
-not_in_nav: |
-  dashboard.md
-
 theme:
   name: material
   custom_dir: overrides   # overrides/main.html: og:/twitter: card (RES-1088) + llms.txt alternate link (RES-1037)
@@ -66,6 +62,7 @@ hooks:
 
 extra_javascript:
   - js/keyboard.js   # ⌘K / Ctrl+K focuses the search box
+  - js/cost-calculator.js
 
 plugins:
   - search
@@ -163,6 +160,7 @@ plugins:
           - cli-reference/overview.md: CLI commands (evaluatorq / eq) overview.
           - cli-reference/redteam.md: CLI reference for the eq redteam command.
           - cli-reference/simulation.md: CLI reference for the eq sim command.
+          - cli-reference/dashboard.md: CLI reference for the eq dashboard command.
         Examples:
           # `**/` is load-bearing under the plugin's fnmatch: it requires a subdirectory, so this
           # matches example CONTENT at any depth (examples/<group>/<page>.md) but excludes the
@@ -257,6 +255,7 @@ nav:
       - Framework Integrations: framework-integrations.md
       - Agent Simulation:
           - Overview: guides/agent-simulation.md
+      - Dashboard: dashboard.md
       - Red Teaming:
           - Overview: guides/red-teaming.md
           - Custom Evaluators & Frameworks: custom-evaluators-and-frameworks.md
@@ -273,6 +272,7 @@ nav:
           - Overview: cli-reference/overview.md
           - Red Teaming: cli-reference/redteam.md
           - Simulation: cli-reference/simulation.md
+          - Dashboard: cli-reference/dashboard.md
   - FAQ: faq.md
   - About:
       - Contributing: contributing.md

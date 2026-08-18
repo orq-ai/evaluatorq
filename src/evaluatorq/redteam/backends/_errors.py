@@ -1,39 +1,19 @@
 """Backend-internal exception extraction helpers.
 
 Module-private. Used by ``ORQBackend.map_error`` and ``OpenAIBackend.map_error``.
+
+Status extraction deliberately lives in ``common.target_call`` and is re-exported
+here: the retry boundary and ``map_error`` must classify the same exception the
+same way, or a status the report shows as a 4xx gets retried anyway.
 """
 
 from __future__ import annotations
 
 import re
 
+from evaluatorq.common.target_call import extract_status_code
 
-def extract_status_code(exc: Exception) -> int | None:
-    """Extract HTTP-like status code from structured exception fields or text."""
-    response = getattr(exc, 'response', None)
-    status_code = getattr(response, 'status_code', None)
-    if isinstance(status_code, int) and 100 <= status_code <= 599:
-        return status_code
-
-    for attr in ('status_code', 'status'):
-        value = getattr(exc, attr, None)
-        if isinstance(value, int) and 100 <= value <= 599:
-            return value
-
-    text = str(exc)
-    patterns = [
-        r'\bstatus(?:_code)?\s*[=:]\s*(\d{3})\b',
-        r'\bHTTP\s*(\d{3})\b',
-        r'\bcode\s*[=:]\s*(\d{3})\b',
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if not match:
-            continue
-        code = int(match.group(1))
-        if 100 <= code <= 599:
-            return code
-    return None
+__all__ = ['extract_provider_error_code', 'extract_status_code']
 
 
 def extract_provider_error_code(exc: Exception) -> str | None:

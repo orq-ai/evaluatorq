@@ -333,7 +333,7 @@ async def main() -> None:
             sim_model=sim_model,
             generation_client=generation_client,
             max_turns=args.max_turns,
-            parallelism=args.parallelism,
+            datapoint_parallelism=args.parallelism,
             evaluator_names=DEFAULT_EVALUATOR_NAMES,
             user_simulator=user_simulator,
             upload_results=args.upload_results,

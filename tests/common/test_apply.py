@@ -37,6 +37,30 @@ def _orq_client(*, instructions: str = 'OLD RULES', new_version: str = '1.1.0') 
     return client
 
 
+def test_parse_edits_accepts_fenced_json():
+    content = '```json\n{"edits": [{"find": "OLD", "replace": "NEW"}]}\n```'
+
+    assert apply_mod._parse_edits(content) == [{'find': 'OLD', 'replace': 'NEW'}]
+
+
+@pytest.mark.asyncio
+async def test_rewrite_fallback_accepts_fenced_json(monkeypatch: pytest.MonkeyPatch):
+    _stub_chat(
+        monkeypatch,
+        '```json\n{"edits": []}\n```',
+        '```json\n{"instructions": "NEW RULES"}\n```',
+    )
+
+    revised = await apply_mod._merge_instructions(
+        MagicMock(),
+        'test-model',
+        'OLD RULES',
+        ['Tighten the refund rule'],
+    )
+
+    assert revised == 'NEW RULES'
+
+
 @pytest.mark.asyncio
 async def test_cfg_none_path_merges_via_shared_wrapper(monkeypatch: pytest.MonkeyPatch):
     """The simulation path (cfg is None) exercises the real merge, not a stub."""

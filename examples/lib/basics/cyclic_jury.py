@@ -107,11 +107,11 @@ async def main():
         data=[DataPoint(inputs={"id": key}) for key in ANSWERS],
         jobs=[answer],
         evaluators=[all_judges, cyclic],
-        parallelism=4,
+        datapoint_parallelism=4,
         print_results=False,
     )
 
-    # Both mappings are stable at any `parallelism`: cyclic assignment is keyed
+    # Both mappings are stable at any `datapoint_parallelism`: cyclic assignment is keyed
     # on the dataset row, not on whichever judge call happens to arrive first.
     summarize(results, "correctness-all")
     summarize(results, "correctness-cyclic")

@@ -53,8 +53,8 @@ class PydanticAITarget(AgentTarget):
     from pydantic_ai import Agent
     from evaluatorq.integrations.pydantic_ai_integration import PydanticAITarget
 
-    agent = Agent(model, system_prompt="You are a support agent.")
-    target = PydanticAITarget(agent)
+    agent = Agent(model=model, system_prompt="You are a support agent.")
+    target = PydanticAITarget(agent=agent)
     results = await simulate(target=target, ...)
     ```
     """
@@ -113,7 +113,7 @@ class PydanticAITarget(AgentTarget):
         # text if the message objects don't expose the expected parts.
         output: list[OutputMessage] = _build_output(result)
         if not output:
-            text = '' if result.output is None else str(result.output)
+            text = '' if result.output is None else tool_result_to_text(result.output)
             output = [TextOutputItem(text=text, annotations=[])]
         return AgentResponse(output=output, usage=_extract_usage(result))
 

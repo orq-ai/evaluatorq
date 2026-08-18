@@ -621,13 +621,14 @@ def register_sim_view_routes(app: Any, roots: list[Any] | None = None) -> None:
         """Return the transcript drill-down fragment for a sim result row.
 
         Query param ``idx`` selects the full run's 0-based result position.
-        Missing or out-of-range ``idx`` returns a graceful empty message rather
-        than a 500.
+        An absent ``idx`` defaults to the first conversation; malformed or
+        out-of-range ``idx`` returns a graceful empty message rather than a 500.
         """
+        raw_idx = req.query_params.get('idx')
         try:
-            idx = int(req.query_params.get('idx', '0'))
+            idx = 0 if raw_idx is None else int(raw_idx)
         except (ValueError, TypeError):
-            idx = 0
+            idx = -1
 
         run = _load_run(rid, roots)
         if run is None:

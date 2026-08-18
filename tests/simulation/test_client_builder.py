@@ -12,6 +12,8 @@ Covers all resolution branches:
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -43,6 +45,114 @@ def _build(monkeypatch, *, orq_key=None, openai_key=None, base_url=None, **kwarg
     from evaluatorq.openresponses.client import build_simulation_client
 
     return build_simulation_client(**kwargs)
+
+
+def _retry_calls(relative_path: str) -> list[ast.Call]:
+    root = Path(__file__).parents[2] / 'src' / 'evaluatorq'
+    path = root / relative_path
+    tree = ast.parse(path.read_text(encoding='utf-8'))
+    imported_aliases = {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module in {'evaluatorq.openresponses.client', 'evaluatorq.common.llm_client'}
+        for alias in node.names
+        if alias.name in {'build_simulation_client', 'resolve_llm_client'}
+    }
+
+    def dotted_name(node: ast.expr) -> str:
+        parts: list[str] = []
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        if isinstance(node, ast.Name):
+            parts.append(node.id)
+        return '.'.join(reversed(parts))
+
+    retry_sensitive_names = {'build_simulation_client', 'resolve_llm_client', *imported_aliases}
+    return [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and (
+            dotted_name(node.func).rsplit('.', 1)[-1] in retry_sensitive_names
+            or dotted_name(node.func) in retry_sensitive_names
+        )
+    ]
+
+
+def _assert_sdk_retries_disabled(calls: list[ast.Call], relative_path: str) -> None:
+    assert calls, f"expected a retry-sensitive client build in {relative_path}"
+    for call in calls:
+        max_retries = next((kw.value for kw in call.keywords if kw.arg == "max_retries"), None)
+        assert isinstance(max_retries, ast.Constant) and max_retries.value == 0, (
+            f"{relative_path}:{call.lineno} must pass max_retries=0"
+        )
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "simulation/api.py",
+        "simulation/cli.py",
+        "simulation/runner/simulation.py",
+        "simulation/traces.py",
+    ],
+)
+def test_primary_simulation_client_build_sites_disable_sdk_retries(relative_path: str) -> None:
+    """API, CLI, runner, and trace entry points each keep ``with_retry`` single-owner."""
+    _assert_sdk_retries_disabled(_retry_calls(relative_path), relative_path)
+
+
+def test_every_simulation_client_build_site_disables_sdk_retries() -> None:
+    """A newly added simulation build site must explicitly pin the SDK budget to zero."""
+    root = Path(__file__).parents[2] / 'src' / 'evaluatorq'
+    excluded_wrappers = {
+        'common/llm_client.py',
+        'openresponses/client.py',
+        'redteam/backends/registry.py',
+    }
+    for path in root.rglob('*.py'):
+        relative_path = path.relative_to(root).as_posix()
+        if relative_path in excluded_wrappers:
+            continue
+        calls = _retry_calls(relative_path)
+        if calls:
+            _assert_sdk_retries_disabled(calls, relative_path)
+
+
+@pytest.mark.parametrize(
+    'source',
+    [
+        'from evaluatorq.openresponses.client import build_simulation_client as make_client\nmake_client(max_retries=0)',
+        'import evaluatorq.openresponses.client as client_module\nclient_module.build_simulation_client(max_retries=0)',
+    ],
+)
+def test_client_build_guard_detects_aliased_and_attribute_style_calls(source: str) -> None:
+    """The guard must cover import aliases and module-qualified call sites."""
+    tree = ast.parse(source)
+    assert any(_retry_calls_from_tree(tree))
+
+
+def _retry_calls_from_tree(tree: ast.AST) -> list[ast.Call]:
+    """Find retry-sensitive calls in a parsed source snippet."""
+    imported_aliases = {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+        if alias.name in {'build_simulation_client', 'resolve_llm_client'}
+    }
+    return [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, (ast.Name, ast.Attribute))
+        and (
+            (isinstance(node.func, ast.Name) and node.func.id in imported_aliases)
+            or (isinstance(node.func, ast.Attribute) and node.func.attr in {'build_simulation_client', 'resolve_llm_client'})
+        )
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +263,18 @@ class TestOrqApiKeyEnv:
         assert owned is True
         assert captured.get("base_url") == "https://my.orq.ai/v3/router"
         assert captured.get("api_key") == "orq-env-key"
+
+    def test_auto_built_client_disables_sdk_retries(self, monkeypatch):
+        """Simulation calls use with_retry, so the SDK retry layer is disabled."""
+        monkeypatch.setenv("ORQ_API_KEY", "orq-env-key")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+        from evaluatorq.openresponses.client import build_simulation_client
+
+        client, owned = build_simulation_client()
+
+        assert owned is True
+        assert client.max_retries == 0
 
 
 # ---------------------------------------------------------------------------

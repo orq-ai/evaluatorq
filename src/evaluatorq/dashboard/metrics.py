@@ -256,8 +256,8 @@ def _redteam_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
         # cannot show two different numbers for one run.
         counts = _redteam_counts(data)
         evaluated, attacks = counts.evaluated, counts.attacks
-        if counts.evaluated:
-            derived = (counts.evaluated - counts.vulnerable) / counts.evaluated
+        derived = _legacy_resistance(counts)
+        if derived is not None:
             # Keep the recorded rate visible whenever the derivation moves it,
             # so the row can be reconciled against the run's own exported
             # report instead of quietly contradicting it.
@@ -433,14 +433,16 @@ def landing(roots: list[Path] | None = None) -> Landing:
                     counts.vulnerable,
                     counts.tokens,
                 )
-                resistant += counts.evaluated - counts.vulnerable
+                legacy_resistance = _legacy_resistance(counts)
+                if legacy_resistance is not None:
+                    resistant += round(legacy_resistance * counts.evaluated)
                 vulnerable += counts.vulnerable
                 rt_tokens += counts.tokens
                 total_tokens += counts.tokens
                 # Derived cost is a known-$0-or-more sum, but a run whose results
                 # carried no readable cost must not count as "costed" — mirror
                 # the None semantics of _cost_usd for stored summaries.
-                if counts.cost:
+                if counts.cost is not None:
                     rt_cost += counts.cost
                     costed_runs += 1
                 # The input/output split is not recoverable from legacy results.
@@ -566,7 +568,7 @@ class _RedteamCounts(NamedTuple):
     vulnerable: int
     errors: int
     tokens: int
-    cost: float
+    cost: float | None
     by_severity: dict[str, int]
 
 
@@ -596,20 +598,20 @@ def _result_outcome(res: dict[str, object]) -> bool | None:
     return None
 
 
-def _result_usage(res: dict[str, object]) -> tuple[int, float]:
+def _result_usage(res: dict[str, object]) -> tuple[int, float | None]:
     """``(tokens, cost)`` for one result, over both the target and judge calls.
 
     Same two holders ``converters._aggregate_token_usage`` walks.
     """
     tokens = 0
-    cost = 0.0
+    cost: float | None = None
     for holder in ('execution', 'evaluation'):
         parent = res.get(holder)
         usage = parent.get('token_usage') if isinstance(parent, dict) else None
         tokens += _tokens_total(usage)
         holder_cost = _cost_usd(usage)
         if holder_cost is not None:
-            cost += holder_cost
+            cost = (cost or 0.0) + holder_cost
     return tokens, cost
 
 
@@ -622,7 +624,7 @@ def _redteam_counts(data: dict[str, object]) -> _RedteamCounts:
     an attack-weighted aggregate.
     """
     attacks = evaluated = vulnerable = errors = tokens = 0
-    cost = 0.0
+    cost: float | None = None
     by_severity: dict[str, int] = {}
     for res in _results(data):
         attacks += 1
@@ -630,7 +632,8 @@ def _redteam_counts(data: dict[str, object]) -> _RedteamCounts:
             errors += 1
         tok, c = _result_usage(res)
         tokens += tok
-        cost += c
+        if c is not None:
+            cost = (cost or 0.0) + c
         outcome = _result_outcome(res)
         if outcome is None:
             continue
@@ -651,6 +654,13 @@ def _redteam_counts(data: dict[str, object]) -> _RedteamCounts:
         # _result_usage returns zeros for any unrecognised usage schema.
         logger.debug('redteam counts: {} results but zero derivable token usage — unrecognised usage shape?', attacks)
     return _RedteamCounts(attacks, evaluated, vulnerable, errors, tokens, cost, by_severity)
+
+
+def _legacy_resistance(counts: _RedteamCounts) -> float | None:
+    """Derive resistance from evaluated legacy results, preserving no-verdict as ``None``."""
+    if not counts.evaluated:
+        return None
+    return (counts.evaluated - counts.vulnerable) / counts.evaluated
 
 
 def _summary_severity(summary: dict[str, object]) -> dict[str, int]:
@@ -1130,18 +1140,29 @@ def _redteam_run_stats(path_str: str, mtime_ns: int) -> _RedTeamRunStats | None:
     usage = summary.get('token_usage_total')
     priced, calls, unknown = _cost_calls(usage)
     counts = _redteam_counts(data)
-    resistance = _as_float(summary.get('resistance_rate')) if 'resistance_rate' in summary else None
+    resistance = _as_float_or_none(summary.get('resistance_rate')) if 'resistance_rate' in summary else None
+    if resistance is None:
+        resistance = _legacy_resistance(counts)
     if zero_evaluated_attacks(summary):
         # Same no-score rule as the landing rows: zero evaluated attacks
         # means the rate is only the schema default, never a real score.
         resistance = None
+    cost = _cost_usd(usage)
+    if cost is None:
+        reason = 'no summary token_usage_total' if usage is None else 'unreadable summary token_usage_total'
+        logger.warning(
+            'redteam run {} has {}; falling back to legacy per-result cost',
+            path_str,
+            reason,
+        )
+        cost = counts.cost
     return _RedTeamRunStats(
         attacks=counts.attacks,
         evaluated=counts.evaluated,
         vulnerable=counts.vulnerable,
         critical=counts.by_severity.get('critical', 0),
         errors=counts.errors,
-        cost=_cost_usd(usage),
+        cost=cost,
         input_cost=_input_cost(usage),
         output_cost=_output_cost(usage),
         priced_calls=priced,

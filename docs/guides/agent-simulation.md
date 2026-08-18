@@ -149,6 +149,12 @@ precedence: if `ORQ_API_KEY` is set they route through the Orq AI Router;
 otherwise they fall back to OpenAI via `OPENAI_API_KEY` (an explicitly passed
 client always wins). See [Configuration](../configuration.md).
 
+!!! note "CI and local runs"
+    Dropped simulations raise by default; ordinary failed goals remain in the
+    returned results. Set `exit_on_failure=False` for exploratory runs. When
+    `ORQ_API_KEY` is available, results upload to Orq by default; pass
+    `upload_results=False` for a local-only run.
+
 ## Seed by archetype
 
 The middle ground between "just give me five" and specifying every trait: name
@@ -337,51 +343,39 @@ Occurrence is mapped to pass/fail in code, so `rules_broken` is derived, not
 reported. Failures land in `rules_broken` (criterion ids), `criteria_results`
 (description → passed), and the `criteria_met` score.
 
-Once a criterion is confirmed to have occurred it is settled — stickiness means a
-later turn cannot change it — so the judge is told to stop re-auditing it. It stays
-in the prompt (the judge still needs it to decide whether to stop early) but drops
-out of the per-turn audit payload, which otherwise costs an entry with an evidence
-quote per criterion per turn.
-
 Per-criterion detail is in `metadata['criteria_meta']`, where `audited` says whether
 the judge actually returned a verdict for that criterion:
 
 ```python
 for c in result.metadata['criteria_meta']:
-    # `.get('audited') is False` — not `not c['audited']`: `None` (and an absent
-    # key, on a report saved before the field existed) means unknown, not "the
-    # judge skipped it".
     if not c['passed'] and c.get('audited') is False:
-        print(f"{c['id']} failed by default — the judge never reported on it")
+        print(f"{c['id']} was not audited by the judge")
 ```
 
-A `must_happen` the judge confirmed never occurred and one it silently skipped both
-show `passed: False`; only `audited` separates them. It is `None` for runs saved
-before the field existed.
+A `must_happen` the judge confirmed never occurred and one it did not audit both
+show `passed: False`; use `audited` to distinguish them. It has three states, not
+two: `True` audited, `False` not audited, and `None` on runs saved before the
+field existed — which is why the example tests `is False` rather than `not
+c['audited']`.
 
 Each entry also carries **`evidence`** — the quote from the turn where the
 criterion's occurrence first flipped, taken from the judge's `criteria_verdicts`
 audit. It is `''` when the criterion never occurred (or occurred without a
 tracked quote) and `None` when no tracker was available, same as `audited`.
 
-Both keys reach the reports. A criterion that passed only because nobody audited
-it renders as **not audited** (a neutral `?`, never a green tick) in the dashboard,
-the HTML report and the markdown export, and is counted separately from the
-"N/M criteria met" tally; `evidence` is shown beside the criterion it justifies. A
-run with `criteria_verified = False` says so above the criteria list rather than
-showing a tally that contradicts its `criteria_met` score of `0.0`.
+Both keys reach the reports. A criterion that was not audited renders as **not
+audited** (a neutral `?`, never a green tick) and is counted separately from the
+"N/M criteria met" tally. A run with `criteria_verified = False` says so above
+the criteria list.
 
 The `criteria_met` score applies the same rule: an unaudited criterion is **not
-met**, so the score and the tally beside it agree. A criterion the judge settled
-early still counts — a verdict is what settles it — and `audited: None` (a run
-saved before the field existed) keeps the score it always had.
+met**, so the score and the tally beside it agree.
 
 !!! warning "A custom `judge=` must report per-criterion verdicts"
 
     The built-in `JudgeAgent` audits each unsettled criterion every turn. A custom
-    judge that does not populate `Judgment.criteria_verdicts` falls back to the
-    pre-1.3 behaviour: pass/fail is inferred from its `rules_broken` list, so a
-    `must_happen` criterion **cannot fail**.
+    judge that does not populate `Judgment.criteria_verdicts` cannot provide a
+    reliable per-criterion audit.
 
     That run is marked `SimulationResult.criteria_verified = False`, the runner logs
     a warning naming the scenario, and `criteria_met` scores it `0.0` — unknown, not
@@ -391,8 +385,6 @@ saved before the field existed) keeps the score it always had.
     if result.criteria_verified is False:
         print('criteria unverified — the judge returned no per-criterion audit')
     ```
-
-    `criteria_verified` is `None` on runs saved before the field existed.
 
 A run that ends in an error or a timeout never reaches the audit either. Those
 results also score `criteria_met` as `0.0` (not `1.0`) and log a warning, so neither
@@ -681,7 +673,49 @@ the generated cases (`eq sim generate --datapoints`, or `eq sim run
     rather start from real traffic, use `eq sim from-traces` above — it infers the
     personas and scenarios for you.
 
---8<-- "docs/_snippets/dashboard-tip.md"
+## Reading a run in the dashboard
+
+Runs are saved to `.evaluatorq/sim-runs/<name>_<timestamp>.json` — automatically
+by `eq sim run` (unless you pass `--no-save`), and by `simulate()` when called
+with `save=True`. `eq dashboard` browses those files locally, no external
+service:
+
+```bash
+uv add "evaluatorq[dashboard]"
+
+eq dashboard                       # browse every saved run
+eq dashboard .evaluatorq/sim-runs  # scope to simulation runs
+```
+
+!!! warning "The Python examples above don't save by default"
+    `simulate()` and `generate_and_simulate()` default to `save=False`, so a
+    script copy-pasted from earlier on this page leaves the dashboard empty.
+    Pass `save=True`, or drive the run from the CLI (`eq sim run`), which saves
+    unless you pass `--no-save`.
+
+Land on the cross-surface overview, pick the run from **Agent Sim**, then work
+down the report tabs from headline to transcript:
+
+| Tab | What it answers |
+|---|---|
+| **Overview** | Summary, pass rate, average score, the four per-turn quality metrics |
+| **Breakdown** | Persona × scenario heatmap — usually the fastest read |
+| **Recommendations** | Suggested instruction edits, applicable to an Orq agent |
+| **Transcripts** | Every conversation, expandable to criteria, rationale and messages |
+| **Turn quality** | The four metrics trended by turn index |
+| **Config** | Run metadata plus the persona dials |
+| **Compare** | KPI and per-conversation deltas against a second run |
+
+Two easily conflated numbers: **pass rate** is the share of conversations where
+the judge set `goal_achieved`; **average score** is the mean
+`goal_completion_score`, so a run can average 0.7 while passing half its
+conversations. The **CONFIDENCE** badge is a band on the pass rate, not a
+statistical confidence — it carries no sample-size meaning.
+
+The tab-by-tab walkthrough, with screenshots, lives in the Dashboard reference:
+[Reading a simulation run](../dashboard.md#reading-a-simulation-run). See also
+[filters](../dashboard.md#filters), [trace links](../dashboard.md#orq-trace-links)
+and [downloads](../dashboard.md#downloads).
 
 ## External framework demos
 

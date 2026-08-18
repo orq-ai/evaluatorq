@@ -155,7 +155,7 @@ async def main():
                 {"name": "performance-scorer", "scorer": performance_scorer},
                 {"name": "contains the word joke", "scorer": contains_joke},
             ],
-            "parallelism": 2,
+            "datapoint_parallelism": 2,
             "print": True,
         },
     )
