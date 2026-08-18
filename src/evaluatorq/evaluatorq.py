@@ -8,6 +8,7 @@ from typing import Any, cast
 
 from loguru import logger
 
+from .common.llm_limit import llm_concurrency_limit
 from .common.messages import coerce_content_text
 from .fetch_data import (
     fetch_dataset_batches,
@@ -116,6 +117,7 @@ async def evaluatorq(
     jobs: list[Job] | None = None,
     evaluators: list[Evaluator] | None = None,
     parallelism: int = 10,
+    max_concurrent_llm_calls: int | None = None,
     print_results: bool = True,
     description: str | None = None,
     path: str | None = None,
@@ -156,6 +158,13 @@ async def evaluatorq(
               evaluators (the budget is not split between them — a job releases
               its slot before its evaluators take theirs). Defaults to 10; set to
               1 for sequential execution, or lower it if your provider rate-limits.
+        max_concurrent_llm_calls: Ceiling on in-flight LLM requests for the whole run,
+              counted per request rather than per task, so it holds however the
+              datapoint/job/evaluator/jury fan-out nests. Unbounded by default. This
+              is the knob to set against a provider concurrency limit; ``parallelism``
+              bounds tasks, and one task can issue many requests. Only requests routed
+              through evaluatorq are counted — wrap a job's own provider calls in
+              ``evaluatorq.common.llm_limit.llm_slot()`` to include them.
         print_results: Whether to print results table to console. Defaults to True.
         description: Optional description for the evaluation run.
         path: Optional path (e.g. "MyProject/MyFolder") to place the experiment
@@ -204,6 +213,7 @@ async def evaluatorq(
             jobs=jobs,
             evaluators=evaluators,
             parallelism=parallelism,
+            max_concurrent_llm_calls=max_concurrent_llm_calls,
             print_results=print_results,
             description=description,
             path=path,
@@ -231,12 +241,17 @@ async def evaluatorq(
         jobs = [_replay_recorded_response]
     evaluators_list = validated.evaluators or []
     parallelism = validated.parallelism
+    max_concurrent_llm_calls = validated.max_concurrent_llm_calls
     print_results = validated.print_results
     description = validated.description
     path = validated.path
     single_trace = validated.single_trace
 
-    async with tracing_session(name, trace_type=_trace_type) as tracing_context, AsyncExitStack() as span_stack:
+    async with (
+        llm_concurrency_limit(max_concurrent_llm_calls),
+        tracing_session(name, trace_type=_trace_type) as tracing_context,
+        AsyncExitStack() as span_stack,
+    ):
         if single_trace:
             from .tracing.spans import RunSpanOptions, with_run_span
 
