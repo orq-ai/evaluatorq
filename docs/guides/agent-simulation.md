@@ -353,7 +353,10 @@ for c in result.metadata['criteria_meta']:
 ```
 
 A `must_happen` the judge confirmed never occurred and one it did not audit both
-show `passed: False`; use `audited` to distinguish them.
+show `passed: False`; use `audited` to distinguish them. It has three states, not
+two: `True` audited, `False` not audited, and `None` on runs saved before the
+field existed — which is why the example tests `is False` rather than `not
+c['audited']`.
 
 Each entry also carries **`evidence`** — the quote from the turn where the
 criterion's occurrence first flipped, taken from the judge's `criteria_verdicts`

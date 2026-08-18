@@ -96,3 +96,9 @@ eq redteam runs [PATH] [--limit N] [--json]
 | `PATH` | `Path \| None` / `None` | Directory containing run reports. Defaults to `.evaluatorq/runs/`. |
 | `--limit` / `-n` | `int` / `20` | Maximum number of runs to show. |
 | `--json` | `bool` / `False` | Emit runs as a JSON array on stdout (machine-readable). |
+
+## `eq redteam ui` (deprecated)
+
+Launches the old Streamlit report viewer. Still registered, no longer
+documented: use [`eq dashboard`](../dashboard.md), which browses every saved
+run rather than one report and is the only surface receiving new features.

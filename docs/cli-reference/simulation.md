@@ -236,3 +236,9 @@ eq sim runs [DIRECTORY] [--limit N]
 | `--limit` / `-n` | `int` / `20` | Maximum number of runs to show. |
 | `--full` / `-f` | `bool` / `False` | Render at full content width; do not truncate columns. |
 | `--json` | `bool` / `False` | Emit runs as a JSON array on stdout. |
+
+## `eq sim ui` (deprecated)
+
+Launches the old Streamlit report viewer. Still registered, no longer
+documented: use [`eq dashboard`](../dashboard.md), which browses every saved
+run rather than one report and is the only surface receiving new features.
