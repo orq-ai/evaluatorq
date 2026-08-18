@@ -228,7 +228,7 @@ async def simulate(
             and datapoint generators.
         judge: Pre-constructed ``BaseAgent`` used to evaluate each turn.
         datapoint_parallelism: Maximum number of concurrent simulations (tasks).
-            Defaults to 5.
+            Defaults to 10.
         llm_parallelism: Ceiling on in-flight LLM requests for the whole
             run, counted per request rather than per simulation. Unbounded by
             default. Set this, not ``datapoint_parallelism``, against a provider
@@ -359,7 +359,7 @@ async def simulate(
     ```
     """
     datapoint_parallelism = resolve_datapoint_parallelism(
-        datapoint_parallelism, parallelism, default=5, caller='simulate'
+        datapoint_parallelism, parallelism, default=10, caller='simulate'
     )
     run = await _simulate_run(
         evaluation_name=evaluation_name,
@@ -408,7 +408,7 @@ async def _simulate_run(
     max_turns: int | None = None,
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
-    datapoint_parallelism: int = 5,
+    datapoint_parallelism: int = 10,
     llm_parallelism: int | None = None,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
@@ -578,7 +578,7 @@ async def generate_and_simulate(
     description from both sources raises ``ValueError`` before generation begins.
 
     ``datapoint_parallelism``: Maximum number of concurrent simulations (tasks).
-    Defaults to 5. ``llm_parallelism`` bounds concurrent LLM requests instead —
+    Defaults to 10. ``llm_parallelism`` bounds concurrent LLM requests instead —
     see `simulate` for the full distinction. ``parallelism`` is a deprecated
     alias for ``datapoint_parallelism``.
 
@@ -638,7 +638,7 @@ async def generate_and_simulate(
     ```
     """
     datapoint_parallelism = resolve_datapoint_parallelism(
-        datapoint_parallelism, parallelism, default=5, caller='generate_and_simulate'
+        datapoint_parallelism, parallelism, default=10, caller='generate_and_simulate'
     )
     run = await _generate_and_simulate_run(
         evaluation_name=evaluation_name,
@@ -748,7 +748,7 @@ async def _generate_and_simulate_run(
     max_turns: int | None = None,
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
-    datapoint_parallelism: int = 5,
+    datapoint_parallelism: int = 10,
     llm_parallelism: int | None = None,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
