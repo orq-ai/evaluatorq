@@ -391,7 +391,15 @@ async def _compute_judge_vote(
     decisive = [p for p in predictions if p.decisive]
     abstained = bool(predictions) and not decisive and any(p.abstained for p in predictions)
     repetitions_raw = [p.value if p.decisive else None for p in predictions]
-    failed_count = sum(1 for p in predictions if p.error is not None)
+    # A pass has failed if it is neither decisive nor a CLEAN abstention: an error, or a
+    # mechanically-unusable value=None / abstained=False pass. Counting only p.error let the
+    # second case pass as a free abstention and keep consistency at 1.0 (RES-1251 review, item 6).
+    # A pass that both errored and set abstained is a failure, not a clean abstention, so
+    # `p.error is not None` overrides the abstained flag (RES-1251 review, item 21 - latent today,
+    # nothing builds that combination, but the predicate should not let it through). decisive
+    # already means "error is None and not abstained and value is not None", so a tie or a genuine
+    # clean abstention is never counted. Shared jury layer, so it tightens redteam/simulation too.
+    failed_count = sum(1 for p in predictions if not p.decisive and (not p.abstained or p.error is not None))
 
     if failed_count > 0 and failed_count < len(predictions):
         logger.warning('judge {} had {}/{} repetitions fail', model, failed_count, len(predictions))

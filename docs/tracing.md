@@ -350,7 +350,7 @@ Span attributes on `orq.judge`:
 | `judge.label_swapped` | Comparative (pairwise) mode only — which ordering this vote was cast in |
 | `judge.latency_ms` | Wall-clock time for this judge's repetitions |
 | `judge.error` | Error string when the judge failed (truncated per `EVALUATORQ_SPAN_MAX_TEXT_CHARS`) |
-| `judge.repetitions_failed` | Count of failed repetitions out of the judge's configured repetition count |
+| `judge.repetitions_failed` | Count of repetitions that failed to produce a usable verdict (an error, or a non-decisive non-abstained pass; a clean abstention is not counted), out of the configured repetition count |
 
 No token usage or cost here: those are recorded once, on the `chat` spans
 underneath, and rolled up by the consumer. Stamping them on every ancestor as
