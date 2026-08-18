@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.llm_client import resolve_results_base_url
+from evaluatorq.common.llm_limit import llm_concurrency_limit
 from evaluatorq.common.recommendations import resolve_recommendations
 from evaluatorq.common.thread_context import _evaluatorq_run_scope, build_thread_id, evaluatorq_pipeline
 from evaluatorq.simulation._config import SimulationConfig
@@ -190,6 +191,7 @@ async def simulate(
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
     parallelism: int = 5,
+    max_concurrent_llm_calls: int | None = None,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
@@ -223,6 +225,13 @@ async def simulate(
             ``sim_model``. ``sim_model`` drives the user-simulator, the judge,
             and datapoint generators.
         judge: Pre-constructed ``BaseAgent`` used to evaluate each turn.
+        max_concurrent_llm_calls: Ceiling on in-flight LLM requests for the whole
+            run, counted per request rather than per simulation. Unbounded by
+            default. Set this, not ``parallelism``, against a provider concurrency
+            limit: one simulation issues a request per turn per agent, so
+            ``parallelism`` cannot be sized against one. Covers the user
+            simulator, the judge and datapoint generation; a target's own calls
+            are not counted.
         hooks: Optional ``SimulationHooks`` for run/datapoint/turn lifecycle
             events. Sync or async; ``async def`` is preferred (a sync hook
             works but emits a one-time ``DeprecationWarning``). Defaults to
@@ -359,6 +368,7 @@ async def simulate(
         sim_model=sim_model,
         evaluator_names=evaluator_names,
         parallelism=parallelism,
+        max_concurrent_llm_calls=max_concurrent_llm_calls,
         user_simulator=user_simulator,
         judge=judge,
         hooks=hooks,
@@ -391,6 +401,7 @@ async def _simulate_run(
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
     parallelism: int = 5,
+    max_concurrent_llm_calls: int | None = None,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
@@ -440,7 +451,11 @@ async def _simulate_run(
             # writer is retained for terminal complete/cancel/fail calls. The
             # run-id bind is what reaches every LLM call — a ContextVar set here
             # is visible to the nested evaluatorq() and copied into child tasks.
-            with _evaluatorq_run_scope(run_id, pipeline_span), evaluatorq_pipeline('agent_simulation'):
+            with (
+                _evaluatorq_run_scope(run_id, pipeline_span),
+                evaluatorq_pipeline('agent_simulation'),
+                llm_concurrency_limit(max_concurrent_llm_calls),
+            ):
                 composed_hooks, manifest_writer = _compose_sim_hooks(
                     hooks,
                     save=save,
@@ -513,6 +528,7 @@ async def generate_and_simulate(
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
     parallelism: int = 5,
+    max_concurrent_llm_calls: int | None = None,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
@@ -618,6 +634,7 @@ async def generate_and_simulate(
         sim_model=sim_model,
         evaluator_names=evaluator_names,
         parallelism=parallelism,
+        max_concurrent_llm_calls=max_concurrent_llm_calls,
         user_simulator=user_simulator,
         judge=judge,
         hooks=hooks,
@@ -715,6 +732,7 @@ async def _generate_and_simulate_run(
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
     parallelism: int = 5,
+    max_concurrent_llm_calls: int | None = None,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
@@ -766,7 +784,11 @@ async def _generate_and_simulate_run(
             },
         ) as pipeline_span:
             # The raw writer is retained for terminal complete/cancel/fail calls.
-            with _evaluatorq_run_scope(run_id, pipeline_span), evaluatorq_pipeline('agent_simulation'):
+            with (
+                _evaluatorq_run_scope(run_id, pipeline_span),
+                evaluatorq_pipeline('agent_simulation'),
+                llm_concurrency_limit(max_concurrent_llm_calls),
+            ):
                 composed_hooks, manifest_writer = _compose_sim_hooks(
                     hooks,
                     save=save,
@@ -871,6 +893,7 @@ async def generate(
     generation_client: AsyncOpenAI | None = None,
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
+    max_concurrent_llm_calls: int | None = None,
 ) -> list[SimulationDatapoint]:
     """Generate ready-to-run simulation ``SimulationDatapoint``s from an agent description.
 
@@ -915,7 +938,11 @@ async def generate(
                 'orq.simulation.num_scenarios': num_scenarios,
             },
         ) as pipeline_span:
-            with _evaluatorq_run_scope(run_id, pipeline_span), evaluatorq_pipeline('agent_simulation'):
+            with (
+                _evaluatorq_run_scope(run_id, pipeline_span),
+                evaluatorq_pipeline('agent_simulation'),
+                llm_concurrency_limit(max_concurrent_llm_calls),
+            ):
                 # Bracket generation with the same GENERATE stage hooks the
                 # generate_and_simulate path uses, so the standalone command
                 # isn't silent. Empty on_stage_end meta: the CLI prints its own
