@@ -615,7 +615,7 @@ def simulate(
     datapoint_parallelism: Annotated[
         int,
         typer.Option('--datapoint-parallelism', '--parallelism', min=1, help='Concurrent simulations.'),
-    ] = 5,
+    ] = 10,
     llm_parallelism: Annotated[
         int | None,
         typer.Option(
@@ -954,7 +954,7 @@ def run(
     datapoint_parallelism: Annotated[
         int,
         typer.Option('--datapoint-parallelism', '--parallelism', min=1, help='Concurrent simulations.'),
-    ] = 5,
+    ] = 10,
     llm_parallelism: Annotated[
         int | None,
         typer.Option(
