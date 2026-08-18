@@ -53,10 +53,12 @@ uv run basedpyright
 # Build
 uv build
 
-# Serve the docs site locally. Pick a port — parallel worktrees serve the SAME
-# path, so a plain `mkdocs serve` may bind to a sibling session's port and you
-# review THEIR build. Live-reload does not fire in a Conductor worktree: the
-# server keeps showing the build it started with, so restart it after an edit.
+# Serve the docs site locally. Pick a FREE port (81xx) and check it is yours —
+# parallel worktrees serve the same path, so the default binds to whichever
+# session got there first and you end up reviewing THEIR build. Live-reload does
+# not fire in a Conductor worktree: the server keeps showing the build it
+# started with, so restart it after an edit.
+lsof -nP -iTCP:8125 -sTCP:LISTEN            # empty = free
 uv run --group docs mkdocs serve -a 127.0.0.1:8125
 
 # Build the docs site (strict — fails on warnings, as CI does)
