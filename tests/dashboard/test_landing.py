@@ -90,6 +90,34 @@ def _legacy_result(
     return res
 
 
+def test_legacy_redteam_stats_match_landing_cost_and_derive_resistance(tmp_path: Path) -> None:
+    """Legacy result usage and verdicts feed both overview surfaces identically."""
+    rt = tmp_path / 'runs'
+    rt.mkdir()
+    payload = _legacy_redteam_payload(
+        'Legacy cost and resistance',
+        created='2026-06-29T10:00:00',
+        resistance=0.0,
+        results=[
+            _legacy_result(vulnerable=True, tokens=10),
+            _legacy_result(vulnerable=False, tokens=20),
+        ],
+    )
+    payload['summary']['resistance_rate'] = None
+    report = rt / 'legacy.json'
+    report.write_text(json.dumps(payload))
+
+    counts = metrics._redteam_counts(payload)
+    stats = metrics._redteam_run_stats(str(report.resolve()), report.stat().st_mtime_ns)
+    assert stats is not None
+    landing = metrics.landing([rt])
+
+    assert counts.cost == pytest.approx(0.03)
+    assert stats.cost == pytest.approx(counts.cost)
+    assert landing.total_cost == pytest.approx(counts.cost)
+    assert stats.resistance == pytest.approx(0.5)
+
+
 def _sim_payload(name: str, *, created: str, averages: dict[str, float], n: int, tok_each: int) -> dict:
     return {
         'mode': 'run',
@@ -218,6 +246,71 @@ class TestMetrics:
         row = metrics.run_rows([rt])[0]
         assert row.score == pytest.approx(0.5)
         assert row.stored_score is None  # not re-derived, so nothing to reconcile
+
+    def test_legacy_cost_fallback_warns_when_summary_usage_is_absent(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        report_path = rt / 'legacy.json'
+        report_path.write_text(
+            json.dumps(
+                _legacy_redteam_payload(
+                    'Legacy cost fallback',
+                    created='2026-01-01T00:00:00',
+                    resistance=1.0,
+                    results=[_legacy_result(tokens=100)],
+                )
+            )
+        )
+
+        with caplog.at_level('WARNING'):
+            metrics._redteam_run_stats(str(report_path), report_path.stat().st_mtime_ns)
+
+        assert 'has no summary token_usage_total' in caplog.text
+
+    def test_unreadable_summary_cost_falls_back_and_names_schema_drift(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        payload = _legacy_redteam_payload(
+            'Unreadable summary cost',
+            created='2026-01-01T00:00:00',
+            resistance=1.0,
+            results=[_legacy_result(tokens=100)],
+        )
+        payload['summary']['token_usage_total'] = {'total_tokens': 100, 'cost_usd': 'provider-drift'}
+        payload['results'][0]['execution']['token_usage']['cost_usd'] = 0.007
+        report_path = rt / 'unreadable-summary-cost.json'
+        report_path.write_text(json.dumps(payload))
+
+        with caplog.at_level('WARNING'):
+            stats = metrics._redteam_run_stats(str(report_path.resolve()), report_path.stat().st_mtime_ns)
+
+        assert stats is not None
+        assert stats.cost == pytest.approx(0.007)
+        assert 'unreadable summary token_usage_total' in caplog.text
+
+    def test_legacy_zero_cost_is_known_and_consistent_across_overviews(self, tmp_path: Path) -> None:
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        payload = _legacy_redteam_payload(
+            'Known zero cost',
+            created='2026-01-01T00:00:00',
+            resistance=1.0,
+            results=[_legacy_result(tokens=100)],
+        )
+        payload['results'][0]['execution']['token_usage']['cost_usd'] = 0.0
+        report_path = rt / 'known-zero-cost.json'
+        report_path.write_text(json.dumps(payload))
+
+        stats = metrics._redteam_run_stats(str(report_path.resolve()), report_path.stat().st_mtime_ns)
+        landing = metrics.landing([rt])
+
+        assert stats is not None
+        assert stats.cost == 0.0
+        assert landing.total_cost == 0.0
 
     def test_legacy_row_marks_a_rate_it_recalculated(self, tmp_path: Path) -> None:
         # The recorded rate was computed over every attack (1/2); the dashboard

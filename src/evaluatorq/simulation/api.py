@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.llm_client import resolve_results_base_url
+from evaluatorq.common.llm_limit import llm_concurrency_limit
+from evaluatorq.common.parallelism import resolve_datapoint_parallelism
 from evaluatorq.common.recommendations import resolve_recommendations
 from evaluatorq.common.thread_context import _evaluatorq_run_scope, build_thread_id, evaluatorq_pipeline
 from evaluatorq.simulation._config import SimulationConfig
@@ -81,7 +83,9 @@ async def _attach_recommendations(
 
     resolved = None
     try:
-        resolved = resolve_llm_client()
+        # Retry is owned by generate_recommendations' with_retry calls; disable
+        # the SDK layer so the two budgets cannot stack.
+        resolved = resolve_llm_client(max_retries=0)
         run.recommendations = await generate_recommendations(run.results, resolved.client, model, config=config) or None
     except Exception:
         logger.warning('Failed to generate remediation suggestions (results still returned)', exc_info=True)
@@ -187,7 +191,9 @@ async def simulate(
     max_turns: int | None = None,
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
-    parallelism: int = 5,
+    datapoint_parallelism: int | None = None,
+    llm_parallelism: int | None = None,
+    parallelism: int | None = None,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
@@ -221,6 +227,16 @@ async def simulate(
             ``sim_model``. ``sim_model`` drives the user-simulator, the judge,
             and datapoint generators.
         judge: Pre-constructed ``BaseAgent`` used to evaluate each turn.
+        datapoint_parallelism: Maximum number of concurrent simulations (tasks).
+            Defaults to 10.
+        llm_parallelism: Ceiling on in-flight LLM requests for the whole
+            run, counted per request rather than per simulation. Unbounded by
+            default. Set this, not ``datapoint_parallelism``, against a provider
+            concurrency limit: one simulation issues a request per turn per
+            agent, so ``datapoint_parallelism`` cannot be sized against one.
+            Covers the user simulator, the judge and datapoint generation; a
+            target's own calls are not counted.
+        parallelism: Deprecated alias for ``datapoint_parallelism``.
         hooks: Optional ``SimulationHooks`` for run/datapoint/turn lifecycle
             events. Sync or async; ``async def`` is preferred (a sync hook
             works but emits a one-time ``DeprecationWarning``). Defaults to
@@ -342,6 +358,9 @@ async def simulate(
     asyncio.run(main())
     ```
     """
+    datapoint_parallelism = resolve_datapoint_parallelism(
+        datapoint_parallelism, parallelism, default=10, caller='simulate'
+    )
     run = await _simulate_run(
         evaluation_name=evaluation_name,
         target=target,
@@ -356,7 +375,8 @@ async def simulate(
         max_turns=max_turns,
         sim_model=sim_model,
         evaluator_names=evaluator_names,
-        parallelism=parallelism,
+        datapoint_parallelism=datapoint_parallelism,
+        llm_parallelism=llm_parallelism,
         user_simulator=user_simulator,
         judge=judge,
         hooks=hooks,
@@ -388,7 +408,8 @@ async def _simulate_run(
     max_turns: int | None = None,
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
-    parallelism: int = 5,
+    datapoint_parallelism: int = 10,
+    llm_parallelism: int | None = None,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
@@ -431,14 +452,18 @@ async def _simulate_run(
                 # value, else a replayed run's cap, else the default), and
                 # set_span_attrs drops None — so the resolved value is stamped
                 # there rather than guessed here.
-                'orq.simulation.parallelism': parallelism,
+                'orq.simulation.parallelism': datapoint_parallelism,
             },
         ) as pipeline_span:
             # Compose once; the manifest hook is registered first, and the raw
             # writer is retained for terminal complete/cancel/fail calls. The
             # run-id bind is what reaches every LLM call — a ContextVar set here
             # is visible to the nested evaluatorq() and copied into child tasks.
-            with _evaluatorq_run_scope(run_id, pipeline_span), evaluatorq_pipeline('agent_simulation'):
+            with (
+                _evaluatorq_run_scope(run_id, pipeline_span),
+                evaluatorq_pipeline('agent_simulation'),
+                llm_concurrency_limit(llm_parallelism),
+            ):
                 composed_hooks, manifest_writer = _compose_sim_hooks(
                     hooks,
                     save=save,
@@ -466,7 +491,7 @@ async def _simulate_run(
                         max_turns=max_turns,
                         model=sim_model,
                         evaluator_names=evaluator_names,
-                        parallelism=parallelism,
+                        datapoint_parallelism=datapoint_parallelism,
                         user_simulator=user_simulator,
                         judge=judge,
                         generation_client=generation_client,
@@ -510,7 +535,9 @@ async def generate_and_simulate(
     max_turns: int | None = None,
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
-    parallelism: int = 5,
+    datapoint_parallelism: int | None = None,
+    llm_parallelism: int | None = None,
+    parallelism: int | None = None,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
@@ -549,6 +576,11 @@ async def generate_and_simulate(
     an ``agent:<key>`` target (or bare agent key) resolves its description from
     Orq; other targets must provide ``agent_description``. A missing or blank
     description from both sources raises ``ValueError`` before generation begins.
+
+    ``datapoint_parallelism``: Maximum number of concurrent simulations (tasks).
+    Defaults to 10. ``llm_parallelism`` bounds concurrent LLM requests instead —
+    see `simulate` for the full distinction. ``parallelism`` is a deprecated
+    alias for ``datapoint_parallelism``.
 
     ``evaluation_description``: Optional human-readable note passed straight
     through to the uploaded experiment (shown as its description in the Orq UI).
@@ -605,6 +637,9 @@ async def generate_and_simulate(
     asyncio.run(main())
     ```
     """
+    datapoint_parallelism = resolve_datapoint_parallelism(
+        datapoint_parallelism, parallelism, default=10, caller='generate_and_simulate'
+    )
     run = await _generate_and_simulate_run(
         evaluation_name=evaluation_name,
         agent_description=agent_description,
@@ -615,7 +650,8 @@ async def generate_and_simulate(
         max_turns=max_turns,
         sim_model=sim_model,
         evaluator_names=evaluator_names,
-        parallelism=parallelism,
+        datapoint_parallelism=datapoint_parallelism,
+        llm_parallelism=llm_parallelism,
         user_simulator=user_simulator,
         judge=judge,
         hooks=hooks,
@@ -668,7 +704,7 @@ async def _generate_datapoints_inner(
     from evaluatorq.openresponses.client import build_simulation_client
     from evaluatorq.simulation.hooks import DefaultHooks
 
-    gen_client, gen_owned = build_simulation_client(generation_client)
+    gen_client, gen_owned = build_simulation_client(generation_client, max_retries=0)
     try:
         gen_hooks = hooks or DefaultHooks()
         gen_personas, gen_scenarios = await _generate_personas_scenarios(
@@ -712,7 +748,8 @@ async def _generate_and_simulate_run(
     max_turns: int | None = None,
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
-    parallelism: int = 5,
+    datapoint_parallelism: int = 10,
+    llm_parallelism: int | None = None,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
@@ -760,11 +797,15 @@ async def _generate_and_simulate_run(
                 # value, else a replayed run's cap, else the default), and
                 # set_span_attrs drops None — so the resolved value is stamped
                 # there rather than guessed here.
-                'orq.simulation.parallelism': parallelism,
+                'orq.simulation.parallelism': datapoint_parallelism,
             },
         ) as pipeline_span:
             # The raw writer is retained for terminal complete/cancel/fail calls.
-            with _evaluatorq_run_scope(run_id, pipeline_span), evaluatorq_pipeline('agent_simulation'):
+            with (
+                _evaluatorq_run_scope(run_id, pipeline_span),
+                evaluatorq_pipeline('agent_simulation'),
+                llm_concurrency_limit(llm_parallelism),
+            ):
                 composed_hooks, manifest_writer = _compose_sim_hooks(
                     hooks,
                     save=save,
@@ -823,7 +864,7 @@ async def _generate_and_simulate_run(
                             max_turns=max_turns,
                             model=sim_model,
                             evaluator_names=evaluator_names,
-                            parallelism=parallelism,
+                            datapoint_parallelism=datapoint_parallelism,
                             user_simulator=user_simulator,
                             judge=judge,
                             generation_client=gen_client,
@@ -869,6 +910,7 @@ async def generate(
     generation_client: AsyncOpenAI | None = None,
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
+    llm_parallelism: int | None = None,
 ) -> list[SimulationDatapoint]:
     """Generate ready-to-run simulation ``SimulationDatapoint``s from an agent description.
 
@@ -913,7 +955,11 @@ async def generate(
                 'orq.simulation.num_scenarios': num_scenarios,
             },
         ) as pipeline_span:
-            with _evaluatorq_run_scope(run_id, pipeline_span), evaluatorq_pipeline('agent_simulation'):
+            with (
+                _evaluatorq_run_scope(run_id, pipeline_span),
+                evaluatorq_pipeline('agent_simulation'),
+                llm_concurrency_limit(llm_parallelism),
+            ):
                 # Bracket generation with the same GENERATE stage hooks the
                 # generate_and_simulate path uses, so the standalone command
                 # isn't silent. Empty on_stage_end meta: the CLI prints its own
@@ -1159,7 +1205,7 @@ async def _generate_personas_scenarios(
     from evaluatorq.simulation.exceptions import SimulationError
     from evaluatorq.simulation.generators import PersonaGenerator, ScenarioGenerator
 
-    gen_client, gen_owned = build_simulation_client(generation_client)
+    gen_client, gen_owned = build_simulation_client(generation_client, max_retries=0)
     try:
         persona_gen = PersonaGenerator(model=model, client=gen_client)
         scenario_gen = ScenarioGenerator(model=model, client=gen_client)
@@ -1232,7 +1278,7 @@ async def _simulate_core(
 
     evaluation_name = config.evaluation_name
     model = config.model
-    parallelism = config.parallelism
+    datapoint_parallelism = config.datapoint_parallelism
     save = config.save
     run_output = config.run_output
 
@@ -1305,7 +1351,7 @@ async def _simulate_core(
         'num_datapoints': len(sim_datapoints),
         'model': model,
         'max_turns': max_turns,
-        'parallelism': parallelism,
+        'datapoint_parallelism': datapoint_parallelism,
         'evaluation_name': evaluation_name,
         'evaluator_names': resolved_evaluator_names,
         'target': target_label,
@@ -1358,11 +1404,7 @@ async def _simulate_core(
             # raise propagates (per the contract) while on_run_complete in the
             # finally still receives the real results, not []. Scores were stamped
             # onto each result's metadata by _stamp_evaluator_scores.
-            for r in results:
-                dp_id = r.metadata.get('datapoint_id', '')
-                evaluator_scores = r.metadata.get('evaluator_scores') or {}
-                for evaluator_name, score in evaluator_scores.items():
-                    await await_maybe(resolved_hooks.on_evaluator_complete(dp_id, evaluator_name, score, r))
+            await _notify_evaluator_complete(results, resolved_hooks)
         except SimulationDroppedError as dropped:
             # exit_on_failure aborted the run, but the rows that succeeded are real
             # results — hand them to on_run_complete (via the finally) instead of [].
@@ -1651,7 +1693,7 @@ async def _resolve_or_generate_datapoints(
     from evaluatorq.simulation.generators import FirstMessageGenerator
     from evaluatorq.simulation.tracing import with_simulation_span
 
-    gen_client, gen_owned = build_simulation_client(generation_client)
+    gen_client, gen_owned = build_simulation_client(generation_client, max_retries=0)
     try:
         first_msg_gen = FirstMessageGenerator(model=model, client=gen_client)
         pairs = [(p, s) for p in personas for s in scenarios]
@@ -1936,8 +1978,19 @@ def _sim_evaluation_details(name: str, result: SimulationResult) -> tuple[str | 
                 ),
                 False,
             )
-        meta = result.metadata.get('criteria_meta') or []
-        if isinstance(meta, list) and meta:
+        from evaluatorq.simulation.evaluators.scorers import read_criteria_meta
+        from evaluatorq.simulation.types import CriteriaMeta
+
+        entries, invalid = read_criteria_meta(result)
+        if invalid:
+            lines = [f'ERROR: invalid criteria_meta entry: {entry!r}' for entry in invalid]
+            lines.extend(
+                f'{"PASS" if c.passed else "FAIL"} [{"prohibited" if c.type == "must_not_happen" else "required"}]: '
+                f'{c.description}'
+                for c in entries
+            )
+            return '\n'.join(lines), None
+        if entries:
             # Tag each line with the criterion polarity. Without it, a passed
             # 'must_not_happen' rule renders as e.g. "PASS: Agent blames the
             # customer", which reads as if the agent passed *by* misbehaving.
@@ -1946,15 +1999,14 @@ def _sim_evaluation_details(name: str, result: SimulationResult) -> tuple[str | 
             # passing only by its not-observed default, and `criteria_met_scorer`
             # does not count it as met either. The two must agree, or the score and
             # the explanation beside it contradict each other on the same span.
-            def _line(c: dict[str, object]) -> str:
-                passed = bool(c.get('passed'))
-                verdict = ('UNKNOWN' if c.get('audited') is False else 'PASS') if passed else 'FAIL'
-                polarity = 'prohibited' if c.get('type') == 'must_not_happen' else 'required'
+            def _line(c: CriteriaMeta) -> str:
+                verdict = ('UNKNOWN' if c.audited is False else 'PASS') if c.passed else 'FAIL'
+                polarity = 'prohibited' if c.type == 'must_not_happen' else 'required'
                 suffix = ' (not audited)' if verdict == 'UNKNOWN' else ''
-                return f'{verdict} [{polarity}]: {c.get("description", c.get("id", "?"))}{suffix}'
+                return f'{verdict} [{polarity}]: {c.description}{suffix}'
 
-            lines = [_line(c) for c in meta]
-            all_met = all(c.get('passed') and c.get('audited') is not False for c in meta)
+            lines = [_line(c) for c in entries]
+            all_met = all(c.passed and c.audited is not False for c in entries)
             return '\n'.join(lines), all_met
         # Fallback to the lossy criteria_results dict when criteria_meta is absent.
         criteria_results = result.criteria_results or {}
@@ -1994,7 +2046,7 @@ async def _simulate_via_evaluatorq(
     # _simulate_core resolves max_turns before calling here; the fallback only
     # covers a direct call that skipped it.
     max_turns = config.max_turns if config.max_turns is not None else DEFAULT_MAX_TURNS
-    parallelism = config.parallelism
+    datapoint_parallelism = config.datapoint_parallelism
     user_simulator = config.user_simulator
     judge = config.judge
     generation_client = config.generation_client
@@ -2041,7 +2093,7 @@ async def _simulate_via_evaluatorq(
             data=eq_datapoints,
             jobs=[job_fn],
             evaluators=evaluators,
-            parallelism=parallelism,
+            datapoint_parallelism=datapoint_parallelism,
             description=evaluation_description,
             path=orq_results_path,
             # Suppress the inner ProgressService spinner + results table: the
@@ -2049,12 +2101,8 @@ async def _simulate_via_evaluatorq(
             # two concurrent rich.Live regions flicker against each other.
             print_results=False,
             _send_results=upload_results,
-            # Never let evaluatorq's score-based gate (check_pass_failures →
-            # sys.exit) fire for simulation. Now that scorers report pass_ (a
-            # judge verdict — e.g. goal not achieved), an underperforming but
-            # otherwise healthy run must NOT exit the process. exit_on_failure
-            # for sim means dropped rows only (SimulationDroppedError below).
-            _exit_on_failure=False,
+            # evaluatorq returns scorer failures as results; simulation handles
+            # dropped rows separately through SimulationDroppedError below.
             _base_url=upload_base_url,
             _experiment_url_out=experiment_url_out,
         )
@@ -2113,6 +2161,17 @@ async def _simulate_via_evaluatorq(
     return results
 
 
+async def _notify_evaluator_complete(results: list[SimulationResult], hooks: SimulationHooks) -> None:
+    """Send stamped evaluator scores through the real completion-hook seam."""
+    from evaluatorq.common.async_utils import await_maybe
+
+    for result in results:
+        datapoint_id = result.metadata.get('datapoint_id', '')
+        evaluator_scores = result.metadata.get('evaluator_scores') or {}
+        for evaluator_name, score in evaluator_scores.items():
+            await await_maybe(hooks.on_evaluator_complete(datapoint_id, evaluator_name, score, result))
+
+
 def _stamp_evaluator_scores(
     eq_results: list[DataPointResult],
     result_cache: dict[int, SimulationResult],
@@ -2133,9 +2192,20 @@ def _stamp_evaluator_scores(
         sim_result = result_cache.get(id(dp_result.data_point))
         if sim_result is None or not dp_result.job_results:
             continue
-        scores_dict = sim_result.metadata.setdefault('evaluator_scores', {})
         for job_result in dp_result.job_results:
             for score in job_result.evaluator_scores or []:
+                if (
+                    score.error is not None
+                    or isinstance(score.score.value, bool)
+                    or not isinstance(score.score.value, (int, float))
+                ):
+                    logger.warning(
+                        'Skipping evaluator %s score: %s',
+                        score.evaluator_name,
+                        score.error or f'non-numeric value {score.score.value!r}',
+                    )
+                    continue
+                scores_dict = sim_result.metadata.setdefault('evaluator_scores', {})
                 if isinstance(scores_dict, dict):
                     scores_dict[score.evaluator_name] = score.score.value
         if evaluation_name:

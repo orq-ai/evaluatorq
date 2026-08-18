@@ -3,8 +3,10 @@ from collections.abc import Awaitable
 from inspect import isawaitable
 from typing import TYPE_CHECKING, cast
 
+from loguru import logger
+
 from .job_helper import JobError
-from .progress import Phase, ProgressService
+from .progress import Phase, ProgressService, safe_update_progress
 from .types import (
     DataPoint,
     DataPointResult,
@@ -26,7 +28,7 @@ async def process_data_point(
     row_index: int,
     jobs: list[Job],
     evaluators: list[Evaluator] | None,
-    parallelism: int,
+    datapoint_parallelism: int,
     progress_service: ProgressService | None = None,
     tracing_context: 'TracingContext | None' = None,
 ) -> list[DataPointResult]:
@@ -38,13 +40,14 @@ async def process_data_point(
         row_index: Index of this data point in the dataset
         jobs: List of jobs to execute
         evaluators: List of evaluators to run on job outputs
-        parallelism: Number of jobs to run in parallel
+        datapoint_parallelism: Concurrency budget shared by this datapoint's jobs and evaluators
         progress_service: Optional progress tracking service
         tracing_context: Optional tracing context for OTEL spans
 
     Returns:
         List containing a single DataPointResult with job results and evaluator scores
     """
+    data_point: DataPoint | None = None
     try:
         # Resolve the data point (await if it's awaitable, otherwise use directly)
         if isawaitable(data_promise):
@@ -54,23 +57,28 @@ async def process_data_point(
 
         # Update progress for this data point
         if progress_service:
-            await progress_service.update_progress(current_data_point=row_index + 1, phase=Phase.PROCESSING)
+            await safe_update_progress(
+                progress_service,
+                operation='datapoint update',
+                current_data_point=row_index + 1,
+                phase=Phase.PROCESSING,
+            )
 
         # Process jobs with concurrency control
-        semaphore = asyncio.Semaphore(parallelism)
+        semaphore = asyncio.Semaphore(datapoint_parallelism)
 
         async def run_job_with_semaphore(job: Job) -> JobResult:
-            async with semaphore:
-                return await process_job(
-                    job,
-                    data_point,
-                    row_index,
-                    evaluators,
-                    progress_service,
-                    tracing_context,
-                )
+            return await process_job(
+                job,
+                data_point,
+                row_index,
+                evaluators,
+                progress_service,
+                tracing_context,
+                semaphore,
+            )
 
-        # Execute all jobs with controlled parallelism
+        # Execute all jobs with controlled concurrency
         job_results = await asyncio.gather(
             *[run_job_with_semaphore(job) for job in jobs],
             return_exceptions=False,
@@ -85,10 +93,12 @@ async def process_data_point(
         ]
 
     except Exception as error:
-        # Return error result with placeholder data point
+        logger.warning('Data point {} failed before job execution: {}', row_index, error)
+        # Placeholder only when resolution itself failed; row_index keeps them distinct.
+        fallback = data_point if isinstance(data_point, DataPoint) else DataPoint(inputs={'row_index': row_index})
         return [
             DataPointResult(
-                data_point=DataPoint(inputs={}, expected_output=None),
+                data_point=fallback,
                 error=str(error),
                 job_results=None,
             )
@@ -102,6 +112,7 @@ async def process_job(
     evaluators: list[Evaluator] | None = None,
     progress_service: ProgressService | None = None,
     tracing_context: 'TracingContext | None' = None,
+    semaphore: asyncio.Semaphore | None = None,
 ) -> JobResult:
     """
     Process a single job and optionally run evaluators on its output.
@@ -113,6 +124,7 @@ async def process_job(
         evaluators: List of evaluators to run on the job output
         progress_service: Optional progress tracking service
         tracing_context: Optional tracing context for OTEL spans
+        semaphore: Optional per-datapoint semaphore shared by the job and its evaluators
 
     Returns:
         JobResult containing job output and evaluator scores
@@ -139,7 +151,11 @@ async def process_job(
     ) as job_span:
         try:
             # Execute the job
-            result = await job(data_point, row_index)
+            if semaphore is None:
+                result = await job(data_point, row_index)
+            else:
+                async with semaphore:
+                    result = await job(data_point, row_index)
             job_name = cast('str', result['name'])
             output = cast('Output', result['output'])
 
@@ -148,7 +164,7 @@ async def process_job(
 
             # Update progress with current job name
             if progress_service:
-                await progress_service.update_progress(current_job=job_name)
+                await safe_update_progress(progress_service, operation='job update', current_job=job_name)
 
         except JobError as e:
             # Extract job name from JobError
@@ -180,18 +196,22 @@ async def process_job(
         if evaluators:
             # Update phase to evaluating
             if progress_service:
-                await progress_service.update_progress(phase=Phase.EVALUATING)
+                await safe_update_progress(
+                    progress_service, operation='evaluation phase update', phase=Phase.EVALUATING
+                )
 
-            # Run all evaluators concurrently (unbounded concurrency)
-            # Using create_task for better event loop scheduling
-            tasks = [
-                asyncio.create_task(
-                    process_evaluator(
+            async def run_evaluator_with_semaphore(evaluator: Evaluator) -> EvaluatorScore:
+                if semaphore is None:
+                    return await process_evaluator(
                         evaluator, data_point, output, progress_service, tracing_context, row_index=row_index
                     )
-                )
-                for evaluator in evaluators
-            ]
+                async with semaphore:
+                    return await process_evaluator(
+                        evaluator, data_point, output, progress_service, tracing_context, row_index=row_index
+                    )
+
+            # Run all evaluators concurrently, bounded by the per-datapoint semaphore.
+            tasks = [asyncio.create_task(run_evaluator_with_semaphore(evaluator)) for evaluator in evaluators]
 
             evaluator_scores = await asyncio.gather(*tasks)
 
@@ -246,7 +266,11 @@ async def process_evaluator(
         try:
             # Update current evaluator in progress
             if progress_service:
-                await progress_service.update_progress(current_evaluator=evaluator_name)
+                await safe_update_progress(
+                    progress_service,
+                    operation='evaluator update',
+                    current_evaluator=evaluator_name,
+                )
 
             # Execute the scorer
             scorer_param: ScorerParameter = {

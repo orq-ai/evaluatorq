@@ -71,7 +71,7 @@ class SimulationConfig(BaseModel):
     cap when replaying, else to ``DEFAULT_MAX_TURNS``."""
     model: str = DEFAULT_MODEL
     evaluator_names: list[str] | None = None
-    parallelism: int = 5
+    datapoint_parallelism: int = 10
     user_simulator: Any = None
     """``BaseAgent | None`` — ``Any`` at runtime, see module note above."""
     judge: Any = None

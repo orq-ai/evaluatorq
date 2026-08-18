@@ -41,7 +41,7 @@ def test_tool_calls_preserved():
     turn = Turn(
         attacker=AgentResponse(text="go"),
         target=AgentResponse(output=[
-            ToolCallOutputItem(name="lookup", arguments='{"q":"x"}', id="c1", call_id="c1"),
+            ToolCallOutputItem(name="lookup", arguments='{"q":"x"}', id="c1", call_id="c1", result="found"),
         ]),
     )
     msgs = turns_to_messages([turn])
@@ -124,7 +124,7 @@ def test_tool_call_preserves_responses_item_id():
     turn = Turn(
         attacker=AgentResponse(text="go"),
         target=AgentResponse(output=[
-            ToolCallOutputItem(name="lookup", arguments='{"q":"x"}', id="fc_abc", call_id="call_xyz"),
+            ToolCallOutputItem(name="lookup", arguments='{"q":"x"}', id="fc_abc", call_id="call_xyz", result="found"),
         ]),
     )
     msgs = turns_to_messages([turn])
@@ -144,16 +144,17 @@ def test_interleaved_text_tool_text_emits_three_assistant_rows():
         attacker=AgentResponse(text="search"),
         target=AgentResponse(output=[
             TextOutputItem(text="thinking...", annotations=[]),
-            ToolCallOutputItem(name="lookup", arguments="{}", id="c1", call_id="c1"),
+            ToolCallOutputItem(name="lookup", arguments="{}", id="c1", call_id="c1", result="found"),
             TextOutputItem(text="found it", annotations=[]),
         ]),
     )
     msgs = turns_to_messages([turn])
-    # user, assistant("thinking..."), assistant(tool_calls), assistant("found it")
-    assert [m.role for m in msgs] == ["user", "assistant", "assistant", "assistant"]
+    # user, assistant("thinking..."), assistant(tool_calls), tool, assistant("found it")
+    assert [m.role for m in msgs] == ["user", "assistant", "assistant", "tool", "assistant"]
     assert msgs[1].content == "thinking..."
     assert msgs[2].tool_calls is not None and msgs[2].tool_calls[0].function.name == "lookup"
-    assert msgs[3].content == "found it"
+    assert msgs[3].content == "found"
+    assert msgs[4].content == "found it"
 
 
 def test_consecutive_text_items_collapse_into_one_assistant_row():

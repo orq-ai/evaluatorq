@@ -262,9 +262,20 @@ The report fields most users need are:
   the attack was not evaluated, not that it was resisted.
 - `report.summary.by_vulnerability`: the pre-aggregated vulnerability breakdown.
 
-For failures, `result.error` means the attack did not run; `result.evaluation_error`
-means it ran but the judge could not return a verdict. Both roll up into
-`report.summary.errors_by_type`.
+A datapoint that fails before its strategy can create an attack is not counted as
+an attack result. Its structured `RunError` is stored in `report.errors`, and
+`report.summary.pre_execution_errors` records how many rows failed at that stage;
+the dashboard surfaces that count separately from executed attacks.
+
+When a judge fails to return a verdict, the reason is captured on
+`result.evaluation_error` (a `RunError` with a `code` like `timeout`, `parse`,
+`api_connection`, `api_status`, or `unknown`). It is deliberately separate from
+`result.error`: `error` means the attack itself never ran, `evaluation_error`
+means the attack ran and the transcript exists but no judge could score it. Both
+roll up into `report.summary.errors_by_type`, where judge failures appear under
+`evaluation/<code>` keys (execution failures use the bare code) — so a
+systematically blocked judge shows up as one named cause (`evaluation/api_status:
+40 attacks`) instead of vanishing into forty individual results.
 
 ## What a run costs
 

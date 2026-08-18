@@ -33,7 +33,7 @@ async def test_full_static_run(
         report = await red_team(
             "agent:e2e-static-model",
             mode="static",
-            parallelism=2,
+            datapoint_parallelism=2,
             dataset=str(static_dataset_path),
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
             description="E2E static test",
@@ -54,7 +54,7 @@ async def test_static_vulnerability_detection(
     report = await red_team(
         OpenAIModelTarget("e2e-static-model", client=client),
         mode="static",
-        parallelism=2,
+        datapoint_parallelism=2,
         dataset=str(static_dataset_path),
         llm_client=client,
     )
@@ -89,7 +89,7 @@ async def test_static_category_filtering(
             "agent:e2e-static-model",
             mode="static",
             categories=["ASI01"],
-            parallelism=2,
+            datapoint_parallelism=2,
             dataset=str(static_dataset_path),
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
         )
@@ -117,7 +117,7 @@ async def test_static_delivery_method_filtering(
             "agent:e2e-static-model",
             mode="static",
             delivery_methods=[DeliveryMethod.DIRECT_REQUEST],
-            parallelism=2,
+            datapoint_parallelism=2,
             dataset=str(static_dataset_path),
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
         )
@@ -142,7 +142,7 @@ async def test_static_delivery_method_empty_match_hard_fails(
             "agent:e2e-static-model",
             mode="static",
             delivery_methods=[DeliveryMethod.BASE64],  # no fixture row uses this
-            parallelism=2,
+            datapoint_parallelism=2,
             dataset=str(static_dataset_path),
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
         )
@@ -169,7 +169,7 @@ async def test_static_unknown_delivery_method_passes_through_and_hard_fails(
             "agent:e2e-static-model",
             mode="static",
             delivery_methods=["bespoke-technique"],  # not an enum member, not registered
-            parallelism=2,
+            datapoint_parallelism=2,
             dataset=str(static_dataset_path),
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
         )
@@ -215,7 +215,7 @@ async def test_static_empty_filter_hard_fails_instead_of_running_everything(
         await red_team(
             "agent:e2e-static-model",
             mode="static",
-            parallelism=2,
+            datapoint_parallelism=2,
             dataset=str(static_dataset_path),
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
             categories=categories,
@@ -236,7 +236,7 @@ async def test_static_datapoint_capping(
             "agent:e2e-static-model",
             mode="static",
             max_static_datapoints=1,
-            parallelism=2,
+            datapoint_parallelism=2,
             dataset=str(static_dataset_path),
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
         )
@@ -270,7 +270,7 @@ async def test_unfiltered_empty_run_does_not_blame_a_filter(
         report = await red_team(
             "agent:e2e-static-model",
             mode="static",
-            parallelism=2,
+            datapoint_parallelism=2,
             dataset=str(static_dataset_path),
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
         )

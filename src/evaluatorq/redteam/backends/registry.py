@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from evaluatorq.common.retry import without_client_retries
+from evaluatorq.redteam.backends._retry import warn_ignored_target_retries
 from evaluatorq.redteam.exceptions import BackendError, CredentialError
 
 if TYPE_CHECKING:
@@ -45,9 +47,8 @@ def create_async_llm_client(
     ``LLMConfig.retry_count``); ``None`` keeps the SDK default. Callers that own
     retry themselves — the judge via ``with_retry``, ``OrqResponsesTarget`` — must
     not stack a second budget underneath their own; ``run_judge``'s
-    ``_without_client_retries`` helper (``evaluatorq.common.judge``) enforces
-    that by disarming the client it is given, so a client built here and handed to
-    a judge comes back with ``max_retries=0``.
+    ``without_client_retries`` (``evaluatorq.common.retry``) enforces that at
+    retry-owning boundaries by cloning injected clients with ``max_retries=0``.
     """
     from evaluatorq.common.llm_client import MissingLLMCredentialsError, resolve_llm_client
 
@@ -99,11 +100,30 @@ def _create_openai_backend(
     llm_client: AsyncOpenAI | None = None,
     target_config: TargetConfig | None = None,
     pipeline_config: LLMConfig | None = None,
+    retry_count: int | None = None,
+    retry_on_codes: list[int] | None = None,
     **_: object,
 ) -> Backend:
+    """Build an OpenAI target whose retries belong to ``call_target_with_retry``.
+
+    ``retry_count`` and ``retry_on_codes`` remain explicit for direct factory
+    callers. They are ignored for target calls and non-default values emit the
+    same warning as ``pipeline_config``; the uniform ``**_`` resolver sink must
+    not swallow those retry settings silently.
+    """
     from evaluatorq.redteam.backends.openai import OpenAIBackend
 
     system_prompt = target_config.system_prompt if target_config else None
+    # call_target_with_retry owns retry here, so pipeline retry settings cannot apply.
+    warn_ignored_target_retries(
+        'OpenAI',
+        retry_count=retry_count
+        if retry_count is not None
+        else (pipeline_config.retry_count if pipeline_config else None),
+        retry_on_codes=retry_on_codes
+        if retry_on_codes is not None
+        else (pipeline_config.retry_on_codes if pipeline_config else None),
+    )
     # Forward the pipeline timeout like the orq/openresponses factories do —
     # without it the backend's timeout_ms plumbing is never fed from config.
     # max_tokens stays unfed on purpose: LLMConfig has no target-level token
@@ -137,18 +157,30 @@ def _create_openresponses_backend(
     pipeline_config: LLMConfig | None = None,
     **_: object,  # absorbs unknown kwargs from resolve_backend's uniform signature
 ) -> Backend:
+    """Build an OpenResponses target with target retries owned by the orchestrator.
+
+    ``retry_attempts=1`` leaves the target's internal ``with_retry`` boundary as
+    a single SDK call; ``call_target_with_retry`` owns the actual target retry
+    budget. Injected clients are cloned with SDK retries disabled before they
+    reach that boundary.
+    """
     from evaluatorq.redteam.backends.openresponses import OpenResponsesBackend
 
     instructions = target_config.system_prompt if target_config else None
     timeout_ms = pipeline_config.target_agent_timeout_ms if pipeline_config else None
-    retry_attempts = pipeline_config.retry_attempts if pipeline_config else None
-    retry_statuses = pipeline_config.retry_on_codes if pipeline_config else None
+    # call_target_with_retry owns retry here; keep one inner attempt, no second budget.
+    if pipeline_config is not None:
+        warn_ignored_target_retries(
+            'OpenResponses',
+            retry_count=pipeline_config.retry_count,
+            retry_on_codes=pipeline_config.retry_on_codes,
+        )
+    retry_attempts = 1
     return OpenResponsesBackend(
-        client=llm_client,
+        client=without_client_retries(llm_client) if llm_client is not None else None,
         instructions=instructions,
         timeout_ms=timeout_ms,
         retry_attempts=retry_attempts,
-        retry_statuses=retry_statuses,
     )
 
 

@@ -54,6 +54,9 @@ def create_model_job(
 ) -> Job:
     """Create an evaluatorq job for a router model or ORQ deployment.
 
+    The model leg deliberately keeps roles intact as a richer interface, so its message shape differs from the
+    AgentTarget static leg.
+
     ``max_tokens`` is applied to direct model calls (router jobs).
     Deployment targets manage their own token limits via platform configuration,
     so ``max_tokens`` is ignored for that path.

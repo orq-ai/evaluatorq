@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 from typing_extensions import Self
 
 from evaluatorq.common.llm_client import client_routes_through_orq
-from evaluatorq.common.retry import with_retry
+from evaluatorq.common.retry import with_retry, without_client_retries
 from evaluatorq.common.thread_context import pipeline_metadata, thread_body_param
 from evaluatorq.common.tracing import get_trace_context_headers
 from evaluatorq.contracts import AgentContext, AgentResponse, AgentTarget, LLMCallConfig, Message
@@ -76,7 +76,9 @@ class OrqResponsesTarget(AgentTarget):
         # OPENAI_API_KEY — an ``agent/<key>`` model only resolves on the Orq router.
         self.require_orq = require_orq
         if client is not None:
-            self._client = client
+            # This target owns retry via with_retry, including when callers
+            # inject an AsyncOpenAI client that was built with SDK retries.
+            self._client = without_client_retries(client)
             self._client_owned = False
         else:
             # max_retries=0: this target owns retry via with_retry in
@@ -162,7 +164,10 @@ class OrqResponsesTarget(AgentTarget):
         """Pure call into ``client.responses.create``; no instance mutation.
 
         Applies retry (rate-limit / server errors) via `with_retry` and
-        converts `asyncio.TimeoutError` into a descriptive RuntimeError.
+        converts `asyncio.TimeoutError` into a descriptive RuntimeError. The
+        red-team backend sets ``retry_attempts=1`` so
+        ``call_target_with_retry`` owns the target retry budget; simulation
+        callers may instead configure this boundary's ``with_retry`` budget.
         """
         timeout_s = self.config.timeout_ms / 1000.0 if self.config.timeout_ms else None
 

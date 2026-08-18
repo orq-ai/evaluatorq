@@ -315,6 +315,7 @@ class TestOrchestratorTranscript:
                             arguments='{"q":"x"}',
                             id="call_1",
                             call_id="call_1",
+                            result="found",
                         ),
                         TextOutputItem(text="a1", annotations=[]),
                     ])

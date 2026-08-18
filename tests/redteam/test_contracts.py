@@ -3,15 +3,17 @@
 import json
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from evaluatorq.contracts import (
     AgentResponse,
     ReasoningOutputItem,
     TextOutputItem,
     ToolCallOutputItem,
+    tool_result_to_text,
 )
 from evaluatorq.dashboard.library import load_model_cached
 from evaluatorq.redteam.contracts import (
@@ -58,6 +60,49 @@ class TestNormalizeCategory:
 
     def test_llm_prefix(self) -> None:
         assert normalize_category('OWASP-LLM01') == 'LLM01'
+
+
+def test_tool_result_to_text_serializes_pydantic_models_as_json() -> None:
+    class Answer(BaseModel):
+        field: str
+
+    assert tool_result_to_text(Answer(field='x')) == '{"field":"x"}'
+
+
+def test_tool_result_to_text_falls_back_when_pydantic_serialization_fails() -> None:
+    class Answer(BaseModel):
+        model_config = ConfigDict(arbitrary_types_allowed=True)
+        field: object
+
+        def __str__(self) -> str:
+            return 'answer fallback'
+
+    with patch('evaluatorq.contracts.logger.warning') as warning:
+        rendered = tool_result_to_text(Answer(field=object()))
+
+    assert rendered == '"answer fallback"'
+    warning.assert_called_once()
+    assert 'model_dump_json() failed' in warning.call_args.args[0]
+    assert warning.call_args.args[2] == 'PydanticSerializationError'
+
+
+def test_tool_result_to_text_warns_and_falls_back_for_non_string_renderer() -> None:
+    class NonStringRenderer:
+        def __str__(self) -> str:
+            return 'renderer fallback'
+
+        def model_dump_json(self) -> object:
+            return 42
+
+    with patch('evaluatorq.contracts.logger.warning') as warning:
+        rendered = tool_result_to_text(NonStringRenderer())
+
+    assert rendered == '"renderer fallback"'
+    warning.assert_called_once_with(
+        'tool_result_to_text: {}.model_dump_json() returned {}; falling back to JSON encoding',
+        'NonStringRenderer',
+        'int',
+    )
 
 
 class TestInferFramework:
@@ -354,18 +399,15 @@ class TestChatCompletionsOrdering:
         assert msgs[1].content == 'Hello, world.'
         assert msgs[1].tool_calls is None
 
-    def test_tool_call_without_result_emits_assistant_only(self) -> None:
+    def test_tool_call_without_result_is_dropped(self) -> None:
         result = self._build([
             ToolCallOutputItem(call_id='call_1', name='search', arguments='{"q": "x"}'),
         ])
         msgs = result.chat_completions
         assert [m.role for m in msgs] == ['user', 'assistant']
         assistant = msgs[1]
-        assert assistant.content is None
-        assert assistant.tool_calls is not None and len(assistant.tool_calls) == 1
-        assert assistant.tool_calls[0].id == 'call_1'
-        assert assistant.tool_calls[0].function.name == 'search'
-        assert assistant.tool_calls[0].function.arguments == '{"q": "x"}'
+        assert assistant.content == ''
+        assert assistant.tool_calls is None
 
     def test_tool_call_with_result_emits_assistant_then_tool(self) -> None:
         result = self._build([
@@ -393,7 +435,6 @@ class TestChatCompletionsOrdering:
             'assistant',  # tool_call c1
             'tool',  # result for c1
             'assistant',  # "Now another:"
-            'assistant',  # tool_call c2 (no result)
             'assistant',  # "Done."
         ]
         assert msgs[1].content == 'Thinking...'
@@ -404,9 +445,7 @@ class TestChatCompletionsOrdering:
         assert msgs[3].tool_call_id == 'c1'
         assert msgs[3].content == 'r1'
         assert msgs[4].content == 'Now another:'
-        assert msgs[5].tool_calls is not None
-        assert msgs[5].tool_calls[0].id == 'c2'
-        assert msgs[6].content == 'Done.'
+        assert msgs[5].content == 'Done.'
 
     def test_reasoning_items_are_dropped(self) -> None:
         result = self._build([

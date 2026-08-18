@@ -34,6 +34,7 @@ from evaluatorq.contracts import (
     TextOutputItem,
     TokenUsage,
     content_to_text,
+    tool_result_to_text,
 )
 
 if TYPE_CHECKING:
@@ -124,7 +125,8 @@ class CrewAITarget(AgentTarget):
         except Exception as exc:
             raise RuntimeError(f'CrewAITarget: crew.kickoff() raised an error: {exc}') from exc
 
-        text = str(getattr(output, 'raw', '') or '')
+        raw = getattr(output, 'raw', '') or ''
+        text = tool_result_to_text(raw)
         out: list[OutputMessage] = [TextOutputItem(text=text, annotations=[])]
         return AgentResponse(output=out, usage=_extract_usage(output))
 

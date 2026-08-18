@@ -405,6 +405,7 @@ from evaluatorq.contracts import (  # noqa: F401
     StrategyToolCall,
     TextOutputItem,
     ToolCallOutputItem,
+    render_tool_call,
 )
 
 # ---------------------------------------------------------------------------
@@ -775,15 +776,8 @@ class LLMConfig(BaseModel):
     evaluator: EvaluatorConfig = Field(default_factory=EvaluatorConfig)
 
     # --- Retry configuration --------------------------------------------------
-    # Client-side retries per LLM call (OpenAI SDK ``max_retries``), and — on the
-    # Orq router path only — also the router-side budget via ``retry_extra_body``.
-    # The two layers multiply only during sustained outages: worst case per call
-    # is (retry_count + 1) HTTP requests, each asking the router for up to
-    # retry_count provider retries.
-    #
-    # Same semantics as LLMCallConfig.retry_count / EvaluatorConfig.retry_count
-    # (retries after the initial call, 0 disables retry) — this is the target-side
-    # budget, those are the attacker/judge-side ones.
+    # Retries after the initial call (0 disables) for pipeline-owned LLM calls and
+    # ORQ context/enrichment/cleanup. Target calls are owned by call_target_with_retry.
     retry_count: int = Field(default=3, ge=0, le=10)
     retry_on_codes: list[int] = Field(default=[429, 500, 502, 503, 504])
     # How many times to regenerate an attacker turn that the attack model
@@ -799,10 +793,8 @@ class LLMConfig(BaseModel):
     # --- Target agent timeout -------------------------------------------------
     target_agent_timeout_ms: int = 240_000
     # Retry a failed target transport call before abandoning its attacker turn.
-    # This is deliberately separate from ``retry_count``: the latter is forwarded
-    # to the ORQ router when supported, while this budget protects every target
-    # implementation at the orchestrator boundary.  A retry never consumes a
-    # new attacker turn or changes the conversation transcript.
+    # Sole retry owner: targets built for it must disable their own SDK budgets.
+    # A retry never consumes a new attacker turn or changes the transcript.
     max_target_retries: int = Field(default=2, ge=0, le=10)
 
     # --- Agent tool continuation cap ------------------------------------------
@@ -1058,10 +1050,11 @@ def turns_to_messages(turns: list[Turn], *, skip_errors: bool = False) -> list[M
 
     Each turn becomes a ``user`` message (the attacker prompt) followed by the
     target's output rows: consecutive text runs collapse into one ``assistant``
-    message; each tool call becomes an ``assistant`` message with one
-    ``tool_calls`` entry, plus a following ``tool`` row when ``result`` is set;
-    reasoning items are dropped. An empty target output still emits an empty
-    ``assistant`` row so consumers can rely on a user/assistant pair per turn.
+    message; each completed tool call becomes an ``assistant`` message with one
+    ``tool_calls`` entry plus its following ``tool`` row; calls without a result
+    are dropped because they cannot form a valid pair. Reasoning items are
+    dropped. An empty target output still emits an empty ``assistant`` row so
+    consumers can rely on a user/assistant pair per turn.
 
     When ``skip_errors`` is True, turns whose target carries an
     `evaluatorq.contracts.AgentResponseError` are omitted entirely — used
@@ -1086,28 +1079,18 @@ def turns_to_messages(turns: list[Turn], *, skip_errors: bool = False) -> list[M
                 text_buffer.append(item.text)
             elif isinstance(item, ToolCallOutputItem):
                 _flush_text()
-                out.append(
+                rendered = render_tool_call(item)
+                if rendered is None:
+                    continue
+                tool_call, tool_message = rendered
+                out.extend([
                     Message(
                         role='assistant',
                         content=None,
-                        tool_calls=[
-                            StrategyToolCall(
-                                id=item.call_id,
-                                item_id=item.id or None,
-                                function=FunctionCall(name=item.name, arguments=item.arguments),
-                            )
-                        ],
-                    )
-                )
-                if item.result is not None:
-                    out.append(
-                        Message(
-                            role='tool',
-                            tool_call_id=item.call_id,
-                            name=item.name,
-                            content=item.result,
-                        )
-                    )
+                        tool_calls=[tool_call],
+                    ),
+                    tool_message,
+                ])
             # ReasoningOutputItem intentionally dropped.
         _flush_text()
         # Alternation invariant: every user row must be followed by an assistant row.
@@ -1655,6 +1638,10 @@ class ReportSummary(BaseModel):
     vulnerability_rate: float | None = Field(default=None, ge=0.0, le=1.0, description=_RATE_NONE_DOC)
     resistance_rate: float | None = Field(default=None, ge=0.0, le=1.0, description=_RATE_NONE_DOC)
     total_errors: int = 0
+    pre_execution_errors: int = Field(
+        default=0,
+        description='Rows that failed before an attack job could execute',
+    )
     errors_by_type: dict[str, int] = Field(default_factory=dict, description='Error counts grouped by type')
     token_usage_total: TokenUsage | None = Field(default=None, description='Aggregated token usage across all results')
     token_usage_by_source: dict[str, TokenUsage] = Field(
@@ -1747,6 +1734,11 @@ class RedTeamReport(BaseModel):
     categories_tested: list[str]
     tested_agents: list[str] = Field(default_factory=list, description='Names/keys of tested agents in this report')
     total_results: int
+
+    errors: list[RunError] = Field(
+        default_factory=list,
+        description='Run-level errors for datapoints that never became attack results',
+    )
 
     agent_contexts: dict[str, AgentContext] = Field(
         default_factory=dict, description='Per-agent context keyed by agent key'
@@ -1943,7 +1935,7 @@ class DynamicRunMetadata(BaseModel):
     max_turns: int | None = None
     max_per_category: int | None = None
     generated_strategy_count: int | None = None
-    parallelism: int | None = None
+    datapoint_parallelism: int | None = None
     timestamp: str | None = None
     duration_seconds: float | None = None
 

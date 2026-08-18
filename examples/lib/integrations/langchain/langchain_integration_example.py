@@ -62,7 +62,7 @@ async def main():
         ],
         jobs=[wrap_langchain_agent(agent)],
         evaluators=[{"name": "has-temperature", "scorer": has_temperature_scorer}],
-        parallelism=2,
+        datapoint_parallelism=2,
     )
 
 

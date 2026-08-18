@@ -241,6 +241,49 @@ class TestOpenAIAgentTarget:
             await target.respond([Message(role="user", content="hi")])
 
     @pytest.mark.asyncio
+    async def test_structured_final_output_serialized_as_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A pydantic `final_output` must reach the judge as JSON, not a Python repr.
+
+        `str(SomeModel(field='x'))` renders `field='x'` (a repr), which is not
+        valid JSON and is not what the agent actually said.
+        """
+        import json
+
+        from pydantic import BaseModel
+        from evaluatorq.contracts import tool_result_to_text
+
+        import evaluatorq.integrations.openai_agents_integration.target as target_module
+
+        class Answer(BaseModel):
+            field: str
+
+        result = MagicMock()
+        result.final_output = Answer(field="x")
+        result.to_input_list.return_value = [
+            {"role": "user", "content": "prompt"},
+        ]
+        del result.context_wrapper
+        runner = MagicMock()
+        runner.run = AsyncMock(return_value=result)
+        monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
+        rendered: list[object] = []
+
+        def _render(value: object) -> str:
+            rendered.append(value)
+            return tool_result_to_text(value)
+
+        monkeypatch.setattr(target_module, 'tool_result_to_text', _render, raising=False)
+
+        target = OpenAIAgentTarget(MagicMock())
+        response = await target.respond([Message(role="user", content="hello")])
+
+        assert response.text is not None
+        assert "Answer(" not in response.text
+        parsed = json.loads(response.text)
+        assert parsed == {"field": "x"}
+        assert rendered == [Answer(field='x')]
+
+    @pytest.mark.asyncio
     async def test_runner_error_is_wrapped_with_context(self, monkeypatch: pytest.MonkeyPatch) -> None:
         runner = MagicMock()
         runner.run = AsyncMock(side_effect=RuntimeError("model overloaded"))

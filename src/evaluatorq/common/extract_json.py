@@ -10,7 +10,10 @@ from __future__ import annotations
 import json
 import re
 
-_JSON_BLOCK_PATTERN = re.compile(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', re.IGNORECASE)
+_JSON_BLOCK_PATTERN = re.compile(
+    r'```(?P<language>[^\r\n`]*)\r?\n?(?P<body>[\s\S]*?)\n?```',
+    re.IGNORECASE,
+)
 
 
 def coerce_str_list(value: object) -> object:
@@ -52,10 +55,17 @@ def extract_json_from_response(content: str) -> str:
     if not content:
         return ''
 
-    # Try to extract from code block using regex
-    match = _JSON_BLOCK_PATTERN.search(content)
-    if match and match.group(1):
-        return match.group(1).strip()
+    # Try every fenced block, preferring a tagged JSON block. Providers can put
+    # an illustrative Python block before their actual JSON response.
+    matches = list(_JSON_BLOCK_PATTERN.finditer(content))
+    ordered_matches = sorted(matches, key=lambda match: match.group('language').strip().lower() != 'json')
+    for match in ordered_matches:
+        candidate = match.group('body').strip()
+        try:
+            json.loads(candidate)
+            return candidate
+        except (json.JSONDecodeError, ValueError):
+            continue
 
     # No code block found — extract the outermost JSON structure. Whichever
     # opener appears FIRST wins: trying arrays unconditionally before objects

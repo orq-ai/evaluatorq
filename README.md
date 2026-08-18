@@ -99,7 +99,7 @@ uv run support_agent_eval.py
 
 <img src="docs/assets/readme-eval-terminal.svg" alt="Terminal output: summary table and a Detailed Results table scoring agent-v1 at 0.33 against agent-v2 at 1.00 on the string-contains evaluator" width="720">
 
-Every job runs against every data point, so adding a variant adds a column. Swap the two function bodies for real model or agent calls and nothing else changes. Any evaluator that returns `pass_=False` exits the process non-zero, so the same script gates CI — which is why this run ends with status 1.
+Every job runs against every data point, so adding a variant adds a column. Swap the two function bodies for real model or agent calls and nothing else changes. The library returns results even when an evaluator returns `pass_=False`, so this example exits 0. To gate CI, check `pass_` with `check_pass_failures(results)` and raise `SystemExit(1)` in your script.
 
 This is the repo's [`examples/lib/basics/support_agent_eval.py`](examples/lib/basics/support_agent_eval.py), minus its `__main__` guard.
 
@@ -202,7 +202,7 @@ results = await simulate(
 print(results[0].goal_achieved, results[0].goal_completion_score)
 ```
 
-Runs exit non-zero on failure by default (`exit_on_failure=True`), so they drop straight into CI. The target can be an Orq agent or any local async callable, including agents built with the OpenAI Agents SDK, LangGraph, CrewAI or PydanticAI — [the examples](examples/agent_simulation/) cover each, with screen recordings.
+Simulation owns its `exit_on_failure=True` gate for dropped rows, so it can drop straight into CI; evaluator score failures remain available in the returned results. The target can be an Orq agent or any local async callable, including agents built with the OpenAI Agents SDK, LangGraph, CrewAI or PydanticAI — [the examples](examples/agent_simulation/) cover each, with screen recordings.
 
 → [Agent simulation guide](https://orq-ai.github.io/evaluatorq/guides/agent-simulation/) ·
 [Intro notebook](examples/agent_simulation_intro.ipynb) ·

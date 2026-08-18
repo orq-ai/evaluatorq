@@ -7,11 +7,14 @@ deterministic ``BlackboxCapabilityInference``. No network, no real agent.
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
-from openai import APIConnectionError
+from openai import APIConnectionError, APIStatusError
 
 from evaluatorq.contracts import AgentResponse, AgentTarget, Message
 from evaluatorq.redteam.adaptive.blackbox_classifier import (
@@ -281,7 +284,7 @@ async def test_one_flaky_probe_does_not_abort_classification() -> None:
 
         async def respond(self, messages: list[Message]) -> AgentResponse:
             self.n += 1
-            if self.n == 1:
+            if self.n <= 3:
                 raise RuntimeError('transient')
             return AgentResponse(text='ok')
 
@@ -293,9 +296,9 @@ async def test_one_flaky_probe_does_not_abort_classification() -> None:
 
     result = await classify_agent_capabilities_blackbox(target, client, model='m')
 
-    # The failing turn is the memory WRITE: without it the recall tests
-    # nothing, so memory is a coverage gap and the flag goes optimistic —
-    # but classification still completes and the other groups still report.
+    # The failing turn exhausts the helper's three-attempt budget: without a
+    # successful write the recall tests nothing, so memory is a coverage gap
+    # and the flag goes optimistic — but other groups still report.
     assert result.classification_failed is True
     assert result.all_capabilities() == {'knowledge_retrieval'}
     # The judge was still called despite the one failure.
@@ -335,8 +338,8 @@ async def test_whole_group_unanswered_sets_classification_failed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_target_connection_error_propagates() -> None:
-    """A systemic connection error from the target re-raises (not a per-probe flake)."""
+async def test_target_connection_error_is_recorded_after_retries() -> None:
+    """An exhausted connection error is recorded as a failed probe."""
 
     class _ConnDown(AgentTarget):
         async def respond(self, messages: list[Message]) -> AgentResponse:
@@ -345,8 +348,10 @@ async def test_target_connection_error_propagates() -> None:
         def new(self) -> AgentTarget:
             return _ConnDown()
 
-    with pytest.raises(APIConnectionError):
-        await classify_agent_capabilities_blackbox(_ConnDown(), _judge(), model='m')
+    result = await classify_agent_capabilities_blackbox(_ConnDown(), _judge(), model='m')
+
+    assert result.classification_failed is True
+    assert result.capabilities == {}
 
 
 @pytest.mark.asyncio
@@ -401,7 +406,11 @@ async def test_flaky_probe_turn_not_left_in_transcript() -> None:
         def new(self) -> AgentTarget:
             return _SecondFails()
 
-    transcript, _ = await _run_probes(_SecondFails())
+    transcript, _ = await _run_probes(
+        _SecondFails(),
+        target_agent_timeout_ms=240_000,
+        max_target_retries=2,
+    )
 
     users = sum(1 for m in transcript if m.role == 'user')
     assistants = sum(1 for m in transcript if m.role == 'assistant')
@@ -555,15 +564,88 @@ async def test_budget_exhaustion_skips_recall_and_flags_gap(monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
-async def test_target_status_error_propagates() -> None:
-    """APIStatusError from the target re-raises like APIConnectionError."""
-    import httpx
-    from openai import APIStatusError
+async def test_target_status_error_is_recorded_after_retries() -> None:
+    """An exhausted transient status error is recorded as a failed probe."""
 
     class _StatusError(_ScriptedTarget):
         async def respond(self, messages: list[Message]) -> AgentResponse:
             request = httpx.Request('POST', 'http://test')
             raise APIStatusError('boom', response=httpx.Response(500, request=request), body=None)
 
-    with pytest.raises(APIStatusError):
-        await classify_agent_capabilities_blackbox(_StatusError(), _judge(), model='m')
+    result = await classify_agent_capabilities_blackbox(_StatusError(), _judge(), model='m')
+
+    assert result.classification_failed is True
+    assert result.capabilities == {}
+
+
+class _ProbeErrorTarget(AgentTarget):
+    """Target that raises one configured error, then answers every probe."""
+
+    def __init__(self, error_factory: Any, *, shared: dict[str, Any] | None = None) -> None:
+        super().__init__()
+        self.error_factory = error_factory
+        self.shared = shared if shared is not None else {'calls': []}
+
+    @property
+    def calls(self) -> list[list[Message]]:
+        return self.shared['calls']
+
+    async def respond(self, messages: list[Message]) -> AgentResponse:
+        self.calls.append(list(messages))
+        if len(self.calls) == 1:
+            raise self.error_factory()
+        return AgentResponse(text='ok')
+
+    def new(self) -> AgentTarget:
+        return type(self)(self.error_factory, shared=self.shared)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('error_factory', 'first_probe_attempts'),
+    [
+        pytest.param(
+            lambda: APIStatusError(
+                'rate limited',
+                response=httpx.Response(429, request=httpx.Request('POST', 'http://test')),
+                body=None,
+            ),
+            2,
+            id='429',
+        ),
+        pytest.param(lambda: APIConnectionError(request=MagicMock()), 2, id='connection'),
+        pytest.param(
+            lambda: APIStatusError(
+                'bad request',
+                response=httpx.Response(400, request=httpx.Request('POST', 'http://test')),
+                body=None,
+            ),
+            1,
+            id='400-no-retry',
+        ),
+    ],
+)
+async def test_probe_error_retry_policy(error_factory: Any, first_probe_attempts: int) -> None:
+    """Probe retries cover transient API failures but stop on a non-retryable 4xx."""
+    from evaluatorq.redteam.adaptive.blackbox_classifier import _run_probes
+
+    target = _ProbeErrorTarget(error_factory)
+    await _run_probes(target, target_agent_timeout_ms=240_000, max_target_retries=1)
+
+    first_probe = PROBES['memory'][0]
+    assert sum(first_probe in (messages[-1].content or '') for messages in target.calls) == first_probe_attempts
+
+
+def test_probe_path_routes_target_calls_through_shared_helper() -> None:
+    """Probe code must not regain a direct ``AgentTarget.respond`` call."""
+    source_path = Path(__file__).parents[2] / 'src/evaluatorq/redteam/adaptive/blackbox_classifier.py'
+    tree = ast.parse(source_path.read_text(encoding='utf-8'))
+    direct_calls = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'respond'
+    ]
+    assert direct_calls == [], (
+        f'{source_path.name} contains direct target.respond() call(s) on line(s) {direct_calls}; '
+        'use common.target_call.call_target_with_retry'
+    )

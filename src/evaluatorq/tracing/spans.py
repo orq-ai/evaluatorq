@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from evaluatorq.types import EvaluationResultCell
 
-from .setup import get_tracer
+from .setup import get_tracer  # noqa: F401  # backwards-compatible test/import hook
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -99,7 +99,7 @@ async def with_run_span(
 
 
 @asynccontextmanager
-async def with_job_span(  # noqa: RUF029
+async def with_job_span(
     options: JobSpanOptions,
 ) -> AsyncGenerator[Span | None, None]:
     """
@@ -119,47 +119,26 @@ async def with_job_span(  # noqa: RUF029
             pass
         ```
     """
-    tracer = get_tracer()
-    if tracer is None:
-        yield None
-        return
+    from evaluatorq.common.tracing import with_span
 
-    try:
-        from opentelemetry import context as otel_context
-        from opentelemetry.trace import SpanKind, Status, StatusCode
+    attributes: dict[str, Any] = {
+        'orq.trace_type': options.trace_type,
+        'orq.run_id': options.run_id,
+        'orq.row_index': options.row_index,
+    }
+    if options.job_name:
+        attributes['orq.job_name'] = options.job_name
 
-        # Use parent context if provided, otherwise use active context
-        parent_ctx = options.parent_context or otel_context.get_current()
-
-        attributes: dict[str, Any] = {
-            'orq.trace_type': options.trace_type,
-            'orq.run_id': options.run_id,
-            'orq.row_index': options.row_index,
-        }
-        if options.job_name:
-            attributes['orq.job_name'] = options.job_name
-
-        with tracer.start_as_current_span(
-            'orq.job',
-            context=parent_ctx,
-            kind=SpanKind.INTERNAL,
-            attributes=attributes,
-        ) as span:
-            try:
-                yield span
-                span.set_status(Status(StatusCode.OK))
-            except Exception as e:
-                span.set_status(Status(StatusCode.ERROR, str(e)))
-                span.record_exception(e)
-                raise
-
-    except ImportError:
-        # OTEL not available, run without span
-        yield None
+    async with with_span(
+        'orq.job',
+        attributes,
+        parent_context=options.parent_context,
+    ) as span:
+        yield span
 
 
 @asynccontextmanager
-async def with_evaluation_span(  # noqa: RUF029
+async def with_evaluation_span(
     options: EvaluationSpanOptions,
 ) -> AsyncGenerator[Span | None, None]:
     """
@@ -182,36 +161,17 @@ async def with_evaluation_span(  # noqa: RUF029
             pass
         ```
     """
-    tracer = get_tracer()
-    if tracer is None:
-        yield None
-        return
+    from evaluatorq.common.tracing import with_span
 
-    try:
-        from opentelemetry.trace import SpanKind, Status, StatusCode
-
-        with tracer.start_as_current_span(
-            # Include the evaluator name so concurrent evaluator spans are
-            # distinguishable in the trace tree / UI (mirrors `chat {model}`)
-            # rather than N identical `orq.evaluation` rows.
-            f'orq.evaluation {options.evaluator_name}',
-            kind=SpanKind.INTERNAL,
-            attributes={
-                'orq.run_id': options.run_id,
-                'orq.evaluator_name': options.evaluator_name,
-            },
-        ) as span:
-            try:
-                yield span
-                span.set_status(Status(StatusCode.OK))
-            except Exception as e:
-                span.set_status(Status(StatusCode.ERROR, str(e)))
-                span.record_exception(e)
-                raise
-
-    except ImportError:
-        # OTEL not available, run without span
-        yield None
+    async with with_span(
+        # Named so concurrent spans are distinguishable, mirroring `chat {model}`.
+        f'orq.evaluation {options.evaluator_name}',
+        {
+            'orq.run_id': options.run_id,
+            'orq.evaluator_name': options.evaluator_name,
+        },
+    ) as span:
+        yield span
 
 
 def set_evaluation_attributes(

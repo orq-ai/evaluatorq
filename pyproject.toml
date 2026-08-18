@@ -185,6 +185,7 @@ src = [ "src" ]
     "requests".msg = "Use httpx (already a runtime dependency); async paths need it anyway."
 
 [tool.basedpyright]
+pythonVersion = "3.10"
 exclude = [ "examples", "scripts", ".venv", "src/evaluatorq/redteam/ui", "src/evaluatorq/simulation/ui" ]
 reportIncompatibleVariableOverride = "none"
 reportExplicitAny = "none"

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
 from rich.columns import Columns
 from rich.console import Console
 from rich.live import Live
@@ -11,6 +12,7 @@ from rich.spinner import Spinner
 from rich.text import Text
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
     from types import CoroutineType
 
     from .types import EvaluatorqResult
@@ -180,6 +182,39 @@ class ProgressService:
             self.console.print(message)
 
 
+async def _safe_progress_call(operation: str, action: Callable[[], Awaitable[None]]) -> None:
+    """Run a display action without letting terminal failures affect evaluation."""
+    try:
+        await action()
+    except Exception as error:  # noqa: BLE001 - display faults must not fail a run
+        logger.warning(
+            'Progress display {} failed; continuing: {}: {}',
+            operation,
+            type(error).__name__,
+            error,
+        )
+
+
+async def safe_update_progress(
+    progress_service: ProgressService,
+    *,
+    operation: str = 'update',
+    **kwargs: Any,
+) -> None:
+    """Update progress without allowing a display failure to affect the run."""
+    await _safe_progress_call(operation, lambda: progress_service.update_progress(**kwargs))
+
+
+async def safe_start_spinner(progress_service: ProgressService) -> None:
+    """Start the spinner without allowing a display failure to affect the run."""
+    await _safe_progress_call('spinner start', progress_service.start_spinner)
+
+
+async def safe_stop_spinner(progress_service: ProgressService, *, operation: str = 'spinner stop') -> None:
+    """Stop the spinner without allowing a display failure to affect the run."""
+    await _safe_progress_call(operation, progress_service.stop_spinner)
+
+
 async def with_progress(
     coroutine: CoroutineType[Any, Any, EvaluatorqResult],
     progress_service: ProgressService,
@@ -210,22 +245,21 @@ async def with_progress(
     if not show_progress:
         return await coroutine
 
-    try:
-        # Start spinner
-        await progress_service.start_spinner()
+    await safe_start_spinner(progress_service)
 
+    try:
         # Run the coroutine
         result = await coroutine
 
         # Update to completed state
-        await progress_service.update_progress(phase=Phase.COMPLETED)
+        await safe_update_progress(progress_service, operation='completion update', phase=Phase.COMPLETED)
 
         # Stop spinner with success
-        await progress_service.stop_spinner()
+        await safe_stop_spinner(progress_service)
 
         return result
 
-    except Exception as error:
+    except Exception:
         # Stop spinner on error
-        await progress_service.stop_spinner()
+        await safe_stop_spinner(progress_service, operation='error cleanup')
         raise

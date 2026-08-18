@@ -37,12 +37,37 @@ def delimit(text: str, *, tag: str = 'data') -> str:
     Returns:
         The text wrapped in ``<tag>…</tag>`` with internal occurrences
         of the tag escaped.
+
+    Note:
+        Only tag-shaped runs are escaped; unrelated ``<``/``>`` pass through so a
+        judge reads the content, not entity noise. Use `xml_escape` otherwise.
+        Whitespace inside the tag name (``<da ta>``) is deliberately unmatched:
+        matching it needs an interleaved ``\\s*`` that backtracks quadratically
+        (10.4s on 50k spaces), and no parser reads it as the boundary tag anyway.
     """
     if not re.fullmatch(r'[a-zA-Z][a-zA-Z0-9_-]*', tag):
         raise ValueError(f'Invalid tag name: {tag!r}')
     sanitized = text.replace('&', '&amp;')
-    sanitized = re.sub(rf'<{re.escape(tag)}>', f'&lt;{tag}&gt;', sanitized, flags=re.IGNORECASE)
-    sanitized = re.sub(rf'</{re.escape(tag)}>', f'&lt;/{tag}&gt;', sanitized, flags=re.IGNORECASE)
+    # Keep slash/no-slash whitespace alternatives separate to avoid quadratic
+    # backtracking on long near-misses; stop at another '<' for the same reason.
+    sanitized = re.sub(
+        rf'<(?:\s*/\s*|\s*){re.escape(tag)}(?![a-zA-Z0-9_-])[^<>]*>',
+        lambda match: (
+            re
+            .sub(re.escape(tag), tag, match.group(), count=1, flags=re.IGNORECASE)
+            .replace('<', '&lt;')
+            .replace('>', '&gt;')
+        ),
+        sanitized,
+        flags=re.IGNORECASE,
+    )
+    sanitized = re.sub(
+        rf'<(?:\s*/\s*|\s*){re.escape(tag)}(?![a-zA-Z0-9_-])'
+        rf'(?:[^<>]*<[^>]*(?:>|$))?',
+        lambda match: match.group().replace('<', '&lt;').replace('>', '&gt;'),
+        sanitized,
+        flags=re.IGNORECASE,
+    )
     return f'<{tag}>{sanitized}</{tag}>'
 
 

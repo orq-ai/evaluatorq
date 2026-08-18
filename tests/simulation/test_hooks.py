@@ -66,7 +66,7 @@ def _meta() -> SimulationRunMeta:
         num_datapoints=1,
         model='m',
         max_turns=3,
-        parallelism=1,
+        datapoint_parallelism=1,
         evaluation_name='e',
         evaluator_names=['goal_achieved'],
         target='callback',
@@ -868,7 +868,7 @@ def test_rich_hooks_reusable_across_runs():
         num_datapoints=2,
         model='m',
         max_turns=3,
-        parallelism=2,
+        datapoint_parallelism=2,
         evaluation_name='',
         evaluator_names=['goal_achieved'],
         target='callback',
@@ -1157,7 +1157,7 @@ def _meta_with_target(n: int = 2) -> SimulationRunMeta:
         num_datapoints=n,
         model='openai/gpt-5.4-mini',
         max_turns=5,
-        parallelism=3,
+        datapoint_parallelism=3,
         evaluation_name='sim',
         evaluator_names=['goal_achieved'],
         target='agent:foo',
@@ -1307,7 +1307,7 @@ async def test_generate_fires_generate_stage_hooks(monkeypatch):
     monkeypatch.setattr(api, '_resolve_or_generate_datapoints', _fake_resolve)
     monkeypatch.setattr(
         'evaluatorq.openresponses.client.build_simulation_client',
-        lambda _client: (object(), False),
+        lambda _client, **_kwargs: (object(), False),
     )
     monkeypatch.setattr('evaluatorq.simulation.tracing.with_simulation_span', _fake_span)
     monkeypatch.setattr('evaluatorq.tracing.tracing_session', _noop_tracing_session)

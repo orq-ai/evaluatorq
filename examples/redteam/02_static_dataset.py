@@ -39,7 +39,7 @@ async def main() -> None:
         target=target,
         mode="static",
         dataset="tests/redteam/fixtures/static_e2e_dataset.json",
-        parallelism=3,
+        datapoint_parallelism=3,
     )
 
     print(f"Pipeline: {report.pipeline}")

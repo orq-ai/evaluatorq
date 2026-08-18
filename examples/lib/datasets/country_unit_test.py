@@ -54,7 +54,7 @@ async def run():
         data=DatasetIdInput(dataset_id=DATASET_ID),
         jobs=[country_lookup_job],
         evaluators=[string_contains_evaluator()],
-        parallelism=6,
+        datapoint_parallelism=6,
         print_results=True,
         description="Unit test for unit_test_countries deployment",
     )

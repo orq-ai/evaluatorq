@@ -178,6 +178,12 @@ def rid(roots: list[Path]) -> str:
     return report_id(roots[0] / 'rt_multi_agent_20260101_000000.json')
 
 
+def _assert_empty_attack_fragment(response) -> None:
+    assert response.status_code == 200
+    assert response.text == '<p class="rt-view-empty">No attack at that index.</p>'
+    assert 'Evaluator verdict' not in response.text
+
+
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
@@ -196,6 +202,27 @@ def _get(client: TestClient, url: str) -> str:
 
 class TestBreakdownView:
     """GET /r/{rid}/view/breakdown"""
+
+    def test_all_errored_report_renders_breakdown_empty_state(self, tmp_path: Path) -> None:
+        errored = _make_result(category='ASI01', passed=None, attack_id='errored').model_copy(
+            update={'error': 'target unavailable'}
+        )
+        report = _make_report([errored], tested_agents=['agent-a'])
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        report_path = rt / 'rt_all_errored_20260101.json'
+        report_path.write_text(report.model_dump_json())
+
+        app = build_app(roots=[rt])
+        rid = report_id(report_path)
+        response = TestClient(app, raise_server_exceptions=True).get(
+            f'/r/{rid}/view/breakdown?group_by=vulnerability&stack_by=severity'
+        )
+
+        assert response.status_code == 200
+        assert 'rt-view-empty' in response.text
+        assert 'No evaluated results to display.' in response.text
+        assert 'data-vega-for' not in response.text
 
     def test_returns_200(self, client: TestClient, rid: str) -> None:
         _get(client, f'/r/{rid}/view/breakdown?group_by=vulnerability')
@@ -308,6 +335,65 @@ class TestBreakdownView:
         assert asi02_row['value'] == 0.0, f'Expected ASI02 ASR=0.0, got {asi02_row["value"]!r}'
         # Also verify the text label contains "50.0%"
         assert '50.0%' in asi01_row.get('text', ''), f"Expected '50.0%' in text label, got {asi01_row.get('text')!r}"
+
+    def test_stacked_breakdown_uses_vulnerable_counts_and_pooled_order(self, tmp_path: Path) -> None:
+        """Stacked bars must add vulnerable attacks, while ordering uses pooled ASR."""
+        import json
+        import re
+
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        results: list[RedTeamResult] = []
+
+        # Group A has two 100% stacks with one attack each and one large safe
+        # stack: its unweighted mean is higher, but its pooled ASR is lower.
+        results.extend(
+            [
+                _make_result(category='GROUP_A', severity=Severity.HIGH, passed=False, attack_id='a-high'),
+                _make_result(category='GROUP_A', severity=Severity.MEDIUM, passed=False, attack_id='a-medium'),
+            ]
+        )
+        results.extend(
+            _make_result(
+                category='GROUP_A', severity=Severity.LOW, passed=True, attack_id=f'a-low-{i}'
+            )
+            for i in range(100)
+        )
+
+        # Group B has a large vulnerable stack and two small safe stacks: its
+        # pooled ASR is higher despite its lower unweighted stack mean.
+        results.extend(
+            _make_result(category='GROUP_B', severity=Severity.HIGH, passed=False, attack_id=f'b-high-{i}')
+            for i in range(100)
+        )
+        results.extend(
+            [
+                _make_result(category='GROUP_B', severity=Severity.MEDIUM, passed=True, attack_id='b-medium'),
+                _make_result(category='GROUP_B', severity=Severity.LOW, passed=True, attack_id='b-low'),
+            ]
+        )
+
+        report = _make_report(results, tested_agents=['agent-a'])
+        rp = rt / 'rt_stacked_counts_20260101.json'
+        rp.write_text(report.model_dump_json())
+        app = build_app(roots=[rt])
+        rid = report_id(rp)
+        html = TestClient(app, raise_server_exceptions=True).get(
+            f'/r/{rid}/view/breakdown?group_by=category&stack_by=severity'
+        ).text
+        specs = re.findall(r'<script[^>]+data-vega-for[^>]*>(.*?)</script>', html, re.DOTALL)
+        assert specs, f'No embedded Vega spec found in HTML:\n{html[:800]}'
+        spec = json.loads(specs[0].replace('<\\/', '</'))
+
+        assert spec['encoding']['x']['title'] == 'Vulnerable attacks'
+        rows = spec['data']['values']
+        assert sum(row['value'] for row in rows if row['label'] == 'GROUP_A') == 2
+        assert sum(row['value'] for row in rows if row['label'] == 'GROUP_B') == 100
+        assert [row['label'] for row in rows if row['series'] == rows[0]['series']] == ['GROUP_B', 'GROUP_A']
+        assert spec['encoding']['tooltip']
+        tooltip = spec['encoding']['tooltip']
+        assert {item['field'] for item in tooltip} >= {'value', 'asr', 'evaluated'}
+        assert next(item for item in tooltip if item['field'] == 'value')['title'] == 'Vulnerable attacks'
 
     def test_asr_evaluated_set_denominator_matches_static_report(self, tmp_path: Path) -> None:
         """Regression guard: interactive breakdown ASR == static report ASR on evaluated-set denominator.
@@ -458,9 +544,9 @@ class TestAttackFragmentView:
         assert html_0 != html_1
 
     def test_out_of_range_idx_handled_gracefully(self, client: TestClient, rid: str) -> None:
-        """idx beyond result count should still return 200 (clamped to 0)."""
-        html = _get(client, f'/r/{rid}/redteam/attack?idx=9999')
-        assert 'Evaluator verdict' in html
+        """idx beyond result count should return a visible empty fragment."""
+        response = client.get(f'/r/{rid}/redteam/attack?idx=9999')
+        _assert_empty_attack_fragment(response)
 
     def test_hx_get_links_present_for_navigation(self, client: TestClient, rid: str) -> None:
         html = _get(client, f'/r/{rid}/redteam/attack?idx=0')
@@ -469,6 +555,24 @@ class TestAttackFragmentView:
     def test_missing_report_404(self, client: TestClient) -> None:
         r = client.get('/r/nonexistentxyz/redteam/attack?idx=0')
         assert r.status_code == 404
+
+    @pytest.mark.parametrize('idx', ['', 'not-an-index', '-1', '9999'])
+    def test_invalid_or_absent_idx_matches_sim_route(self, client: TestClient, rid: str, idx: str) -> None:
+        response = client.get(f'/r/{rid}/redteam/attack?idx={idx}')
+        _assert_empty_attack_fragment(response)
+
+    def test_idx_into_empty_report_is_empty_fragment(self, tmp_path: Path) -> None:
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        report_path = rt / 'empty.json'
+        report_path.write_text(_make_report([], []).model_dump_json())
+        empty_rid = report_id(report_path)
+
+        response = TestClient(build_app(roots=[rt]), raise_server_exceptions=True).get(
+            f'/r/{empty_rid}/redteam/attack?idx=0'
+        )
+
+        _assert_empty_attack_fragment(response)
 
 
 # ---------------------------------------------------------------------------
@@ -701,14 +805,33 @@ class TestViewRoutesHonorFilter:
         assert 'Evaluator verdict' in html_all
         assert 'Evaluator verdict' in html_vuln
 
-    def test_attack_fragment_stale_idx_clamped_after_filter(self, tmp_path: Path) -> None:
-        """An idx that falls outside the filtered set should be clamped to 0 (not 500)."""
+    def test_attack_fragment_stale_idx_after_filter_is_empty(self, tmp_path: Path) -> None:
+        """An idx outside the filtered set should return a visible empty fragment."""
         client, rid = self._filtered_report(tmp_path)
         # Unfiltered has 4 results (idx 0-3); filtered to Vulnerable has 2 (idx 0-1).
-        # idx=3 is out-of-range for the filtered set — must not 500.
+        # idx=3 is out-of-range for the filtered set — it must not show row 0.
         r = client.get(f'/r/{rid}/redteam/attack?idx=3&result=Vulnerable')
-        assert r.status_code == 200
-        assert 'Evaluator verdict' in r.text
+        _assert_empty_attack_fragment(r)
+
+    def test_attack_fragment_out_of_range_filtered_index_is_empty(self, tmp_path: Path) -> None:
+        """An index beyond a three-row filtered report must not show attack #1."""
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        results = [
+            _make_result(category='ASI01', passed=False, agent_key='agent-a', attack_id='v1'),
+            _make_result(category='ASI01', passed=False, agent_key='agent-a', attack_id='v2'),
+            _make_result(category='ASI01', passed=False, agent_key='agent-a', attack_id='v3'),
+            _make_result(category='LLM01', passed=True, agent_key='agent-a', attack_id='r1'),
+        ]
+        report = _make_report(results, tested_agents=['agent-a'])
+        rp = rt / 'rt_filter_three_vulnerable_20260101.json'
+        rp.write_text(report.model_dump_json())
+        client = TestClient(build_app(roots=[rt]), raise_server_exceptions=True)
+        rid = report_id(rp)
+
+        response = client.get(f'/r/{rid}/redteam/attack?idx=99&result=Vulnerable')
+
+        _assert_empty_attack_fragment(response)
 
     def test_disagreement_filtered_reduces_or_changes_set(self, tmp_path: Path) -> None:
         """Filtering to a single category should change disagreement results."""
