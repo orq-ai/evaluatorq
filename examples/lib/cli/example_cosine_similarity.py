@@ -245,7 +245,7 @@ async def main():
             ],
             "jobs": [translate_to_french],
             "evaluators": [french_translation_similarity, exact_translation_threshold],
-            "parallelism": 2,
+            "datapoint_parallelism": 2,
             "print": True,
         },
     )
@@ -270,7 +270,7 @@ async def main():
             ],
             "jobs": [describe_capital],
             "evaluators": [capital_description_threshold],
-            "parallelism": 2,
+            "datapoint_parallelism": 2,
             "print": True,
         },
     )

@@ -203,7 +203,7 @@ async def main():
                 bert_score_evaluator,
                 rouge_n_evaluator,
             ],
-            "parallelism": 4,
+            "datapoint_parallelism": 4,
             "print": True,
         },
     )

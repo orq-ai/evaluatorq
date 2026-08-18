@@ -136,7 +136,7 @@ async def run_simulated_delay_example():
                 {"name": "response-validator", "scorer": response_validator},
                 {"name": "latency-scorer", "scorer": latency_scorer},
             ],
-            "parallelism": 2,  # Process 2 data points at a time
+            "datapoint_parallelism": 2,  # Process 2 data points at a time
             "print": True,  # Display the table
         },
     )
