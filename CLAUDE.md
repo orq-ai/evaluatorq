@@ -289,6 +289,13 @@ that file in the same PR**, or coverage checking silently stops seeing it.
 
 Rules live in the skills, not here. Both are under `.claude/skills/`.
 
+**A new docs page goes in `mkdocs.yml` twice.** Once under `nav:`, once under
+`plugins.llmstxt.sections` — the llmstxt plugin silently drops any nav page it
+does not list from `llms.txt` and `llms-full.txt` without failing the build, so
+`docs/hooks.py` fails `--strict` on the mismatch instead. The check is
+one-directional (nav → sections) and accepts globs, which is why
+`reference/evaluatorq/*.md` covers the generated API pages with one entry.
+
 **Fence every code sample in a docstring, with a language.** An indented block or an
 RST `Example::` literal reaches Pygments with no lexer and renders as grey text; nothing
 warns, and `mkdocs build --strict` stays green. Keep the body under `Example:` / `Usage:`
