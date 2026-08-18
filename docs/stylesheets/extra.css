@@ -107,8 +107,13 @@ html { font-size: 100%; }
    body bump above. Pull them to the exact body size so all prose reads uniform. */
 .md-typeset .admonition,
 .md-typeset details,
-.md-typeset table:not([class]),
 .md-typeset .footnote { font-size: 0.98rem; }
+/* Between the two: body size makes a 3-column reference table fill a screen. */
+.md-typeset table:not([class]) { font-size: 0.85rem; }
+.md-typeset table:not([class]) th,
+.md-typeset table:not([class]) td { padding: 0.6em 0.9em; }
+/* word-break: a mid-token break in `{{input.expected_output}}` reads as a typo. */
+.md-typeset table:not([class]) code { font-size: 0.82em; word-break: normal; }
 
 /* Sidebar nav + TOC: ~content size, a touch bigger so the menu reads as chrome. */
 .md-nav { font-size: 1rem; }
