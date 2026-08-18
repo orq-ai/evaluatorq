@@ -63,7 +63,7 @@
   --orq-sand: #f9f8f6;
   /* Sidebar group headings (both rails): dark grey, not near-black — above the
      muted page links, below the body text. */
-  --eq-nav-heading: color-mix(in srgb, var(--md-default-fg-color) 62%, transparent);
+  --eq-nav-heading: color-mix(in srgb, var(--md-default-fg-color) 70%, transparent);
 }
 
 /* Light scheme: teal identity, orange accent. */
