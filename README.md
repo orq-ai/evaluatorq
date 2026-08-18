@@ -21,7 +21,7 @@
 | src/evaluatorq/common/fields.py                                          |        6 |        0 |    100% |           |
 | src/evaluatorq/common/hook\_compose.py                                   |       16 |        0 |    100% |           |
 | src/evaluatorq/common/judge.py                                           |      197 |        9 |     95% |119-120, 214, 228, 292-294, 342-343 |
-| src/evaluatorq/common/jury.py                                            |      299 |        8 |     97% |115, 132, 145-146, 229, 434, 769, 818 |
+| src/evaluatorq/common/jury.py                                            |      299 |        8 |     97% |115, 132, 145-146, 229, 442, 777, 826 |
 | src/evaluatorq/common/llm\_call.py                                       |      122 |        0 |    100% |           |
 | src/evaluatorq/common/llm\_client.py                                     |       48 |        0 |    100% |           |
 | src/evaluatorq/common/messages.py                                        |       16 |        0 |    100% |           |
@@ -50,7 +50,7 @@
 | src/evaluatorq/common/tracing.py                                         |      303 |       28 |     91% |155-166, 192, 204-206, 213, 409, 446-448, 531-533, 570-571, 583-584 |
 | src/evaluatorq/common/ui/\_\_init\_\_.py                                 |        0 |        0 |    100% |           |
 | src/evaluatorq/common/ui/launch.py                                       |       20 |       12 |     40% |23, 35-39, 55-79 |
-| src/evaluatorq/contracts.py                                              |      496 |       17 |     97% |58, 81, 115-117, 720, 789, 791, 793, 795, 845, 850, 854, 859, 861, 977, 1229, 1533 |
+| src/evaluatorq/contracts.py                                              |      496 |       17 |     97% |58, 81, 115-117, 720, 791, 793, 795, 797, 847, 852, 856, 861, 863, 979, 1231, 1535 |
 | src/evaluatorq/dashboard/\_\_init\_\_.py                                 |        0 |        0 |    100% |           |
 | src/evaluatorq/dashboard/\_compat.py                                     |       23 |       14 |     39% | 37-51, 69 |
 | src/evaluatorq/dashboard/app.py                                          |      277 |       39 |     86% |88-89, 92-93, 263-264, 284-285, 322, 325, 328, 331-333, 349, 353-355, 382, 411, 415-417, 448, 451, 459-461, 487, 498, 506-508, 522, 553, 556, 564-566 |
@@ -106,9 +106,9 @@
 | src/evaluatorq/openresponses/target.py                                   |      118 |        3 |     97% |139, 236, 259 |
 | src/evaluatorq/openresponses/tracing.py                                  |       74 |       18 |     76% |40, 67-73, 85, 87, 99-103, 117, 138-145 |
 | src/evaluatorq/openresponses/types.py                                    |       91 |        0 |    100% |           |
-| src/evaluatorq/pairwise.py                                               |      218 |        5 |     98% |308, 311-312, 425, 592 |
+| src/evaluatorq/pairwise.py                                               |      306 |        5 |     98% |581, 584-585, 702, 917 |
 | src/evaluatorq/pairwise\_reports/\_\_init\_\_.py                         |        3 |        0 |    100% |           |
-| src/evaluatorq/pairwise\_reports/export\_html.py                         |      114 |        6 |     95% |93-98, 135, 146 |
+| src/evaluatorq/pairwise\_reports/export\_html.py                         |      114 |        4 |     96% |     93-98 |
 | src/evaluatorq/pairwise\_reports/sections.py                             |       56 |        0 |    100% |           |
 | src/evaluatorq/pairwise\_run.py                                          |       85 |        4 |     95% |145-149, 152 |
 | src/evaluatorq/processings.py                                            |       66 |        5 |     92% |51, 87-89, 280-282 |
@@ -228,7 +228,7 @@
 | src/evaluatorq/tracing/setup.py                                          |      136 |       39 |     71% |103-113, 134-137, 142, 171, 177-183, 191-201, 235-243, 292-293, 314 |
 | src/evaluatorq/tracing/spans.py                                          |      112 |       13 |     88% |140, 151-158, 207-214 |
 | src/evaluatorq/types.py                                                  |       85 |        2 |     98% |   32, 264 |
-| **TOTAL**                                                                | **26044** | **4478** | **83%** |           |
+| **TOTAL**                                                                | **26132** | **4476** | **83%** |           |
 
 
 ## Setup coverage badge
