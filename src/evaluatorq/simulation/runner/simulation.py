@@ -804,9 +804,7 @@ class SimulationRunner:
             # Isolate per-sim state — see user_simulator comment above.
             judge: JudgeAgent = copy.copy(self._injected_judge)  # pyright: ignore[reportAssignmentType]
             judge.reset_usage()
-            # Without the scenario context the judge's prompt says "No specific
-            # criteria defined": criteria_verdicts stays empty, criteria_verified
-            # is False and criteria_met scores 0.0 for every datapoint.
+            # Without this the judge sees "No specific criteria defined" and scores 0.0.
             if _implements(judge, _CONTEXTUAL_JUDGE_METHODS):
                 judge.update_context(
                     goal=scenario.goal if scenario else '',

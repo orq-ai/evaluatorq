@@ -213,15 +213,9 @@ class BaseAgent(ABC):
         4. ``OPENAI_API_KEY`` env var — uses the OpenAI SDK default base URL so
            traffic goes to OpenAI directly, not to the Orq router.
 
-        Retry owner: ``with_retry`` in ``_call_chat_completions`` /
-        ``_call_responses``, bounded at ``config.retry_count + 1`` transport
-        attempts. The SDK's own budget is disarmed here (``max_retries=0``) so
-        the two cannot multiply.
-
-        Note the chat-completions path additionally retries *once* on an empty
-        response (no text, no tool calls) inside a single transport attempt.
-        That is a content-level retry, not a transport one, so a model that
-        keeps returning nothing costs up to ``2 * (retry_count + 1)`` calls.
+        Retry owner: ``with_retry`` in ``_call_chat_completions`` / ``_call_responses``,
+        bounded at ``config.retry_count + 1`` attempts. The SDK budget is disarmed
+        here (``max_retries=0``) so the two cannot multiply.
         """
         client, owned = build_simulation_client(
             self.config.client,
@@ -296,6 +290,7 @@ class BaseAgent(ABC):
 
             async def _do_call() -> LLMResult:
                 finish_reason: str | None = None
+                # Content-level retry inside one transport attempt: costs up to 2x the budget.
                 for attempt in range(2):
                     response, delta = await execute_chat_completion(
                         client=self._client,

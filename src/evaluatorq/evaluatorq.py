@@ -376,9 +376,7 @@ async def evaluatorq(
                 except Exception as exc:  # noqa: BLE001 - collect fetch failures with task failures
                     fetch_error = exc
                 finally:
-                    # Stop polling on both success and failure. A fetch failure also
-                    # cancels in-flight processing, but their exceptions are still
-                    # collected separately from the deliberately cancelled poller.
+                    # A fetch failure also cancels in-flight processing.
                     stop_polling = True
                     if fetch_error is not None:
                         for task in processing_tasks:
@@ -390,13 +388,10 @@ async def evaluatorq(
                         *processing_tasks,
                         return_exceptions=True,
                     )
-                    # Awaited for the side effect only: the poller was just
-                    # cancelled deliberately, and poll_progress already logs and
-                    # swallows anything that is not a CancelledError.
+                    # Deliberately cancelled above; poll_progress logs the rest.
                     _ = await asyncio.gather(polling_task, return_exceptions=True)
 
-                # A cancellation delivered to the caller while fetching must retain
-                # asyncio's cancellation semantics, even if processing failed too.
+                # Tasks we cancelled ourselves are not errors the caller should see.
                 task_errors = [
                     result
                     for task, result in zip(processing_tasks, processing_results, strict=True)

@@ -114,9 +114,7 @@ def _create_openai_backend(
     from evaluatorq.redteam.backends.openai import OpenAIBackend
 
     system_prompt = target_config.system_prompt if target_config else None
-    # The orchestrator's call_target_with_retry is the single retry owner for
-    # OpenAI target calls. Do not silently accept pipeline retry settings that
-    # cannot affect this target path.
+    # call_target_with_retry owns retry here, so pipeline retry settings cannot apply.
     warn_ignored_target_retries(
         'OpenAI',
         retry_count=retry_count
@@ -170,9 +168,7 @@ def _create_openresponses_backend(
 
     instructions = target_config.system_prompt if target_config else None
     timeout_ms = pipeline_config.target_agent_timeout_ms if pipeline_config else None
-    # The orchestrator's call_target_with_retry is the single retry owner for
-    # target calls; keep one inner attempt so a target cannot add a second budget.
-    # The pipeline retry settings therefore do not apply on this target path.
+    # call_target_with_retry owns retry here; keep one inner attempt, no second budget.
     if pipeline_config is not None:
         warn_ignored_target_retries(
             'OpenResponses',

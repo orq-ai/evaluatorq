@@ -52,14 +52,9 @@ def without_client_retries(client: AsyncOpenAI) -> AsyncOpenAI:
     reuses the caller's transport, authentication, base URL, headers, and
     timeout, so an injected client is never mutated and its lifecycle remains
     caller-owned. Clients that already have no integer retry budget are returned
-    unchanged, which keeps lightweight test doubles usable.
-
-    Disarming is unconditional with respect to the caller's own attempt count.
-    A caller that configures ``retry_count=0`` is asking for exactly one attempt,
-    not for the SDK to retry on its behalf, so the SDK budget is dropped there
-    too. (The per-call-site helper this replaced took a ``retry_count`` argument
-    and left the client armed at zero, which meant "no retries" silently still
-    made SDK retries.)
+    unchanged, which keeps lightweight test doubles usable. Disarming ignores the
+    caller's own attempt count: ``retry_count=0`` means one attempt, not "let the
+    SDK retry instead".
     """
     max_retries = getattr(client, 'max_retries', 0)
     if not isinstance(max_retries, int) or max_retries <= 0:

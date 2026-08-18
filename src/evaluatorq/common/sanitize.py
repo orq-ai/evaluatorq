@@ -39,17 +39,11 @@ def delimit(text: str, *, tag: str = 'data') -> str:
         of the tag escaped.
 
     Note:
-        Only tag-shaped runs are escaped; unrelated ``<``/``>`` (``a < b``, a
-        ``<div>`` inside a fenced code sample) pass through, so a judge reads the
-        content rather than entity noise. Use `xml_escape` where that trade is
-        not wanted.
-
-        Whitespace *inside* the tag name (``<da ta>``) is deliberately not
-        matched. Allowing it needs an interleaved ``\\s*`` between every
-        character, which backtracks quadratically — the obvious version took
-        10.4s on 50k spaces, a denial of service in a security boundary. It is
-        also unnecessary: no XML or HTML parser, and no LLM tokenizer, reads
-        ``<da ta>`` as the boundary tag, so it cannot forge one.
+        Only tag-shaped runs are escaped; unrelated ``<``/``>`` pass through so a
+        judge reads the content, not entity noise. Use `xml_escape` otherwise.
+        Whitespace inside the tag name (``<da ta>``) is deliberately unmatched:
+        matching it needs an interleaved ``\\s*`` that backtracks quadratically
+        (10.4s on 50k spaces), and no parser reads it as the boundary tag anyway.
     """
     if not re.fullmatch(r'[a-zA-Z][a-zA-Z0-9_-]*', tag):
         raise ValueError(f'Invalid tag name: {tag!r}')

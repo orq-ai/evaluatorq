@@ -85,35 +85,16 @@ def _is_status(value: object) -> bool:
 
 
 def extract_status_code(exc: BaseException) -> int | None:
-    """Best-effort HTTP status from the heterogeneous exception shapes targets raise.
+    """Best-effort HTTP status, checked down the exception chain then in ``str(exc)``.
 
-    **The single status extractor.** Both the retry boundary (which short-circuits
-    on a 4xx) and the backend ``map_error`` implementations that build the reported
-    ``error_code`` go through this function. They used to have separate versions
-    with different coverage, so an exception could be reported as a 4xx while the
-    retry loop still treated it as retryable.
-
-    Checks, on the exception and then down its chained originals — explicit
-    ``__cause__`` (``raise ... from``) first, falling back to the implicit
-    ``__context__`` (a bare ``raise`` inside an ``except`` block):
-
-    * ``exc.response.status_code`` — ``httpx.HTTPStatusError`` (Vercel targets);
-    * ``exc.status_code`` — openai ``APIStatusError`` and friends;
-    * ``exc.status`` — aiohttp-style errors.
-
-    The response is checked first: when an exception carries both and they
-    disagree, the one attached to the actual HTTP response is authoritative.
-
-    Falls back to parsing ``str(exc)`` for ``status=429`` / ``HTTP 500`` / ``code: 503``
-    shapes, which is the only way to classify backends that stringify their status.
-
-    Returns ``None`` when no plausible status is found. ``bool`` is excluded (it is
-    an ``int`` subclass but never a status), as is any int outside 100-599.
+    The single status extractor: the retry boundary and the backends' ``map_error``
+    must classify one exception the same way, or a reported 4xx gets retried anyway.
     """
     current: BaseException | None = exc
     for _ in range(_STATUS_CHAIN_DEPTH):
         if current is None:
             break
+        # Response first: if the two disagree, the actual HTTP response wins.
         response = getattr(current, 'response', None)
         value = getattr(response, 'status_code', None)
         if _is_status(value):
@@ -148,13 +129,6 @@ class TargetCallResult:
     success or a returned-error attempt, or a synthetic one on timeout/exception.
     ``error_details`` carries the raw exception info callers persist into
     ``AttackOutput.error_details``.
-
-    ``succeeded`` is **derived** from ``error``, not stored. As two independent
-    fields they could be constructed disagreeing, and ``error_payload`` keys off
-    ``error`` — so a result marked ``succeeded=False`` with ``error=None`` emitted
-    an all-``None`` payload and the judge scored a dead target as a genuine reply.
-    That is the exact failure this type exists to prevent; making it underivable
-    is cheaper than testing for it.
     """
 
     response: AgentResponse
@@ -164,7 +138,7 @@ class TargetCallResult:
 
     @property
     def succeeded(self) -> bool:
-        """True iff no error was recorded. Cannot disagree with ``error``."""
+        """Derived, not stored, so it cannot disagree with the ``error`` payload keys off."""
         return self.error is None
 
     def error_payload(self, *, context: str = '', turn: int = 1) -> dict[str, Any]:

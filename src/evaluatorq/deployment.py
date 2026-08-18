@@ -168,10 +168,7 @@ def _extract_content_from_response(completion: object) -> str:
     """
     Extract text content from an Orq deployment response.
 
-    An empty reply always logs: a recognised union arm that carried no text
-    reaches the ``msg_type in ('content', 'tool_calls')`` warning rather than
-    returning ``''`` silently, so the empty-content case is distinguishable in
-    the logs from an unrecognised shape — and from a run that simply worked.
+    An empty reply always warns, so it is distinguishable from a run that worked.
 
     Uses getattr-based introspection because the Orq SDK returns dynamically
     typed response objects. This approach handles various response structures
@@ -198,13 +195,9 @@ def _extract_content_from_response(completion: object) -> str:
         # Handle array content (e.g., multimodal responses)
         content = text
     elif isinstance(msg_content, str) and msg_content:
-        # Other union arms (e.g. 'tool_calls') still carry a nullable str content
-        # field per the SDK schema; surface it instead of silently dropping it.
+        # Other union arms (e.g. 'tool_calls') carry a nullable str content too.
         content = msg_content
     elif msg_type in ('content', 'tool_calls'):
-        # A recognised union arm with empty/None content is routine (e.g. a pure
-        # tool-call turn) — not a shape we failed to handle. Note it without
-        # implying the type itself is unrecognised.
         logger.warning(
             'Deployment response message type {!r} carried no text content; returning empty reply',
             msg_type,

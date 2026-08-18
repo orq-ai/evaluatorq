@@ -203,17 +203,12 @@ class ORQAgentTarget(AgentTarget):
         Caller contract: ``messages[-1].role == "user"``. A mismatch with the
         server-side history is a caller bug.
 
-        Token usage is accumulated across pending-tool-call continuations. The
-        red-team orchestrator owns target retries via ``call_target_with_retry``;
-        each SDK operation therefore passes ``retries=None`` so the shared
-        client's retry budget remains available to context and cleanup calls.
+        Token usage is accumulated across pending-tool-call continuations.
 
-        ``retries=None`` must be passed **explicitly**. The Speakeasy-generated
-        SDK distinguishes an omitted argument (``UNSET`` — inherit the client's
-        ``retry_config``) from an explicit ``None`` (no retry for this operation).
-        Dropping the kwarg therefore does not mean "no retries"; it re-arms the
-        client budget underneath ``call_target_with_retry`` and the two multiply
-        again. Verified against ``orq_ai_sdk.agents``; re-check on SDK upgrade.
+        Retry owner: ``call_target_with_retry`` in the orchestrator. Each SDK
+        operation passes ``retries=None`` **explicitly** — omitting it means
+        ``UNSET`` (inherit the client budget) in the Speakeasy-generated SDK, not
+        "no retry", so the two layers would multiply.
         """
         if not messages or messages[-1].role != 'user':
             raise ValueError(
@@ -667,9 +662,7 @@ class ORQBackend(Backend):
                 api_key=_get_orq_api_key(),
                 server_url=_get_orq_server_url(),
                 timeout_ms=self._timeout_ms,
-                # This client serves context, enrichment, and cleanup. Target
-                # operations override this per call because the orchestrator
-                # owns their retry budget.
+                # For context, enrichment and cleanup; target calls override per call.
                 retry_config=_orq_retry_config(retry_count, retry_on_codes, timeout_ms=self._timeout_ms),
             )
 
