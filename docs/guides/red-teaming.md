@@ -297,6 +297,14 @@ Sol or Opus) at about $0.01 per call, **Balanced** at one fifth of that, and
       <input type="number" name="turns" min="0" step="1" value="1">
     </label>
     <label>
+      LLM calls per turn
+      <input type="number" name="calls-per-turn" min="0" step="1" value="2">
+    </label>
+    <label>
+      Judge calls per attack
+      <input type="number" name="judge-calls" min="0" step="1" value="1">
+    </label>
+    <label>
       Model tier
       <select name="model-tier">
         <option value="frontier">Frontier — $0.01/call</option>
@@ -311,27 +319,58 @@ Sol or Opus) at about $0.01 per call, **Balanced** at one fifth of that, and
     </label>
   </div>
   <div class="cost-calculator__result" aria-live="polite">
-    <strong>Estimated cost: <span data-cost-total>$0.20</span></strong>
-    <span data-cost-breakdown>20 calls</span>
+    <strong>Estimated cost: <span data-cost-total>$0.30</span></strong>
+    <span data-cost-breakdown>30 calls</span>
   </div>
 </form>
 
-The estimate uses **fixed calls + (attacks × turns × 2)** calls, where the two
-per-turn calls represent the target and the judge. Optional analysis can add
-calls, and actual spend varies with prompt and completion length.
+The estimate uses **fixed calls + attacks × (turns × calls-per-turn + judge calls)**.
+
+- **Calls per turn** is 2 for dynamic and hybrid attacks — one adversarial
+  generation and one target call. Static attacks replay a fixed prompt, so set
+  it to 1 (target only).
+- **Judge calls per attack** is 1 by default. The judge runs once after the turn
+  loop, not per turn. A jury multiplies this by panel size × repetitions.
+
+Content-filter retries on the attacker turn are real billed calls and are not in
+this estimate. Actual spend varies with prompt and completion length.
 
 If you want separate attacker and evaluator model settings rather than one
 default model, see the [`11_redteam_config.py` cookbook](../examples/redteam/11_redteam_config.md).
 
 There is no single fixed-call count for every run. Use these baselines when
-setting the first field: **static and replay runs: 0** setup calls; **dynamic and
-hybrid runs: 1 resource-inference call per target**, plus **1 tool-classification
-call per target when the target exposes tools**. Strategy generation adds **1
-planning call per selected vulnerability** (or unresolved category) when it is
-enabled. The default executive summary adds 1 call. Recommendations add 1 call
-per failed focus area, plus an occasional trace-condensing call for oversized
-attacks. The CLI quickstart above disables strategy generation, recommendations,
-and the executive summary, so its baseline is 0.
+setting the first field:
+
+- **Static and replay runs: 0.** A replay selects nothing, so capability
+  classification is skipped entirely.
+- **Dynamic and hybrid runs:** 1 resource-inference call per target, plus 1
+  tool-classification call per target when the target exposes tools. Both are
+  skipped when no LLM client or credentials can be resolved.
+- **Strategy generation** (when enabled): roughly 1 planning call per selected
+  vulnerability or unresolved category, batched — more than eight objectives
+  split across several calls rather than one.
+- **Executive summary** (on by default): 1 call, best-effort — skipped silently
+  without credentials.
+- **Recommendations:** 1 call per *selected top* focus area, not per failed area,
+  plus an occasional trace-condensing call for oversized attacks.
+
+The CLI quickstart above disables strategy generation, recommendations, and the
+executive summary, so its baseline is 0.
+
+#### What the totals do not include
+
+`token_usage_total` records the calls the run makes on the attack path. Setup and
+post-processing calls are real spend that lands outside it:
+
+- Capability classification (resource inference, tool classification) and
+  blackbox target classification.
+- Strategy and objective generation.
+- Structured-output retries and the `json_object` fallback re-request.
+- Recommendations, trace condensing, and the executive summary.
+- Target-side usage, when the backend does not report it back.
+
+If `priced_calls < calls` in the summary, some counted calls had no provider
+price either, so the dollar figure is a lower bound on a subset.
 
 ## In CI
 

@@ -52,7 +52,7 @@ def build_agent() -> object:
     from pydantic_ai.providers.openai import OpenAIProvider
 
     model = OpenAIChatModel(
-        model=AGENT_MODEL,
+        model_name=AGENT_MODEL,
         provider=OpenAIProvider(
             base_url=os.environ.get("OPENAI_BASE_URL"),
             api_key=os.environ["OPENAI_API_KEY"],

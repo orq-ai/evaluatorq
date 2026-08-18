@@ -31,7 +31,7 @@ MODEL = "openai/gpt-4o-mini"  # provider/model on the Orq router
 
 
 def build_target() -> PydanticAITarget:
-    model = OpenAIChatModel(model=MODEL, provider=OpenAIProvider(base_url=ORQ_ROUTER, api_key=os.environ.get("ORQ_API_KEY")))
+    model = OpenAIChatModel(model_name=MODEL, provider=OpenAIProvider(base_url=ORQ_ROUTER, api_key=os.environ.get("ORQ_API_KEY")))
     agent = Agent(model=model, system_prompt="You are a support agent. Only issue refunds for eligible orders under $50.")
 
     @agent.tool_plain
