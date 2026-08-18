@@ -106,6 +106,47 @@ async def test_execute_chat_completion_takes_a_slot() -> None:
 
 
 @pytest.mark.asyncio
+async def test_enterable_both_ways() -> None:
+    """red_team wraps at an `async with`, simulate at a `with`; both must work."""
+    sync_peak, async_peak = _Peak(), _Peak()
+
+    with llm_concurrency_limit(2):
+        await asyncio.gather(*(sync_peak.call() for _ in range(6)))
+    async with llm_concurrency_limit(2):
+        await asyncio.gather(*(async_peak.call() for _ in range(6)))
+
+    assert (sync_peak.peak, async_peak.peak) == (2, 2)
+
+
+@pytest.mark.asyncio
+async def test_none_leaves_an_enclosing_limit_alone() -> None:
+    """A nested evaluatorq() defaults to None; it must not widen its caller's budget."""
+    peak = _Peak()
+    with llm_concurrency_limit(2), llm_concurrency_limit(None):
+        await asyncio.gather(*(peak.call() for _ in range(6)))
+    assert peak.peak == 2
+
+
+@pytest.mark.parametrize(
+    ('module', 'func'),
+    [
+        ('evaluatorq.evaluatorq', 'evaluatorq'),
+        ('evaluatorq.redteam.runner', 'red_team'),
+        ('evaluatorq.simulation.api', 'simulate'),
+        ('evaluatorq.simulation.api', 'generate_and_simulate'),
+        ('evaluatorq.simulation.api', 'generate'),
+    ],
+)
+def test_entry_points_expose_the_knob(module: str, func: str) -> None:
+    import importlib
+    import inspect
+
+    parameter = inspect.signature(getattr(importlib.import_module(module), func)).parameters
+    assert 'max_concurrent_llm_calls' in parameter, f'{func} has no LLM concurrency knob'
+    assert parameter['max_concurrent_llm_calls'].default is None
+
+
+@pytest.mark.asyncio
 async def test_each_run_gets_its_own_semaphore() -> None:
     """Two concurrent runs must not share a budget, nor carry one across loops."""
     first, second = _Peak(), _Peak()

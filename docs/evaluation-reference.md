@@ -211,6 +211,9 @@ async def my_job(data_point, row_index):
 Wrap only the request — holding a slot across parsing shrinks the budget
 without reducing load on the provider.
 
+`red_team()`, `simulate()`, `generate_and_simulate()` and `generate()` take the
+same argument, with the same meaning.
+
 ### Organizing results on Orq
 
 ```python

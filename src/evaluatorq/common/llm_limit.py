@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from contextvars import Token
 
 # Holds the semaphore itself, not the limit: it is created inside the running
 # loop by `llm_concurrency_limit` and inherited by child tasks through the
@@ -28,23 +29,41 @@ if TYPE_CHECKING:
 _llm_semaphore: ContextVar[asyncio.Semaphore | None] = ContextVar('evaluatorq_llm_semaphore', default=None)
 
 
-@asynccontextmanager
-async def llm_concurrency_limit(max_concurrent: int | None) -> AsyncIterator[None]:  # noqa: RUF029 - async so the semaphore is built on the running loop
+class llm_concurrency_limit:  # noqa: N801 - used as a context manager, named like one
     """Bound concurrent LLM requests within this block. ``None`` leaves them unbounded.
 
-    Set once per run. Tasks created inside inherit the limit; tasks created before
-    it do not, so enter this before fanning out.
+    Set once per run, before fanning out: tasks created inside inherit the limit,
+    tasks created before it do not.
+
+    Enterable with ``with`` or ``async with`` — the entry points wrap at whichever
+    block they already open, and reindenting theirs to match would rewrite hundreds
+    of untouched lines. The semaphore binds to a loop on first acquire, which is
+    inside the run on either path.
+
+    An enclosing limit is left alone when ``max_concurrent`` is ``None``, so a nested
+    ``evaluatorq()`` cannot widen the budget its caller set.
     """
-    if max_concurrent is None:
-        yield
-        return
-    if max_concurrent < 1:
-        raise ValueError(f'max_concurrent must be >= 1, got {max_concurrent}')
-    token = _llm_semaphore.set(asyncio.Semaphore(max_concurrent))
-    try:
-        yield
-    finally:
-        _llm_semaphore.reset(token)
+
+    def __init__(self, max_concurrent: int | None) -> None:
+        if max_concurrent is not None and max_concurrent < 1:
+            raise ValueError(f'max_concurrent must be >= 1, got {max_concurrent}')
+        self._max_concurrent = max_concurrent
+        self._token: Token[asyncio.Semaphore | None] | None = None
+
+    def __enter__(self) -> None:
+        if self._max_concurrent is not None:
+            self._token = _llm_semaphore.set(asyncio.Semaphore(self._max_concurrent))
+
+    def __exit__(self, *_exc: object) -> None:
+        if self._token is not None:
+            _llm_semaphore.reset(self._token)
+            self._token = None
+
+    async def __aenter__(self) -> None:
+        self.__enter__()
+
+    async def __aexit__(self, *exc: object) -> None:
+        self.__exit__(*exc)
 
 
 @asynccontextmanager

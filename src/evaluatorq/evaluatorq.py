@@ -248,10 +248,11 @@ async def evaluatorq(
     single_trace = validated.single_trace
 
     async with (
-        llm_concurrency_limit(max_concurrent_llm_calls),
         tracing_session(name, trace_type=_trace_type) as tracing_context,
         AsyncExitStack() as span_stack,
     ):
+        # Before any fan-out, so every task created below inherits the budget.
+        _ = span_stack.enter_context(llm_concurrency_limit(max_concurrent_llm_calls))
         if single_trace:
             from .tracing.spans import RunSpanOptions, with_run_span
 
