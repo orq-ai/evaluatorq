@@ -21,6 +21,11 @@ To read a file as it is on HEAD without touching the tree, use
 `git show HEAD:<path>`. To see only your own changes on a shared dirty tree,
 diff the paths you touched: `git diff -- <your paths>`.
 
+Processes are shared too. **Never `pkill -f` a command name** (`mkdocs serve`,
+`uvicorn`, `pytest`) — every worktree runs the same ones, so the pattern kills a
+sibling session's server. Kill the port you own: `lsof -nP -iTCP:<port> -sTCP:LISTEN`,
+then the PID.
+
 ## Quick Reference
 
 ```bash
@@ -48,8 +53,13 @@ uv run basedpyright
 # Build
 uv build
 
-# Serve the docs site locally (live-reload at http://127.0.0.1:8000/evaluatorq/)
-uv run --group docs mkdocs serve
+# Serve the docs site locally. Pick a FREE port (81xx) and check it is yours —
+# parallel worktrees serve the same path, so the default binds to whichever
+# session got there first and you end up reviewing THEIR build. Live-reload does
+# not fire in a Conductor worktree: the server keeps showing the build it
+# started with, so restart it after an edit.
+lsof -nP -iTCP:8125 -sTCP:LISTEN            # empty = free
+uv run --group docs mkdocs serve -a 127.0.0.1:8125
 
 # Build the docs site (strict — fails on warnings, as CI does)
 uv run --group docs mkdocs build --strict

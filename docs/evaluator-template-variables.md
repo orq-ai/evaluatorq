@@ -14,11 +14,11 @@ both jury types; `criteria` and `question` are layered on top by `llm_jury()` /
 | --- | --- | --- |
 | `{{input.all_messages}}` | Full input message list, as JSON. | `[{"role": "user", "content": "What is the capital of France?"}]` |
 | `{{input.expected_output}}` | Expected/reference output text, or empty string if none. | `Paris` |
-| `{{input.system_instructions}}` | System instructions passed to the judge, or empty string if none. | `` (empty by default — pointwise jury does not set this) |
+| `{{input.system_instructions}}` | System instructions passed to the judge, or empty string if none. | _empty_ — pointwise jury does not set this |
 | `{{output.response}}` | The assistant's text response being judged. | `The capital of France is Paris.` |
 | `{{output.tools_called}}` | Tool calls made while producing the output (name/arguments/result/id), as JSON. | `[{"name": "search", "arguments": {...}, "result": "...", "id": "call_1"}]` |
 | `{{output.messages}}` | Structured output transcript (text, reasoning, and tool-call turns), as JSON. | `[{"role": "assistant", "content": "Paris"}]` |
-| `{{output.error}}` | Error message when the agent errored, else empty string. | `` (empty on success) |
+| `{{output.error}}` | Error message when the agent errored, else empty string. | _empty_ on success |
 | `{{log.input}}` | Content of the last input message. | `What is the capital of France?` |
 | `{{log.output}}` | Same value as `{{output.response}}`. | `The capital of France is Paris.` |
 | `{{log.reference}}` | Same value as `{{input.expected_output}}`. | `Paris` |
