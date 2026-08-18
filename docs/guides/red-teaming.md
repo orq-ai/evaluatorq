@@ -285,14 +285,17 @@ by the pipeline or by the model's list price.
     <label>
       Setup calls
       <input type="number" name="fixed-calls" min="0" step="1" value="7">
+      <small>0 for static and replay runs</small>
     </label>
     <label>
       Attacks
       <input type="number" name="attacks" min="0" step="1" value="10">
+      <small>≤ 65 for a full sweep of one target</small>
     </label>
     <label>
       Turns per attack
       <input type="number" name="turns" min="0" step="1" value="1">
+      <small><code>max_turns</code> defaults to 5</small>
     </label>
   </div>
   <label class="cost-calculator__wide">
@@ -324,6 +327,16 @@ by the pipeline or by the model's list price.
 Call count is **setup calls + attacks × (turns × 2 + 1)**: each turn is one
 adversarial generation plus one target call, and the judge runs once after the
 turn loop, not per turn.
+
+**One attack is one strategy against one vulnerability**, not one category — a
+category contributes several. The count for a run is the sum, over each selected
+category, of the registry strategies that apply to the target plus
+`generated_strategy_count` (default 2), then capped by `max_per_category` and
+`max_dynamic_datapoints`. A full dynamic sweep of one target therefore tops out
+at **65**: 45 registry strategies across 10 categories, plus 2 generated each.
+Capability filtering only removes strategies, so 65 is a ceiling; multiple
+targets multiply it. The run plan shown before datapoint generation carries the
+exact count, so you never have to guess for a run you are about to start.
 
 **Setup calls** are the ones that happen before and after the attack loop. The
 default of 7 is a dynamic run against one tool-bearing target with the standard

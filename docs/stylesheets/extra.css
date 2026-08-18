@@ -208,8 +208,27 @@ html { font-size: 100%; }
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
   gap: 0.9rem;
-  /* A two-line label must not push its input below its row-mates. */
-  align-items: end;
+  /* Subgrid so a two-line label or hint cannot shift its input off the row
+     baseline its neighbours sit on — the raggedness that made the first
+     eight-field version look broken. Browsers without subgrid fall back to
+     per-label stacking, which is the old behaviour, not a worse one. */
+  grid-auto-rows: auto;
+}
+.cost-calculator__grid > label {
+  grid-row: span 3;
+  grid-template-rows: subgrid;
+}
+/* Hints carry the ceiling, not the value; they must not read as an input. */
+.cost-calculator small {
+  align-self: start;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--calc-label);
+  opacity: 0.85;
+}
+.cost-calculator small code {
+  font-size: inherit;
+  padding: 0 0.2em;
 }
 /* display:grid above outranks the UA [hidden] rule, so restate it. */
 .cost-calculator [hidden] {
