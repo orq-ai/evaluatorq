@@ -235,8 +235,6 @@ def _redteam_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
     summary = summary if isinstance(summary, dict) else {}
     # An explicit null rate means "no verdict" and must stay None; only an *absent*
     # field (legacy reports predating the nullable rates) takes the 1.0 default.
-    # An explicit null rate means "no verdict" and must stay None; only an *absent*
-    # field (legacy reports predating the nullable rates) takes the 1.0 default.
     resistance = (
         _as_float_or_none(summary['resistance_rate']) if 'resistance_rate' in summary else (1.0 if summary else None)
     )

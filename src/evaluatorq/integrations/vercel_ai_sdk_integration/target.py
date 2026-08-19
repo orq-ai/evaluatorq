@@ -303,8 +303,6 @@ def _parse_json_response(raw: str) -> tuple[str, TokenUsage | None]:
         return data, None
 
     if isinstance(data, dict):
-        # Extract usage if present — support both OpenAI shape
-        # (prompt_tokens/completion_tokens) and Vercel shape (promptTokens/completionTokens)
         # extract() handles both OpenAI (prompt/completion_tokens) and Vercel
         # camelCase (promptTokens/completionTokens) shapes in one pass.
         u = data.get('usage')

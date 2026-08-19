@@ -10,10 +10,12 @@ The shim is semantics-preserving: it does NOT silently drop the handlers.
 
 Import order matters
 --------------------
-This module must be imported BEFORE ``fasthtml`` is imported anywhere in the
-same interpreter session.  ``app.py`` imports it at the very top (before the
-``fasthtml.core`` import) so that the patch is in place when ``build_app()``
-constructs the ``FastHTML`` instance.
+The patch must be applied before ``build_app()`` constructs the ``FastHTML``
+instance — that is the moment ``Starlette.__init__`` is looked up.  Importing
+this module anywhere in ``app.py``'s import block satisfies that; its position
+relative to the ``fasthtml`` import does not, because patching the class
+attribute takes effect for every later instantiation regardless of when
+``fasthtml`` was imported.
 
 Why not in ``serve()``?
 -----------------------
