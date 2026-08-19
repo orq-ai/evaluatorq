@@ -477,10 +477,9 @@ async def with_llm_span(  # noqa: RUF029
     if max_tokens is not None:
         genai_attrs['gen_ai.request.max_tokens'] = max_tokens
     if input_messages is not None and capture_message_content():
-        # Reuse `_serialize_messages` rather than re-inlining it: the inlined
-        # copy that stood here emitted a Python repr for block-list content
-        # (prompt-cache breakpoints, multimodal) because only the other renderer
-        # was ever fixed.
+        # One renderer for message content. The copy inlined here duplicated
+        # `_serialize_messages`, so block-list content (prompt-cache breakpoints,
+        # multimodal) had to be fixed in two places; it was fixed in one.
         serialized = _serialize_messages(input_messages)
         genai_attrs['gen_ai.input.messages'] = serialized
         genai_attrs['input'] = serialized

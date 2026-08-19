@@ -1,10 +1,10 @@
-"""Probe: can a Responses breakpoint be positioned, like on Chat Completions?
+"""Probe: is a Responses breakpoint positionable, like on Chat Completions?
 
-The Responses `input` is a list of items, same as chat messages — so nothing
-about the *shape* forces the whole-input-only behaviour. What we ship is the
-top-level `cache_control`, which the router applies to the end of the input. The
-open question is whether a **per-item** `cache_control` is also honoured, which
-would let `volatile_tail` work here too and remove the judge's asymmetry.
+It is, and that is what `common.prompt_cache.mark_responses_input` ships. This
+script is the evidence, and the regression probe that would catch the router
+dropping per-item support: the top-level `cache_control` body field marks the end
+of the *whole* input, so it cannot be kept off a rebuilt trailing item and reads
+nothing back. That is why it is deliberately not sent.
 
 Each mode below runs two calls that share a long prefix and differ only in a
 rebuilt trailing item. A mode "works" if call 2 reports a cache read.
@@ -91,8 +91,8 @@ async def main() -> int:
     print('Two calls per mode; they share a long prefix and differ in the trailing item.')
     print('A cache read on call 2 means the breakpoint landed on the shared prefix.\n')
 
-    await _probe(client, 'top-level only (what we ship)', per_item=False, top_level=True)
-    await _probe(client, 'per-item on prefix end', per_item=True, top_level=False)
+    await _probe(client, 'top-level only (rejected: 0 reads)', per_item=False, top_level=True)
+    await _probe(client, 'per-item on prefix end (what we ship)', per_item=True, top_level=False)
     await _probe(client, 'per-item + top-level', per_item=True, top_level=True)
     await _probe(client, 'neither (control)', per_item=False, top_level=False)
     return 0

@@ -10,7 +10,7 @@ from loguru import logger
 from evaluatorq.common.llm_call import apply_pipeline_metadata
 from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.model_catalogue import price_usage
-from evaluatorq.common.prompt_cache import apply_cache_breakpoints
+from evaluatorq.common.prompt_cache import apply_cache_breakpoints, caching_applies
 from evaluatorq.common.retry import without_client_retries
 from evaluatorq.common.thread_context import thread_body_param
 from evaluatorq.common.tracing import record_llm_response
@@ -130,15 +130,15 @@ class OpenAIModelTarget(AgentTarget):
         ]
         # Attack threads replay a growing append-only transcript, so mark the
         # system prompt and the latest turn as cache breakpoints — Anthropic does
-        # not cache without them (see common/prompt_cache.py). Router-only, like
-        # `thread` below: `cache_control` inside a content part is outside the
-        # direct OpenAI schema, and only the Orq router is known to tolerate it.
+        # not cache without them (see common/prompt_cache.py).
         routes_through_orq = client_routes_through_orq(self.client)
         completion_messages = cast(
             'list[ChatCompletionMessageParam]',
             # volatile_tail=0: the caller owns the transcript and this target only
             # ever appends to it, so every message here persists into the next turn.
-            apply_cache_breakpoints(raw_messages, volatile_tail=0) if routes_through_orq else raw_messages,
+            apply_cache_breakpoints(raw_messages, volatile_tail=0)
+            if caching_applies(self.client, self.model)
+            else raw_messages,
         )
         # Tag the target invocation so its Orq trace is attributable to the run:
         # the pipeline surface + run id via the standard `metadata` property (sent

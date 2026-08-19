@@ -22,7 +22,12 @@ from evaluatorq.common.llm_call import (
     strip_known_rejected_responses_reasoning,
 )
 from evaluatorq.common.llm_client import client_routes_through_orq
-from evaluatorq.common.prompt_cache import apply_cache_breakpoints, mark_responses_input
+from evaluatorq.common.prompt_cache import (
+    apply_cache_breakpoints,
+    caching_applies,
+    mark_responses_input,
+    responses_volatile_items,
+)
 from evaluatorq.common.retry import with_retry
 from evaluatorq.common.thread_context import pipeline_metadata, thread_body_param
 from evaluatorq.common.tracing import get_trace_context_headers, record_llm_input, record_llm_response
@@ -170,14 +175,25 @@ class BaseAgent(ABC):
         max_tokens: int | None = None,
         timeout: float | None = None,
         llm_purpose: str | None = None,
+        volatile_tail: int = 0,
     ) -> str:
-        """Generate a text response for a conversation."""
+        """Generate a text response for a conversation.
+
+        ``volatile_tail`` is the number of trailing messages this caller rebuilds
+        every turn instead of appending to the transcript — a per-call
+        instruction, a re-rendered scratchpad. It keeps the prompt-cache
+        breakpoint off them; see `common.prompt_cache`. It defaults to ``0``
+        because most callers replay a transcript verbatim, but a caller that
+        appends anything synthetic must say so or pay a per-turn cache write
+        nothing reads back.
+        """
         result = await self._call_llm(
             messages,
             temperature=temperature,
             max_tokens=max_tokens,
             timeout=timeout,
             llm_purpose=llm_purpose,
+            volatile_tail=volatile_tail,
         )
         if not result.content:
             raise RuntimeError(f'{self.name}: LLM call failed -- no content in response')
@@ -244,9 +260,10 @@ class BaseAgent(ABC):
         is owned by ``with_retry``; client retries are disabled.
 
         ``volatile_tail`` is the number of trailing messages this caller rebuilds
-        every turn instead of appending to the transcript — see
-        `common.prompt_cache.apply_cache_breakpoints`, which keeps the cache
-        breakpoint off them.
+        every turn instead of appending to the transcript. It keeps the cache
+        breakpoint off them on both paths — see `common.prompt_cache`:
+        `apply_cache_breakpoints` on the chat path, `mark_responses_input` on the
+        Responses path (which is the judge's default).
         """
         if self.config.api == 'responses':
             return await self._call_responses(
@@ -291,11 +308,7 @@ class BaseAgent(ABC):
         # Breakpoints on the system prompt and the end of the persisted transcript:
         # simulation replays a growing append-only prefix, so without them Anthropic
         # models re-encode the whole thing every turn (see common/prompt_cache.py).
-        # `volatile_tail` keeps the second breakpoint off per-turn instructions a
-        # caller appends (the judge's). Router-only, for the same reason
-        # `thread_body_param` is: `cache_control` inside a content part is outside
-        # the direct OpenAI schema.
-        if client_routes_through_orq(self._client):
+        if caching_applies(self._client, self._model):
             full_messages = apply_cache_breakpoints(full_messages, volatile_tail=volatile_tail)
 
         async with with_llm_span(
@@ -385,9 +398,14 @@ class BaseAgent(ABC):
         input_messages = messages_to_responses_input(messages)
         # A per-item breakpoint, not the top-level switch: the latter marks the end
         # of the whole input, so a caller that rebuilds its trailing item (the
-        # judge) writes every turn and reads none. Router-only, as on the chat path.
-        if client_routes_through_orq(self._client):
-            input_messages = mark_responses_input(input_messages, volatile_tail=volatile_tail)
+        # judge) writes every turn and reads none. `volatile_tail` counts messages
+        # and this list counts items, which are not 1:1 — one tool-calling assistant
+        # message renders to several items.
+        if caching_applies(self._client, self._model):
+            input_messages = mark_responses_input(
+                input_messages,
+                volatile_items=responses_volatile_items(messages, volatile_tail=volatile_tail),
+            )
 
         params: dict[str, Any] = {
             'model': self._model,
@@ -436,10 +454,10 @@ class BaseAgent(ABC):
                 metadata = pipeline_metadata()
                 if metadata:
                     call_kwargs['metadata'] = metadata
-                # Router-only. No `responses_cache_body()` here: the breakpoint is
-                # already positioned per-item above, and the top-level switch would
-                # add a second one at the end of the input — on the rebuilt tail,
-                # which is a write nothing reads back.
+                # Router-only. The Responses top-level `cache_control` body field is
+                # deliberately not sent: the breakpoint is already positioned
+                # per-item above, and the top-level one marks the end of the whole
+                # input — on the rebuilt tail, which is a write nothing reads back.
                 extra_body = thread_body_param() if client_routes_through_orq(self._client) else {}
                 if extra_body:
                     call_kwargs['extra_body'] = {**call_kwargs.get('extra_body', {}), **extra_body}

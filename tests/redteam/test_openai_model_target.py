@@ -117,20 +117,45 @@ async def test_respond_sends_only_system_and_user() -> None:
 
 
 @pytest.mark.asyncio
-async def test_respond_marks_cache_breakpoints_only_on_an_orq_routed_client() -> None:
-    """The breakpoint is router-only, like the `thread` extra_body param."""
+async def test_respond_marks_cache_breakpoints_on_a_routed_anthropic_model() -> None:
+    """Both breakpoints: the system prompt reads back on every later turn, and
+    the prefix end is what the next appended turn reads."""
+    # Past CACHE_MIN_PROMPT_TOKENS; below it the helper correctly marks nothing.
+    long_turn = "first message " + "x " * 3000
     client = MagicMock()
+    client.base_url = "https://my.orq.ai/v3/router"
     client.chat.completions.create = AsyncMock(
         return_value=_make_completion_response(content="reply")
     )
-    target = OpenAIModelTarget(model="gpt-4o", client=client)
-    with (
-        patch("evaluatorq.redteam.tracing.get_tracer", return_value=None),
-        patch("evaluatorq.redteam.backends.openai.client_routes_through_orq", return_value=True),
-    ):
-        await target.respond([Message(role="user", content="first message")])
+    target = OpenAIModelTarget(model="anthropic/claude-sonnet-4-6", client=client)
+    with patch("evaluatorq.redteam.tracing.get_tracer", return_value=None):
+        await target.respond([Message(role="user", content=long_turn)])
 
     messages = client.chat.completions.create.call_args.kwargs["messages"]
-    assert messages[1]["content"] == [
-        {"type": "text", "text": "first message", "cache_control": {"type": "ephemeral"}}
+    assert messages[0]["content"] == [
+        {
+            "type": "text",
+            "text": target.system_prompt,
+            "cache_control": {"type": "ephemeral"},
+        }
     ]
+    assert messages[1]["content"] == [
+        {"type": "text", "text": long_turn, "cache_control": {"type": "ephemeral"}}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_respond_leaves_a_routed_non_anthropic_model_alone() -> None:
+    """OpenAI caches automatically; a marker there is request-shape churn."""
+    long_turn = "first message " + "x " * 3000
+    client = MagicMock()
+    client.base_url = "https://my.orq.ai/v3/router"
+    client.chat.completions.create = AsyncMock(
+        return_value=_make_completion_response(content="reply")
+    )
+    target = OpenAIModelTarget(model="openai/gpt-4o", client=client)
+    with patch("evaluatorq.redteam.tracing.get_tracer", return_value=None):
+        await target.respond([Message(role="user", content=long_turn)])
+
+    messages = client.chat.completions.create.call_args.kwargs["messages"]
+    assert messages[1]["content"] == long_turn
