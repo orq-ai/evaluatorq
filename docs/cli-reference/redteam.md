@@ -2,6 +2,8 @@
 
 Red teaming subcommand group. Registered only when `evaluatorq[redteam]` is installed.
 
+--8<-- "docs/_snippets/openai-direct-model.md"
+
 ## `eq redteam run`
 
 Run adversarial red teaming against one or more targets.

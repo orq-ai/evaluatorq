@@ -10,6 +10,8 @@ Three main verbs: `generate` (datapoints only), `simulate` (run against pre-buil
     `eq dashboard` (both stores). Passing a single JSON report file is an optional
     direct deep-link.
 
+--8<-- "docs/_snippets/openai-direct-model.md"
+
 ## `eq sim run`
 
 Generate personas and scenarios, then run simulations.
