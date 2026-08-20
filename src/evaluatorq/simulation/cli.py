@@ -600,7 +600,7 @@ def simulate(
                 'env: ORQ_API_KEY -> Orq router, else OPENAI_API_KEY '
                 '(+ OPENAI_BASE_URL) -> OpenAI-compatible endpoint. The default '
                 'targets the Orq router; for OpenAI-direct pass a bare model '
-                "name (e.g. 'gpt-5.4-mini', no provider prefix)."
+                "name (e.g. 'gpt-5.6-luna', no provider prefix)."
             ),
         ),
     ] = DEFAULT_MODEL,
@@ -943,7 +943,7 @@ def run(
                 'ORQ_API_KEY -> Orq router, else OPENAI_API_KEY (+ OPENAI_BASE_URL) '
                 '-> OpenAI-compatible endpoint. The default targets the Orq '
                 'router; for OpenAI-direct pass a bare model name '
-                "(e.g. 'gpt-5.4-mini', no provider prefix)."
+                "(e.g. 'gpt-5.6-luna', no provider prefix)."
             ),
         ),
     ] = DEFAULT_MODEL,
@@ -1232,7 +1232,7 @@ def generate(
                 'resolved from env: ORQ_API_KEY -> Orq router, else '
                 'OPENAI_API_KEY (+ OPENAI_BASE_URL) -> OpenAI-compatible '
                 'endpoint. The default targets the Orq router; for OpenAI-direct '
-                "pass a bare model name (e.g. 'gpt-5.4-mini', no provider prefix)."
+                "pass a bare model name (e.g. 'gpt-5.6-luna', no provider prefix)."
             ),
         ),
     ] = DEFAULT_MODEL,

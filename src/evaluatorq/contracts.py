@@ -150,8 +150,10 @@ else:
 # Pipeline defaults (mirrored from redteam.contracts for shared use)
 # ---------------------------------------------------------------------------
 
-# The one default model for both surfaces: red team (attacker, evaluator,
-# classifiers) and simulation (re-exported as simulation.types.DEFAULT_MODEL).
+# The one default model. Red team reads it directly; simulation, the jury and
+# the dashboard's apply flow alias it as DEFAULT_MODEL, DEFAULT_JUDGE_MODEL and
+# DEFAULT_APPLY_MODEL. Provider-prefixed for the Orq router; a caller pointing
+# at OpenAI directly overrides with the bare id.
 DEFAULT_PIPELINE_MODEL: str = 'openai/gpt-5.6-luna'
 DEFAULT_TARGET_MAX_TOKENS: int = 5000
 DEFAULT_TARGET_TIMEOUT_MS: int = 240_000

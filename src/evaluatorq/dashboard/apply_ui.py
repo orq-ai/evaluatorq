@@ -104,11 +104,10 @@ def _request_rejected(req: Request, form: Any) -> str | None:
     return None
 
 
-# Model for the instruction-merge call. Falls back to the shared default
-# (`evaluatorq.contracts.DEFAULT_PIPELINE_MODEL`) but stays independently
-# settable via EVALUATORQ_APPLY_MODEL, shown on the Settings page: the merge
-# rewrites production agent instructions, so a caller may want a stronger
-# model here than the scoring pipeline needs.
+# Model for the instruction-merge call. It used to default to its own literal,
+# on the reasoning that rewriting production agent instructions warrants a
+# stronger model than scoring does; it now falls back to the shared default and
+# keeps EVALUATORQ_APPLY_MODEL (Settings page) as the way to raise it again.
 APPLY_MODEL_ENV = 'EVALUATORQ_APPLY_MODEL'
 DEFAULT_APPLY_MODEL = DEFAULT_PIPELINE_MODEL
 

@@ -31,9 +31,7 @@ from evaluatorq.pairwise import PairwiseComparison, run_pairwise
 from evaluatorq.types import DataPoint, EvaluationResult, Evaluator, Output, ScorerParameter
 
 DEFAULT_JUDGE_MODEL = DEFAULT_PIPELINE_MODEL
-"""Judge model when the caller names none. Same value as red team and
-simulation — change it in ``evaluatorq.contracts``, not here. Override per
-call with ``model=`` or ``judges=``."""
+"""Judge model when the caller names neither ``model=`` nor ``judges=``."""
 
 PAIRWISE_LABELS = ['A', 'B', 'tie']
 DEFAULT_PAIRWISE_CRITERIA = (
@@ -802,7 +800,7 @@ def llm_jury_pairwise(
 
     comparator = llm_jury_pairwise(
         criteria="The answer is accurate, complete, and directly addresses the question.",
-        judges=["anthropic/claude-sonnet-4-6", "openai/gpt-5.4-mini"],
+        judges=["anthropic/claude-sonnet-4-6", "openai/gpt-5.6-luna"],
     )
     comparison = await comparator.compare(
         question="What is the capital of France?",

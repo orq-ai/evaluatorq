@@ -21,8 +21,7 @@ from evaluatorq.contracts import (
 )
 
 DEFAULT_MODEL = DEFAULT_PIPELINE_MODEL
-"""Simulation's name for the shared default. One value for simulation and red
-team — change it in ``evaluatorq.contracts``, not here."""
+"""Model for the user-simulator, judge and generators when ``sim_model`` is unset."""
 
 DEFAULT_MAX_TURNS = 10
 """Turn cap when the caller names none. The public ``max_turns`` defaults to
