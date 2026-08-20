@@ -73,11 +73,10 @@ def _make_result(
 
 
 def _parsed_response(suggestions: list[str]) -> Any:
-    """A parse() response carrying a validated model (happy path)."""
+    """A ``responses.parse()`` response carrying a validated model (happy path)."""
     response = MagicMock()
-    response.choices = [MagicMock()]
-    response.choices[0].message.refusal = None
-    response.choices[0].message.parsed = _SuggestionsLLMResponse(suggestions=suggestions)
+    response.incomplete_details = None
+    response.output_parsed = _SuggestionsLLMResponse(suggestions=suggestions)
     return response
 
 
@@ -95,12 +94,17 @@ def _schema_400() -> APIStatusError:
 
 
 def _mock_client(payload: list[str] | Exception) -> MagicMock:
-    """Client whose ``parse()`` succeeds with the given suggestions, or raises."""
+    """Client whose ``responses.parse()`` succeeds with the given suggestions, or raises.
+
+    Generation asks for ``api='responses'``, so the Responses leg is the one
+    exercised; the chat legs only run when this leg declines (see the fallback
+    tests, which make ``responses.parse`` raise a schema rejection).
+    """
     client = MagicMock()
     if isinstance(payload, Exception):
-        client.chat.completions.parse = AsyncMock(side_effect=payload)
+        client.responses.parse = AsyncMock(side_effect=payload)
     else:
-        client.chat.completions.parse = AsyncMock(return_value=_parsed_response(payload))
+        client.responses.parse = AsyncMock(return_value=_parsed_response(payload))
     return client
 
 
@@ -180,7 +184,7 @@ async def test_no_triggered_results_makes_no_llm_calls():
     client = _mock_client(['unused'])
     recs = await generate_recommendations([_make_result()], client, 'test-model')
     assert recs == []
-    client.chat.completions.parse.assert_not_awaited()
+    client.responses.parse.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -202,8 +206,8 @@ async def test_broken_rule_produces_targeted_recommendation():
     assert rec.triggers == ['rule_broken: leaked internal data']
     assert rec.suggestions == ['Add a system prompt rule forbidding internal data']
 
-    call_kwargs = client.chat.completions.parse.await_args.kwargs
-    user_prompt = call_kwargs['messages'][1]['content']
+    call_kwargs = client.responses.parse.await_args.kwargs
+    user_prompt = call_kwargs['input'][1]['content']
     assert 'leaked internal data' in user_prompt
     # Reasoning models reject non-default temperatures; omit unless asked for.
     assert 'temperature' not in call_kwargs
@@ -217,7 +221,7 @@ async def test_recommendation_call_inherits_run_metadata():
     with evaluatorq_pipeline('agent_simulation'), evaluatorq_run_id('sim-run-1'):
         await generate_recommendations([result], client, 'test-model')
 
-    assert client.chat.completions.parse.await_args.kwargs['metadata'] == {
+    assert client.responses.parse.await_args.kwargs['metadata'] == {
         'evaluatorq_pipeline': 'agent_simulation',
         'evaluatorq_run_id': 'sim-run-1',
     }
@@ -227,10 +231,10 @@ async def test_recommendation_call_inherits_run_metadata():
 async def test_recommendation_call_injects_active_trace_headers(monkeypatch: pytest.MonkeyPatch):
     client = _mock_client(['Fix it'])
     result = _make_result(goal_achieved=False, rules_broken=['leaked data'])
-    # Trace headers are fetched inside the shared helper now that the call
-    # routes through common.structured_output.
+    # The Responses leg injects headers through llm_call.apply_trace_headers,
+    # not through structured_output's own import — patch the transport.
     monkeypatch.setattr(
-        'evaluatorq.common.structured_output.get_trace_context_headers',
+        'evaluatorq.common.llm_call.get_trace_context_headers',
         AsyncMock(return_value={'traceparent': 'active-trace', 'tracestate': 'active-state'}),
     )
 
@@ -243,7 +247,7 @@ async def test_recommendation_call_injects_active_trace_headers(monkeypatch: pyt
 
     # The active trace wins over a stale caller traceparent, but other caller
     # headers survive.
-    assert client.chat.completions.parse.await_args.kwargs['extra_headers'] == {
+    assert client.responses.parse.await_args.kwargs['extra_headers'] == {
         'x-caller': 'preserved',
         'traceparent': 'active-trace',
         'tracestate': 'active-state',
@@ -263,6 +267,7 @@ async def test_fenced_json_object_fallback_parses():
     """parse() rejected (400) -> json_object fallback, and a fenced ```json
     payload still yields suggestions instead of dropping the section."""
     client = MagicMock()
+    client.responses.parse = AsyncMock(side_effect=_schema_400())
     client.chat.completions.parse = AsyncMock(side_effect=_schema_400())
     fenced = '```json\n{"suggestions": ["Add a guardrail on ticket IDs"]}\n```'
     client.chat.completions.create = AsyncMock(return_value=_fallback_response(fenced))
@@ -278,6 +283,7 @@ async def test_fenced_json_object_fallback_parses():
 async def test_malformed_fallback_is_swallowed():
     """A malformed fallback payload skips the result with a warning, no crash."""
     client = MagicMock()
+    client.responses.parse = AsyncMock(side_effect=_schema_400())
     client.chat.completions.parse = AsyncMock(side_effect=_schema_400())
     client.chat.completions.create = AsyncMock(return_value=_fallback_response('not json at all'))
     result = _make_result(goal_achieved=False, rules_broken=['leaked data'])
@@ -293,7 +299,7 @@ async def test_max_results_caps_llm_calls():
     results = [_make_result(goal_achieved=False, rules_broken=['r']) for _ in range(5)]
     recs = await generate_recommendations(results, client, 'test-model', max_results=2)
     assert len(recs) == 2
-    assert client.chat.completions.parse.await_count == 2
+    assert client.responses.parse.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -307,7 +313,7 @@ async def test_config_max_results_caps_llm_calls():
     )
 
     assert len(recs) == 2
-    assert client.chat.completions.parse.await_count == 2
+    assert client.responses.parse.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -337,9 +343,9 @@ async def test_config_drives_token_budget_and_prompt_budgets():
         ),
     )
 
-    kwargs = client.chat.completions.parse.await_args.kwargs
-    assert kwargs['max_completion_tokens'] == 123
-    system, user = kwargs['messages']
+    kwargs = client.responses.parse.await_args.kwargs
+    assert kwargs['max_output_tokens'] == 123
+    system, user = kwargs['input']
     assert 'a list of 1-9 concise' in system['content']
     # Per-message budget bites first (60 + the ellipsis), then the transcript cap.
     assert 'x' * 61 not in user['content']
@@ -412,6 +418,7 @@ async def test_fallback_tolerates_non_string_suggestions():
     """A stray number/null in the fallback payload is coerced or dropped instead
     of dropping the whole suggestion (review fix: keep the old tolerance)."""
     client = MagicMock()
+    client.responses.parse = AsyncMock(side_effect=_schema_400())
     client.chat.completions.parse = AsyncMock(side_effect=_schema_400())
     sloppy = '{"suggestions": [1, "Add a guardrail", null]}'
     client.chat.completions.create = AsyncMock(return_value=_fallback_response(sloppy))
@@ -421,3 +428,51 @@ async def test_fallback_tolerates_non_string_suggestions():
 
     assert len(recs) == 1
     assert recs[0].suggestions == ['1', 'Add a guardrail']
+
+
+@pytest.mark.asyncio
+async def test_batch_is_wrapped_in_one_span(monkeypatch: pytest.MonkeyPatch):
+    """Without the wrapper each per-result call attaches to the trace root, so a
+    batch renders as N loose top-level LLM spans after the run span has closed."""
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer('test')
+    monkeypatch.setattr('evaluatorq.simulation.tracing.get_tracer', lambda: tracer)
+    monkeypatch.setattr('evaluatorq.common.tracing.get_tracer', lambda: tracer)
+
+    client = _mock_client(['fix it'])
+    results = [_make_result(goal_achieved=False, rules_broken=['r']) for _ in range(3)]
+    await generate_recommendations(results, client, 'test-model')
+
+    provider.shutdown()
+    finished = exporter.get_finished_spans()
+    batch = [s for s in finished if s.name == 'orq.simulation.recommendation_generation']
+    assert len(batch) == 1
+    batch_attrs = batch[0].attributes or {}
+    batch_context = batch[0].context
+    assert batch_context is not None
+    assert batch_attrs['orq.simulation.recommendation_count'] == 3
+    llm_spans = [s for s in finished if s.name == 'responses test-model']
+    assert len(llm_spans) == 3
+    assert all(s.parent is not None and s.parent.span_id == batch_context.span_id for s in llm_spans)
+
+
+@pytest.mark.asyncio
+async def test_no_triggers_opens_no_batch_span(monkeypatch: pytest.MonkeyPatch):
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr('evaluatorq.simulation.tracing.get_tracer', lambda: provider.get_tracer('test'))
+
+    assert await generate_recommendations([_make_result()], _mock_client(['unused']), 'test-model') == []
+    provider.shutdown()
+    assert exporter.get_finished_spans() == ()
