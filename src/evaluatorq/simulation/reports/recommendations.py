@@ -9,6 +9,8 @@ never carries noise suggestions.
 
 from __future__ import annotations
 
+import asyncio
+from itertools import starmap
 from typing import TYPE_CHECKING, Annotated, Any
 
 from loguru import logger
@@ -235,7 +237,55 @@ async def generate_recommendations(
     if not triggered:
         return []
 
-    recommendations: list[SimulationRecommendation] = []
+    async def _one(
+        idx: int,
+        result: SimulationResult,
+        triggers: list[tuple[str, str]],
+    ) -> SimulationRecommendation | None:
+        """Analyze one result. Returns None when the call fails or yields nothing."""
+        messages = [
+            {'role': 'system', 'content': _SYSTEM_PROMPT.format(max_suggestions=config.max_suggestions)},
+            {'role': 'user', 'content': _build_user_prompt(result, triggers, config)},
+        ]
+        try:
+            # RES-1295: generate_structured extracts no usage, so this call's
+            # tokens never reach any total. `SimulationRecommendation` has no
+            # usage field and this opt-in post-processing step runs after
+            # per-simulation usage has already been summarized — adding a sink
+            # here would mean widening a public result type. See "What the
+            # totals do not include" in docs/guides/red-teaming.md.
+            parsed, raw = await generate_structured(
+                client=llm_client,
+                model=model,
+                messages=messages,
+                response_format=_SuggestionsLLMResponse,
+                temperature=temperature,
+                max_tokens=config.max_tokens,
+                label='recommendations',
+                extra_kwargs=dict(llm_kwargs or {}),
+                api='responses',
+            )
+            if parsed is None:
+                # Fallback path: parse the json_object payload, tolerating a
+                # ```json fenced body from providers that ignore response_format.
+                parsed = _SuggestionsLLMResponse.model_validate_json(extract_json_from_response(raw))
+            suggestions = [str(s) for s in parsed.suggestions if s][: config.max_suggestions]
+            if not suggestions:
+                return None
+
+            datapoint_id = result.metadata.get('datapoint_id')
+            return SimulationRecommendation(
+                result_index=idx,
+                datapoint_id=str(datapoint_id) if datapoint_id else None,
+                persona=_persona_name(result),
+                scenario=_scenario_name(result),
+                triggers=[f'{trigger}: {evidence}' for trigger, evidence in triggers],
+                suggestions=suggestions,
+            )
+        except Exception:
+            logger.warning(f'Failed to generate recommendations for result #{idx + 1}', exc_info=True)
+            return None
+
     # One span over the whole batch: without it each per-result call attaches
     # straight to the trace root, so a 10-result batch renders as 10 loose
     # top-level LLM spans after the run span has already closed.
@@ -243,50 +293,11 @@ async def generate_recommendations(
         'orq.simulation.recommendation_generation',
         {'orq.simulation.recommendation_count': len(triggered)},
     ):
-        for idx, result, triggers in triggered:
-            messages = [
-                {'role': 'system', 'content': _SYSTEM_PROMPT.format(max_suggestions=config.max_suggestions)},
-                {'role': 'user', 'content': _build_user_prompt(result, triggers, config)},
-            ]
-            try:
-                # RES-1295: generate_structured extracts no usage, so this call's
-                # tokens never reach any total. `SimulationRecommendation` has no
-                # usage field and this opt-in post-processing step runs after
-                # per-simulation usage has already been summarized — adding a sink
-                # here would mean widening a public result type. See "What the
-                # totals do not include" in docs/guides/red-teaming.md.
-                parsed, raw = await generate_structured(
-                    client=llm_client,
-                    model=model,
-                    messages=messages,
-                    response_format=_SuggestionsLLMResponse,
-                    temperature=temperature,
-                    max_tokens=config.max_tokens,
-                    label='recommendations',
-                    extra_kwargs=dict(llm_kwargs or {}),
-                    api='responses',
-                )
-                if parsed is None:
-                    # Fallback path: parse the json_object payload, tolerating a
-                    # ```json fenced body from providers that ignore response_format.
-                    parsed = _SuggestionsLLMResponse.model_validate_json(extract_json_from_response(raw))
-                suggestions = [str(s) for s in parsed.suggestions if s][: config.max_suggestions]
-                if not suggestions:
-                    continue
+        # Concurrent, not sequential: these calls are independent, and the run's
+        # `--llm-parallelism` budget already throttles them inside the transport
+        # (`common.llm_limit.llm_slot`), so a second limiter here would only
+        # multiply against it. gather preserves order, so recommendations stay
+        # in result order.
+        settled = await asyncio.gather(*starmap(_one, triggered))
 
-                datapoint_id = result.metadata.get('datapoint_id')
-                recommendations.append(
-                    SimulationRecommendation(
-                        result_index=idx,
-                        datapoint_id=str(datapoint_id) if datapoint_id else None,
-                        persona=_persona_name(result),
-                        scenario=_scenario_name(result),
-                        triggers=[f'{trigger}: {evidence}' for trigger, evidence in triggers],
-                        suggestions=suggestions,
-                    )
-                )
-            except Exception:
-                logger.warning(f'Failed to generate recommendations for result #{idx + 1}', exc_info=True)
-                continue
-
-    return recommendations
+    return [rec for rec in settled if rec is not None]

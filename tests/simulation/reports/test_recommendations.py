@@ -476,3 +476,34 @@ async def test_no_triggers_opens_no_batch_span(monkeypatch: pytest.MonkeyPatch):
     assert await generate_recommendations([_make_result()], _mock_client(['unused']), 'test-model') == []
     provider.shutdown()
     assert exporter.get_finished_spans() == ()
+
+
+@pytest.mark.asyncio
+async def test_batch_runs_concurrently():
+    """The per-result calls are independent; running them serially made a
+    10-result batch a 20s staircase at the end of every run."""
+    import asyncio
+
+    in_flight = 0
+    peak = 0
+
+    async def _slow_parse(**_kwargs: Any) -> Any:
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        try:
+            await asyncio.sleep(0.01)
+            return _parsed_response(['fix it'])
+        finally:
+            in_flight -= 1
+
+    client = MagicMock()
+    client.responses.parse = _slow_parse
+    results = [_make_result(goal_achieved=False, rules_broken=['r']) for _ in range(5)]
+
+    recs = await generate_recommendations(results, client, 'test-model')
+
+    assert len(recs) == 5
+    assert peak == 5
+    # gather preserves order, so recommendations still map back to result order.
+    assert [r.result_index for r in recs] == [0, 1, 2, 3, 4]
