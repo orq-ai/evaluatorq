@@ -83,13 +83,22 @@ class RunSinks:
 
 
 def _invert_roles_for_simulator(messages: list[Message]) -> list[Message]:
-    """Swap roles so the user simulator sees the conversation from its perspective."""
+    """Swap roles so the user simulator sees the conversation from its perspective.
+
+    The target's tool calls and their ``role='tool'`` results are dropped: inverting
+    turns an ``assistant`` row into a ``user`` row, and a ``user`` row carrying
+    ``tool_calls`` followed by ``tool`` rows is rejected by the provider
+    ("messages with role 'tool' must be a response to a preceeding message with
+    'tool_calls'"). The simulated user only ever saw the assistant text anyway.
+    """
     inverted: list[Message] = []
     for m in messages:
+        if m.role == 'tool':
+            continue
         if m.role == 'user':
             inverted.append(m.model_copy(update={'role': 'assistant'}))
         elif m.role == 'assistant':
-            inverted.append(m.model_copy(update={'role': 'user'}))
+            inverted.append(m.model_copy(update={'role': 'user', 'tool_calls': None}))
         else:
             inverted.append(m)
     return inverted
@@ -887,6 +896,19 @@ class SimulationRunner:
                     'orq.simulation.max_turns': effective_max_turns,
                 },
             ) as turn_span:
+                # The user's line opens the turn it belongs to. Turn 1's line is the
+                # generated first message; every later turn asks the simulator here,
+                # so a turn span reads user -> target -> judge instead of trailing the
+                # next user message off the end of the previous turn.
+                if turn > 0:
+                    async with with_simulation_span('orq.simulation.user_simulator_call', None):
+                        user_response = await user_simulator.respond_async(
+                            _invert_roles_for_simulator(sinks.messages),
+                            llm_purpose='user_simulator',
+                        )
+                    sinks.messages.append(Message(role='user', content=user_response))
+                    _refresh_token_usage()
+
                 async with with_simulation_span('orq.simulation.target_call', None) as target_span:
                     # `span_message_text`, not `m.content or ''`: multi-part content
                     # would otherwise land on the span as a Python repr. Same helper
@@ -979,15 +1001,6 @@ class SimulationRunner:
                         'orq.simulation.should_terminate': judgment.should_terminate,
                     },
                 )
-
-                if not judgment.should_terminate and turn < effective_max_turns - 1:
-                    async with with_simulation_span('orq.simulation.user_simulator_call', None):
-                        user_response = await user_simulator.respond_async(
-                            _invert_roles_for_simulator(sinks.messages),
-                            llm_purpose='user_simulator',
-                        )
-                    sinks.messages.append(Message(role='user', content=user_response))
-                    _refresh_token_usage()
 
             if last_judgment and last_judgment.should_terminate:
                 _refresh_token_usage()

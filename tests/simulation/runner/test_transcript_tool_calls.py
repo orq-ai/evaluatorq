@@ -3,7 +3,7 @@ import logging
 from evaluatorq.contracts import AgentResponse, TextOutputItem, ToolCallOutputItem
 from evaluatorq.openresponses.input_items import messages_to_responses_input
 from evaluatorq.simulation.types import Message
-from evaluatorq.simulation.runner.simulation import build_assistant_message
+from evaluatorq.simulation.runner.simulation import _invert_roles_for_simulator, build_assistant_message
 
 
 def test_assistant_message_keeps_tool_calls():
@@ -100,3 +100,25 @@ def test_assistant_message_with_text_and_no_tool_calls_does_not_warn(caplog):
     assert msg.content == 'hello'
     assert msg.tool_calls is None
     assert not any('tool call' in r.message.lower() for r in caplog.records)
+
+
+def test_simulator_view_drops_tool_calls_and_tool_rows():
+    """Inverted roles must not leave a `user` row with tool_calls, nor orphan `tool` rows.
+
+    Providers reject "messages with role 'tool' must be a response to a preceeding
+    message with 'tool_calls'", which killed the whole simulation at turn 2.
+    """
+    response = AgentResponse(
+        output=[
+            TextOutputItem(text='Your balance is €12.', annotations=[]),
+            ToolCallOutputItem(
+                name='get_card_info', arguments='{}', id='fc_1', call_id='call_1', result='{"balance": 12}'
+            ),
+        ]
+    )
+    transcript = [Message(role='user', content='balance?'), *build_assistant_message(response)]
+
+    inverted = _invert_roles_for_simulator(transcript)
+
+    assert [m.role for m in inverted] == ['assistant', 'user']
+    assert all(m.tool_calls is None for m in inverted)

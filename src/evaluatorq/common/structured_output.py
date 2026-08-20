@@ -23,7 +23,7 @@ passes them through ``attributes``.
 from __future__ import annotations
 
 import logging
-from typing import Any, TypeVar, cast
+from typing import Any, Literal, TypeVar, cast
 
 from openai import APIStatusError, AsyncOpenAI, LengthFinishReasonError
 from pydantic import BaseModel
@@ -47,6 +47,77 @@ T = TypeVar('T', bound=BaseModel)
 _STRUCTURAL_KEYS = frozenset({'model', 'messages', 'response_format'})
 
 
+async def _generate_structured_via_responses(
+    client: AsyncOpenAI,
+    *,
+    model: str,
+    messages: list[dict[str, Any]],
+    response_format: type[T],
+    max_tokens: int,
+    label: str,
+    temperature: float | None,
+    extra_kwargs: dict[str, Any] | None,
+) -> T | None:
+    """Structured output through the Responses API; ``None`` means "use the chat legs".
+
+    Returns ``None`` — after a warning naming the cause — when the provider
+    rejects the Responses schema form (400/404) or hands back nothing parsed, so
+    the caller degrades to ``chat.completions`` rather than losing the call.
+    A length-truncated response raises, matching the chat leg: a same-budget
+    retry would truncate again.
+    """
+    params: dict[str, Any] = {
+        'model': model,
+        'input': cast('Any', messages),
+        'text_format': response_format,
+        'max_output_tokens': max_tokens,
+    }
+    if temperature is not None:
+        params['temperature'] = temperature
+    if extra_kwargs:
+        params.update(extra_kwargs)
+    trace_headers = await get_trace_context_headers()
+    if trace_headers:
+        params['extra_headers'] = {**(params.get('extra_headers') or {}), **trace_headers}
+    apply_pipeline_metadata(params)
+
+    async with with_llm_span(
+        model=model,
+        operation='responses',
+        temperature=temperature,
+        max_tokens=max_tokens,
+        input_messages=messages,
+        attributes={'orq.llm.purpose': label},
+    ) as span:
+        try:
+            response = await with_retry(lambda: client.responses.parse(**params), label=label)
+        except APIStatusError as e:
+            if e.status_code not in (400, 404):
+                raise
+            logger.warning(
+                '%s: Responses structured output rejected (HTTP %s), falling back to chat.completions',
+                label,
+                e.status_code,
+            )
+            return None
+        record_llm_response(span, response)
+
+        incomplete = getattr(response, 'incomplete_details', None)
+        if getattr(incomplete, 'reason', None) == 'max_output_tokens':
+            logger.error('%s: Responses output truncated at the token limit (max_tokens=%s)', label, max_tokens)
+            raise RuntimeError(
+                f'{label}: the model hit the token limit (max_tokens={max_tokens}) and the '
+                f'structured output was truncated, so the result is unusable. Raise the max_tokens '
+                f'budget passed to this call and retry.'
+            )
+
+        parsed = getattr(response, 'output_parsed', None)
+        if parsed is None:
+            logger.warning('%s: Responses returned no parsed output, falling back to chat.completions', label)
+            return None
+        return cast('T', parsed)
+
+
 async def generate_structured(
     client: AsyncOpenAI,
     *,
@@ -57,6 +128,7 @@ async def generate_structured(
     label: str,
     temperature: float | None = None,
     extra_kwargs: dict[str, Any] | None = None,
+    api: Literal['chat_completions', 'responses'] = 'chat_completions',
 ) -> tuple[T | None, str]:
     """Generate a chat completion with structured output, falling back to a non-strict schema.
 
@@ -103,6 +175,23 @@ async def generate_structured(
     # Cast once — the OpenAI SDK accepts dict literals at runtime; the TypedDict
     # union just doesn't type-narrow from dict[str, Any].
     typed_messages = cast('Any', messages)
+
+    if api == 'responses':
+        parsed_via_responses = await _generate_structured_via_responses(
+            client,
+            model=model,
+            messages=messages,
+            response_format=response_format,
+            max_tokens=max_tokens,
+            label=label,
+            temperature=temperature,
+            extra_kwargs=extra_kwargs,
+        )
+        if parsed_via_responses is not None:
+            return parsed_via_responses, ''
+        # The warning naming the cause is emitted by the helper; the chat legs
+        # below are the fallback, so a provider without Responses structured
+        # output still gets an answer.
 
     async with with_llm_span(
         model=model,

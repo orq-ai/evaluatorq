@@ -66,12 +66,10 @@ def _scenario(goal: str = 'fix my bug') -> Scenario:
 
 
 def _first_message_client(message_content: str) -> MagicMock:
-    msg = MagicMock(content=message_content)
-    choice = MagicMock(message=msg)
-    resp = MagicMock(choices=[choice])
-    resp.usage = MagicMock(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+    resp = MagicMock(output_text=message_content)
+    resp.usage = MagicMock(input_tokens=1, output_tokens=1, total_tokens=2)
     client = MagicMock()
-    client.chat.completions.create = AsyncMock(return_value=resp)
+    client.responses.create = AsyncMock(return_value=resp)
     return client
 
 
@@ -141,7 +139,7 @@ class TestFirstMessageGeneratorPipelineMetadata:
         with evaluatorq_pipeline('agent_simulation'), evaluatorq_run_id('generation-run'):
             await gen.generate(_persona(), _scenario())
 
-        _, kwargs = client.chat.completions.create.call_args
+        _, kwargs = client.responses.create.call_args
         assert kwargs.get('metadata') == {
             'evaluatorq_pipeline': 'agent_simulation',
             'evaluatorq_run_id': 'generation-run',
@@ -154,7 +152,7 @@ class TestFirstMessageGeneratorPipelineMetadata:
 
         await gen.generate(_persona(), _scenario())
 
-        _, kwargs = client.chat.completions.create.call_args
+        _, kwargs = client.responses.create.call_args
         assert 'metadata' not in kwargs
 
     async def test_sends_metadata_when_not_orq_routed(self) -> None:
@@ -165,7 +163,7 @@ class TestFirstMessageGeneratorPipelineMetadata:
         with evaluatorq_pipeline('agent_simulation'), evaluatorq_run_id('generation-run'):
             await gen.generate(_persona(), _scenario())
 
-        _, kwargs = client.chat.completions.create.call_args
+        _, kwargs = client.responses.create.call_args
         assert kwargs['metadata'] == {
             'evaluatorq_pipeline': 'agent_simulation',
             'evaluatorq_run_id': 'generation-run',

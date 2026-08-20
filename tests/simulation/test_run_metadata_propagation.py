@@ -44,9 +44,27 @@ class _FakeCompletions:
         return SimpleNamespace(choices=[SimpleNamespace(message=message, finish_reason='stop')], usage=None)
 
 
+class _FakeResponses:
+    """Captures the kwargs of the single ``parse`` call generate_structured makes.
+
+    The generators run on the Responses API, so ``text_format`` carries the
+    schema and ``output_parsed`` carries the result.
+    """
+
+    def __init__(self, sink: dict[str, Any], build_parsed) -> None:
+        self._sink = sink
+        self._build_parsed = build_parsed
+
+    async def parse(self, **kwargs: Any) -> Any:
+        self._sink.update(kwargs)
+        parsed = self._build_parsed(kwargs['text_format'])
+        return SimpleNamespace(output_parsed=parsed, incomplete_details=None, usage=None)
+
+
 class _FakeClient:
     def __init__(self, sink: dict[str, Any], build_parsed) -> None:
         self.chat = SimpleNamespace(completions=_FakeCompletions(sink, build_parsed))
+        self.responses = _FakeResponses(sink, build_parsed)
         self.base_url = 'https://my.orq.ai/v3/router'
 
     async def close(self) -> None:  # pragma: no cover - generator doesn't own us

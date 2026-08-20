@@ -126,7 +126,7 @@ Keep it natural - this is how they would actually open a conversation."""
         try:
             async with with_llm_span(
                 model=self._model,
-                operation='chat',
+                operation='responses',
                 temperature=_TEMPERATURE_FIRST_MESSAGE,
                 max_tokens=500,
                 purpose='first_message',
@@ -150,19 +150,18 @@ Keep it natural - this is how they would actually open a conversation."""
                 # totals do not include" in docs/guides/red-teaming.md.
                 for attempt in range(2):
                     response = await with_retry(
-                        lambda: self._client.chat.completions.create(  # pyright: ignore[reportUnknownLambdaType]
+                        lambda: self._client.responses.create(  # pyright: ignore[reportUnknownLambdaType]
                             model=self._model,
-                            messages=messages,
+                            input=cast('Any', messages),
                             temperature=_TEMPERATURE_FIRST_MESSAGE,
-                            max_tokens=500,
+                            max_output_tokens=500,
                             **extra,
                         ),
                         label='FirstMessageGenerator.generate',
                     )
                     record_llm_response(span, response)
 
-                    message = response.choices[0].message.content if response.choices else ''
-                    message = re.sub(r'^["\']|["\']$', '', (message or '').strip())
+                    message = re.sub(r'^["\']|["\']$', '', (response.output_text or '').strip())
                     if message:
                         break
                     if attempt == 0:

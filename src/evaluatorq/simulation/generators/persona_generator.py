@@ -196,6 +196,7 @@ Return ONLY a JSON array, no other text."""
                 temperature=_TEMPERATURE_CREATIVE,
                 max_tokens=4000,
                 label='PersonaGenerator.generate',
+                api='responses',
             )
             personas = parsed.personas if parsed is not None else self._parse_personas(raw or '[]')
 
@@ -321,6 +322,7 @@ Return ONLY a JSON array, no other text."""
                 temperature=_TEMPERATURE_BALANCED,
                 max_tokens=4000,
                 label='PersonaGenerator.generate_with_coverage',
+                api='responses',
             )
             personas = parsed.personas if parsed is not None else self._parse_personas(raw or '[]')
 

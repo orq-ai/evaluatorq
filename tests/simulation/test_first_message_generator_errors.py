@@ -49,44 +49,31 @@ def _api_error(status: int) -> APIStatusError:
     return APIStatusError(message=f"http {status}", response=response, body=None)
 
 
-def _client_with_response(message_content: str | None) -> MagicMock:
-    msg = MagicMock()
-    msg.content = message_content
-    choice = MagicMock()
-    choice.message = msg
+def _response(output_text: str | None) -> MagicMock:
     resp = MagicMock()
-    resp.choices = [choice]
-    resp.usage = MagicMock(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+    resp.output_text = output_text
+    resp.usage = MagicMock(input_tokens=1, output_tokens=1, total_tokens=2)
+    return resp
+
+
+def _client_with_response(message_content: str | None) -> MagicMock:
     client = MagicMock()
-    client.chat = MagicMock()
-    client.chat.completions = MagicMock()
-    client.chat.completions.create = AsyncMock(return_value=resp)
+    client.responses = MagicMock()
+    client.responses.create = AsyncMock(return_value=_response(message_content))
     return client
 
 
 def _client_with_responses(*message_contents: str | None) -> MagicMock:
-    responses = []
-    for message_content in message_contents:
-        msg = MagicMock()
-        msg.content = message_content
-        choice = MagicMock()
-        choice.message = msg
-        resp = MagicMock()
-        resp.choices = [choice]
-        resp.usage = MagicMock(prompt_tokens=1, completion_tokens=1, total_tokens=2)
-        responses.append(resp)
     client = MagicMock()
-    client.chat = MagicMock()
-    client.chat.completions = MagicMock()
-    client.chat.completions.create = AsyncMock(side_effect=responses)
+    client.responses = MagicMock()
+    client.responses.create = AsyncMock(side_effect=[_response(c) for c in message_contents])
     return client
 
 
 def _client_raising(exc: Exception) -> MagicMock:
     client = MagicMock()
-    client.chat = MagicMock()
-    client.chat.completions = MagicMock()
-    client.chat.completions.create = AsyncMock(side_effect=exc)
+    client.responses = MagicMock()
+    client.responses.create = AsyncMock(side_effect=exc)
     return client
 
 
@@ -146,7 +133,7 @@ class TestFirstMessageGeneratorErrors:
         gen = FirstMessageGenerator(model="gpt-4o", client=client)
         result = await gen.generate(_persona(), _scenario("login"))
         assert result == "I need help logging in"
-        assert client.chat.completions.create.await_count == 2
+        assert client.responses.create.await_count == 2
 
     async def test_leading_and_trailing_double_quotes_stripped(self):
         client = _client_with_response('"hello there"')

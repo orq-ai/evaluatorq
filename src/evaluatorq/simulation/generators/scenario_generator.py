@@ -26,6 +26,17 @@ _TEMPERATURE_CREATIVE = 0.8
 _TEMPERATURE_BALANCED = 0.7
 _TEMPERATURE_EDGE_CASE = 0.9
 
+# A generated scenario costs roughly 300-400 output tokens; a flat cap truncated the
+# structured output (unrecoverable LengthFinishReasonError) once a caller asked for
+# ~15+ scenarios in one call.
+_TOKENS_PER_SCENARIO = 500
+_MIN_SCENARIO_TOKENS = 6000
+
+
+def _scenario_token_budget(num_scenarios: int) -> int:
+    return max(_MIN_SCENARIO_TOKENS, _TOKENS_PER_SCENARIO * num_scenarios)
+
+
 _SCENARIO_GENERATOR_PROMPT = """You are an expert test scenario designer for AI agent evaluation. Create realistic, testable scenarios that thoroughly evaluate agent capabilities.
 
 ## Scenario Structure
@@ -268,8 +279,9 @@ Return ONLY a JSON array, no other text."""
                     messages=messages,
                     response_format=ScenarioListResponse,
                     temperature=_TEMPERATURE_CREATIVE,
-                    max_tokens=6000,
+                    max_tokens=_scenario_token_budget(num_scenarios),
                     label='ScenarioGenerator.generate',
+                    api='responses',
                 )
 
                 if parsed is not None:
@@ -345,8 +357,9 @@ Return ONLY a JSON array, no other text."""
                     messages=messages,
                     response_format=ScenarioListResponse,
                     temperature=_TEMPERATURE_BALANCED,
-                    max_tokens=6000,
+                    max_tokens=_scenario_token_budget(num_scenarios),
                     label='ScenarioGenerator.generate_with_coverage',
+                    api='responses',
                 )
 
                 if parsed is not None:
@@ -422,6 +435,7 @@ Return ONLY a JSON array, no other text."""
                     temperature=_TEMPERATURE_EDGE_CASE,
                     max_tokens=4000,
                     label='ScenarioGenerator.generate_edge_cases',
+                    api='responses',
                 )
 
                 if parsed is not None:
@@ -488,6 +502,7 @@ Return ONLY a JSON array, no other text."""
                     temperature=_TEMPERATURE_EDGE_CASE,
                     max_tokens=4000,
                     label='ScenarioGenerator.generate_boundary_scenarios',
+                    api='responses',
                 )
 
                 if parsed is not None:
@@ -567,6 +582,7 @@ Return ONLY a JSON array, no other text."""
                     temperature=_TEMPERATURE_EDGE_CASE,
                     max_tokens=6000,
                     label='ScenarioGenerator.generate_security_scenarios',
+                    api='responses',
                 )
 
                 if parsed is not None:
