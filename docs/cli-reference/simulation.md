@@ -32,7 +32,7 @@ Targets — provide **exactly one**:
 |---|---|---|
 | `--agent-description` | `str \| None` / `None` | Free-text description of the agent. May be omitted when `--target` is an Orq agent (fetched automatically). |
 | `--name` / `-n` | `str` / `sim` | Run name for the run-store entry. |
-| `--sim-model` | `str` / `openai/gpt-5.4-mini` | Model for user-simulator, judge, and generation. |
+| `--sim-model` | `str` / `openai/gpt-5.6-luna` | Model for user-simulator, judge, and generation. |
 | `--max-turns` | `int` / `10` | Maximum conversation turns. |
 | `--datapoint-parallelism` | `int` / `10` | Concurrent simulations. `--parallelism` is a deprecated alias. |
 | `--llm-parallelism` | `int` / unset | Ceiling on in-flight LLM requests for the whole run. |
@@ -74,7 +74,7 @@ by `--experiment-run-id`), or `--from-run`.
 | `--from-run` | `str \| None` | Replay a previous run from `.evaluatorq/sim-runs/`: pass its file name, run id, path, or `"latest"`. Re-runs the exact same personas, scenarios, and first messages; only the target/evaluators may differ. |
 | `--memory-entity` | `str \| None` / `None` | Memory `entity_id` sent with every `agent:<key>` (or bare `<key>`) target call, for agents with a memory store attached. Omit to mint a fresh id per conversation; pass one to reuse a specific (e.g. seeded) entity, shared across the run. |
 | `--name` / `-n` | `str` / `sim` | Run name for the run-store entry. |
-| `--sim-model` | `str` / `openai/gpt-5.4-mini` | Model for user-simulator and judge. |
+| `--sim-model` | `str` / `openai/gpt-5.6-luna` | Model for user-simulator and judge. |
 | `--max-turns` | `int` / `10` | Maximum conversation turns. Defaults to the replayed run's cap with `--from-run`. |
 | `--datapoint-parallelism` | `int` / `10` | Concurrent simulations. `--parallelism` is a deprecated alias. |
 | `--llm-parallelism` | `int` / unset | Ceiling on in-flight LLM requests for the whole run. |
@@ -128,7 +128,7 @@ eq sim generate --datapoints dp.jsonl --agent-description "..."
 | `--datapoints` / `-d` | `Path` (required) | Path to write generated datapoints JSONL. |
 | `--agent-description` | `str \| None` / `None` | Free-text description of the agent. |
 | `--target` | `str \| None` / `None` | Agent target used to fetch the description when `--agent-description` is omitted. Accepts `agent:<key>`. |
-| `--sim-model` | `str` / `openai/gpt-5.4-mini` | Model for persona/scenario/first-message generation. |
+| `--sim-model` | `str` / `openai/gpt-5.6-luna` | Model for persona/scenario/first-message generation. |
 | `--num-personas` | `int` / `5` | Number of personas to generate. |
 | `--num-scenarios` | `int` / `5` | Number of scenarios to generate. |
 | `--persona-seed` | `str` (repeatable) / `None` | Archetype seed for a persona, e.g. `"angry retiree"` (repeatable). Each seed becomes one persona the LLM fleshes out — overrides `--num-personas`. Omit to auto-generate. |
@@ -163,7 +163,7 @@ distribution of the fetched traces (extra LLM calls). Feed the output file to
 | `--search` | `str \| None` | Free-text search applied to the trace list. |
 | `--extend` | `int` / `0` | Also generate N distribution-matched datapoints on top of the direct per-trace ones (extra LLM calls). `0` disables extension. |
 | `--agent-description` | `str \| None` | Agent description used for `--extend` generation. Optional; inferred from the traffic profile if omitted. |
-| `--sim-model` | `str` / `openai/gpt-5.4-mini` | Model for persona/scenario inference and extension generation. |
+| `--sim-model` | `str` / `openai/gpt-5.6-luna` | Model for persona/scenario inference and extension generation. |
 | `--verbose` / `-v` | count / `0` | Increase verbosity. |
 | `--quiet` / `-q` | `bool` / `False` | Suppress non-error output. |
 
@@ -189,7 +189,7 @@ that has none stored.
 | `--output` / `-o` | `Path` (required) | Path to write the exported file. |
 | `--format` | `str` / `openresponses` | Export format: `openresponses` (payload JSON), `md` (Markdown report), `html` (HTML report). |
 | `--recommendations` | `bool` / `False` | For `md`/`html`: generate LLM remediation suggestions at export time if none are stored. Extra LLM cost; uses `--sim-model`. |
-| `--sim-model` | `str` / `openai/gpt-5.4-mini` | Model for `--recommendations` generation. |
+| `--sim-model` | `str` / `openai/gpt-5.6-luna` | Model for `--recommendations` generation. |
 | `--target-label` | `str` / `agent` | Target name shown in md/html report headers. |
 
 ---

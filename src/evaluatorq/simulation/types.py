@@ -11,9 +11,18 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError, computed_field
 from typing_extensions import TypedDict
 
-from evaluatorq.contracts import Message, ResponseTrace, RunSummary, StrEnum, TokenUsage
+from evaluatorq.contracts import (
+    DEFAULT_PIPELINE_MODEL,
+    Message,
+    ResponseTrace,
+    RunSummary,
+    StrEnum,
+    TokenUsage,
+)
 
-DEFAULT_MODEL = 'openai/gpt-5.4-mini'
+DEFAULT_MODEL = DEFAULT_PIPELINE_MODEL
+"""Simulation's name for the shared default. One value for simulation and red
+team — change it in ``evaluatorq.contracts``, not here."""
 
 DEFAULT_MAX_TURNS = 10
 """Turn cap when the caller names none. The public ``max_turns`` defaults to

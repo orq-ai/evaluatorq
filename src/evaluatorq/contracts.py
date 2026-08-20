@@ -150,7 +150,9 @@ else:
 # Pipeline defaults (mirrored from redteam.contracts for shared use)
 # ---------------------------------------------------------------------------
 
-DEFAULT_PIPELINE_MODEL: str = 'gpt-5-mini'
+# The one default model for both surfaces: red team (attacker, evaluator,
+# classifiers) and simulation (re-exported as simulation.types.DEFAULT_MODEL).
+DEFAULT_PIPELINE_MODEL: str = 'openai/gpt-5.6-luna'
 DEFAULT_TARGET_MAX_TOKENS: int = 5000
 DEFAULT_TARGET_TIMEOUT_MS: int = 240_000
 
