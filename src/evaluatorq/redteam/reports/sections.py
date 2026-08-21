@@ -835,6 +835,11 @@ def _build_token_usage_section(report: RedTeamReport) -> ReportSection | None:
         agent_key = result.agent.key or result.agent.display_name or 'unknown'
         agent_usage[agent_key] = agent_usage[agent_key] + result.execution.token_usage
 
+    # `cached_tokens` and `cache_creation_tokens` are carried per agent but not
+    # rendered per agent: the tables are already six columns wide and a review
+    # judged a seventh not worth it yet. Section data is the report's structure,
+    # not the export's — a consumer reading sections directly gets the split.
+    # Deliberate for now, not settled; the column is RES-1413 if it comes back.
     per_agent = [
         {
             'agent': agent_key,
