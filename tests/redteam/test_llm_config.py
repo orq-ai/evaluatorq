@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
+    DEFAULT_TARGET_MAX_TOKENS,
     PIPELINE_CONFIG,
     EvaluatorConfig,
     LLMCallConfig,
@@ -20,7 +21,7 @@ def test_llm_call_config_defaults():
     cfg = LLMCallConfig()
     assert cfg.model == DEFAULT_PIPELINE_MODEL
     assert cfg.temperature == 1.0
-    assert cfg.max_tokens == 5000
+    assert cfg.max_tokens == DEFAULT_TARGET_MAX_TOKENS
     assert cfg.timeout_ms == 90_000
     assert cfg.extra_kwargs == {}
     assert cfg.client is None

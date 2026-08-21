@@ -49,6 +49,8 @@ sequenceDiagram
     Note over J: scores goal_achieved / criteria_met
 ```
 
+--8<-- "docs/_snippets/openai-direct-model.md"
+
 ## Generate from a one-line description
 
 The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios,

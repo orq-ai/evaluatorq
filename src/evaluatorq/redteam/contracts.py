@@ -993,17 +993,6 @@ class RunError(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-# RES-883: the attacker LLM output was unified onto
-# `evaluatorq.contracts.AgentResponse` — the same response shape used by
-# targets and simulation agents. ``generated_prompt`` is now ``AgentResponse.text``
-# and ``truncated`` is derivable from ``finish_reason == 'length'``. The former
-# ``AttackerResponse`` type is removed outright (a ``feat!`` breaking change) rather
-# than left as a silent alias: ``AttackerResponse = AgentResponse`` would have made
-# ``AttackerResponse(generated_prompt=...)`` quietly drop the prompt (AgentResponse
-# ignores unknown kwargs) and collapse ``isinstance`` discrimination. Construct
-# ``AgentResponse(text=...)`` directly.
-
-
 class Turn(BaseModel):
     """One attacker→target exchange in a multi-turn attack.
 

@@ -41,7 +41,7 @@ from loguru import logger
 from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
 from evaluatorq.common.cli_epilog import examples as _examples
 from evaluatorq.common.cli_errors import emit_error
-from evaluatorq.common.cli_help import CONTEXT_SETTINGS
+from evaluatorq.common.cli_help import CONTEXT_SETTINGS, MODEL_OPTION_NOTE
 from evaluatorq.common.cli_json import echo_json
 from evaluatorq.common.cli_tty import should_skip_confirm
 from evaluatorq.common.llm_client import resolve_llm_client
@@ -595,13 +595,7 @@ def simulate(
         str,
         typer.Option(
             '--sim-model',
-            help=(
-                'Model for the user-simulator and judge. Provider resolved from '
-                'env: ORQ_API_KEY -> Orq router, else OPENAI_API_KEY '
-                '(+ OPENAI_BASE_URL) -> OpenAI-compatible endpoint. The default '
-                'targets the Orq router; for OpenAI-direct pass a bare model '
-                "name (e.g. 'gpt-5.4-mini', no provider prefix)."
-            ),
+            help=f'Model for the user-simulator and judge. {MODEL_OPTION_NOTE}',
         ),
     ] = DEFAULT_MODEL,
     max_turns: Annotated[
@@ -939,11 +933,7 @@ def run(
             '--sim-model',
             help=(
                 'Model for the user-simulator, the judge, and persona/scenario/'
-                'first-message generation. Provider resolved from env: '
-                'ORQ_API_KEY -> Orq router, else OPENAI_API_KEY (+ OPENAI_BASE_URL) '
-                '-> OpenAI-compatible endpoint. The default targets the Orq '
-                'router; for OpenAI-direct pass a bare model name '
-                "(e.g. 'gpt-5.4-mini', no provider prefix)."
+                f'first-message generation. {MODEL_OPTION_NOTE}'
             ),
         ),
     ] = DEFAULT_MODEL,
@@ -1227,13 +1217,7 @@ def generate(
         str,
         typer.Option(
             '--sim-model',
-            help=(
-                'Model for persona/scenario/first-message generation. Provider '
-                'resolved from env: ORQ_API_KEY -> Orq router, else '
-                'OPENAI_API_KEY (+ OPENAI_BASE_URL) -> OpenAI-compatible '
-                'endpoint. The default targets the Orq router; for OpenAI-direct '
-                "pass a bare model name (e.g. 'gpt-5.4-mini', no provider prefix)."
-            ),
+            help=f'Model for persona/scenario/first-message generation. {MODEL_OPTION_NOTE}',
         ),
     ] = DEFAULT_MODEL,
     num_personas: Annotated[
@@ -1430,11 +1414,7 @@ def from_traces(
         str,
         typer.Option(
             '--sim-model',
-            help=(
-                'Model for persona/scenario inference and extension generation. '
-                'Provider resolved from env: ORQ_API_KEY -> Orq router, else '
-                'OPENAI_API_KEY (+ OPENAI_BASE_URL).'
-            ),
+            help=f'Model for persona/scenario inference and extension generation. {MODEL_OPTION_NOTE}',
         ),
     ] = DEFAULT_MODEL,
     replay_first_message: Annotated[  # noqa: FBT002
@@ -1660,7 +1640,7 @@ def export(
     ] = False,
     sim_model: Annotated[
         str,
-        typer.Option('--sim-model', help='Model for --recommendations generation.'),
+        typer.Option('--sim-model', help=f'Model for --recommendations generation. {MODEL_OPTION_NOTE}'),
     ] = DEFAULT_MODEL,
     target: Annotated[
         str,

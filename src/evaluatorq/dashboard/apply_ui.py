@@ -45,6 +45,7 @@ from starlette.responses import Response
 
 from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.common.reports import esc
+from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -103,12 +104,12 @@ def _request_rejected(req: Request, form: Any) -> str | None:
     return None
 
 
-# Model for the instruction-merge call. A dashboard config setting (shown on
-# the Settings page) rather than the red-team pipeline's evaluator default:
-# the merge rewrites production agent instructions, so it warrants a stronger
-# model than the scoring pipeline needs, independently configurable.
+# Model for the instruction-merge call. It used to default to its own literal,
+# on the reasoning that rewriting production agent instructions warrants a
+# stronger model than scoring does; it now falls back to the shared default and
+# keeps EVALUATORQ_APPLY_MODEL (Settings page) as the way to raise it again.
 APPLY_MODEL_ENV = 'EVALUATORQ_APPLY_MODEL'
-DEFAULT_APPLY_MODEL = 'gpt-5.6-luna'
+DEFAULT_APPLY_MODEL = DEFAULT_PIPELINE_MODEL
 
 
 def apply_model() -> str:
@@ -464,7 +465,7 @@ def _build_clients() -> tuple[Any, Any, str]:
 
     The call config (temperature, retries) follows the red-team pipeline's
     evaluator role; the MODEL is the dashboard's apply-model setting
-    (``EVALUATORQ_APPLY_MODEL``, default ``gpt-5.6-luna``), shown on the
+    (``EVALUATORQ_APPLY_MODEL``, default ``openai/gpt-5.6-luna``), shown on the
     Settings page.
     """
     api_key = os.environ.get('ORQ_API_KEY', '')

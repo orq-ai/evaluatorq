@@ -66,13 +66,13 @@ For `generate_and_simulate()`, pass `agent_description` for any local, deploymen
 
 ## LLM configuration
 
-`sim_model` (default `openai/gpt-5.4-mini`) drives the user-simulator, the judge,
+`sim_model` (default `openai/gpt-5.6-luna`) drives the user-simulator, the judge,
 and — for `generate_and_simulate` — persona/scenario generation. Provider
 resolution mirrors red teaming: an injected `generation_client` →
 `ORQ_API_KEY` (Orq router) → `OPENAI_API_KEY` (with optional `OPENAI_BASE_URL`).
 
-The default `openai/gpt-5.4-mini` assumes the Orq router. If you target OpenAI
-directly (only `OPENAI_API_KEY` set), drop the prefix: `sim_model="gpt-5.4-mini"`.
+The default `openai/gpt-5.6-luna` assumes the Orq router. If you target OpenAI
+directly (only `OPENAI_API_KEY` set), drop the prefix: `sim_model="gpt-5.6-luna"`.
 
 Override the user-simulator or judge entirely by passing pre-built `BaseAgent`
 instances via `user_simulator=` / `judge=`.

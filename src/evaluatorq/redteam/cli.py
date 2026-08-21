@@ -17,7 +17,7 @@ import typer
 
 from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
 from evaluatorq.common.cli_epilog import examples
-from evaluatorq.common.cli_help import CONTEXT_SETTINGS
+from evaluatorq.common.cli_help import CONTEXT_SETTINGS, MODEL_OPTION_NOTE
 from evaluatorq.common.cli_json import echo_json
 from evaluatorq.common.cli_tty import should_skip_confirm
 from evaluatorq.common.reports.html_helpers import pct
@@ -322,7 +322,7 @@ def run(
     ] = None,
     attack_model: Annotated[
         str,
-        typer.Option(help='Model for adversarial prompt generation.'),
+        typer.Option(help=f'Model for adversarial prompt generation. {MODEL_OPTION_NOTE}'),
     ] = DEFAULT_PIPELINE_MODEL,
     attacker_instructions: Annotated[
         str | None,
@@ -336,7 +336,7 @@ def run(
     ] = None,
     evaluator_model: Annotated[
         str,
-        typer.Option(help='Model for OWASP evaluation scoring.'),
+        typer.Option(help=f'Model for OWASP evaluation scoring. {MODEL_OPTION_NOTE}'),
     ] = DEFAULT_PIPELINE_MODEL,
     min_evaluation_coverage: Annotated[
         float,
