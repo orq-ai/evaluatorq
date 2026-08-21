@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_57264865448e6c8c_contracts_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.15.4">coverage.py v7.15.4</a>,
-            created at 2026-08-18 19:44 +0000
+            created at 2026-08-21 09:37 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -99,7 +99,7 @@
     <p class="pln"><span class="n"><a id="t17" href="#t17">17</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t18" href="#t18">18</a></span><span class="t"><span class="key">from</span> <span class="nam">evaluatorq</span><span class="op">.</span><span class="nam">common</span> <span class="key">import</span> <span class="nam">cli_width</span>  <span class="com"># noqa: F401  &#8212; import for its non-TTY width side effect</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t19" href="#t19">19</a></span><span class="t"><span class="key">from</span> <span class="nam">evaluatorq</span><span class="op">.</span><span class="nam">common</span><span class="op">.</span><span class="nam">cli_epilog</span> <span class="key">import</span> <span class="nam">examples</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t20" href="#t20">20</a></span><span class="t"><span class="key">from</span> <span class="nam">evaluatorq</span><span class="op">.</span><span class="nam">common</span><span class="op">.</span><span class="nam">cli_help</span> <span class="key">import</span> <span class="nam">CONTEXT_SETTINGS</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t20" href="#t20">20</a></span><span class="t"><span class="key">from</span> <span class="nam">evaluatorq</span><span class="op">.</span><span class="nam">common</span><span class="op">.</span><span class="nam">cli_help</span> <span class="key">import</span> <span class="nam">CONTEXT_SETTINGS</span><span class="op">,</span> <span class="nam">MODEL_OPTION_NOTE</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t21" href="#t21">21</a></span><span class="t"><span class="key">from</span> <span class="nam">evaluatorq</span><span class="op">.</span><span class="nam">common</span><span class="op">.</span><span class="nam">cli_json</span> <span class="key">import</span> <span class="nam">echo_json</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t22" href="#t22">22</a></span><span class="t"><span class="key">from</span> <span class="nam">evaluatorq</span><span class="op">.</span><span class="nam">common</span><span class="op">.</span><span class="nam">cli_tty</span> <span class="key">import</span> <span class="nam">should_skip_confirm</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t23" href="#t23">23</a></span><span class="t"><span class="key">from</span> <span class="nam">evaluatorq</span><span class="op">.</span><span class="nam">common</span><span class="op">.</span><span class="nam">reports</span><span class="op">.</span><span class="nam">html_helpers</span> <span class="key">import</span> <span class="nam">pct</span>&nbsp;</span><span class="r"></span></p>
@@ -404,7 +404,7 @@
     <p class="run run2"><span class="n"><a id="t322" href="#t322">322</a></span><span class="t">    <span class="op">]</span> <span class="op">=</span> <span class="key">None</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t323" href="#t323">323</a></span><span class="t">    <span class="nam">attack_model</span><span class="op">:</span> <span class="nam">Annotated</span><span class="op">[</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t324" href="#t324">324</a></span><span class="t">        <span class="nam">str</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run run2"><span class="n"><a id="t325" href="#t325">325</a></span><span class="t">        <span class="nam">typer</span><span class="op">.</span><span class="nam">Option</span><span class="op">(</span><span class="nam">help</span><span class="op">=</span><span class="str">&#x27;Model for adversarial prompt generation.&#x27;</span><span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t325" href="#t325">325</a></span><span class="t">        <span class="nam">typer</span><span class="op">.</span><span class="nam">Option</span><span class="op">(</span><span class="nam">help</span><span class="op">=</span><span class="fst">f&#x27;</span><span class="fst">Model for adversarial prompt generation. </span><span class="op">{</span><span class="nam">MODEL_OPTION_NOTE</span><span class="op">}</span><span class="fst">&#x27;</span><span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t326" href="#t326">326</a></span><span class="t">    <span class="op">]</span> <span class="op">=</span> <span class="nam">DEFAULT_PIPELINE_MODEL</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t327" href="#t327">327</a></span><span class="t">    <span class="nam">attacker_instructions</span><span class="op">:</span> <span class="nam">Annotated</span><span class="op">[</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t328" href="#t328">328</a></span><span class="t">        <span class="nam">str</span> <span class="op">|</span> <span class="key">None</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
@@ -418,7 +418,7 @@
     <p class="run run2"><span class="n"><a id="t336" href="#t336">336</a></span><span class="t">    <span class="op">]</span> <span class="op">=</span> <span class="key">None</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t337" href="#t337">337</a></span><span class="t">    <span class="nam">evaluator_model</span><span class="op">:</span> <span class="nam">Annotated</span><span class="op">[</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t338" href="#t338">338</a></span><span class="t">        <span class="nam">str</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run run2"><span class="n"><a id="t339" href="#t339">339</a></span><span class="t">        <span class="nam">typer</span><span class="op">.</span><span class="nam">Option</span><span class="op">(</span><span class="nam">help</span><span class="op">=</span><span class="str">&#x27;Model for OWASP evaluation scoring.&#x27;</span><span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run run2"><span class="n"><a id="t339" href="#t339">339</a></span><span class="t">        <span class="nam">typer</span><span class="op">.</span><span class="nam">Option</span><span class="op">(</span><span class="nam">help</span><span class="op">=</span><span class="fst">f&#x27;</span><span class="fst">Model for OWASP evaluation scoring. </span><span class="op">{</span><span class="nam">MODEL_OPTION_NOTE</span><span class="op">}</span><span class="fst">&#x27;</span><span class="op">)</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t340" href="#t340">340</a></span><span class="t">    <span class="op">]</span> <span class="op">=</span> <span class="nam">DEFAULT_PIPELINE_MODEL</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t341" href="#t341">341</a></span><span class="t">    <span class="nam">min_evaluation_coverage</span><span class="op">:</span> <span class="nam">Annotated</span><span class="op">[</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t342" href="#t342">342</a></span><span class="t">        <span class="nam">float</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
@@ -1061,7 +1061,7 @@
             <a class="nav" href="z_57264865448e6c8c_contracts_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.15.4">coverage.py v7.15.4</a>,
-            created at 2026-08-18 19:44 +0000
+            created at 2026-08-21 09:37 +0000
         </p>
     </div>
 </footer>
