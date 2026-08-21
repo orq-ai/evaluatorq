@@ -25,6 +25,7 @@ from evaluatorq.openresponses import (
     redteam_sample_from_openresponses,
     turns_to_openresponses_input,
 )
+from evaluatorq.openresponses.target import OrqResponsesTarget
 from evaluatorq.redteam.adaptive.orchestrator import (
     ADVERSARIAL_ANALYSIS_PROMPT,
     ADVERSARIAL_INITIAL_USER_PROMPT,
@@ -167,6 +168,7 @@ __all__ = [
     'OpenAIModelTarget',
     # Result models
     'OrchestratorResult',
+    'OrqResponsesTarget',
     'OutputMessage',
     'Pipeline',
     # Hook system
