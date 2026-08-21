@@ -75,14 +75,10 @@ def delivery_method_str(value: DeliveryMethod | str) -> str:
     return value.value if isinstance(value, DeliveryMethod) else value
 
 
-# Technique family for each canonical method (the groupings the enum documents).
-# The one piece of real structure delivery methods carry; kept so ``register``
-# has somewhere to place a custom method and the registry mirrors the
-# vulnerability registry's structured defs rather than being a bare set.
-# The category value itself has no runtime consumer today (the import-time
-# completeness check below inspects keys only) — it is structural/placeholder
-# metadata kept so the shape matches the vulnerability registry and a future
-# consumer has somewhere to read from. Add richer per-method defs here if one does.
+# Technique family for each canonical method. The keys are load-bearing — they drive
+# the import-time completeness check below. The category *values* have no reader yet;
+# they are public (``__all__``, and documented in custom-evaluators-and-frameworks.md)
+# for callers that want to group methods by family.
 DELIVERY_METHOD_CATEGORY: Mapping[DeliveryMethod, str] = {
     DeliveryMethod.DAN: 'persona',
     DeliveryMethod.ROLE_PLAY: 'persona',

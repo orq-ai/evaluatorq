@@ -20,15 +20,12 @@ stores.
 
 FastHTML 0.12.x passes ``on_startup`` / ``on_shutdown`` positional args to
 ``Starlette.__init__``, which Starlette 1.3.x removed.  A targeted shim is
-applied before the FastHTML import so callers never see the error.  This is
-documented as a concern in the task-3 report.
+applied at import time so callers never see the error.  This is documented as
+a concern in the task-3 report.
 """
 
 from __future__ import annotations
 
-# ---------------------------------------------------------------------------
-# Normal imports (after shim)
-# ---------------------------------------------------------------------------
 import csv
 import io
 import json
@@ -39,12 +36,11 @@ from loguru import logger
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import Response
 
-# Apply the Starlette 1.3.x / FastHTML 0.12.x compatibility shim BEFORE the
-# FastHTML import.  The shim patches Starlette.__init__ at import time so it
-# is in place when build_app() constructs the FastHTML app.  dashboard tests
-# use build_app()+TestClient without serve(), so the patch must NOT be deferred
-# to serve().  See evaluatorq/dashboard/_compat.py for the full explanation.
-import evaluatorq.dashboard._compat  # noqa: F401 — side-effect import; must precede FastHTML (intentional sort-order deviation)
+# Starlette 1.3.x / FastHTML 0.12.x compat shim. Must be imported, not deferred to
+# serve(): the patch has to be live when build_app() constructs the FastHTML app, and
+# dashboard tests use build_app()+TestClient without ever calling serve(). See
+# evaluatorq/dashboard/_compat.py.
+import evaluatorq.dashboard._compat  # noqa: F401 — side-effect import
 from evaluatorq.dashboard import library, metrics, report_tabs
 from evaluatorq.dashboard.apply_ui import register_apply_routes
 from evaluatorq.dashboard.filter_request import parse_selections

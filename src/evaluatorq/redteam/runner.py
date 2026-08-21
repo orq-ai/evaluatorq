@@ -882,22 +882,14 @@ async def red_team(
         except ValueError:
             resolved_vulns = None
 
-    # Evaluability gate (forward-looking guard): a requested vulnerability with no
-    # registered automated evaluator can be *attacked* but not *scored* by prompt-based
-    # red teaming. Without this gate the dynamic leg would burn attacker and target
-    # tokens generating attacks that always return inconclusive, and the summary could
-    # not distinguish "unmeasured" from "resisted" (every rate is None at zero evaluation
-    # coverage, so the report reads "no verdict" rather than a score). Such vulnerabilities
-    # are pruned up front; if NONE of the requested ones are scorable, we raise.
-    #
-    # As of this writing every vulnerability in the registry HAS an evaluator (all ten
-    # ASI categories plus the LLM Top 10 mappings — e.g. LLM03 Supply Chain resolves to
-    # the supply_chain vulnerability, scored by the ASI04 evaluator), so this gate is
-    # currently inert. It is retained deliberately: it is the safety net that stops a
-    # future vulnerability shipped without an evaluator from being silently reported as
-    # resisted. The default category set from list_available_categories() is already
-    # evaluator-backed, so it only ever affects explicit user selections; the static leg
-    # keeps its own datapoint-level coverage guard in _run_static().
+    # Evaluability gate: a vulnerability with no registered evaluator can be attacked
+    # but not scored, so prune it up front (raise if none are scorable) rather than
+    # burning tokens on attacks that always read "no verdict". Currently inert — every
+    # registry vulnerability has an evaluator (the ten ASI categories plus the LLM Top 10
+    # mappings, e.g. LLM03 Supply Chain resolves to supply_chain, scored by ASI04) — but
+    # kept as the safety net against a future one shipped without one. list_available_categories()
+    # is already evaluator-backed, so this only ever prunes an explicit user selection.
+    # The static leg keeps its own datapoint-level coverage guard in _run_static().
     unevaluable_codes: list[str] = []
     if resolved_vulns is not None:
         from evaluatorq.redteam.frameworks.owasp.evaluators import VULNERABILITY_EVALUATOR_REGISTRY
@@ -1947,20 +1939,14 @@ async def _run_dynamic_or_hybrid(
         msg = 'red_team() requires at least one target'
         raise ValueError(msg)
 
-    # Step 1b: Classify agent capabilities per target (one LLM call each).
-    # The result is threaded into the on_stage_end(CONTEXT_RETRIEVAL) meta
-    # so hooks can render a per-target capability table, AND into
-    # _prepare_target / direct-target paths so the planner skips its own
-    # classifier call (no duplicate round-trip).
-    #
-    # Client resolution is independent of `generate_strategies`: even if
-    # strategy generation is disabled, we still want capability data for
-    # operator visibility. `create_async_llm_client()` raises BackendError
-    # when no credentials are available, which we treat as "classification
-    # disabled" rather than a hard error.
-    #
-    # A replay skips classification entirely: it only exists to steer strategy
-    # selection, and a replay selects nothing — its datapoints are already fixed.
+    # Step 1b: Classify agent capabilities per target (one LLM call each), threaded
+    # into on_stage_end(CONTEXT_RETRIEVAL) meta for the hook table and into
+    # _prepare_target / the direct-target path so the planner skips its own
+    # classifier call (no duplicate round-trip). Independent of
+    # `generate_strategies` — capability data is still wanted for operator visibility
+    # even with strategy generation disabled; a missing-credentials BackendError is
+    # treated as "classification disabled", not a hard error. Replays skip it
+    # entirely since their datapoints are already fixed.
     cap_llm_client: AsyncOpenAI | None = None
     if replay_datapoints is None:
         cap_llm_client = llm_client
