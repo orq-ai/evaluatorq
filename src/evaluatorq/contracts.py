@@ -155,7 +155,10 @@ else:
 # DEFAULT_APPLY_MODEL. Provider-prefixed for the Orq router; a caller pointing
 # at OpenAI directly overrides with the bare id.
 DEFAULT_PIPELINE_MODEL: str = 'openai/gpt-5.6-luna'
-DEFAULT_TARGET_MAX_TOKENS: int = 5000
+# Completion-token budget per call, shared by red team and simulation. On a
+# reasoning model this covers hidden reasoning as well as the visible answer,
+# which is why 5000 stopped being enough when the default model became one.
+DEFAULT_TARGET_MAX_TOKENS: int = 10_000
 DEFAULT_TARGET_TIMEOUT_MS: int = 240_000
 
 

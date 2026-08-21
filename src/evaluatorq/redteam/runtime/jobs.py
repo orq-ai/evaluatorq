@@ -17,7 +17,7 @@ from evaluatorq.common.thread_context import build_static_thread_id, conversatio
 from evaluatorq.common.tracing import record_llm_response, set_span_attrs, truncate_for_span
 from evaluatorq.redteam.adaptive.orchestrator import _get_active_progress
 from evaluatorq.redteam.backends.registry import create_async_llm_client
-from evaluatorq.redteam.contracts import Message, TokenUsage
+from evaluatorq.redteam.contracts import DEFAULT_TARGET_MAX_TOKENS, Message, TokenUsage
 from evaluatorq.redteam.exceptions import CredentialError
 from evaluatorq.redteam.tracing import with_llm_span, with_redteam_span
 
@@ -49,7 +49,7 @@ def create_model_job(
     deployment_key: str | None = None,
     llm_client: AsyncOpenAI | None = None,
     system_prompt: str | None = None,
-    max_tokens: int = 5000,
+    max_tokens: int = DEFAULT_TARGET_MAX_TOKENS,
     run_id: str | None = None,
 ) -> Job:
     """Create an evaluatorq job for a router model or ORQ deployment.
@@ -64,7 +64,8 @@ def create_model_job(
     Args:
         model: Model name for direct LLM calls via the ORQ router or OpenAI.
         deployment_key: ORQ deployment key for deployment-based inference.
-        max_tokens: Maximum tokens for direct model responses (default 5000).
+        max_tokens: Maximum tokens for direct model responses; defaults to
+            ``DEFAULT_TARGET_MAX_TOKENS``.
         run_id: Red-team run id used to build the static-trace thread id so
             job spans correlate with the red-team pipeline; a per-target
             fallback is used when omitted.
