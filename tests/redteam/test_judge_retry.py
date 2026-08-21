@@ -57,10 +57,42 @@ def _no_real_sleep(monkeypatch: pytest.MonkeyPatch):
 
 
 def _responses_reply() -> Any:
-    return SimpleNamespace(
-        output_parsed=Verdict(value=True, explanation='resisted'),
+    content = SimpleNamespace(
+        type='output_text',
+        text='{"value": true, "explanation": "resisted"}',
+        annotations=[],
+    )
+    content.to_dict = lambda: {
+        'type': content.type,
+        'text': content.text,
+        'annotations': content.annotations,
+    }
+    output = SimpleNamespace(type='message', role='assistant', content=[content], status='completed')
+    output.to_dict = lambda: {
+        'type': output.type,
+        'role': output.role,
+        'content': [content.to_dict()],
+        'status': output.status,
+    }
+    response = SimpleNamespace(
+        output=[output],
+        stop_reason='stop',
+        incomplete_details=None,
         output_text='{"value": true, "explanation": "resisted"}',
+    )
+    response.to_dict = lambda: {
+        'output': [output.to_dict()],
+        'stop_reason': response.stop_reason,
+        'incomplete_details': response.incomplete_details,
+        'output_text': response.output_text,
+    }
+    return SimpleNamespace(
+        output=response.output,
+        stop_reason=response.stop_reason,
+        incomplete_details=response.incomplete_details,
+        output_text=response.output_text,
         usage={'input_tokens': 10, 'output_tokens': 5, 'total_tokens': 15, 'total_cost': 0.25},
+        to_dict=response.to_dict,
     )
 
 
@@ -97,17 +129,17 @@ def _bad_request(message: str) -> BadRequestError:
 
 
 class _Client:
-    """Minimal stand-in whose ``responses.parse``/``chat.completions.*`` are swappable."""
+    """Minimal stand-in whose ``responses.create``/``chat.completions.*`` are swappable."""
 
     def __init__(self, base_url: str = ORQ_URL):
         self.base_url = base_url
         self.calls: list[str] = []
-        self.responses = SimpleNamespace(parse=self._default_responses_parse)
+        self.responses = SimpleNamespace(create=self._default_responses_create)
         self.chat = SimpleNamespace(
             completions=SimpleNamespace(parse=self._default_chat_parse, create=self._default_chat_create)
         )
 
-    async def _default_responses_parse(self, **kwargs: Any) -> Any:
+    async def _default_responses_create(self, **kwargs: Any) -> Any:
         self.calls.append('responses')
         return _responses_reply()
 
@@ -155,14 +187,14 @@ async def test_retryable_rate_limit_recovers_on_second_attempt():
     client = _Client()
     attempts = {'n': 0}
 
-    async def flaky_responses_parse(**kwargs: Any) -> Any:
+    async def flaky_responses_create(**kwargs: Any) -> Any:
         attempts['n'] += 1
         client.calls.append('responses')
         if attempts['n'] == 1:
             raise _rate_limit_error()
         return _responses_reply()
 
-    client.responses = SimpleNamespace(parse=flaky_responses_parse)
+    client.responses = SimpleNamespace(create=flaky_responses_create)
     outcome = await _judge(client)
 
     assert attempts['n'] == 2
@@ -213,7 +245,7 @@ async def test_default_retry_count_issues_exactly_two_requests():
         client.calls.append('responses')
         raise _server_error(503)
 
-    client.responses = SimpleNamespace(parse=always_fails)
+    client.responses = SimpleNamespace(create=always_fails)
     cfg = LLMCallConfig(model='gpt-5-mini', api='responses', max_tokens=256)
     assert cfg.retry_count == 1
     outcome = await run_judge(
@@ -241,7 +273,7 @@ async def test_exhausted_retries_classify_as_api_status():
         client.calls.append('responses')
         raise _server_error(503)
 
-    client.responses = SimpleNamespace(parse=always_fails)
+    client.responses = SimpleNamespace(create=always_fails)
     outcome = await _judge(client, retry_count=2)
 
     assert len(client.calls) == 3
@@ -257,14 +289,24 @@ async def test_malformed_json_consumes_exactly_one_attempt():
     """A ValidationError from unparseable JSON must not be retried (RES-1295 regression)."""
     client = _Client()
 
-    async def malformed_responses_parse(**kwargs: Any) -> Any:
+    async def malformed_responses_create(**kwargs: Any) -> Any:
         client.calls.append('responses')
         reply = _responses_reply()
-        reply.output_parsed = None
+        content = SimpleNamespace(type='output_text', text='not json at all {', annotations=[])
+        content.to_dict = lambda: {'type': content.type, 'text': content.text, 'annotations': content.annotations}
+        output = SimpleNamespace(type='message', role='assistant', content=[content], status='completed')
+        output.to_dict = lambda: {
+            'type': output.type,
+            'role': output.role,
+            'content': [content.to_dict()],
+            'status': output.status,
+        }
+        reply.output = [output]
         reply.output_text = 'not json at all {'
+        reply.to_dict = lambda: {'output': [output.to_dict()], 'output_text': reply.output_text}
         return reply
 
-    client.responses = SimpleNamespace(parse=malformed_responses_parse)
+    client.responses = SimpleNamespace(create=malformed_responses_create)
     outcome = await _judge(client, retry_count=2)
 
     # No parsed object surfaces as JudgeError.PARSE directly from _responses_judge,
@@ -318,7 +360,7 @@ async def test_retry_count_zero_disables_retry():
         client.calls.append('responses')
         raise _rate_limit_error()
 
-    client.responses = SimpleNamespace(parse=always_fails)
+    client.responses = SimpleNamespace(create=always_fails)
     outcome = await _judge(client, retry_count=0)
 
     assert len(client.calls) == 1
@@ -346,11 +388,11 @@ async def test_endpoint_is_chat_when_served_by_chat_completions():
 
 @pytest.mark.asyncio
 async def test_endpoint_is_chat_when_responses_400s_and_falls_back():
-    async def rejecting_responses_parse(**kwargs: Any) -> Any:
+    async def rejecting_responses_create(**kwargs: Any) -> Any:
         raise _bad_request('endpoint not supported for this model')
 
     client = _Client()
-    client.responses = SimpleNamespace(parse=rejecting_responses_parse)
+    client.responses = SimpleNamespace(create=rejecting_responses_create)
     outcome = await _judge(client)
 
     assert outcome.endpoint == 'chat'

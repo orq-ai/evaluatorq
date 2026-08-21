@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from openai.types.chat import ChatCompletionMessageParam
 
 from evaluatorq.common.llm_call import execute_response
+from evaluatorq.common.responses import first_responses_refusal, responses_stop_reason
 from evaluatorq.common.retry import with_retry
 from evaluatorq.common.tracing import record_llm_input
 from evaluatorq.simulation.tracing import with_llm_span
@@ -145,6 +146,7 @@ Keep it natural - this is how they would actually open a conversation."""
                 # execute_response now prices has nowhere to go — carrying it
                 # would mean widening this public return type. See "What the
                 # totals do not include" in docs/guides/red-teaming.md.
+                message = ''
                 for attempt in range(2):
                     response, _usage = await with_retry(
                         lambda: execute_response(
@@ -159,6 +161,10 @@ Keep it natural - this is how they would actually open a conversation."""
                         label='FirstMessageGenerator.generate',
                     )
 
+                    refusal = first_responses_refusal(response)
+                    if refusal is not None:
+                        logger.warning('FirstMessageGenerator: model refused first message: %s', refusal)
+                        break
                     message = re.sub(r'^["\']|["\']$', '', (response.output_text or '').strip())
                     if message:
                         break
@@ -166,8 +172,7 @@ Keep it natural - this is how they would actually open a conversation."""
                     # answers, so empty text here often means truncation rather
                     # than a lazy model. Retrying at the same budget would
                     # truncate identically — name the cause and stop.
-                    reason = getattr(getattr(response, 'incomplete_details', None), 'reason', None)
-                    if reason == 'max_output_tokens':
+                    if responses_stop_reason(response) == 'length':
                         logger.warning(
                             'FirstMessageGenerator: response truncated at max_output_tokens=%s before any text; '
                             'raise the budget to get a persona-shaped opening',

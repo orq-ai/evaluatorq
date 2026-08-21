@@ -17,8 +17,9 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from evaluatorq.common.llm_call import execute_chat_completion, execute_chat_parse, execute_response
 from evaluatorq.common.llm_client import client_routes_through_orq
-from evaluatorq.common.messages import coerce_content_text, first_responses_refusal
+from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.model_catalogue import qualified_model
+from evaluatorq.common.responses import first_responses_refusal, parse_responses_response, responses_stop_reason
 from evaluatorq.common.retry import with_retry, without_client_retries
 from evaluatorq.common.template_engine import render_template
 from evaluatorq.common.tracing import with_llm_span
@@ -317,28 +318,37 @@ async def _responses_judge(
         messages=messages,
         span=span,
         timeout_s=cfg.timeout_ms / 1000.0,
-        response_model=verdict_model,
+        response_text_format=verdict_model,
         temperature=temp,
         max_output_tokens=cfg.max_tokens,
         extra_kwargs=cfg.extra_kwargs or None,
     )
-    parsed = response.output_parsed
+    raw = getattr(response, 'output_text', '') or ''
+    refusal = first_responses_refusal(response)
+    if refusal is not None:
+        payload = EvaluatorResponsePayload(value=None, abstain=True, explanation=refusal)
+        return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw)
+    reason = responses_stop_reason(response)
+    if reason == 'length':
+        logger.error('Judge [{}] Responses output hit max_tokens={}', model, cfg.max_tokens)
+        return JudgeOutcome(
+            error_kind=JudgeError.PARSE,
+            error_message=f'structured output hit the token limit (max_tokens={cfg.max_tokens})',
+            token_usage=usage,
+            raw_content=raw,
+        )
+    try:
+        parsed = getattr(parse_responses_response(response, verdict_model), 'output_parsed', None)
+    except ValidationError as exc:
+        logger.error('Judge [{}] Responses output did not validate: {}', model, exc)
+        return JudgeOutcome(
+            error_kind=JudgeError.PARSE,
+            error_message=f'structured output did not validate against {verdict_model.__name__}',
+            token_usage=usage,
+            raw_content=raw,
+        )
     if parsed is None:
-        raw = getattr(response, 'output_text', '') or ''
-        # A refusal is a verdict, not a failure: the chat-parse path maps it to an
-        # abstain, and the same judgement must not change classification just
-        # because it went out on a different endpoint.
-        refusal = first_responses_refusal(response)
-        if refusal is not None:
-            payload = EvaluatorResponsePayload(value=None, abstain=True, explanation=refusal)
-            return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw)
-        # Otherwise: truncation or a content filter. Report it the way the
-        # chat-parse path does — a PARSE error that still carries the usage,
-        # because those tokens were billed whether or not the verdict parsed —
-        # and name the reason, so "your max_tokens was too small" does not get
-        # rolled up to the user as "the model returned malformed JSON".
         status = getattr(response, 'status', None)
-        reason = getattr(getattr(response, 'incomplete_details', None), 'reason', None)
         logger.error('Judge [{}] responses parse produced no object (status={}, reason={})', model, status, reason)
         return JudgeOutcome(
             error_kind=JudgeError.PARSE,

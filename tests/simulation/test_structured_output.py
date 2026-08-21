@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 # ruff: noqa: S101
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -128,7 +129,7 @@ def _schema_400() -> Any:
 
     request = httpx.Request("POST", "https://router.example/v3/router")
     return APIStatusError(
-        "response_format json_schema not supported",
+        "text.format is not supported",
         response=httpx.Response(400, request=request),
         body=None,
     )
@@ -198,7 +199,27 @@ def _responses_result(parsed: Any, incomplete_reason: str | None = None) -> Magi
     response.output_text = '' if parsed is None else parsed.model_dump_json()
     response.stop_reason = None
     response.incomplete_details = None if incomplete_reason is None else MagicMock(reason=incomplete_reason)
+    _set_response_output(response, response.output_text)
     return response
+
+
+def _set_response_output(response: MagicMock, text: str) -> None:
+    response.output_text = text
+    if not text:
+        response.output = []
+        return
+    content = SimpleNamespace(
+        type='output_text',
+        text=text,
+        to_dict=lambda: {'type': 'output_text', 'text': text},
+    )
+    response.output = [
+        SimpleNamespace(
+            type='message',
+            content=[content],
+            to_dict=lambda: {'type': 'message', 'content': [content.to_dict()]},
+        )
+    ]
 
 
 def _responses_refusal(reason: str) -> MagicMock:
@@ -319,6 +340,7 @@ async def test_truncated_responses_output_raises_rather_than_degrading() -> None
     # Same rule as the chat leg: the chat fallback would run at the same budget
     # and truncate again, so a cut-off payload fails loudly and actionably.
     response = _responses_result(None)
+    _set_response_output(response, '{"value": "half a str')
     response.stop_reason = 'length'
     client = _responses_client(response)
 
@@ -330,8 +352,19 @@ async def test_truncated_responses_output_raises_rather_than_degrading() -> None
 
 
 @pytest.mark.asyncio
+async def test_nested_truncation_metadata_wins_over_a_non_length_stop_reason() -> None:
+    response = _responses_result(None, incomplete_reason='max_output_tokens')
+    _set_response_output(response, '{"value": "half a str')
+    response.stop_reason = 'stop'
+    client = _responses_client(response)
+
+    with pytest.raises(RuntimeError, match='Raise the max_tokens budget'):
+        await _generate_via_responses(client)
+
+
+@pytest.mark.asyncio
 async def test_responses_structural_extra_kwargs_are_rejected() -> None:
-    # text_format is the Responses leg's name for the schema this helper exists
+    # text is the Responses leg's name for the schema this helper exists
     # to enforce; extra_kwargs replacing it would return a well-formed object of
     # the wrong type through the cast, with no error until a field access fails.
     client = _responses_client(_responses_result(SampleResponse(value="ok")))
@@ -354,7 +387,7 @@ async def test_chat_structural_keys_stay_reserved_on_the_responses_path() -> Non
 @pytest.mark.asyncio
 async def test_malformed_responses_payload_is_not_assumed_to_be_truncated() -> None:
     response = _responses_result(None)
-    response.output_text = '{"value": "half a str'
+    _set_response_output(response, '{"value": "half a str')
     response.stop_reason = 'stop'
     client = _responses_client(response)
 
@@ -369,7 +402,7 @@ async def test_malformed_responses_payload_is_not_assumed_to_be_truncated() -> N
 @pytest.mark.asyncio
 async def test_schema_validation_error_is_not_misreported_as_truncation() -> None:
     response = _responses_result(None)
-    response.output_text = '{"other": "ok"}'
+    _set_response_output(response, '{"other": "ok"}')
     response.stop_reason = 'stop'
     client = _responses_client(response)
 

@@ -35,7 +35,7 @@ from openai import APIStatusError, AsyncOpenAI, LengthFinishReasonError
 from pydantic import BaseModel, ValidationError
 
 from evaluatorq.common.llm_call import apply_pipeline_metadata, execute_response
-from evaluatorq.common.messages import first_responses_refusal
+from evaluatorq.common.responses import first_responses_refusal, parse_responses_response, responses_stop_reason
 from evaluatorq.common.retry import with_retry
 from evaluatorq.common.tracing import get_trace_context_headers, record_llm_response, with_llm_span
 
@@ -66,26 +66,20 @@ _STRUCTURAL_KEYS_BY_API = {
 # A bare status code does not: a 400 is far more often a bad parameter, an
 # over-length context or a content-policy rejection, and degrading on those
 # masks the real cause and re-bills the same broken request on the other leg.
-_SCHEMA_KEYWORDS = ('structured', 'response_format', 'json_schema', 'text_format', 'not supported')
+_SCHEMA_KEYWORDS = (
+    'structured',
+    'response_format',
+    'json_schema',
+    'text_format',
+    'text.format',
+    "'text'",
+    'not supported',
+)
 
 
 def _looks_like_schema_rejection(exc: APIStatusError) -> bool:
     err_body = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
     return any(kw in err_body for kw in _SCHEMA_KEYWORDS)
-
-
-def _responses_stop_reason(response: Any) -> str | None:
-    """Return the provider's completion reason, normalizing Responses metadata."""
-    stop_reason = getattr(response, 'stop_reason', None)
-    if isinstance(stop_reason, str):
-        return stop_reason
-
-    reason = getattr(getattr(response, 'incomplete_details', None), 'reason', None)
-    if not isinstance(reason, str):
-        return None
-    # OpenAI's Responses schema calls this max_output_tokens; some compatible
-    # routers expose the equivalent stop reason directly as ``length``.
-    return 'length' if reason == 'max_output_tokens' else reason
 
 
 # The Responses leg's per-request ceiling. A batched generation asking for tens
@@ -175,8 +169,7 @@ async def _generate_structured_via_responses(
                     messages=messages,
                     span=span,
                     timeout_s=_STRUCTURED_TIMEOUT_S,
-                    response_model=response_format,
-                    parse_response_model=False,
+                    response_text_format=response_format,
                     temperature=temperature,
                     max_output_tokens=max_tokens,
                     extra_kwargs=extra_kwargs,
@@ -192,7 +185,7 @@ async def _generate_structured_via_responses(
                 raise
             logger.warning('%s: %s, falling back to chat.completions', label, cause)
             return None
-        if _responses_stop_reason(response) == 'length':
+        if responses_stop_reason(response) == 'length':
             raise _truncated_output_error(label, max_tokens)
 
         refusal = first_responses_refusal(response)
@@ -205,12 +198,21 @@ async def _generate_structured_via_responses(
             return None
 
         try:
-            return response_format.model_validate_json(raw_content)
+            parsed_response = parse_responses_response(
+                response,
+                response_format,
+                input_tools=(extra_kwargs or {}).get('tools'),
+            )
         except ValidationError as exc:
             logger.exception('%s: Responses output did not validate against %s', label, response_format.__name__)
             raise RuntimeError(
                 f'{label}: the Responses output did not validate against {response_format.__name__}.'
             ) from exc
+        parsed = getattr(parsed_response, 'output_parsed', None)
+        if parsed is None:
+            logger.warning('%s: Responses returned no parsed output, falling back to chat.completions', label)
+            return None
+        return cast('T', parsed)
 
 
 async def generate_structured(

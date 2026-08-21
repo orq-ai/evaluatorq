@@ -1,4 +1,4 @@
-"""Shared helpers for normalizing chat-message and Responses content.
+"""Shared helpers for normalizing chat-message content.
 
 Canonical for every surface. Content is typed ``str | list[ContentPart]``:
 never call ``str()`` on it — that renders a Python repr into a transcript a
@@ -42,12 +42,3 @@ def coerce_content_text(content: Any) -> str:
                 texts.append(f'[{part_type or "unknown"}]')
         return '\n'.join(texts)
     return str(content or '')
-
-
-def first_responses_refusal(response: Any) -> str | None:
-    """Return the first refusal in a Responses output, if present."""
-    for item in getattr(response, 'output', None) or []:
-        for part in getattr(item, 'content', None) or []:
-            if getattr(part, 'type', None) == 'refusal':
-                return getattr(part, 'refusal', '') or ''
-    return None

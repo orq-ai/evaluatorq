@@ -44,11 +44,30 @@ class _CapturingResponses:
     async def create(self, **kwargs: Any) -> Any:
         self._sink.update(kwargs)
         schema = kwargs['text']['format']['schema']
-        return SimpleNamespace(
-            output_text=json.dumps({name: [] for name in schema['properties']}),
+        output_text = json.dumps({name: [] for name in schema['properties']})
+        content = SimpleNamespace(type='output_text', text=output_text, annotations=[])
+        content.to_dict = lambda: {'type': content.type, 'text': content.text, 'annotations': content.annotations}
+        output = SimpleNamespace(type='message', role='assistant', content=[content], status='completed')
+        output.to_dict = lambda: {
+            'type': output.type,
+            'role': output.role,
+            'content': [content.to_dict()],
+            'status': output.status,
+        }
+        response = SimpleNamespace(
+            output=[output],
+            output_text=output_text,
             stop_reason='stop',
+            incomplete_details=None,
             usage=None,
         )
+        response.to_dict = lambda: {
+            'output': [output.to_dict()],
+            'output_text': response.output_text,
+            'stop_reason': response.stop_reason,
+            'incomplete_details': response.incomplete_details,
+        }
+        return response
 
 
 class _CapturingClient:

@@ -49,17 +49,20 @@ def _api_error(status: int) -> APIStatusError:
     return APIStatusError(message=f"http {status}", response=response, body=None)
 
 
-def _response(output_text: str | None) -> MagicMock:
+def _response(output_text: str | None, *, stop_reason: str | None = None, refusal: str | None = None) -> MagicMock:
     resp = MagicMock()
     resp.output_text = output_text
+    resp.stop_reason = stop_reason
+    resp.incomplete_details = None
+    resp.output = [] if refusal is None else [MagicMock(content=[MagicMock(type='refusal', refusal=refusal)])]
     resp.usage = MagicMock(input_tokens=1, output_tokens=1, total_tokens=2)
     return resp
 
 
-def _client_with_response(message_content: str | None) -> MagicMock:
+def _client_with_response(message_content: str | None, **response_kwargs: str | None) -> MagicMock:
     client = MagicMock()
     client.responses = MagicMock()
-    client.responses.create = AsyncMock(return_value=_response(message_content))
+    client.responses.create = AsyncMock(return_value=_response(message_content, **response_kwargs))
     return client
 
 
@@ -127,6 +130,20 @@ class TestFirstMessageGeneratorErrors:
         gen = FirstMessageGenerator(model="gpt-4o", client=client)
         result = await gen.generate(_persona(), _scenario("login"))
         assert result == "Hi, I need help with: login"
+
+    async def test_length_stop_reason_falls_back_without_retry(self):
+        client = _client_with_response("", stop_reason="length")
+        gen = FirstMessageGenerator(model="gpt-4o", client=client)
+        result = await gen.generate(_persona(), _scenario("truncated"))
+        assert result == "Hi, I need help with: truncated"
+        assert client.responses.create.await_count == 1
+
+    async def test_refusal_falls_back_without_retry(self):
+        client = _client_with_response("", refusal="not allowed")
+        gen = FirstMessageGenerator(model="gpt-4o", client=client)
+        result = await gen.generate(_persona(), _scenario("refused"))
+        assert result == "Hi, I need help with: refused"
+        assert client.responses.create.await_count == 1
 
     async def test_empty_content_retries_before_fallback(self):
         client = _client_with_responses("", "I need help logging in")

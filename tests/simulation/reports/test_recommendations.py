@@ -12,6 +12,7 @@ assert on its kwargs, plus the fenced and malformed fallback paths.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -74,10 +75,28 @@ def _make_result(
 
 def _parsed_response(suggestions: list[str]) -> Any:
     """A raw Responses response carrying valid structured JSON (happy path)."""
-    response = MagicMock()
-    response.incomplete_details = None
-    response.stop_reason = 'stop'
-    response.output_text = _SuggestionsLLMResponse(suggestions=suggestions).model_dump_json()
+    output_text = _SuggestionsLLMResponse(suggestions=suggestions).model_dump_json()
+    content = SimpleNamespace(type='output_text', text=output_text, annotations=[])
+    content.to_dict = lambda: {'type': content.type, 'text': content.text, 'annotations': content.annotations}
+    output = SimpleNamespace(type='message', role='assistant', content=[content], status='completed')
+    output.to_dict = lambda: {
+        'type': output.type,
+        'role': output.role,
+        'content': [content.to_dict()],
+        'status': output.status,
+    }
+    response = SimpleNamespace(
+        output=[output],
+        incomplete_details=None,
+        stop_reason='stop',
+        output_text=output_text,
+    )
+    response.to_dict = lambda: {
+        'output': [output.to_dict()],
+        'incomplete_details': response.incomplete_details,
+        'stop_reason': response.stop_reason,
+        'output_text': response.output_text,
+    }
     return response
 
 
