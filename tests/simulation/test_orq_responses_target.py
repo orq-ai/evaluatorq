@@ -106,12 +106,13 @@ def _make_target(
     client: Any | None = None,
     instructions: str | None = None,
     timeout_ms: int = 30_000,
+    tools: list[dict[str, Any]] | None = None,
 ) -> OrqResponsesTarget:
     """Create an OrqResponsesTarget with an injected mock client."""
     if client is None:
         client = _make_client()
     config = LLMCallConfig(model="gpt-4o", timeout_ms=timeout_ms)
-    return OrqResponsesTarget(config, instructions=instructions, client=client)
+    return OrqResponsesTarget(config, instructions=instructions, tools=tools, client=client)
 
 
 def _responses_http_response(
@@ -834,3 +835,42 @@ class TestOrqResponsesTargetClose:
             assert t._client_owned is True
 
         owned_client.close.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# agent context
+# ---------------------------------------------------------------------------
+
+
+class TestOrqResponsesTargetAgentContext:
+    @pytest.mark.asyncio
+    async def test_agent_context_carries_instructions(self):
+        target = _make_target(client=_make_client(), instructions="You are a cow.")
+
+        ctx = await target.get_agent_context()
+
+        assert ctx.instructions == "You are a cow."
+        assert ctx.key == target.config.model
+
+    @pytest.mark.asyncio
+    async def test_agent_context_instructions_empty_when_none(self):
+        target = _make_target(client=_make_client(), instructions=None)
+
+        assert (await target.get_agent_context()).instructions == ""
+
+    @pytest.mark.asyncio
+    async def test_agent_context_maps_tools(self):
+        target = _make_target(
+            client=_make_client(),
+            tools=[
+                {"type": "function", "name": "refund", "description": "Issue refund", "parameters": {"x": 1}},
+                {"type": "function", "function": {"name": "lookup", "description": "Find order"}},
+                {"type": "web_search"},
+            ],
+        )
+
+        ctx = await target.get_agent_context()
+
+        assert [t.name for t in ctx.tools] == ["refund", "lookup", "web_search"]
+        assert ctx.tools[0].parameters == {"x": 1}
+        assert ctx.tools[1].description == "Find order"

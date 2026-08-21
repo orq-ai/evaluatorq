@@ -13,7 +13,7 @@ from evaluatorq.common.responses import first_responses_refusal, responses_stop_
 from evaluatorq.common.retry import with_retry, without_client_retries
 from evaluatorq.common.thread_context import pipeline_metadata, thread_body_param
 from evaluatorq.common.tracing import get_trace_context_headers
-from evaluatorq.contracts import AgentContext, AgentResponse, AgentTarget, LLMCallConfig, Message
+from evaluatorq.contracts import AgentContext, AgentResponse, AgentTarget, LLMCallConfig, Message, ToolInfo
 from evaluatorq.openresponses.client import build_simulation_client
 from evaluatorq.openresponses.input_items import messages_to_responses_input
 from evaluatorq.openresponses.tracing import (
@@ -40,6 +40,24 @@ def _raw_responses_create(client: Any) -> Any | None:
     if raw_client is None or not type(raw_client).__module__.startswith('openai.'):
         return None
     return raw_client.responses.create
+
+
+def _tool_info(tool: dict[str, Any]) -> ToolInfo:
+    """Map one Responses tool dict to a ``ToolInfo`` for the attack planner.
+
+    Accepts both the flat Responses shape (``{'type': 'function', 'name': ...}``)
+    and the nested Chat Completions shape (``{'function': {'name': ...}}``);
+    callers pass either through to the SDK. Unnamed/unknown tool shapes keep
+    their ``type`` as the name rather than being dropped silently.
+    """
+    nested = tool.get('function')
+    spec: dict[str, Any] = nested if isinstance(nested, dict) else tool
+    return ToolInfo(
+        name=str(spec.get('name') or tool.get('type') or 'unknown'),
+        description=spec.get('description'),
+        parameters=spec.get('parameters'),
+        action_type=tool.get('type'),
+    )
 
 
 class OrqResponsesTarget(AgentTarget):
@@ -138,8 +156,19 @@ class OrqResponsesTarget(AgentTarget):
         return clone
 
     async def get_agent_context(self) -> AgentContext:
-        """Describe this target — the configured model is the agent key."""
-        return AgentContext(key=self.config.model, model=self.config.model)
+        """Describe this target — the configured model is the agent key.
+
+        ``instructions`` is carried through so attack planners see the persona
+        the model actually runs with; dropping it makes them plan against a
+        generic assistant. Consumers read ``instructions or system_prompt``, so
+        filling this one alone is enough.
+        """
+        return AgentContext(
+            key=self.config.model,
+            model=self.config.model,
+            instructions=self.instructions or '',
+            tools=[_tool_info(t) for t in self.tools or []],
+        )
 
     async def close(self) -> None:
         """Close the underlying HTTP client if this instance owns it.
