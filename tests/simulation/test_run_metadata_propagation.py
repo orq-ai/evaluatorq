@@ -12,6 +12,7 @@ traced via ``orq.simulation.persona_generation`` and its child LLM span.
 
 from __future__ import annotations
 
+import json
 # ruff: noqa: S101
 from types import SimpleNamespace
 from typing import Any, cast
@@ -45,20 +46,27 @@ class _FakeCompletions:
 
 
 class _FakeResponses:
-    """Captures the kwargs of the single ``parse`` call generate_structured makes.
+    """Captures the kwargs of the single raw Responses call generate_structured makes.
 
-    The generators run on the Responses API, so ``text_format`` carries the
-    schema and ``output_parsed`` carries the result.
+    The generators run on the Responses API, so ``text.format`` carries the
+    schema and ``output_text`` carries the result.
     """
 
     def __init__(self, sink: dict[str, Any], build_parsed) -> None:
         self._sink = sink
         self._build_parsed = build_parsed
 
-    async def parse(self, **kwargs: Any) -> Any:
+    async def create(self, **kwargs: Any) -> Any:
         self._sink.update(kwargs)
-        parsed = self._build_parsed(kwargs['text_format'])
-        return SimpleNamespace(output_parsed=parsed, incomplete_details=None, usage=None)
+        class _ResponseFormat:
+            def __init__(self, **fields: Any) -> None:
+                self._fields = fields
+
+            def model_dump_json(self) -> str:
+                return json.dumps(self._fields)
+
+        parsed = self._build_parsed(_ResponseFormat)
+        return SimpleNamespace(output_text=parsed.model_dump_json(), stop_reason='stop', usage=None)
 
 
 class _FakeClient:

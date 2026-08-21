@@ -5,9 +5,9 @@ generation path with a mocked LLM client, and rendering of the recommendations
 section in the Markdown / HTML exports.
 
 RES-822: generation now routes through ``common.structured_output.generate_structured``
-— ``parse()`` first, ``json_object`` (``create()``) fallback with fence-tolerant
-parsing — so the generation tests mock ``parse`` and assert on its kwargs, plus
-the fenced and malformed fallback paths.
+— the raw Responses ``create()`` leg first, then ``json_object`` fallback with
+fence-tolerant parsing — so the generation tests mock the Responses response and
+assert on its kwargs, plus the fenced and malformed fallback paths.
 """
 
 from __future__ import annotations
@@ -73,10 +73,11 @@ def _make_result(
 
 
 def _parsed_response(suggestions: list[str]) -> Any:
-    """A ``responses.parse()`` response carrying a validated model (happy path)."""
+    """A raw Responses response carrying valid structured JSON (happy path)."""
     response = MagicMock()
     response.incomplete_details = None
-    response.output_parsed = _SuggestionsLLMResponse(suggestions=suggestions)
+    response.stop_reason = 'stop'
+    response.output_text = _SuggestionsLLMResponse(suggestions=suggestions).model_dump_json()
     return response
 
 
@@ -94,17 +95,18 @@ def _schema_400() -> APIStatusError:
 
 
 def _mock_client(payload: list[str] | Exception) -> MagicMock:
-    """Client whose ``responses.parse()`` succeeds with the given suggestions, or raises.
+    """Client whose raw Responses call succeeds with the given suggestions, or raises.
 
     Generation asks for ``api='responses'``, so the Responses leg is the one
     exercised; the chat legs only run when this leg declines (see the fallback
-    tests, which make ``responses.parse`` raise a schema rejection).
+    tests, which make ``responses.create`` raise a schema rejection).
     """
     client = MagicMock()
     if isinstance(payload, Exception):
-        client.responses.parse = AsyncMock(side_effect=payload)
+        client.responses.create = AsyncMock(side_effect=payload)
     else:
-        client.responses.parse = AsyncMock(return_value=_parsed_response(payload))
+        client.responses.create = AsyncMock(return_value=_parsed_response(payload))
+    client.responses.parse = AsyncMock()
     return client
 
 
@@ -184,7 +186,7 @@ async def test_no_triggered_results_makes_no_llm_calls():
     client = _mock_client(['unused'])
     recs = await generate_recommendations([_make_result()], client, 'test-model')
     assert recs == []
-    client.responses.parse.assert_not_awaited()
+    client.responses.create.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -206,7 +208,7 @@ async def test_broken_rule_produces_targeted_recommendation():
     assert rec.triggers == ['rule_broken: leaked internal data']
     assert rec.suggestions == ['Add a system prompt rule forbidding internal data']
 
-    call_kwargs = client.responses.parse.await_args.kwargs
+    call_kwargs = client.responses.create.await_args.kwargs
     user_prompt = call_kwargs['input'][1]['content']
     assert 'leaked internal data' in user_prompt
     # Reasoning models reject non-default temperatures; omit unless asked for.
@@ -221,7 +223,7 @@ async def test_recommendation_call_inherits_run_metadata():
     with evaluatorq_pipeline('agent_simulation'), evaluatorq_run_id('sim-run-1'):
         await generate_recommendations([result], client, 'test-model')
 
-    assert client.responses.parse.await_args.kwargs['metadata'] == {
+    assert client.responses.create.await_args.kwargs['metadata'] == {
         'evaluatorq_pipeline': 'agent_simulation',
         'evaluatorq_run_id': 'sim-run-1',
     }
@@ -247,7 +249,7 @@ async def test_recommendation_call_injects_active_trace_headers(monkeypatch: pyt
 
     # The active trace wins over a stale caller traceparent, but other caller
     # headers survive.
-    assert client.responses.parse.await_args.kwargs['extra_headers'] == {
+    assert client.responses.create.await_args.kwargs['extra_headers'] == {
         'x-caller': 'preserved',
         'traceparent': 'active-trace',
         'tracestate': 'active-state',
@@ -267,7 +269,8 @@ async def test_fenced_json_object_fallback_parses():
     """parse() rejected (400) -> json_object fallback, and a fenced ```json
     payload still yields suggestions instead of dropping the section."""
     client = MagicMock()
-    client.responses.parse = AsyncMock(side_effect=_schema_400())
+    client.responses.create = AsyncMock(side_effect=_schema_400())
+    client.responses.parse = AsyncMock()
     client.chat.completions.parse = AsyncMock(side_effect=_schema_400())
     fenced = '```json\n{"suggestions": ["Add a guardrail on ticket IDs"]}\n```'
     client.chat.completions.create = AsyncMock(return_value=_fallback_response(fenced))
@@ -283,7 +286,8 @@ async def test_fenced_json_object_fallback_parses():
 async def test_malformed_fallback_is_swallowed():
     """A malformed fallback payload skips the result with a warning, no crash."""
     client = MagicMock()
-    client.responses.parse = AsyncMock(side_effect=_schema_400())
+    client.responses.create = AsyncMock(side_effect=_schema_400())
+    client.responses.parse = AsyncMock()
     client.chat.completions.parse = AsyncMock(side_effect=_schema_400())
     client.chat.completions.create = AsyncMock(return_value=_fallback_response('not json at all'))
     result = _make_result(goal_achieved=False, rules_broken=['leaked data'])
@@ -299,7 +303,7 @@ async def test_max_results_caps_llm_calls():
     results = [_make_result(goal_achieved=False, rules_broken=['r']) for _ in range(5)]
     recs = await generate_recommendations(results, client, 'test-model', max_results=2)
     assert len(recs) == 2
-    assert client.responses.parse.await_count == 2
+    assert client.responses.create.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -313,7 +317,7 @@ async def test_config_max_results_caps_llm_calls():
     )
 
     assert len(recs) == 2
-    assert client.responses.parse.await_count == 2
+    assert client.responses.create.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -343,7 +347,7 @@ async def test_config_drives_token_budget_and_prompt_budgets():
         ),
     )
 
-    kwargs = client.responses.parse.await_args.kwargs
+    kwargs = client.responses.create.await_args.kwargs
     assert kwargs['max_output_tokens'] == 123
     system, user = kwargs['input']
     assert 'a list of 1-9 concise' in system['content']
@@ -418,7 +422,8 @@ async def test_fallback_tolerates_non_string_suggestions():
     """A stray number/null in the fallback payload is coerced or dropped instead
     of dropping the whole suggestion (review fix: keep the old tolerance)."""
     client = MagicMock()
-    client.responses.parse = AsyncMock(side_effect=_schema_400())
+    client.responses.create = AsyncMock(side_effect=_schema_400())
+    client.responses.parse = AsyncMock()
     client.chat.completions.parse = AsyncMock(side_effect=_schema_400())
     sloppy = '{"suggestions": [1, "Add a guardrail", null]}'
     client.chat.completions.create = AsyncMock(return_value=_fallback_response(sloppy))
@@ -487,7 +492,7 @@ async def test_batch_runs_concurrently():
     in_flight = 0
     peak = 0
 
-    async def _slow_parse(**_kwargs: Any) -> Any:
+    async def _slow_create(**_kwargs: Any) -> Any:
         nonlocal in_flight, peak
         in_flight += 1
         peak = max(peak, in_flight)
@@ -498,7 +503,8 @@ async def test_batch_runs_concurrently():
             in_flight -= 1
 
     client = MagicMock()
-    client.responses.parse = _slow_parse
+    client.responses.create = _slow_create
+    client.responses.parse = AsyncMock()
     results = [_make_result(goal_achieved=False, rules_broken=['r']) for _ in range(5)]
 
     recs = await generate_recommendations(results, client, 'test-model')

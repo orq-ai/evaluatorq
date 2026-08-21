@@ -10,6 +10,7 @@ defect while the helper's own unit test stays green.
 
 from __future__ import annotations
 
+import json
 # ruff: noqa: S101
 from types import SimpleNamespace
 from typing import Any, cast
@@ -35,16 +36,19 @@ def test_persona_budget_scales_past_its_own_flat_cap():
 
 
 class _CapturingResponses:
-    """Answers the Responses leg with an empty result and records the kwargs."""
+    """Answers the raw Responses leg with an empty result and records the kwargs."""
 
     def __init__(self, sink: dict[str, Any]) -> None:
         self._sink = sink
 
-    async def parse(self, **kwargs: Any) -> Any:
+    async def create(self, **kwargs: Any) -> Any:
         self._sink.update(kwargs)
-        schema = kwargs['text_format']
-        empty = schema(**{name: [] for name in schema.model_fields})
-        return SimpleNamespace(output_parsed=empty, incomplete_details=None, usage=None)
+        schema = kwargs['text']['format']['schema']
+        return SimpleNamespace(
+            output_text=json.dumps({name: [] for name in schema['properties']}),
+            stop_reason='stop',
+            usage=None,
+        )
 
 
 class _CapturingClient:

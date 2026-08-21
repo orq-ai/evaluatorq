@@ -98,6 +98,33 @@ async def test_uses_parse_when_response_model_set(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.asyncio
+async def test_can_return_raw_response_while_sending_the_model_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    client = _client()
+
+    await execute_response(
+        client=client,
+        model='gpt-x',
+        messages=[{'role': 'user', 'content': 'hi'}],
+        span=None,
+        timeout_s=5.0,
+        response_model=_Verdict,
+        parse_response_model=False,
+    )
+
+    client.responses.create.assert_awaited_once()
+    client.responses.parse.assert_not_awaited()
+    assert client.responses.create.call_args.kwargs['text'] == {
+        'format': {
+            'type': 'json_schema',
+            'strict': True,
+            'name': '_Verdict',
+            'schema': _Verdict.model_json_schema(),
+        }
+    }
+
+
+@pytest.mark.asyncio
 async def test_drops_reasoning_and_retries_once_on_rejection(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
     # `logger.warning` on the rejection path uses loguru-style `{}` placeholders,

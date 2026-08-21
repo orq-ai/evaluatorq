@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from evaluatorq.common.llm_call import execute_chat_completion, execute_chat_parse, execute_response
 from evaluatorq.common.llm_client import client_routes_through_orq
-from evaluatorq.common.messages import coerce_content_text
+from evaluatorq.common.messages import coerce_content_text, first_responses_refusal
 from evaluatorq.common.model_catalogue import qualified_model
 from evaluatorq.common.retry import with_retry, without_client_retries
 from evaluatorq.common.template_engine import render_template
@@ -286,19 +286,6 @@ async def _resolve_responses_model(client: AsyncOpenAI, model: str) -> str | Non
     return await qualified_model(model, client)
 
 
-def _first_refusal(response: Any) -> str | None:
-    """The refusal text on a Responses reply, or None if it did not refuse.
-
-    A refusal arrives as a ``refusal`` content part inside an output message
-    rather than as its own field, which is why this walks the output items.
-    """
-    for item in getattr(response, 'output', None) or []:
-        for part in getattr(item, 'content', None) or []:
-            if getattr(part, 'type', None) == 'refusal':
-                return getattr(part, 'refusal', '') or ''
-    return None
-
-
 async def _responses_judge(
     *,
     client: AsyncOpenAI,
@@ -341,7 +328,7 @@ async def _responses_judge(
         # A refusal is a verdict, not a failure: the chat-parse path maps it to an
         # abstain, and the same judgement must not change classification just
         # because it went out on a different endpoint.
-        refusal = _first_refusal(response)
+        refusal = first_responses_refusal(response)
         if refusal is not None:
             payload = EvaluatorResponsePayload(value=None, abstain=True, explanation=refusal)
             return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw)

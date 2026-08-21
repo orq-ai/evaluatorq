@@ -257,12 +257,18 @@ async def execute_response(
     span: Span | None,
     timeout_s: float,
     response_model: type[BaseModel] | None = None,
+    parse_response_model: bool = True,
     temperature: float | None = None,
     max_output_tokens: int | None = None,
     inject_trace_headers: bool = True,
     extra_kwargs: dict[str, Any] | None = None,
 ) -> tuple[Any, TokenUsage | None]:
     """Execute one Responses API call — ``.parse`` with a ``response_model``, else ``.create``.
+
+    Set ``parse_response_model=False`` to send the model's strict JSON schema
+    while returning the raw ``.create()`` response. This is useful when the
+    caller must inspect response completion metadata before validating the
+    payload (the SDK's ``.parse()`` can validate and raise before returning it).
 
     The Responses counterpart of `execute_chat_completion`. Preferred for
     judges because the Orq router prices this endpoint and not Chat Completions:
@@ -282,6 +288,16 @@ async def execute_response(
     if extra_kwargs:
         params.update(extra_kwargs)
 
+    if response_model is not None and not parse_response_model:
+        params['text'] = {
+            'format': {
+                'type': 'json_schema',
+                'strict': True,
+                'name': response_model.__name__,
+                'schema': response_model.model_json_schema(),
+            }
+        }
+
     strip_known_rejected_responses_reasoning(model, params)
     apply_pipeline_metadata(params)
 
@@ -291,7 +307,7 @@ async def execute_response(
         await apply_trace_headers(params)
 
     async def _call() -> Any:
-        if response_model is not None:
+        if response_model is not None and parse_response_model:
             return await _bounded_call(client.responses.parse(text_format=response_model, **params), timeout_s)
         return await _bounded_call(client.responses.create(**params), timeout_s)
 

@@ -195,6 +195,8 @@ def _status_error(status: int, message: str) -> Any:
 def _responses_result(parsed: Any, incomplete_reason: str | None = None) -> MagicMock:
     response = MagicMock()
     response.output_parsed = parsed
+    response.output_text = '' if parsed is None else parsed.model_dump_json()
+    response.stop_reason = None
     response.incomplete_details = None if incomplete_reason is None else MagicMock(reason=incomplete_reason)
     return response
 
@@ -209,9 +211,10 @@ def _responses_client(parse_result: Any) -> MagicMock:
     """A client whose Responses leg is driven by the caller and whose chat legs succeed."""
     client = MagicMock()
     if isinstance(parse_result, BaseException):
-        client.responses.parse = AsyncMock(side_effect=parse_result)
+        client.responses.create = AsyncMock(side_effect=parse_result)
     else:
-        client.responses.parse = AsyncMock(return_value=parse_result)
+        client.responses.create = AsyncMock(return_value=parse_result)
+    client.responses.parse = AsyncMock()
     client.chat.completions.parse = AsyncMock(return_value=_no_parsed_completion())
     client.chat.completions.create = AsyncMock(return_value=_fallback_completion('{"value": "chat"}', "stop"))
     return client
@@ -240,6 +243,8 @@ async def test_responses_leg_returns_the_parsed_model_without_touching_chat() ->
     assert parsed == SampleResponse(value="ok")
     assert raw == ""
     client.chat.completions.parse.assert_not_awaited()
+    client.chat.completions.create.assert_not_awaited()
+    client.responses.parse.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -252,6 +257,7 @@ async def test_missing_responses_endpoint_degrades_to_the_chat_legs(caplog: pyte
 
     assert raw == '{"value": "chat"}'
     client.chat.completions.parse.assert_awaited_once()
+    client.chat.completions.create.assert_awaited_once()
     assert "HTTP 404" in caplog.text
 
 
@@ -265,6 +271,7 @@ async def test_schema_rejection_degrades_to_the_chat_legs(caplog: pytest.LogCapt
 
     assert raw == '{"value": "chat"}'
     client.chat.completions.parse.assert_awaited_once()
+    client.chat.completions.create.assert_awaited_once()
     assert "HTTP 400" in caplog.text
 
 
@@ -279,6 +286,7 @@ async def test_unrelated_400_raises_instead_of_being_blamed_on_the_provider() ->
         await _generate_via_responses(client)
 
     client.chat.completions.parse.assert_not_awaited()
+    client.chat.completions.create.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -291,7 +299,8 @@ async def test_unparsed_responses_output_degrades_to_the_chat_legs(caplog: pytes
 
     assert raw == '{"value": "chat"}'
     client.chat.completions.parse.assert_awaited_once()
-    assert "no parsed output" in caplog.text
+    client.chat.completions.create.assert_awaited_once()
+    assert "no output" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -302,18 +311,22 @@ async def test_responses_refusal_does_not_degrade_to_chat() -> None:
         await _generate_via_responses(client)
 
     client.chat.completions.parse.assert_not_awaited()
+    client.chat.completions.create.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_truncated_responses_output_raises_rather_than_degrading() -> None:
     # Same rule as the chat leg: the chat fallback would run at the same budget
     # and truncate again, so a cut-off payload fails loudly and actionably.
-    client = _responses_client(_responses_result(None, incomplete_reason="max_output_tokens"))
+    response = _responses_result(None)
+    response.stop_reason = 'length'
+    client = _responses_client(response)
 
     with pytest.raises(RuntimeError, match="Raise the max_tokens budget"):
         await _generate_via_responses(client)
 
     client.chat.completions.parse.assert_not_awaited()
+    client.chat.completions.create.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -338,51 +351,31 @@ async def test_chat_structural_keys_stay_reserved_on_the_responses_path() -> Non
         await _generate_via_responses(client, extra_kwargs={"messages": []})
 
 
-def _truncation_validation_error() -> BaseException:
-    """What responses.parse actually raises on a cut-off payload.
-
-    Confirmed against openai's own parser: ``responses.parse`` runs
-    ``model_validate_json`` on the text before returning, so a body cut off at
-    ``max_output_tokens`` raises a pydantic ValidationError from inside the SDK
-    and never reaches an ``incomplete_details`` check. Only a response truncated
-    with no text at all — a reasoning model that spent the budget before
-    answering — comes back as an object.
-    """
-    try:
-        SampleResponse.model_validate_json('{"value": "half a str')
-    except Exception as exc:  # noqa: BLE001
-        return exc
-    raise AssertionError('expected a ValidationError')
-
-
-def _schema_validation_error() -> BaseException:
-    try:
-        SampleResponse.model_validate_json('{"other": "ok"}')
-    except Exception as exc:  # noqa: BLE001
-        return exc
-    raise AssertionError('expected a ValidationError')
-
-
 @pytest.mark.asyncio
-async def test_truncated_responses_payload_raises_the_actionable_error() -> None:
-    # Without this the run dies on a raw pydantic ValidationError several frames
-    # away — the generators catch json.JSONDecodeError only — which reads as
-    # "the model returned malformed JSON" rather than "your budget was too small".
-    client = _responses_client(_truncation_validation_error())
+async def test_malformed_responses_payload_is_not_assumed_to_be_truncated() -> None:
+    response = _responses_result(None)
+    response.output_text = '{"value": "half a str'
+    response.stop_reason = 'stop'
+    client = _responses_client(response)
 
-    with pytest.raises(RuntimeError, match="Raise the max_tokens budget"):
+    with pytest.raises(RuntimeError, match='did not validate against SampleResponse'):
         await _generate_via_responses(client)
 
-    # No chat fallback: the same budget truncates in the same place.
+    # The payload is invalid, but there is no provider truncation signal.
     client.chat.completions.parse.assert_not_awaited()
+    client.chat.completions.create.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_schema_validation_error_is_not_misreported_as_truncation() -> None:
-    client = _responses_client(_schema_validation_error())
+    response = _responses_result(None)
+    response.output_text = '{"other": "ok"}'
+    response.stop_reason = 'stop'
+    client = _responses_client(response)
 
     with pytest.raises(RuntimeError, match='did not validate against SampleResponse') as error:
         await _generate_via_responses(client)
 
     assert 'Raise the max_tokens budget' not in str(error.value)
     client.chat.completions.parse.assert_not_awaited()
+    client.chat.completions.create.assert_not_awaited()

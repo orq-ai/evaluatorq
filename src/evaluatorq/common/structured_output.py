@@ -14,11 +14,11 @@ what made the fence-tolerant parsing necessary in the first place. A provider
 that rejects the schema form outright degrades to ``json_object`` on a second
 400, so nothing that worked before stops working.
 
-``api='responses'`` puts ``client.responses.parse(text_format=...)`` in front of
-that ladder, which the whole simulation pipeline uses so a run's spans are
-uniformly ``responses ...``. It is a leg, not a replacement: a provider without
-the endpoint, or one that names the schema form unsupported, falls through to
-everything described above.
+``api='responses'`` puts a raw ``client.responses.create()`` call carrying the
+same strict JSON schema in front of that ladder, which the whole simulation
+pipeline uses so a run's spans are uniformly ``responses ...``. It is a leg,
+not a replacement: a provider without the endpoint, or one that names the
+schema form unsupported, falls through to everything described above.
 
 Lives in ``common`` rather than ``simulation`` so both the simulation and
 red-team report code can reuse one copy (RES-822). It delegates to the canonical
@@ -35,6 +35,7 @@ from openai import APIStatusError, AsyncOpenAI, LengthFinishReasonError
 from pydantic import BaseModel, ValidationError
 
 from evaluatorq.common.llm_call import apply_pipeline_metadata, execute_response
+from evaluatorq.common.messages import first_responses_refusal
 from evaluatorq.common.retry import with_retry
 from evaluatorq.common.tracing import get_trace_context_headers, record_llm_response, with_llm_span
 
@@ -55,7 +56,7 @@ T = TypeVar('T', bound=BaseModel)
 # legs, so its reserved set is the union — a key that is safe on the endpoint
 # actually reached is not safe on the one it degrades to.
 _STRUCTURAL_KEYS = frozenset({'model', 'messages', 'response_format'})
-_STRUCTURAL_KEYS_RESPONSES = frozenset({'model', 'input', 'text_format', 'max_output_tokens'})
+_STRUCTURAL_KEYS_RESPONSES = frozenset({'model', 'input', 'text', 'text_format', 'max_output_tokens'})
 _STRUCTURAL_KEYS_BY_API = {
     'chat_completions': _STRUCTURAL_KEYS,
     'responses': _STRUCTURAL_KEYS | _STRUCTURAL_KEYS_RESPONSES,
@@ -73,25 +74,18 @@ def _looks_like_schema_rejection(exc: APIStatusError) -> bool:
     return any(kw in err_body for kw in _SCHEMA_KEYWORDS)
 
 
-def _first_responses_refusal(response: Any) -> str | None:
-    """Return the first refusal in a Responses output, if present."""
-    for item in getattr(response, 'output', None) or []:
-        for part in getattr(item, 'content', None) or []:
-            if getattr(part, 'type', None) == 'refusal':
-                return getattr(part, 'refusal', '') or ''
-    return None
+def _responses_stop_reason(response: Any) -> str | None:
+    """Return the provider's completion reason, normalizing Responses metadata."""
+    stop_reason = getattr(response, 'stop_reason', None)
+    if isinstance(stop_reason, str):
+        return stop_reason
 
-
-def _looks_like_truncated_json(exc: ValidationError) -> bool:
-    """Recognize the end-of-input validation error caused by cut-off JSON."""
-    for error in exc.errors():
-        if error.get('type') != 'json_invalid':
-            continue
-        context = error.get('ctx') or {}
-        detail = str(context.get('error') or error.get('msg') or '').lower()
-        if 'eof' in detail or 'end of input' in detail:
-            return True
-    return False
+    reason = getattr(getattr(response, 'incomplete_details', None), 'reason', None)
+    if not isinstance(reason, str):
+        return None
+    # OpenAI's Responses schema calls this max_output_tokens; some compatible
+    # routers expose the equivalent stop reason directly as ``length``.
+    return 'length' if reason == 'max_output_tokens' else reason
 
 
 # The Responses leg's per-request ceiling. A batched generation asking for tens
@@ -101,22 +95,17 @@ def _looks_like_truncated_json(exc: ValidationError) -> bool:
 _STRUCTURED_TIMEOUT_S = 300.0
 
 
-def _truncated_output_error(label: str, max_tokens: int, *, schema: str | None = None) -> RuntimeError:
-    """One message for every way this helper can be handed a cut-off payload.
+def _truncated_output_error(label: str, max_tokens: int) -> RuntimeError:
+    """Return the actionable error for a provider-reported cut-off payload.
 
     Truncated structured output is unusable and unrecoverable: the JSON stops
     mid-string, and a retry at the same budget truncates in the same place. All
     three legs raise this rather than degrading, so the user gets the one action
     that works instead of a parse error several frames away.
     """
-    detail = (
-        'the structured output was truncated, so the result is unusable'
-        if schema is None
-        else f'the reply did not validate against {schema}, which is what a truncated payload looks like'
-    )
     logger.error('%s: output truncated at the token limit (max_tokens=%s)', label, max_tokens)
     return RuntimeError(
-        f'{label}: the model hit the token limit (max_tokens={max_tokens}) and {detail}. '
+        f'{label}: the model hit the token limit (max_tokens={max_tokens}) and the structured output is unusable. '
         f'Raise the max_tokens budget passed to this call and retry.'
     )
 
@@ -166,11 +155,9 @@ async def _generate_structured_via_responses(
     here.
 
     A length-truncated response raises, matching the chat leg: a same-budget
-    retry would truncate again. Truncation surfaces two ways —
-    ``responses.parse`` validates the payload before returning, so a cut-off
-    body raises a JSON ``ValidationError`` with an end-of-input error, and only
-    a response truncated with no text at all (a reasoning model that spent the
-    budget before answering) reaches the ``incomplete_details`` check.
+    retry would truncate again. The raw response is inspected before parsing so
+    this decision uses the provider's completion metadata, never the shape of
+    the returned JSON.
     """
     async with with_llm_span(
         model=model,
@@ -189,6 +176,7 @@ async def _generate_structured_via_responses(
                     span=span,
                     timeout_s=_STRUCTURED_TIMEOUT_S,
                     response_model=response_format,
+                    parse_response_model=False,
                     temperature=temperature,
                     max_output_tokens=max_tokens,
                     extra_kwargs=extra_kwargs,
@@ -204,26 +192,25 @@ async def _generate_structured_via_responses(
                 raise
             logger.warning('%s: %s, falling back to chat.completions', label, cause)
             return None
+        if _responses_stop_reason(response) == 'length':
+            raise _truncated_output_error(label, max_tokens)
+
+        refusal = first_responses_refusal(response)
+        if refusal is not None:
+            raise RuntimeError(f'{label}: model refused to generate: {refusal}')
+
+        raw_content = getattr(response, 'output_text', '') or ''
+        if not raw_content:
+            logger.warning('%s: Responses returned no output, falling back to chat.completions', label)
+            return None
+
+        try:
+            return response_format.model_validate_json(raw_content)
         except ValidationError as exc:
-            if _looks_like_truncated_json(exc):
-                raise _truncated_output_error(label, max_tokens, schema=response_format.__name__) from exc
             logger.exception('%s: Responses output did not validate against %s', label, response_format.__name__)
             raise RuntimeError(
                 f'{label}: the Responses output did not validate against {response_format.__name__}.'
             ) from exc
-
-        if getattr(getattr(response, 'incomplete_details', None), 'reason', None) == 'max_output_tokens':
-            raise _truncated_output_error(label, max_tokens)
-
-        refusal = _first_responses_refusal(response)
-        if refusal is not None:
-            raise RuntimeError(f'{label}: model refused to generate: {refusal}')
-
-        parsed = getattr(response, 'output_parsed', None)
-        if parsed is None:
-            logger.warning('%s: Responses returned no parsed output, falling back to chat.completions', label)
-            return None
-        return cast('T', parsed)
 
 
 async def generate_structured(
@@ -242,13 +229,14 @@ async def generate_structured(
 
     ``api`` selects the endpoint tried first. The default ``chat_completions``
     runs the ladder below unchanged. ``responses`` tries
-    ``client.responses.parse(text_format=...)`` first and falls through to that
-    same ladder when the endpoint is absent, names the schema form unsupported,
-    or returns nothing parsed — so this helper's contract does not depend on the
-    provider implementing the Responses API. On the ``responses`` success path
-    the returned raw-content string is always ``""``. Structural fields are
-    reserved per endpoint, and an ``api='responses'`` call reserves both sets
-    because it may still reach the chat legs.
+    A raw ``client.responses.create()`` call carrying the strict schema goes
+    first and falls through to that same ladder when the endpoint is absent,
+    names the schema form unsupported, or returns no output — so this helper's
+    contract does not depend on the provider implementing the Responses API. On
+    the ``responses`` success path the returned raw-content string is always
+    ``""``. Structural fields are reserved per endpoint, and an
+    ``api='responses'`` call reserves both sets because it may still reach the
+    chat legs.
 
     Returns ``(parsed_model, "")`` when strict structured output succeeds, or
     ``(None, raw_content)`` when the model rejects it and we fall back to a plain
