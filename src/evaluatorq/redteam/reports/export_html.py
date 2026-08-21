@@ -13,6 +13,7 @@ from __future__ import annotations
 import operator
 from typing import TYPE_CHECKING, Any
 
+from evaluatorq.common.reports import CACHED_TOKENS_LABEL as _CACHED_TOKENS_LABEL
 from evaluatorq.common.reports import COLORS as _COLORS
 from evaluatorq.common.reports import STATUS_COLORS as _STATUS_COLORS_BASE
 from evaluatorq.common.reports import cost_coverage as _cost_coverage
@@ -1022,7 +1023,7 @@ def _render_token_usage_html(section: ReportSection) -> str:
             cache_cards.append(
                 '<div class="kpi-card">'
                 f'<div class="kpi-value">{_esc(_fmt_cached_tokens(cached_tokens, prompt_tokens))}</div>'
-                '<div class="kpi-label">Cached Input Tokens</div>'
+                f'<div class="kpi-label">{_CACHED_TOKENS_LABEL}</div>'
                 '</div>'
             )
         if cache_creation_tokens:

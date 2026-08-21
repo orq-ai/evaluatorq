@@ -48,17 +48,26 @@ def cost_coverage(priced_calls: int, calls: int) -> str:
     return ''
 
 
-def fmt_cached_tokens(cached_tokens: int, input_tokens: int) -> str:
-    """Format cached input tokens with their share of input, e.g. ``'12,345 (68% of input)'``.
+CACHED_TOKENS_LABEL = 'Cached Input Tokens'
+"""Row/card label for `fmt_cached_tokens`, shared so the two surfaces cannot drift apart."""
+
+
+def fmt_cached_tokens(cached_tokens: float, input_tokens: float) -> str:
+    """Format cached input tokens with their share of input, e.g. ``'12,345 (68% of input tokens)'``.
 
     The share is the number that answers "did caching work" — a raw count says
-    nothing without the denominator it was cached against. Omits the share when
-    ``input_tokens`` is 0: reports written before input was tracked would
-    otherwise read as a confident 0%.
+    nothing without the denominator it was cached against.
+
+    Says **of input tokens**, never bare "of input", because this row renders
+    two rows above `Total Cost`: a cached token bills at roughly a tenth of a
+    fresh one, so 68% of input cached is nowhere near 68% of spend, and the
+    provider does not break out a cached-vs-uncached cost split for us to show
+    instead. Omits the share entirely when ``input_tokens`` is 0 — the
+    denominator is missing, not zero, and dividing would raise.
     """
     if input_tokens <= 0:
-        return f'{cached_tokens:,}'
-    return f'{cached_tokens:,} ({pct(cached_tokens / input_tokens)} of input)'
+        return f'{cached_tokens:,.0f}'
+    return f'{cached_tokens:,.0f} ({pct(cached_tokens / input_tokens)} of input tokens)'
 
 
 def bar(rate: float | None, width: int = 10) -> str:

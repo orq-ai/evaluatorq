@@ -131,7 +131,7 @@ def test_token_usage_rows_share_canonical_labels_and_legacy_fallbacks() -> None:
         ['Avg Total / Conversation', '15'],
         ['Avg Input / Conversation', '10'],
         ['Avg Output / Conversation', '5'],
-        ['Cached Tokens (retrieved)', '3 (30% of input)'],
+        ['Cached Input Tokens', '3 (30% of input tokens)'],
         ['Reasoning Tokens', '2'],
     ]
     assert build_token_usage_rows({
@@ -175,7 +175,7 @@ def test_token_usage_export_sections_render_the_same_rows() -> None:
         ('Avg Total / Conversation', '15'),
         ('Avg Input / Conversation', '10'),
         ('Avg Output / Conversation', '5'),
-        ('Cached Tokens (retrieved)', '3 (30% of input)'),
+        ('Cached Input Tokens', '3 (30% of input tokens)'),
         ('Reasoning Tokens', '2'),
     ]:
         assert f'| {label} | {value} |' in markdown
@@ -196,7 +196,7 @@ def test_token_usage_exports_use_canonical_names_and_optional_details() -> None:
     for rendered in (export_markdown([result], target='t'), export_html([result], target='t')):
         assert 'Input Tokens (total)' in rendered
         assert 'Output Tokens (total)' in rendered
-        assert 'Cached Tokens (retrieved)' in rendered
+        assert 'Cached Input Tokens' in rendered
         assert 'Reasoning Tokens' in rendered
         assert 'Prompt Tokens (total)' not in rendered
         assert 'Completion Tokens (total)' not in rendered

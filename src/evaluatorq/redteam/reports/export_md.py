@@ -13,6 +13,7 @@ from __future__ import annotations
 import operator
 from typing import TYPE_CHECKING, Any
 
+from evaluatorq.common.reports import CACHED_TOKENS_LABEL as _CACHED_TOKENS_LABEL
 from evaluatorq.common.reports import bar as _bar
 from evaluatorq.common.reports import bold_bar as _bold_bar
 from evaluatorq.common.reports import center_table as _center_table
@@ -633,7 +634,7 @@ def _render_token_usage_section(section: ReportSection) -> str:
         cached_tokens = overall.get('cached_tokens', 0)
         if cached_tokens:
             metric_rows.append([
-                'Cached Input Tokens',
+                _CACHED_TOKENS_LABEL,
                 _fmt_cached_tokens(cached_tokens, overall.get('prompt_tokens', 0)),
             ])
         cache_creation_tokens = overall.get('cache_creation_tokens', 0)

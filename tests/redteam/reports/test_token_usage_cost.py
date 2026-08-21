@@ -276,7 +276,7 @@ def test_cached_input_share_renders_in_both_exports():
     report = _make_report(results)
     for rendered in (export_markdown(report), export_html(report)):
         assert 'Cached Input Tokens' in rendered
-        assert '75 (75% of input)' in rendered
+        assert '75 (75% of input tokens)' in rendered
 
 
 def test_cached_input_row_absent_when_nothing_was_cached():
