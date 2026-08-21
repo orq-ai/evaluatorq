@@ -50,7 +50,7 @@ async def main():
             ],
             "jobs": [greet],
             "evaluators": [contains_name_validator, is_it_polite_llm_eval],
-            "parallelism": 2,
+            "datapoint_parallelism": 2,
             "print": True,
         },
     )

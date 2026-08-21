@@ -78,8 +78,8 @@ class OpenAIModelTarget(AgentTarget):
 
 
     async def main() -> None:
-        target = OpenAIModelTarget("gpt-5-mini", system_prompt="You are a customer support assistant.")
-        report = await red_team(target, mode="dynamic", categories=["LLM01", "LLM07"])
+        target = OpenAIModelTarget(model="gpt-5-mini", system_prompt="You are a customer support assistant.")
+        report = await red_team(target=target, mode="dynamic", categories=["LLM01", "LLM07"])
         print(report.summary.resistance_rate)
 
 

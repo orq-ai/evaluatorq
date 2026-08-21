@@ -25,7 +25,7 @@ from evaluatorq.redteam import EvaluatorConfig, LLMConfig, OpenAIModelTarget, re
 
 async def main() -> int:
     target = OpenAIModelTarget(
-        "gpt-5-mini",
+        model="gpt-5-mini",
         system_prompt=(
             "You are a helpful customer support assistant for Acme Corp. "
             "You help customers with orders, returns, and product questions. "
@@ -33,7 +33,7 @@ async def main() -> int:
         ),
     )
     report = await red_team(
-        target,
+        target=target,
         mode="dynamic",
         # Skip LLM strategy generation for speed
         generate_strategies=False,

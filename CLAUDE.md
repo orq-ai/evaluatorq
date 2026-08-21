@@ -21,6 +21,11 @@ To read a file as it is on HEAD without touching the tree, use
 `git show HEAD:<path>`. To see only your own changes on a shared dirty tree,
 diff the paths you touched: `git diff -- <your paths>`.
 
+Processes are shared too. **Never `pkill -f` a command name** (`mkdocs serve`,
+`uvicorn`, `pytest`) — every worktree runs the same ones, so the pattern kills a
+sibling session's server. Kill the port you own: `lsof -nP -iTCP:<port> -sTCP:LISTEN`,
+then the PID.
+
 ## Quick Reference
 
 ```bash
@@ -48,8 +53,13 @@ uv run basedpyright
 # Build
 uv build
 
-# Serve the docs site locally (live-reload at http://127.0.0.1:8000/evaluatorq/)
-uv run --group docs mkdocs serve
+# Serve the docs site locally. Pick a FREE port (81xx) and check it is yours —
+# parallel worktrees serve the same path, so the default binds to whichever
+# session got there first and you end up reviewing THEIR build. Live-reload does
+# not fire in a Conductor worktree: the server keeps showing the build it
+# started with, so restart it after an edit.
+lsof -nP -iTCP:8125 -sTCP:LISTEN            # empty = free
+uv run --group docs mkdocs serve -a 127.0.0.1:8125
 
 # Build the docs site (strict — fails on warnings, as CI does)
 uv run --group docs mkdocs build --strict
@@ -245,7 +255,7 @@ do the same.
 - `OPENAI_API_KEY` — for direct OpenAI backend or pipeline LLM calls
 - `ORQ_WORKSPACE` (or `ORQ_WORKSPACE_SLUG`) — workspace slug for dashboard→Orq trace deep-links; buttons hidden when unset
 - `ORQ_UI_BASE_URL` — optional Orq UI base for deep-links (defaults to `ORQ_BASE_URL` or `https://my.orq.ai`)
-- `EVALUATORQ_APPLY_MODEL` — model for the dashboard's apply-recommendations merge (default `gpt-5.6-luna`)
+- `EVALUATORQ_APPLY_MODEL` — model for the dashboard's apply-recommendations merge (default `openai/gpt-5.6-luna`, the shared `DEFAULT_PIPELINE_MODEL`)
 
 ### Code Style
 
@@ -290,6 +300,13 @@ Read it when adding anything users choose between; **a new dimension means editi
 that file in the same PR**, or coverage checking silently stops seeing it.
 
 Rules live in the skills, not here. Both are under `.claude/skills/`.
+
+**A new docs page goes in `mkdocs.yml` twice.** Once under `nav:`, once under
+`plugins.llmstxt.sections` — the llmstxt plugin silently drops any nav page it
+does not list from `llms.txt` and `llms-full.txt` without failing the build, so
+`docs/hooks.py` fails `--strict` on the mismatch instead. The check is
+one-directional (nav → sections) and accepts globs, which is why
+`reference/evaluatorq/*.md` covers the generated API pages with one entry.
 
 **Fence every code sample in a docstring, with a language.** An indented block or an
 RST `Example::` literal reaches Pygments with no lexer and renders as grey text; nothing

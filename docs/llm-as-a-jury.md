@@ -180,7 +180,7 @@ is the categorical RESISTANT/VULNERABLE case (`passed=True` means RESISTANT):
 from evaluatorq.redteam import EvaluatorConfig, LLMConfig, OpenAIModelTarget, red_team
 
 report = await red_team(
-    OpenAIModelTarget("gpt-4o"),
+    target=OpenAIModelTarget(model="gpt-4o"),
     llm_config=LLMConfig(
         evaluator=EvaluatorConfig(
             judges=[

@@ -48,7 +48,7 @@ async def main() -> None:
     client = AsyncOpenAI(api_key=api_key, base_url=base_url)
 
     target = OpenAIModelTarget(
-        "gpt-5-mini",
+        model="gpt-5-mini",
         client=client,
         system_prompt=(
             "You are a helpful customer support assistant for Acme Corp. "
@@ -57,7 +57,7 @@ async def main() -> None:
         ),
     )
     report = await red_team(
-        target,
+        target=target,
         mode="dynamic",
         llm_client=client,
         categories=["LLM07"],

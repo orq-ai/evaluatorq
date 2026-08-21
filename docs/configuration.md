@@ -25,7 +25,7 @@ All configuration is via environment variables. No config file is required.
 | `EVALUATORQ_CAPTURE_MESSAGE_CONTENT` | No | `true` | Set to `false` or `0` to strip LLM message content (prompts and responses) from spans. Token counts, model name, and latency are still recorded. Useful when exporting to third-party backends or to avoid capturing PII. |
 | `EVALUATORQ_SPAN_MAX_TEXT_CHARS` | No | unset (no limit) | Maximum characters per span text attribute. Set a positive integer (e.g. `8192`) to truncate long strings. Unset or `0` / `-1` means capture all. |
 | `EVALUATORQ_LLM_TIMEOUT_S` | No | `60.0` | Per-LLM-call timeout in seconds. **Simulation only** — has no effect on red teaming or core evaluation. Increase for slow self-hosted endpoints. |
-| `EVALUATORQ_LLM_MAX_TOKENS` | No | `8192` | Maximum completion tokens per LLM call. **Simulation only** — has no effect on red teaming or core evaluation. Increase for reasoning models that exhaust the default budget before emitting a tool call. |
+| `EVALUATORQ_LLM_MAX_TOKENS` | No | `10000` | Maximum completion tokens per LLM call. **Simulation only** — red teaming shares the same default (`DEFAULT_TARGET_MAX_TOKENS`) but is tuned per role via `LLMConfig.max_tokens` / `EvaluatorConfig.max_tokens`, not by this variable. Increase for reasoning models that exhaust the default budget before emitting a tool call. |
 | `EVALUATORQ_REASONING_EFFORT` | No | `medium` | Reasoning effort hint passed to reasoning-capable models. **Simulation only** — has no effect on red teaming or core evaluation. Set to `""`, `none`, or `off` to omit the parameter entirely. |
 
 ## `.env` file

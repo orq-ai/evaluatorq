@@ -6,7 +6,6 @@ data and a local scorer.
 ## Install
 
 ```bash
-uv init my-evals && cd my-evals   # skip if you already have a uv project
 uv add evaluatorq
 ```
 

@@ -53,8 +53,8 @@ class PydanticAITarget(AgentTarget):
     from pydantic_ai import Agent
     from evaluatorq.integrations.pydantic_ai_integration import PydanticAITarget
 
-    agent = Agent(model, system_prompt="You are a support agent.")
-    target = PydanticAITarget(agent)
+    agent = Agent(model=model, system_prompt="You are a support agent.")
+    target = PydanticAITarget(agent=agent)
     results = await simulate(target=target, ...)
     ```
     """

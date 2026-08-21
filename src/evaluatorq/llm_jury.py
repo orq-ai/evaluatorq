@@ -26,11 +26,12 @@ from evaluatorq.common.output_adapters import (
     output_to_messages,
     output_to_text,
 )
-from evaluatorq.contracts import JURY_RAW_OUTPUT_KEY, LLMCallConfig
+from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL, JURY_RAW_OUTPUT_KEY, LLMCallConfig
 from evaluatorq.pairwise import PairwiseComparison, run_pairwise
 from evaluatorq.types import DataPoint, EvaluationResult, Evaluator, Output, ScorerParameter
 
-DEFAULT_JUDGE_MODEL = 'openai/gpt-5.4-mini'
+DEFAULT_JUDGE_MODEL = DEFAULT_PIPELINE_MODEL
+"""Judge model when the caller names neither ``model=`` nor ``judges=``."""
 
 PAIRWISE_LABELS = ['A', 'B', 'tie']
 DEFAULT_PAIRWISE_CRITERIA = (
@@ -799,7 +800,7 @@ def llm_jury_pairwise(
 
     comparator = llm_jury_pairwise(
         criteria="The answer is accurate, complete, and directly addresses the question.",
-        judges=["anthropic/claude-sonnet-4-6", "openai/gpt-5.4-mini"],
+        judges=["anthropic/claude-sonnet-4-6", "openai/gpt-5.6-luna"],
     )
     comparison = await comparator.compare(
         question="What is the capital of France?",

@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from openai import AsyncOpenAI
 
-from evaluatorq.contracts import TextOutputItem
+from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL, TextOutputItem
 
 
 def _make_report():
@@ -184,7 +184,7 @@ class TestCreateDynamicEvaluatorLlmClient:
         custom_client = MagicMock(spec=AsyncOpenAI)
         create_dynamic_evaluator(llm_client=custom_client)
         mock_cls.assert_called_once_with(
-            evaluator_model='gpt-5-mini',
+            evaluator_model=DEFAULT_PIPELINE_MODEL,
             llm_client=custom_client,
             llm_kwargs=None,
             cfg=None,
@@ -202,7 +202,7 @@ class TestCreateDynamicEvaluatorLlmClient:
 
         create_dynamic_evaluator()
         mock_cls.assert_called_once_with(
-            evaluator_model='gpt-5-mini',
+            evaluator_model=DEFAULT_PIPELINE_MODEL,
             llm_client=None,
             llm_kwargs=None,
             cfg=None,

@@ -16,25 +16,99 @@ flowchart LR
     EV --> RP["Report: resistance rate"]
 ```
 
+--8<-- "docs/_snippets/openai-direct-model.md"
+
 ## Modes
 
 - **dynamic** — an LLM generates attacks; run the categories you pick.
 - **static** — replays a fixed dataset of known attacks instead of generating
   them. Deterministic, cheap, good for CI. Runs Orq's public
   [`orq/redteam-vulnerabilities`](https://huggingface.co/datasets/orq/redteam-vulnerabilities)
-  dataset by default; pass `dataset=` to run your own.
-- **hybrid** — static seeds plus dynamic expansion.
+  dataset by default; pass `dataset=` to run your own. The
+  [static dataset cookbook](../examples/redteam/02_static_dataset.md) shows the
+  reproducible version end to end.
+- **hybrid** — static seeds plus dynamic expansion; see the
+  [hybrid mode cookbook](../examples/redteam/03_hybrid_mode.md) when you want
+  both known attacks and generated coverage.
 
 ```python
 # static mode replays Orq's public attack dataset by default
-report = await red_team(target, mode="static")
+report = await red_team(target=target, mode="static")
 
 # ...or bring your own — a local JSON file or a HuggingFace repo
-report = await red_team(target, mode="static", dataset="./my_attacks.json")
-report = await red_team(target, mode="static", dataset="hf:my-org/my-attacks")
+report = await red_team(target=target, mode="static", dataset="./my_attacks.json")
+report = await red_team(target=target, mode="static", dataset="hf:my-org/my-attacks")
 ```
 
 ## Red-team your target
+
+!!! warning "Use a sandbox or test agent"
+    Red-team attacks run the target's real tools. Do not point them at production
+    credentials or an agent that can send messages, move money, modify data, or
+    run commands unless those side effects are isolated and intentional.
+
+### Fastest first run
+
+If you prefer the CLI, start with a small static run against a test agent. Static
+mode uses the built-in attack dataset, so it is a predictable way to verify your
+setup before exploring dynamic or hybrid runs.
+
+```bash
+export ORQ_API_KEY=...
+uv add "evaluatorq[redteam]"
+eq redteam run \
+  --target agent:your-agent-key \
+  --mode static \
+  --category LLM01 \
+  --max-static-datapoints 5 \
+  --no-executive-summary \
+  --no-recommendations \
+  --report redteam-report.json \
+  --yes
+```
+
+The command writes a JSON report and exits non-zero if no attacks receive a
+verdict or evaluation coverage falls below the configured floor. See the
+[CLI reference](../cli-reference/redteam.md) for the other output formats and
+run options.
+
+### Choose a cookbook
+
+<div class="grid cards" markdown>
+
+-   :material-rocket-launch:{ .lg .middle } __Start with a smoke test__
+
+    ---
+
+    Run a small, CI-friendly check with an explicit exit-code gate.
+
+    [:octicons-arrow-right-24: `08_quick_smoke_test.py`](../examples/redteam/08_quick_smoke_test.md)
+
+-   :material-database-check:{ .lg .middle } __Make it reproducible__
+
+    ---
+
+    Replay a fixed dataset when you need stable attacks across agent versions.
+
+    [:octicons-arrow-right-24: `02_static_dataset.py`](../examples/redteam/02_static_dataset.md)
+
+-   :material-tune-variant:{ .lg .middle } __Aim attacks at your domain__
+
+    ---
+
+    Add domain context so generated attacks reflect your agent and threat model.
+
+    [:octicons-arrow-right-24: `13_attacker_instructions.py`](../examples/redteam/13_attacker_instructions.md)
+
+-   :material-file-chart-outline:{ .lg .middle } __Inspect what happened__
+
+    ---
+
+    Filter results, inspect verdicts, and export evidence from Python.
+
+    [:octicons-arrow-right-24: `07_report_inspection.py`](../examples/redteam/07_report_inspection.md)
+
+</div>
 
 === "Orq agent"
 
@@ -59,7 +133,7 @@ report = await red_team(target, mode="static", dataset="hf:my-org/my-attacks")
 
     async def main():
         report = await red_team(
-            "agent:your-agent-key",             # Orq agent, routed via ORQ_API_KEY
+            target="agent:your-agent-key",      # Orq agent, routed via ORQ_API_KEY
             mode="dynamic",
             categories=["LLM01", "LLM07"],      # prompt injection, system-prompt leakage
             max_dynamic_datapoints=5,
@@ -99,7 +173,7 @@ report = await red_team(target, mode="static", dataset="hf:my-org/my-attacks")
 
     async def main():
         target = OpenAIModelTarget(
-            "gpt-4o-mini",
+            model="gpt-4o-mini",
             system_prompt=(
                 "You are a customer support assistant for Acme Corp. "
                 "Help with orders, returns, and product questions. "
@@ -107,7 +181,7 @@ report = await red_team(target, mode="static", dataset="hf:my-org/my-attacks")
             ),
         )
         report = await red_team(
-            target,
+            target=target,
             mode="dynamic",
             categories=["LLM01", "LLM07"],      # prompt injection, system-prompt leakage
             max_dynamic_datapoints=5,
@@ -174,21 +248,21 @@ target's actual tools, memory and system prompt. Pass
 your own vulnerabilities, strategies and judges — see
 [Custom Evaluators & Frameworks](../custom-evaluators-and-frameworks.md).
 
-## Reading the report
+## Inspect results in Python
 
-`report.summary.resistance_rate` is the fraction of *evaluated* attacks the
-target withstood — higher is better. It is `None` when no attack could be
-evaluated at all (every judge call failed, e.g. a gateway guardrail rejecting
-them): there is no verdict to report, and a `0.0` there would read as "fully
-compromised" when in fact nothing was tested. Check
-`report.summary.evaluated_attacks` against `total_attacks` before trusting a
-rate. Individual results follow the same rule: `r.vulnerable` is `None`, not
-`False`, when that attack could not be evaluated.
+For the same numbers rendered as a browsable report, see
+[Reading a run in the dashboard](#reading-a-run-in-the-dashboard) below.
 
-`report.results` holds every attack result; group by
-`r.attack.vulnerability` for a per-vulnerability breakdown.
-`report.summary.by_vulnerability` contains pre-aggregated
-`VulnerabilitySummary` statistics keyed by vulnerability identifier.
+The report fields most users need are:
+
+- `report.summary.resistance_rate`: the fraction of evaluated attacks resisted;
+  higher is better. `None` means no attack received a verdict.
+- `report.summary.evaluated_attacks` and `total_attacks`: check both before
+  trusting a rate. `evaluation_coverage` and `coverage_below_minimum` expose the
+  same check for CI.
+- `report.results`: the per-attack evidence. `result.vulnerable is None` means
+  the attack was not evaluated, not that it was resisted.
+- `report.summary.by_vulnerability`: the pre-aggregated vulnerability breakdown.
 
 A datapoint that fails before its strategy can create an attack is not counted as
 an attack result. Its structured `RunError` is stored in `report.errors`, and
@@ -205,92 +279,140 @@ roll up into `report.summary.errors_by_type`, where judge failures appear under
 systematically blocked judge shows up as one named cause (`evaluation/api_status:
 40 attacks`) instead of vanishing into forty individual results.
 
-### What a run costs
+## What a run costs
 
-`report.summary.token_usage_total` covers every LLM call in a run — attack
-generation, the target, and the judge — with `calls` and `priced_calls` alongside
-the dollar figure. When those two counts differ, some call carries no price and
-the total is a floor rather than the whole bill.
+`report.summary.token_usage_total` covers usage recorded for attack generation,
+the target, and the judge. It includes `calls` and `priced_calls` alongside token
+counts and the dollar figure. If `priced_calls < calls`, some calls reported
+usage without a provider price, so the displayed cost is a lower bound. Use the
+calculator below to include the fixed setup calls in a planning estimate.
 
-A judge on the Orq router calls its Responses endpoint by default, because that
-is the endpoint the router prices. Verdicts there are schema-enforced
-(`json_schema`), so the provider produces the verdict's own keys rather than
-merely some JSON object. Pass `EvaluatorConfig(api='chat_completions')` to opt
-out; a judge on Chat Completions comes back with tokens but no price, so
-evaluatorq fills the cost in client-side from Orq's model catalogue.
+### Ballpark the cost
 
-Four conditions have to hold for the Responses default to apply: `cfg.api ==
-'responses'` (the evaluator default; `structured_output` — the `llm_jury(...,
-structured_output=False)` knob — must also be on, since the Responses path here
-is schema-only), the judge client routes through the Orq router, and the model
-appears in the catalogue and reports Responses support. Reading the catalogue
-needs a credential — the client's own `api_key` when the host was resolved from
-an injected client, otherwise `ORQ_API_KEY` from the environment. A judge
-pointed at any other endpoint — a direct OpenAI key, vLLM, a proxy — stays on
-Chat Completions, as does one whose model the catalogue does not list. Both
-layers fall back on their own: a model the router rejects on Responses moves to
-Chat Completions for the rest of the run, and a model missing from the catalogue
-stays honestly unpriced rather than reporting `$0.00`.
+Three numbers describe a run: how many setup calls it makes before attacking,
+how many attacks it runs, and how long each attack is. Everything else is fixed
+by the pipeline or by the price tier you run at.
 
-Judge calls retry on rate limits, 5xx and transport failures —
-`EvaluatorConfig(retry_count=...)` sets the budget (1 retry by default, 0 to
-disable), same semantics as `LLMConfig.retry_count`: retries after the initial
-call. It is a separate, judge-side budget from `LLMConfig.retry_count`'s
-target-side one; a client evaluatorq is given for judging has its own
-SDK-level retry disarmed for the duration so the two cannot multiply.
+<form class="cost-calculator" data-cost-calculator>
+  <div class="cost-calculator__grid">
+    <label>
+      Setup calls
+      <input type="number" name="fixed-calls" min="0" step="1" value="7">
+      <small>0 for static and replay runs</small>
+    </label>
+    <label>
+      Attacks
+      <input type="number" name="attacks" min="0" step="1" value="10">
+      <small>≤ 65 for a full sweep of one target</small>
+    </label>
+    <label>
+      Turns per attack
+      <input type="number" name="turns" min="0" step="1" value="1">
+      <small><code>max_turns</code> defaults to 5</small>
+    </label>
+  </div>
+  <label class="cost-calculator__wide">
+    Price tier
+    <select name="model">
+      <option value="frontier">Frontier — $5 / $25 per 1M</option>
+      <option value="mid" selected>Mid-tier — $2 / $10 per 1M</option>
+      <option value="cheap">Cheap — $0.50 / $2.50 per 1M</option>
+      <option value="custom">Custom — enter prices below</option>
+    </select>
+  </label>
+  <div class="cost-calculator__grid" data-custom-prices hidden>
+    <label>
+      Input price (USD / 1k tokens)
+      <input type="number" name="input-price" min="0" step="any" value="0.003">
+    </label>
+    <label>
+      Output price (USD / 1k tokens)
+      <input type="number" name="output-price" min="0" step="any" value="0.015">
+    </label>
+  </div>
+  <div class="cost-calculator__result" aria-live="polite">
+    <strong>Estimated cost: <span data-cost-total>$0.3268</span></strong>
+    <span data-cost-breakdown>37 calls · 67,000 input tokens (90% cached) · 29,000 output tokens</span>
+  </div>
+</form>
 
-#### What the totals do not include
+Call count is **setup calls + attacks × (turns × 2 + 1)**: each turn is one
+adversarial generation plus one target call, and the judge runs once after the
+turn loop, not per turn.
 
-A handful of LLM calls fall outside `report.summary.token_usage_total` (and
-outside the equivalent simulation-side totals) entirely — real spend that no
-total, floor or otherwise, reflects. Each is a deliberate scope call, not an
-oversight left in place by accident:
+**One attack is one strategy against one vulnerability**, not one category — a
+category contributes several. The count for a run is the sum, over each selected
+category, of the registry strategies that apply to the target plus
+`generated_strategy_count` (default 2), then capped by `max_per_category` and
+`max_dynamic_datapoints`. A full dynamic sweep of one target therefore tops out
+at **65**: 45 registry strategies across 10 categories, plus 2 generated each.
+Capability filtering only removes strategies, so 65 is a ceiling; multiple
+targets multiply it. The run plan shown before datapoint generation carries the
+exact count, so you never have to guess for a run you are about to start.
 
-- **Blackbox capability classification** (`redteam/adaptive/blackbox_classifier.py`)
-  — the judge call that infers an agent's capabilities from probe transcripts
-  extracts no usage. `classify_agent_capabilities_blackbox` returns
-  `BlackboxAgentCapabilities`, which has no usage field, and the function is
-  not currently wired into any pipeline (exported but uncalled outside tests).
-- **Structured-output generation** (`common/structured_output.py`,
-  `simulation/generators/first_message_generator.py`) — persona, scenario, and
-  first-message generation for simulated users extract no usage from either
-  the primary `parse()` call or the `json_object` fallback. The shared
-  `generate_structured` helper is called from 11 sites across the simulation
-  generators, `traces.py`, and both report `recommendations.py` modules, none
-  of which track usage today.
-- **LLM-generated recommendations and executive summaries**
-  (`redteam/reports/recommendations.py`, `simulation/reports/recommendations.py`,
-  `common/reports/executive_summary.py`) — these are opt-in post-processing
-  steps (`generate_focus_area_recommendations` on the red-team side,
-  `generate_recommendations` on the simulation side, and
-  `generate_executive_summary`) that run
-  after a report's usage summary is already finalized. Folding their usage in
-  would mean either widening a public result type or maintaining the
-  documented `token_usage_by_source` sums-to `token_usage_total` invariant
-  across a new source category — both out of scope for this pass.
-- **Adversarial generation calls that discard their priced `Usage`**
-  (`redteam/adaptive/attack_generator.py`, `capability_classifier.py`,
-  `objective_generator.py`) — these already call `execute_chat_parse`, so the
-  call itself is priced, but each site discards the returned `Usage` with
-  `response, _ = await execute_chat_parse(...)` because its function returns a
-  bare parsed model (`ToolAnalysis`, `ResourceCapabilityInference`,
-  `ToolCapabilitiesResponse`, `GeneratedObjectives`) with no usage field.
-  Real spend, uncounted.
-- **Target-side usage from agent and framework backends** — these feed
-  `token_usage_total` unpriced, so `priced_calls < calls` on a run against any
-  of them is expected, not a bug:
-    - The **ORQ agent target** (`redteam/backends/orq.py`) accumulates usage
-      across pending-tool-call continuations with no `price_usage` call. An
-      agent run can fan out over several models per turn, so client-side
-      pricing may genuinely not be possible here even in principle.
-    - The **LangGraph** (`integrations/langgraph_integration/target.py`),
-      **OpenAI Agents SDK** (`integrations/openai_agents_integration/target.py`),
-      and **Vercel AI SDK** (`integrations/vercel_ai_sdk_integration/target.py`)
-      targets all extract token counts from the framework's own usage metadata
-      but attach no cost fields.
-    - A **custom callable target**'s usage, normalized by
-      `redteam/runtime/jobs.py`'s `_normalize_usage`, passes through
-      `TokenUsage.extract` the same way — counted, unpriced.
+**Setup calls** are the ones that happen before and after the attack loop. The
+default of 7 is a dynamic run against one tool-bearing target with the standard
+report options on:
+
+| Stage | Calls |
+|---|---|
+| Resource inference | 1 per target |
+| Tool classification | 1 per target, only when the target exposes tools |
+| Strategy generation | ~1 per selected vulnerability or unresolved category, batched (more than eight objectives split across calls) |
+| Executive summary | 1, best-effort |
+| Recommendations | 1 per *selected top* focus area — up to `max_areas`, default 5 |
+
+Set it to **0** for static and replay runs: a replay selects nothing, so
+capability classification is skipped entirely. The CLI quickstart above also
+disables strategy generation, recommendations, and the executive summary, so its
+baseline is 0 too. Classification is skipped whenever no LLM client or
+credentials resolve.
+
+The token model behind the dollar figure is a ballpark, not a knob — these
+values are fixed:
+
+- **1,000 tokens per turn, per side.** Each turn call emits one block and the
+  transcript grows by one block, so input cost is quadratic in turns — which is
+  why long multi-turn attacks cost more than the call count suggests.
+- **90% cache hit rate** on the attack transcript, billed at **0.1× the base
+  input price** — the standard cached-read rate for the models listed. A run
+  that never repeats a prefix pays more than this estimate.
+- **One judge call per attack**, reading the finished transcript and emitting
+  ~200 tokens. A jury multiplies that by panel size × repetitions; the judges do
+  not extend the transcript for each other, so five judges cost five reads of
+  the same transcript, not five compounding ones.
+- **Setup calls are priced at the full input rate**, one block each way. They
+  share no prefix with the attack transcript, so no cache discount applies.
+- **Round price tiers, not named models.** Frontier is the flagship tier
+  (Claude Opus, GPT-5.6-terra); mid-tier is the workhorse most runs use; cheap
+  is the small-and-fast tier (Gemini Flash, GPT-5.6-luna). A named-model list
+  goes stale on every provider release, and a planning estimate does not need
+  the third significant figure — pick **Custom** when you need an exact one.
+  Regional deployments run above these rates: Orq's EU entries carry roughly a
+  10% uplift. At runtime evaluatorq prices calls from the live Orq `/v2/models`
+  catalogue, so reported costs use your actual model and region, not this
+  estimate.
+
+Content-filter retries on the attacker turn are real billed calls and are not in
+this estimate. Actual spend varies with prompt and completion length.
+
+If you want separate attacker and evaluator model settings rather than one
+default model, see the [`11_redteam_config.py` cookbook](../examples/redteam/11_redteam_config.md).
+
+### What the totals do not include
+
+`token_usage_total` records the calls the run makes on the attack path. Setup and
+post-processing calls are real spend that lands outside it:
+
+- Capability classification (resource inference, tool classification) and
+  blackbox target classification.
+- Strategy and objective generation.
+- Structured-output retries and the `json_object` fallback re-request.
+- Recommendations, trace condensing, and the executive summary.
+- Target-side usage, when the backend does not report it back.
+
+If `priced_calls < calls` in the summary, some counted calls had no provider
+price either, so the dollar figure is a lower bound on a subset.
 
 ## In CI
 
@@ -299,7 +421,7 @@ resistance rate, failing the build if the target regresses:
 
 ```python
 report = await red_team(
-    OpenAIModelTarget("gpt-4o-mini", system_prompt="..."),
+    target=OpenAIModelTarget(model="gpt-4o-mini", system_prompt="..."),
     mode="static",                 # replay a fixed dataset — deterministic, cheap
     categories=["LLM01", "LLM07"],
     max_static_datapoints=10,
@@ -309,52 +431,58 @@ assert rate is not None, "no attack could be evaluated — the target was not te
 assert rate >= 0.9, f"resistance {rate:.0%} below the 0.9 gate"
 ```
 
-The `is not None` check is the part people forget: without it, a run where every
-judge call was rejected produces no rate at all and the gate would crash (or, in
-older versions, silently pass a `0.0`). `eq redteam run` applies the same rule —
-it exits `1` when attacks ran but not one of them could be scored
-(`report.summary.no_verdict`: `total_attacks > 0` and `evaluated_attacks == 0`),
-so a CLI-driven gate fails loudly too. A run with zero attacks (an empty
-category filter, say) is not this condition and does not trigger it.
+The `is not None` check matters: a run where every judge call failed has no
+honest rate. `eq redteam run` exits `1` when attacks ran but none could be
+scored (`report.summary.no_verdict`).
 
-!!! warning "Coverage gate — a run under 80% evaluated now fails, not just warns"
-    `EvaluatorConfig.min_evaluation_coverage` (default **`0.8`**) is a run-level
-    floor on top of `no_verdict`: even when *some* attacks got a verdict,
-    `eq redteam run` exits `1` if fewer than 80% of attacks did
-    (`report.summary.coverage_below_minimum`). **This is a behaviour change** —
-    a run that finished at, say, 79% evaluation coverage used to exit `0` with a
-    warning; it now exits `1`. If you wire `eq redteam run` into CI, a flaky
-    judge/gateway that drops just over a fifth of verdicts will now fail the
-    build. Pass `--min-evaluation-coverage 0` (or set
-    `min_evaluation_coverage=None` on `EvaluatorConfig`) to restore the old
-    warn-only behaviour. Zero coverage (`no_verdict`) always fails regardless
-    of this setting — it isn't a case the floor can raise or lower.
-
-    This is distinct from `EvaluatorConfig.min_successful_judges` (default `1`),
-    which is a **per-attack** quorum: it decides whether one attack's jury panel
-    produced enough decisive votes to reach *that attack's* verdict, and a
-    quorum miss is exactly what produces an unevaluated attack.
-    `min_evaluation_coverage` is the **run-level** floor on how many such
-    unevaluated attacks the whole run can tolerate before its rates are
-    considered untrustworthy. Tightening `min_successful_judges` makes more
-    individual attacks fall through as unevaluated; tightening
-    `min_evaluation_coverage` makes the run less tolerant of however many do.
-
-    Set it from either surface: `eq redteam run --min-evaluation-coverage 0.5`
-    on the CLI (pass `0` for warn-only), or
-    `red_team(llm_config=LLMConfig(evaluator=EvaluatorConfig(min_evaluation_coverage=...)))`
-    in Python (`None` there is warn-only).
-    The Python API itself does not raise on this condition — `red_team()` only
-    appends a `pipeline_warnings` entry and logs; only the `eq redteam run` CLI
-    command turns it into a nonzero exit. A caller using the Python API for its
-    own CI gate should check `report.summary.coverage_below_minimum` explicitly,
-    the same way it already checks `resistance_rate is not None` above.
+!!! warning "Gate on coverage as well as resistance"
+    `EvaluatorConfig.min_evaluation_coverage` defaults to **0.8**. The CLI exits
+    `1` when `report.summary.coverage_below_minimum` is true. The Python API
+    returns the report, so a Python CI gate should check both
+    `summary.no_verdict` / `summary.coverage_below_minimum` and
+    `summary.resistance_rate` before accepting the run.
 
 The runnable smoke example
 ([`08_quick_smoke_test.py`](../examples/redteam/08_quick_smoke_test.md)) wraps
-this same pattern.
+this same pattern; the [report inspection cookbook](../examples/redteam/07_report_inspection.md)
+shows how to consume the resulting JSON in Python.
 
---8<-- "docs/_snippets/dashboard-tip.md"
+## Reading a run in the dashboard
+
+Runs are saved to `.evaluatorq/runs/<name>_<timestamp>.json` by default
+(`--save none` skips the file; `--save detail` also keeps per-stage artifacts
+in `--artifacts-dir`), and `eq dashboard` browses those files locally — no
+external service:
+
+```bash
+uv add "evaluatorq[dashboard]"
+
+eq dashboard                                              # browse every saved run
+eq dashboard .evaluatorq/runs/red-team_<timestamp>.json   # deep-link to one report
+```
+
+Land on the cross-surface overview, pick the run from **Red Team**, then work
+down the report tabs from headline to evidence:
+
+| Tab | What it answers |
+|---|---|
+| **Overview** | Executive summary, resistance rate and ASR, severity split |
+| **Agents** | Per-target ASR and discovered tools, skills and knowledge |
+| **Focus areas** | Fixes ranked by `success rate × avg severity`, with remediations |
+| **Breakdowns** | Attack success per framework category, worst first |
+| **Attacks** | Every attack, expandable to the judge verdict and transcript |
+| **Usage** | Tokens and API calls per agent |
+| **Config** | What was tested — and what was *not* |
+
+Two traps worth knowing before you read a number: the resistance rate covers
+only the categories this run attacked (check **Config** for the skipped ones),
+and it is measured over *evaluated* attacks, so failed judge calls drop out of
+the denominator rather than counting as resisted.
+
+The tab-by-tab walkthrough, with screenshots, lives in the Dashboard reference:
+[Reading a red-team run](../dashboard.md#reading-a-red-team-run). See also
+[filters](../dashboard.md#filters), [trace links](../dashboard.md#orq-trace-links)
+and [downloads](../dashboard.md#downloads).
 
 ## External agent frameworks
 
@@ -370,8 +498,11 @@ from langgraph.prebuilt import create_react_agent
 from evaluatorq.integrations.langgraph_integration import LangGraphTarget
 from evaluatorq.redteam import red_team
 
-graph = create_react_agent(ChatOpenAI(model="gpt-4o-mini"), tools=[...], prompt="...")
-report = await red_team(LangGraphTarget(graph), categories=["LLM01", "ASI01"])
+graph = create_react_agent(model=ChatOpenAI(model="gpt-4o-mini"), tools=[...], prompt="...")
+report = await red_team(
+    target=LangGraphTarget(graph=graph),
+    categories=["LLM01", "ASI01"],
+)
 ```
 
 | Framework | Wrapper | Extra | Runnable example |

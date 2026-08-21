@@ -52,14 +52,14 @@ def build_agent() -> object:
     from pydantic_ai.providers.openai import OpenAIProvider
 
     model = OpenAIChatModel(
-        AGENT_MODEL,
+        model_name=AGENT_MODEL,
         provider=OpenAIProvider(
             base_url=os.environ.get("OPENAI_BASE_URL"),
             api_key=os.environ["OPENAI_API_KEY"],
         ),
     )
     agent = Agent(
-        model,
+        model=model,
         system_prompt=(
             "You are a customer support agent for an online store. "
             "Use the get_order_status tool to look up orders. "
@@ -87,7 +87,7 @@ async def main() -> None:
     if not os.getenv("ORQ_API_KEY"):
         raise SystemExit("ORQ_API_KEY is not set - needed for the UserSimulator and Judge LLMs")
 
-    target = PydanticAITarget(build_agent())
+    target = PydanticAITarget(agent=build_agent())
 
     persona = Persona(
         name="Curious Shopper",

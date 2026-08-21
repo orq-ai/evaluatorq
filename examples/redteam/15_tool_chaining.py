@@ -89,7 +89,7 @@ async def main() -> None:
     # generate_strategies=False keeps the run to the hardcoded ASI02 strategies so the
     # tool-chaining strategy is exercised directly.
     report = await red_team(
-        target,
+        target=target,
         mode="dynamic",
         vulnerabilities=["tool_misuse"],
         max_turns=4,

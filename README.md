@@ -86,7 +86,7 @@ async def main():
         data=data,
         jobs=[agent_v1, agent_v2],
         evaluators=[string_contains_evaluator()],
-        parallelism=3,
+        datapoint_parallelism=3,
     )
 
 
@@ -156,7 +156,7 @@ Findings come back ranked by `risk = attack success rate × average severity`, e
 
 ### What a run costs
 
-Measured wall clock and token counts from two runs against Orq-hosted agents, attacked and judged by `gpt-5-mini` at `parallelism=10`:
+Measured wall clock and token counts from two runs against Orq-hosted agents, attacked and judged by `gpt-5-mini` at `datapoint_parallelism=10`:
 
 | Run | Attacks | Wall clock | Tokens | Tokens per attack |
 |---|---|---|---|---|
@@ -164,6 +164,8 @@ Measured wall clock and token counts from two runs against Orq-hosted agents, at
 | Dynamic, 3 categories, 1 agent | 10 | 2m 12s | 88k | 9k |
 
 Attacks run concurrently, so wall clock tracks the slowest attack far more than the attack count — quadrupling the sweep cost twelve seconds. Budget a few cents for a run this size at `gpt-5-mini` prices; roughly 40% of the tokens are the judge's, and both the attacker and judge models are configurable, so pointing them at a cheaper model moves the bill directly. Two runs is not a benchmark — treat these as an order of magnitude.
+
+To price a run you have not made yet, the [cost calculator](https://orq-ai.github.io/evaluatorq/guides/red-teaming/#ballpark-the-cost) takes the three numbers that vary — setup calls, attacks, turns — and a price tier.
 
 → [Red teaming guide](https://orq-ai.github.io/evaluatorq/guides/red-teaming/) ·
 [Intro notebook](examples/red_teaming_intro.ipynb) ·

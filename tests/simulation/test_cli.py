@@ -26,6 +26,7 @@ from evaluatorq.simulation.cli import (
     _write_report,
     app,
 )
+from evaluatorq.simulation.types import DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import build_simulation_run as _build_simulation_run
 
 class _OfflineCliRunner(CliRunner):
@@ -1696,7 +1697,7 @@ def test_generate_datapoints_roundtrips_through_simulate_loader(tmp_path: Path) 
     assert result.exit_code == 0, result.output
     # The Generate Plan box surfaces the resolved provider + model (beats 1+2).
     assert 'Generate Plan' in result.stderr
-    assert 'OpenAI-compatible' in result.stderr and 'openai/gpt-5.4-mini' in result.stderr
+    assert 'OpenAI-compatible' in result.stderr and DEFAULT_MODEL in result.stderr
     loaded = load_datapoints_from_jsonl(str(out_file))
     assert [dp.id for dp in loaded] == ["dp-0", "dp-1"]  # id round-trips (not re-fabricated)
     assert [dp.persona.name for dp in loaded] == ["User0", "User1"]
@@ -2059,7 +2060,7 @@ def test_simulate_yes_exits_clean(tmp_path: Path) -> None:
         )
 
     assert result.exit_code == 0, result.output
-    assert 'Using for generations: OpenAI-compatible · openai/gpt-5.4-mini' in result.stderr
+    assert f'Using for generations: OpenAI-compatible · {DEFAULT_MODEL}' in result.stderr
 
 
 def test_run_yes_exits_clean(tmp_path: Path) -> None:
@@ -2086,7 +2087,7 @@ def test_run_yes_exits_clean(tmp_path: Path) -> None:
         )
 
     assert result.exit_code == 0, result.output
-    assert 'Using for generations: OpenAI-compatible · openai/gpt-5.4-mini' in result.stderr
+    assert f'Using for generations: OpenAI-compatible · {DEFAULT_MODEL}' in result.stderr
 
 
 def test_export_md_includes_stored_recommendations(tmp_path):

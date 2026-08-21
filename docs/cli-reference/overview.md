@@ -15,9 +15,8 @@ Subcommands are registered at startup. `eq redteam` requires the `redteam` extra
     `eq dashboard`. The canonical invocation scans a run directory — `eq dashboard`
     browses both default stores (red team + simulation), and `eq dashboard
     .evaluatorq/sim-runs` scopes to simulation. Passing a single JSON report file
-    is an optional direct deep-link. The legacy `eq redteam ui` / `eq sim ui`
-    Streamlit commands remain callable but are deprecated. See
-    [Dashboard](../dashboard.md) and [Simulation](simulation.md).
+    is an optional direct deep-link. See [Dashboard](../dashboard.md) and
+    [Simulation](simulation.md).
 
 Two command groups have their own pages:
 

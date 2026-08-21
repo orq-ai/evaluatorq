@@ -1,0 +1,6 @@
+!!! warning "Going OpenAI-direct? Override the model default"
+    Every model default is `openai/gpt-5.6-luna` — provider-prefixed, because the
+    default route is the Orq router, which resolves `provider/model`. With only
+    `OPENAI_API_KEY` set, calls go straight to OpenAI, which does **not** know that
+    id and rejects it. Pass the bare `gpt-5.6-luna` (or any other OpenAI model id)
+    on every model flag you use.

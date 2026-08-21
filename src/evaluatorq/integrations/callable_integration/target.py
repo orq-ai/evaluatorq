@@ -82,7 +82,7 @@ class CallableTarget(AgentTarget):
 
     # Pass to simulation or red teaming
     results = await simulate(target=target, ...)
-    report = await red_team(target)
+    report = await red_team(target=target)
     ```
     """
 

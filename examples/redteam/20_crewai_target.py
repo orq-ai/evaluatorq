@@ -49,9 +49,9 @@ def make_crew() -> Crew:
 
 
 async def main() -> None:
-    target = CrewAITarget(make_crew(), crew_factory=make_crew)
+    target = CrewAITarget(crew=make_crew(), crew_factory=make_crew)
     report = await red_team(
-        target,
+        target=target,
         mode="dynamic",
         categories=["LLM01", "LLM07"],  # prompt injection + system-prompt leakage
         max_dynamic_datapoints=3,
