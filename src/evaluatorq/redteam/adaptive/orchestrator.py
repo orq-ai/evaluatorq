@@ -12,7 +12,7 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from inspect import signature
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 from openai import AsyncOpenAI
@@ -26,6 +26,7 @@ from evaluatorq.common.content_filter import (
     regenerate_on_content_filter,
 )
 from evaluatorq.common.llm_call import execute_chat_completion
+from evaluatorq.common.prompt_cache import apply_cache_breakpoints, caching_applies
 from evaluatorq.common.sanitize import xml_escape
 from evaluatorq.common.target_call import call_target_with_retry, default_map_error
 from evaluatorq.common.tracing import set_span_attrs, truncate_for_span
@@ -645,13 +646,31 @@ class MultiTurnOrchestrator:
                     attack_response: Any = None
                     max_attempts = max(1, self._cfg.max_content_filter_retries + 1)
 
+                    # Anthropic caches nothing without an explicit breakpoint, and this loop
+                    # replays a growing append-only transcript. Recomputed per turn against
+                    # the live list: `apply_cache_breakpoints` returns a marked copy, so one
+                    # hoisted above the loop would freeze the turn-1 snapshot and send it for
+                    # the rest of the attack. volatile_tail=0 — nothing here is rebuilt, the
+                    # turn loop only appends (see common/prompt_cache.py).
+                    # The cast is the same accommodation `redteam/backends/openai.py` makes:
+                    # the helpers speak plain dicts, the transcript is annotated with the
+                    # OpenAI param union, and `list` is invariant. It is deliberately taken
+                    # on a per-turn local — `adversarial_messages` keeps its annotation, so
+                    # reassigning the marked copy onto it stays a type error.
+                    raw_messages = cast('list[dict[str, Any]]', adversarial_messages)
+                    sent_messages = (
+                        apply_cache_breakpoints(raw_messages, volatile_tail=0)
+                        if caching_applies(self.llm_client, self.model)
+                        else raw_messages
+                    )
+
                     # Loop vars are bound as eager defaults (_turn/_strategy/_messages) so the
                     # closure doesn't capture the mutating loop variables (avoids B023).
                     async def _generate_attack_turn(
                         attempt: int,
                         _turn=turn,
                         _strategy=strategy,
-                        _messages=adversarial_messages,
+                        _messages=sent_messages,
                         _timeout=llm_timeout_s,
                     ) -> Any:
                         # One adversarial generation. Owns its span + per-attempt token
