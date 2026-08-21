@@ -131,7 +131,7 @@ def test_token_usage_rows_share_canonical_labels_and_legacy_fallbacks() -> None:
         ['Avg Total / Conversation', '15'],
         ['Avg Input / Conversation', '10'],
         ['Avg Output / Conversation', '5'],
-        ['Cached Tokens (retrieved)', '3'],
+        ['Cached Tokens (retrieved)', '3 (30% of input)'],
         ['Reasoning Tokens', '2'],
     ]
     assert build_token_usage_rows({
@@ -175,7 +175,7 @@ def test_token_usage_export_sections_render_the_same_rows() -> None:
         ('Avg Total / Conversation', '15'),
         ('Avg Input / Conversation', '10'),
         ('Avg Output / Conversation', '5'),
-        ('Cached Tokens (retrieved)', '3'),
+        ('Cached Tokens (retrieved)', '3 (30% of input)'),
         ('Reasoning Tokens', '2'),
     ]:
         assert f'| {label} | {value} |' in markdown

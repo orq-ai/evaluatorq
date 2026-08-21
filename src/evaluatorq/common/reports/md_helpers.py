@@ -48,6 +48,19 @@ def cost_coverage(priced_calls: int, calls: int) -> str:
     return ''
 
 
+def fmt_cached_tokens(cached_tokens: int, input_tokens: int) -> str:
+    """Format cached input tokens with their share of input, e.g. ``'12,345 (68% of input)'``.
+
+    The share is the number that answers "did caching work" — a raw count says
+    nothing without the denominator it was cached against. Omits the share when
+    ``input_tokens`` is 0: reports written before input was tracked would
+    otherwise read as a confident 0%.
+    """
+    if input_tokens <= 0:
+        return f'{cached_tokens:,}'
+    return f'{cached_tokens:,} ({pct(cached_tokens / input_tokens)} of input)'
+
+
 def bar(rate: float | None, width: int = 10) -> str:
     """Render a Unicode block-character progress bar with a numeric percentage.
 

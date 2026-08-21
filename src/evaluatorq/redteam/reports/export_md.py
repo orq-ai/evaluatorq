@@ -18,6 +18,7 @@ from evaluatorq.common.reports import bold_bar as _bold_bar
 from evaluatorq.common.reports import center_table as _center_table
 from evaluatorq.common.reports import cost_coverage as _cost_coverage
 from evaluatorq.common.reports import details_block as _details_block
+from evaluatorq.common.reports import fmt_cached_tokens as _fmt_cached_tokens
 from evaluatorq.common.reports import fmt_cost as _fmt_cost
 from evaluatorq.common.reports import md_table as _md_table
 from evaluatorq.common.reports import truncate as _truncate
@@ -629,6 +630,12 @@ def _render_token_usage_section(section: ReportSection) -> str:
             ['Completion Tokens', f'{overall.get("completion_tokens", 0):,}'],
             ['API Calls', f'{overall.get("calls", 0):,}'],
         ]
+        cached_tokens = overall.get('cached_tokens', 0)
+        if cached_tokens:
+            metric_rows.append([
+                'Cached Input Tokens',
+                _fmt_cached_tokens(cached_tokens, overall.get('prompt_tokens', 0)),
+            ])
         cache_creation_tokens = overall.get('cache_creation_tokens', 0)
         if cache_creation_tokens:
             metric_rows.append(['Cache-Write Tokens', f'{cache_creation_tokens:,}'])

@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
     from typing import Any
 
-from evaluatorq.common.reports import cost_coverage, fmt_cost
+from evaluatorq.common.reports import cost_coverage, fmt_cached_tokens, fmt_cost
 from evaluatorq.simulation.token_usage import token_value
 
 
@@ -34,7 +34,8 @@ def build_token_usage_rows(data: Mapping[str, Any]) -> list[list[str]]:
         rows.append(['Usage Coverage', f'unknown for {unknown} {label}'])
     cached = token_value(data, 'cached_tokens')
     if cached:
-        rows.append(['Cached Tokens (retrieved)', f'{cached:,}'])
+        input_tokens = token_value(data, 'input_tokens', 'prompt_tokens')
+        rows.append(['Cached Tokens (retrieved)', fmt_cached_tokens(int(cached), int(input_tokens))])
     cache_creation = token_value(data, 'cache_creation_tokens')
     if cache_creation:
         rows.append(['Cache-Write Tokens', f'{cache_creation:,}'])
