@@ -17,6 +17,7 @@ from openai import BadRequestError
 
 from evaluatorq.common.llm_limit import llm_slot
 from evaluatorq.common.model_catalogue import price_usage
+from evaluatorq.common.responses import responses_text_config
 from evaluatorq.common.thread_context import pipeline_metadata
 from evaluatorq.common.tracing import (
     get_trace_context_headers,
@@ -257,12 +258,18 @@ async def execute_response(
     span: Span | None,
     timeout_s: float,
     response_model: type[BaseModel] | None = None,
+    response_text_format: type[BaseModel] | None = None,
     temperature: float | None = None,
     max_output_tokens: int | None = None,
     inject_trace_headers: bool = True,
     extra_kwargs: dict[str, Any] | None = None,
 ) -> tuple[Any, TokenUsage | None]:
     """Execute one Responses API call — ``.parse`` with a ``response_model``, else ``.create``.
+
+    Set ``response_text_format`` to send a model's strict JSON schema while
+    returning the raw ``.create()`` response. This is useful when the caller
+    must inspect response completion metadata before validating the payload
+    (the SDK's ``.parse()`` can validate and raise before returning it).
 
     The Responses counterpart of `execute_chat_completion`. Preferred for
     judges because the Orq router prices this endpoint and not Chat Completions:
@@ -281,6 +288,11 @@ async def execute_response(
         params['max_output_tokens'] = max_output_tokens
     if extra_kwargs:
         params.update(extra_kwargs)
+
+    if response_model is not None and response_text_format is not None:
+        raise ValueError('response_model and response_text_format are mutually exclusive')
+    if response_text_format is not None:
+        params['text'] = responses_text_config(response_text_format)
 
     strip_known_rejected_responses_reasoning(model, params)
     apply_pipeline_metadata(params)

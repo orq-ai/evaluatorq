@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from evaluatorq.common import llm_call
 from evaluatorq.common.llm_call import execute_response
+from evaluatorq.common.responses import responses_text_config
 
 
 class _Verdict(BaseModel):
@@ -95,6 +96,27 @@ async def test_uses_parse_when_response_model_set(monkeypatch: pytest.MonkeyPatc
     kwargs = client.responses.parse.call_args.kwargs
     assert kwargs['text_format'] is _Verdict
     assert kwargs['model'] == 'gpt-x'
+
+
+@pytest.mark.asyncio
+async def test_can_return_raw_response_while_sending_the_model_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    client = _client()
+
+    await execute_response(
+        client=client,
+        model='gpt-x',
+        messages=[{'role': 'user', 'content': 'hi'}],
+        span=None,
+        timeout_s=5.0,
+        response_text_format=_Verdict,
+    )
+
+    client.responses.create.assert_awaited_once()
+    client.responses.parse.assert_not_awaited()
+    text_config = client.responses.create.call_args.kwargs['text']
+    assert text_config == responses_text_config(_Verdict)
+    assert text_config['format']['schema']['additionalProperties'] is False
 
 
 @pytest.mark.asyncio

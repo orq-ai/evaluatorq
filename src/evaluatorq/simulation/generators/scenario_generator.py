@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel
 
 from evaluatorq.common.sanitize import delimit
+from evaluatorq.common.structured_output import token_budget_for_items
 from evaluatorq.simulation.types import (
     DEFAULT_MODEL,
     Criterion,
@@ -25,6 +26,19 @@ logger = logging.getLogger(__name__)
 _TEMPERATURE_CREATIVE = 0.8
 _TEMPERATURE_BALANCED = 0.7
 _TEMPERATURE_EDGE_CASE = 0.9
+
+# A generated scenario costs roughly 300-400 output tokens; a flat cap truncated the
+# structured output (unrecoverable LengthFinishReasonError) once a caller asked for
+# ~15+ scenarios in one call. Every method here that takes a caller-controlled
+# count uses this, including the edge-case, boundary and security variants — they
+# take the same kind of count and truncate the same way.
+_TOKENS_PER_SCENARIO = 500
+_MIN_SCENARIO_TOKENS = 6000
+
+
+def _scenario_token_budget(num_scenarios: int) -> int:
+    return token_budget_for_items(num_scenarios, per_item=_TOKENS_PER_SCENARIO, minimum=_MIN_SCENARIO_TOKENS)
+
 
 _SCENARIO_GENERATOR_PROMPT = """You are an expert test scenario designer for AI agent evaluation. Create realistic, testable scenarios that thoroughly evaluate agent capabilities.
 
@@ -268,8 +282,9 @@ Return ONLY a JSON array, no other text."""
                     messages=messages,
                     response_format=ScenarioListResponse,
                     temperature=_TEMPERATURE_CREATIVE,
-                    max_tokens=6000,
+                    max_tokens=_scenario_token_budget(num_scenarios),
                     label='ScenarioGenerator.generate',
+                    api='responses',
                 )
 
                 if parsed is not None:
@@ -345,8 +360,9 @@ Return ONLY a JSON array, no other text."""
                     messages=messages,
                     response_format=ScenarioListResponse,
                     temperature=_TEMPERATURE_BALANCED,
-                    max_tokens=6000,
+                    max_tokens=_scenario_token_budget(num_scenarios),
                     label='ScenarioGenerator.generate_with_coverage',
+                    api='responses',
                 )
 
                 if parsed is not None:
@@ -420,8 +436,9 @@ Return ONLY a JSON array, no other text."""
                     messages=messages,
                     response_format=ScenarioListResponse,
                     temperature=_TEMPERATURE_EDGE_CASE,
-                    max_tokens=4000,
+                    max_tokens=_scenario_token_budget(num_edge_cases),
                     label='ScenarioGenerator.generate_edge_cases',
+                    api='responses',
                 )
 
                 if parsed is not None:
@@ -486,8 +503,9 @@ Return ONLY a JSON array, no other text."""
                     messages=messages,
                     response_format=ScenarioListResponse,
                     temperature=_TEMPERATURE_EDGE_CASE,
-                    max_tokens=4000,
+                    max_tokens=_scenario_token_budget(num_scenarios),
                     label='ScenarioGenerator.generate_boundary_scenarios',
+                    api='responses',
                 )
 
                 if parsed is not None:
@@ -565,8 +583,9 @@ Return ONLY a JSON array, no other text."""
                     messages=messages,
                     response_format=ScenarioListResponse,
                     temperature=_TEMPERATURE_EDGE_CASE,
-                    max_tokens=6000,
+                    max_tokens=_scenario_token_budget(num_scenarios),
                     label='ScenarioGenerator.generate_security_scenarios',
+                    api='responses',
                 )
 
                 if parsed is not None:

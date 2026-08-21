@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from typing_extensions import Self
 
 from evaluatorq.common.llm_client import client_routes_through_orq
+from evaluatorq.common.responses import first_responses_refusal, responses_stop_reason
 from evaluatorq.common.retry import with_retry, without_client_retries
 from evaluatorq.common.thread_context import pipeline_metadata, thread_body_param
 from evaluatorq.common.tracing import get_trace_context_headers
@@ -240,7 +241,16 @@ class OrqResponsesTarget(AgentTarget):
                 if span is not None and trace_id:
                     span.set_attribute('orq.trace_id', trace_id)
 
+            stop_reason = responses_stop_reason(response)
+            if stop_reason == 'length':
+                raise RuntimeError(
+                    f'OrqResponsesTarget: response truncated at max_output_tokens={self.config.max_tokens}; '
+                    'raise the configured token budget and retry.'
+                )
+            refusal = first_responses_refusal(response)
             agent_response = AgentResponse.from_openresponses(response)
+            if refusal is not None:
+                agent_response = agent_response.model_copy(update={'refusal': refusal})
             if not agent_response.output:
                 raise RuntimeError(
                     f'OrqResponsesTarget: response contained no extractable '

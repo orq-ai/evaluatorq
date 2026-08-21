@@ -126,8 +126,14 @@ class TestInvertRolesForSimulator:
     def test_empty_messages(self):
         assert _invert_roles_for_simulator([]) == []
 
-    def test_preserves_tool_calls_on_assistant_message(self):
-        """Regression: inversion must keep tool_calls/tool_call_id/name fields."""
+    def test_drops_tool_calls_and_tool_rows_for_the_simulator(self):
+        """Regression: a `user` row with tool_calls plus an orphan `tool` row is a 400.
+
+        Inversion feeds the user simulator only. Providers reject "messages with role
+        'tool' must be a response to a preceeding message with 'tool_calls'", which
+        errored out every simulation whose target used tools. The judge reads the
+        un-inverted transcript, so tool visibility is not lost there.
+        """
         from evaluatorq.contracts import FunctionCall, StrategyToolCall
 
         tool_call = StrategyToolCall(
@@ -145,11 +151,30 @@ class TestInvertRolesForSimulator:
         ]
         result = _invert_roles_for_simulator(messages)
 
+        assert len(result) == 1
         assert result[0].role == "user"
-        assert result[0].tool_calls == [tool_call]
-        assert result[1].role == "tool"
-        assert result[1].tool_call_id == "call_123"
-        assert result[1].name == "lookup"
+        assert result[0].content == "thinking"
+        assert result[0].tool_calls is None
+
+    def test_does_not_mutate_the_canonical_transcript(self):
+        """Inversion is a throwaway view; sinks.messages keeps the tool traffic.
+
+        The target (simulation.py:907) and the judge (:946) are handed the canonical
+        list, so dropping tool rows for the simulator loses nothing downstream.
+        """
+        from evaluatorq.contracts import FunctionCall, StrategyToolCall
+
+        tool_call = StrategyToolCall(id="call_1", function=FunctionCall(name="lookup", arguments="{}"))
+        canonical = [
+            Message(role="assistant", content="thinking", tool_calls=[tool_call]),
+            Message(role="tool", content="result", tool_call_id="call_1", name="lookup"),
+        ]
+
+        _invert_roles_for_simulator(canonical)
+
+        assert len(canonical) == 2
+        assert canonical[0].tool_calls == [tool_call]
+        assert canonical[1].role == "tool"
 
     def test_message_with_tool_role_round_trips(self):
         """Tool-role messages with full superset fields survive serialize/deserialize."""

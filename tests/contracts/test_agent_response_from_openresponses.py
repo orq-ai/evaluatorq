@@ -165,6 +165,7 @@ def test_refusal_part_is_kept_as_text():
     ))
     assert [type(i) for i in r.output] == [TextOutputItem]
     assert r.text == "I can't help with that."
+    assert r.refusal == "I can't help with that."
 
 
 def test_unknown_message_part_type_is_logged_and_skipped(caplog):

@@ -239,6 +239,30 @@ class TestCallLlmDispatch:
         assert result.tool_calls[0].function.arguments == '{"done": true}'
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize('stop_reason', ['length', 'max_output_tokens'])
+    async def test_responses_length_metadata_is_not_returned_as_partial_text(self, stop_reason):
+        client = _make_client()
+        mock_response = MagicMock(output=[], usage=None, output_text='partial answer', stop_reason=stop_reason)
+        client.responses.create = AsyncMock(return_value=mock_response)
+        agent = _ConcreteAgent(LLMCallConfig(model='gpt-4o', api='responses', client=client))
+
+        with pytest.raises(RuntimeError, match='response truncated'):
+            await agent._call_llm(_make_messages())
+
+    @pytest.mark.asyncio
+    async def test_responses_refusal_is_exposed_without_losing_text(self):
+        client = _make_client()
+        refusal = MagicMock(type='refusal', refusal='not allowed')
+        response = MagicMock(output=[MagicMock(type='message', content=[refusal])], usage=None)
+        client.responses.create = AsyncMock(return_value=response)
+        agent = _ConcreteAgent(LLMCallConfig(model='gpt-4o', api='responses', client=client))
+
+        result = await agent._call_llm(_make_messages())
+
+        assert result.content == 'not allowed'
+        assert result.refusal == 'not allowed'
+
+    @pytest.mark.asyncio
     async def test_chat_completions_path_via_real_sdk_mock(self):
         """End-to-end: _call_chat_completions uses client.chat.completions.create, not responses."""
         client = _make_client()

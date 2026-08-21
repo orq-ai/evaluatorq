@@ -9,6 +9,8 @@ never carries noise suggestions.
 
 from __future__ import annotations
 
+import asyncio
+from itertools import starmap
 from typing import TYPE_CHECKING, Annotated, Any
 
 from loguru import logger
@@ -25,6 +27,7 @@ from evaluatorq.simulation.reports.sections import (
     _persona_name,
     _scenario_name,
 )
+from evaluatorq.simulation.tracing import with_simulation_span
 from evaluatorq.simulation.types import SimulationRecommendation
 
 if TYPE_CHECKING:
@@ -231,8 +234,15 @@ async def generate_recommendations(
         logger.warning(f'{len(triggered)} results have remediable failures; analyzing only the first {max_results}')
         triggered = triggered[:max_results]
 
-    recommendations: list[SimulationRecommendation] = []
-    for idx, result, triggers in triggered:
+    if not triggered:
+        return []
+
+    async def _one(
+        idx: int,
+        result: SimulationResult,
+        triggers: list[tuple[str, str]],
+    ) -> SimulationRecommendation | None:
+        """Analyze one result. Returns None when the call fails or yields nothing."""
         messages = [
             {'role': 'system', 'content': _SYSTEM_PROMPT.format(max_suggestions=config.max_suggestions)},
             {'role': 'user', 'content': _build_user_prompt(result, triggers, config)},
@@ -253,6 +263,7 @@ async def generate_recommendations(
                 max_tokens=config.max_tokens,
                 label='recommendations',
                 extra_kwargs=dict(llm_kwargs or {}),
+                api='responses',
             )
             if parsed is None:
                 # Fallback path: parse the json_object payload, tolerating a
@@ -260,21 +271,33 @@ async def generate_recommendations(
                 parsed = _SuggestionsLLMResponse.model_validate_json(extract_json_from_response(raw))
             suggestions = [str(s) for s in parsed.suggestions if s][: config.max_suggestions]
             if not suggestions:
-                continue
+                return None
 
             datapoint_id = result.metadata.get('datapoint_id')
-            recommendations.append(
-                SimulationRecommendation(
-                    result_index=idx,
-                    datapoint_id=str(datapoint_id) if datapoint_id else None,
-                    persona=_persona_name(result),
-                    scenario=_scenario_name(result),
-                    triggers=[f'{trigger}: {evidence}' for trigger, evidence in triggers],
-                    suggestions=suggestions,
-                )
+            return SimulationRecommendation(
+                result_index=idx,
+                datapoint_id=str(datapoint_id) if datapoint_id else None,
+                persona=_persona_name(result),
+                scenario=_scenario_name(result),
+                triggers=[f'{trigger}: {evidence}' for trigger, evidence in triggers],
+                suggestions=suggestions,
             )
         except Exception:
             logger.warning(f'Failed to generate recommendations for result #{idx + 1}', exc_info=True)
-            continue
+            return None
 
-    return recommendations
+    # One span over the whole batch: without it each per-result call attaches
+    # straight to the trace root, so a 10-result batch renders as 10 loose
+    # top-level LLM spans after the run span has already closed.
+    async with with_simulation_span(
+        'orq.simulation.recommendation_generation',
+        {'orq.simulation.recommendation_count': len(triggered)},
+    ):
+        # Concurrent, not sequential: these calls are independent, and the run's
+        # `--llm-parallelism` budget already throttles them inside the transport
+        # (`common.llm_limit.llm_slot`), so a second limiter here would only
+        # multiply against it. gather preserves order, so recommendations stay
+        # in result order.
+        settled = await asyncio.gather(*starmap(_one, triggered))
+
+    return [rec for rec in settled if rec is not None]

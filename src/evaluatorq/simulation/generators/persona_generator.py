@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel
 
 from evaluatorq.common.sanitize import delimit
+from evaluatorq.common.structured_output import token_budget_for_items
 from evaluatorq.simulation.types import DEFAULT_MODEL, CommunicationStyle, Persona
 from evaluatorq.simulation.utils.structured_output import generate_structured
 
@@ -18,6 +19,17 @@ logger = logging.getLogger(__name__)
 
 _TEMPERATURE_CREATIVE = 0.8
 _TEMPERATURE_BALANCED = 0.7
+
+# A persona carries more prose than a scenario (background, quirks, speech
+# patterns), so it costs more per item. Same reason as the scenario budget: a
+# flat cap truncates the structured output once a caller asks for enough of
+# them, and truncated structured output is unrecoverable.
+_TOKENS_PER_PERSONA = 600
+_MIN_PERSONA_TOKENS = 4000
+
+
+def _persona_token_budget(num_personas: int) -> int:
+    return token_budget_for_items(num_personas, per_item=_TOKENS_PER_PERSONA, minimum=_MIN_PERSONA_TOKENS)
 
 
 _PERSONA_GENERATOR_PROMPT = """You are an expert persona designer for AI agent testing. Create realistic, memorable user personas that feel like real people, not stereotypes.
@@ -194,8 +206,9 @@ Return ONLY a JSON array, no other text."""
                 messages=messages,
                 response_format=PersonaListResponse,
                 temperature=_TEMPERATURE_CREATIVE,
-                max_tokens=4000,
+                max_tokens=_persona_token_budget(num_personas),
                 label='PersonaGenerator.generate',
+                api='responses',
             )
             personas = parsed.personas if parsed is not None else self._parse_personas(raw or '[]')
 
@@ -319,8 +332,9 @@ Return ONLY a JSON array, no other text."""
                 messages=messages,
                 response_format=PersonaListResponse,
                 temperature=_TEMPERATURE_BALANCED,
-                max_tokens=4000,
+                max_tokens=_persona_token_budget(num_personas),
                 label='PersonaGenerator.generate_with_coverage',
+                api='responses',
             )
             personas = parsed.personas if parsed is not None else self._parse_personas(raw or '[]')
 

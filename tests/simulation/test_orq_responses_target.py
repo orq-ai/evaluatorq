@@ -52,6 +52,8 @@ def _make_response(
     input_tokens: int = 10,
     output_tokens: int = 5,
     trace_id: str | None = None,
+    stop_reason: str | None = None,
+    refusal: str | None = None,
 ) -> MagicMock:
     """Build a mock Responses API response object."""
     usage = MagicMock()
@@ -59,8 +61,9 @@ def _make_response(
     usage.output_tokens = output_tokens
 
     part = MagicMock()
-    part.type = "output_text"
+    part.type = "refusal" if refusal is not None else "output_text"
     part.text = text
+    part.refusal = refusal
 
     msg_item = MagicMock()
     msg_item.type = "message"
@@ -73,6 +76,8 @@ def _make_response(
     response.id = response_id
     response.usage = usage
     response.output = [msg_item]
+    response.stop_reason = stop_reason
+    response.incomplete_details = None
     response.telemetry = telemetry
     return response
 
@@ -337,6 +342,29 @@ class TestOrqResponsesTargetRespond:
 
         with pytest.raises(RuntimeError, match="response contained no extractable output items"):
             await target.respond(_make_messages())
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize('stop_reason', ['length', 'max_output_tokens'])
+    async def test_respond_raises_on_length_metadata(self, stop_reason):
+        client = _make_client()
+        client.responses.create = AsyncMock(
+            return_value=_make_response(text='partial', stop_reason=stop_reason)
+        )
+        target = _make_target(client=client)
+
+        with pytest.raises(RuntimeError, match='response truncated'):
+            await target.respond(_make_messages())
+
+    @pytest.mark.asyncio
+    async def test_respond_exposes_refusal_metadata(self):
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response(refusal='not allowed'))
+        target = _make_target(client=client)
+
+        result = await target.respond(_make_messages())
+
+        assert result.text == 'not allowed'
+        assert result.refusal == 'not allowed'
 
     @pytest.mark.asyncio
     async def test_respond_with_single_user_message(self):

@@ -234,11 +234,11 @@ Evaluatorq - Agent Simulation    # root — one per simulate() / generate_and_si
         ├── orq.simulation.first_message_generation   # only when no first message was pre-generated
         │     └── chat/responses {model} (orq.llm.purpose="first_message")
         └── orq.simulation.turn  (x N turns)
+              ├── orq.simulation.user_simulator_call   # turns 2+ only — turn 1's user line is the first message above
+              │     └── chat/responses {model} (orq.llm.purpose="user_simulator")
               ├── orq.simulation.target_call           # calls the agent under test; no span attrs of its own
-              ├── orq.simulation.judge_evaluation
-              │     └── chat/responses {model} (orq.llm.purpose="judge")
-              └── orq.simulation.user_simulator_call
-                    └── chat/responses {model} (orq.llm.purpose="user_simulator")
+              └── orq.simulation.judge_evaluation
+                    └── chat/responses {model} (orq.llm.purpose="judge")
 
 orq.simulation.generate          # root — one per standalone generate() call
   └── chat/responses {model}     # persona/scenario/first-message generation calls

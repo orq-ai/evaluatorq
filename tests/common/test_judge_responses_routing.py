@@ -43,11 +43,40 @@ def _isolate(monkeypatch: pytest.MonkeyPatch):
     judge_mod.reset_responses_rejectors()
 
 
-def _responses_reply() -> Any:
+def _responses_reply(parsed: BaseModel | None = None) -> Any:
+    parsed = parsed or Verdict(value=True, explanation='resisted')
+    text = parsed.model_dump_json()
+    content = SimpleNamespace(
+        type='output_text',
+        text=text,
+        annotations=[],
+        to_dict=lambda: {'type': 'output_text', 'text': text, 'annotations': []},
+    )
+    output = SimpleNamespace(
+        type='message',
+        id='msg_test',
+        status='completed',
+        role='assistant',
+        content=[content],
+        to_dict=lambda: {
+            'type': 'message',
+            'id': 'msg_test',
+            'status': 'completed',
+            'role': 'assistant',
+            'content': [content.to_dict()],
+        },
+    )
     return SimpleNamespace(
-        output_parsed=Verdict(value=True, explanation='resisted'),
-        output_text='{"value": true, "explanation": "resisted"}',
+        output=[output],
+        output_text=text,
+        stop_reason='stop',
+        incomplete_details=None,
         usage={'input_tokens': 10, 'output_tokens': 5, 'total_tokens': 15, 'total_cost': 0.25},
+        to_dict=lambda: {
+            'output': [output.to_dict()],
+            'output_text': text,
+            'status': 'completed',
+        },
     )
 
 
@@ -69,7 +98,7 @@ class _Client:
         self._responses_error = responses_error
         client = self
 
-        async def responses_parse(**kwargs: Any) -> Any:
+        async def responses_create(**kwargs: Any) -> Any:
             client.calls.append('responses')
             client.models.append(kwargs['model'])
             if client._responses_error is not None:
@@ -88,7 +117,7 @@ class _Client:
             reply.choices[0].message = SimpleNamespace(content='{"value": true, "explanation": "resisted"}')
             return reply
 
-        self.responses = SimpleNamespace(parse=responses_parse)
+        self.responses = SimpleNamespace(create=responses_create)
         self.chat = SimpleNamespace(completions=SimpleNamespace(parse=chat_parse, create=chat_create))
 
 
@@ -106,8 +135,14 @@ async def _judge(
     *,
     response_model: type[BaseModel] | None = Verdict,
     structured_output: bool = True,
+    extra_kwargs: dict[str, Any] | None = None,
 ) -> Any:
-    cfg = LLMCallConfig(model='gpt-5-mini', api=api, max_tokens=256)  # pyright: ignore[reportArgumentType]
+    cfg = LLMCallConfig(
+        model='gpt-5-mini',
+        api=api,  # pyright: ignore[reportArgumentType]
+        max_tokens=256,
+        extra_kwargs=extra_kwargs or {},
+    )  # pyright: ignore[reportArgumentType]
     return await run_judge(
         client=client,
         model='gpt-5-mini',
@@ -117,6 +152,24 @@ async def _judge(
         response_model=response_model,
         structured_output=structured_output,
     )
+
+
+@pytest.mark.asyncio
+async def test_responses_judge_forwards_tools_to_sdk_parser(monkeypatch: pytest.MonkeyPatch):
+    seen: dict[str, Any] = {}
+    original = judge_mod.parse_responses_response
+
+    def spy(response: Any, response_model: type[BaseModel], *, input_tools: Any = None) -> Any:
+        seen['input_tools'] = input_tools
+        return original(response, response_model, input_tools=input_tools)
+
+    monkeypatch.setattr(judge_mod, 'parse_responses_response', spy)
+    tools = [{'type': 'function', 'name': 'lookup', 'parameters': {'type': 'object'}}]
+
+    outcome = await _judge(_Client(), extra_kwargs={'tools': tools})
+
+    assert outcome.payload is not None
+    assert seen['input_tools'] == tools
 
 
 @pytest.mark.asyncio
@@ -134,7 +187,7 @@ async def test_responses_payload_rebuild_preserves_abstain(monkeypatch: pytest.M
     parsed = AbstainingVerdict(value=False, explanation='uncertain', abstain=True)
 
     async def fake_execute_response(**_kwargs: Any) -> tuple[Any, Any]:
-        return SimpleNamespace(output_parsed=parsed, output_text=parsed.model_dump_json()), None
+        return _responses_reply(parsed), None
 
     monkeypatch.setattr(judge_mod, 'execute_response', fake_execute_response)
     outcome = await judge_mod._responses_judge(
@@ -159,16 +212,17 @@ async def test_without_a_response_model_the_verdict_schema_is_enforced():
     client = _Client()
     seen: dict[str, Any] = {}
 
-    async def responses_parse(**kwargs: Any) -> Any:
+    async def responses_create(**kwargs: Any) -> Any:
         seen.update(kwargs)
         client.calls.append('responses')
         return _responses_reply()
 
-    client.responses = SimpleNamespace(parse=responses_parse)
+    client.responses = SimpleNamespace(create=responses_create)
+
     await _judge(client, response_model=None)
     assert client.calls == ['responses']
-    assert seen['text_format'] is judge_mod.EvaluatorResponsePayload
-    assert 'text' not in seen
+    assert seen['text']['format']['name'] == 'EvaluatorResponsePayload'
+    assert seen['text']['format']['strict'] is True
 
 
 @pytest.mark.asyncio
@@ -221,17 +275,51 @@ async def test_unparsed_response_keeps_its_usage():
     """A billed call that produced no verdict still reports its tokens and cost."""
     client = _Client()
 
-    async def responses_parse(**_kwargs: Any) -> Any:
+    async def responses_create(**_kwargs: Any) -> Any:
         client.calls.append('responses')
         reply = _responses_reply()
-        reply.output_parsed = None
+        reply.output = []
         return reply
 
-    client.responses = SimpleNamespace(parse=responses_parse)
+    client.responses = SimpleNamespace(create=responses_create)
     outcome = await _judge(client)
     assert outcome.error_kind is JudgeError.PARSE
     assert outcome.token_usage is not None and outcome.token_usage.total_cost == 0.25
-    assert outcome.raw_content == '{"value": true, "explanation": "resisted"}'
+    assert outcome.raw_content == Verdict(value=True, explanation='resisted').model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_responses_length_stop_reason_is_reported_before_parsing():
+    client = _Client()
+
+    async def responses_create(**_kwargs: Any) -> Any:
+        reply = _responses_reply()
+        reply.stop_reason = 'length'
+        reply.output_text = '{"value": "cut off'
+        return reply
+
+    client.responses = SimpleNamespace(create=responses_create)
+    outcome = await _judge(client)
+
+    assert outcome.error_kind is JudgeError.PARSE
+    assert outcome.error_message == 'structured output hit the token limit (max_tokens=256)'
+
+
+@pytest.mark.asyncio
+async def test_responses_refusal_becomes_an_abstention():
+    client = _Client()
+
+    async def responses_create(**_kwargs: Any) -> Any:
+        reply = _responses_reply()
+        reply.output = [SimpleNamespace(content=[SimpleNamespace(type='refusal', refusal='cannot help')])]
+        return reply
+
+    client.responses = SimpleNamespace(create=responses_create)
+    outcome = await _judge(client)
+
+    assert outcome.payload is not None
+    assert outcome.payload.abstain is True
+    assert outcome.payload.explanation == 'cannot help'
 
 
 @pytest.mark.asyncio

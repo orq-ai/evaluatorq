@@ -49,44 +49,34 @@ def _api_error(status: int) -> APIStatusError:
     return APIStatusError(message=f"http {status}", response=response, body=None)
 
 
-def _client_with_response(message_content: str | None) -> MagicMock:
-    msg = MagicMock()
-    msg.content = message_content
-    choice = MagicMock()
-    choice.message = msg
+def _response(output_text: str | None, *, stop_reason: str | None = None, refusal: str | None = None) -> MagicMock:
     resp = MagicMock()
-    resp.choices = [choice]
-    resp.usage = MagicMock(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+    resp.output_text = output_text
+    resp.stop_reason = stop_reason
+    resp.incomplete_details = None
+    resp.output = [] if refusal is None else [MagicMock(content=[MagicMock(type='refusal', refusal=refusal)])]
+    resp.usage = MagicMock(input_tokens=1, output_tokens=1, total_tokens=2)
+    return resp
+
+
+def _client_with_response(message_content: str | None, **response_kwargs: str | None) -> MagicMock:
     client = MagicMock()
-    client.chat = MagicMock()
-    client.chat.completions = MagicMock()
-    client.chat.completions.create = AsyncMock(return_value=resp)
+    client.responses = MagicMock()
+    client.responses.create = AsyncMock(return_value=_response(message_content, **response_kwargs))
     return client
 
 
 def _client_with_responses(*message_contents: str | None) -> MagicMock:
-    responses = []
-    for message_content in message_contents:
-        msg = MagicMock()
-        msg.content = message_content
-        choice = MagicMock()
-        choice.message = msg
-        resp = MagicMock()
-        resp.choices = [choice]
-        resp.usage = MagicMock(prompt_tokens=1, completion_tokens=1, total_tokens=2)
-        responses.append(resp)
     client = MagicMock()
-    client.chat = MagicMock()
-    client.chat.completions = MagicMock()
-    client.chat.completions.create = AsyncMock(side_effect=responses)
+    client.responses = MagicMock()
+    client.responses.create = AsyncMock(side_effect=[_response(c) for c in message_contents])
     return client
 
 
 def _client_raising(exc: Exception) -> MagicMock:
     client = MagicMock()
-    client.chat = MagicMock()
-    client.chat.completions = MagicMock()
-    client.chat.completions.create = AsyncMock(side_effect=exc)
+    client.responses = MagicMock()
+    client.responses.create = AsyncMock(side_effect=exc)
     return client
 
 
@@ -141,12 +131,34 @@ class TestFirstMessageGeneratorErrors:
         result = await gen.generate(_persona(), _scenario("login"))
         assert result == "Hi, I need help with: login"
 
+    async def test_length_stop_reason_falls_back_without_retry(self):
+        client = _client_with_response("", stop_reason="length")
+        gen = FirstMessageGenerator(model="gpt-4o", client=client)
+        result = await gen.generate(_persona(), _scenario("truncated"))
+        assert result == "Hi, I need help with: truncated"
+        assert client.responses.create.await_count == 1
+
+    @pytest.mark.parametrize('stop_reason', ['length', 'max_output_tokens'])
+    async def test_partial_length_response_falls_back_without_retry(self, stop_reason):
+        client = _client_with_response('partial opening', stop_reason=stop_reason)
+        gen = FirstMessageGenerator(model="gpt-4o", client=client)
+        result = await gen.generate(_persona(), _scenario("partial"))
+        assert result == "Hi, I need help with: partial"
+        assert client.responses.create.await_count == 1
+
+    async def test_refusal_falls_back_without_retry(self):
+        client = _client_with_response("", refusal="not allowed")
+        gen = FirstMessageGenerator(model="gpt-4o", client=client)
+        result = await gen.generate(_persona(), _scenario("refused"))
+        assert result == "Hi, I need help with: refused"
+        assert client.responses.create.await_count == 1
+
     async def test_empty_content_retries_before_fallback(self):
         client = _client_with_responses("", "I need help logging in")
         gen = FirstMessageGenerator(model="gpt-4o", client=client)
         result = await gen.generate(_persona(), _scenario("login"))
         assert result == "I need help logging in"
-        assert client.chat.completions.create.await_count == 2
+        assert client.responses.create.await_count == 2
 
     async def test_leading_and_trailing_double_quotes_stripped(self):
         client = _client_with_response('"hello there"')

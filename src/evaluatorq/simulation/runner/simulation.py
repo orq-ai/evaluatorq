@@ -12,7 +12,7 @@ from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry, default_map_error
 from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pipeline
 from evaluatorq.common.tracing import record_llm_input, record_llm_output, set_span_attrs
-from evaluatorq.contracts import ResponseTrace, TokenUsage, render_tool_call
+from evaluatorq.contracts import ResponseTrace, TokenUsage, content_to_text, render_tool_call
 from evaluatorq.integrations.callable_integration import CallableTarget
 from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
 from evaluatorq.simulation.agents.user_simulator import (
@@ -82,14 +82,53 @@ class RunSinks:
     target_model: str | None = None
 
 
+_MAX_TOOL_RESULT_CHARS = 500
+
+
+def _tool_traffic_text(message: Message, results: Mapping[str, str]) -> str:
+    """Render an assistant turn's tool calls and their results as plain text.
+
+    Each result is truncated; a tool that returns a page of JSON would otherwise
+    dominate the simulator's view of a turn it is only meant to react to.
+    """
+    lines: list[str] = []
+    for call in message.tool_calls or []:
+        line = f'{call.function.name}({call.function.arguments})'
+        result = results.get(call.id)
+        if result is not None:
+            if len(result) > _MAX_TOOL_RESULT_CHARS:
+                result = f'{result[:_MAX_TOOL_RESULT_CHARS]}… (truncated)'
+            line = f'{line} -> {result}'
+        lines.append(line)
+    return '[The agent used tools instead of replying]\n' + '\n'.join(lines)
+
+
 def _invert_roles_for_simulator(messages: list[Message]) -> list[Message]:
-    """Swap roles so the user simulator sees the conversation from its perspective."""
+    """Swap roles so the user simulator sees the conversation from its perspective.
+
+    The target's tool calls and their ``role='tool'`` results are dropped as
+    *structure*: inverting turns an ``assistant`` row into a ``user`` row, and a
+    ``user`` row carrying ``tool_calls`` followed by ``tool`` rows is rejected by
+    the provider ("messages with role 'tool' must be a response to a preceeding
+    message with 'tool_calls'").
+
+    A turn that is *only* tool calls would then invert to a content-less ``user``
+    row, and the simulator would be asked to reply to a blank turn. Those turns
+    keep the traffic as text instead, so the row always carries something to react
+    to and the pairing problem stays impossible by construction. A turn that also
+    produced text keeps only the text — a real user never sees the tool traffic.
+    """
+    tool_results = {m.tool_call_id: content_to_text(m.content) for m in messages if m.role == 'tool' and m.tool_call_id}
     inverted: list[Message] = []
     for m in messages:
+        if m.role == 'tool':
+            continue
         if m.role == 'user':
             inverted.append(m.model_copy(update={'role': 'assistant'}))
         elif m.role == 'assistant':
-            inverted.append(m.model_copy(update={'role': 'user'}))
+            blank_with_tools = not content_to_text(m.content) and m.tool_calls
+            content = _tool_traffic_text(m, tool_results) if blank_with_tools else m.content
+            inverted.append(m.model_copy(update={'role': 'user', 'content': content, 'tool_calls': None}))
         else:
             inverted.append(m)
     return inverted
@@ -887,6 +926,19 @@ class SimulationRunner:
                     'orq.simulation.max_turns': effective_max_turns,
                 },
             ) as turn_span:
+                # The user's line opens the turn it belongs to. Turn 1's line is the
+                # generated first message; every later turn asks the simulator here,
+                # so a turn span reads user -> target -> judge instead of trailing the
+                # next user message off the end of the previous turn.
+                if turn > 0:
+                    async with with_simulation_span('orq.simulation.user_simulator_call', None):
+                        user_response = await user_simulator.respond_async(
+                            _invert_roles_for_simulator(sinks.messages),
+                            llm_purpose='user_simulator',
+                        )
+                    sinks.messages.append(Message(role='user', content=user_response))
+                    _refresh_token_usage()
+
                 async with with_simulation_span('orq.simulation.target_call', None) as target_span:
                     # `span_message_text`, not `m.content or ''`: multi-part content
                     # would otherwise land on the span as a Python repr. Same helper
@@ -979,15 +1031,6 @@ class SimulationRunner:
                         'orq.simulation.should_terminate': judgment.should_terminate,
                     },
                 )
-
-                if not judgment.should_terminate and turn < effective_max_turns - 1:
-                    async with with_simulation_span('orq.simulation.user_simulator_call', None):
-                        user_response = await user_simulator.respond_async(
-                            _invert_roles_for_simulator(sinks.messages),
-                            llm_purpose='user_simulator',
-                        )
-                    sinks.messages.append(Message(role='user', content=user_response))
-                    _refresh_token_usage()
 
             if last_judgment and last_judgment.should_terminate:
                 _refresh_token_usage()
