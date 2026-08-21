@@ -338,7 +338,15 @@ async def _responses_judge(
             raw_content=raw,
         )
     try:
-        parsed = getattr(parse_responses_response(response, verdict_model), 'output_parsed', None)
+        parsed = getattr(
+            parse_responses_response(
+                response,
+                verdict_model,
+                input_tools=(cfg.extra_kwargs or {}).get('tools'),
+            ),
+            'output_parsed',
+            None,
+        )
     except ValidationError as exc:
         logger.error('Judge [{}] Responses output did not validate: {}', model, exc)
         return JudgeOutcome(

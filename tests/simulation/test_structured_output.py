@@ -311,6 +311,17 @@ async def test_unrelated_400_raises_instead_of_being_blamed_on_the_provider() ->
 
 
 @pytest.mark.asyncio
+async def test_generic_text_unsupported_400_is_not_classified_as_schema_rejection() -> None:
+    client = _responses_client(_status_error(400, 'the text parameter is not supported by this deployment'))
+
+    with pytest.raises(APIStatusError):
+        await _generate_via_responses(client)
+
+    client.chat.completions.parse.assert_not_awaited()
+    client.chat.completions.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_unparsed_responses_output_degrades_to_the_chat_legs(caplog: pytest.LogCaptureFixture) -> None:
     """No exception and no truncation, but nothing parsed — take the answer from chat."""
     client = _responses_client(_responses_result(None))

@@ -67,13 +67,11 @@ _STRUCTURAL_KEYS_BY_API = {
 # over-length context or a content-policy rejection, and degrading on those
 # masks the real cause and re-bills the same broken request on the other leg.
 _SCHEMA_KEYWORDS = (
-    'structured',
     'response_format',
     'json_schema',
     'text_format',
     'text.format',
-    "'text'",
-    'not supported',
+    'structured output',
 )
 
 

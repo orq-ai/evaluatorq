@@ -22,6 +22,7 @@ from evaluatorq.common.llm_call import (
     strip_known_rejected_responses_reasoning,
 )
 from evaluatorq.common.llm_client import client_routes_through_orq
+from evaluatorq.common.responses import first_responses_refusal, responses_stop_reason
 from evaluatorq.common.retry import with_retry
 from evaluatorq.common.thread_context import pipeline_metadata, thread_body_param
 from evaluatorq.common.tracing import get_trace_context_headers, record_llm_input, record_llm_response
@@ -89,6 +90,7 @@ class LLMResult:
 
     content: str
     tool_calls: list[Any] | None = None
+    refusal: str | None = None
 
 
 @dataclass
@@ -441,6 +443,13 @@ class BaseAgent(ABC):
                         timeout=timeout_s,
                     )
 
+                stop_reason = responses_stop_reason(response)
+                if stop_reason == 'length':
+                    raise RuntimeError(
+                        f'{self.name}._call_responses: response truncated at max_output_tokens='
+                        f'{params["max_output_tokens"]}; raise the budget via EVALUATORQ_LLM_MAX_TOKENS.'
+                    )
+                refusal = first_responses_refusal(response)
                 agent_response = AgentResponse.from_openresponses(response)
                 output_items = agent_response.output
                 usage = agent_response.usage
@@ -471,7 +480,7 @@ class BaseAgent(ABC):
                     )
 
                 text = ''.join(getattr(i, 'text', '') for i in text_items)
-                result = LLMResult(content=text)
+                result = LLMResult(content=text, refusal=refusal)
                 if tool_call_items:
                     result.tool_calls = [
                         StrategyToolCall(

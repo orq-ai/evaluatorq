@@ -135,8 +135,14 @@ async def _judge(
     *,
     response_model: type[BaseModel] | None = Verdict,
     structured_output: bool = True,
+    extra_kwargs: dict[str, Any] | None = None,
 ) -> Any:
-    cfg = LLMCallConfig(model='gpt-5-mini', api=api, max_tokens=256)  # pyright: ignore[reportArgumentType]
+    cfg = LLMCallConfig(
+        model='gpt-5-mini',
+        api=api,  # pyright: ignore[reportArgumentType]
+        max_tokens=256,
+        extra_kwargs=extra_kwargs or {},
+    )  # pyright: ignore[reportArgumentType]
     return await run_judge(
         client=client,
         model='gpt-5-mini',
@@ -146,6 +152,24 @@ async def _judge(
         response_model=response_model,
         structured_output=structured_output,
     )
+
+
+@pytest.mark.asyncio
+async def test_responses_judge_forwards_tools_to_sdk_parser(monkeypatch: pytest.MonkeyPatch):
+    seen: dict[str, Any] = {}
+    original = judge_mod.parse_responses_response
+
+    def spy(response: Any, response_model: type[BaseModel], *, input_tools: Any = None) -> Any:
+        seen['input_tools'] = input_tools
+        return original(response, response_model, input_tools=input_tools)
+
+    monkeypatch.setattr(judge_mod, 'parse_responses_response', spy)
+    tools = [{'type': 'function', 'name': 'lookup', 'parameters': {'type': 'object'}}]
+
+    outcome = await _judge(_Client(), extra_kwargs={'tools': tools})
+
+    assert outcome.payload is not None
+    assert seen['input_tools'] == tools
 
 
 @pytest.mark.asyncio

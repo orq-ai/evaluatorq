@@ -138,6 +138,14 @@ class TestFirstMessageGeneratorErrors:
         assert result == "Hi, I need help with: truncated"
         assert client.responses.create.await_count == 1
 
+    @pytest.mark.parametrize('stop_reason', ['length', 'max_output_tokens'])
+    async def test_partial_length_response_falls_back_without_retry(self, stop_reason):
+        client = _client_with_response('partial opening', stop_reason=stop_reason)
+        gen = FirstMessageGenerator(model="gpt-4o", client=client)
+        result = await gen.generate(_persona(), _scenario("partial"))
+        assert result == "Hi, I need help with: partial"
+        assert client.responses.create.await_count == 1
+
     async def test_refusal_falls_back_without_retry(self):
         client = _client_with_response("", refusal="not allowed")
         gen = FirstMessageGenerator(model="gpt-4o", client=client)

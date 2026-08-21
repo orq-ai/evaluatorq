@@ -986,6 +986,7 @@ class AgentResponse(BaseModel):
         ``.text``       — all ``TextOutputItem`` contents concatenated, or ``""`` if none
         ``.tool_calls`` — list of `ToolCallOutputItem` filtered from
         `output` in order
+        ``.refusal``    — the first provider refusal, when the response contains one
     """
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
@@ -1004,6 +1005,7 @@ class AgentResponse(BaseModel):
     # routed through Orq or the router omits it.
     span_id: str | None = None
     finish_reason: str | None = None
+    refusal: str | None = None
     error: AgentResponseError | None = None
 
     if TYPE_CHECKING:
@@ -1019,6 +1021,7 @@ class AgentResponse(BaseModel):
             trace_id: str | None = None,
             span_id: str | None = None,
             finish_reason: str | None = None,
+            refusal: str | None = None,
             error: AgentResponseError | None = None,
         ) -> None: ...
 
@@ -1059,6 +1062,7 @@ class AgentResponse(BaseModel):
         applied by callers to the returned object's ``usage``.
         """
         items: list[OutputMessage] = []
+        refusal: str | None = None
         for item in _gf(response, 'output') or []:
             item_type = _gf(item, 'type')
             if item_type == 'message':
@@ -1071,6 +1075,8 @@ class AgentResponse(BaseModel):
                     # answer (and for red teaming, the *resistant* outcome), so
                     # it is carried as text rather than discarded.
                     text = _gf(part, 'text') if part_type == 'output_text' else _gf(part, 'refusal')
+                    if part_type == 'refusal' and isinstance(text, str) and refusal is None:
+                        refusal = text
                     if part_type in ('output_text', 'refusal') and text:
                         items.append(TextOutputItem(type='output_text', text=text, annotations=[], logprobs=[]))
                     elif part_type not in ('output_text', 'refusal'):
@@ -1123,6 +1129,7 @@ class AgentResponse(BaseModel):
             model=model if isinstance(model, str) else None,
             finish_reason=status if isinstance(status, str) else None,
             response_id=response_id if isinstance(response_id, str) else None,
+            refusal=refusal,
         )
 
 

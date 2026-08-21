@@ -165,13 +165,6 @@ Keep it natural - this is how they would actually open a conversation."""
                     if refusal is not None:
                         logger.warning('FirstMessageGenerator: model refused first message: %s', refusal)
                         break
-                    message = re.sub(r'^["\']|["\']$', '', (response.output_text or '').strip())
-                    if message:
-                        break
-                    # A reasoning model can spend the whole budget before it
-                    # answers, so empty text here often means truncation rather
-                    # than a lazy model. Retrying at the same budget would
-                    # truncate identically — name the cause and stop.
                     if responses_stop_reason(response) == 'length':
                         logger.warning(
                             'FirstMessageGenerator: response truncated at max_output_tokens=%s before any text; '
@@ -179,6 +172,13 @@ Keep it natural - this is how they would actually open a conversation."""
                             _MAX_OUTPUT_TOKENS,
                         )
                         break
+                    message = re.sub(r'^["\']|["\']$', '', (response.output_text or '').strip())
+                    if message:
+                        break
+                    # A reasoning model can spend the whole budget before it
+                    # answers, so empty text here often means truncation rather
+                    # than a lazy model. Retrying at the same budget would
+                    # truncate identically — name the cause and stop.
                     if attempt == 0:
                         logger.info('FirstMessageGenerator: LLM returned empty content, retrying once')
                 else:

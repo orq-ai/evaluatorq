@@ -2,25 +2,34 @@
 
 from __future__ import annotations
 
+import logging
+from importlib import import_module
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
-
-from openai.lib._parsing._responses import parse_response
-from openai.lib._pydantic import to_strict_json_schema
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from pydantic import BaseModel
 
+logger = logging.getLogger(__name__)
+
 
 def responses_text_config(response_model: type[BaseModel]) -> dict[str, Any]:
     """Build the strict ``text.format`` config used by ``responses.create``."""
+    try:
+        to_strict_json_schema = import_module('openai.lib._pydantic').to_strict_json_schema
+    except (ImportError, AttributeError):
+        logger.warning('OpenAI strict-schema helper unavailable; using the Pydantic JSON schema fallback')
+        schema = response_model.model_json_schema()
+    else:
+        schema = to_strict_json_schema(response_model)
     return {
         'format': {
             'type': 'json_schema',
             'strict': True,
             'name': response_model.__name__,
-            'schema': to_strict_json_schema(response_model),
+            'schema': schema,
         }
     }
 
@@ -58,8 +67,11 @@ def parse_responses_response(
     input_tools: Iterable[Any] | None = None,
 ) -> Any:
     """Apply the SDK's per-output-item Responses parser to a raw response."""
-    return parse_response(
-        text_format=response_model,
-        input_tools=input_tools or (),
-        response=response,
-    )
+    try:
+        parse_response = import_module('openai.lib._parsing._responses').parse_response
+    except (ImportError, AttributeError):
+        logger.warning('OpenAI Responses parser unavailable; validating output_text directly')
+        raw_content = getattr(response, 'output_text', '') or ''
+        parsed = response_model.model_validate_json(raw_content) if raw_content else None
+        return SimpleNamespace(output_parsed=parsed)
+    return parse_response(text_format=response_model, input_tools=input_tools or (), response=response)
