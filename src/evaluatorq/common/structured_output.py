@@ -73,6 +73,27 @@ def _looks_like_schema_rejection(exc: APIStatusError) -> bool:
     return any(kw in err_body for kw in _SCHEMA_KEYWORDS)
 
 
+def _first_responses_refusal(response: Any) -> str | None:
+    """Return the first refusal in a Responses output, if present."""
+    for item in getattr(response, 'output', None) or []:
+        for part in getattr(item, 'content', None) or []:
+            if getattr(part, 'type', None) == 'refusal':
+                return getattr(part, 'refusal', '') or ''
+    return None
+
+
+def _looks_like_truncated_json(exc: ValidationError) -> bool:
+    """Recognize the end-of-input validation error caused by cut-off JSON."""
+    for error in exc.errors():
+        if error.get('type') != 'json_invalid':
+            continue
+        context = error.get('ctx') or {}
+        detail = str(context.get('error') or error.get('msg') or '').lower()
+        if 'eof' in detail or 'end of input' in detail:
+            return True
+    return False
+
+
 # The Responses leg's per-request ceiling. A batched generation asking for tens
 # of items is a slow call by design, so this is well above LLMCallConfig's
 # 90s default; without it the call has no bound at all, which is what the
@@ -132,10 +153,13 @@ async def _generate_structured_via_responses(
 
     Returns ``None`` — after a warning naming the cause — when the endpoint is
     absent (404), when a 400's body names the schema form as unsupported, or
-    when the provider hands back nothing parsed, so the caller degrades to
-    ``chat.completions`` rather than losing the call. Any other 400 re-raises:
-    a bad parameter or an over-length context is not a capability signal, and
-    degrading on it would blame the provider and re-bill the same failure.
+    when the provider hands back nothing parsed. Those cases let the caller
+    degrade to ``chat.completions`` rather than losing the call. Refusals and
+    schema-validation failures raise instead: a refusal must not be retried on a
+    second endpoint, and a validation error is not evidence of a capability gap.
+    Any other 400 re-raises: a bad parameter or an over-length context is not a
+    capability signal, and degrading on it would blame the provider and re-bill
+    the same failure.
     Transport is ``common.llm_call.execute_response``, so this leg inherits the
     concurrency slot, the timeout, the reasoning-block drop-and-retry and the
     usage pricing rather than re-deriving them. Only the fallback policy lives
@@ -144,9 +168,9 @@ async def _generate_structured_via_responses(
     A length-truncated response raises, matching the chat leg: a same-budget
     retry would truncate again. Truncation surfaces two ways —
     ``responses.parse`` validates the payload before returning, so a cut-off
-    body raises ``ValidationError`` from inside the SDK and only a response
-    truncated with no text at all (a reasoning model that spent the budget
-    before answering) reaches the ``incomplete_details`` check.
+    body raises a JSON ``ValidationError`` with an end-of-input error, and only
+    a response truncated with no text at all (a reasoning model that spent the
+    budget before answering) reaches the ``incomplete_details`` check.
     """
     async with with_llm_span(
         model=model,
@@ -181,10 +205,19 @@ async def _generate_structured_via_responses(
             logger.warning('%s: %s, falling back to chat.completions', label, cause)
             return None
         except ValidationError as exc:
-            raise _truncated_output_error(label, max_tokens, schema=response_format.__name__) from exc
+            if _looks_like_truncated_json(exc):
+                raise _truncated_output_error(label, max_tokens, schema=response_format.__name__) from exc
+            logger.exception('%s: Responses output did not validate against %s', label, response_format.__name__)
+            raise RuntimeError(
+                f'{label}: the Responses output did not validate against {response_format.__name__}.'
+            ) from exc
 
         if getattr(getattr(response, 'incomplete_details', None), 'reason', None) == 'max_output_tokens':
             raise _truncated_output_error(label, max_tokens)
+
+        refusal = _first_responses_refusal(response)
+        if refusal is not None:
+            raise RuntimeError(f'{label}: model refused to generate: {refusal}')
 
         parsed = getattr(response, 'output_parsed', None)
         if parsed is None:
