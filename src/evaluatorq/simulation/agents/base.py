@@ -26,6 +26,7 @@ from evaluatorq.common.retry import with_retry
 from evaluatorq.common.thread_context import pipeline_metadata, thread_body_param
 from evaluatorq.common.tracing import get_trace_context_headers, record_llm_input, record_llm_response
 from evaluatorq.contracts import (
+    DEFAULT_TARGET_MAX_TOKENS,
     AgentResponse,
     FunctionCall,
     LLMCallConfig,
@@ -69,11 +70,12 @@ def _env_int(name: str, default: int) -> int:
 # under parallel load) can exceed the default; raise via EVALUATORQ_LLM_TIMEOUT_S.
 DEFAULT_TIMEOUT_S = _env_float('EVALUATORQ_LLM_TIMEOUT_S', 60.0)
 
-# Default completion-token budget. Reasoning models (e.g. gemma-4) spend tokens
-# on hidden reasoning before the tool call; too small a budget truncates the
+# Default completion-token budget, shared with red team via
+# DEFAULT_TARGET_MAX_TOKENS. Reasoning models (e.g. gemma-4) spend tokens on
+# hidden reasoning before the tool call; too small a budget truncates the
 # response (finish_reason=length) before the tool call is emitted, surfacing as
 # "no text and no tool calls". Raise via EVALUATORQ_LLM_MAX_TOKENS for such models.
-DEFAULT_MAX_TOKENS = _env_int('EVALUATORQ_LLM_MAX_TOKENS', 8192)
+DEFAULT_MAX_TOKENS = _env_int('EVALUATORQ_LLM_MAX_TOKENS', DEFAULT_TARGET_MAX_TOKENS)
 
 # Default reasoning effort for reasoning-capable models. "medium" keeps hidden
 # reasoning bounded (far fewer tokens than the model's default), which avoids

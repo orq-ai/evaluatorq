@@ -2,6 +2,8 @@
 
 Red teaming subcommand group. Registered only when `evaluatorq[redteam]` is installed.
 
+--8<-- "docs/_snippets/openai-direct-model.md"
+
 ## `eq redteam run`
 
 Run adversarial red teaming against one or more targets.
@@ -21,9 +23,9 @@ eq redteam run --target agent:<key> [OPTIONS]
 | `--delivery-method` / `-d` | `str` (repeatable) | Restrict to one or more delivery methods. Repeatable and/or comma-separated. |
 | `--max-turns` | `int` / `5` | Maximum conversation turns for multi-turn attacks. |
 | `--max-per-category` | `int \| None` / `None` | Cap strategies per category. |
-| `--attack-model` | `str` / `gpt-5-mini` | Model for adversarial prompt generation. |
+| `--attack-model` | `str` / `openai/gpt-5.6-luna` | Model for adversarial prompt generation. |
 | `--attacker-instructions` | `str \| None` / `None` | Domain-specific context to steer attack generation. |
-| `--evaluator-model` | `str` / `gpt-5-mini` | Model for OWASP evaluation scoring. |
+| `--evaluator-model` | `str` / `openai/gpt-5.6-luna` | Model for OWASP evaluation scoring. |
 | `--datapoint-parallelism` | `int` / `10` | Maximum concurrent datapoints/jobs. `--parallelism` is a deprecated alias. |
 | `--llm-parallelism` | `int` / unset | Ceiling on in-flight LLM requests for the whole run. |
 | `--generated-strategy-count` | `int` / `2` | Number of LLM-generated strategies per category. |

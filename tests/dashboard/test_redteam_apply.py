@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 import evaluatorq.dashboard.apply_ui as apply_mod
+from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL
 from evaluatorq.dashboard.apply_ui import record_applied_on_report, render_preview_drawer
 from evaluatorq.redteam.reports.apply import ApplyRecommendationsResult
 
@@ -489,20 +490,20 @@ class TestMultiAgentGating:
 class TestApplyModelSetting:
     def test_default_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(apply_mod.APPLY_MODEL_ENV, raising=False)
-        assert apply_mod.apply_model() == 'gpt-5.6-luna'
+        assert apply_mod.apply_model() == apply_mod.DEFAULT_APPLY_MODEL == DEFAULT_PIPELINE_MODEL
 
     def test_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(apply_mod.APPLY_MODEL_ENV, 'openai/gpt-6')
         assert apply_mod.apply_model() == 'openai/gpt-6'
         monkeypatch.setenv(apply_mod.APPLY_MODEL_ENV, '   ')
-        assert apply_mod.apply_model() == 'gpt-5.6-luna'
+        assert apply_mod.apply_model() == apply_mod.DEFAULT_APPLY_MODEL == DEFAULT_PIPELINE_MODEL
 
     def test_settings_page_shows_the_model(self, apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
         client, _rid, _path = apply_client
         monkeypatch.delenv(apply_mod.APPLY_MODEL_ENV, raising=False)
         html = client.get('/settings').text
         assert 'Apply-recommendations model' in html
-        assert 'gpt-5.6-luna (default)' in html
+        assert f'{DEFAULT_PIPELINE_MODEL} (default)' in html
 
     def test_settings_page_shows_the_override_source(self, apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
         client, _rid, _path = apply_client

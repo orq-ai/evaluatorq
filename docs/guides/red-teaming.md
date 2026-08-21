@@ -16,6 +16,8 @@ flowchart LR
     EV --> RP["Report: resistance rate"]
 ```
 
+--8<-- "docs/_snippets/openai-direct-model.md"
+
 ## Modes
 
 - **dynamic** — an LLM generates attacks; run the categories you pick.
