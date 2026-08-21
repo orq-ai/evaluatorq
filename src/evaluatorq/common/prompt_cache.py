@@ -38,6 +38,19 @@ prefix, three judgements each
 | responses             |      0 |  7,417 |  8,304 |
 | responses, top-level  |      0 |      0 |      0 |
 
+The red-team attacker loop, five turns through the real orchestrator
+(``scripts/manual_tests/prompt_cache_redteam_probe.py``, same model and salting).
+Each turn reads back essentially the whole previous request, so only the newly
+appended pair pays full price — 2,696 of 2,948 tokens on turn 5:
+
+| turn       |     1 |     2 |     3 |     4 |     5 |
+| ---------- | ----- | ----- | ----- | ----- | ----- |
+| input      | 1,988 | 2,214 | 2,438 | 2,699 | 2,948 |
+| cache_read |     0 | 1,986 | 2,211 | 2,435 | 2,696 |
+
+``cache_creation_tokens`` is permanently 0 through the Orq router, so writes are
+unobservable and a read on the *next* turn is the only evidence a write landed.
+
 Never set ``ttl``: 5m is the default, 1h costs more, and only Anthropic honours
 it.
 """
