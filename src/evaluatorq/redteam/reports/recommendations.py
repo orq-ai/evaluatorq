@@ -38,8 +38,9 @@ class _FocusAreaLLMResponse(BaseModel):
     """Schema the analysis LLM fills for one focus area (RES-822).
 
     Structured-output-first: ``generate_structured`` enforces this via
-    ``parse()`` and falls back to ``json_object`` for models that reject it,
-    where a fenced payload is recovered with ``extract_json_from_response``.
+    ``parse()`` and degrades through a non-strict schema, a forced tool call and
+    ``json_object`` for models that reject it, recovering a fenced payload with
+    ``extract_json_from_response`` on every rung that answers in text.
     The coercing validators keep the fallback as tolerant as the code this
     replaced: a stray non-string item must not drop the whole focus area.
     """

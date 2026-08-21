@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 # ruff: noqa: S101
+import logging
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -110,15 +111,230 @@ async def test_complete_fallback_content_is_returned() -> None:
         label="Sample.generate",
     )
 
-    assert parsed is None
+    assert parsed is not None
+    assert parsed.value == "ok"
     assert raw == '{"value": "ok"}'
 
 
+@pytest.mark.asyncio
+async def test_fenced_fallback_content_is_parsed_by_the_helper() -> None:
+    """A provider on a text rung fences its payload; the ladder salvages it so every
+    caller gets a model, not a raw string it has to fence-strip itself."""
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(return_value=_no_parsed_completion())
+    client.chat.completions.create = AsyncMock(
+        return_value=_fallback_completion('Here you go:\n```json\n{"value": "ok"}\n```', "stop")
+    )
+
+    parsed, raw = await generate_structured(
+        client,
+        model="local-model",
+        messages=[{"role": "user", "content": "return json"}],
+        response_format=SampleResponse,
+        max_tokens=64,
+        label="Sample.generate",
+    )
+
+    assert parsed is not None
+    assert parsed.value == "ok"
+    assert "```json" in raw  # raw stays untouched for callers with their own salvage
+
+
+@pytest.mark.asyncio
+async def test_unparseable_fallback_content_returns_none_and_warns(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Off-schema content must not come back as a parsed model — None plus a warning."""
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(return_value=_no_parsed_completion())
+    client.chat.completions.create = AsyncMock(return_value=_fallback_completion("sorry, no json here", "stop"))
+
+    with caplog.at_level(logging.WARNING):
+        parsed, raw = await generate_structured(
+            client,
+            model="local-model",
+            messages=[{"role": "user", "content": "return json"}],
+            response_format=SampleResponse,
+            max_tokens=64,
+            label="Sample.generate",
+        )
+
+    assert parsed is None
+    assert raw == "sorry, no json here"
+    assert "did not validate" in caplog.text
+
+
+async def _run_to_the_tool_rung(client: MagicMock) -> tuple[Any, str]:
+    """Drive the ladder with rung 2 answering nothing usable, so rung 3 runs."""
+    return await generate_structured(
+        client,
+        model="local-model",
+        messages=[{"role": "user", "content": "return json"}],
+        response_format=SampleResponse,
+        max_tokens=64,
+        label="Sample.generate",
+    )
+
+
+@pytest.mark.asyncio
+async def test_forced_tool_call_rung_answers_when_json_schema_did_not() -> None:
+    """Rung 3 is the strict backup: tool_choice leaves the model no prose channel."""
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(
+        side_effect=[_no_parsed_completion(), _tool_completion('{"value": "ok"}')]
+    )
+    client.chat.completions.create = AsyncMock(return_value=_fallback_completion("not json at all", "stop"))
+
+    parsed, raw = await _run_to_the_tool_rung(client)
+
+    assert parsed is not None
+    assert parsed.value == "ok"
+    assert raw == '{"value": "ok"}'
+    # Rung 4 never ran — the tool rung answered first.
+    assert client.chat.completions.create.await_count == 1
+
+    tool_kwargs = client.chat.completions.parse.await_args_list[1].kwargs
+    assert tool_kwargs["tool_choice"] == {"type": "function", "function": {"name": "SampleResponse"}}
+    assert tool_kwargs["tools"][0]["function"]["name"] == "SampleResponse"
+
+
+@pytest.mark.asyncio
+async def test_forced_tool_call_appends_a_nudge_without_mutating_the_caller_messages() -> None:
+    """The nudge rescues providers that downgrade a named tool_choice to auto — but the
+    caller's list is theirs, and the appended turn must be visible in the sent params."""
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(
+        side_effect=[_no_parsed_completion(), _tool_completion('{"value": "ok"}')]
+    )
+    client.chat.completions.create = AsyncMock(return_value=_fallback_completion("not json at all", "stop"))
+    messages = [{"role": "user", "content": "return json"}]
+
+    await generate_structured(
+        client,
+        model="local-model",
+        messages=messages,
+        response_format=SampleResponse,
+        max_tokens=64,
+        label="Sample.generate",
+    )
+
+    assert messages == [{"role": "user", "content": "return json"}]  # untouched
+    sent = client.chat.completions.parse.await_args_list[1].kwargs["messages"]
+    assert len(sent) == 2
+    assert sent[-1]["role"] == "user"
+    assert "SampleResponse" in sent[-1]["content"]
+    # Rung 1 got the caller's prompt verbatim — only rung 3 edits it.
+    assert client.chat.completions.parse.await_args_list[0].kwargs["messages"] == messages
+
+
+@pytest.mark.asyncio
+async def test_forced_tool_call_rung_is_skipped_when_the_caller_passes_tools() -> None:
+    """A caller's tools are functional; forcing ours would break the call this rung
+    only exists to salvage. Skip to json_object instead."""
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(return_value=_no_parsed_completion())
+    client.chat.completions.create = AsyncMock(
+        side_effect=[
+            _fallback_completion("not json at all", "stop"),
+            _fallback_completion('{"value": "ok"}', "stop"),
+        ]
+    )
+
+    parsed, _raw = await generate_structured(
+        client,
+        model="local-model",
+        messages=[{"role": "user", "content": "return json"}],
+        response_format=SampleResponse,
+        max_tokens=64,
+        label="Sample.generate",
+        extra_kwargs={"tools": [{"type": "function", "function": {"name": "caller_tool"}}]},
+    )
+
+    assert parsed is not None
+    assert parsed.value == "ok"
+    assert client.chat.completions.parse.await_count == 1  # rung 1 only; rung 3 skipped
+    assert client.chat.completions.create.await_count == 2  # rungs 2 and 4
+
+
+@pytest.mark.asyncio
+async def test_forced_tool_call_without_tool_calls_falls_through_to_json_object() -> None:
+    """A model that ignores tool_choice and answers in prose must not end the ladder."""
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(return_value=_no_parsed_completion())
+    client.chat.completions.create = AsyncMock(
+        side_effect=[
+            _fallback_completion("not json at all", "stop"),
+            _fallback_completion('{"value": "ok"}', "stop"),
+        ]
+    )
+
+    parsed, _raw = await _run_to_the_tool_rung(client)
+
+    assert parsed is not None
+    assert parsed.value == "ok"
+    assert client.chat.completions.parse.await_count == 2  # rung 3 was attempted
+
+
+@pytest.mark.asyncio
+async def test_tool_arguments_are_validated_by_the_helper_when_the_sdk_did_not() -> None:
+    """Non-OpenAI providers come back without parsed_arguments; the raw argument
+    string still goes through the shared salvage rather than being trusted."""
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(
+        side_effect=[_no_parsed_completion(), _tool_completion('```json\n{"value": "ok"}\n```')]
+    )
+    client.chat.completions.create = AsyncMock(return_value=_fallback_completion("not json at all", "stop"))
+
+    parsed, _raw = await _run_to_the_tool_rung(client)
+
+    assert parsed is not None
+    assert parsed.value == "ok"
+
+
+@pytest.mark.asyncio
+async def test_total_failure_returns_the_last_non_empty_raw() -> None:
+    """Nothing validated anywhere — the caller still gets text to log."""
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(return_value=_no_parsed_completion())
+    client.chat.completions.create = AsyncMock(
+        side_effect=[
+            _fallback_completion("first attempt", "stop"),
+            _fallback_completion("last attempt", "stop"),
+        ]
+    )
+
+    parsed, raw = await _run_to_the_tool_rung(client)
+
+    assert parsed is None
+    assert raw == "last attempt"
+
+
 def _no_parsed_completion() -> MagicMock:
-    """A parse() response with no validated model, which trips the fallback."""
+    """A parse() response with no validated model, which trips the fallback.
+
+    tool_calls is emptied too: on the forced-tool rung a bare MagicMock would
+    auto-create a truthy parsed_arguments and fake a tool answer.
+    """
     completion = MagicMock()
     completion.choices[0].message.refusal = None
     completion.choices[0].message.parsed = None
+    completion.choices[0].message.tool_calls = []
+    completion.choices[0].finish_reason = "stop"
+    return completion
+
+
+def _tool_completion(arguments: str, *, parsed_arguments: Any = None) -> MagicMock:
+    """A parse() response answering through a forced tool call."""
+    completion = MagicMock()
+    choice = MagicMock()
+    choice.finish_reason = "tool_calls"
+    choice.message.refusal = None
+    choice.message.parsed = None
+    call = MagicMock()
+    call.function.arguments = arguments
+    call.function.parsed_arguments = parsed_arguments
+    choice.message.tool_calls = [call]
+    completion.choices = [choice]
     return completion
 
 

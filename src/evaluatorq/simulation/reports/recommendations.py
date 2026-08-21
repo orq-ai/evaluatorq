@@ -39,8 +39,9 @@ if TYPE_CHECKING:
 class _SuggestionsLLMResponse(BaseModel):
     """Schema the LLM fills with remediation suggestions for one result (RES-822).
 
-    Structured-output-first via ``generate_structured``, with a fence-tolerant
-    ``json_object`` fallback for models that reject structured output. The
+    Structured-output-first via ``generate_structured``, degrading through a
+    non-strict schema, a forced tool call and a fence-tolerant ``json_object``
+    rung for models that reject strict structured output. The
     coercing validator keeps the fallback as tolerant as the code this
     replaced: a stray non-string item must not drop the whole suggestion.
     """
