@@ -133,10 +133,15 @@ before revising.
 Read the hate skill and follow it, in `--apply --sonnet` mode, targeting the
 branch diff:
 
+The skill lives in the `orq-ai/research` checkout, not this one, so locate it
+rather than assuming a path:
+
 ```bash
-cat ../research/.claude/skills/hate/SKILL.md 2>/dev/null \
-  || cat "$HOME/.claude/skills/hate/SKILL.md"
+find .. "$HOME/.claude/skills" -path '*skills/hate/SKILL.md' -print -quit 2>/dev/null
 ```
+
+Not found → skip track A, say so in the PR body in one line, and run track B
+alone. A missing critic is not a reason to skip the personas.
 
 Two overrides for unattended use:
 
