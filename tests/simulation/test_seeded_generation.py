@@ -7,8 +7,11 @@ mocked at the ``generate_structured`` layer so no network/key is needed.
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 
+from evaluatorq.common.structured_output import StructuredResult
 from evaluatorq.simulation import (
     generate_persona,
     generate_personas,
@@ -44,13 +47,13 @@ def captured(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[str]]:
     """Patch the LLM layer; record each call's user prompt."""
     prompts: dict[str, list[str]] = {"prompts": []}
 
-    async def fake_persona(client, *, messages, **_kw):  # noqa: ANN001, ANN002
+    async def fake_persona(client, *, messages, **_kw) -> StructuredResult[Any]:  # noqa: ANN001, ANN002
         prompts["prompts"].append(messages[-1]["content"])
-        return _Parsed(personas=[_persona()]), None
+        return StructuredResult(cast(Any, _Parsed(personas=[_persona()])), "")
 
-    async def fake_scenario(client, *, messages, **_kw):  # noqa: ANN001, ANN002
+    async def fake_scenario(client, *, messages, **_kw) -> StructuredResult[Any]:  # noqa: ANN001, ANN002
         prompts["prompts"].append(messages[-1]["content"])
-        return _Parsed(scenarios=[_scenario()]), None
+        return StructuredResult(cast(Any, _Parsed(scenarios=[_scenario()])), "")
 
     monkeypatch.setattr(
         "evaluatorq.openresponses.client.build_simulation_client",
@@ -117,3 +120,42 @@ async def test_generate_personas_scenarios_seeds_override_num(captured):
     assert "fraud dispute" in joined
     # Scenarios auto-generated (no seeds) — still produced.
     assert len(scenarios) >= 1
+
+
+@pytest.mark.asyncio
+async def test_generate_personas_scenarios_threads_edge_case_percentage(captured):
+    """F6: edge_case_percentage was hardcoded to each generator's own default
+    (0.2 / 0.3) with no way for a caller of _generate_personas_scenarios to
+    override it. An explicit value must reach the auto-generated (non-seeded)
+    prompt for both dimensions."""
+    from evaluatorq.simulation.api import _generate_personas_scenarios
+
+    await _generate_personas_scenarios(
+        agent_description="support agent",
+        num_personas=5,
+        num_scenarios=5,
+        model="m",
+        generation_client=object(),  # pyright: ignore[reportArgumentType]
+        edge_case_percentage=0.6,
+    )
+    joined = " ".join(captured["prompts"])
+    # int(5 * 0.6) == 3 edge cases, vs int(5 * 0.2) == 1 / int(5 * 0.3) == 1 at defaults.
+    assert "3 edge case" in joined
+
+
+@pytest.mark.asyncio
+async def test_generate_personas_scenarios_default_edge_case_percentage_unchanged(captured):
+    """Omitting edge_case_percentage must still fall through to each generator's
+    own default (0.2 for personas, 0.3 for scenarios), not some new literal."""
+    from evaluatorq.simulation.api import _generate_personas_scenarios
+
+    await _generate_personas_scenarios(
+        agent_description="support agent",
+        num_personas=5,
+        num_scenarios=5,
+        model="m",
+        generation_client=object(),  # pyright: ignore[reportArgumentType]
+    )
+    joined = " ".join(captured["prompts"])
+    assert "1 edge case" in joined
+    assert "3 edge case" not in joined

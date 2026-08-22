@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import TYPE_CHECKING, Any
 
@@ -13,11 +14,12 @@ from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.orq_client import resolve_orq_client
+from evaluatorq.common.retry import with_retry
 from evaluatorq.common.thread_context import build_static_thread_id, conversation_thread, thread_body_param
 from evaluatorq.common.tracing import record_llm_response, set_span_attrs, truncate_for_span
 from evaluatorq.redteam.adaptive.orchestrator import _get_active_progress
 from evaluatorq.redteam.backends.registry import create_async_llm_client
-from evaluatorq.redteam.contracts import DEFAULT_TARGET_MAX_TOKENS, Message, TokenUsage
+from evaluatorq.redteam.contracts import DEFAULT_TARGET_MAX_TOKENS, PIPELINE_CONFIG, LLMConfig, Message, TokenUsage
 from evaluatorq.redteam.exceptions import CredentialError
 from evaluatorq.redteam.tracing import with_llm_span, with_redteam_span
 
@@ -51,6 +53,7 @@ def create_model_job(
     system_prompt: str | None = None,
     max_tokens: int = DEFAULT_TARGET_MAX_TOKENS,
     run_id: str | None = None,
+    cfg: LLMConfig | None = None,
 ) -> Job:
     """Create an evaluatorq job for a router model or ORQ deployment.
 
@@ -61,6 +64,21 @@ def create_model_job(
     Deployment targets manage their own token limits via platform configuration,
     so ``max_tokens`` is ignored for that path.
 
+    ``cfg`` (``PIPELINE_CONFIG`` when omitted) supplies ``target_agent_timeout_ms``
+    (both legs), ``max_target_retries``, and ``target_reasoning_effort`` (router
+    job only — forwarded to ``execute_chat_completion``, which drops and retries
+    once if the model rejects it; the deployment leg logs a warning and ignores
+    it, matching ``max_tokens`` above). Retry ownership differs per leg, each
+    with exactly one layer:
+
+    * Router job: the OpenAI SDK client's own ``max_retries``, set from
+      ``cfg.max_target_retries`` only when this factory builds its own client
+      (``llm_client is None``) — an injected client's retry budget is the
+      caller's to set, per "caller-supplied values win merges".
+    * Deployment job: the Orq SDK deployment client has no per-call retry
+      knob exposed here, so this leg retries via ``common.retry.with_retry``
+      instead.
+
     Args:
         model: Model name for direct LLM calls via the ORQ router or OpenAI.
         deployment_key: ORQ deployment key for deployment-based inference.
@@ -69,6 +87,8 @@ def create_model_job(
         run_id: Red-team run id used to build the static-trace thread id so
             job spans correlate with the red-team pipeline; a per-target
             fallback is used when omitted.
+        cfg: Optional ``LLMConfig`` for per-run timeout/retry tuning; defaults
+            to the module-level ``PIPELINE_CONFIG``.
 
     Returns:
         An evaluatorq Job.
@@ -76,8 +96,19 @@ def create_model_job(
     Raises:
         ValueError: If no target parameter is provided.
     """
+    cfg = cfg or PIPELINE_CONFIG
     if deployment_key:
         safe_key = _sanitize_job_name(deployment_key)
+        if cfg.target_reasoning_effort:
+            # Deployment targets manage their own decode/reasoning config via
+            # platform configuration (same rationale as max_tokens above) — the
+            # invoke_async payload has no field for it, so a configured value
+            # here is silently inert unless flagged.
+            logger.warning(
+                f'target_reasoning_effort={cfg.target_reasoning_effort!r} is set but deployment '
+                f'{deployment_key!r} manages reasoning effort via its own platform configuration; '
+                'this value is not forwarded.'
+            )
 
         api_key = os.environ.get('ORQ_API_KEY')
         if not api_key:
@@ -120,7 +151,21 @@ def create_model_job(
                         # caller-supplied metadata if this path gains one.
                         apply_pipeline_metadata(invoke_kwargs)
                         invoke_kwargs.update(thread_body_param())
-                        completion = await deployment_client.deployments.invoke_async(**invoke_kwargs)
+
+                        async def _invoke() -> Any:
+                            return await asyncio.wait_for(
+                                deployment_client.deployments.invoke_async(**invoke_kwargs),
+                                timeout=cfg.target_agent_timeout_ms / 1000.0,
+                            )
+
+                        # Sole retry layer for this leg (see docstring): the Orq
+                        # SDK deployment client exposes no per-call retry_config
+                        # here, so with_retry owns it instead of a client budget.
+                        completion = await with_retry(
+                            _invoke,
+                            max_attempts=cfg.max_target_retries + 1,
+                            label=f'deployment:{deployment_key}',
+                        )
                         content = _extract_deployment_content(completion)
                         record_llm_response(llm_span, completion, output_content=content)
                         output = truncate_for_span(content)
@@ -162,7 +207,10 @@ def create_model_job(
         messages = _build_messages(data)
         if system_prompt:
             messages = [{'role': 'system', 'content': system_prompt}, *messages]
-        client = llm_client or create_async_llm_client()
+        # Sole retry layer for this leg: the SDK client's own max_retries, set
+        # from cfg only when we build the client ourselves — an injected
+        # llm_client keeps whatever retry budget its owner configured.
+        client = llm_client or create_async_llm_client(max_retries=cfg.max_target_retries)
         attack_attrs = _static_attack_attrs(data)
         target_input = _static_target_input(messages)
         thread_id = build_static_thread_id(run_id, safe_model, _row)
@@ -184,24 +232,26 @@ def create_model_job(
                     input_messages=messages,
                     attributes={'orq.redteam.llm_purpose': 'target'},
                 ) as llm_span:
-                    extra_kwargs: dict[str, Any] = {}
-                    if client_routes_through_orq(client):
-                        # Run metadata is applied natively by execute_chat_completion
-                        # (llm_call.apply_pipeline_metadata); only thread grouping here.
-                        extra_kwargs['extra_body'] = thread_body_param()
-                    # ponytail: fixed 300s ceiling (was unbounded); thread a cfg
-                    # target timeout through create_model_job if per-run tuning is needed.
-                    # execute_chat_completion already prices this call's usage
-                    # (RES-1295); keep its returned Usage rather than re-deriving
-                    # an unpriced one from the raw response below.
+                    # Run metadata is applied natively by execute_chat_completion
+                    # (llm_call.apply_pipeline_metadata); only thread grouping here.
+                    # The router body travels in its own `extra_body=` parameter —
+                    # it is call-site-owned, and `extra_kwargs` reserves the key.
+                    extra_body: dict[str, Any] | None = (
+                        thread_body_param() if client_routes_through_orq(client) else None
+                    )
+                    # Per-run timeout ceiling (was a hardcoded 300s unbounded of
+                    # cfg). execute_chat_completion already prices this call's
+                    # usage (RES-1295); keep its returned Usage rather than
+                    # re-deriving an unpriced one from the raw response below.
                     response, token_usage = await execute_chat_completion(
                         client=client,
                         model=model,
                         messages=messages,
                         span=llm_span,
-                        timeout_s=300.0,
+                        timeout_s=cfg.target_agent_timeout_ms / 1000.0,
                         max_tokens=max_tokens,
-                        extra_kwargs=extra_kwargs or None,
+                        reasoning_effort=cfg.target_reasoning_effort,
+                        extra_body=extra_body,
                     )
                     content = response.choices[0].message.content or ''
                     output = truncate_for_span(content)

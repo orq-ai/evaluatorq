@@ -23,6 +23,7 @@ from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.llm_limit import llm_concurrency_limit
 from evaluatorq.common.messages import coerce_content_text
+from evaluatorq.common.model_catalogue import validate_reasoning_effort
 from evaluatorq.common.parallelism import resolve_datapoint_parallelism
 from evaluatorq.common.recommendations import resolve_recommendations
 from evaluatorq.common.replay import REPLAY_VERSION, REPLAY_VERSION_KEY
@@ -1293,6 +1294,7 @@ def _create_static_job_for_agent_target(
     label: str,
     cfg: LLMConfig | None = None,
     *,
+    map_error: Callable[[Exception], tuple[str, str] | None] = default_map_error,
     run_id: str | None = None,
 ) -> Any:
     """Create an evaluatorq static job that drives an `AgentTarget`.
@@ -1302,6 +1304,11 @@ def _create_static_job_for_agent_target(
     that own the target lifecycle pass ``at.new``; the internal ``agent:`` path
     passes a factory that builds an owned target per row, so no long-lived parent
     target (and its unused HTTP client) is left dangling.
+
+    ``map_error`` should be the owning backend's ``map_error`` (falls back to
+    ``default_map_error`` — a generic ``target_error`` — when the caller has none)
+    so the static leg reports the same normalized error taxonomy as hybrid/dynamic
+    instead of a backend-agnostic default.
     """
     safe = _sanitize_job_name(label)
     cfg = cfg or PIPELINE_CONFIG
@@ -1339,6 +1346,7 @@ def _create_static_job_for_agent_target(
                             prompt,
                             target_agent_timeout_ms=cfg.target_agent_timeout_ms,
                             max_target_retries=cfg.max_target_retries,
+                            map_error=map_error,
                         )
                         if output['error'] is not None:
                             error_attrs: AttrMap = {
@@ -1398,20 +1406,28 @@ def _create_job_for_target(
         llm_client:    Optional pre-configured `openai.AsyncOpenAI`
                        client.
         system_prompt: Optional system prompt to pass to the job.
-        pipeline_config: Optional ``LLMConfig`` for ``target_max_tokens``.
+        pipeline_config: Optional ``LLMConfig`` supplying ``max_tokens``
+            (via ``DEFAULT_TARGET_MAX_TOKENS`` fallback), ``target_agent_timeout_ms``
+            and ``max_target_retries`` for the model/deployment leg.
 
     Returns:
         A job callable as returned by ``create_model_job``.
     """
     cfg = pipeline_config or PIPELINE_CONFIG
     kind, value = parse_target(target)
-    common = dict(llm_client=llm_client, system_prompt=system_prompt, run_id=run_id)
+    common = dict(llm_client=llm_client, system_prompt=system_prompt, run_id=run_id, cfg=cfg)
     if kind == TargetKind.AGENT:
         tcfg = TargetConfig(system_prompt=system_prompt)
         backend = make_agent_backend(target_config=tcfg, pipeline_config=cfg)
         # Build a fresh owned target per row (composite prefixes -> model
         # "agent/<value>"); no long-lived parent target/client is left dangling.
-        return _create_static_job_for_agent_target(lambda: backend.create_target(value), label=value, run_id=run_id)
+        return _create_static_job_for_agent_target(
+            lambda: backend.create_target(value),
+            label=value,
+            cfg=cfg,
+            map_error=backend.map_error,
+            run_id=run_id,
+        )
     if kind == TargetKind.DEPLOYMENT:
         return create_model_job(deployment_key=value, **common)
     return create_model_job(model=value, **common)
@@ -1930,6 +1946,41 @@ async def _run_dynamic_or_hybrid(
             )
             at_ctx = AgentContext(key=at_deduped_label)
         at_contexts[id(at)] = at_ctx
+
+    # Pre-flight the target reasoning effort against the resolved model, here and
+    # not at the first target call: an agent's model is only known once context
+    # resolution has run, and everything after this point (capability
+    # classification, strategy generation, attack generation) costs LLM calls
+    # that a 400 on the first target invocation would throw away.
+    #
+    # Only ``TargetKind.AGENT`` string targets actually route through a backend
+    # that forwards ``target_reasoning_effort`` (make_agent_backend's OpenResponses
+    # exec leg). Model/deployment string targets execute via the ORQ SDK agents
+    # endpoint, which has no reasoning parameter, and a bare ``AgentTarget`` may
+    # or may not send it at all — this pre-flight cannot know. Both cases warn
+    # and skip rather than raise: a setting the target would never have received
+    # must not be able to kill a run that never needed it.
+    if pipeline_config is not None and pipeline_config.target_reasoning_effort:
+        effort = pipeline_config.target_reasoning_effort
+        for target_str in targets:
+            target_kind, _value = parse_target(target_str)
+            if target_kind != TargetKind.AGENT:
+                logger.warning(
+                    f'target_reasoning_effort={effort!r} is set but target {target_str!r} '
+                    f'(kind={target_kind.value}) executes via a backend that does not forward it; '
+                    'skipping the pre-flight check for it.'
+                )
+                continue
+            ctx = all_agent_contexts[target_str]
+            if ctx.model:
+                await validate_reasoning_effort(effort, ctx.model, llm_client)
+        for at in resolved_agent_targets:
+            label = agent_target_labels[id(at)]
+            logger.warning(
+                f'target_reasoning_effort={effort!r} is set but AgentTarget {label!r} is a bare '
+                'user-supplied target whose ability to forward it is unknown; skipping the pre-flight '
+                'check for it. The provider will reject an unsupported value at call time instead.'
+            )
 
     if targets:
         first_agent_context = all_agent_contexts[targets[0]]
@@ -3007,9 +3058,79 @@ async def _run_static(
         for t in targets
     ]
     jobs.extend(
-        _create_static_job_for_agent_target(at.new, agent_target_labels[id(at)], run_id=run_id)
+        _create_static_job_for_agent_target(
+            at.new,
+            agent_target_labels[id(at)],
+            cfg=pipeline_config,
+            map_error=BareTargetBackend(at).map_error,
+            run_id=run_id,
+        )
         for at in resolved_agent_targets
     )
+
+    # Fetch agent contexts for all targets (best-effort). Resolved before the
+    # evaluator/panel is built and before the confirm hook, not at report time:
+    # the report decorates itself with these (below), the self-judge/family-bias
+    # guard (RES-739) needs resolved model ids rather than raw target strings to
+    # fire at all, and the reasoning-effort pre-flight further down needs the
+    # target's model before the first target call is paid for. Kept
+    # unconditional (not gated on ``target_reasoning_effort``) because the first
+    # two consumers need it regardless of whether reasoning effort is configured.
+    # Still best-effort — a context that will not resolve must not stop a run
+    # that never needed it.
+    agent_contexts: dict[str, AgentContext] = {}
+    try:
+        static_backend = resolve_backend(
+            'orq', llm_client=llm_client, target_config=target_config, pipeline_config=pipeline_config
+        )
+        for t in targets:
+            _kind, value = parse_target(t)
+            try:
+                ctx = await static_backend.resolve_context(value)
+                agent_contexts[value] = ctx
+            except Exception:
+                logger.warning(f'Could not retrieve agent context for {value!r} — proceeding without it')
+    except Exception:
+        logger.warning('Could not resolve backend for agent context retrieval — proceeding without context')
+
+    # Pull agent context from AgentTarget objects that expose it.
+    for at in resolved_agent_targets:
+        label = agent_target_labels[id(at)]
+        provider = getattr(at, 'get_agent_context', None)
+        if not callable(provider):
+            continue
+        try:
+            agent_contexts[label] = await cast('Any', provider)()
+        except Exception:
+            logger.warning(f'Could not retrieve agent context for {label!r} — proceeding without it')
+
+    # Pre-flight the target reasoning effort, restricted the same way as the
+    # dynamic leg: only AGENT-kind string targets route through a backend
+    # (make_agent_backend / OpenResponses) that forwards it. Model/deployment
+    # string targets execute via the ORQ SDK agents endpoint (no reasoning
+    # parameter), and a bare AgentTarget's ability to forward it is unknown —
+    # both warn and skip rather than raise.
+    if pipeline_config is not None and pipeline_config.target_reasoning_effort:
+        effort = pipeline_config.target_reasoning_effort
+        for t in targets:
+            target_kind, value = parse_target(t)
+            if target_kind != TargetKind.AGENT:
+                logger.warning(
+                    f'target_reasoning_effort={effort!r} is set but target {t!r} '
+                    f'(kind={target_kind.value}) executes via a backend that does not forward it; '
+                    'skipping the pre-flight check for it.'
+                )
+                continue
+            ctx = agent_contexts.get(value)
+            if ctx is not None and ctx.model:
+                await validate_reasoning_effort(effort, ctx.model, llm_client)
+        for at in resolved_agent_targets:
+            label = agent_target_labels[id(at)]
+            logger.warning(
+                f'target_reasoning_effort={effort!r} is set but AgentTarget {label!r} is a bare '
+                'user-supplied target whose ability to forward it is unknown; skipping the pre-flight '
+                'check for it. The provider will reject an unsupported value at call time instead.'
+            )
 
     from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
 
@@ -3017,12 +3138,27 @@ async def _run_static(
     evaluator_client = evaluator_client or llm_client
     evaluator_cfg = pipeline_config.evaluator if pipeline_config else None
     panel_cfg = pipeline_config.evaluator if pipeline_config else None
+    # Resolved model ids (falling back to the raw target string when a context
+    # never resolved), not the raw target list: RES-739's family-bias guard
+    # compares this against the judge model, and an unresolved raw string like
+    # ``agent:abc123`` always resolves to provider family ``unknown``, which
+    # silently defeats the guard (matches the dynamic leg's
+    # ``pt.agent_context.model`` pattern above).
+    static_target_models: list[str] = []
+    for t in targets:
+        _kind, value = parse_target(t)
+        ctx = agent_contexts.get(value)
+        static_target_models.append(ctx.model if ctx is not None and ctx.model else t)
+    for at in resolved_agent_targets:
+        label = agent_target_labels[id(at)]
+        ctx = agent_contexts.get(label)
+        static_target_models.append(ctx.model if ctx is not None and ctx.model else label)
     panel_kwargs: dict[str, Any] = {
         'judges': panel_cfg.judges[1:] if panel_cfg else [],
         'judge_repetitions': panel_cfg.repetitions if panel_cfg else 1,
         'replacement_judges': panel_cfg.replacement_judges if panel_cfg else [],
         'min_successful_judges': panel_cfg.min_successful_judges if panel_cfg else 1,
-        'target_models': list(dict.fromkeys(targets)),
+        'target_models': list(dict.fromkeys(static_target_models)),
         'strict_panel': panel_cfg.strict_panel if panel_cfg else False,
     }
     evaluator = create_owasp_evaluator(
@@ -3129,33 +3265,6 @@ async def _run_static(
                     result.agent.model = t_value if t_kind.is_model else result.agent.model
                 job_report.tested_agents = [t_value]
                 break
-
-    # Fetch agent contexts for all targets (best-effort)
-    agent_contexts: dict[str, AgentContext] = {}
-    try:
-        static_backend = resolve_backend(
-            'orq', llm_client=llm_client, target_config=target_config, pipeline_config=pipeline_config
-        )
-        for t in targets:
-            _kind, value = parse_target(t)
-            try:
-                ctx = await static_backend.resolve_context(value)
-                agent_contexts[value] = ctx
-            except Exception:
-                logger.warning(f'Could not retrieve agent context for {value!r} — proceeding without it')
-    except Exception:
-        logger.warning('Could not resolve backend for agent context retrieval — proceeding without context')
-
-    # Pull agent context from AgentTarget objects that expose it.
-    for at in resolved_agent_targets:
-        label = agent_target_labels[id(at)]
-        provider = getattr(at, 'get_agent_context', None)
-        if not callable(provider):
-            continue
-        try:
-            agent_contexts[label] = await cast('Any', provider)()
-        except Exception:
-            logger.warning(f'Could not retrieve agent context for {label!r} — proceeding without it')
 
     all_job_reports = list(per_job_reports.values())
     if not all_job_reports:

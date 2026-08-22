@@ -94,6 +94,7 @@ class OpenAIModelTarget(AgentTarget):
         client: AsyncOpenAI | None = None,
         max_tokens: int | None = None,
         timeout_ms: int | None = None,
+        reasoning_effort: str | None = None,
     ):
         """Initialize the target with a model name, optional async client, and optional system prompt.
 
@@ -103,6 +104,14 @@ class OpenAIModelTarget(AgentTarget):
         The orchestrator owns target retries via ``call_target_with_retry``;
         auto-built clients therefore have SDK retries disabled and injected
         clients are cloned with that budget disabled at the target boundary.
+
+        ``reasoning_effort``, when set, is forwarded verbatim as the chat
+        completions ``reasoning_effort`` field; unlike
+        ``common.llm_call.execute_chat_completion`` this target does not
+        self-heal by dropping and retrying on a rejection — a model that
+        rejects the value fails the call. This target is not routed through
+        that shared executor at all (see ``respond``'s comment on why), so
+        this stays a direct field rather than a hand-rolled param dict.
         """
         super().__init__(memory_entity_id=None)
         self.model = model
@@ -111,6 +120,7 @@ class OpenAIModelTarget(AgentTarget):
         self.system_prompt = system_prompt or 'You are a helpful assistant.'
         self.max_tokens = max_tokens or DEFAULT_TARGET_MAX_TOKENS
         self.timeout_ms = timeout_ms or DEFAULT_TARGET_TIMEOUT_MS
+        self.reasoning_effort = reasoning_effort
 
     async def respond(self, messages: list[Message]) -> AgentResponse:
         """Stateless: send the provided message list + system prompt.
@@ -140,6 +150,8 @@ class OpenAIModelTarget(AgentTarget):
             'messages': completion_messages,
             'max_tokens': self.max_tokens,
         }
+        if self.reasoning_effort:
+            create_kwargs['reasoning_effort'] = self.reasoning_effort
         apply_pipeline_metadata(create_kwargs)
         if client_routes_through_orq(self.client):
             thread = thread_body_param()
@@ -201,6 +213,7 @@ class OpenAIModelTarget(AgentTarget):
             client=self.client,
             max_tokens=self.max_tokens,
             timeout_ms=self.timeout_ms,
+            reasoning_effort=self.reasoning_effort,
         )
 
     target_kind: TargetKind = TargetKind.OPENAI
@@ -228,6 +241,16 @@ class OpenAIModelTarget(AgentTarget):
 class OpenAIBackend(Backend):
     """Backend for direct OpenAI model targets.
 
+    **Not resolved by `red_team()`.** `_prepare_target` routes `TargetKind.AGENT`
+    to `make_agent_backend` and every other kind to `resolve_backend('orq', ...)`,
+    and the `openai:` target prefix was deliberately removed in favour of passing
+    `OpenAIModelTarget` as an object — which reaches the runner through
+    `BareTargetBackend`, never through this class. It stays as the reference
+    non-Orq `Backend` implementation, which `tests/redteam/test_retry_wiring.py`
+    and `test_backend_abc.py` use to pin contracts that apply to every backend.
+    Users extending evaluatorq implement `AgentTarget`, not `Backend`; see
+    docs/guides/targets.md.
+
     Targets are stateless. ``cleanup_memory`` is a no-op (OpenAI models do not
     own server-side memory).
     """
@@ -239,6 +262,7 @@ class OpenAIBackend(Backend):
         system_prompt: str | None = None,
         max_tokens: int | None = None,
         timeout_ms: int | None = None,
+        reasoning_effort: str | None = None,
     ) -> None:
         super().__init__(name='openai')
         # call_target_with_retry is the single retry owner for target calls.
@@ -246,6 +270,7 @@ class OpenAIBackend(Backend):
         self._system_prompt = system_prompt
         self._max_tokens = max_tokens
         self._timeout_ms = timeout_ms
+        self._reasoning_effort = reasoning_effort
 
     def create_target(self, agent_key: str) -> OpenAIModelTarget:
         return OpenAIModelTarget(
@@ -254,6 +279,7 @@ class OpenAIBackend(Backend):
             client=self._client,
             max_tokens=self._max_tokens,
             timeout_ms=self._timeout_ms,
+            reasoning_effort=self._reasoning_effort,
         )
 
     async def cleanup_memory(self, ctx: AgentContext, entity_ids: list[str]) -> None:

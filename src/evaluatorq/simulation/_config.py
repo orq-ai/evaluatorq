@@ -35,6 +35,7 @@ from pydantic import BaseModel, ConfigDict
 # with `from __future__ import annotations`, so they must be real, importable
 # names in this module's namespace and can't live behind `TYPE_CHECKING`.
 from evaluatorq.contracts import AgentTarget  # noqa: TC001
+from evaluatorq.simulation.evaluators.scorers import SimulationScoringConfig  # noqa: TC001
 from evaluatorq.simulation.hooks import SimulationHooks  # noqa: TC001
 from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig  # noqa: TC001
 from evaluatorq.simulation.types import DEFAULT_MODEL, Message, Persona, Scenario, SimulationDatapoint
@@ -71,7 +72,40 @@ class SimulationConfig(BaseModel):
     cap when replaying, else to ``DEFAULT_MAX_TURNS``."""
     model: str = DEFAULT_MODEL
     evaluator_names: list[str] | None = None
+    scoring: SimulationScoringConfig | None = None
+    """Policy knobs for the ``turn_efficiency`` / ``conversation_quality`` scorers
+    (cliffs, decay, floor, composite weights). ``None`` uses
+    ``DEFAULT_SCORING_CONFIG`` — the shipped defaults."""
     datapoint_parallelism: int = 10
+    target_agent_timeout_ms: int = 240_000
+    """Per-call timeout for the target under test, threaded into
+    ``SimulationRunner``. Mirrors red team's equivalent knob — a slow
+    self-hosted target needs this raised; ``EVALUATORQ_LLM_TIMEOUT_S`` only
+    covers the simulator's own (user-simulator / judge) LLM calls."""
+    max_target_retries: int = 2
+    """Retries for a failed target call, threaded into ``SimulationRunner``.
+    Mirrors red team's equivalent knob."""
+    target_reasoning_effort: str | None = None
+    """Reasoning effort pinned on the agent *under test* (``agent:<key>`` /
+    bare ``<key>`` targets only) — the simulation counterpart of red team's
+    ``LLMConfig.target_reasoning_effort``. ``None`` leaves the provider
+    default. Distinct from the simulator's own ``EVALUATORQ_REASONING_EFFORT``
+    fallback (see ``simulation.agents.base``), which drives the user-simulator
+    and judge, not the target."""
+    max_tool_result_chars: int = 500
+    """Cap on each tool result rendered into the text the user-simulator sees
+    for a tool-only turn (``runner.simulation._tool_traffic_text``). 500 by
+    default; raise it for a tool-heavy agent whose results are being cut
+    before the simulator — and the judge, which scores the same transcript —
+    can react to them."""
+    per_simulation_timeout_s: float | None = None
+    """Overall wall-clock bound for one datapoint's simulation (all turns,
+    target + user-simulator + judge calls included), applied via
+    ``SimulationRunner._run_with_timeout`` — the same guard ``run_batch`` uses.
+    ``None`` (the default) leaves no bound beyond the per-call timeouts
+    (``target_agent_timeout_ms`` / the simulator's own LLM timeout): a stalled
+    conversation was previously unbounded on the ``simulate()`` path, since it
+    calls ``runner.run()`` per row instead of ``run_batch``."""
     user_simulator: Any = None
     """``BaseAgent | None`` — ``Any`` at runtime, see module note above."""
     judge: Any = None

@@ -77,6 +77,37 @@ def test_evaluator_config_min_evaluation_coverage_accepts_none():
     assert cfg.min_evaluation_coverage is None
 
 
+def test_evaluator_config_accepts_llm_call_config_with_reasoning_effort():
+    """Regression (F1): EvaluatorConfig.model_validate(LLMCallConfig(...)) must
+    round-trip cleanly even when the LLMCallConfig carries reasoning_effort —
+    it used to hard-reject with 'Extra inputs are not permitted' because
+    EvaluatorConfig redeclared LLMCallConfig's fields by hand and had not been
+    updated when reasoning_effort was added there.
+    """
+    cfg = EvaluatorConfig.model_validate(LLMCallConfig(model='m', reasoning_effort='high'))
+    assert cfg.judges == ['m']
+    assert cfg.reasoning_effort == 'high'
+    call_cfg = cfg.as_call_config()
+    assert call_cfg.model == 'm'
+    assert call_cfg.reasoning_effort == 'high'
+
+
+def test_evaluator_config_field_set_agrees_with_llm_call_config():
+    """The import-time guardrail in redteam/contracts.py (mirroring
+    vulnerability_registry.py's registry-completeness check) must actually
+    catch a desync: simulate a field that exists on LLMCallConfig but not on
+    EvaluatorConfig and assert the same comparison it runs would fail.
+    """
+    call_config_fields = set(LLMCallConfig.model_fields)
+    evaluator_config_fields = set(EvaluatorConfig.model_fields)
+    assert call_config_fields <= evaluator_config_fields
+
+    # Simulate a LLMCallConfig field EvaluatorConfig never learned about.
+    fields_missing_a_field = evaluator_config_fields - {'reasoning_effort'}
+    missing = call_config_fields - fields_missing_a_field
+    assert missing == {'reasoning_effort'}
+
+
 def test_llm_config_no_backend_field():
     cfg = LLMConfig()
     assert not hasattr(cfg, 'backend')

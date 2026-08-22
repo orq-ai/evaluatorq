@@ -16,10 +16,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, BadRequestError
 
 from evaluatorq.contracts import AgentResponse, LLMCallConfig, Message
 from evaluatorq.openresponses.target import OrqResponsesTarget
+
+
+def _bad_request(message: str) -> BadRequestError:
+    request = httpx.Request("POST", "https://my.orq.ai/v3/router/responses")
+    response = httpx.Response(400, request=request)
+    return BadRequestError(message, response=response, body={"error": {"message": message}})
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -626,6 +632,141 @@ class TestOrqResponsesTargetTools:
         target_empty = OrqResponsesTarget(config, tools=[], client=client)
         await target_empty.respond(_make_messages())
         assert "tools" not in client.responses.create.call_args.kwargs
+
+
+class TestOrqResponsesTargetConfigParams:
+    @pytest.mark.asyncio
+    async def test_temperature_reaches_the_request(self):
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(LLMCallConfig(model="gpt-4o", temperature=0.3), client=client)
+
+        await target.respond(_make_messages())
+
+        assert client.responses.create.call_args.kwargs["temperature"] == 0.3
+
+    @pytest.mark.asyncio
+    async def test_extra_kwargs_reach_the_request(self):
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o", extra_kwargs={"top_p": 0.5, "store": True}),
+            client=client,
+        )
+
+        await target.respond(_make_messages())
+
+        kwargs = client.responses.create.call_args.kwargs
+        assert kwargs["top_p"] == 0.5
+        assert kwargs["store"] is True
+
+    @pytest.mark.asyncio
+    async def test_extra_kwargs_override_computed_values(self):
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o", temperature=0.3, extra_kwargs={"temperature": 0.9}),
+            client=client,
+        )
+
+        await target.respond(_make_messages())
+
+        assert client.responses.create.call_args.kwargs["temperature"] == 0.9
+
+    @pytest.mark.asyncio
+    async def test_extra_kwargs_cannot_replace_extra_body(self):
+        """``extra_body`` is a reserved structural key — it carries the internally
+        computed thread/memory router body, so a caller-supplied value must be
+        rejected rather than silently clobbering it."""
+        client = _make_client()
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o", extra_kwargs={"extra_body": {"malicious": True}}),
+            client=client,
+        )
+
+        with pytest.raises(ValueError, match="extra_body"):
+            await target.respond(_make_messages())
+
+        client.responses.create.assert_not_awaited()
+
+
+class TestOrqResponsesTargetReasoningEffort:
+    @pytest.mark.asyncio
+    async def test_reasoning_effort_forwarded_when_set(self):
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o", reasoning_effort="high"), client=client
+        )
+
+        await target.respond(_make_messages())
+
+        assert client.responses.create.call_args.kwargs["reasoning"] == {"effort": "high"}
+
+    @pytest.mark.asyncio
+    async def test_reasoning_omitted_when_unset(self):
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(LLMCallConfig(model="gpt-4o"), client=client)
+
+        await target.respond(_make_messages())
+
+        assert "reasoning" not in client.responses.create.call_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_reasoning_rejection_drops_and_retries_once(self):
+        """A 400 naming ``reasoning`` is dropped and retried once, like execute_response."""
+        client = _make_client()
+        rejection = _bad_request("Unsupported parameter: 'reasoning' is not supported with this model.")
+        good = _make_response(response_id="resp-after-drop")
+        client.responses.create = AsyncMock(side_effect=[rejection, good])
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o-mini", reasoning_effort="high"), client=client
+        )
+
+        result = await target.respond(_make_messages())
+
+        assert client.responses.create.await_count == 2
+        first_kwargs, second_kwargs = (c.kwargs for c in client.responses.create.call_args_list)
+        assert first_kwargs["reasoning"] == {"effort": "high"}
+        assert "reasoning" not in second_kwargs
+        assert result.model == "gpt-4o-mini" or result is not None
+
+    @pytest.mark.asyncio
+    async def test_unrelated_bad_request_propagates_without_retry(self):
+        """A 400 that does not name ``reasoning`` in the error body must not be swallowed."""
+        client = _make_client()
+        unrelated = _bad_request("Invalid value for 'temperature': must be between 0 and 2.")
+        client.responses.create = AsyncMock(side_effect=unrelated)
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o-mini", reasoning_effort="high"), client=client
+        )
+
+        with pytest.raises(BadRequestError):
+            await target.respond(_make_messages())
+
+        assert client.responses.create.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_memoized_rejection_strips_reasoning_up_front_on_next_call(self):
+        """After one rejection, a later call on the same target never re-sends ``reasoning``."""
+        client = _make_client()
+        rejection = _bad_request("Unsupported parameter: 'reasoning'.")
+        good = _make_response()
+        client.responses.create = AsyncMock(side_effect=[rejection, good, good])
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o-mini-memo", reasoning_effort="high"), client=client
+        )
+
+        await target.respond(_make_messages())
+        client.responses.create.reset_mock()
+        client.responses.create.side_effect = None
+        client.responses.create.return_value = good
+
+        await target.respond(_make_messages())
+
+        assert client.responses.create.await_count == 1
+        assert "reasoning" not in client.responses.create.call_args.kwargs
 
 
 # ---------------------------------------------------------------------------

@@ -962,6 +962,35 @@ def run(
         int,
         typer.Option('--num-scenarios', min=1, help='Number of scenarios to generate.'),
     ] = 5,
+    persona_seed: Annotated[
+        list[str] | None,
+        typer.Option(
+            '--persona-seed',
+            help=(
+                'Archetype seed for a persona, e.g. "angry retiree" (repeatable). '
+                'Each seed becomes one persona the LLM fleshes out — overrides '
+                '--num-personas. Omit to auto-generate.'
+            ),
+        ),
+    ] = None,
+    scenario_seed: Annotated[
+        list[str] | None,
+        typer.Option(
+            '--scenario-seed',
+            help=(
+                'Situation seed for a scenario, e.g. "disputes a refund denial" '
+                '(repeatable). Each seed becomes one scenario — overrides '
+                '--num-scenarios. Omit to auto-generate.'
+            ),
+        ),
+    ] = None,
+    target_reasoning_effort: Annotated[
+        str | None,
+        typer.Option(
+            '--target-reasoning-effort',
+            help='Reasoning effort pinned on the target agent under test (agent:<key> targets only).',
+        ),
+    ] = None,
     evaluator: Annotated[
         list[str] | None,
         typer.Option('--evaluator', help='Evaluator name (repeatable). Defaults to API defaults.'),
@@ -1097,6 +1126,9 @@ def run(
                 save_datapoints=datapoints_path,
                 hooks=hooks,
                 recommendations=recommendations,
+                persona_seeds=persona_seed,
+                scenario_seeds=scenario_seed,
+                target_reasoning_effort=target_reasoning_effort,
             )
         )
     except KeyboardInterrupt:
@@ -1155,6 +1187,9 @@ async def _run_impl(
     save_datapoints: Path | None = None,
     hooks: Any = None,
     recommendations: bool = True,
+    persona_seeds: list[str] | None = None,
+    scenario_seeds: list[str] | None = None,
+    target_reasoning_effort: str | None = None,
 ) -> SimulationRun:
     from evaluatorq.simulation.api import _generate_and_simulate_run
 
@@ -1185,6 +1220,9 @@ async def _run_impl(
         emit_datapoints=emit,
         hooks=hooks,
         recommendations=recommendations,
+        persona_seeds=persona_seeds,
+        scenario_seeds=scenario_seeds,
+        target_reasoning_effort=target_reasoning_effort,
     )
 
 

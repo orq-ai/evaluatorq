@@ -27,6 +27,9 @@ if TYPE_CHECKING:
 MAX_RETRY_ATTEMPTS = 5
 RETRY_MIN_WAIT_S = 2.0
 RETRY_MAX_WAIT_S = 60.0
+# Fraction of the computed wait added as random jitter, to stop a fleet of
+# concurrent datapoints retrying in lockstep against the same rate limit.
+RETRY_JITTER_FRACTION = 0.25
 
 T = TypeVar('T')
 
@@ -105,6 +108,9 @@ async def with_retry(
     fn: Callable[[], Awaitable[T]],
     *,
     max_attempts: int = MAX_RETRY_ATTEMPTS,
+    min_wait_s: float = RETRY_MIN_WAIT_S,
+    max_wait_s: float = RETRY_MAX_WAIT_S,
+    jitter_fraction: float = RETRY_JITTER_FRACTION,
     retry_statuses: Iterable[int] | None = None,
     label: str = 'API call',
 ) -> T:
@@ -113,9 +119,23 @@ async def with_retry(
     Retries on rate-limit (429), server errors (500+), and network errors
     (connection reset, timeout, DNS). All other errors are raised immediately.
     ``asyncio.TimeoutError`` and ``asyncio.CancelledError`` are never retried.
+
+    The backoff curve is ``min_wait_s * 2 ** (attempt - 1)``, capped at
+    ``max_wait_s``, plus up to ``jitter_fraction`` of that wait chosen at random.
+    All three are parameters because a provider with a long rate-limit window
+    needs a different curve than a flaky local endpoint, and the module defaults
+    used to be the only option.
+
+    This is one of the package's two retry layers and they compose
+    multiplicatively — a call path uses this **or** the SDK's own ``max_retries``,
+    never both.
     """
     if max_attempts < 1:
         raise ValueError(f'with_retry: max_attempts must be >= 1, got {max_attempts}')
+    if min_wait_s < 0 or max_wait_s < 0:
+        raise ValueError(f'with_retry: waits must be >= 0, got min={min_wait_s}, max={max_wait_s}')
+    if jitter_fraction < 0:
+        raise ValueError(f'with_retry: jitter_fraction must be >= 0, got {jitter_fraction}')
     last_error: Exception = RuntimeError('with_retry: no attempts made')
     retry_status_set = set(retry_statuses) if retry_statuses is not None else None
 
@@ -131,9 +151,9 @@ async def with_retry(
                 raise
 
             if attempt < max_attempts:
-                base_wait = RETRY_MIN_WAIT_S * (2 ** (attempt - 1))
-                wait_s = min(base_wait, RETRY_MAX_WAIT_S)
-                jitter = random.uniform(0, wait_s * 0.25)
+                base_wait = min_wait_s * (2 ** (attempt - 1))
+                wait_s = min(base_wait, max_wait_s)
+                jitter = random.uniform(0, wait_s * jitter_fraction)
                 logger.warning(
                     '{}: attempt {}/{} failed ({}), retrying in {:.1f}s',
                     label,

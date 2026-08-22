@@ -295,7 +295,7 @@ class TestCallLlmDispatch:
 
     @pytest.mark.asyncio
     async def test_responses_drops_reasoning_and_retries_when_rejected(self, monkeypatch):
-        monkeypatch.setattr("evaluatorq.simulation.agents.base.DEFAULT_REASONING_EFFORT", "low")
+        monkeypatch.setattr("evaluatorq.simulation.agents.base._default_reasoning_effort", lambda: "low")
         client = _make_client()
         ok = MagicMock()
         ok.output = []
@@ -318,7 +318,7 @@ class TestCallLlmDispatch:
     async def test_responses_reasoning_rejection_is_memoized(self, monkeypatch):
         """After one model rejects reasoning, later calls strip it up front —
         no repeat 400. The conftest fixture resets the memo between tests."""
-        monkeypatch.setattr("evaluatorq.simulation.agents.base.DEFAULT_REASONING_EFFORT", "low")
+        monkeypatch.setattr("evaluatorq.simulation.agents.base._default_reasoning_effort", lambda: "low")
         client = _make_client()
         ok = MagicMock()
         ok.output = []
@@ -340,7 +340,7 @@ class TestCallLlmDispatch:
 
     @pytest.mark.asyncio
     async def test_responses_reraises_unrelated_400(self, monkeypatch):
-        monkeypatch.setattr("evaluatorq.simulation.agents.base.DEFAULT_REASONING_EFFORT", "low")
+        monkeypatch.setattr("evaluatorq.simulation.agents.base._default_reasoning_effort", lambda: "low")
         client = _make_client()
         client.responses.create = AsyncMock(side_effect=_bad_request("Invalid tool schema"))
 

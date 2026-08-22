@@ -157,6 +157,7 @@ class ORQAgentTarget(AgentTarget):
         memory_entity_id: str | None = None,
         model: str | None = None,
         timeout_ms: int | None = None,
+        max_tool_continuations: int | None = None,
     ):
         """Initialize the ORQ agent target with client and configuration.
 
@@ -164,6 +165,11 @@ class ORQAgentTarget(AgentTarget):
         instance owns a ``memory_entity_id`` so parallel jobs stay isolated;
         if not provided, one is generated. The pipeline reads this attribute
         after construction to track entities for cleanup.
+
+        ``max_tool_continuations`` caps client-driven tool-result continuation
+        rounds (see ``respond``); ``None`` falls back to
+        ``PIPELINE_CONFIG.max_tool_continuations`` so direct construction
+        outside the backend/registry path keeps working.
         """
         # Track whether the id was explicitly seeded (constructor or later
         # assignment) vs auto-minted: a seeded id must survive ``new()`` while
@@ -176,6 +182,9 @@ class ORQAgentTarget(AgentTarget):
         self.orq_client = orq_client
         self.model = model
         self._timeout_ms = timeout_ms
+        self._max_tool_continuations = (
+            max_tool_continuations if max_tool_continuations is not None else PIPELINE_CONFIG.max_tool_continuations
+        )
         self._task_id: str | None = None
         self._cached_context: AgentContext | None = None
 
@@ -353,7 +362,7 @@ class ORQAgentTarget(AgentTarget):
 
                 # Some agent tool flows require client-provided tool_result parts.
                 # Continue the same task with synthetic tool results so the thread can progress.
-                max_tool_continuations = PIPELINE_CONFIG.max_tool_continuations
+                max_tool_continuations = self._max_tool_continuations
                 pending_ids = _pending_tool_call_ids(response)
                 continuation_count = 0
                 while pending_ids and continuation_count < max_tool_continuations:
@@ -459,6 +468,7 @@ class ORQAgentTarget(AgentTarget):
             memory_entity_id=self.memory_entity_id if self._memory_entity_seeded else None,
             model=self.model,
             timeout_ms=self._timeout_ms,
+            max_tool_continuations=self._max_tool_continuations,
         )
 
     target_kind: TargetKind = TargetKind.AGENT
@@ -639,10 +649,12 @@ class ORQBackend(Backend):
         timeout_ms: int | None = None,
         retry_count: int | None = None,
         retry_on_codes: list[int] | None = None,
+        max_tool_continuations: int | None = None,
     ) -> None:
         super().__init__(name='orq')
         timeout_ms = timeout_ms or PIPELINE_CONFIG.target_agent_timeout_ms
         self._timeout_ms = timeout_ms
+        self._max_tool_continuations = max_tool_continuations
         warn_ignored_target_retries(
             'ORQ',
             retry_count=retry_count,
@@ -671,6 +683,7 @@ class ORQBackend(Backend):
             agent_key=agent_key,
             orq_client=self._orq_client,
             timeout_ms=self._timeout_ms,
+            max_tool_continuations=self._max_tool_continuations,
         )
 
     async def cleanup_memory(self, ctx: AgentContext, entity_ids: list[str]) -> None:

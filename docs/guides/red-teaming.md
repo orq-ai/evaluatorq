@@ -204,6 +204,10 @@ run options.
         with `openai/...` (which then uses `ORQ_API_KEY`). Everything else —
         categories, modes, the report — is identical to the Orq agent path.
 
+The two tabs above are the two most common targets. For the full set — including
+`OrqResponsesTarget` (the Responses API through the Orq router, with per-call
+config) — and for writing your own, see [Targets](targets.md).
+
 !!! note "`generate_strategies` and the CLI"
     Both examples pass `generate_strategies=False` to skip LLM-authored attack
     strategies and run only the built-in ones — faster and more deterministic.
@@ -407,12 +411,25 @@ post-processing calls are real spend that lands outside it:
 - Capability classification (resource inference, tool classification) and
   blackbox target classification.
 - Strategy and objective generation.
-- Structured-output retries and the `json_object` fallback re-request.
 - Recommendations, trace condensing, and the executive summary.
 - Target-side usage, when the backend does not report it back.
 
+A structured-output call's own fallback ladder is no longer among them. When a
+provider rejects the strict schema, the helper degrades through a non-strict
+schema, a forced tool call and a bare `json_object` request — up to four billed
+calls for one answer. Every rung that reached the provider is now counted in that
+call's usage, not just the rung that answered, so a call that degraded twice is
+priced as three calls rather than one. Whether that figure reaches
+`token_usage_total` still depends on where the call sits: the recommendations and
+trace-condensing calls above run after the summary is finalized, so their totals
+are written to the run log (`Red-team recommendations: N tokens over M LLM
+call(s), $X`) rather than into the report.
+
 If `priced_calls < calls` in the summary, some counted calls had no provider
-price either, so the dollar figure is a lower bound on a subset.
+price either, so the dollar figure is a lower bound on a subset. The same is true
+within a single structured-output call: a rung whose usage block the provider did
+not report is counted as one unpriced call — never as zero — and logged, so the
+call count stays honest even when the tokens behind it are unknown.
 
 ## In CI
 
@@ -512,6 +529,12 @@ report = await red_team(
 | Pydantic AI | `PydanticAITarget` | `evaluatorq[pydantic-ai]` | [`19_pydantic_ai_target.py`](../examples/redteam/19_pydantic_ai_target.md) |
 | CrewAI | `CrewAITarget` | `evaluatorq[crewai]` | [`20_crewai_target.py`](../examples/redteam/20_crewai_target.md) |
 
+Nothing in that list fits? Any `AgentTarget` works, and
+[Targets](targets.md#writing-your-own-target) walks through writing one —
+what `respond()` and `new()` must do, why declaring tools in
+`get_agent_context()` decides which attack strategies fire, and how to surface
+errors so a dead target is not scored as resistant.
+
 ### Demo runs
 
 Live runs of the four examples above (dynamic mode, 3 attacks each, routed through
@@ -574,3 +597,4 @@ external-framework targets:
 - **[Examples › Red Teaming](../examples/index.md)** — static datasets, category filtering, custom clients, multi-target, report inspection, custom hooks.
 - **[API Reference › redteam](../reference/evaluatorq/redteam.md)** — the full `Vulnerability` enum and the OWASP `LLM__` / `ASI__` category codes you can pass to `categories=`. The [CLI Reference](../cli-reference/redteam.md#eq-redteam-run) lists the same as `--category` / `--vulnerability`.
 - **[Custom Evaluators & Frameworks](../custom-evaluators-and-frameworks.md)** — add your own vulnerabilities and attack strategies.
+- **[Tuning](../tuning.md)** — target timeouts, retry budgets, reasoning effort, and provider options.

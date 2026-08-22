@@ -6,6 +6,7 @@ import pytest
 
 from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.evaluators import (
+    SimulationScoringConfig,
     conversation_quality_scorer,
     criteria_met_scorer,
     get_all_evaluators,
@@ -81,8 +82,14 @@ class TestTurnEfficiencyScorer:
         assert turn_efficiency_scorer(result) == 0.7
 
     def test_very_slow_resolution(self):
-        result = _make_result(goal_achieved=True, turn_count=10)
-        assert turn_efficiency_scorer(result) == 0.6
+        result = _make_result(goal_achieved=True, turn_count=8)
+        assert turn_efficiency_scorer(result) == 0.5
+
+    def test_curve_is_monotonic_across_the_decay_seam(self):
+        """The decay continues from the last cliff, so one more turn never scores higher."""
+        scores = [turn_efficiency_scorer(_make_result(goal_achieved=True, turn_count=n)) for n in range(1, 16)]
+        assert scores == sorted(scores, reverse=True)
+        assert scores[:8] == [1.0, 1.0, 0.9, 0.9, 0.7, 0.7, 0.6, 0.5]
 
     def test_single_turn_resolution(self):
         result = _make_result(goal_achieved=True, turn_count=1)
@@ -131,3 +138,92 @@ class TestEvaluatorRegistry:
         a = get_all_evaluators()
         b = get_all_evaluators()
         assert a is not b
+
+
+class TestSimulationScoringConfig:
+    """The config is the documented policy surface; these cover its bounds and threading."""
+
+    def test_defaults_reproduce_shipped_behaviour(self):
+        result = _make_result(goal_achieved=True, turn_count=4, criteria_results={"a": True, "b": False})
+        assert conversation_quality_scorer(result) == conversation_quality_scorer(result, SimulationScoringConfig())
+
+    def test_worked_example_from_the_docstring(self):
+        # goal_achieved 1.0 * 0.4 + criteria_met 0.5 * 0.3 + turn_efficiency 0.9 * 0.3 = 0.82
+        result = _make_result(goal_achieved=True, turn_count=4, criteria_results={"a": True, "b": False})
+        assert conversation_quality_scorer(result) == 0.82
+
+    def test_weights_are_applied(self):
+        result = _make_result(goal_achieved=True, turn_count=4, criteria_results={"a": True, "b": False})
+        goal_only = SimulationScoringConfig(
+            goal_achieved_weight=1.0, criteria_met_weight=0.0, turn_efficiency_weight=0.0
+        )
+        assert conversation_quality_scorer(result, goal_only) == 1.0
+
+    def test_wider_cliffs_stop_penalising_a_long_task(self):
+        config = SimulationScoringConfig(turn_efficiency_cliffs=((6, 1.0), (10, 0.9), (16, 0.7)))
+        result = _make_result(goal_achieved=True, turn_count=9)
+        assert turn_efficiency_scorer(result) == 0.4
+        assert turn_efficiency_scorer(result, config) == 0.9
+
+    def test_failed_run_scores_zero_regardless_of_config(self):
+        config = SimulationScoringConfig(turn_efficiency_cliffs=((100, 1.0),))
+        assert turn_efficiency_scorer(_make_result(goal_achieved=False, turn_count=1), config) == 0.0
+
+    def test_weights_must_sum_to_one(self):
+        with pytest.raises(ValueError, match="must sum to 1.0"):
+            SimulationScoringConfig(goal_achieved_weight=0.5)
+
+    def test_cliff_turns_must_increase(self):
+        with pytest.raises(ValueError, match="must strictly increase"):
+            SimulationScoringConfig(turn_efficiency_cliffs=((4, 0.9), (2, 1.0)))
+
+    def test_cliff_scores_must_not_increase(self):
+        with pytest.raises(ValueError, match="must not increase with turns"):
+            SimulationScoringConfig(turn_efficiency_cliffs=((2, 0.5), (4, 0.9)))
+
+    def test_cliffs_must_not_be_empty(self):
+        with pytest.raises(ValueError, match="at least one"):
+            SimulationScoringConfig(turn_efficiency_cliffs=())
+
+    def test_floor_must_not_exceed_last_cliff(self):
+        with pytest.raises(ValueError, match="exceeds the last cliff score"):
+            SimulationScoringConfig(turn_efficiency_floor=0.9)
+
+    def test_unknown_field_is_rejected(self):
+        with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+            SimulationScoringConfig(turn_efficiency_cliff=((2, 1.0),))  # pyright: ignore[reportCallIssue]
+
+    def test_get_evaluator_binds_the_config(self):
+        config = SimulationScoringConfig(turn_efficiency_cliffs=((12, 1.0),))
+        result = _make_result(goal_achieved=True, turn_count=10)
+        assert get_evaluator("turn_efficiency", config)(result) == 1.0
+        assert get_evaluator("turn_efficiency")(result) == 0.3
+
+    def test_get_all_evaluators_binds_the_config(self):
+        config = SimulationScoringConfig(turn_efficiency_cliffs=((12, 1.0),))
+        result = _make_result(goal_achieved=True, turn_count=10, criteria_results={"a": True})
+        evaluators = get_all_evaluators(config)
+        assert evaluators["conversation_quality"](result) == 1.0
+        # Judge-verdict scorers have nothing to tune, so they are returned unwrapped.
+        assert evaluators["goal_achieved"] is goal_achieved_scorer
+
+
+class TestScoringConfigIsReachable:
+    """`scoring=` must reach the scorers the same way `recommendations=` reaches its config."""
+
+    def test_public_entry_points_accept_scoring(self):
+        import inspect
+
+        from evaluatorq.simulation import generate_and_simulate, simulate
+
+        for fn in (simulate, generate_and_simulate):
+            param = inspect.signature(fn).parameters.get("scoring")
+            assert param is not None, f"{fn.__name__} has no scoring= parameter"
+            assert param.default is None
+
+    def test_internal_config_carries_it_to_the_scorers(self):
+        from evaluatorq.simulation._config import SimulationConfig
+
+        config = SimulationConfig(scoring=SimulationScoringConfig(turn_efficiency_cliffs=((12, 1.0),)))
+        scorer = get_evaluator("turn_efficiency", config.scoring)
+        assert scorer(_make_result(goal_achieved=True, turn_count=10)) == 1.0

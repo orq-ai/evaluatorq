@@ -575,11 +575,21 @@ from evaluatorq.contracts import (  # noqa: F401
 )
 
 
-class EvaluatorConfig(BaseModel):
+class EvaluatorConfig(LLMCallConfig):
     """LLM evaluator-role configuration, including the optional judge panel.
 
     ``model="x"`` is accepted as shorthand for ``judges=["x"]``. Decode/client
     fields are shared across every judge in the panel.
+
+    Inherits its call-config fields (``model``, ``api``, ``temperature``,
+    ``max_tokens``, ``timeout_ms``, ``extra_kwargs``, ``reasoning_effort``,
+    ``client``, ``retry_count``) from `LLMCallConfig` instead of redeclaring
+    them, so a field added there (e.g. ``reasoning_effort``) is automatically
+    accepted here too — redeclaring them by hand is what let this class and
+    ``as_call_config()`` desync from `LLMCallConfig` and reject the sugar
+    conversion at ``:  _accept_model_sugar`` with ``extra_kwargs cannot...``.
+    ``_EVALUATOR_CONFIG_FIELDS_AGREE`` below asserts the two field sets stay
+    aligned at import time.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra='forbid')
@@ -648,16 +658,15 @@ class EvaluatorConfig(BaseModel):
         return self.judges[0]
 
     def as_call_config(self) -> LLMCallConfig:
-        return LLMCallConfig(
-            model=self.model or self.judges[0],
-            api=self.api,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-            timeout_ms=self.timeout_ms,
-            extra_kwargs=self.extra_kwargs,
-            client=self.client,
-            retry_count=self.retry_count,
-        )
+        """Project the shared `LLMCallConfig` fields back into a standalone instance.
+
+        Reads every field via ``getattr(self, name)`` for ``name in
+        LLMCallConfig.model_fields`` rather than enumerating them by hand, so a
+        field added to `LLMCallConfig` (e.g. ``reasoning_effort``) is carried
+        through automatically instead of silently dropped here a second time.
+        """
+        values = {name: getattr(self, name) for name in LLMCallConfig.model_fields if name != 'model'}
+        return LLMCallConfig(model=self.model or self.judges[0], **values)
 
     @model_validator(mode='after')
     def _check_min_successful_judges(self) -> 'EvaluatorConfig':
@@ -675,6 +684,20 @@ class EvaluatorConfig(BaseModel):
         object.__setattr__(self, 'judges', panel)
         object.__setattr__(self, 'model', panel[0])
         return self
+
+
+# Guardrail for the desync this class used to have with LLMCallConfig (F1):
+# EvaluatorConfig inherits its call-config fields rather than redeclaring them,
+# but assert it explicitly so a future refactor back to composition/duplication
+# fails fast at import time instead of surfacing as a ValidationError deep in a
+# pipeline run. Mirrors the vulnerability_registry.py pattern of asserting
+# derived collections agree with their source of truth.
+_missing_call_config_fields = set(LLMCallConfig.model_fields) - set(EvaluatorConfig.model_fields)
+if _missing_call_config_fields:
+    raise RuntimeError(
+        f'EvaluatorConfig is missing LLMCallConfig field(s) {sorted(_missing_call_config_fields)}; '
+        'a field was added to LLMCallConfig without EvaluatorConfig inheriting/declaring it.'
+    )
 
 
 class RedTeamRecommendationConfig(RecommendationConfigBase):
@@ -786,6 +809,20 @@ class LLMConfig(BaseModel):
     # which only cover HTTP errors via the ORQ router. 0 disables retries (the
     # unusable turn stops the attack immediately rather than being forwarded).
     max_content_filter_retries: int = Field(default=2, ge=0, le=10)
+    # Consecutive adversarial-LLM timeouts (across turns, not within a single
+    # regenerate_on_content_filter attempt) before the orchestrator abandons
+    # the attack. Distinct from max_content_filter_retries: a timeout is a
+    # transport failure the attacker never responded to, not a refusal it did.
+    max_consecutive_adversarial_timeouts: int = Field(default=2, ge=1, le=10)
+    # Objectives requested per attacker LLM call before objective_generator
+    # batches into multiple calls. Governs live-call cost directly: raising it
+    # asks for more objectives (and more output tokens) per call; ~150 tokens
+    # per objective is what keeps the default from truncating.
+    max_objectives_per_llm_call: int = Field(default=8, ge=1)
+    # Probe turns blackbox_classifier.classify_agent_capabilities_blackbox may
+    # send before giving up on capability inference. Each turn is a live call
+    # against the target, so this is a cost/latency knob, not just a loop guard.
+    max_probe_turns: int = Field(default=8, ge=1)
 
     # --- Cleanup timeout ------------------------------------------------------
     cleanup_timeout_ms: int = 60_000
@@ -796,6 +833,10 @@ class LLMConfig(BaseModel):
     # Sole retry owner: targets built for it must disable their own SDK budgets.
     # A retry never consumes a new attacker turn or changes the transcript.
     max_target_retries: int = Field(default=2, ge=0, le=10)
+    # Reasoning effort for the target agent (Responses targets only). Forwarded
+    # verbatim as ``reasoning={'effort': ...}``; accepted values differ per model,
+    # so the provider validates and rejects an unsupported one with a 400.
+    target_reasoning_effort: str | None = None
 
     # --- Agent tool continuation cap ------------------------------------------
     max_tool_continuations: int = Field(

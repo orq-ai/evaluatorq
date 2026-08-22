@@ -17,6 +17,7 @@ from typing import Any, Protocol
 from loguru import logger
 
 from evaluatorq.common.llm_call import apply_pipeline_metadata
+from evaluatorq.contracts import LLMCallConfig
 
 
 class _ChatCompletions(Protocol):
@@ -71,7 +72,13 @@ Rules:
 
 # Request params for the executive-summary completion. Exposed as constants so
 # callers that trace the call (e.g. simulation's with_llm_span) report the exact
-# values sent instead of re-typing literals that could drift.
+# values sent instead of re-typing literals that could drift. Both are also
+# accepted as overridable keyword params on `generate_executive_summary` below —
+# the constants remain the defaults, not a hard ceiling. 400 completion tokens
+# is mostly consumed by hidden reasoning on a reasoning-class model (the
+# package default, DEFAULT_PIPELINE_MODEL), so an empty summary is a likely
+# outcome at this default regardless of the merge-order bug fixed below; raise
+# ``max_tokens`` if that turns out to be the case for your model.
 EXECUTIVE_SUMMARY_TEMPERATURE = 0.7
 EXECUTIVE_SUMMARY_MAX_TOKENS = 400
 
@@ -105,6 +112,8 @@ async def generate_executive_summary(
     model: str,
     system_prompt: str = EXECUTIVE_SUMMARY_SYSTEM_PROMPT,
     temperature: float = EXECUTIVE_SUMMARY_TEMPERATURE,
+    max_tokens: int = EXECUTIVE_SUMMARY_MAX_TOKENS,
+    reasoning_effort: str | None = None,
     extra_body: dict[str, Any] | None = None,
     extra_kwargs: dict[str, Any] | None = None,
 ) -> str | None:
@@ -112,17 +121,29 @@ async def generate_executive_summary(
 
     Returns the stripped paragraph, or ``None`` when ``facts`` is blank, the
     completion is empty, or any error occurs (logged, never raised).
+
+    Params are built via `LLMCallConfig.completion_params`, not a hand-rolled
+    dict splatted next to explicit ``temperature=``/``max_completion_tokens=``
+    keywords: the old shape raised ``TypeError: got multiple values for keyword
+    argument`` the moment a caller passed ``extra_kwargs={'temperature': 1}`` —
+    the documented escape hatch for reasoning-class models that reject a
+    lowered temperature — and that ``TypeError`` was swallowed by the blanket
+    ``except Exception`` below, so the failure surfaced only as a silently
+    ``None`` summary. ``completion_params`` reserves the same escape hatch by
+    construction: caller-supplied ``extra_kwargs`` values win the merge.
     """
     if not facts or not facts.strip():
         return None
     try:
-        # Merge splat kwargs into one dict for last-wins precedence and to keep
-        # basedpyright's platform-conditional overload checks happy.
-        merged_kwargs: Any = {
-            'extra_body': extra_body or {},
-            **(extra_kwargs or {}),
-        }
-        apply_pipeline_metadata(merged_kwargs)
+        cfg = LLMCallConfig(
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
+            extra_kwargs=extra_kwargs or {},
+        )
+        params = cfg.completion_params(extra_body=extra_body or {})
+        apply_pipeline_metadata(params)
         # RES-1295: this call extracts no priced usage. `_record_usage_on_current_span`
         # below annotates whatever span is active with token *counts* for
         # tracing, but never calls `price_usage`, so this call's cost never
@@ -136,9 +157,7 @@ async def generate_executive_summary(
                 {'role': 'system', 'content': system_prompt},
                 {'role': 'user', 'content': facts},
             ],
-            temperature=temperature,
-            max_completion_tokens=EXECUTIVE_SUMMARY_MAX_TOKENS,
-            **merged_kwargs,
+            **params,
         )
         _record_usage_on_current_span(response)
         content = response.choices[0].message.content or ''

@@ -20,7 +20,7 @@ from evaluatorq.common.extract_json import coerce_str_list, extract_json_from_re
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.recommendations import RecommendationConfigBase
 from evaluatorq.common.sanitize import xml_escape
-from evaluatorq.common.structured_output import generate_structured
+from evaluatorq.common.structured_output import generate_structured, log_structured_usage, sum_structured_usage
 from evaluatorq.simulation.reports.sections import (
     _criteria_rows,
     _is_errored,
@@ -33,6 +33,7 @@ from evaluatorq.simulation.types import SimulationRecommendation
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
+    from evaluatorq.contracts import TokenUsage
     from evaluatorq.simulation.types import SimulationResult
 
 
@@ -242,20 +243,24 @@ async def generate_recommendations(
         idx: int,
         result: SimulationResult,
         triggers: list[tuple[str, str]],
-    ) -> SimulationRecommendation | None:
-        """Analyze one result. Returns None when the call fails or yields nothing."""
+    ) -> tuple[SimulationRecommendation | None, TokenUsage | None]:
+        """Analyze one result, with what the call cost.
+
+        The recommendation is ``None`` when the call fails or yields nothing; the
+        usage element is still whatever the call billed, and is ``None`` only
+        when the call raised before any rung reached the provider.
+        """
         messages = [
             {'role': 'system', 'content': _SYSTEM_PROMPT.format(max_suggestions=config.max_suggestions)},
             {'role': 'user', 'content': _build_user_prompt(result, triggers, config)},
         ]
+        # This opt-in post-processing step runs after per-simulation usage has
+        # already been summarized, so its spend has no report field; the phase
+        # total is logged by the caller instead (RES-1295). See "What the totals
+        # do not include" in docs/guides/red-teaming.md.
+        usage: TokenUsage | None = None
         try:
-            # RES-1295: generate_structured extracts no usage, so this call's
-            # tokens never reach any total. `SimulationRecommendation` has no
-            # usage field and this opt-in post-processing step runs after
-            # per-simulation usage has already been summarized — adding a sink
-            # here would mean widening a public result type. See "What the
-            # totals do not include" in docs/guides/red-teaming.md.
-            parsed, raw = await generate_structured(
+            result_out = await generate_structured(
                 client=llm_client,
                 model=model,
                 messages=messages,
@@ -266,16 +271,18 @@ async def generate_recommendations(
                 extra_kwargs=dict(llm_kwargs or {}),
                 api='responses',
             )
+            usage = result_out.usage
+            parsed = result_out.parsed
             if parsed is None:
                 # Fallback path: parse the json_object payload, tolerating a
                 # ```json fenced body from providers that ignore response_format.
-                parsed = _SuggestionsLLMResponse.model_validate_json(extract_json_from_response(raw))
+                parsed = _SuggestionsLLMResponse.model_validate_json(extract_json_from_response(result_out.raw))
             suggestions = [str(s) for s in parsed.suggestions if s][: config.max_suggestions]
             if not suggestions:
-                return None
+                return None, usage
 
             datapoint_id = result.metadata.get('datapoint_id')
-            return SimulationRecommendation(
+            recommendation = SimulationRecommendation(
                 result_index=idx,
                 datapoint_id=str(datapoint_id) if datapoint_id else None,
                 persona=_persona_name(result),
@@ -285,7 +292,8 @@ async def generate_recommendations(
             )
         except Exception:
             logger.warning(f'Failed to generate recommendations for result #{idx + 1}', exc_info=True)
-            return None
+            return None, usage
+        return recommendation, usage
 
     # One span over the whole batch: without it each per-result call attaches
     # straight to the trace root, so a 10-result batch renders as 10 loose
@@ -301,4 +309,8 @@ async def generate_recommendations(
         # in result order.
         settled = await asyncio.gather(*starmap(_one, triggered))
 
-    return [rec for rec in settled if rec is not None]
+    log_structured_usage(
+        sum_structured_usage([usage for _rec, usage in settled]),
+        phase='Simulation recommendations',
+    )
+    return [rec for rec, _usage in settled if rec is not None]

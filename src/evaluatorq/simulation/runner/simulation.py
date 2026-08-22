@@ -85,25 +85,30 @@ class RunSinks:
 _MAX_TOOL_RESULT_CHARS = 500
 
 
-def _tool_traffic_text(message: Message, results: Mapping[str, str]) -> str:
+def _tool_traffic_text(message: Message, results: Mapping[str, str], max_chars: int = _MAX_TOOL_RESULT_CHARS) -> str:
     """Render an assistant turn's tool calls and their results as plain text.
 
-    Each result is truncated; a tool that returns a page of JSON would otherwise
-    dominate the simulator's view of a turn it is only meant to react to.
+    Each result is truncated to ``max_chars``; a tool that returns a page of
+    JSON would otherwise dominate the simulator's view of a turn it is only
+    meant to react to. ``max_chars`` defaults to the module constant so direct
+    callers (tests, other call sites) keep today's behaviour; `SimulationRunner`
+    threads its own ``max_tool_result_chars`` config value through instead.
     """
     lines: list[str] = []
     for call in message.tool_calls or []:
         line = f'{call.function.name}({call.function.arguments})'
         result = results.get(call.id)
         if result is not None:
-            if len(result) > _MAX_TOOL_RESULT_CHARS:
-                result = f'{result[:_MAX_TOOL_RESULT_CHARS]}… (truncated)'
+            if len(result) > max_chars:
+                result = f'{result[:max_chars]}… (truncated)'
             line = f'{line} -> {result}'
         lines.append(line)
     return '[The agent used tools instead of replying]\n' + '\n'.join(lines)
 
 
-def _invert_roles_for_simulator(messages: list[Message]) -> list[Message]:
+def _invert_roles_for_simulator(
+    messages: list[Message], max_tool_result_chars: int = _MAX_TOOL_RESULT_CHARS
+) -> list[Message]:
     """Swap roles so the user simulator sees the conversation from its perspective.
 
     The target's tool calls and their ``role='tool'`` results are dropped as
@@ -117,6 +122,10 @@ def _invert_roles_for_simulator(messages: list[Message]) -> list[Message]:
     keep the traffic as text instead, so the row always carries something to react
     to and the pairing problem stays impossible by construction. A turn that also
     produced text keeps only the text — a real user never sees the tool traffic.
+
+    ``max_tool_result_chars`` caps each tool result rendered into that text (see
+    `_tool_traffic_text`); defaults to the module constant, overridden by
+    `SimulationRunner.__init__`'s ``max_tool_result_chars``.
     """
     tool_results = {m.tool_call_id: content_to_text(m.content) for m in messages if m.role == 'tool' and m.tool_call_id}
     inverted: list[Message] = []
@@ -127,7 +136,7 @@ def _invert_roles_for_simulator(messages: list[Message]) -> list[Message]:
             inverted.append(m.model_copy(update={'role': 'assistant'}))
         elif m.role == 'assistant':
             blank_with_tools = not content_to_text(m.content) and m.tool_calls
-            content = _tool_traffic_text(m, tool_results) if blank_with_tools else m.content
+            content = _tool_traffic_text(m, tool_results, max_tool_result_chars) if blank_with_tools else m.content
             inverted.append(m.model_copy(update={'role': 'user', 'content': content, 'tool_calls': None}))
         else:
             inverted.append(m)
@@ -612,6 +621,7 @@ class SimulationRunner:
         max_turns: int = 10,
         target_agent_timeout_ms: int = 240_000,
         max_target_retries: int = 2,
+        max_tool_result_chars: int = _MAX_TOOL_RESULT_CHARS,
         user_simulator: BaseAgent | None = None,
         judge: BaseAgent | None = None,
         hooks: SimulationHooks | None = None,
@@ -623,6 +633,8 @@ class SimulationRunner:
             raise ValueError(f'max_turns must be >= 1, got {max_turns}')
         if max_target_retries < 0:
             raise ValueError(f'max_target_retries must be >= 0, got {max_target_retries}')
+        if max_tool_result_chars < 1:
+            raise ValueError(f'max_tool_result_chars must be >= 1, got {max_tool_result_chars}')
         if not model.strip():
             raise ValueError('model must be a non-empty string')
 
@@ -649,6 +661,7 @@ class SimulationRunner:
         self._spawned_targets: list[AgentTarget] = []
         self._target_agent_timeout_ms = target_agent_timeout_ms
         self._max_target_retries = max_target_retries
+        self._max_tool_result_chars = max_tool_result_chars
         self._model = model
         self._max_turns = max_turns
         self._shared_client: AsyncOpenAI | None = llm_client
@@ -933,7 +946,7 @@ class SimulationRunner:
                 if turn > 0:
                     async with with_simulation_span('orq.simulation.user_simulator_call', None):
                         user_response = await user_simulator.respond_async(
-                            _invert_roles_for_simulator(sinks.messages),
+                            _invert_roles_for_simulator(sinks.messages, self._max_tool_result_chars),
                             llm_purpose='user_simulator',
                         )
                     sinks.messages.append(Message(role='user', content=user_response))
@@ -1346,9 +1359,11 @@ class SimulationRunner:
         datapoint: SimulationDatapoint,
         max_turns: int | None,
         timeout_s: float,
+        *,
+        thread_id: str | None = None,
     ) -> SimulationResult:
         if timeout_s <= 0:
-            return await self.run(datapoint=datapoint, max_turns=max_turns)
+            return await self.run(datapoint=datapoint, max_turns=max_turns, thread_id=thread_id)
 
         # Own one sink object so every piece of state completed before an outer
         # timeout survives cancellation of the inner coroutine.
@@ -1358,6 +1373,7 @@ class SimulationRunner:
                 self.run(
                     datapoint=datapoint,
                     max_turns=max_turns,
+                    thread_id=thread_id,
                     _sinks=sinks,
                 ),
                 timeout=timeout_s,

@@ -164,3 +164,24 @@ def test_long_tool_result_is_truncated_for_the_simulator():
     assert isinstance(content, str)
     assert '(truncated)' in content
     assert len(content) < 700
+
+
+def test_max_tool_result_chars_is_configurable():
+    """F7: _MAX_TOOL_RESULT_CHARS was a module constant with no way to raise it
+    for a tool-heavy agent. Both the default and an explicit override must apply."""
+    response = AgentResponse(
+        output=[
+            ToolCallOutputItem(name='dump', arguments='{}', id='fc_1', call_id='call_1', result='x' * 5000),
+        ]
+    )
+    messages = build_assistant_message(response)
+
+    default_inverted = _invert_roles_for_simulator(messages)
+    default_content = default_inverted[0].content
+    assert isinstance(default_content, str)
+    assert default_content.count('x') == 500  # module default
+
+    raised_inverted = _invert_roles_for_simulator(messages, max_tool_result_chars=2000)
+    raised_content = raised_inverted[0].content
+    assert isinstance(raised_content, str)
+    assert raised_content.count('x') == 2000

@@ -22,6 +22,19 @@ feature that changed it.
 | **mode** | `--mode` on `eq redteam run`, **plus `replay`** (see below) | `dynamic`, `static`, `hybrid`, `replay` |
 | **data source** | `evaluatorq()` / `red_team()` dataset params | inline `DataPoint`s, ORQ dataset id, HuggingFace dataset, generated |
 | **evaluator kind** | `VULNERABILITY_EVALUATOR_REGISTRY`, `SIMULATION_EVALUATORS`, pairwise types | built-in scorer, LLM jury, pairwise jury, custom `Evaluator` |
+| **reasoning-effort scope** | fixed (see below) | target under test · pipeline attacker/judge · simulator's own calls |
+
+### `reasoning-effort scope` is a choice, not a value
+
+Three settings carry the words "reasoning effort" and they apply to three
+different models: `target_reasoning_effort` (the agent under test),
+`LLMCallConfig.reasoning_effort` on `attacker=` / `evaluator=` (red team's own
+calls), and `EVALUATORQ_REASONING_EFFORT` (the simulator's user-simulator and
+judge). Picking the wrong one is silent — the call just runs at the default — so
+this is a dimension a user chooses along, not a tuning number.
+
+Values are fixed here because no registry enumerates them; the *accepted efforts*
+per model come from the model catalogue and are a different thing entirely.
 
 ### `replay` is a mode value that no enum contains
 
@@ -61,6 +74,10 @@ Marked `N/A` in the matrix, never reported as a gap.
 | `red_team()` × data source `inline DataPoint`s | `dataset` takes a `Path` or specifier string; there is no inline-datapoint parameter |
 | `static` mode × generated data source | static mode consumes a fixed dataset by definition |
 | CLI × custom `AgentTarget` | custom targets are constructed in Python; the CLI resolves string identifiers |
+| reasoning-effort scope `simulator's own calls` × `red_team()` | red teaming has no user simulator; its own calls are the attacker/judge scope |
+| reasoning-effort scope `pipeline attacker/judge` × `simulate()` / `generate_and_simulate()` | simulation has no attacker; its own calls are the simulator scope |
+| reasoning-effort scope × dashboard | the dashboard reads saved artifacts; it invokes no model under test |
+| reasoning-effort scope `target under test` × target kinds without a Responses endpoint | effort reaches the target only on Responses-capable targets (`agent:<key>`); a direct OpenAI backend, callable target or Vercel endpoint has nowhere to put it |
 
 ## Tiers
 

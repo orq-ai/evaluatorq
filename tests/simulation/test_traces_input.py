@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
+from evaluatorq.common.structured_output import StructuredResult
 from evaluatorq.simulation.traces import (
     TraceConversation,
     _content_to_text,
@@ -448,10 +449,10 @@ def _stub_structured(monkeypatch: pytest.MonkeyPatch, parsed: Any, summary: str 
     """Answer both schemas: every direct-mode conversation is summarized before inference."""
     from evaluatorq.simulation import traces as traces_mod
 
-    async def fake_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+    async def fake_generate_structured(*args: Any, **kwargs: Any) -> StructuredResult[Any]:
         if kwargs["response_format"] is traces_mod._ConversationSummary:
-            return traces_mod._ConversationSummary(summary=summary), ""
-        return parsed, ""
+            return StructuredResult(traces_mod._ConversationSummary(summary=summary), "")
+        return StructuredResult(parsed, "")
 
     monkeypatch.setattr(traces_mod, "generate_structured", fake_generate_structured)
 
@@ -533,11 +534,11 @@ async def test_long_transcript_is_summarized_before_inference(monkeypatch: pytes
     parsed = traces_mod._InferredPersonaScenario(persona=_make_persona(), scenario=_make_scenario())
     prompts: list[str] = []
 
-    async def fake_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+    async def fake_generate_structured(*args: Any, **kwargs: Any) -> StructuredResult[Any]:
         prompts.append(kwargs["messages"][1]["content"])
         if kwargs["response_format"] is traces_mod._ConversationSummary:
-            return traces_mod._ConversationSummary(summary="Impatient user chasing a refund."), ""
-        return parsed, ""
+            return StructuredResult(traces_mod._ConversationSummary(summary="Impatient user chasing a refund."), "")
+        return StructuredResult(parsed, "")
 
     monkeypatch.setattr(traces_mod, "generate_structured", fake_generate_structured)
     _stub_first_message(monkeypatch, "Where is it?")
@@ -566,11 +567,11 @@ async def test_every_conversation_is_summarized_even_a_short_one(monkeypatch: py
     parsed = traces_mod._InferredPersonaScenario(persona=_make_persona(), scenario=_make_scenario())
     schemas: list[Any] = []
 
-    async def fake_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+    async def fake_generate_structured(*args: Any, **kwargs: Any) -> StructuredResult[Any]:
         schemas.append(kwargs["response_format"])
         if kwargs["response_format"] is traces_mod._ConversationSummary:
-            return traces_mod._ConversationSummary(summary="Short chat about an order."), ""
-        return parsed, ""
+            return StructuredResult(traces_mod._ConversationSummary(summary="Short chat about an order."), "")
+        return StructuredResult(parsed, "")
 
     monkeypatch.setattr(traces_mod, "generate_structured", fake_generate_structured)
     _stub_first_message(monkeypatch, "Where is it?")
@@ -589,10 +590,10 @@ async def test_supplied_summaries_are_not_recomputed(monkeypatch: pytest.MonkeyP
     schemas: list[Any] = []
     prompts: list[str] = []
 
-    async def fake_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+    async def fake_generate_structured(*args: Any, **kwargs: Any) -> StructuredResult[Any]:
         schemas.append(kwargs["response_format"])
         prompts.append(kwargs["messages"][1]["content"])
-        return parsed, ""
+        return StructuredResult(parsed, "")
 
     monkeypatch.setattr(traces_mod, "generate_structured", fake_generate_structured)
     _stub_first_message(monkeypatch, "Where is it?")
@@ -614,12 +615,12 @@ async def test_datapoints_from_traces_skips_summarize_failures(monkeypatch: pyte
 
     parsed = traces_mod._InferredPersonaScenario(persona=_make_persona(), scenario=_make_scenario())
 
-    async def flaky_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+    async def flaky_generate_structured(*args: Any, **kwargs: Any) -> StructuredResult[Any]:
         if kwargs["response_format"] is traces_mod._ConversationSummary:
             if "bad" in kwargs["messages"][1]["content"]:
                 raise RuntimeError("LLM down")
-            return traces_mod._ConversationSummary(summary="good conversation"), ""
-        return parsed, ""
+            return StructuredResult(traces_mod._ConversationSummary(summary="good conversation"), "")
+        return StructuredResult(parsed, "")
 
     monkeypatch.setattr(traces_mod, "generate_structured", flaky_generate_structured)
     _stub_first_message(monkeypatch, "Where is it?")
@@ -641,14 +642,14 @@ async def test_datapoints_from_traces_skips_inference_exceptions(monkeypatch: py
 
     parsed = traces_mod._InferredPersonaScenario(persona=_make_persona(), scenario=_make_scenario())
 
-    async def fake_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+    async def fake_generate_structured(*args: Any, **kwargs: Any) -> StructuredResult[Any]:
         if kwargs["response_format"] is traces_mod._ConversationSummary:
             summary = "bad summary" if "bad marker" in kwargs["messages"][1]["content"] else "good summary"
-            return traces_mod._ConversationSummary(summary=summary), ""
+            return StructuredResult(traces_mod._ConversationSummary(summary=summary), "")
         # response_format is _InferredPersonaScenario: the inference call itself.
         if "bad summary" in kwargs["messages"][1]["content"]:
             raise RuntimeError("inference LLM down")
-        return parsed, ""
+        return StructuredResult(parsed, "")
 
     monkeypatch.setattr(traces_mod, "generate_structured", fake_generate_structured)
     _stub_first_message(monkeypatch, "Where is it?")
@@ -670,13 +671,13 @@ async def test_datapoints_from_traces_skips_unparseable_inference(monkeypatch: p
 
     parsed = traces_mod._InferredPersonaScenario(persona=_make_persona(), scenario=_make_scenario())
 
-    async def fake_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+    async def fake_generate_structured(*args: Any, **kwargs: Any) -> StructuredResult[Any]:
         if kwargs["response_format"] is traces_mod._ConversationSummary:
             summary = "bad summary" if "bad marker" in kwargs["messages"][1]["content"] else "good summary"
-            return traces_mod._ConversationSummary(summary=summary), ""
+            return StructuredResult(traces_mod._ConversationSummary(summary=summary), "")
         if "bad summary" in kwargs["messages"][1]["content"]:
-            return None, ""
-        return parsed, ""
+            return StructuredResult(None, "")
+        return StructuredResult(parsed, "")
 
     monkeypatch.setattr(traces_mod, "generate_structured", fake_generate_structured)
     _stub_first_message(monkeypatch, "Where is it?")
@@ -703,12 +704,12 @@ async def test_extend_from_traces(monkeypatch: pytest.MonkeyPatch) -> None:
 
     profile = traces_mod._TrafficProfile(profile="Mostly refund questions, casual tone.")
 
-    async def fake_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+    async def fake_generate_structured(*args: Any, **kwargs: Any) -> StructuredResult[Any]:
         # Extension mode is map-then-reduce: every conversation is summarized first,
         # so the stub has to answer both schemas.
         if kwargs["response_format"] is traces_mod._ConversationSummary:
-            return traces_mod._ConversationSummary(summary="Wants a refund, casual, impatient."), ""
-        return profile, ""
+            return StructuredResult(traces_mod._ConversationSummary(summary="Wants a refund, casual, impatient."), "")
+        return StructuredResult(profile, "")
 
     monkeypatch.setattr(traces_mod, "generate_structured", fake_generate_structured)
 
@@ -826,15 +827,15 @@ async def test_datapoints_from_traces_inference_is_bounded_concurrent(
     parsed = traces_mod._InferredPersonaScenario(persona=_make_persona(), scenario=_make_scenario())
     state = {"active": 0, "peak": 0}
 
-    async def tracked_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+    async def tracked_generate_structured(*args: Any, **kwargs: Any) -> StructuredResult[Any]:
         state["active"] += 1
         state["peak"] = max(state["peak"], state["active"])
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         state["active"] -= 1
         if kwargs["response_format"] is traces_mod._ConversationSummary:
-            return traces_mod._ConversationSummary(summary="summary"), ""
-        return parsed, ""
+            return StructuredResult(traces_mod._ConversationSummary(summary="summary"), "")
+        return StructuredResult(parsed, "")
 
     monkeypatch.setattr(traces_mod, "generate_structured", tracked_generate_structured)
     _stub_first_message(monkeypatch, "Where is it?")
@@ -856,11 +857,11 @@ async def test_redaction_instruction_follows_the_flag(monkeypatch: pytest.Monkey
     parsed = traces_mod._InferredPersonaScenario(persona=_make_persona(), scenario=_make_scenario())
     systems: list[str] = []
 
-    async def fake_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+    async def fake_generate_structured(*args: Any, **kwargs: Any) -> StructuredResult[Any]:
         systems.append(kwargs["messages"][0]["content"])
         if kwargs["response_format"] is traces_mod._ConversationSummary:
-            return traces_mod._ConversationSummary(summary="Wants a refund."), ""
-        return parsed, ""
+            return StructuredResult(traces_mod._ConversationSummary(summary="Wants a refund."), "")
+        return StructuredResult(parsed, "")
 
     monkeypatch.setattr(traces_mod, "generate_structured", fake_generate_structured)
     _stub_first_message(monkeypatch, "Where is it?")
@@ -890,10 +891,10 @@ async def test_redaction_instruction_follows_the_flag(monkeypatch: pytest.Monkey
 async def test_summarize_conversations_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.simulation import traces as traces_mod
 
-    async def fake_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+    async def fake_generate_structured(*args: Any, **kwargs: Any) -> StructuredResult[Any]:
         transcript = kwargs["messages"][1]["content"]
         trace_id = "one" if "first message" in transcript else "two"
-        return traces_mod._ConversationSummary(summary=f"summary for {trace_id}"), ""
+        return StructuredResult(traces_mod._ConversationSummary(summary=f"summary for {trace_id}"), "")
 
     monkeypatch.setattr(traces_mod, "generate_structured", fake_generate_structured)
 
@@ -912,10 +913,10 @@ async def test_summarize_conversations_drops_failures_and_warns(
 ) -> None:
     from evaluatorq.simulation import traces as traces_mod
 
-    async def flaky_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+    async def flaky_generate_structured(*args: Any, **kwargs: Any) -> StructuredResult[Any]:
         if "bad" in kwargs["messages"][1]["content"]:
             raise RuntimeError("LLM down")
-        return traces_mod._ConversationSummary(summary="fine"), ""
+        return StructuredResult(traces_mod._ConversationSummary(summary="fine"), "")
 
     monkeypatch.setattr(traces_mod, "generate_structured", flaky_generate_structured)
 
@@ -934,7 +935,7 @@ async def test_summarize_conversations_drops_failures_and_warns(
 async def test_summarize_conversations_all_fail_returns_empty_dict(monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.simulation import traces as traces_mod
 
-    async def always_fails(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+    async def always_fails(*args: Any, **kwargs: Any) -> StructuredResult[Any]:
         raise RuntimeError("LLM down")
 
     monkeypatch.setattr(traces_mod, "generate_structured", always_fails)
@@ -955,13 +956,13 @@ async def test_summarize_conversations_is_bounded_concurrent(monkeypatch: pytest
 
     state = {"active": 0, "peak": 0}
 
-    async def tracked_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+    async def tracked_generate_structured(*args: Any, **kwargs: Any) -> StructuredResult[Any]:
         state["active"] += 1
         state["peak"] = max(state["peak"], state["active"])
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         state["active"] -= 1
-        return traces_mod._ConversationSummary(summary="summary"), ""
+        return StructuredResult(traces_mod._ConversationSummary(summary="summary"), "")
 
     monkeypatch.setattr(traces_mod, "generate_structured", tracked_generate_structured)
 
@@ -985,9 +986,9 @@ async def test_supplied_partial_summaries_drop_missing_without_resummarizing_dir
     parsed = traces_mod._InferredPersonaScenario(persona=_make_persona(), scenario=_make_scenario())
     schemas: list[Any] = []
 
-    async def fake_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+    async def fake_generate_structured(*args: Any, **kwargs: Any) -> StructuredResult[Any]:
         schemas.append(kwargs["response_format"])
-        return parsed, ""
+        return StructuredResult(parsed, "")
 
     monkeypatch.setattr(traces_mod, "generate_structured", fake_generate_structured)
     _stub_first_message(monkeypatch, "Where is it?")
@@ -1017,9 +1018,9 @@ async def test_supplied_partial_summaries_drop_missing_without_resummarizing_ext
     profile = traces_mod._TrafficProfile(profile="profile text")
     schemas: list[Any] = []
 
-    async def fake_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+    async def fake_generate_structured(*args: Any, **kwargs: Any) -> StructuredResult[Any]:
         schemas.append(kwargs["response_format"])
-        return profile, ""
+        return StructuredResult(profile, "")
 
     monkeypatch.setattr(traces_mod, "generate_structured", fake_generate_structured)
 

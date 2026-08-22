@@ -112,6 +112,7 @@ def _create_openai_backend(
     not swallow those retry settings silently.
     """
     from evaluatorq.redteam.backends.openai import OpenAIBackend
+    from evaluatorq.redteam.contracts import DEFAULT_TARGET_MAX_TOKENS
 
     system_prompt = target_config.system_prompt if target_config else None
     # call_target_with_retry owns retry here, so pipeline retry settings cannot apply.
@@ -126,10 +127,19 @@ def _create_openai_backend(
     )
     # Forward the pipeline timeout like the orq/openresponses factories do —
     # without it the backend's timeout_ms plumbing is never fed from config.
-    # max_tokens stays unfed on purpose: LLMConfig has no target-level token
-    # cap field to source it from.
+    # max_tokens is passed explicitly rather than left for OpenAIBackend's own
+    # ``None`` default: LLMConfig still has no target-level token cap field to
+    # source a per-run override from, so DEFAULT_TARGET_MAX_TOKENS is the value
+    # both paths land on today — but wiring it here means a future LLMConfig
+    # field only has to change this one line, not also touch OpenAIBackend.
     timeout_ms = pipeline_config.target_agent_timeout_ms if pipeline_config else None
-    return OpenAIBackend(client=llm_client, system_prompt=system_prompt, timeout_ms=timeout_ms)
+    return OpenAIBackend(
+        client=llm_client,
+        system_prompt=system_prompt,
+        timeout_ms=timeout_ms,
+        max_tokens=DEFAULT_TARGET_MAX_TOKENS,
+        reasoning_effort=pipeline_config.target_reasoning_effort if pipeline_config else None,
+    )
 
 
 def _create_orq_backend(
@@ -148,6 +158,7 @@ def _create_orq_backend(
         timeout_ms=timeout_ms,
         retry_count=pipeline_config.retry_count if pipeline_config else None,
         retry_on_codes=pipeline_config.retry_on_codes if pipeline_config else None,
+        max_tool_continuations=pipeline_config.max_tool_continuations if pipeline_config else None,
     )
 
 
@@ -181,6 +192,7 @@ def _create_openresponses_backend(
         instructions=instructions,
         timeout_ms=timeout_ms,
         retry_attempts=retry_attempts,
+        reasoning_effort=pipeline_config.target_reasoning_effort if pipeline_config else None,
     )
 
 

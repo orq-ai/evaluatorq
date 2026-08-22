@@ -138,7 +138,7 @@ else:
 
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
     from openai import AsyncOpenAI
 
@@ -168,8 +168,29 @@ DEFAULT_TARGET_TIMEOUT_MS: int = 240_000
 
 
 # Request fields extra_kwargs must never replace: they are structural (what
-# call is being made), not tunable sampling/provider options.
+# call is being made), not tunable sampling/provider options. One set per
+# endpoint, because the structural field names differ (`messages`/`response_format`
+# on chat completions, `input`/`text` on Responses). These two frozensets are the
+# only reserved-key vocabulary in the package — `common.llm_call` and
+# `common.structured_output` import them rather than keeping their own copies,
+# which is how they drifted into three inconsistent guards before.
 _RESERVED_COMPLETION_KEYS = frozenset({'model', 'messages', 'response_format', 'extra_body'})
+_RESERVED_RESPONSES_KEYS = frozenset({'model', 'input', 'text', 'extra_body'})
+
+
+def check_reserved_keys(extra_kwargs: Mapping[str, Any], reserved: frozenset[str]) -> None:
+    """Raise if ``extra_kwargs`` would replace a structural request field.
+
+    Shared by `LLMCallConfig.completion_params` / `.responses_params` and by the
+    `common.llm_call` executors, so a caller that reaches an executor without an
+    `LLMCallConfig` gets the same guard.
+    """
+    clash = reserved & extra_kwargs.keys()
+    if clash:
+        raise ValueError(
+            f'extra_kwargs cannot override structural request field(s) {sorted(clash)}; '
+            'these are owned by the call site.'
+        )
 
 
 class LLMCallConfig(BaseModel):
@@ -188,6 +209,23 @@ class LLMCallConfig(BaseModel):
     max_tokens: int = Field(default=DEFAULT_TARGET_MAX_TOKENS, gt=0)
     timeout_ms: int = Field(default=90_000, gt=0)
     extra_kwargs: dict[str, Any] = Field(default_factory=dict)
+    extra_body: dict[str, Any] = Field(
+        default_factory=dict,
+        description='Extra fields for the request BODY, for router/provider options the SDK has '
+        'no named parameter for. Distinct from ``extra_kwargs``, which sets top-level SDK call '
+        'arguments. This one **merges into** the body the call site builds (the Orq router retry '
+        'policy, thread and memory ids) rather than replacing it: your keys win per key, and the '
+        'call site keeps the keys you did not set. Replacing the whole body is what silently '
+        'dropped retry hints, which is why ``extra_body`` is rejected inside ``extra_kwargs``.',
+    )
+    reasoning_effort: str | None = Field(
+        default=None,
+        description='Reasoning effort. Rendered per endpoint by the two param builders below: '
+        "flat ``reasoning_effort=`` on chat completions, ``reasoning={'effort': ...}`` on the "
+        'Responses API. Not validated here: accepted values differ per model, so the provider '
+        'is the only authority — an unsupported value comes back as a provider 400, which the '
+        '`common.llm_call` executors turn into a drop-and-retry-once.',
+    )
     client: _Client = None
     retry_count: int = Field(
         default=1,
@@ -213,19 +251,62 @@ class LLMCallConfig(BaseModel):
         and provider options, and letting it silently replace ``model`` /
         ``messages`` / ``response_format`` / ``extra_body`` would break the
         call it rides on (e.g. dropping a required JSON response format).
+
+        ``extra_body`` is merged, not overridden. The call site owns the router
+        body (retry policy, thread ids); this config's ``extra_body`` is layered
+        on top per key, so a caller adds fields without dropping the ones the
+        call site set. Every other field follows the usual caller-wins order.
         """
-        reserved = _RESERVED_COMPLETION_KEYS & self.extra_kwargs.keys()
-        if reserved:
-            raise ValueError(
-                f'extra_kwargs cannot override structural request field(s) {sorted(reserved)}; '
-                'these are owned by the call site.'
-            )
-        return {
+        check_reserved_keys(self.extra_kwargs, _RESERVED_COMPLETION_KEYS)
+        base: dict[str, Any] = {
             'temperature': self.temperature,
             'max_completion_tokens': self.max_tokens,
-            **params,
-            **self.extra_kwargs,
         }
+        if self.reasoning_effort:
+            base['reasoning_effort'] = self.reasoning_effort
+        merged = {**base, **params, **self.extra_kwargs}
+        return self._merge_extra_body(merged, params)
+
+    def responses_params(self, **params: Any) -> dict[str, Any]:
+        """Merged kwargs for a Responses API call. Same contract as
+        `completion_params` — sampling first, call-site params, then
+        ``extra_kwargs`` last so caller-supplied values win.
+
+        The Responses endpoint spells two of these differently: the token cap is
+        ``max_output_tokens`` (not ``max_completion_tokens``) and reasoning effort
+        rides in a ``reasoning`` block rather than flat. Building both shapes from
+        one config here is what stops a field from being honoured on one endpoint
+        and silently dropped on the other.
+
+        Reserved keys differ too — ``input``/``text`` are the structural fields
+        here, where chat completions has ``messages``/``response_format``.
+
+        ``extra_body`` is merged, not overridden. The call site owns the router
+        body (retry policy, thread ids); this config's ``extra_body`` is layered
+        on top per key, so a caller adds fields without dropping the ones the
+        call site set. Every other field follows the usual caller-wins order.
+        """
+        check_reserved_keys(self.extra_kwargs, _RESERVED_RESPONSES_KEYS)
+        base: dict[str, Any] = {
+            'temperature': self.temperature,
+            'max_output_tokens': self.max_tokens,
+        }
+        if self.reasoning_effort:
+            base['reasoning'] = {'effort': self.reasoning_effort}
+        merged = {**base, **params, **self.extra_kwargs}
+        return self._merge_extra_body(merged, params)
+
+    def _merge_extra_body(self, merged: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
+        """Layer this config's ``extra_body`` over the call site's, per key.
+
+        Replacing the body wholesale is the failure this exists to prevent: the
+        call site's keys are the Orq router's retry policy and thread ids, and a
+        caller who set one unrelated field used to drop all of them silently.
+        """
+        if not self.extra_body:
+            return merged
+        merged['extra_body'] = {**(params.get('extra_body') or {}), **self.extra_body}
+        return merged
 
 
 # ---------------------------------------------------------------------------

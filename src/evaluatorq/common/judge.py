@@ -321,6 +321,8 @@ async def _responses_judge(
         response_text_format=verdict_model,
         temperature=temp,
         max_output_tokens=cfg.max_tokens,
+        reasoning_effort=cfg.reasoning_effort,
+        extra_body=cfg.extra_body or None,
         extra_kwargs=cfg.extra_kwargs or None,
     )
     raw = getattr(response, 'output_text', '') or ''
@@ -405,6 +407,8 @@ async def _json_object_judge(
         temperature=temp,
         max_completion_tokens=cfg.max_tokens,
         response_format={'type': 'json_object'},
+        reasoning_effort=cfg.reasoning_effort,
+        extra_body=cfg.extra_body or None,
         extra_kwargs=cfg.extra_kwargs or None,
     )
     raw = response.choices[0].message.content or '{}'

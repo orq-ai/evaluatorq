@@ -6,8 +6,15 @@ import asyncio
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
+from openai import BadRequestError
 from typing_extensions import Self
 
+from evaluatorq.common.llm_call import (
+    is_responses_reasoning_rejection,
+    remember_responses_reasoning_rejection,
+    strip_known_rejected_responses_reasoning,
+)
 from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.responses import first_responses_refusal, responses_stop_reason
 from evaluatorq.common.retry import with_retry, without_client_retries
@@ -202,30 +209,45 @@ class OrqResponsesTarget(AgentTarget):
         timeout_s = self.config.timeout_ms / 1000.0 if self.config.timeout_ms else None
 
         async def _do_call() -> AgentResponse:
-            kwargs: dict[str, Any] = {
-                'model': self.config.model,
-                'input': responses_input,
-            }
-            if self.config.max_tokens:
-                kwargs['max_output_tokens'] = self.config.max_tokens
-            if self.tools:
-                kwargs['tools'] = self.tools
-            if self.instructions is not None:
-                kwargs['instructions'] = self.instructions
             # Metadata is a native Responses field on every endpoint. Threads are
             # an Orq-router extension, so direct OpenAI-compatible endpoints must
             # not receive them in ``extra_body``.
             metadata = pipeline_metadata()
-            if metadata:
-                kwargs['metadata'] = metadata
             routes_through_orq = client_routes_through_orq(self._client)
             body_extra = thread_body_param() if routes_through_orq else {}
             # Agents with memory tools reject the call outright without a memory
             # scope ("memory_entity_id_required"), so forward ours when set.
             if routes_through_orq and self.memory_entity_id:
                 body_extra['memory'] = {'entity_id': self.memory_entity_id}
+
+            # ``responses_params`` folds temperature/max_output_tokens/reasoning
+            # and ``extra_kwargs`` (top_p, store, truncation, tool_choice, ...)
+            # into one dict, ``extra_kwargs`` winning last so a caller-supplied
+            # value overrides these computed ones. ``extra_body`` is one of the
+            # structural keys ``responses_params`` guards — a caller cannot
+            # replace the router's thread/memory body wholesale via
+            # ``extra_kwargs={'extra_body': ...}``; it 400s instead of silently
+            # dropping ``body_extra`` above. A caller that needs to add to
+            # ``extra_body`` merges into ``body_extra`` here — there is no
+            # public seam for that today.
+            call_params: dict[str, Any] = {'input': responses_input}
+            if self.tools:
+                call_params['tools'] = self.tools
+            if self.instructions is not None:
+                call_params['instructions'] = self.instructions
+            if metadata:
+                call_params['metadata'] = metadata
+            kwargs: dict[str, Any] = {
+                'model': self.config.model,
+                **self.config.responses_params(**call_params),
+            }
             if body_extra:
                 kwargs['extra_body'] = {**kwargs.get('extra_body', {}), **body_extra}
+            # Drop the `reasoning` block up front if this model already 400'd on
+            # it this process — same memo `common.llm_call.execute_response` uses,
+            # so a rejection learned via the pipeline's own calls also short-circuits
+            # target calls, and vice versa.
+            strip_known_rejected_responses_reasoning(self.config.model, kwargs)
 
             async with with_llm_span(
                 model=self.config.model,
@@ -243,15 +265,33 @@ class OrqResponsesTarget(AgentTarget):
                     kwargs['extra_headers'] = {**kwargs.get('extra_headers', {}), **trace_headers}
                 record_openresponses_request(span, kwargs)
                 raw_create = _raw_responses_create(self._client)
-                if raw_create is not None:
-                    raw_coro = raw_create(**kwargs)
-                    raw_response = await (asyncio.wait_for(raw_coro, timeout=timeout_s) if timeout_s else raw_coro)
-                    response_headers = raw_response.headers
-                    response = raw_response.parse()
-                else:
+
+                async def _create() -> tuple[Any, Any | None]:
+                    """Return ``(response, response_headers)`` for the current ``kwargs``."""
+                    if raw_create is not None:
+                        raw_coro = raw_create(**kwargs)
+                        raw_response = await (asyncio.wait_for(raw_coro, timeout=timeout_s) if timeout_s else raw_coro)
+                        return raw_response.parse(), raw_response.headers
                     coro = self._client.responses.create(**kwargs)
-                    response = await (asyncio.wait_for(coro, timeout=timeout_s) if timeout_s else coro)
-                    response_headers = None
+                    parsed = await (asyncio.wait_for(coro, timeout=timeout_s) if timeout_s else coro)
+                    return parsed, None
+
+                try:
+                    response, response_headers = await _create()
+                except BadRequestError as exc:
+                    # Same drop-and-retry-once contract as
+                    # `common.llm_call.execute_response`: only a 400 naming
+                    # `reasoning` in both the request and the error body is
+                    # treated as a rejection; anything else propagates.
+                    if not is_responses_reasoning_rejection(kwargs, exc):
+                        raise
+                    remember_responses_reasoning_rejection(self.config.model, kwargs)
+                    logger.warning(
+                        'OrqResponsesTarget: model {} rejected the reasoning block; dropping it and retrying once',
+                        self.config.model,
+                    )
+                    kwargs.pop('reasoning', None)
+                    response, response_headers = await _create()
                 # Some SDK-compatible clients expose trace IDs on parsed response
                 # telemetry. The Orq SDK raw-response path instead gets the
                 # authoritative IDs from HTTP headers because its parser drops the

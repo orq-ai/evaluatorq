@@ -465,3 +465,108 @@ async def test_generate_and_simulate_closes_owned_client_when_emit_datapoints_ra
         )
 
     mock_client.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_generate_and_simulate_threads_seeds_and_edge_case_percentage(monkeypatch):
+    """F6: generate_and_simulate() previously had no persona_seeds/scenario_seeds/
+    edge_case_percentage parameters at all -- verify they now reach
+    _generate_datapoints_inner (the shared generation seam)."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    fake_datapoints = [_make_datapoint("dp-0")]
+    captured: dict[str, object] = {}
+
+    async def capture_generate_datapoints_inner(**kwargs):  # noqa: ANN003
+        captured.update(kwargs)
+        return fake_datapoints, MagicMock(), False
+
+    with (
+        patch(
+            "evaluatorq.simulation.api._generate_datapoints_inner",
+            new=capture_generate_datapoints_inner,
+        ),
+        patch(
+            "evaluatorq.simulation.api._simulate_via_evaluatorq",
+            new=AsyncMock(return_value=[]),
+        ),
+    ):
+        await generate_and_simulate(
+            agent_description="test agent",
+            target=lambda messages: "ok",
+            persona_seeds=["angry retiree"],
+            scenario_seeds=["refund dispute"],
+            edge_case_percentage=0.5,
+        )
+
+    assert captured["persona_seeds"] == ["angry retiree"]
+    assert captured["scenario_seeds"] == ["refund dispute"]
+    assert captured["edge_case_percentage"] == 0.5
+
+
+@pytest.mark.asyncio
+async def test_generate_and_simulate_threads_target_agent_knobs(monkeypatch):
+    """F3/F5: target_agent_timeout_ms / max_target_retries / target_reasoning_effort
+    must reach SimulationConfig, not stay pinned at SimulationRunner's literals."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    fake_datapoints = [_make_datapoint("dp-0")]
+    captured: dict[str, object] = {}
+
+    def capture_simulate_via_evaluatorq(*, config, **kwargs):  # noqa: ANN003
+        captured["target_agent_timeout_ms"] = config.target_agent_timeout_ms
+        captured["max_target_retries"] = config.max_target_retries
+        captured["target_reasoning_effort"] = config.target_reasoning_effort
+        return []
+
+    with (
+        patch(
+            "evaluatorq.simulation.api._generate_datapoints_inner",
+            new=AsyncMock(return_value=(fake_datapoints, MagicMock(), False)),
+        ),
+        patch(
+            "evaluatorq.simulation.api._simulate_via_evaluatorq",
+            new=AsyncMock(side_effect=capture_simulate_via_evaluatorq),
+        ),
+    ):
+        await generate_and_simulate(
+            agent_description="test agent",
+            target=lambda messages: "ok",
+            target_agent_timeout_ms=999_000,
+            max_target_retries=9,
+            target_reasoning_effort="low",
+        )
+
+    assert captured["target_agent_timeout_ms"] == 999_000
+    assert captured["max_target_retries"] == 9
+    assert captured["target_reasoning_effort"] == "low"
+
+
+@pytest.mark.asyncio
+async def test_simulate_threads_target_agent_knobs(monkeypatch):
+    """F3/F5, simulate() path: same knobs must reach SimulationConfig here too."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    captured: dict[str, object] = {}
+
+    def capture_simulate_via_evaluatorq(*, config, **kwargs):  # noqa: ANN003
+        captured["target_agent_timeout_ms"] = config.target_agent_timeout_ms
+        captured["max_target_retries"] = config.max_target_retries
+        captured["target_reasoning_effort"] = config.target_reasoning_effort
+        return []
+
+    with patch(
+        "evaluatorq.simulation.api._simulate_via_evaluatorq",
+        new=AsyncMock(side_effect=capture_simulate_via_evaluatorq),
+    ):
+        await simulate(
+            datapoints=[_make_datapoint("dp-0")],
+            target=lambda messages: "ok",
+            target_agent_timeout_ms=999_000,
+            max_target_retries=9,
+            target_reasoning_effort="low",
+        )
+
+    assert captured["target_agent_timeout_ms"] == 999_000
+    assert captured["max_target_retries"] == 9
+    assert captured["target_reasoning_effort"] == "low"

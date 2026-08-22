@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from evaluatorq.common.run_manifest import ManifestWriter
     from evaluatorq.contracts import AgentResponse, AgentTarget
     from evaluatorq.simulation.agents.base import BaseAgent
-    from evaluatorq.simulation.evaluators.scorers import SimulationScorer
+    from evaluatorq.simulation.evaluators.scorers import SimulationScorer, SimulationScoringConfig
     from evaluatorq.simulation.generators import FirstMessageGenerator
     from evaluatorq.simulation.hooks import SimulationHooks
     from evaluatorq.simulation.replay import SimulationReplay
@@ -191,9 +191,15 @@ async def simulate(
     max_turns: int | None = None,
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
+    scoring: SimulationScoringConfig | None = None,
     datapoint_parallelism: int | None = None,
     llm_parallelism: int | None = None,
     parallelism: int | None = None,
+    target_agent_timeout_ms: int = 240_000,
+    max_target_retries: int = 2,
+    target_reasoning_effort: str | None = None,
+    max_tool_result_chars: int = 500,
+    per_simulation_timeout_s: float | None = None,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
@@ -237,6 +243,29 @@ async def simulate(
             Covers the user simulator, the judge and datapoint generation; a
             target's own calls are not counted.
         parallelism: Deprecated alias for ``datapoint_parallelism``.
+        target_agent_timeout_ms: Per-call timeout for the target under test.
+            Defaults to 240s. Raise this for a slow self-hosted target —
+            ``EVALUATORQ_LLM_TIMEOUT_S`` only bounds the simulator's own
+            (user-simulator / judge) LLM calls, not the target.
+        max_target_retries: Retries after a failed target call. Defaults to 2.
+        target_reasoning_effort: Reasoning effort pinned on the agent under
+            test (``agent:<key>`` / bare ``<key>`` targets only). ``None``
+            (the default) leaves the provider default. The simulation
+            counterpart of red team's ``LLMConfig.target_reasoning_effort`` —
+            pass this to measure the same agent config red teaming pinned.
+        max_tool_result_chars: Cap on each tool result shown to the user
+            simulator for a tool-only turn. Defaults to 500. For a tool-heavy
+            agent this silently shapes what the simulated user reacts to (and
+            what the judge, scoring the same transcript, sees) — raise it if a
+            tool result is being cut before its relevant content.
+        per_simulation_timeout_s: Overall wall-clock bound for one datapoint's
+            simulation (all turns, target + user-simulator + judge calls
+            included). ``None`` (the default) leaves no bound beyond the
+            per-call timeouts (``target_agent_timeout_ms``, the simulator's
+            own LLM timeout) — a stalled conversation is otherwise unbounded,
+            since ``simulate()`` runs one datapoint per row rather than
+            through ``SimulationRunner.run_batch``'s own timeout. Set this to
+            cap a single stuck conversation instead of the whole run.
         hooks: Optional ``SimulationHooks`` for run/datapoint/turn lifecycle
             events. Sync or async; ``async def`` is preferred (a sync hook
             works but emits a one-time ``DeprecationWarning``). Defaults to
@@ -308,6 +337,14 @@ async def simulate(
             saved file — so the dashboard shows saved prose instead of the
             computed fallback sentence. Best-effort: no-op without LLM creds.
             Set ``False`` to skip the extra LLM call.
+        scoring: Policy knobs for the two built-in scorers that make a judgement
+            call: ``turn_efficiency`` (how many turns the goal took) and
+            ``conversation_quality`` (the weighted composite of the other three).
+            ``None`` — the default — uses the shipped values, so behaviour is
+            unchanged. Pass a ``SimulationScoringConfig`` to move the turn-count
+            cliffs (a task that legitimately needs many turns is otherwise
+            penalised) or to reweight the composite. See
+            ``SimulationScoringConfig`` for what each field means.
         recommendations: Generate per-result remediation suggestions and store
             them on the run — and in any saved file. Off by default because the
             returned ``SimulationResult`` list has nowhere to carry them, so
@@ -375,8 +412,14 @@ async def simulate(
         max_turns=max_turns,
         sim_model=sim_model,
         evaluator_names=evaluator_names,
+        scoring=scoring,
         datapoint_parallelism=datapoint_parallelism,
         llm_parallelism=llm_parallelism,
+        target_agent_timeout_ms=target_agent_timeout_ms,
+        max_target_retries=max_target_retries,
+        target_reasoning_effort=target_reasoning_effort,
+        max_tool_result_chars=max_tool_result_chars,
+        per_simulation_timeout_s=per_simulation_timeout_s,
         user_simulator=user_simulator,
         judge=judge,
         hooks=hooks,
@@ -408,8 +451,14 @@ async def _simulate_run(
     max_turns: int | None = None,
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
+    scoring: SimulationScoringConfig | None = None,
     datapoint_parallelism: int = 10,
     llm_parallelism: int | None = None,
+    target_agent_timeout_ms: int = 240_000,
+    max_target_retries: int = 2,
+    target_reasoning_effort: str | None = None,
+    max_tool_result_chars: int = 500,
+    per_simulation_timeout_s: float | None = None,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
@@ -491,7 +540,13 @@ async def _simulate_run(
                         max_turns=max_turns,
                         model=sim_model,
                         evaluator_names=evaluator_names,
+                        scoring=scoring,
                         datapoint_parallelism=datapoint_parallelism,
+                        target_agent_timeout_ms=target_agent_timeout_ms,
+                        max_target_retries=max_target_retries,
+                        target_reasoning_effort=target_reasoning_effort,
+                        max_tool_result_chars=max_tool_result_chars,
+                        per_simulation_timeout_s=per_simulation_timeout_s,
                         user_simulator=user_simulator,
                         judge=judge,
                         generation_client=generation_client,
@@ -532,12 +587,21 @@ async def generate_and_simulate(
     memory_entity_id: str | None = None,
     num_personas: int = 5,
     num_scenarios: int = 5,
+    edge_case_percentage: float | None = None,
+    persona_seeds: list[str] | None = None,
+    scenario_seeds: list[str] | None = None,
     max_turns: int | None = None,
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
+    scoring: SimulationScoringConfig | None = None,
     datapoint_parallelism: int | None = None,
     llm_parallelism: int | None = None,
     parallelism: int | None = None,
+    target_agent_timeout_ms: int = 240_000,
+    max_target_retries: int = 2,
+    target_reasoning_effort: str | None = None,
+    max_tool_result_chars: int = 500,
+    per_simulation_timeout_s: float | None = None,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
@@ -582,6 +646,22 @@ async def generate_and_simulate(
     see `simulate` for the full distinction. ``parallelism`` is a deprecated
     alias for ``datapoint_parallelism``.
 
+    ``target_agent_timeout_ms`` / ``max_target_retries`` / ``target_reasoning_effort``:
+    same knobs as `simulate` — see its docstring. Threaded straight through to the
+    generated simulate stage.
+
+    ``edge_case_percentage``: Fraction of generated personas/scenarios that are
+    edge cases, applied to both dimensions. ``None`` (the default) leaves each
+    generator's own default (0.2 for personas, 0.3 for scenarios). Only affects
+    the auto-generated portion of a dimension — a seeded persona/scenario
+    (``persona_seeds`` / ``scenario_seeds``) never gets edge-case padding.
+
+    ``persona_seeds`` / ``scenario_seeds``: Archetype seeds (e.g. ``"angry
+    retiree"``) that steer a dimension — one persona/scenario per seed, LLM-
+    fleshed out — instead of auto-generating ``num_personas`` / ``num_scenarios``
+    for it. The other dimension still auto-generates; seeded x auto still
+    crosses into the full grid. See `generate` for the full semantics.
+
     ``evaluation_description``: Optional human-readable note passed straight
     through to the uploaded experiment (shown as its description in the Orq UI).
     Pure metadata — nothing branches on it, and it only matters when
@@ -603,6 +683,10 @@ async def generate_and_simulate(
     ``executive_summary``: When ``True`` (the default), generate the LLM
     narrative summary and store it on the returned run — and in any saved file.
     Best-effort: no-op without LLM creds. Set ``False`` to skip the LLM call.
+
+    ``scoring``: Policy knobs for the ``turn_efficiency`` / ``conversation_quality``
+    scorers — turn-count cliffs, decay, floor, and the composite weights. ``None``
+    (the default) uses the shipped values. See ``SimulationScoringConfig``.
 
     ``recommendations``: Generate per-result remediation suggestions and store
     them on the run. Off by default because the returned ``SimulationResult``
@@ -647,11 +731,20 @@ async def generate_and_simulate(
         memory_entity_id=memory_entity_id,
         num_personas=num_personas,
         num_scenarios=num_scenarios,
+        edge_case_percentage=edge_case_percentage,
+        persona_seeds=persona_seeds,
+        scenario_seeds=scenario_seeds,
         max_turns=max_turns,
         sim_model=sim_model,
         evaluator_names=evaluator_names,
+        scoring=scoring,
         datapoint_parallelism=datapoint_parallelism,
         llm_parallelism=llm_parallelism,
+        target_agent_timeout_ms=target_agent_timeout_ms,
+        max_target_retries=max_target_retries,
+        target_reasoning_effort=target_reasoning_effort,
+        max_tool_result_chars=max_tool_result_chars,
+        per_simulation_timeout_s=per_simulation_timeout_s,
         user_simulator=user_simulator,
         judge=judge,
         hooks=hooks,
@@ -680,6 +773,7 @@ async def _generate_datapoints_inner(
     hooks: SimulationHooks | None = None,
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
+    edge_case_percentage: float | None = None,
 ) -> tuple[list[SimulationDatapoint], AsyncOpenAI, bool]:
     """Shared generation trio: personas/scenarios + first-message datapoints.
 
@@ -715,6 +809,7 @@ async def _generate_datapoints_inner(
             generation_client=gen_client,
             persona_seeds=persona_seeds,
             scenario_seeds=scenario_seeds,
+            edge_case_percentage=edge_case_percentage,
         )
         await await_maybe(gen_hooks.on_generate_inputs_ready(len(gen_personas), len(gen_scenarios)))
 
@@ -745,11 +840,20 @@ async def _generate_and_simulate_run(
     memory_entity_id: str | None = None,
     num_personas: int = 5,
     num_scenarios: int = 5,
+    edge_case_percentage: float | None = None,
+    persona_seeds: list[str] | None = None,
+    scenario_seeds: list[str] | None = None,
     max_turns: int | None = None,
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
+    scoring: SimulationScoringConfig | None = None,
     datapoint_parallelism: int = 10,
     llm_parallelism: int | None = None,
+    target_agent_timeout_ms: int = 240_000,
+    max_target_retries: int = 2,
+    target_reasoning_effort: str | None = None,
+    max_tool_result_chars: int = 500,
+    per_simulation_timeout_s: float | None = None,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
@@ -841,6 +945,9 @@ async def _generate_and_simulate_run(
                                 model=sim_model,
                                 generation_client=generation_client,
                                 hooks=composed_hooks,
+                                persona_seeds=persona_seeds,
+                                scenario_seeds=scenario_seeds,
+                                edge_case_percentage=edge_case_percentage,
                             )
                             if emit_datapoints is not None:
                                 emit_datapoints(datapoints)
@@ -864,7 +971,13 @@ async def _generate_and_simulate_run(
                             max_turns=max_turns,
                             model=sim_model,
                             evaluator_names=evaluator_names,
+                            scoring=scoring,
                             datapoint_parallelism=datapoint_parallelism,
+                            target_agent_timeout_ms=target_agent_timeout_ms,
+                            max_target_retries=max_target_retries,
+                            target_reasoning_effort=target_reasoning_effort,
+                            max_tool_result_chars=max_tool_result_chars,
+                            per_simulation_timeout_s=per_simulation_timeout_s,
                             user_simulator=user_simulator,
                             judge=judge,
                             generation_client=gen_client,
@@ -910,6 +1023,7 @@ async def generate(
     generation_client: AsyncOpenAI | None = None,
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
+    edge_case_percentage: float | None = None,
     llm_parallelism: int | None = None,
 ) -> list[SimulationDatapoint]:
     """Generate ready-to-run simulation ``SimulationDatapoint``s from an agent description.
@@ -924,6 +1038,11 @@ async def generate(
     object, overriding ``num_personas`` / ``num_scenarios`` for that dimension.
     The other dimension still auto-generates. Seeded x auto still crosses into
     the full persona x scenario grid.
+
+    ``edge_case_percentage`` overrides the fraction of the auto-generated
+    portion of each dimension that are edge cases (default 0.2 for personas,
+    0.3 for scenarios, applied independently per generator). Has no effect on
+    a seeded dimension, which never gets edge-case padding.
 
     This freezes the simulation *inputs* (personas, scenarios, first messages)
     so every `simulate` run scores the same fixed dataset — useful for
@@ -983,6 +1102,7 @@ async def generate(
                         hooks=gen_hooks,
                         persona_seeds=persona_seeds,
                         scenario_seeds=scenario_seeds,
+                        edge_case_percentage=edge_case_percentage,
                     )
                 finally:
                     await await_maybe(gen_hooks.on_stage_end(SimStage.GENERATE, {}))
@@ -1191,6 +1311,7 @@ async def _generate_personas_scenarios(
     generation_client: AsyncOpenAI | None,
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
+    edge_case_percentage: float | None = None,
 ) -> tuple[list[Persona], list[Scenario]]:
     """Generate personas and scenarios concurrently from an agent description.
 
@@ -1200,7 +1321,13 @@ async def _generate_personas_scenarios(
     ``"angry retiree"``) — instead of auto-generating ``num_*``; the other
     dimension still auto-generates. Provider is resolved via the shared factory;
     the client is closed only when owned here (i.e. not injected).
+
+    ``edge_case_percentage``, when given, overrides each generator's own default
+    (0.2 for personas, 0.3 for scenarios) on the auto-generated (non-seeded)
+    branch only — a seeded dimension already fixes ``edge_case_percentage=0.0``
+    on purpose (one object per seed, no padding) and must not be overridden.
     """
+    from evaluatorq.common.structured_output import log_structured_usage, sum_structured_usage
     from evaluatorq.openresponses.client import build_simulation_client
     from evaluatorq.simulation.exceptions import SimulationError
     from evaluatorq.simulation.generators import PersonaGenerator, ScenarioGenerator
@@ -1224,17 +1351,31 @@ async def _generate_personas_scenarios(
                 out.append(batch[0])
             return out
 
+        persona_kwargs: dict[str, Any] = {'agent_description': agent_description, 'num_personas': num_personas}
+        scenario_kwargs: dict[str, Any] = {'agent_description': agent_description, 'num_scenarios': num_scenarios}
+        if edge_case_percentage is not None:
+            persona_kwargs['edge_case_percentage'] = edge_case_percentage
+            scenario_kwargs['edge_case_percentage'] = edge_case_percentage
+
         personas_coro = (
             _seeded(persona_gen, persona_seeds, 'persona', 'num_personas')
             if persona_seeds
-            else persona_gen.generate(agent_description=agent_description, num_personas=num_personas)
+            else persona_gen.generate(**persona_kwargs)
         )
         scenarios_coro = (
             _seeded(scenario_gen, scenario_seeds, 'scenario', 'num_scenarios')
             if scenario_seeds
-            else scenario_gen.generate(agent_description=agent_description, num_scenarios=num_scenarios)
+            else scenario_gen.generate(**scenario_kwargs)
         )
         gen_personas, gen_scenarios = await asyncio.gather(personas_coro, scenarios_coro)
+        # Generation happens before a run object exists, so there is no report
+        # field for what it cost; the log line is where that spend surfaces
+        # (RES-1295). Both generators accumulate across every call they made,
+        # including the seeded fan-out and the fallback rungs.
+        log_structured_usage(
+            sum_structured_usage([persona_gen.get_usage(), scenario_gen.get_usage()]),
+            phase='Persona/scenario generation',
+        )
     finally:
         if gen_owned:
             await gen_client.close()
@@ -1283,7 +1424,9 @@ async def _simulate_core(
     run_output = config.run_output
 
     target_callable, target_agent, target_kind_hint = _resolve_target(
-        config.target, memory_entity_id=config.memory_entity_id
+        config.target,
+        memory_entity_id=config.memory_entity_id,
+        target_reasoning_effort=config.target_reasoning_effort,
     )
 
     # ``run_id`` is minted at the outer entry (_simulate_run /
@@ -1527,6 +1670,7 @@ def _resolve_target(
     target: str | Callable[..., Any] | AgentTarget | None,
     *,
     memory_entity_id: str | None = None,
+    target_reasoning_effort: str | None = None,
 ) -> tuple[
     Callable[[list[Message]], str | Awaitable[str] | Awaitable[AgentResponse]] | None, AgentTarget | None, str | None
 ]:
@@ -1546,6 +1690,10 @@ def _resolve_target(
       the ``eq sim`` CLI uses for ``--target agent:<key>``; ``"deployment:<key>"``
       bridges to an Orq deployment callback (hint ``"orq_deployment"``);
     * a plain callable → callback path (hint ``None`` → ``"callback"``).
+
+    ``target_reasoning_effort`` only applies to the ``str`` (agent:<key> / bare
+    <key>) path — it is pinned on the ``LLMConfig`` fed to ``make_agent_backend``,
+    the simulation counterpart of red team's ``LLMConfig.target_reasoning_effort``.
     """
     from evaluatorq.contracts import AgentTarget
     from evaluatorq.integrations.vercel_ai_sdk_integration import VercelAISdkTarget
@@ -1579,7 +1727,7 @@ def _resolve_target(
 
             backend = make_agent_backend(
                 target_config=TargetConfig(system_prompt=None),
-                pipeline_config=LLMConfig(),
+                pipeline_config=LLMConfig(target_reasoning_effort=target_reasoning_effort),
             )
             agent_target = backend.create_target(value)
             if memory_entity_id is not None:
@@ -1802,6 +1950,10 @@ def _build_simulation_job_and_cache(
     generation_client: AsyncOpenAI | None,
     hooks: SimulationHooks | None,
     run_id: str | None = None,
+    target_agent_timeout_ms: int = 240_000,
+    max_target_retries: int = 2,
+    max_tool_result_chars: int = 500,
+    per_simulation_timeout_s: float | None = None,
 ) -> tuple[
     Callable[[DataPoint, int], Awaitable[dict[str, Any]]],
     dict[int, SimulationResult],
@@ -1827,6 +1979,9 @@ def _build_simulation_job_and_cache(
         target_agent=target_agent,
         model=model,
         max_turns=max_turns,
+        target_agent_timeout_ms=target_agent_timeout_ms,
+        max_target_retries=max_target_retries,
+        max_tool_result_chars=max_tool_result_chars,
         user_simulator=user_simulator,
         judge=judge,
         llm_client=generation_client,
@@ -1872,7 +2027,13 @@ def _build_simulation_job_and_cache(
         # Orq observability and powers the dashboard's per-conversation deep link.
         # _row is the datapoint's index (stable across the run).
         thread_id = build_thread_id(run_id, _row)
-        result = await runner.run(datapoint=sim_dp, max_turns=max_turns, thread_id=thread_id)
+        # Routes through the same wall-clock guard run_batch uses
+        # (SimulationRunner._run_with_timeout): timeout_s<=0 (the default —
+        # per_simulation_timeout_s left unset) falls straight through to
+        # runner.run(), so this is a no-op change until a caller opts in.
+        result = await runner._run_with_timeout(  # noqa: SLF001
+            sim_dp, max_turns, per_simulation_timeout_s or 0, thread_id=thread_id
+        )
         result.metadata['datapoint_id'] = sim_dp.id
         result_cache[id(data)] = result
         if result.terminated_by in (TerminatedBy.error, TerminatedBy.timeout):
@@ -2056,7 +2217,7 @@ async def _simulate_via_evaluatorq(
     exit_on_failure = config.exit_on_failure
 
     resolved_evaluator_names = config.evaluator_names if config.evaluator_names is not None else DEFAULT_EVALUATOR_NAMES
-    scorers = [(name, get_evaluator(name)) for name in resolved_evaluator_names]
+    scorers = [(name, get_evaluator(name, config.scoring)) for name in resolved_evaluator_names]
 
     eq_datapoints = [DataPoint(inputs={'datapoint': dp.model_dump(mode='json')}) for dp in sim_datapoints]
     # Map the evaluatorq DataPoint instance back to its source simulation
@@ -2076,6 +2237,10 @@ async def _simulate_via_evaluatorq(
         generation_client=generation_client,
         hooks=hooks,
         run_id=run_id,
+        target_agent_timeout_ms=config.target_agent_timeout_ms,
+        max_target_retries=config.max_target_retries,
+        max_tool_result_chars=config.max_tool_result_chars,
+        per_simulation_timeout_s=config.per_simulation_timeout_s,
     )
 
     evaluators = [_adapt_simulation_scorer(name, fn, result_cache) for name, fn in scorers]

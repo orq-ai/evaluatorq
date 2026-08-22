@@ -5,6 +5,12 @@ Owns ONLY: params assembly, input/response span recording, W3C trace-header
 injection, the timed ``create`` call, and token-usage extraction. Does NOT own the
 span (caller opens its own domain ``with_llm_span`` and passes it in), retry (caller
 wraps with ``with_retry`` if desired), or parsing/result-shaping.
+
+``extra_body`` is a **dedicated parameter, not an ``extra_kwargs`` key**. It carries
+the Orq router body (retry policy, thread/memory ids), which is owned by the call
+site, so `check_reserved_keys` rejects it inside ``extra_kwargs`` — a user routing
+it through there would silently replace the router body rather than add to it.
+Pass the call-site body as ``extra_body=`` and user options as ``extra_kwargs=``.
 """
 
 from __future__ import annotations
@@ -24,7 +30,12 @@ from evaluatorq.common.tracing import (
     record_llm_input,
     record_llm_response,
 )
-from evaluatorq.contracts import TokenUsage
+from evaluatorq.contracts import (
+    _RESERVED_COMPLETION_KEYS,
+    _RESERVED_RESPONSES_KEYS,
+    TokenUsage,
+    check_reserved_keys,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -148,9 +159,11 @@ async def execute_chat_completion(
     temperature: float | None = None,
     max_tokens: int | None = None,
     max_completion_tokens: int | None = None,
+    reasoning_effort: str | None = None,
     tools: list[dict[str, Any]] | None = None,
     response_format: dict[str, Any] | None = None,
     inject_trace_headers: bool = True,
+    extra_body: dict[str, Any] | None = None,
     extra_kwargs: dict[str, Any] | None = None,
 ) -> tuple[ChatCompletion, TokenUsage | None]:
     """Execute one Chat Completions call. Records input/response on ``span``.
@@ -165,12 +178,17 @@ async def execute_chat_completion(
         params['max_tokens'] = max_tokens
     if max_completion_tokens is not None:
         params['max_completion_tokens'] = max_completion_tokens
+    if reasoning_effort:
+        params['reasoning_effort'] = reasoning_effort
     if tools:  # truthiness (not `is not None`) for parity with BaseAgent
         params['tools'] = tools
         params['tool_choice'] = 'auto'
     if response_format is not None:
         params['response_format'] = response_format
+    if extra_body:
+        params['extra_body'] = extra_body
     if extra_kwargs:
+        check_reserved_keys(extra_kwargs, _RESERVED_COMPLETION_KEYS)
         params.update(extra_kwargs)
 
     _strip_known_rejected_reasoning(model, params)
@@ -211,7 +229,9 @@ async def execute_chat_parse(
     response_model: type[BaseModel],
     temperature: float | None = None,
     max_completion_tokens: int | None = None,
+    reasoning_effort: str | None = None,
     inject_trace_headers: bool = True,
+    extra_body: dict[str, Any] | None = None,
     extra_kwargs: dict[str, Any] | None = None,
 ) -> tuple[ParsedChatCompletion[Any], TokenUsage | None]:
     """Execute one structured Chat Completions call via ``.parse``.
@@ -226,7 +246,12 @@ async def execute_chat_parse(
         params['temperature'] = temperature
     if max_completion_tokens is not None:
         params['max_completion_tokens'] = max_completion_tokens
+    if reasoning_effort:
+        params['reasoning_effort'] = reasoning_effort
+    if extra_body:
+        params['extra_body'] = extra_body
     if extra_kwargs:
+        check_reserved_keys(extra_kwargs, _RESERVED_COMPLETION_KEYS)
         params.update(extra_kwargs)
 
     _strip_known_rejected_reasoning(model, params)
@@ -261,7 +286,9 @@ async def execute_response(
     response_text_format: type[BaseModel] | None = None,
     temperature: float | None = None,
     max_output_tokens: int | None = None,
+    reasoning_effort: str | None = None,
     inject_trace_headers: bool = True,
+    extra_body: dict[str, Any] | None = None,
     extra_kwargs: dict[str, Any] | None = None,
 ) -> tuple[Any, TokenUsage | None]:
     """Execute one Responses API call — ``.parse`` with a ``response_model``, else ``.create``.
@@ -286,7 +313,12 @@ async def execute_response(
         params['temperature'] = temperature
     if max_output_tokens is not None:
         params['max_output_tokens'] = max_output_tokens
+    if reasoning_effort:
+        params['reasoning'] = {'effort': reasoning_effort}
+    if extra_body:
+        params['extra_body'] = extra_body
     if extra_kwargs:
+        check_reserved_keys(extra_kwargs, _RESERVED_RESPONSES_KEYS)
         params.update(extra_kwargs)
 
     if response_model is not None and response_text_format is not None:

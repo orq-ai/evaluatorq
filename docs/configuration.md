@@ -24,9 +24,43 @@ All configuration is via environment variables. No config file is required.
 | `OTEL_SERVICE_VERSION` | No | `1.0.0` | Service version recorded on every span's `service.version` resource attribute. |
 | `EVALUATORQ_CAPTURE_MESSAGE_CONTENT` | No | `true` | Set to `false` or `0` to strip LLM message content (prompts and responses) from spans. Token counts, model name, and latency are still recorded. Useful when exporting to third-party backends or to avoid capturing PII. |
 | `EVALUATORQ_SPAN_MAX_TEXT_CHARS` | No | unset (no limit) | Maximum characters per span text attribute. Set a positive integer (e.g. `8192`) to truncate long strings. Unset or `0` / `-1` means capture all. |
-| `EVALUATORQ_LLM_TIMEOUT_S` | No | `60.0` | Per-LLM-call timeout in seconds. **Simulation only** — has no effect on red teaming or core evaluation. Increase for slow self-hosted endpoints. |
-| `EVALUATORQ_LLM_MAX_TOKENS` | No | `10000` | Maximum completion tokens per LLM call. **Simulation only** — red teaming shares the same default (`DEFAULT_TARGET_MAX_TOKENS`) but is tuned per role via `LLMConfig.max_tokens` / `EvaluatorConfig.max_tokens`, not by this variable. Increase for reasoning models that exhaust the default budget before emitting a tool call. |
-| `EVALUATORQ_REASONING_EFFORT` | No | `medium` | Reasoning effort hint passed to reasoning-capable models. **Simulation only** — has no effect on red teaming or core evaluation. Set to `""`, `none`, or `off` to omit the parameter entirely. |
+| `EVALUATORQ_LLM_TIMEOUT_S` | No | `60.0` | Per-LLM-call timeout in seconds. **Simulation only** — has no effect on red teaming or core evaluation. A fallback default: `LLMCallConfig.timeout_ms` on the agent's config wins when set. Read at call time, so setting it after import takes effect. Increase for slow self-hosted endpoints; for the *target's* timeout rather than the simulator's, pass `target_agent_timeout_ms` to `simulate()`. |
+| `EVALUATORQ_LLM_MAX_TOKENS` | No | `10000` | Maximum completion tokens per LLM call. **Simulation only** — red teaming shares the same default (`DEFAULT_TARGET_MAX_TOKENS`) but is tuned per role via `LLMConfig.max_tokens` / `EvaluatorConfig.max_tokens`, not by this variable. A fallback default: `LLMCallConfig.max_tokens` on the agent's config wins when set. Read at call time, so setting it after import takes effect. Increase for reasoning models that exhaust the default budget before emitting a tool call. |
+| `EVALUATORQ_REASONING_EFFORT` | No | `medium` | Reasoning effort hint for the **simulator's own** LLM calls (user simulator, judge) — not for the agent under test, which takes `target_reasoning_effort` on `simulate()` / `red_team()`. **Simulation only.** A fallback default: `LLMCallConfig.reasoning_effort` on the agent's config wins when set. Read at call time, so setting it after import takes effect. Set to `""`, `none`, or `off` to omit the parameter entirely. |
+| `EVALUATORQ_APPLY_MODEL` | No | `openai/gpt-5.6-luna` | Model used by the dashboard's apply-recommendations merge. Shown in the dashboard config panel. See [Dashboard](dashboard.md). |
+| `EVALUATORQ_DASHBOARD_ROOTS` | No | unset | Colon-separated run-store roots the dashboard serves. Set automatically for the reloader subprocess; set it yourself only to point the dashboard at stores outside `EVALUATORQ_DIR`. |
+| `EVALUATORQ_CATALOGUE_TIMEOUT_S` | No | `30` | HTTP timeout in seconds for the `GET /v2/models` model-catalogue fetch, read once at import (unlike the three `EVALUATORQ_LLM_*` vars above, which are read at call time). The catalogue supplies per-model prices, Responses support, and accepted reasoning-effort values. A failed fetch is **not** cached immediately: the first two failures leave the catalogue unloaded so a later call can still succeed, and only the third gives up and degrades the rest of the process to unpriced and chat-completions-only. Each failure logs a warning naming the attempt number. |
+
+## Model catalogue overrides
+
+Prices, provider ids, Responses support and accepted reasoning-effort values come
+from Orq's `GET /v2/models`, fetched once per process. A model that catalogue does
+not list — a self-hosted deployment, or one newer than your workspace's catalogue —
+degrades silently in three ways: the call stays unpriced, `qualified_model()` sends
+it to Chat Completions instead of Responses, and its reasoning effort cannot be
+pre-validated.
+
+Register an entry to fix that. Registered entries take priority over the fetched
+catalogue, so this also corrects an entry that is wrong:
+
+```python
+from evaluatorq.common.model_catalogue import ModelInfo, get_model_info, register_model
+
+register_model(
+    'my-self-hosted-llama',
+    ModelInfo(
+        input_cost_per_1k=0.0002,
+        output_cost_per_1k=0.0008,
+        provider='self',
+        supports_responses=False,
+        reasoning_efforts=None,  # None = "unknown", never "nothing allowed"
+    ),
+)
+
+info = await get_model_info('my-self-hosted-llama')
+```
+
+Costs are USD **per 1000 tokens**, matching what `/v2/models` publishes.
 
 ## `.env` file
 

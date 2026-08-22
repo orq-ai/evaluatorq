@@ -27,6 +27,7 @@ from evaluatorq.common.retry import with_retry
 from evaluatorq.common.thread_context import pipeline_metadata, thread_body_param
 from evaluatorq.common.tracing import get_trace_context_headers, record_llm_input, record_llm_response
 from evaluatorq.contracts import (
+    _RESERVED_RESPONSES_KEYS,
     DEFAULT_TARGET_MAX_TOKENS,
     AgentResponse,
     FunctionCall,
@@ -35,6 +36,7 @@ from evaluatorq.contracts import (
     TextOutputItem,
     TokenUsage,
     ToolCallOutputItem,
+    check_reserved_keys,
 )
 from evaluatorq.openresponses.client import build_simulation_client
 from evaluatorq.openresponses.input_items import messages_to_responses_input
@@ -67,23 +69,60 @@ def _env_int(name: str, default: int) -> int:
         raise ValueError(f'Environment variable {name}={raw!r} must be an integer') from None
 
 
-# Per-LLM-call timeout. Self-hosted endpoints (e.g. a single-GPU tailscale box
-# under parallel load) can exceed the default; raise via EVALUATORQ_LLM_TIMEOUT_S.
-DEFAULT_TIMEOUT_S = _env_float('EVALUATORQ_LLM_TIMEOUT_S', 60.0)
+# NOTE: the three functions below are resolved at CALL TIME, not import time —
+# `os.environ[...]` set after this module is imported (e.g. by a test, or a
+# caller composing several runs with different env in one process) takes
+# effect on the next LLM call. They are the process-global FALLBACK layer only:
+# `LLMCallConfig.timeout_ms` / `.max_tokens` / `.reasoning_effort`, when
+# explicitly set on an agent's config, always win over them (see
+# `BaseAgent._resolved_*` below).
 
-# Default completion-token budget, shared with red team via
-# DEFAULT_TARGET_MAX_TOKENS. Reasoning models (e.g. gemma-4) spend tokens on
-# hidden reasoning before the tool call; too small a budget truncates the
-# response (finish_reason=length) before the tool call is emitted, surfacing as
-# "no text and no tool calls". Raise via EVALUATORQ_LLM_MAX_TOKENS for such models.
-DEFAULT_MAX_TOKENS = _env_int('EVALUATORQ_LLM_MAX_TOKENS', DEFAULT_TARGET_MAX_TOKENS)
 
-# Default reasoning effort for reasoning-capable models. "medium" keeps hidden
-# reasoning bounded (far fewer tokens than the model's default), which avoids
-# budget-exhaustion truncation. Endpoints that don't support it degrade
-# gracefully (the param is dropped on a 400). Set "" / "none" to omit it.
-_REASONING_EFFORT_RAW = os.environ.get('EVALUATORQ_REASONING_EFFORT', 'medium').strip().lower()
-DEFAULT_REASONING_EFFORT = _REASONING_EFFORT_RAW if _REASONING_EFFORT_RAW not in ('', 'none', 'off') else None
+def _default_timeout_s() -> float:
+    """Per-LLM-call timeout fallback. Self-hosted endpoints (e.g. a single-GPU
+    tailscale box under parallel load) can exceed the default; raise via
+    EVALUATORQ_LLM_TIMEOUT_S, or per-agent via ``LLMCallConfig.timeout_ms``.
+    """
+    return _env_float('EVALUATORQ_LLM_TIMEOUT_S', 60.0)
+
+
+def _default_max_tokens() -> int:
+    """Default completion-token budget fallback, shared with red team via
+    DEFAULT_TARGET_MAX_TOKENS. Reasoning models (e.g. gemma-4) spend tokens on
+    hidden reasoning before the tool call; too small a budget truncates the
+    response (finish_reason=length) before the tool call is emitted, surfacing
+    as "no text and no tool calls". Raise via EVALUATORQ_LLM_MAX_TOKENS, or
+    per-agent via ``LLMCallConfig.max_tokens``.
+    """
+    return _env_int('EVALUATORQ_LLM_MAX_TOKENS', DEFAULT_TARGET_MAX_TOKENS)
+
+
+def _default_reasoning_effort() -> str | None:
+    """Default reasoning effort fallback for reasoning-capable models. "medium"
+    keeps hidden reasoning bounded (far fewer tokens than the model's default),
+    which avoids budget-exhaustion truncation. Endpoints that don't support it
+    degrade gracefully (the param is dropped on a 400). Set "" / "none" via
+    EVALUATORQ_REASONING_EFFORT to omit it, or set ``LLMCallConfig.reasoning_effort``
+    per-agent (including explicit ``None`` to opt out, overriding this fallback).
+
+    A separate knob from red team's ``LLMConfig.target_reasoning_effort``, which
+    configures the agent *under test* rather than the simulator's own LLM calls
+    (user simulator, judge). Both ultimately resolve into a per-call
+    ``LLMCallConfig.reasoning_effort`` — this one via the env fallback below when
+    a `BaseAgent`'s config leaves it unset, that one via an explicit
+    ``reasoning_effort=`` threaded into the target's backend construction.
+    """
+    raw = os.environ.get('EVALUATORQ_REASONING_EFFORT', 'medium').strip().lower()
+    return raw if raw not in ('', 'none', 'off') else None
+
+
+# Backward-compat snapshot for external callers/tests that inspect the shared
+# default budget (e.g. asserting it matches `DEFAULT_TARGET_MAX_TOKENS`). NOT
+# read by any call path in this module — every LLM call resolves the live
+# value via `_default_max_tokens()` at call time (see the module note above),
+# so this constant can go stale relative to `EVALUATORQ_LLM_MAX_TOKENS` set
+# after import without affecting behaviour.
+DEFAULT_MAX_TOKENS = _default_max_tokens()
 
 
 @dataclass
@@ -101,26 +140,51 @@ class AgentConfig:
 
     Deprecated: use `evaluatorq.contracts.LLMCallConfig` instead. `AgentConfig`
     is kept for backwards compatibility and will be removed in a future release.
-    Subclasses (`JudgeAgentConfig`, `UserSimulatorAgentConfig`) will be migrated
-    in a subsequent task.
+
+    ``temperature`` / ``max_tokens`` / ``timeout_ms`` / ``extra_kwargs`` /
+    ``reasoning_effort`` / ``retry_count`` default to ``None`` here (not
+    `LLMCallConfig`'s own defaults): ``None`` means "caller didn't touch this",
+    so `_config_from_agent_config` omits it from the constructed
+    `LLMCallConfig`, letting the per-call-site literal / env fallback apply —
+    exactly as if this legacy class had never been in the way.
     """
 
     model: str = DEFAULT_MODEL
     client: AsyncOpenAI | None = None
     api_key: str | None = None
     api: Literal['chat_completions', 'responses'] = 'chat_completions'
+    temperature: float | None = None
+    max_tokens: int | None = None
+    timeout_ms: int | None = None
+    extra_kwargs: dict[str, Any] | None = None
+    reasoning_effort: str | None = None
+    retry_count: int | None = None
 
 
 def _config_from_agent_config(agent_cfg: AgentConfig) -> tuple[LLMCallConfig, str | None]:
-    """Convert a legacy AgentConfig into a LLMCallConfig + optional api_key."""
-    return (
-        LLMCallConfig(
-            model=agent_cfg.model,
-            client=agent_cfg.client,
-            api=agent_cfg.api,
-        ),
-        agent_cfg.api_key,
-    )
+    """Convert a legacy AgentConfig into a LLMCallConfig + optional api_key.
+
+    Only fields the caller actually set on ``agent_cfg`` (non-``None``) are
+    passed through to the `LLMCallConfig` constructor, so
+    `LLMCallConfig.model_fields_set` accurately reflects caller intent for the
+    resolvers in `BaseAgent` (``_resolved_temperature`` etc.) — a field left at
+    its `AgentConfig` default of ``None`` must NOT shadow the per-call-site
+    literal / env fallback with `LLMCallConfig`'s own field default.
+    """
+    kwargs: dict[str, Any] = {'model': agent_cfg.model, 'client': agent_cfg.client, 'api': agent_cfg.api}
+    if agent_cfg.temperature is not None:
+        kwargs['temperature'] = agent_cfg.temperature
+    if agent_cfg.max_tokens is not None:
+        kwargs['max_tokens'] = agent_cfg.max_tokens
+    if agent_cfg.timeout_ms is not None:
+        kwargs['timeout_ms'] = agent_cfg.timeout_ms
+    if agent_cfg.extra_kwargs is not None:
+        kwargs['extra_kwargs'] = agent_cfg.extra_kwargs
+    if agent_cfg.reasoning_effort is not None:
+        kwargs['reasoning_effort'] = agent_cfg.reasoning_effort
+    if agent_cfg.retry_count is not None:
+        kwargs['retry_count'] = agent_cfg.retry_count
+    return LLMCallConfig(**kwargs), agent_cfg.api_key
 
 
 class BaseAgent(ABC):
@@ -229,6 +293,49 @@ class BaseAgent(ABC):
         self._client_owned = owned
         return client
 
+    def _resolved_temperature(self, call_value: float | None, fallback: float | None) -> float | None:
+        """Effective temperature: explicit ``self.config.temperature`` beats the
+        per-call-site literal (``call_value``, e.g. the judge's ``0.0`` or the
+        user simulator's first-message ``0.8``), which beats ``fallback``.
+
+        ``self.config.temperature`` always carries a value (`LLMCallConfig`
+        defaults it to ``1.0``), so ``model_fields_set`` is the only way to tell
+        "caller explicitly configured this agent's temperature" from "this is
+        just the field default" — see `LLMCallConfig`.
+        """
+        if 'temperature' in self.config.model_fields_set:
+            return self.config.temperature
+        return call_value if call_value is not None else fallback
+
+    def _resolved_max_tokens(self, call_value: int | None) -> int:
+        """Effective max-tokens budget: explicit ``self.config.max_tokens`` beats
+        ``call_value``, which beats the call-time-resolved env fallback
+        (`_default_max_tokens`, EVALUATORQ_LLM_MAX_TOKENS).
+        """
+        if 'max_tokens' in self.config.model_fields_set:
+            return self.config.max_tokens
+        return call_value if call_value is not None else _default_max_tokens()
+
+    def _resolved_timeout_s(self, call_value: float | None) -> float:
+        """Effective per-call timeout in seconds: explicit ``self.config.timeout_ms``
+        (converted from ms) beats ``call_value`` (already seconds — the unit
+        `respond_async` / `_call_llm` use), which beats the call-time-resolved
+        env fallback (`_default_timeout_s`, EVALUATORQ_LLM_TIMEOUT_S).
+        """
+        if 'timeout_ms' in self.config.model_fields_set:
+            return self.config.timeout_ms / 1000.0
+        return call_value if call_value is not None else _default_timeout_s()
+
+    def _resolved_reasoning_effort(self) -> str | None:
+        """Effective reasoning effort: an explicitly set ``self.config.reasoning_effort``
+        wins — including an explicit ``None``, which opts this agent out of the
+        env fallback on purpose — else the call-time-resolved env fallback
+        (`_default_reasoning_effort`, EVALUATORQ_REASONING_EFFORT).
+        """
+        if 'reasoning_effort' in self.config.model_fields_set:
+            return self.config.reasoning_effort
+        return _default_reasoning_effort()
+
     async def _call_llm(
         self,
         messages: list[Message],
@@ -273,10 +380,20 @@ class BaseAgent(ABC):
         tools: list[dict[str, Any]] | None = None,
         llm_purpose: str | None = None,
     ) -> LLMResult:
-        """Call the LLM via the Chat Completions API with retry logic."""
-        temp = temperature if temperature is not None else 0.7
-        max_tok = max_tokens or DEFAULT_MAX_TOKENS
-        timeout_s = timeout or DEFAULT_TIMEOUT_S
+        """Call the LLM via the Chat Completions API with retry logic.
+
+        Effective ``temperature`` / ``max_tokens`` / ``timeout`` / reasoning
+        effort come from `_resolved_temperature` / `_resolved_max_tokens` /
+        `_resolved_timeout_s` / `_resolved_reasoning_effort`: an explicit
+        ``self.config`` value wins, else this call site's literal (``temperature``
+        param here — e.g. the judge's ``0.0``), else the call-time env fallback.
+        ``self.config.extra_kwargs`` rides along last, so it can still override
+        any of the above (matches `LLMCallConfig.completion_params`'s contract).
+        """
+        temp = self._resolved_temperature(temperature, 0.7)
+        max_tok = self._resolved_max_tokens(max_tokens)
+        timeout_s = self._resolved_timeout_s(timeout)
+        reasoning_effort = self._resolved_reasoning_effort()
 
         full_messages: list[dict[str, Any]] = [
             {'role': 'system', 'content': self.system_prompt},
@@ -290,7 +407,12 @@ class BaseAgent(ABC):
             max_tokens=max_tok,
             purpose=llm_purpose,
         ) as span:
-            reasoning_kwargs = {'reasoning_effort': DEFAULT_REASONING_EFFORT} if DEFAULT_REASONING_EFFORT else None
+            call_extra: dict[str, Any] = dict(self.config.extra_kwargs) if self.config.extra_kwargs else {}
+            if reasoning_effort and 'reasoning_effort' not in call_extra:
+                call_extra['reasoning_effort'] = reasoning_effort
+            # execute_chat_completion treats None as "no extras"; an empty dict
+            # would be splatted as a no-op but reads as "the caller set extras".
+            reasoning_kwargs: dict[str, Any] | None = call_extra or None
 
             async def _do_call() -> LLMResult:
                 finish_reason: str | None = None
@@ -305,6 +427,7 @@ class BaseAgent(ABC):
                         temperature=temp,
                         max_tokens=max_tok,
                         tools=tools,
+                        extra_body=self.config.extra_body or None,
                         extra_kwargs=reasoning_kwargs,
                     )
                     if delta is not None:
@@ -360,8 +483,18 @@ class BaseAgent(ABC):
         ``instructions`` (system prompt) instead of a ``messages`` list.
         Text is extracted from ``response.output`` items that carry a
         ``content`` list of parts with a ``text`` attribute.
+
+        Effective ``temperature`` / ``max_tokens`` / ``timeout`` / reasoning
+        effort follow the same config-beats-call-site-beats-fallback order as
+        `_call_chat_completions` (see `_resolved_temperature` etc.).
+        ``self.config.extra_kwargs`` is merged in last (structural keys guarded
+        by `check_reserved_keys`), so it can override any of the above —
+        matching `LLMCallConfig.responses_params`'s contract.
         """
-        timeout_s = timeout or DEFAULT_TIMEOUT_S
+        timeout_s = self._resolved_timeout_s(timeout)
+        resolved_temp = self._resolved_temperature(temperature, None)
+        max_tok = self._resolved_max_tokens(max_tokens)
+        reasoning_effort = self._resolved_reasoning_effort()
 
         # Canonical renderer: an assistant turn must arrive as output_text parts or
         # the Orq router silently drops it, leaving the judge blind to the agent's
@@ -377,19 +510,23 @@ class BaseAgent(ABC):
         if tools:
             params['tools'] = [_responses_tool_schema(tool) for tool in tools]
 
-        if temperature is not None:
-            params['temperature'] = temperature
+        if resolved_temp is not None:
+            params['temperature'] = resolved_temp
 
-        params['max_output_tokens'] = max_tokens or DEFAULT_MAX_TOKENS
+        params['max_output_tokens'] = max_tok
 
-        if DEFAULT_REASONING_EFFORT:
-            params['reasoning'] = {'effort': DEFAULT_REASONING_EFFORT}
+        if reasoning_effort:
+            params['reasoning'] = {'effort': reasoning_effort}
+
+        if self.config.extra_kwargs:
+            check_reserved_keys(self.config.extra_kwargs, _RESERVED_RESPONSES_KEYS)
+            params.update(self.config.extra_kwargs)
 
         async with with_llm_span(
             model=self._model,
             operation='responses',
-            temperature=temperature,
-            max_tokens=max_tokens,
+            temperature=resolved_temp,
+            max_tokens=max_tok,
             purpose=llm_purpose,
         ) as span:
             # Responses API sends system context via `instructions`, not as a
@@ -416,6 +553,10 @@ class BaseAgent(ABC):
                 if metadata:
                     call_kwargs['metadata'] = metadata
                 extra_body = thread_body_param() if client_routes_through_orq(self._client) else {}
+                # Config body layered last: the caller's keys win per key, the
+                # call site's thread grouping survives the ones they did not set.
+                if self.config.extra_body:
+                    extra_body = {**extra_body, **self.config.extra_body}
                 if extra_body:
                     call_kwargs['extra_body'] = {**call_kwargs.get('extra_body', {}), **extra_body}
                 # Drop reasoning up front if this model already rejected it once, so

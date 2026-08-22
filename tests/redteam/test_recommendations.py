@@ -199,14 +199,19 @@ async def test_extra_body_carries_retry_hints_for_router_client(
 async def test_extra_body_empty_for_non_router_client(
     mock_client_and_capture: tuple[Any, dict[str, Any]],
 ) -> None:
-    """No ORQ-specific ``retry`` is sent to a plain OpenAI client (decision: gate on base_url)."""
+    """No ORQ-specific ``retry`` is sent to a plain OpenAI client (decision: gate on base_url).
+
+    The router body now travels in its own ``extra_body=`` parameter, which is
+    omitted entirely when empty rather than sent as ``{}`` — so the assertion is
+    that the key is absent, not that it is an empty dict.
+    """
     client, captured = mock_client_and_capture
     client.base_url = 'https://api.openai.com/v1'
     cfg = LLMConfig()
 
     await generate_focus_area_recommendations(_empty_report(), client, model='gpt-5-mini', cfg=cfg)
 
-    assert captured['extra_body'] == {}
+    assert captured.get('extra_body', {}) == {}
 
 
 @pytest.mark.asyncio

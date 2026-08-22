@@ -40,6 +40,13 @@ pipeline uses so a run's spans are uniformly ``responses ...``. It is a leg,
 not a replacement: a provider without the endpoint, or one that names the
 schema form unsupported, falls through to everything described above.
 
+Because one call can bill up to five provider requests, the result carries the
+usage of **all** of them (`StructuredResult.usage`), summed rather than taken
+from the rung that answered — a rung that failed still billed (RES-1295). Rungs
+are priced individually through ``common.model_catalogue.price_usage``, and a
+rung whose usage block cannot be read counts as one unpriced call after a
+warning, never as zero.
+
 Lives in ``common`` rather than ``simulation`` so both the simulation and
 red-team report code can reuse one copy (RES-822). It delegates to the canonical
 ``common.tracing.with_llm_span``; a domain that needs its own span attributes
@@ -49,19 +56,22 @@ passes them through ``attributes``.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast
 
 from openai import APIStatusError, AsyncOpenAI, LengthFinishReasonError, pydantic_function_tool
 from pydantic import BaseModel, ValidationError
 
 from evaluatorq.common.extract_json import extract_json_from_response
 from evaluatorq.common.llm_call import apply_pipeline_metadata, execute_response
+from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.responses import first_responses_refusal, parse_responses_response, responses_stop_reason
 from evaluatorq.common.retry import with_retry
 from evaluatorq.common.tracing import get_trace_context_headers, record_llm_response, with_llm_span
+from evaluatorq.contracts import TokenUsage, check_reserved_keys
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Sequence
 
     from opentelemetry.trace import Span
 
@@ -76,20 +86,140 @@ _LEG_JSON_SCHEMA = 'json_schema'
 _LEG_TOOL = 'tools'
 _LEG_JSON_OBJECT = 'json_object'
 
+
+@dataclass(frozen=True)
+class StructuredResult(Generic[T]):
+    """What one ``generate_structured`` call produced, including what it cost.
+
+    A result object rather than a wider tuple: the ladder can bill up to five
+    provider calls, so ``usage`` is a first-class part of the answer and reads
+    better named than as a third positional slot at eleven call sites.
+
+    ``parsed`` is ``None`` when no rung produced anything that validated;
+    ``raw`` is then the last non-empty text seen, for a caller with its own
+    salvage. ``usage`` is the **sum over every rung that reached the provider**,
+    not just the one that answered — a call that burned rungs 1-3 before rung 4
+    succeeded paid for all four. ``None`` means no rung ever reached a provider
+    (e.g. every attempt was rejected before billing).
+    """
+
+    parsed: T | None
+    raw: str
+    usage: TokenUsage | None = None
+
+
+def sum_structured_usage(usages: Sequence[TokenUsage | None]) -> TokenUsage | None:
+    """Add up `StructuredResult.usage` values, keeping ``None`` for "nothing was billed".
+
+    The one adder for the call sites, so a phase that makes several structured
+    calls reports one figure rather than each module re-implementing the
+    ``None``-tolerant fold. Uses `Usage.__add__`, which carries ``calls`` and
+    ``priced_calls`` through — so an aggregate that mixes priced and unpriced
+    calls still answers `Usage.cost_is_partial` honestly.
+    """
+    known = [u for u in usages if u is not None]
+    if not known:
+        return None
+    total = known[0]
+    for usage in known[1:]:
+        total = total + usage
+    return total
+
+
+def log_structured_usage(usage: TokenUsage | None, *, phase: str) -> None:
+    """Announce what a phase of structured generation cost.
+
+    Every `generate_structured` call site sits on a path with **no report field
+    for its usage**: the persona/scenario/trace generators run before a run
+    object exists, and the recommendation writers run after the report summary
+    has been finalized (RES-1295). The per-call numbers do reach the LLM spans,
+    but a user reading the run log had no way to see this spend at all, so each
+    phase logs its own total here rather than each module inventing a format.
+
+    Deliberately not recorded on the enclosing span: `generate_structured`
+    already records usage on the child LLM span it opens for every rung, and
+    adding the aggregate to the parent would double-count it in any trace-level
+    sum.
+    """
+    if usage is None:
+        logger.info('%s: no usage reported by the provider', phase)
+        return
+    cost = f'${usage.total_cost:.4f}' if usage.total_cost is not None else 'cost unknown'
+    if usage.cost_is_partial:
+        cost += f' (priced for {usage.priced_calls} of {usage.calls} calls)'
+    logger.info(
+        '%s: %d tokens over %d LLM call(s), %s',
+        phase,
+        usage.total_tokens,
+        usage.calls,
+        cost,
+    )
+
+
+async def _rung_usage(
+    response: Any,
+    *,
+    client: AsyncOpenAI,
+    model: str,
+    label: str,
+    leg: str,
+) -> TokenUsage:
+    """Usage for one chat rung's response, priced from the catalogue.
+
+    The Orq router prices Responses but not Chat Completions, so — exactly as
+    `execute_chat_completion` does — the extracted counts go through
+    `price_usage` here rather than being left costless.
+
+    A response whose ``usage`` block this cannot read is counted as **one
+    unpriced call** (``calls=1, priced_calls=0``), never dropped and never
+    silently priced at $0: the rung reached the provider and was billed. Summed
+    against a rung that did report a cost, that makes `Usage.cost_is_partial`
+    true, which is how the rest of the package renders "this figure covers N of
+    M calls". The cause is logged, since a shape this misses is a provider
+    change worth seeing.
+    """
+    usage = await price_usage(TokenUsage.from_completion(response), model, client)
+    if usage is None:
+        logger.warning(
+            '%s: the %s rung returned no readable usage block (%r); '
+            'counting it as one unpriced call rather than as zero cost',
+            label,
+            leg,
+            getattr(response, 'usage', None),
+        )
+        return TokenUsage(calls=1)
+    return usage
+
+
 # Structural request fields a caller's extra_kwargs may not replace: they are
 # owned by this helper, and letting extra_kwargs swap them out would silently
 # break the call it rides on (e.g. replacing the response_format schema this
-# helper exists to enforce). This mirrors the INTENT of
-# LLMCallConfig.completion_params, but the key set is intentionally narrower:
-# that guard also reserves extra_body, whereas here extra_body is deliberately
-# NOT reserved because it is the documented carrier for provider options like
-# the Orq router retry body.
+# helper exists to enforce). Enforced through the same shared `check_reserved_keys`
+# guard `LLMCallConfig.completion_params` / `.responses_params` use (contracts.py),
+# so there is exactly one implementation of "raise on a structural-key clash" in
+# the package — this module previously hand-rolled its own `reserved = ... &
+# keys(); if reserved: raise` copy of that check, which is what let it drift out
+# of step (see below).
+#
+# `extra_body` is reserved here too, matching contracts.py. It carries the Orq
+# router body (retry policy, thread ids), which is owned by the call site, so it
+# arrives through the dedicated `extra_body=` parameter rather than smuggled
+# inside `extra_kwargs`. Before that parameter existed, callers such as
+# `redteam/reports/recommendations.py::_condense_attack` merged the two dicts by
+# hand and passed the result as `extra_kwargs` — which the `api='responses'` leg
+# rejected downstream anyway in `execute_response`, so the shape only ever worked
+# on the chat legs. One parameter, reserved on both legs, removes that split.
+#
 # Keyed by API because the two legs own different field names for the same
 # structural role. An api='responses' call may still fall through to the chat
 # legs, so its reserved set is the union — a key that is safe on the endpoint
-# actually reached is not safe on the one it degrades to.
-_STRUCTURAL_KEYS = frozenset({'model', 'messages', 'response_format'})
-_STRUCTURAL_KEYS_RESPONSES = frozenset({'model', 'input', 'text', 'text_format', 'max_output_tokens'})
+# actually reached is not safe on the one it degrades to. `max_completion_tokens`
+# (chat) and `max_output_tokens` (responses) are both reserved now — the chat
+# side used to omit its token-cap field while the responses side reserved its
+# own, an asymmetry that let extra_kwargs silently override the chat budget but
+# not the responses one.
+_STRUCTURAL_KEYS = frozenset({'model', 'messages', 'response_format', 'max_completion_tokens', 'extra_body'})
+_STRUCTURAL_KEYS_RESPONSES = frozenset({'model', 'input', 'text', 'text_format', 'max_output_tokens', 'extra_body'})
 _STRUCTURAL_KEYS_BY_API = {
     'chat_completions': _STRUCTURAL_KEYS,
     'responses': _STRUCTURAL_KEYS | _STRUCTURAL_KEYS_RESPONSES,
@@ -162,12 +292,15 @@ async def _generate_structured_via_responses(
     label: str,
     temperature: float | None,
     extra_kwargs: dict[str, Any] | None,
-) -> T | None:
-    """Structured output through the Responses API; ``None`` means "use the chat legs".
+    reasoning_effort: str | None = None,
+    timeout_s: float = _STRUCTURED_TIMEOUT_S,
+    extra_body: dict[str, Any] | None = None,
+) -> StructuredResult[T]:
+    """Structured output through the Responses API; ``parsed is None`` means "use the chat legs".
 
-    Returns ``None`` — after a warning naming the cause — when the endpoint is
-    absent (404), when a 400's body names the schema form as unsupported, or
-    when the provider hands back nothing parsed. Those cases let the caller
+    Returns ``parsed=None`` — after a warning naming the cause — when the
+    endpoint is absent (404), when a 400's body names the schema form as
+    unsupported, or when the provider hands back nothing parsed. Those cases let the caller
     degrade to ``chat.completions`` rather than losing the call. Refusals and
     schema-validation failures raise instead: a refusal must not be retried on a
     second endpoint, and a validation error is not evidence of a capability gap.
@@ -183,6 +316,10 @@ async def _generate_structured_via_responses(
     retry would truncate again. The raw response is inspected before parsing so
     this decision uses the provider's completion metadata, never the shape of
     the returned JSON.
+
+    The returned ``usage`` is carried even on the fall-through paths: this leg
+    billed whether or not its payload was usable, and the chat ladder that runs
+    next adds its own rungs on top.
     """
     async with with_llm_span(
         model=model,
@@ -192,17 +329,20 @@ async def _generate_structured_via_responses(
         input_messages=messages,
         attributes={'orq.llm.purpose': label},
     ) as span:
+        usage: TokenUsage | None = None
         try:
-            response, _usage = await with_retry(
+            response, usage = await with_retry(
                 lambda: execute_response(
                     client=client,
                     model=model,
                     messages=messages,
                     span=span,
-                    timeout_s=_STRUCTURED_TIMEOUT_S,
+                    timeout_s=timeout_s,
                     response_text_format=response_format,
                     temperature=temperature,
                     max_output_tokens=max_tokens,
+                    reasoning_effort=reasoning_effort,
+                    extra_body=extra_body,
                     extra_kwargs=extra_kwargs,
                 ),
                 label=label,
@@ -215,7 +355,16 @@ async def _generate_structured_via_responses(
             else:
                 raise
             logger.warning('%s: %s, falling back to chat.completions', label, cause)
-            return None
+            # A rejected request is not a billed one: there is no usage to carry.
+            return StructuredResult(None, '', None)
+        if usage is None:
+            logger.warning(
+                '%s: the Responses leg returned no readable usage block (%r); '
+                'counting it as one unpriced call rather than as zero cost',
+                label,
+                getattr(response, 'usage', None),
+            )
+            usage = TokenUsage(calls=1)
         if responses_stop_reason(response) == 'length':
             raise _truncated_output_error(label, max_tokens)
 
@@ -226,7 +375,7 @@ async def _generate_structured_via_responses(
         raw_content = getattr(response, 'output_text', '') or ''
         if not raw_content:
             logger.warning('%s: Responses returned no output, falling back to chat.completions', label)
-            return None
+            return StructuredResult(None, '', usage)
 
         try:
             parsed_response = parse_responses_response(
@@ -242,8 +391,8 @@ async def _generate_structured_via_responses(
         parsed = getattr(parsed_response, 'output_parsed', None)
         if parsed is None:
             logger.warning('%s: Responses returned no parsed output, falling back to chat.completions', label)
-            return None
-        return cast('T', parsed)
+            return StructuredResult(None, '', usage)
+        return StructuredResult(cast('T', parsed), '', usage)
 
 
 def _chat_params(
@@ -254,6 +403,7 @@ def _chat_params(
     temperature: float | None,
     extra_kwargs: dict[str, Any] | None,
     trace_headers: dict[str, str] | None,
+    reasoning_effort: str | None = None,
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """Build the per-leg request-parameter factory for the chat legs.
 
@@ -261,7 +411,8 @@ def _chat_params(
     ``tools``/``tool_choice``/``messages``) and merges them over the shared base.
     Every chat leg goes through it, so the merge order is defined once:
 
-    1. base (``model``, ``messages``, ``max_completion_tokens``, ``temperature``)
+    1. base (``model``, ``messages``, ``max_completion_tokens``, ``temperature``,
+       ``reasoning_effort`` when set)
     2. the leg's own fields
     3. ``extra_kwargs`` — a caller's provider options (``extra_body``, a
        reasoning-model ``temperature`` override, user ``llm_kwargs``) win over
@@ -288,6 +439,8 @@ def _chat_params(
         }
         if temperature is not None:
             base['temperature'] = temperature
+        if reasoning_effort:
+            base['reasoning_effort'] = reasoning_effort
         if extra_kwargs:
             base.update(extra_kwargs)
         if trace_headers:
@@ -338,7 +491,8 @@ async def _leg_strict_parse(
     label: str,
     span: Span | None,
     max_tokens: int,
-) -> tuple[T | None, str]:
+    model: str,
+) -> StructuredResult[T]:
     """Rung 1: strict schema-enforced structured output via ``parse()``.
 
     Continues the ladder on a 400 whose body names the schema form, and on a
@@ -354,10 +508,12 @@ async def _leg_strict_parse(
         if e.status_code != 400 or not _looks_like_schema_rejection(e):
             raise
         logger.warning('%s: structured output not supported by model, trying the non-strict schema', label)
-        return None, ''
+        # Rejected before the model ran: nothing was billed, so no usage.
+        return StructuredResult(None, '')
     except LengthFinishReasonError as exc:
         raise _truncated_output_error(label, max_tokens) from exc
     record_llm_response(span, response)
+    usage = await _rung_usage(response, client=client, model=model, label=label, leg=_LEG_PARSE)
     message = response.choices[0].message
     refusal = getattr(message, 'refusal', None)
     if refusal:
@@ -365,9 +521,9 @@ async def _leg_strict_parse(
     parsed = message.parsed
     if parsed is None:
         logger.debug('%s: parse() returned None, trying the non-strict schema', label)
-        return None, ''
+        return StructuredResult(None, '', usage)
     _mark_leg(span, _LEG_PARSE)
-    return parsed, ''
+    return StructuredResult(parsed, '', usage)
 
 
 async def _leg_json_schema(
@@ -378,7 +534,8 @@ async def _leg_json_schema(
     label: str,
     span: Span | None,
     max_tokens: int,
-) -> tuple[T | None, str]:
+    model: str,
+) -> StructuredResult[T]:
     """Rung 2: the same schema, non-strict, via plain ``create()``.
 
     Non-strict on purpose: strict mode is what rung 1 already tried and what the
@@ -404,9 +561,16 @@ async def _leg_json_schema(
         if e.status_code != 400:
             raise
         logger.warning('%s: json_schema not accepted, trying a forced tool call', label)
-        return None, ''
-    return _content_result(
-        response, response_format=response_format, label=label, span=span, max_tokens=max_tokens, leg=_LEG_JSON_SCHEMA
+        return StructuredResult(None, '')
+    return await _content_result(
+        response,
+        response_format=response_format,
+        label=label,
+        span=span,
+        max_tokens=max_tokens,
+        leg=_LEG_JSON_SCHEMA,
+        client=client,
+        model=model,
     )
 
 
@@ -419,8 +583,9 @@ async def _leg_forced_tool(
     label: str,
     span: Span | None,
     max_tokens: int,
+    model: str,
     extra_kwargs: dict[str, Any] | None,
-) -> tuple[T | None, str]:
+) -> StructuredResult[T]:
     """Rung 3: force a named tool call carrying the same schema.
 
     Stricter than the two rungs below it: ``tool_choice`` naming the function
@@ -444,7 +609,7 @@ async def _leg_forced_tool(
     caller_kwargs = extra_kwargs or {}
     if 'tools' in caller_kwargs or 'tool_choice' in caller_kwargs:
         logger.debug('%s: caller supplied tools, skipping the forced tool call leg', label)
-        return None, ''
+        return StructuredResult(None, '')
 
     tool = pydantic_function_tool(response_format)
     tool_name = tool['function']['name']
@@ -473,12 +638,13 @@ async def _leg_forced_tool(
         if e.status_code != 400:
             raise
         logger.warning('%s: forced tool call not accepted, falling back to json_object', label)
-        return None, ''
+        return StructuredResult(None, '')
     except LengthFinishReasonError as exc:
         raise _truncated_output_error(label, max_tokens) from exc
     record_llm_response(span, response)
+    usage = await _rung_usage(response, client=client, model=model, label=label, leg=_LEG_TOOL)
     if not response.choices:
-        return None, ''
+        return StructuredResult(None, '', usage)
     message = response.choices[0].message
     refusal = getattr(message, 'refusal', None)
     if refusal:
@@ -489,7 +655,7 @@ async def _leg_forced_tool(
     tool_calls = message.tool_calls or []
     if not tool_calls:
         logger.warning('%s: forced tool call returned no tool_calls, falling back to json_object', label)
-        return None, ''
+        return StructuredResult(None, '', usage)
     function = tool_calls[0].function
     # .parse() validates tool arguments against the same model for us; the raw
     # argument string is the fallback when the SDK could not (a non-OpenAI
@@ -499,9 +665,9 @@ async def _leg_forced_tool(
     if parsed is None:
         parsed = _validate_content(raw, response_format=response_format, label=label, leg=_LEG_TOOL)
     if parsed is None:
-        return None, raw
+        return StructuredResult(None, raw, usage)
     _mark_leg(span, _LEG_TOOL)
-    return parsed, raw
+    return StructuredResult(parsed, raw, usage)
 
 
 async def _leg_json_object(
@@ -512,7 +678,8 @@ async def _leg_json_object(
     label: str,
     span: Span | None,
     max_tokens: int,
-) -> tuple[T | None, str]:
+    model: str,
+) -> StructuredResult[T]:
     """Rung 4: bare ``json_object``, the last rung.
 
     Asks for "some JSON" and leaves the field names to chance, which is what
@@ -524,12 +691,19 @@ async def _leg_json_object(
         lambda: client.chat.completions.create(**params_for({'response_format': {'type': 'json_object'}})),  # pyright: ignore[reportUnknownLambdaType]
         label=f'{label} (json_object fallback)',
     )
-    return _content_result(
-        response, response_format=response_format, label=label, span=span, max_tokens=max_tokens, leg=_LEG_JSON_OBJECT
+    return await _content_result(
+        response,
+        response_format=response_format,
+        label=label,
+        span=span,
+        max_tokens=max_tokens,
+        leg=_LEG_JSON_OBJECT,
+        client=client,
+        model=model,
     )
 
 
-def _content_result(
+async def _content_result(
     response: Any,
     *,
     response_format: type[T],
@@ -537,8 +711,10 @@ def _content_result(
     span: Span | None,
     max_tokens: int,
     leg: str,
-) -> tuple[T | None, str]:
-    """Turn a text-answering leg's response into ``(parsed | None, raw)``.
+    client: AsyncOpenAI,
+    model: str,
+) -> StructuredResult[T]:
+    """Turn a text-answering leg's response into a `StructuredResult`.
 
     Shared by the two ``create()`` rungs. Truncation raises here rather than
     degrading: the SDK raises ``LengthFinishReasonError`` for us on the
@@ -547,8 +723,9 @@ def _content_result(
     object and the caller would score a half-answer.
     """
     record_llm_response(span, response)
+    usage = await _rung_usage(response, client=client, model=model, label=label, leg=leg)
     if not response.choices:
-        return None, ''
+        return StructuredResult(None, '', usage)
     choice = response.choices[0]
     if choice.finish_reason == 'length':
         raise _truncated_output_error(label, max_tokens)
@@ -556,7 +733,7 @@ def _content_result(
     parsed = _validate_content(content, response_format=response_format, label=label, leg=leg)
     if parsed is not None:
         _mark_leg(span, leg)
-    return parsed, content
+    return StructuredResult(parsed, content, usage)
 
 
 async def generate_structured(
@@ -570,7 +747,10 @@ async def generate_structured(
     temperature: float | None = None,
     extra_kwargs: dict[str, Any] | None = None,
     api: Literal['chat_completions', 'responses'] = 'chat_completions',
-) -> tuple[T | None, str]:
+    reasoning_effort: str | None = None,
+    timeout_s: float = _STRUCTURED_TIMEOUT_S,
+    extra_body: dict[str, Any] | None = None,
+) -> StructuredResult[T]:
     """Generate structured output, degrading through four chat rungs.
 
     ``api`` selects the endpoint tried first. The default ``chat_completions``
@@ -583,12 +763,32 @@ async def generate_structured(
     Structural fields are reserved per endpoint, and an ``api='responses'`` call
     reserves both sets because it may still reach the chat legs.
 
-    Returns ``(parsed_model, raw_content)`` from whichever rung answered — the
-    raw string is ``""`` on the two rungs the SDK validates for us, and the
-    model's own text on the rungs parsed here. ``(None, raw_content)`` means no
-    rung produced anything that validated, with ``raw_content`` the last
-    non-empty text seen so a caller still has something to log or salvage.
-    ``parsed is None`` therefore means "nothing validated" uniformly.
+    Returns a `StructuredResult`. ``parsed`` comes from whichever rung
+    answered; ``raw`` is ``""`` on the rungs the SDK validates for us and the
+    model's own text on the rungs parsed here. ``parsed is None`` means no rung
+    produced anything that validated, with ``raw`` the last non-empty text seen
+    so a caller still has something to log or salvage.
+
+    ``usage`` is the sum over **every rung that reached the provider**, not just
+    the one that answered: a call that burned rungs 1-3 before rung 4 succeeded
+    paid for all four, and reporting only the last would understate the spend
+    (RES-1295). Each rung is priced individually through `price_usage` before
+    being added — that helper refuses to price an aggregate — so a rung the
+    catalogue does not cover contributes tokens without a cost and shows up as
+    ``priced_calls < calls``. A rung whose usage block cannot be read is counted
+    as one unpriced call after a warning, never as zero. ``usage is None`` means
+    no rung ever reached a provider.
+
+    ``reasoning_effort`` is sent only when truthy, as a flat ``reasoning_effort``
+    field on the chat legs and as ``reasoning={'effort': ...}`` on the Responses
+    leg (mirroring `LLMCallConfig.completion_params` / `.responses_params`) — a
+    caller wanting it must be on Chat Completions or the Responses API, since
+    only those two shapes are rendered here.
+
+    ``timeout_s`` bounds only the Responses leg's request (``execute_response``);
+    the chat legs are governed by the client's own timeout. Defaults to 300s —
+    generous relative to `LLMCallConfig`'s 90s default because a batched
+    generation asking for tens of items is a slow call by design.
 
     ``temperature`` is sent only when not ``None`` (some callers deliberately let
     the provider default stand). ``extra_kwargs`` is merged into every rung's
@@ -605,22 +805,16 @@ async def generate_structured(
     ``except`` and skip that one item, so a truncation degrades a single section
     — but with a clear log line naming the budget, not a silent drop.
 
-    RES-1295: none of the chat rungs extract usage, so their tokens never reach
-    any total. The 11 call sites across ``persona_generator.py``,
-    ``scenario_generator.py``, ``traces.py``, and both ``recommendations.py``
-    modules track no usage today — adding a usage element to this function's
-    return tuple would mean threading it through every one of them. See "What
-    the totals do not include" in docs/guides/red-teaming.md.
     """
-    reserved = _STRUCTURAL_KEYS_BY_API[api] & (extra_kwargs or {}).keys()
-    if reserved:
-        raise ValueError(
-            f'extra_kwargs cannot override structural request field(s) {sorted(reserved)}; '
-            'these are owned by generate_structured.'
-        )
-
+    check_reserved_keys(extra_kwargs or {}, _STRUCTURAL_KEYS_BY_API[api])
+    # The call-site-owned router body stays OUT of extra_kwargs. The Responses
+    # leg forwards it to `execute_response`, which owns the `extra_body=`
+    # parameter and reserves the key inside extra_kwargs — folding it in here
+    # would trip that guard on every call. The chat legs build their params
+    # dict directly for the SDK, so they take it as a plain key (below).
+    usages: list[TokenUsage | None] = []
     if api == 'responses':
-        parsed_via_responses = await _generate_structured_via_responses(
+        via_responses = await _generate_structured_via_responses(
             client,
             model=model,
             messages=messages,
@@ -629,12 +823,17 @@ async def generate_structured(
             label=label,
             temperature=temperature,
             extra_kwargs=extra_kwargs,
+            reasoning_effort=reasoning_effort,
+            timeout_s=timeout_s,
+            extra_body=extra_body,
         )
-        if parsed_via_responses is not None:
-            return parsed_via_responses, ''
+        usages.append(via_responses.usage)
+        if via_responses.parsed is not None:
+            return via_responses
         # The warning naming the cause is emitted by the helper; the chat legs
         # below are the fallback, so a provider without Responses structured
-        # output still gets an answer.
+        # output still gets an answer. Its usage stays in `usages`: the leg
+        # billed even though its payload was unusable.
 
     async with with_llm_span(
         model=model,
@@ -649,18 +848,22 @@ async def generate_structured(
             messages=messages,
             max_tokens=max_tokens,
             temperature=temperature,
-            extra_kwargs=extra_kwargs,
+            # The chat rungs hand their params straight to the SDK, so the
+            # router body rides as a plain key here rather than a parameter.
+            extra_kwargs={**(extra_kwargs or {}), 'extra_body': extra_body} if extra_body else extra_kwargs,
             trace_headers=await get_trace_context_headers(),
+            reasoning_effort=reasoning_effort,
         )
         common: dict[str, Any] = {
             'response_format': response_format,
             'label': label,
             'span': span,
             'max_tokens': max_tokens,
+            'model': model,
         }
         # Thunks, not coroutines: returning on rung 1 would leave three
         # never-awaited coroutine objects behind (and a RuntimeWarning each).
-        legs: tuple[Callable[[], Awaitable[tuple[T | None, str]]], ...] = (
+        legs: tuple[Callable[[], Awaitable[StructuredResult[T]]], ...] = (
             lambda: _leg_strict_parse(client, params_for, **common),
             lambda: _leg_json_schema(client, params_for, **common),
             lambda: _leg_forced_tool(client, params_for, messages=messages, extra_kwargs=extra_kwargs, **common),
@@ -668,8 +871,9 @@ async def generate_structured(
         )
         last_raw = ''
         for leg in legs:
-            parsed, raw = await leg()
-            last_raw = raw or last_raw
-            if parsed is not None:
-                return parsed, raw
-        return None, last_raw
+            result = await leg()
+            usages.append(result.usage)
+            last_raw = result.raw or last_raw
+            if result.parsed is not None:
+                return StructuredResult(result.parsed, result.raw, sum_structured_usage(usages))
+        return StructuredResult(None, last_raw, sum_structured_usage(usages))

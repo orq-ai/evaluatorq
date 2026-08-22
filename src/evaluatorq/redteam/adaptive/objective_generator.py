@@ -168,8 +168,11 @@ def _build_objective_prompt(
     return prompt
 
 
-# Maximum objectives to request per LLM call. Keeps output quality high and
-# avoids hitting max_tokens limits (~150 tokens per objective).
+# Default objectives to request per LLM call, mirrored on
+# LLMConfig.max_objectives_per_llm_call (contracts.py) so a caller with cost
+# constraints can override it; used here only as the ``cfg is None`` fallback.
+# Keeps output quality high and avoids hitting max_tokens limits (~150 tokens
+# per objective).
 _MAX_PER_LLM_CALL = 8
 
 
@@ -221,10 +224,9 @@ async def _call_llm_for_objectives_single(
                     response_model=GeneratedObjectives,
                     temperature=cfg.attacker.temperature,
                     max_completion_tokens=cfg.attacker.max_tokens,
-                    extra_kwargs={
-                        'extra_body': cfg.retry_extra_body(llm_client),
-                        **cfg.attacker.extra_kwargs,
-                    },
+                    reasoning_effort=cfg.attacker.reasoning_effort,
+                    extra_body=cfg.retry_extra_body(llm_client),
+                    extra_kwargs=cfg.attacker.extra_kwargs,
                 )
                 return response
 
@@ -274,7 +276,8 @@ async def _call_llm_for_objectives(
     fills it with the batch size so the LLM generates the right number.
     """
     cfg = cfg or PIPELINE_CONFIG
-    if count <= _MAX_PER_LLM_CALL:
+    max_per_call = cfg.max_objectives_per_llm_call
+    if count <= max_per_call:
         return await _call_llm_for_objectives_single(
             prompt_template,
             llm_client,
@@ -291,7 +294,7 @@ async def _call_llm_for_objectives(
     batch_idx = 0
 
     while remaining > 0:
-        batch_size = min(remaining, _MAX_PER_LLM_CALL)
+        batch_size = min(remaining, max_per_call)
         batch_objectives = await _call_llm_for_objectives_single(
             prompt_template,
             llm_client,

@@ -1307,6 +1307,37 @@ def test_run_forwards_flags(tmp_path: Path) -> None:
     assert kwargs["max_turns"] == 6
 
 
+def test_run_forwards_seeds_and_target_reasoning_effort(tmp_path: Path) -> None:
+    # F5/F6: --persona-seed / --scenario-seed / --target-reasoning-effort exist
+    # on `sim run` (previously only on `sim generate`) and reach _run_impl.
+    with (
+        patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
+        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
+    ):
+        mock_target.return_value = MagicMock()
+        mock_impl.return_value = _stub_run([_make_result()], mode="run")
+
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--agent-description", "A helpful bot",
+                "--openai-model", "gpt-4o",
+                "--persona-seed", "angry retiree",
+                "--scenario-seed", "disputes a refund",
+                "--target-reasoning-effort", "high",
+                "--no-save",
+            ],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    kwargs = mock_impl.call_args.kwargs
+    assert kwargs["persona_seeds"] == ["angry retiree"]
+    assert kwargs["scenario_seeds"] == ["disputes a refund"]
+    assert kwargs["target_reasoning_effort"] == "high"
+
+
 def test_run_runtime_error_is_clean(tmp_path: Path) -> None:
     # RuntimeError (e.g. SimulationDroppedError / no datapoints) surfaces as a
     # one-line error with exit 1, not a traceback — symmetry with generate.

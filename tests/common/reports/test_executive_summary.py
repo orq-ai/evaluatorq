@@ -96,3 +96,49 @@ async def test_generate_returns_none_on_exception():
     client = _StubClient(None, raise_exc=RuntimeError('boom'))
     out = await generate_executive_summary('facts', llm_client=cast(AsyncOpenAI, cast(object, client)), model='m')
     assert out is None
+
+
+@pytest.mark.asyncio
+async def test_extra_kwargs_temperature_reaches_the_call_instead_of_raising_type_error():
+    """``extra_kwargs={'temperature': ...}`` is the documented escape hatch for
+    reasoning-class models that reject a lowered ``temperature=``. The old
+    hand-built-dict shape splatted ``extra_kwargs`` next to an explicit
+    ``temperature=`` keyword, which raised ``TypeError: got multiple values for
+    keyword argument`` — swallowed by the blanket ``except Exception`` into a
+    silently ``None`` summary. `LLMCallConfig.completion_params` merges
+    ``extra_kwargs`` last, so the caller-supplied value must win instead.
+    """
+    client = _StubClient('Some summary.')
+    out = await generate_executive_summary(
+        'Total attacks: 10',
+        llm_client=cast(AsyncOpenAI, cast(object, client)),
+        model='openai/gpt-5.6-luna',
+        temperature=0.0,
+        extra_kwargs={'temperature': 1},
+    )
+    assert out == 'Some summary.'
+    call = client.chat.completions.calls[0]
+    assert call['temperature'] == 1
+
+
+@pytest.mark.asyncio
+async def test_extra_kwargs_extra_body_is_rejected_not_clobbered():
+    """``extra_body`` is a structural, call-site-owned field (it carries the Orq
+    router retry body); a caller routing it through ``extra_kwargs`` instead of
+    the dedicated ``extra_body=`` parameter must be rejected, not silently
+    allowed to clobber the router-supplied retry config.
+    """
+    client = _StubClient('unused')
+    out = await generate_executive_summary(
+        'Total attacks: 10',
+        llm_client=cast(AsyncOpenAI, cast(object, client)),
+        model='m',
+        extra_body={'retry': {'count': 3}},
+        extra_kwargs={'extra_body': {'malicious': True}},
+    )
+    # The ValueError from check_reserved_keys is caught by the module's own
+    # best-effort `except Exception`, so the contract observable from the
+    # public function is "no summary produced", not a raised exception — but
+    # the call must never reach the client with the clobbered body.
+    assert out is None
+    assert client.chat.completions.calls == []

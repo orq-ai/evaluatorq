@@ -167,6 +167,7 @@ async def _run_single_judge(
     max_tokens: int,
     timeout_ms: int,
     extra_kwargs: dict[str, Any] | None,
+    reasoning_effort: str | None = None,
 ) -> Prediction:
     """Run one judge call and map its outcome to a `Prediction`.
 
@@ -178,7 +179,12 @@ async def _run_single_judge(
     # records cost like the call it judges (RES-1295). run_judge falls back to chat
     # completions on its own for a model the Responses endpoint will not take.
     cfg = LLMCallConfig(
-        model=model, api='responses', max_tokens=max_tokens, timeout_ms=timeout_ms, extra_kwargs=extra_kwargs or {}
+        model=model,
+        api='responses',
+        max_tokens=max_tokens,
+        timeout_ms=timeout_ms,
+        extra_kwargs=extra_kwargs or {},
+        reasoning_effort=reasoning_effort,
     )
     outcome = await run_judge(
         client=client,
@@ -343,6 +349,7 @@ def llm_jury(
     max_tokens: int = 8000,
     timeout_ms: int = 90000,
     extra_kwargs: dict[str, Any] | None = None,
+    reasoning_effort: str | None = None,
     client: Any = None,
 ) -> Evaluator:
     """Build a jury (or single-judge) LLM evaluator for ``evaluators=[...]``.
@@ -535,6 +542,7 @@ def llm_jury(
                 max_tokens=max_tokens,
                 timeout_ms=timeout_ms,
                 extra_kwargs=extra_kwargs,
+                reasoning_effort=reasoning_effort,
             )
 
         if assignment == 'cyclic':
@@ -646,6 +654,7 @@ class PairwiseComparator:
         structured_output: bool,
         extra_kwargs: dict[str, Any] | None,
         client: Any,
+        reasoning_effort: str | None = None,
         max_concurrency: int | None = None,
     ) -> None:
         self._panel = panel
@@ -664,6 +673,7 @@ class PairwiseComparator:
         self._temperature = temperature
         self._structured_output = structured_output
         self._extra_kwargs = extra_kwargs
+        self._reasoning_effort = reasoning_effort
         self._client = client
         if max_concurrency is not None and max_concurrency < 1:
             raise ValueError(f'max_concurrency ({max_concurrency}) must be >= 1.')
@@ -724,6 +734,7 @@ class PairwiseComparator:
                 max_tokens=self._max_tokens,
                 timeout_ms=self._timeout_ms,
                 extra_kwargs=self._extra_kwargs,
+                reasoning_effort=self._reasoning_effort,
             )
 
         # CyclicJudge: one judge per comparison, cycling through the panel.
@@ -761,6 +772,7 @@ def llm_jury_pairwise(
     temperature: float | None = None,
     structured_output: bool = True,
     extra_kwargs: dict[str, Any] | None = None,
+    reasoning_effort: str | None = None,
     client: Any = None,
     max_concurrency: int | None = None,
 ) -> PairwiseComparator:
@@ -835,6 +847,7 @@ def llm_jury_pairwise(
         temperature=temperature,
         structured_output=structured_output,
         extra_kwargs=extra_kwargs,
+        reasoning_effort=reasoning_effort,
         client=client,
         max_concurrency=max_concurrency,
     )
