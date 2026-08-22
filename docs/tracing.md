@@ -359,6 +359,16 @@ well made the same tokens appear three times in one trace.
 `judge.label_swapped` is only ever set (`True`/`False`) in comparative mode —
 in plain `run_jury()` deliberations it is absent, since each judge votes once.
 
+One judge attribute lives a level *down*, on the `chat` / `responses` span that
+made the call rather than on `orq.judge`: `judge.verdict_coerced`. It is set to
+`abstain_with_value` when the model returned `abstain=true` together with a
+non-null `value` — a self-contradictory verdict, kept as an abstention with the
+value dropped. It is absent on a well-formed verdict, so counting it per judge
+model in the trace store answers "can this model follow the verdict schema".
+Nothing aggregates it today — it does not reach `JuryVote`, the run manifest or
+any report, so a coerced verdict is indistinguishable from a clean abstention
+once it leaves the judge call. Query the spans, not the run artifact.
+
 Span attributes on `orq.jury`:
 
 | Attribute | Value |

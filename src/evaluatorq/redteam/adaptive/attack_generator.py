@@ -112,11 +112,13 @@ class ToolRelevance(BaseModel):
     """LLM-classified tool relevance for an attack."""
 
     tool_name: str = Field(description='Name of the tool')
-    relevant: bool = Field(description='Whether this tool could be exploited for the attack')
+    # `relevant` last, after its justification: this model is sent as a structured-output
+    # schema, and the fields are generated in declaration order.
     exploitation_hint: str = Field(
         default='',
         description='Brief explanation of how the tool could be leveraged (empty if not relevant)',
     )
+    relevant: bool = Field(description='Whether this tool could be exploited for the attack')
 
 
 class ToolAnalysis(BaseModel):

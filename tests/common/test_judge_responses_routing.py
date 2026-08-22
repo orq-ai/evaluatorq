@@ -201,9 +201,14 @@ async def test_responses_payload_rebuild_preserves_abstain(monkeypatch: pytest.M
         response_model=AbstainingVerdict,
     )
 
+    # abstain=True with a value is self-contradictory: the abstention survives the
+    # rebuild, the value does not, and the coercion is visible on the outcome.
     assert outcome.payload is not None
-    assert outcome.payload.value is False
     assert outcome.payload.abstain is True
+    assert outcome.payload.value is None
+    assert outcome.verdict_coerced is True
+    # ...and the dropped value is still readable in the verbatim body.
+    assert '"value":false' in outcome.raw_content.replace(' ', '')
 
 
 @pytest.mark.asyncio
