@@ -112,6 +112,15 @@ def test_outcome_to_prediction_abstain():
     assert pred.abstained is True
 
 
+def test_jury_vote_still_rejects_the_contradiction_the_payload_coerces():
+    # EvaluatorResponsePayload coerces abstain=True + a value; JuryVote raises on it.
+    # The two are deliberately different policies, so the backstop needs a test of its
+    # own — otherwise the coercion silently becomes the only enforcement and a vote
+    # built without a judge payload reintroduces the contradiction unnoticed.
+    with pytest.raises(ValueError, match='abstained JuryVote must have a null value'):
+        JuryVote(model='m', success=True, abstained=True, value=True)
+
+
 # ---------------------------------------------------------------------------
 # _to_evaluation_result
 # ---------------------------------------------------------------------------

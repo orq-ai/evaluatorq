@@ -8,6 +8,7 @@ import pytest
 from openai import BadRequestError
 from pydantic import BaseModel, create_model
 
+from evaluatorq.common import judge as judge_mod
 from evaluatorq.common.judge import EvaluatorResponsePayload, JudgeError, run_judge
 from evaluatorq.contracts import LLMCallConfig
 
@@ -24,6 +25,9 @@ def _parsed_completion(value, explanation, refusal=None):
     msg = MagicMock()
     msg.parsed = None if refusal else _verdict_model()(value=value, explanation=explanation)
     msg.refusal = refusal
+    # The SDK sets `content` to the verbatim wire body alongside `parsed`; a bare
+    # MagicMock would hand `run_judge` a mock where it expects that string.
+    msg.content = None if refusal else msg.parsed.model_dump_json()
     choice = MagicMock(); choice.message = msg
     comp = MagicMock(); comp.choices = [choice]; comp.usage = None
     return comp
@@ -34,6 +38,7 @@ def _abstaining_completion():
     msg = MagicMock()
     msg.parsed = verdict_model(value=False, explanation='uncertain', abstain=True)
     msg.refusal = None
+    msg.content = msg.parsed.model_dump_json()
     choice = MagicMock(); choice.message = msg
     comp = MagicMock(); comp.choices = [choice]; comp.usage = None
     return comp, verdict_model
@@ -82,6 +87,10 @@ async def test_tier1_parse_preserves_abstain_on_payload_rebuild():
     assert out.payload.abstain is True
     assert out.payload.value is None
     assert out.verdict_coerced is True
+    # The dropped value survives in the verbatim body — a coerced verdict is exactly
+    # the case someone inspects, so re-serializing the coerced payload over it would
+    # erase the only evidence of what the judge actually said.
+    assert '"value":false' in out.raw_content.replace(' ', '')
 
 
 def test_payload_coerces_abstain_with_value():
@@ -96,13 +105,37 @@ def test_payload_leaves_consistent_verdicts_alone():
     assert decisive.value is True
     assert decisive.coerced_abstain is False
 
-    # The mirror shape (no value, no abstain flag) is NOT normalised: the jury layer
-    # counts it as a failed repetition, and promoting it to a clean abstention here
-    # would hide that.
+    # The mirror shape (no value, no abstain flag) is NOT normalised — the redteam
+    # paths pass both fields through and the jury counts it as a failed repetition.
     empty = EvaluatorResponsePayload(explanation='')
     assert empty.value is None
     assert empty.abstain is False
     assert empty.coerced_abstain is False
+
+
+def test_verdict_schema_generates_value_last():
+    # The whole point of the field order: the schema is emitted in declaration order,
+    # so the judge writes its reasoning before it commits to a verdict. A reorder that
+    # silently undoes that must fail here.
+    assert list(EvaluatorResponsePayload.model_json_schema()['properties']) == [
+        'explanation',
+        'abstain',
+        'value',
+    ]
+
+
+def test_payload_schema_description_stays_out_of_the_prompt():
+    # The docstring is published as the schema `description`, which is prompt text the
+    # judge reads. Design rationale belongs in comments, not in the model's docstring.
+    description = EvaluatorResponsePayload.model_json_schema().get('description', '')
+    assert len(description) < 200
+    assert 'JuryVote' not in description
+
+
+def test_default_security_prompt_names_every_schema_key_in_order():
+    prompt = judge_mod.DEFAULT_SECURITY_EVALUATOR_SYSTEM_PROMPT
+    positions = [prompt.index(f'"{name}"') for name in EvaluatorResponsePayload.model_json_schema()['properties']]
+    assert positions == sorted(positions)
 
 
 def test_payload_coercion_survives_json_validation():
