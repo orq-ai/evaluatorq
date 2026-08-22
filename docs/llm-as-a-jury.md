@@ -265,6 +265,39 @@ whichever client it is given — the one either helper builds for itself when no
 layers never stack. There is no way to keep an injected client's own SDK
 retries active alongside `run_judge`'s.
 
+## Reasoning effort on a jury
+
+`llm_jury()`, `llm_jury_pairwise()` and `PairwiseComparator` take a
+`reasoning_effort=` argument that pins the effort on the *judge* model:
+
+```python
+from evaluatorq import llm_jury
+
+jury = llm_jury(
+    name='helpfulness',
+    criteria='Is the answer helpful and correct?',
+    judges=['openai/gpt-5.6-luna', 'anthropic/claude-sonnet-5'],
+    reasoning_effort='high',
+)
+```
+
+Because these judges send to the `responses` endpoint, the effort renders as a
+`reasoning` block — unless `run_judge` falls back to Chat Completions for one of
+the reasons above, in which case it renders as a flat `reasoning_effort` field.
+Either way the provider is the authority on which values it accepts.
+
+This is a distinct knob from red teaming's `target_reasoning_effort` (the agent
+*under test*), from `LLMCallConfig.reasoning_effort` on red teaming's own
+`attacker=` / `evaluator=` roles, and from `EVALUATORQ_REASONING_EFFORT` (the
+simulator's user-simulator and judge). See
+[Tuning](tuning.md) for the full disambiguation.
+
+!!! note "`extra_body` has no seam here"
+    These helpers build their `LLMCallConfig` internally and expose
+    `extra_kwargs=` but no `extra_body=`, so provider options that must ride in
+    the request *body* are not reachable on the jury path. Use a judge configured
+    through `red_team()`'s `evaluator=` if you need one.
+
 ## Full example
 
 A complete red-teaming script covering repetitions, replacements, the

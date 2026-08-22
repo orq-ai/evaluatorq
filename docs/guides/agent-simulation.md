@@ -695,7 +695,9 @@ tokens, the number of LLM calls, and the cost when the models are priced. The
 call count includes the fallback rungs a structured-output call burned on the way
 to an answer, and a rung whose usage the provider did not report is counted as
 one unpriced call rather than as zero, so the figure reads as a lower bound
-instead of a confident total.
+instead of a confident total. A call that *raised* is counted too — the rungs it
+burned before truncating or refusing were billed, and the exception carries their
+total for the phase to pick up.
 
 `SimulationRun.token_usage_total` is the run-level figure: every result's
 `token_usage`, plus — for `generate_and_simulate()` — the GENERATE stage's

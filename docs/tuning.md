@@ -14,8 +14,8 @@ setting that "does nothing":
 
 ## Reasoning effort: three different things
 
-Three separate settings carry the words "reasoning effort", and they apply to
-three different models. Setting the wrong one is silent — the call simply runs at
+Four separate settings carry the words "reasoning effort", and they apply to
+four different models. Setting the wrong one is silent — the call simply runs at
 the default.
 
 | You want to change | Use | Applies to |
@@ -23,6 +23,7 @@ the default.
 | The **target agent** under test | `--target-reasoning-effort`, or `LLMConfig(target_reasoning_effort=...)` / `simulate(target_reasoning_effort=...)` | The agent being red-teamed or simulated |
 | The **attacker or judge** in red teaming | `LLMCallConfig(reasoning_effort=...)` on `attacker=` / `evaluator=` | evaluatorq's own pipeline calls |
 | The **user simulator and judge** in simulation | `EVALUATORQ_REASONING_EFFORT`, or `LLMCallConfig(reasoning_effort=...)` on a custom `user_simulator=` / `judge=` | evaluatorq's own simulation calls |
+| The **jury** in core evaluation | `reasoning_effort=` on `llm_jury()`, `llm_jury_pairwise()` or `PairwiseComparator` | The verdict calls those evaluators make under `evaluatorq()` |
 
 ```python
 from evaluatorq.contracts import LLMCallConfig
@@ -123,7 +124,9 @@ tools. Four knobs bound it.
 turn, plus the user-simulator and judge calls. On expiry the simulation does not
 raise: it returns a partial result with `terminated_by="timeout"` and the turns it
 completed, and logs a warning naming the budget. Set it on any unattended run;
-`simulate()` calls the runner once per row and is otherwise unbounded.
+`simulate()` calls the runner once per row and is otherwise unbounded. `None` is
+the only spelling of unbounded — `0` is rejected at construction rather than read
+as "no bound".
 
 `max_tool_result_chars` (default `500`) caps each tool result rendered into the
 text the user simulator sees on a tool-only turn. Raise it for a tool-heavy agent
@@ -221,7 +224,11 @@ with no error and no log line — which is why the key is reserved there and rai
 
 So there are exactly two injection seams, and they target different parts of the
 request: `extra_kwargs` for top-level call arguments, `extra_body` for body fields.
-Anything the provider accepts is reachable through one of them.
+Anything the provider accepts is reachable through one of them — wherever you can
+hand evaluatorq an `LLMCallConfig`. The jury evaluators (`llm_jury()`,
+`llm_jury_pairwise()`, `PairwiseComparator`) are the exception: they build their
+config internally and forward only `extra_kwargs=`, so body fields are not
+reachable on that path today.
 
 Sampling fields have first-class parameters now — prefer them over routing the
 same key through `extra_kwargs`:

@@ -62,6 +62,13 @@ info = await get_model_info('my-self-hosted-llama')
 
 Costs are USD **per 1000 tokens**, matching what `/v2/models` publishes.
 
+The id is stored unprefixed, so `'openai/gpt-x'` and `'gpt-x'` register and resolve
+the same entry — register either spelling and both lookups find it. Registering
+both replaces rather than duplicates: there is one model. `reasoning_efforts=None`
+means "unknown, cannot pre-validate"; an empty set means the same thing and is
+normalized to `None`, because a literally-empty accepted-values list would reject
+every effort including the defaults.
+
 ## `.env` file
 
 The library itself does not call `load_dotenv()`. The examples ship with `python-dotenv` calls in their scripts. To load a `.env` file in your own code, call `load_dotenv()` before importing evaluatorq:

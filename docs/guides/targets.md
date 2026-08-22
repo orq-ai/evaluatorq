@@ -138,14 +138,15 @@ config object covers the whole call:
 | `timeout_ms` | client-side `asyncio` timeout | `None` means unbounded |
 | `reasoning_effort` | `reasoning={"effort": ...}` | Not flat, as on chat completions |
 | `extra_kwargs` | top-level SDK call kwargs | Merged **last**, so your value wins over the computed one |
-| `extra_body` | `extra_body` | **Merged per key** into the router body the call site builds |
+| `extra_body` | `extra_body` | **Merged per key** into the router body the call site builds — your key wins a clash, the router keys you did not set survive |
 
 Two guards are worth knowing before you reach for `extra_kwargs`:
 
 - `model`, `input`, `text` and `extra_body` are reserved. Passing one inside
   `extra_kwargs` raises `ValueError` rather than silently replacing a structural
   field. Use `LLMCallConfig.extra_body` for body additions — it merges, so the
-  router's thread and memory ids survive.
+  router's thread and memory ids survive, and one you set yourself (scoping the
+  call to a specific memory entity, say) wins over the minted one.
 - If the model 400s on the `reasoning` block, the target drops it, retries once
   with a warning, and remembers the rejection for the rest of the process — the
   same memo `common.llm_call` uses, so a rejection learned on a pipeline call also
