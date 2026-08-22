@@ -168,12 +168,10 @@ def _build_objective_prompt(
     return prompt
 
 
-# Default objectives to request per LLM call, mirrored on
-# LLMConfig.max_objectives_per_llm_call (contracts.py) so a caller with cost
-# constraints can override it; used here only as the ``cfg is None`` fallback.
-# Keeps output quality high and avoids hitting max_tokens limits (~150 tokens
-# per objective).
-_MAX_PER_LLM_CALL = 8
+# The objectives-per-call budget lives solely on LLMConfig.max_objectives_per_llm_call
+# (contracts.py); `_call_llm_for_objectives` resolves `cfg or PIPELINE_CONFIG` before
+# reading it, so there is no no-cfg path to fall back to. A module constant mirroring
+# that field would have no reader and would be free to drift from it.
 
 
 async def _call_llm_for_objectives_single(

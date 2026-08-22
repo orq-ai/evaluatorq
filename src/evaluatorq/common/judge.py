@@ -562,6 +562,8 @@ async def run_judge(
                         response_model=response_model,
                         temperature=temp,
                         max_completion_tokens=cfg.max_tokens,
+                        reasoning_effort=cfg.reasoning_effort,
+                        extra_body=cfg.extra_body or None,
                         extra_kwargs=cfg.extra_kwargs or None,
                     )
                 except BadRequestError as exc:
@@ -642,7 +644,9 @@ async def run_judge(
                 timeout_s=cfg.timeout_ms / 1000.0,
                 temperature=temp,
                 max_completion_tokens=cfg.max_tokens,
+                reasoning_effort=cfg.reasoning_effort,
                 response_format={'type': 'json_object'},
+                extra_body=cfg.extra_body or None,
                 extra_kwargs=cfg.extra_kwargs or None,
             )
             raw_content = response.choices[0].message.content or '{}'

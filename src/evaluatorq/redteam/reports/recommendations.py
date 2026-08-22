@@ -285,6 +285,7 @@ async def _condense_attack(
             temperature=cfg.evaluator.temperature,
             max_tokens=limits.condense_max_tokens,
             label='redteam_recommendations_condense',
+            reasoning_effort=cfg.evaluator.reasoning_effort,
             extra_kwargs=extra_kwargs,
             extra_body=extra_body,
         )
@@ -403,10 +404,15 @@ async def generate_focus_area_recommendations(
     # `extra_body` is the call-site-owned router body and travels in its own parameter.
     # A caller-supplied extra_body merges INTO the router retry body rather than
     # replacing it, so retry hints cannot vanish silently — this is the one merge seam
-    # for the router body in the package. Both built once: per-run, not per-area.
+    # for the router body in the package. Layered call-site-first so caller keys win
+    # per key, per CLAUDE.md's `{**defaults, **caller}` rule: the router retry body,
+    # then `EvaluatorConfig.extra_body` (the first-class field), then the legacy
+    # `extra_kwargs['extra_body']` shape callers used before that field existed.
+    # Both built once: per-run, not per-area.
     user_extra: dict[str, Any] = {**cfg.evaluator.extra_kwargs, **(llm_kwargs or {})}
     extra_body: dict[str, Any] = {
         **cfg.retry_extra_body(llm_client),
+        **cfg.evaluator.extra_body,
         **(user_extra.pop('extra_body', None) or {}),
     }
     extra_kwargs: dict[str, Any] = user_extra
@@ -467,6 +473,7 @@ async def generate_focus_area_recommendations(
                 temperature=cfg.evaluator.temperature,
                 max_tokens=limits.max_tokens,
                 label='redteam_recommendations',
+                reasoning_effort=cfg.evaluator.reasoning_effort,
                 extra_kwargs=extra_kwargs,
                 extra_body=extra_body,
             )

@@ -1693,6 +1693,37 @@ async def _simulate_core(
     return run
 
 
+def _warn_if_reasoning_effort_unforwarded(target: object, effort: str) -> None:
+    """Warn when ``target`` is a kind `_resolve_target` cannot pin ``effort`` on.
+
+    Only the ``agent:<key>`` / bare ``<key>`` string path pins the setting (onto the
+    ``LLMConfig`` fed to ``make_agent_backend``). Everything else — a
+    ``deployment:<key>`` string, an ``AgentTarget`` instance, a callable — reaches a
+    transport with nowhere to put it. Red team's
+    ``_preflight_target_reasoning_effort`` announces the same situation; this is the
+    simulation twin, so the two surfaces do not differ in whether a dropped knob
+    logs. Warn and continue rather than raise: the run itself is still valid, only
+    the setting is inert.
+    """
+    from evaluatorq.redteam.contracts import TargetKind, parse_target
+
+    if isinstance(target, str) and target.strip():
+        kind, _value = parse_target(target)
+        if kind is TargetKind.AGENT:
+            return
+        description = f'target {target!r} (kind={kind.value})'
+    elif isinstance(target, str):
+        # Blank string: the branch below raises on it, so say nothing here.
+        return
+    else:
+        description = f'a {type(target).__name__} target'
+    logger.warning(
+        f'target_reasoning_effort={effort!r} is set but {description} does not forward it; '
+        "it is only pinned on 'agent:<key>' (or bare '<key>') string targets. Ignoring it. "
+        'Set the effort on the target object itself if it supports one.'
+    )
+
+
 def _resolve_target(
     target: str | Callable[..., Any] | AgentTarget | None,
     *,
@@ -1721,6 +1752,10 @@ def _resolve_target(
     ``target_reasoning_effort`` only applies to the ``str`` (agent:<key> / bare
     <key>) path — it is pinned on the ``LLMConfig`` fed to ``make_agent_backend``,
     the simulation counterpart of red team's ``LLMConfig.target_reasoning_effort``.
+    Every other target kind warns and ignores it rather than dropping it silently,
+    mirroring red team's ``_preflight_target_reasoning_effort``: a knob a target
+    cannot carry must say so, or the caller has no way to tell a configured run
+    from an unconfigured one.
     """
     from evaluatorq.contracts import AgentTarget
     from evaluatorq.integrations.vercel_ai_sdk_integration import VercelAISdkTarget
@@ -1738,6 +1773,9 @@ def _resolve_target(
             "memory_entity_id is only supported with string 'agent:<key>' (or bare '<key>') targets; "
             'for an AgentTarget instance, set memory_entity_id on the instance directly.'
         )
+
+    if target_reasoning_effort:
+        _warn_if_reasoning_effort_unforwarded(resolved, target_reasoning_effort)
 
     if isinstance(resolved, str):
         from evaluatorq.redteam.contracts import TargetKind, parse_target

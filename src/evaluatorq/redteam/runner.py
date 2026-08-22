@@ -1865,11 +1865,13 @@ async def _preflight_target_reasoning_effort(
     400 on the first target invocation would throw away.
 
     Only ``TargetKind.AGENT`` string targets route through a backend that forwards
-    the setting (``make_agent_backend``'s OpenResponses exec leg). Model/deployment
-    string targets execute via the ORQ SDK agents endpoint, which has no reasoning
+    the setting (``make_agent_backend``'s OpenResponses exec leg). Deployment string
+    targets execute via the ORQ SDK agents endpoint, which has no reasoning
     parameter, and a bare ``AgentTarget`` may or may not send it — this pre-flight
     cannot know. Both warn and skip rather than raise: a setting the target would
-    never have received must not kill a run that never needed it.
+    never have received must not kill a run that never needed it. An AGENT target
+    whose model did not resolve warns too — silence there would let the run spend
+    its way to the first target call before finding out.
 
     ``model_for`` maps ``(target_str, parsed_value)`` to the resolved model, because
     the dynamic leg keys its context map on the full target string and the static
@@ -1887,6 +1889,16 @@ async def _preflight_target_reasoning_effort(
         model = model_for(target_str, value)
         if model:
             await validate_reasoning_effort(effort, model, llm_client)
+        else:
+            # Same shape as the skips above: a branch that stayed silent here would
+            # be indistinguishable from a validated one, and the run would spend on
+            # classification and attack generation before the first target call 400s.
+            logger.warning(
+                f'target_reasoning_effort={effort!r} is set but the model behind agent target '
+                f'{target_str!r} did not resolve, so it could not be validated; skipping the '
+                'pre-flight check for it. The provider will reject an unsupported value at call '
+                'time instead.'
+            )
     for at in resolved_agent_targets:
         label = agent_target_labels[id(at)]
         logger.warning(

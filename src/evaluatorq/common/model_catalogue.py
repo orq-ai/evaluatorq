@@ -44,23 +44,60 @@ if TYPE_CHECKING:
     from evaluatorq.contracts import Usage
 
 
-class ModelInfo(NamedTuple):
-    """One catalogue entry.
-
-    Costs are USD **per 1000 tokens** — the unit ``/v2/models`` publishes, and the
-    reason `price_usage` divides by 1000. The names carry the unit so the
-    arithmetic stays self-checking: ``Usage.input_cost`` is absolute USD for a
-    call, 1000x away from this field, and the two meet in one expression.
-    """
+class _ModelInfoFields(NamedTuple):
+    """Field layout for `ModelInfo`; see that class for the contract."""
 
     input_cost_per_1k: float
     output_cost_per_1k: float
     provider: str
     supports_responses: bool
     # Accepted ``reasoning.effort`` values, from the entry's ``reasoningEffort``
-    # parameter. ``None`` means the catalogue does not say — 86 of 148 live
-    # entries carry no such parameter, so absence is "unknown", never "empty".
+    # parameter. ``None`` means the catalogue does not say — most live entries
+    # carry no such parameter, so absence is "unknown", never "empty".
     reasoning_efforts: frozenset[str] | None = None
+
+
+class ModelInfo(_ModelInfoFields):
+    """One catalogue entry.
+
+    Costs are USD **per 1000 tokens** — the unit ``/v2/models`` publishes, and the
+    reason `price_usage` divides by 1000. The names carry the unit so the
+    arithmetic stays self-checking: ``Usage.input_cost`` is absolute USD for a
+    call, 1000x away from this field, and the two meet in one expression.
+
+    Split over a ``_ModelInfoFields`` base purely so ``__new__`` can normalize:
+    ``typing.NamedTuple`` refuses to let a class body override it.
+    """
+
+    __slots__ = ()
+
+    def __new__(  # noqa: PYI034 — a NamedTuple subclass really does construct the subclass
+        cls,
+        input_cost_per_1k: float,
+        output_cost_per_1k: float,
+        provider: str,
+        supports_responses: bool,  # noqa: FBT001 — positional to match the tuple field order
+        reasoning_efforts: frozenset[str] | None = None,
+    ) -> ModelInfo:
+        """Normalize an empty ``reasoning_efforts`` to ``None``.
+
+        The two are not the same thing and the field's contract allows only one of
+        them: ``None`` is "unknown, cannot validate"; an empty set would have to
+        mean "this model accepts no effort at all". `validate_reasoning_effort`
+        branches on ``is not None``, so an empty set makes it reject *every* value —
+        including the defaults — with an empty accepted-values list, killing a run at
+        pre-flight over a state that means nothing. `_parse_reasoning_efforts` already
+        collapses the two; doing it in the type closes the same hole for
+        `register_model`, which takes whatever a caller hands it.
+        """
+        return super().__new__(
+            cls,
+            input_cost_per_1k,
+            output_cost_per_1k,
+            provider,
+            supports_responses,
+            reasoning_efforts or None,
+        )
 
 
 # host -> (model_id -> ModelInfo). A host is absent until its first fetch, and
@@ -76,8 +113,9 @@ _lock: asyncio.Lock | None = None
 # Caller-registered entries, consulted before the fetched catalogue. This is the
 # only way to price, qualify or validate a model Orq's /v2/models does not list
 # (a self-hosted deployment, a model newer than the workspace's catalogue), and
-# the only way to correct an entry that is wrong. Keyed on the bare or qualified
-# id exactly as the caller will name it; `_lookup` tries both spellings.
+# the only way to correct an entry that is wrong. Keyed on the BARE id:
+# `register_model` strips any `provider/` prefix on write so the two spellings
+# collapse to one entry, and `_lookup` probes that single canonical key.
 _overrides: dict[str, ModelInfo] = {}
 # Consecutive failed fetches per host. A single HTTP hiccup used to cache {} for
 # the whole process, degrading every later call in the run to unpriced and
@@ -118,6 +156,14 @@ def register_model(model_id: str, info: ModelInfo) -> None:
     endpoint (`qualified_model`), and unvalidatable (`validate_reasoning_effort`)
     — three degradations a caller could previously neither see nor fix.
 
+    ``model_id`` is stored **unprefixed**: ``'openai/gpt-x'`` and ``'gpt-x'`` name
+    the same model and register the same entry. Normalizing on write rather than
+    on read is what makes the two spellings interchangeable — the internal lookups
+    ask for the bare id (that is what `qualified_model` produces), so a qualified
+    registration stored verbatim would never be found and the override would be a
+    silent no-op. A second registration under the other spelling replaces the
+    first, which is correct: there is one model.
+
     ```python
     from evaluatorq.common.model_catalogue import ModelInfo, register_model
 
@@ -133,7 +179,7 @@ def register_model(model_id: str, info: ModelInfo) -> None:
     )
     ```
     """
-    _overrides[model_id] = info
+    _overrides[model_id.split('/', 1)[-1]] = info
 
 
 def clear_model_overrides() -> None:
@@ -320,7 +366,9 @@ async def _lookup(model: str, client: AsyncOpenAI | None = None) -> ModelInfo | 
     Caller `register_model` overrides win over the fetched catalogue.
     """
     bare = model.split('/', 1)[-1]
-    override = _overrides.get(model) or _overrides.get(bare)
+    # One probe, not two: `register_model` normalizes to the bare id on write, so
+    # the override key space has a single canonical spelling.
+    override = _overrides.get(bare)
     if override is not None:
         return override
     catalogue = await _load_catalogue(client)
