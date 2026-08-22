@@ -239,8 +239,9 @@ def create_model_job(
                     extra_body: dict[str, Any] | None = (
                         thread_body_param() if client_routes_through_orq(client) else None
                     )
-                    # Per-run timeout ceiling (was a hardcoded 300s unbounded of
-                    # cfg). execute_chat_completion already prices this call's
+                    # Per-call timeout comes from cfg.target_agent_timeout_ms
+                    # (default 240s, overridable per run), not a hardcoded
+                    # constant. execute_chat_completion already prices this call's
                     # usage (RES-1295); keep its returned Usage rather than
                     # re-deriving an unpriced one from the raw response below.
                     response, token_usage = await execute_chat_completion(

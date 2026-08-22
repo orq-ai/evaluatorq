@@ -170,10 +170,18 @@ DEFAULT_TARGET_TIMEOUT_MS: int = 240_000
 # Request fields extra_kwargs must never replace: they are structural (what
 # call is being made), not tunable sampling/provider options. One set per
 # endpoint, because the structural field names differ (`messages`/`response_format`
-# on chat completions, `input`/`text` on Responses). These two frozensets are the
-# only reserved-key vocabulary in the package — `common.llm_call` and
-# `common.structured_output` import them rather than keeping their own copies,
-# which is how they drifted into three inconsistent guards before.
+# on chat completions, `input`/`text` on Responses).
+#
+# What is shared package-wide is the `check_reserved_keys` *function* below —
+# `LLMCallConfig.request_params` and the `common.llm_call` executors all raise
+# through it, so there is one implementation of "raise on a structural-key
+# clash" rather than the three inconsistent hand-rolled guards it replaced.
+#
+# These two sets are the *baseline* vocabulary. `common.structured_output`
+# deliberately enforces a wider one (it adds the token-cap fields and
+# `text_format`, which it owns per rung), but it **derives** its sets from these
+# with `|`, so a key added here reaches it automatically. Widen there, never
+# restate.
 _RESERVED_COMPLETION_KEYS = frozenset({'model', 'messages', 'response_format', 'extra_body'})
 _RESERVED_RESPONSES_KEYS = frozenset({'model', 'input', 'text', 'extra_body'})
 

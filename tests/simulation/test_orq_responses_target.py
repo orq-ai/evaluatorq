@@ -593,6 +593,69 @@ class TestOrqResponsesTargetMemory:
         assert "extra_body" not in client.responses.create.call_args.kwargs
 
 
+class TestOrqResponsesTargetExtraBodyPrecedence:
+    """A config-supplied ``extra_body`` key must win over the router body
+    (``thread``/``memory``) on a clash, while a router key the config does not
+    mention must still reach the request. See CLAUDE.md: "Caller-supplied
+    values win merges."
+    """
+
+    @pytest.mark.asyncio
+    async def test_config_extra_body_key_wins_over_router_key(self):
+        from evaluatorq.common.thread_context import conversation_thread
+
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="agent/support", extra_body={"memory": {"entity_id": "tenant-A"}}),
+            memory_entity_id="auto-minted-id",
+            client=client,
+        )
+
+        with conversation_thread("thread-xyz"):
+            await target.respond(_make_messages())
+
+        extra_body = client.responses.create.call_args.kwargs["extra_body"]
+        # config's memory scope wins over the auto-minted memory_entity_id the
+        # router body would otherwise have set
+        assert extra_body["memory"] == {"entity_id": "tenant-A"}
+
+    @pytest.mark.asyncio
+    async def test_router_only_key_survives_when_config_does_not_mention_it(self):
+        from evaluatorq.common.thread_context import conversation_thread
+
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="agent/support", extra_body={"unrelated": "value"}),
+            client=client,
+        )
+
+        with conversation_thread("thread-xyz"):
+            await target.respond(_make_messages())
+
+        extra_body = client.responses.create.call_args.kwargs["extra_body"]
+        assert extra_body["thread"] == {"id": "thread-xyz"}
+        assert extra_body["unrelated"] == "value"
+
+    @pytest.mark.asyncio
+    async def test_router_body_still_sent_when_config_extra_body_is_empty(self):
+        """Common path: config sets no extra_body at all — body_extra must
+        still reach the request (the falsy-``self.extra_body`` early return in
+        ``_merge_extra_body`` must not swallow the call-site body)."""
+        from evaluatorq.common.thread_context import conversation_thread
+
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(LLMCallConfig(model="agent/support"), client=client)
+
+        with conversation_thread("thread-xyz"):
+            await target.respond(_make_messages())
+
+        extra_body = client.responses.create.call_args.kwargs["extra_body"]
+        assert extra_body["thread"] == {"id": "thread-xyz"}
+
+
 # ---------------------------------------------------------------------------
 # instructions / tools forwarding
 # ---------------------------------------------------------------------------

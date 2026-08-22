@@ -228,10 +228,16 @@ class OrqResponsesTarget(AgentTarget):
             # value overrides these computed ones. ``extra_body`` is one of the
             # structural keys ``request_params`` guards — a caller cannot
             # replace the router's thread/memory body wholesale via
-            # ``extra_kwargs={'extra_body': ...}``; it 400s instead of silently
-            # dropping ``body_extra`` above. A caller that needs to add to
-            # ``extra_body`` merges into ``body_extra`` here — there is no
-            # public seam for that today.
+            # ``extra_kwargs={'extra_body': ...}``; ``check_reserved_keys``
+            # raises ``ValueError`` locally at param-build time instead. The
+            # router body assembled above (``body_extra``) is passed in as a
+            # call-site param rather than merged in after the fact, so
+            # ``_merge_extra_body`` stays the single place precedence is
+            # decided: this config's ``extra_body`` — the public seam for a
+            # caller who wants to add to it — is layered on top of
+            # ``body_extra`` per key, so a caller-supplied key wins a clash
+            # (e.g. scoping to a specific memory entity) while any router key
+            # the config does not mention still survives.
             call_params: dict[str, Any] = {'input': responses_input}
             if self.tools:
                 call_params['tools'] = self.tools
@@ -239,12 +245,12 @@ class OrqResponsesTarget(AgentTarget):
                 call_params['instructions'] = self.instructions
             if metadata:
                 call_params['metadata'] = metadata
+            if body_extra:
+                call_params['extra_body'] = body_extra
             kwargs: dict[str, Any] = {
                 'model': self.config.model,
                 **self.config.request_params(api='responses', **call_params),
             }
-            if body_extra:
-                kwargs['extra_body'] = {**kwargs.get('extra_body', {}), **body_extra}
             # Drop the `reasoning` block up front if this model already 400'd on
             # it this process — same memo `common.llm_call.execute_response` uses,
             # so a rejection learned via the pipeline's own calls also short-circuits

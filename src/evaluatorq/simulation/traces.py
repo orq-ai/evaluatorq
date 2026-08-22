@@ -238,8 +238,9 @@ async def _summarize_conversation(
     out of, and cut it at exactly the point the summarize prompt aims for.
 
     The usage element is returned even when the summary is unusable: the call
-    still billed, and the caller sums it into the phase total (RES-1295). It is
-    ``None`` only when the call raised before any rung reached the provider.
+    still billed, and the caller sums it into the phase total (RES-1295). A call
+    that *raised* carries what its rungs billed on the exception, so that is
+    returned too; ``None`` means nothing was billed.
     """
     messages: list[dict[str, Any]] = [
         {
@@ -265,7 +266,7 @@ async def _summarize_conversation(
         )
     except Exception as exc:
         logger.warning('Summarizing trace %s failed (%s); dropping it', conversation.trace_id, exc)
-        return None, None
+        return None, getattr(exc, 'usage', None)
     if result.parsed is None or not result.parsed.summary.strip():
         logger.warning('Summarizing trace %s returned nothing usable; dropping it', conversation.trace_id)
         return None, result.usage
@@ -706,6 +707,12 @@ async def datapoints_from_traces(
                     label='datapoints_from_traces',
                 )
             except Exception as exc:
+                # Append rather than replace: `usages` may already hold the
+                # summarize call's real figure, and the exception carries only
+                # what *this* call's ladder billed before it raised. Matches the
+                # harvest in `_summarize_conversation` (see
+                # `StructuredGenerationError`).
+                usages.append(getattr(exc, 'usage', None))
                 logger.warning(
                     'Persona/scenario inference failed for trace %s: %s',
                     conversation.trace_id,

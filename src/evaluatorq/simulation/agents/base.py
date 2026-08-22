@@ -296,10 +296,32 @@ class BaseAgent(UsageTracking, ABC):
         """Effective max-tokens budget: explicit ``self.config.max_tokens`` beats
         ``call_value``, which beats the call-time-resolved env fallback
         (`_default_max_tokens`, EVALUATORQ_LLM_MAX_TOKENS).
+
+        Pair with `_max_tokens_advice` when building a truncation message: it
+        derives from the same ``model_fields_set`` check, so the two can't drift.
         """
         if 'max_tokens' in self.config.model_fields_set:
             return self.config.max_tokens
         return call_value if call_value is not None else _default_max_tokens()
+
+    def _max_tokens_advice(self, call_value: int | None) -> str:
+        """Remedy text for a truncation message, naming whichever knob
+        `_resolved_max_tokens` actually used for this agent.
+
+        Pass the same ``call_value`` that was handed to `_resolved_max_tokens`,
+        so the message walks the identical three tiers: config, then the
+        caller's per-call ``max_tokens=``, then the env fallback.
+
+        A user whose `LLMCallConfig.max_tokens` is pinned and raises
+        ``EVALUATORQ_LLM_MAX_TOKENS`` instead sees no change and no signal why —
+        the env var is only consulted when the config leaves ``max_tokens``
+        unset *and* the caller passed nothing.
+        """
+        if 'max_tokens' in self.config.model_fields_set:
+            return "raise max_tokens on this agent's LLMCallConfig"
+        if call_value is not None:
+            return 'raise the max_tokens argument passed to this call'
+        return 'raise the budget via EVALUATORQ_LLM_MAX_TOKENS'
 
     def _resolved_timeout_s(self, call_value: float | None) -> float:
         """Effective per-call timeout in seconds: explicit ``self.config.timeout_ms``
@@ -445,7 +467,7 @@ class BaseAgent(UsageTracking, ABC):
                     raise RuntimeError(
                         f'{self.name}._call_chat_completions: response truncated (finish_reason=length, '
                         f'max_tokens={max_tok}) before any text or tool call. The model — likely a reasoning '
-                        'model — ran out of tokens during reasoning. Raise the budget via EVALUATORQ_LLM_MAX_TOKENS.'
+                        f'model — ran out of tokens during reasoning; {self._max_tokens_advice(max_tokens)}.'
                     )
                 raise RuntimeError(
                     f'{self.name}._call_chat_completions: LLM returned no text and no tool calls after retry '
@@ -544,7 +566,7 @@ class BaseAgent(UsageTracking, ABC):
                 if stop_reason == 'length':
                     raise RuntimeError(
                         f'{self.name}._call_responses: response truncated at max_output_tokens='
-                        f'{max_tok}; raise the budget via EVALUATORQ_LLM_MAX_TOKENS.'
+                        f'{max_tok}; {self._max_tokens_advice(max_tokens)}.'
                     )
                 refusal = first_responses_refusal(response)
                 output_items = AgentResponse.from_openresponses(response).output
@@ -562,10 +584,11 @@ class BaseAgent(UsageTracking, ABC):
                     reason = getattr(incomplete, 'reason', None) if incomplete else getattr(response, 'status', None)
                     logger.warning(
                         '%s._call_responses: empty response — no text or tool calls (model=%s, reason=%s). '
-                        'If reason=max_output_tokens, raise the budget via EVALUATORQ_LLM_MAX_TOKENS.',
+                        'If reason=max_output_tokens, %s.',
                         self.name,
                         self.config.model,
                         reason,
+                        self._max_tokens_advice(max_tokens),
                     )
 
                 text = ''.join(getattr(i, 'text', '') for i in text_items)

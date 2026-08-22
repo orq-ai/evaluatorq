@@ -2,7 +2,7 @@
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
@@ -11,6 +11,8 @@ from evaluatorq.redteam.contracts import (
     EvaluatorConfig,
     LLMCallConfig,
     LLMConfig,
+    _assert_call_config_fields_agree,
+    _CALL_CONFIG_DIVERGENCES,
 )
 
 if TYPE_CHECKING:
@@ -92,20 +94,105 @@ def test_evaluator_config_accepts_llm_call_config_with_reasoning_effort():
     assert call_cfg.reasoning_effort == 'high'
 
 
-def test_evaluator_config_field_set_agrees_with_llm_call_config():
-    """The import-time guardrail in redteam/contracts.py (mirroring
-    vulnerability_registry.py's registry-completeness check) must actually
-    catch a desync: simulate a field that exists on LLMCallConfig but not on
-    EvaluatorConfig and assert the same comparison it runs would fail.
-    """
-    call_config_fields = set(LLMCallConfig.model_fields)
-    evaluator_config_fields = set(EvaluatorConfig.model_fields)
-    assert call_config_fields <= evaluator_config_fields
+def test_call_config_guard_accepts_the_real_evaluator_config():
+    """The shipped pair must satisfy the guard the module runs at import time."""
+    _assert_call_config_fields_agree(EvaluatorConfig)
 
-    # Simulate a LLMCallConfig field EvaluatorConfig never learned about.
-    fields_missing_a_field = evaluator_config_fields - {'reasoning_effort'}
-    missing = call_config_fields - fields_missing_a_field
-    assert missing == {'reasoning_effort'}
+
+def test_call_config_guard_rejects_a_missing_field():
+    """A refactor back to composition/hand-listing that drops a field fails."""
+
+    class _Deficient(BaseModel):
+        model: str = DEFAULT_PIPELINE_MODEL
+
+    with pytest.raises(RuntimeError, match='missing from _Deficient'):
+        _assert_call_config_fields_agree(_Deficient, divergences={})
+
+
+def test_call_config_guard_rejects_a_silently_redeclared_default():
+    """The drift that actually bit: a redeclaration that keeps a stale default.
+
+    ``temperature`` is not in the divergence allowlist, so restating it with a
+    different default must fail even though the field name is present and the
+    annotation is unchanged — the name-set check this replaced could not see it.
+    """
+
+    class _StaleDefault(LLMCallConfig):
+        temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+
+    with pytest.raises(RuntimeError, match='temperature: _StaleDefault overrides'):
+        _assert_call_config_fields_agree(_StaleDefault, divergences={})
+
+
+def test_call_config_guard_rejects_a_tightened_constraint():
+    """Constraint metadata counts too, not just the default value."""
+
+    class _TightConstraint(LLMCallConfig):
+        max_tokens: int = Field(default=DEFAULT_TARGET_MAX_TOKENS, gt=0, le=100)
+
+    with pytest.raises(RuntimeError, match='max_tokens: _TightConstraint overrides'):
+        _assert_call_config_fields_agree(_TightConstraint, divergences={})
+
+
+def test_call_config_guard_rejects_an_exclude_only_override():
+    """``exclude`` changes behaviour without changing a type, default or constraint.
+
+    `EvaluatorConfig.as_call_config` and ``_accept_model_sugar`` both round-trip
+    through ``model_dump()``, so a subclass that only adds ``exclude=True`` drops
+    the field on the way to the provider. It is also the attribute ``model`` uses
+    to diverge, so a guard blind to it has a hole exactly where it is aimed.
+    """
+
+    class _Excluded(LLMCallConfig):
+        temperature: float = Field(default=1.0, ge=0.0, le=2.0, exclude=True)
+
+    with pytest.raises(RuntimeError, match='temperature: _Excluded overrides'):
+        _assert_call_config_fields_agree(_Excluded, divergences={})
+
+
+def test_call_config_guard_rejects_an_alias_only_override():
+    """An alias changes which key populates the field and which key it dumps under."""
+
+    class _Aliased(LLMCallConfig):
+        max_tokens: int = Field(default=DEFAULT_TARGET_MAX_TOKENS, gt=0, alias='maxTokens')
+
+    with pytest.raises(RuntimeError, match='max_tokens: _Aliased overrides'):
+        _assert_call_config_fields_agree(_Aliased, divergences={})
+
+
+def test_call_config_guard_allows_a_description_only_override():
+    """EvaluatorConfig.retry_count reuses this: docs may differ, behaviour may not."""
+
+    class _Reworded(LLMCallConfig):
+        retry_count: int = Field(default=1, ge=0, description='judge-side budget')
+
+    _assert_call_config_fields_agree(_Reworded, divergences={})
+
+
+def test_call_config_guard_rejects_a_stale_allowlist_entry():
+    """An allowlist entry must not outlive the divergence it excuses."""
+    with pytest.raises(RuntimeError, match='timeout_ms: listed as an intentional divergence'):
+        _assert_call_config_fields_agree(
+            EvaluatorConfig, divergences={**_CALL_CONFIG_DIVERGENCES, 'timeout_ms': 'no longer true'}
+        )
+
+
+def test_call_config_guard_rejects_an_allowlist_entry_for_an_unknown_field():
+    """A field renamed on LLMCallConfig must not leave a dangling excuse behind."""
+    with pytest.raises(RuntimeError, match='LLMCallConfig has no such field'):
+        _assert_call_config_fields_agree(EvaluatorConfig, divergences={'gone': 'renamed upstream'})
+
+
+def test_evaluator_config_inherits_call_config_defaults():
+    """The inherited fields must carry LLMCallConfig's values, not a stale copy."""
+    evaluator = EvaluatorConfig()
+    call = LLMCallConfig()
+    for name in ('temperature', 'max_tokens', 'timeout_ms', 'extra_kwargs', 'extra_body', 'reasoning_effort'):
+        assert getattr(evaluator, name) == getattr(call, name)
+    # The two deliberate divergences.
+    assert evaluator.api == 'responses'
+    assert call.api == 'chat_completions'
+    assert EvaluatorConfig.model_fields['model'].exclude is True
 
 
 def test_llm_config_no_backend_field():

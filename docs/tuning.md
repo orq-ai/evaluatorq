@@ -48,12 +48,11 @@ comes back as a 400, which the executors turn into a drop-the-block-and-retry-on
 remembered for the rest of the process so later calls to the same model skip the
 block up front.
 
-Reasoning effort reaches the target on **Responses-capable** targets (`agent:<key>`
-on the Orq router) and on the direct OpenAI backend, which sends it as the flat
-`reasoning_effort` chat-completions field. A `model:`/`deployment:` target executes
-via the ORQ SDK agents endpoint, which has no reasoning parameter; a callable target
-or a Vercel endpoint has nowhere to put it either. In all three cases the setting is
-accepted, a warning names the drop, and the run proceeds.
+Reasoning effort reaches the target only on **Responses-capable** targets
+(`agent:<key>` on the Orq router). A `deployment:` target executes via
+the ORQ SDK agents endpoint, which has no reasoning parameter; a callable target
+or a Vercel endpoint has nowhere to put it either. In each of those cases the
+setting is accepted, a warning names the drop, and the run proceeds.
 
 !!! tip "Pre-validate against the catalogue"
     The model catalogue publishes the accepted reasoning-effort values per model.
@@ -144,11 +143,19 @@ These bound evaluatorq's own LLM calls, not the target's.
 | `EvaluatorConfig.retry_count` | `1` | Retries per judge call. `0` falls straight through to `replacement_judges` / `min_successful_judges` |
 | `LLMCallConfig.timeout_ms` | `90000` | Per-call timeout for a pipeline role |
 
-!!! warning "One retry layer, never two"
-    SDK-level retries and evaluatorq's own retries **multiply**. Every helper that
-    owns retry disarms the client's SDK budget (`max_retries=0`) for the duration,
-    so passing your own pre-built `client=` does not stack a second layer on top —
-    and there is no way to keep an injected client's SDK retries active alongside.
+!!! warning "One retry layer, including on a client you inject"
+    SDK-level retries and evaluatorq's own retries would **multiply** — five
+    evaluatorq attempts over a client doing two SDK retries is fifteen requests,
+    not five. So the helpers that wrap a call in evaluatorq's retry loop disarm
+    the SDK budget first: both `common.judge` and `common.structured_output`'s
+    `generate_structured` clone the client with `max_retries=0` before their
+    first attempt. The clone reuses your transport, auth, base URL, headers and
+    timeout, and your own client object is never mutated — so you do not need to
+    pass `max_retries=0` on a client you inject, and configuring SDK retries on
+    it does not stack.
+
+    What you configure instead is the evaluatorq layer: `LLMConfig.retry_count`
+    and `LLMConfig.retry_on_codes` in the table above.
 
 Two knobs govern cost rather than reliability, because each unit is a live call:
 

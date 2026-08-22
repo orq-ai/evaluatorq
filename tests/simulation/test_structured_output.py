@@ -2,6 +2,7 @@ from __future__ import annotations
 
 # ruff: noqa: S101
 import logging
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -759,3 +760,400 @@ async def test_extra_body_reaches_the_responses_request() -> None:
 
 class _StopAfterCapture(Exception):
     """Ends the call once the request kwargs have been recorded."""
+
+
+# --- the chat rungs run through common.llm_call, so they inherit its repairs ---
+
+
+def _reasoning_400() -> Any:
+    """The 400 a non-reasoning model answers `reasoning_effort` with."""
+    import httpx
+    from openai import BadRequestError
+
+    request = httpx.Request('POST', 'https://router.example/v3/router')
+    return BadRequestError(
+        "Unsupported parameter: 'reasoning_effort' is not supported with this model.",
+        response=httpx.Response(400, request=request),
+        body=None,
+    )
+
+
+def _parsed_completion(value: str) -> MagicMock:
+    """A parse() response the SDK validated into the requested model."""
+    completion = MagicMock()
+    choice = MagicMock()
+    choice.finish_reason = 'stop'
+    choice.message.refusal = None
+    choice.message.parsed = SampleResponse(value=value)
+    completion.choices = [choice]
+    return completion
+
+
+@pytest.mark.asyncio
+async def test_chat_rung_survives_a_model_rejecting_reasoning_effort() -> None:
+    """The acceptance test for routing the rungs through `common.llm_call`.
+
+    `reasoning_effort` is injected by this helper but the drop-and-retry that
+    handles a model rejecting it lives in the executors. While the rungs called
+    ``client.chat.completions.parse`` directly, that 400 escaped rung 1 — its
+    body names `reasoning_effort`, not the schema, so the schema-rejection
+    fall-through did not catch it — and killed the whole structured call, while
+    the `api='responses'` leg one function away self-healed.
+    """
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(side_effect=[_reasoning_400(), _parsed_completion('ok')])
+    client.chat.completions.create = AsyncMock()
+
+    result = await generate_structured(
+        client,
+        model='local-model',
+        messages=[{'role': 'user', 'content': 'return json'}],
+        response_format=SampleResponse,
+        max_tokens=64,
+        label='Sample.generate',
+        reasoning_effort='high',
+    )
+
+    assert result.parsed is not None
+    assert result.parsed.value == 'ok'
+    # Rung 1 answered on the retry — the ladder never had to degrade.
+    client.chat.completions.create.assert_not_awaited()
+    first, retried = client.chat.completions.parse.await_args_list
+    assert first.kwargs['reasoning_effort'] == 'high'
+    assert 'reasoning_effort' not in retried.kwargs
+
+
+@pytest.mark.asyncio
+async def test_a_later_call_strips_the_rejected_reasoning_effort_and_says_so(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The memo must not degrade the call silently.
+
+    Once a model is memoized as a rejector the parameter is dropped before the
+    request, so the user's configured effort is not in force. That is worth one
+    warning per (endpoint, model, tools) key — and only one, since a per-call
+    warning across a long run is noise.
+    """
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(
+        side_effect=[_reasoning_400(), _parsed_completion('ok'), _parsed_completion('ok'), _parsed_completion('ok')]
+    )
+    client.chat.completions.create = AsyncMock()
+
+    async def _call() -> None:
+        await generate_structured(
+            client,
+            model='local-model',
+            messages=[{'role': 'user', 'content': 'return json'}],
+            response_format=SampleResponse,
+            max_tokens=64,
+            label='Sample.generate',
+            reasoning_effort='high',
+        )
+
+    with caplog.at_level(logging.DEBUG, logger='evaluatorq.common.llm_call'):
+        await _call()  # pays the 400 once
+        await _call()  # first up-front strip: warns
+        await _call()  # later strips: debug
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING and 'stripping it up front' in r.message]
+    assert len(warnings) == 1, 'the first silent downgrade must be announced exactly once'
+    assert any(r.levelno == logging.DEBUG and 'stripped again' in r.message for r in caplog.records)
+    # And the parameter really is gone from the later requests.
+    for call in client.chat.completions.parse.await_args_list[1:]:
+        assert 'reasoning_effort' not in call.kwargs
+
+
+@pytest.mark.asyncio
+async def test_timeout_s_bounds_the_chat_rungs_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`timeout_s` used to bound only the Responses leg; the chat rungs take it now."""
+    import evaluatorq.common.structured_output as structured_output_module
+
+    captured: list[dict[str, Any]] = []
+
+    async def _fake_execute_chat_parse(**kwargs: Any) -> tuple[Any, None]:
+        captured.append(kwargs)
+        return _parsed_completion('ok'), None
+
+    monkeypatch.setattr(structured_output_module, 'execute_chat_parse', _fake_execute_chat_parse)
+
+    await generate_structured(
+        MagicMock(),
+        model='local-model',
+        messages=[{'role': 'user', 'content': 'return json'}],
+        response_format=SampleResponse,
+        max_tokens=64,
+        label='Sample.generate',
+        timeout_s=23.0,
+    )
+
+    assert captured[0]['timeout_s'] == 23.0
+    assert captured[0]['max_completion_tokens'] == 64
+
+
+@pytest.mark.asyncio
+async def test_extra_kwargs_still_win_over_a_rungs_own_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The executors apply extra_kwargs last, which is the order the ladder had."""
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(return_value=_parsed_completion('ok'))
+
+    await generate_structured(
+        client,
+        model='local-model',
+        messages=[{'role': 'user', 'content': 'return json'}],
+        response_format=SampleResponse,
+        max_tokens=64,
+        label='Sample.generate',
+        temperature=0.0,
+        extra_kwargs={'temperature': 0.9, 'top_p': 0.5},
+    )
+
+    await_args = client.chat.completions.parse.await_args
+    assert await_args is not None
+    sent = await_args.kwargs
+    assert sent['temperature'] == 0.9, "the caller's option wins over the ladder's base field"
+    assert sent['top_p'] == 0.5
+
+
+@pytest.mark.asyncio
+async def test_extra_body_reaches_the_chat_rungs() -> None:
+    """The router body rides the executors' dedicated parameter, not extra_kwargs."""
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(return_value=_parsed_completion('ok'))
+
+    await generate_structured(
+        client,
+        model='local-model',
+        messages=[{'role': 'user', 'content': 'return json'}],
+        response_format=SampleResponse,
+        max_tokens=64,
+        label='Sample.generate',
+        extra_body={'retry': {'count': 3}},
+    )
+
+    await_args = client.chat.completions.parse.await_args
+    assert await_args is not None
+    assert await_args.kwargs['extra_body'] == {'retry': {'count': 3}}
+
+
+class _FakeSpan:
+    """Records `set_attribute` calls so a rung's span attributes can be asserted on."""
+
+    def __init__(self) -> None:
+        self.attributes: dict[str, Any] = {}
+
+    def set_attribute(self, key: str, value: Any) -> None:
+        self.attributes[key] = value
+
+
+def _capture_span(monkeypatch: pytest.MonkeyPatch) -> _FakeSpan:
+    """Give the ladder one recording span in place of the (absent) real tracer."""
+    import contextlib
+
+    import evaluatorq.common.structured_output as structured_output_module
+
+    span = _FakeSpan()
+
+    @contextlib.asynccontextmanager
+    async def _fake_span(**_kwargs: Any) -> AsyncIterator[_FakeSpan]:
+        yield span
+
+    monkeypatch.setattr(structured_output_module, 'with_llm_span', _fake_span)
+    return span
+
+
+@pytest.mark.asyncio
+async def test_the_forced_tool_nudge_is_recorded_on_the_span(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rung 3's docstring claims the appended turn is visible on the ladder's span.
+
+    The rung routes through `execute_chat_parse`, which records the messages it
+    sends, so the nudged list reaches `gen_ai.input.messages` — and rung 3 also
+    writes it to its own attribute, which is what the next test needs.
+    """
+    import evaluatorq.common.llm_call as llm_call_module
+
+    recorded: list[list[dict[str, Any]]] = []
+    monkeypatch.setattr(llm_call_module, 'record_llm_input', lambda _span, messages: recorded.append(messages))
+    span = _capture_span(monkeypatch)
+
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(
+        side_effect=[_no_parsed_completion(), _tool_completion('{"value": "ok"}')]
+    )
+    client.chat.completions.create = AsyncMock(return_value=_fallback_completion('not json at all', 'stop'))
+
+    await _run_to_the_tool_rung(client)
+
+    assert recorded[-1][-1]['role'] == 'user'
+    assert 'SampleResponse' in recorded[-1][-1]['content']
+    assert 'SampleResponse' in span.attributes['orq.structured_output.tool_nudge']
+
+
+@pytest.mark.asyncio
+async def test_the_nudge_survives_a_rung_4_that_runs_after_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`record_llm_input` *sets* the input attribute, so rung 4 overwrites rung 3's list.
+
+    That is precisely the run a reader cares about — rung 3 failing is why rung 4
+    ran — so the nudge has its own attribute, which no later rung touches.
+    """
+    import evaluatorq.common.llm_call as llm_call_module
+
+    recorded: list[list[dict[str, Any]]] = []
+    monkeypatch.setattr(llm_call_module, 'record_llm_input', lambda _span, messages: recorded.append(messages))
+    span = _capture_span(monkeypatch)
+
+    client = MagicMock()
+    # Rung 3 answers without a tool call, so rung 4 runs and answers.
+    client.chat.completions.parse = AsyncMock(return_value=_no_parsed_completion())
+    client.chat.completions.create = AsyncMock(
+        side_effect=[
+            _fallback_completion('not json at all', 'stop'),
+            _fallback_completion('{"value": "ok"}', 'stop'),
+        ]
+    )
+
+    parsed, _raw = await _run_to_the_tool_rung(client)
+
+    assert parsed is not None  # rung 4 answered after rung 3
+    # The recorded input no longer carries the nudge: rung 4 replaced it.
+    assert len(recorded[-1]) == 1
+    assert 'SampleResponse' not in recorded[-1][-1]['content']
+    # The dedicated attribute still does.
+    assert 'SampleResponse' in span.attributes['orq.structured_output.tool_nudge']
+    assert span.attributes['orq.structured_output.leg'] == 'json_object'
+
+
+# --- every degraded exit announces itself -------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_an_exhausted_ladder_says_it_ran_out_of_rungs(caplog: pytest.LogCaptureFixture) -> None:
+    """Four rungs, up to five billed calls, and nothing to show: that is worth a line."""
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(return_value=_no_parsed_completion())
+    client.chat.completions.create = AsyncMock(return_value=_fallback_completion('not json at all', 'stop'))
+
+    with caplog.at_level(logging.WARNING):
+        result = await _run_to_the_tool_rung(client)
+
+    assert result[0] is None
+    assert 'none produced output validating against SampleResponse' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_empty_content_warns_like_off_schema_content_does(caplog: pytest.LogCaptureFixture) -> None:
+    """Two neighbouring branches must not differ in whether they log."""
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(return_value=_no_parsed_completion())
+    client.chat.completions.create = AsyncMock(return_value=_fallback_completion('', 'stop'))
+
+    with caplog.at_level(logging.WARNING):
+        await _run_to_the_tool_rung(client)
+
+    assert 'returned empty content' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_response_with_no_choices_warns_rather_than_vanishing(caplog: pytest.LogCaptureFixture) -> None:
+    """An empty `choices` list used to return an empty result with no explanation."""
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(return_value=_no_parsed_completion())
+    no_choices = MagicMock()
+    no_choices.choices = []
+    client.chat.completions.create = AsyncMock(return_value=no_choices)
+
+    with caplog.at_level(logging.WARNING):
+        await _run_to_the_tool_rung(client)
+
+    assert 'returned no choices' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_the_parse_rung_with_no_choices_degrades_instead_of_raising_indexerror(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Rung 1 indexed `choices[0]` unguarded while both neighbours warned and fell through.
+
+    A provider answering with an empty `choices` list took the whole ladder down
+    with an IndexError instead of degrading to rung 2.
+    """
+    no_choices = MagicMock()
+    no_choices.choices = []
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(side_effect=[no_choices, _tool_completion('{"value": "ok"}')])
+    client.chat.completions.create = AsyncMock(return_value=_fallback_completion('not json at all', 'stop'))
+
+    with caplog.at_level(logging.WARNING):
+        parsed, _raw = await _run_to_the_tool_rung(client)
+
+    assert parsed is not None  # the ladder continued and rung 3 answered
+    assert 'parse() returned no choices' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_tool_rung_with_no_choices_warns_too(caplog: pytest.LogCaptureFixture) -> None:
+    no_choices = MagicMock()
+    no_choices.choices = []
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(side_effect=[_no_parsed_completion(), no_choices])
+    client.chat.completions.create = AsyncMock(return_value=_fallback_completion('not json at all', 'stop'))
+
+    with caplog.at_level(logging.WARNING):
+        await _run_to_the_tool_rung(client)
+
+    assert 'forced tool call returned no choices' in caplog.text
+
+
+# --- one retry layer ----------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_an_injected_clients_sdk_retries_are_disarmed_before_the_ladder_runs() -> None:
+    """Every rung is wrapped in `with_retry`, so the SDK budget must be zeroed first.
+
+    Left armed, the two layers multiply — five outer attempts over a client doing
+    two SDK retries is fifteen requests per rung. The client is cloned, never
+    mutated: it belongs to the caller.
+    """
+    injected = MagicMock()
+    injected.max_retries = 2
+    disarmed = MagicMock()
+    disarmed.max_retries = 0
+    disarmed.chat.completions.parse = AsyncMock(return_value=_parsed_completion('ok'))
+    injected.with_options = MagicMock(return_value=disarmed)
+
+    result = await generate_structured(
+        injected,
+        model='local-model',
+        messages=[{'role': 'user', 'content': 'return json'}],
+        response_format=SampleResponse,
+        max_tokens=64,
+        label='Sample.generate',
+    )
+
+    assert result.parsed is not None
+    injected.with_options.assert_called_once_with(max_retries=0)
+    # The disarmed clone is the one that talked to the provider, and the caller's
+    # own client was not reconfigured in place.
+    disarmed.chat.completions.parse.assert_awaited_once()
+    injected.chat.completions.parse.assert_not_called()
+    assert injected.max_retries == 2
+
+
+@pytest.mark.asyncio
+async def test_a_client_without_an_integer_retry_budget_is_left_alone() -> None:
+    """Test doubles (and clients already at 0) must not be cloned into something else."""
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(return_value=_parsed_completion('ok'))
+
+    await generate_structured(
+        client,
+        model='local-model',
+        messages=[{'role': 'user', 'content': 'return json'}],
+        response_format=SampleResponse,
+        max_tokens=64,
+        label='Sample.generate',
+    )
+
+    client.with_options.assert_not_called()
+    client.chat.completions.parse.assert_awaited_once()

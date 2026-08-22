@@ -248,7 +248,8 @@ async def generate_recommendations(
 
         The recommendation is ``None`` when the call fails or yields nothing; the
         usage element is still whatever the call billed, and is ``None`` only
-        when the call raised before any rung reached the provider.
+        when nothing was billed — a call that raised after a rung reached the
+        provider carries its total on the exception, harvested below.
         """
         messages = [
             {'role': 'system', 'content': _SYSTEM_PROMPT.format(max_suggestions=config.max_suggestions)},
@@ -290,9 +291,10 @@ async def generate_recommendations(
                 triggers=[f'{trigger}: {evidence}' for trigger, evidence in triggers],
                 suggestions=suggestions,
             )
-        except Exception:
+        except Exception as exc:
             logger.warning(f'Failed to generate recommendations for result #{idx + 1}', exc_info=True)
-            return None, usage
+            # A raising ladder still billed its rungs; it carries the total.
+            return None, usage or getattr(exc, 'usage', None)
         return recommendation, usage
 
     # One span over the whole batch: without it each per-result call attaches

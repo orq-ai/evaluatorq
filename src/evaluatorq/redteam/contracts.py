@@ -9,7 +9,9 @@ Semantic convention:
     ``passed=False`` → the agent is VULNERABLE (attack succeeded)
 """
 
+from collections.abc import Mapping
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
 from pydantic import (
@@ -19,6 +21,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic.fields import FieldInfo
 from typing_extensions import NotRequired, TypedDict
 
 from evaluatorq.common.recommendations import RecommendationConfigBase
@@ -581,15 +584,28 @@ class EvaluatorConfig(LLMCallConfig):
     ``model="x"`` is accepted as shorthand for ``judges=["x"]``. Decode/client
     fields are shared across every judge in the panel.
 
-    Inherits its call-config fields (``model``, ``api``, ``temperature``,
-    ``max_tokens``, ``timeout_ms``, ``extra_kwargs``, ``reasoning_effort``,
-    ``client``, ``retry_count``) from `LLMCallConfig` instead of redeclaring
-    them, so a field added there (e.g. ``reasoning_effort``) is automatically
-    accepted here too — redeclaring them by hand is what let this class and
-    ``as_call_config()`` desync from `LLMCallConfig` and reject the sugar
-    conversion at ``:  _accept_model_sugar`` with ``extra_kwargs cannot...``.
-    ``_EVALUATOR_CONFIG_FIELDS_AGREE`` below asserts the two field sets stay
-    aligned at import time.
+    It subclasses `LLMCallConfig` instead of re-listing its fields, so a field
+    added there (e.g. ``reasoning_effort``) is accepted here automatically —
+    hand-listing them is what let this class and ``as_call_config()`` desync
+    from `LLMCallConfig` and reject the sugar conversion in
+    ``_accept_model_sugar`` with ``extra_kwargs cannot...``.
+
+    Inherited verbatim: ``temperature``, ``max_tokens``, ``timeout_ms``,
+    ``extra_kwargs``, ``extra_body``, ``reasoning_effort`` and ``client``.
+    Three fields are declared again below, on purpose:
+
+    - ``model`` — nullable and ``exclude=True`` here. It is judge shorthand that
+      ``_accept_model_sugar`` folds into ``judges[0]``, not the required model id
+      the parent declares.
+    - ``api`` — defaults to ``'responses'`` rather than the parent's
+      ``'chat_completions'``, so judge calls go to the endpoint the Orq router
+      prices.
+    - ``retry_count`` — identical type, default and bounds; only the description
+      differs, to name this as the judge-side budget rather than the target one.
+
+    ``_assert_call_config_fields_agree`` below pins exactly that split at import
+    time: any *other* override of an inherited field, and any allowlist entry
+    whose divergence has since disappeared, is a hard failure.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra='forbid')
@@ -611,11 +627,8 @@ class EvaluatorConfig(LLMCallConfig):
         'chat_completions to opt out; a model the router cannot resolve on responses falls '
         'back to chat completions on its own.',
     )
-    temperature: float = Field(default=1.0, ge=0.0, le=2.0)
-    max_tokens: int = Field(default=DEFAULT_TARGET_MAX_TOKENS, gt=0)
-    timeout_ms: int = Field(default=90_000, gt=0)
-    extra_kwargs: dict[str, Any] = Field(default_factory=dict)
-    client: _Client = None
+    # temperature / max_tokens / timeout_ms / extra_kwargs / extra_body /
+    # reasoning_effort / client are inherited from LLMCallConfig unchanged.
     retry_count: int = Field(
         default=1,
         ge=0,
@@ -686,18 +699,125 @@ class EvaluatorConfig(LLMCallConfig):
         return self
 
 
-# Guardrail for the desync this class used to have with LLMCallConfig (F1):
-# EvaluatorConfig inherits its call-config fields rather than redeclaring them,
-# but assert it explicitly so a future refactor back to composition/duplication
-# fails fast at import time instead of surfacing as a ValidationError deep in a
-# pipeline run. Mirrors the vulnerability_registry.py pattern of asserting
-# derived collections agree with their source of truth.
-_missing_call_config_fields = set(LLMCallConfig.model_fields) - set(EvaluatorConfig.model_fields)
-if _missing_call_config_fields:
-    raise RuntimeError(
-        f'EvaluatorConfig is missing LLMCallConfig field(s) {sorted(_missing_call_config_fields)}; '
-        'a field was added to LLMCallConfig without EvaluatorConfig inheriting/declaring it.'
+# ---------------------------------------------------------------------------
+# Guardrail for the desync this class used to have with LLMCallConfig (F1)
+# ---------------------------------------------------------------------------
+# Comparing the two *field name* sets cannot fail while the inheritance holds —
+# pydantic merges every parent field into a subclass — and it never caught the
+# drift that actually bit: EvaluatorConfig restated a parent field, LLMCallConfig
+# later changed that field's default or constraints, and the judge silently kept
+# the old one. So compare the declarations, and require each intentional
+# divergence to be listed here with a reason. Adding a row is the review moment.
+# Mirrors vulnerability_registry.py: a derived declaration is asserted against
+# its source of truth at import time, and the allowlist is frozen.
+_CALL_CONFIG_DIVERGENCES: Mapping[str, str] = MappingProxyType({
+    'model': 'judge shorthand: nullable and excluded from dumps; _accept_model_sugar '
+    'folds it into judges[0], so it is not the required model id LLMCallConfig declares',
+    'api': "judge calls default to 'responses' (the endpoint the Orq router prices), "
+    "not LLMCallConfig's 'chat_completions'",
+})
+
+
+def _field_declaration(field: FieldInfo) -> tuple[Any, ...]:
+    """The parts of a field declaration a subclass must not silently change.
+
+    Validation *and* serialization are both compared, because both are
+    load-bearing here: `EvaluatorConfig.as_call_config` and `_accept_model_sugar`
+    round-trip through ``model_dump()``, so a redeclaration that only adds
+    ``exclude=True`` changes what reaches the provider without changing a single
+    type or default. ``exclude`` is also the very attribute ``model`` uses to
+    diverge — a guard blind to it has a hole in the place it was built to watch.
+    Aliases decide which input key populates a field and which key it dumps
+    under; ``frozen`` decides whether a caller can reassign it;
+    ``json_schema_extra`` decides what a provider's structured-output schema
+    says about it.
+
+    Deliberately excluded, in full:
+
+    - ``description``: a redeclaration that only rewords the docs cannot drift
+      out of agreement with the parent's behaviour, and ``retry_count`` uses
+      that to name the judge-side budget.
+    - ``title``, ``examples``, ``deprecated``, ``repr``: documentation and
+      display only. Like ``description``, they change no value that a call path
+      reads. (``deprecated`` emits a warning on access; that is a message, not a
+      behaviour change in the call this guard protects.)
+    - ``alias_priority``: derived bookkeeping pydantic recomputes from the
+      aliases themselves, which *are* compared.
+    - ``init``/``init_var``/``kw_only``: dataclass-only knobs, unset on every
+      field of a `BaseModel` here, so comparing them would add noise and catch
+      nothing.
+    """
+    return (
+        field.annotation,
+        field.default,
+        field.default_factory,
+        tuple(field.metadata),
+        field.exclude,
+        field.alias,
+        field.validation_alias,
+        field.serialization_alias,
+        field.frozen,
+        field.json_schema_extra,
+        field.discriminator,
     )
+
+
+def _assert_call_config_fields_agree(
+    child: type[BaseModel],
+    parent: type[BaseModel] = LLMCallConfig,
+    divergences: Mapping[str, str] = _CALL_CONFIG_DIVERGENCES,
+) -> None:
+    """Raise ``RuntimeError`` unless ``child`` carries ``parent``'s fields intact.
+
+    For every field on ``parent``:
+
+    - it must exist on ``child``, so a refactor back to composition or hand-listing
+      that drops one fails at import time rather than as a ``ValidationError``
+      deep inside a pipeline run;
+    - unless it is named in ``divergences``, ``child`` must not change any part
+      of its declaration that a call path reads — annotation, default,
+      ``default_factory``, constraint metadata, ``exclude``, either alias,
+      ``frozen``, ``json_schema_extra`` or ``discriminator`` (see
+      `_field_declaration` for what is left out and why).
+
+    Every name in ``divergences`` must still be a parent field *and* still
+    actually diverge, so an allowlist entry cannot outlive the divergence it
+    excuses and quietly license a future override.
+
+    Both models are parameters so the check is testable against a deliberately
+    deficient stand-in (see tests/redteam/test_llm_config.py).
+    """
+    problems: list[str] = []
+    for name, parent_field in parent.model_fields.items():
+        child_field = child.model_fields.get(name)
+        if child_field is None:
+            problems.append(f'{name}: declared on {parent.__name__} but missing from {child.__name__}')
+            continue
+        parent_decl = _field_declaration(parent_field)
+        child_decl = _field_declaration(child_field)
+        if name in divergences:
+            if parent_decl == child_decl:
+                problems.append(
+                    f'{name}: listed as an intentional divergence ({divergences[name]}) but '
+                    f'{child.__name__} now declares it exactly as {parent.__name__} does; drop the '
+                    'redeclaration and the allowlist entry'
+                )
+        elif parent_decl != child_decl:
+            problems.append(
+                f'{name}: {child.__name__} overrides {parent.__name__}.{name} '
+                f'({parent_decl!r} -> {child_decl!r}); inherit it instead, or add it to '
+                '_CALL_CONFIG_DIVERGENCES with the reason it must differ'
+            )
+    problems.extend(
+        f'{name}: listed as an intentional divergence but {parent.__name__} has no such field'
+        for name in divergences
+        if name not in parent.model_fields
+    )
+    if problems:
+        raise RuntimeError(f'{child.__name__} has drifted from {parent.__name__}:\n  ' + '\n  '.join(problems))
+
+
+_assert_call_config_fields_agree(EvaluatorConfig)
 
 
 class RedTeamRecommendationConfig(RecommendationConfigBase):
@@ -833,9 +953,16 @@ class LLMConfig(BaseModel):
     # Sole retry owner: targets built for it must disable their own SDK budgets.
     # A retry never consumes a new attacker turn or changes the transcript.
     max_target_retries: int = Field(default=2, ge=0, le=10)
-    # Reasoning effort for the target agent (Responses targets only). Forwarded
-    # verbatim as ``reasoning={'effort': ...}``; accepted values differ per model,
-    # so the provider validates and rejects an unsupported one with a 400.
+    # Reasoning effort for the target agent. The value is forwarded verbatim; its
+    # *spelling* is per endpoint, exactly as ``LLMCallConfig.request_params``
+    # renders it — flat ``reasoning_effort=`` on chat completions (the OpenAI
+    # backend and the model/router job in `redteam/runtime/jobs.py`),
+    # ``reasoning={'effort': ...}`` on the Responses API (OrqResponsesTarget).
+    # The deployment job is the one leg that does NOT forward it at all: the
+    # invoke_async payload has no field for it, so that job warns and drops it.
+    # Read that method for the rule rather than enumerating wiring points here.
+    # Accepted values differ per model, so the provider validates and rejects an
+    # unsupported one with a 400.
     target_reasoning_effort: str | None = None
 
     # --- Agent tool continuation cap ------------------------------------------

@@ -40,12 +40,25 @@ pipeline uses so a run's spans are uniformly ``responses ...``. It is a leg,
 not a replacement: a provider without the endpoint, or one that names the
 schema form unsupported, falls through to everything described above.
 
+Every rung — Responses leg and all four chat rungs — is transported by
+``common.llm_call``'s executors, so the ladder inherits the concurrency slot,
+the per-request timeout, span recording, trace-header injection, the
+reserved-key guard and the ``reasoning_effort`` drop-and-retry-once rather than
+re-deriving them, and the client's own SDK retry budget is disarmed once at the
+top of ``generate_structured`` so the two retry layers cannot multiply. Only the
+fallback policy lives here. (The chat rungs called
+the SDK directly until RES-1295's follow-up; the visible symptom was that a
+``reasoning_effort`` a model rejected killed the whole call on the chat legs
+while the Responses leg self-healed.)
+
 Because one call can bill up to five provider requests, the result carries the
 usage of **all** of them (`StructuredResult.usage`), summed rather than taken
 from the rung that answered — a rung that failed still billed (RES-1295). Rungs
-are priced individually through ``common.model_catalogue.price_usage``, and a
-rung whose usage block cannot be read counts as one unpriced call after a
-warning, never as zero.
+are priced individually inside the executor that made them (through
+``common.model_catalogue.price_usage``), and a rung whose usage block cannot be
+read counts as one unpriced call after a warning, never as zero. A call that
+raises carries the same total on the exception (`StructuredGenerationError`),
+since the rungs below the raising one billed too.
 
 Lives in ``common`` rather than ``simulation`` so both the simulation and
 red-team report code can reuse one copy (RES-822). It delegates to the canonical
@@ -63,12 +76,17 @@ from openai import APIStatusError, AsyncOpenAI, LengthFinishReasonError, pydanti
 from pydantic import BaseModel, ValidationError
 
 from evaluatorq.common.extract_json import extract_json_from_response
-from evaluatorq.common.llm_call import apply_pipeline_metadata, execute_response
+from evaluatorq.common.llm_call import execute_chat_completion, execute_chat_parse, execute_response
 from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.responses import first_responses_refusal, parse_responses_response, responses_stop_reason
-from evaluatorq.common.retry import with_retry
-from evaluatorq.common.tracing import get_trace_context_headers, record_llm_response, with_llm_span
-from evaluatorq.contracts import TokenUsage, check_reserved_keys
+from evaluatorq.common.retry import with_retry, without_client_retries
+from evaluatorq.common.tracing import with_llm_span
+from evaluatorq.contracts import (
+    _RESERVED_COMPLETION_KEYS,
+    _RESERVED_RESPONSES_KEYS,
+    TokenUsage,
+    check_reserved_keys,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
@@ -101,11 +119,62 @@ class StructuredResult(Generic[T]):
     not just the one that answered — a call that burned rungs 1-3 before rung 4
     succeeded paid for all four. ``None`` means no rung ever reached a provider
     (e.g. every attempt was rejected before billing).
+
+    A call that *raises* has no result object to carry usage on, so the same
+    total is attached to the exception instead — see `StructuredGenerationError`.
     """
 
     parsed: T | None
     raw: str
     usage: TokenUsage | None = None
+
+
+class StructuredGenerationError(RuntimeError):
+    """A structured-generation failure that carries what the ladder already billed.
+
+    The ladder can burn four or five provider calls before a rung raises
+    (truncation, a refusal, a payload that does not validate). Those calls were
+    billed, and before this type existed every one of them vanished on the way
+    out: ``usages`` was folded into a `StructuredResult` only on the two
+    ``return`` paths, so a run whose rungs 1-2 truncated and whose rung 3 raised
+    reported "no usage reported by the provider".
+
+    Subclasses ``RuntimeError`` because that is what these failures already
+    raised — a caller matching on ``RuntimeError`` keeps working. Callers that
+    want the spend harvest it defensively:
+
+    ```python
+    try:
+        result = await generate_structured(...)
+    except Exception as exc:
+        usage = getattr(exc, 'usage', None)
+    ```
+
+    ``getattr`` rather than ``except StructuredGenerationError``: a provider
+    error (an `APIStatusError` from the last rung) propagates as **itself** —
+    masking a 429 behind a RuntimeError would cost the caller the status code —
+    and `_attach_usage` tags the accumulated total onto it in place.
+    """
+
+    def __init__(self, message: str, *, usage: TokenUsage | None = None) -> None:
+        super().__init__(message)
+        self.usage = usage
+
+
+def _attach_usage(exc: BaseException, usage: TokenUsage | None) -> None:
+    """Tag ``exc`` with the usage billed before it was raised, in place.
+
+    Used on exceptions this module did not create, so a provider error keeps its
+    own type and status code while still carrying the spend. Best-effort: an
+    exception class that refuses the attribute (``__slots__``) is left alone
+    rather than being replaced by one that accepts it.
+    """
+    if usage is None:
+        return
+    try:
+        exc.usage = usage  # pyright: ignore[reportAttributeAccessIssue]
+    except AttributeError:  # pragma: no cover - defensive, no known such class
+        logger.debug('could not attach structured-output usage to %s', type(exc).__name__)
 
 
 def sum_structured_usage(usages: Sequence[TokenUsage | None]) -> TokenUsage | None:
@@ -156,29 +225,22 @@ def log_structured_usage(usage: TokenUsage | None, *, phase: str) -> None:
     )
 
 
-async def _rung_usage(
-    response: Any,
-    *,
-    client: AsyncOpenAI,
-    model: str,
-    label: str,
-    leg: str,
-) -> TokenUsage:
-    """Usage for one chat rung's response, priced from the catalogue.
+def _rung_usage(usage: TokenUsage | None, response: Any, *, label: str, leg: str) -> TokenUsage:
+    """Apply the ladder's unknown-usage policy to one chat rung's usage.
 
-    The Orq router prices Responses but not Chat Completions, so — exactly as
-    `execute_chat_completion` does — the extracted counts go through
-    `price_usage` here rather than being left costless.
+    The pricing itself belongs to the executor that made the call
+    (`execute_chat_completion` / `execute_chat_parse` both run the extracted
+    counts through `price_usage`, because the Orq router prices Responses but
+    not Chat Completions). What lives here is only the policy on top of it.
 
-    A response whose ``usage`` block this cannot read is counted as **one
-    unpriced call** (``calls=1, priced_calls=0``), never dropped and never
+    A response whose ``usage`` block the executor could not read is counted as
+    **one unpriced call** (``calls=1, priced_calls=0``), never dropped and never
     silently priced at $0: the rung reached the provider and was billed. Summed
     against a rung that did report a cost, that makes `Usage.cost_is_partial`
     true, which is how the rest of the package renders "this figure covers N of
     M calls". The cause is logged, since a shape this misses is a provider
     change worth seeing.
     """
-    usage = await price_usage(TokenUsage.from_completion(response), model, client)
     if usage is None:
         logger.warning(
             '%s: the %s rung returned no readable usage block (%r); '
@@ -191,6 +253,23 @@ async def _rung_usage(
     return usage
 
 
+async def _truncation_usage(exc: LengthFinishReasonError, call: _ChatLadderCall, *, leg: str) -> TokenUsage:
+    """Harvest the billed usage off a raised ``LengthFinishReasonError``.
+
+    ``openai._exceptions.LengthFinishReasonError`` carries the ``ChatCompletion``
+    it refused to parse, usage block and all, so a truncated ``parse()`` rung is
+    not an unbilled one: the provider generated ``max_tokens`` of output and
+    charged for them. The executor that made the call never returned, so pricing
+    could not happen there — it happens here instead, through the same
+    `price_usage` the executors use, and the result goes through `_rung_usage` so
+    a completion whose usage block is unreadable still counts as one unpriced
+    call rather than as zero.
+    """
+    completion = getattr(exc, 'completion', None)
+    usage = await price_usage(TokenUsage.from_completion(completion), call.model, call.client)
+    return _rung_usage(usage, completion, label=call.label, leg=leg)
+
+
 # Structural request fields a caller's extra_kwargs may not replace: they are
 # owned by this helper, and letting extra_kwargs swap them out would silently
 # break the call it rides on (e.g. replacing the response_format schema this
@@ -200,6 +279,14 @@ async def _rung_usage(
 # the package — this module previously hand-rolled its own `reserved = ... &
 # keys(); if reserved: raise` copy of that check, which is what let it drift out
 # of step (see below).
+#
+# **Derived from the contracts sets, not restated.** These are deliberately
+# wider — the ladder owns the token-cap fields and `text_format` per rung — but
+# they are built with `|` so a key added to `_RESERVED_COMPLETION_KEYS` /
+# `_RESERVED_RESPONSES_KEYS` reaches `generate_structured` on the same commit.
+# Restating them is what made the contracts comment claim a sharing that did not
+# exist; a guardrail in tests/common/test_structured_output_usage.py asserts the
+# superset relation so a future copy-paste fails instead of drifting.
 #
 # `extra_body` is reserved here too, matching contracts.py. It carries the Orq
 # router body (retry policy, thread ids), which is owned by the call site, so it
@@ -218,8 +305,8 @@ async def _rung_usage(
 # side used to omit its token-cap field while the responses side reserved its
 # own, an asymmetry that let extra_kwargs silently override the chat budget but
 # not the responses one.
-_STRUCTURAL_KEYS = frozenset({'model', 'messages', 'response_format', 'max_completion_tokens', 'extra_body'})
-_STRUCTURAL_KEYS_RESPONSES = frozenset({'model', 'input', 'text', 'text_format', 'max_output_tokens', 'extra_body'})
+_STRUCTURAL_KEYS = _RESERVED_COMPLETION_KEYS | {'max_completion_tokens'}
+_STRUCTURAL_KEYS_RESPONSES = _RESERVED_RESPONSES_KEYS | {'text_format', 'max_output_tokens'}
 _STRUCTURAL_KEYS_BY_API = {
     'chat_completions': _STRUCTURAL_KEYS,
     'responses': _STRUCTURAL_KEYS | _STRUCTURAL_KEYS_RESPONSES,
@@ -264,18 +351,32 @@ def _looks_like_schema_rejection(exc: APIStatusError) -> bool:
 _STRUCTURED_TIMEOUT_S = 300.0
 
 
-def _truncated_output_error(label: str, max_tokens: int) -> RuntimeError:
+def _truncated_output_error(
+    label: str,
+    max_tokens: int,
+    usage: TokenUsage | None = None,
+) -> StructuredGenerationError:
     """Return the actionable error for a provider-reported cut-off payload.
 
     Truncated structured output is unusable and unrecoverable: the JSON stops
     mid-string, and a retry at the same budget truncates in the same place. Every
     rung raises this rather than degrading, so the user gets the one action that
     works instead of a parse error several frames away.
+
+    ``usage`` is the raising rung's own billed usage. The rungs that see a
+    response read it off that response; the ``parse()`` rungs, where the SDK
+    raises ``LengthFinishReasonError`` instead of returning, read it off the
+    ``completion`` the exception carries (`_truncation_usage`) — a truncated call
+    is billed for every token it generated up to the cap, so dropping it would
+    understate the most expensive failure the ladder has. ``None`` is left only
+    for a caller that genuinely has nothing to report. `generate_structured`
+    replaces it with the ladder total on the way out.
     """
     logger.error('%s: output truncated at the token limit (max_tokens=%s)', label, max_tokens)
-    return RuntimeError(
+    return StructuredGenerationError(
         f'{label}: the model hit the token limit (max_tokens={max_tokens}) and the structured output is unusable. '
-        f'Raise the max_tokens budget passed to this call and retry.'
+        f'Raise the max_tokens budget passed to this call and retry.',
+        usage=usage,
     )
 
 
@@ -331,9 +432,12 @@ async def _generate_structured_via_responses(
     this decision uses the provider's completion metadata, never the shape of
     the returned JSON.
 
-    The returned ``usage`` is carried even on the fall-through paths: this leg
-    billed whether or not its payload was usable, and the chat ladder that runs
-    next adds its own rungs on top.
+    ``usage`` is carried on the fall-throughs the provider **answered** — an
+    empty output or an unparsed one billed, and the chat ladder that runs next
+    adds its own rungs on top of it. The two rejection fall-throughs (404, and
+    the 400 naming the schema form) return ``usage=None`` instead: a request the
+    provider refused never ran a model, so counting it as a billed call would
+    invent spend.
     """
     async with with_llm_span(
         model=model,
@@ -380,11 +484,11 @@ async def _generate_structured_via_responses(
             )
             usage = TokenUsage(calls=1)
         if responses_stop_reason(response) == 'length':
-            raise _truncated_output_error(label, max_tokens)
+            raise _truncated_output_error(label, max_tokens, usage)
 
         refusal = first_responses_refusal(response)
         if refusal is not None:
-            raise RuntimeError(f'{label}: model refused to generate: {refusal}')
+            raise StructuredGenerationError(f'{label}: model refused to generate: {refusal}', usage=usage)
 
         raw_content = getattr(response, 'output_text', '') or ''
         if not raw_content:
@@ -399,8 +503,9 @@ async def _generate_structured_via_responses(
             )
         except ValidationError as exc:
             logger.exception('%s: Responses output did not validate against %s', label, response_format.__name__)
-            raise RuntimeError(
-                f'{label}: the Responses output did not validate against {response_format.__name__}.'
+            raise StructuredGenerationError(
+                f'{label}: the Responses output did not validate against {response_format.__name__}.',
+                usage=usage,
             ) from exc
         parsed = getattr(parsed_response, 'output_parsed', None)
         if parsed is None:
@@ -409,60 +514,66 @@ async def _generate_structured_via_responses(
         return StructuredResult(cast('T', parsed), '', usage)
 
 
-def _chat_params(
-    *,
-    model: str,
-    messages: list[dict[str, Any]],
-    max_tokens: int,
-    temperature: float | None,
-    extra_kwargs: dict[str, Any] | None,
-    trace_headers: dict[str, str] | None,
-    reasoning_effort: str | None = None,
-) -> Callable[[dict[str, Any]], dict[str, Any]]:
-    """Build the per-leg request-parameter factory for the chat legs.
+@dataclass(frozen=True)
+class _ChatLadderCall:
+    """The half of a chat rung's request that does not change between rungs.
 
-    Returns a callable that takes the leg's own fields (``response_format``, or
-    ``tools``/``tool_choice``/``messages``) and merges them over the shared base.
-    Every chat leg goes through it, so the merge order is defined once:
+    Every rung goes through `common.llm_call`'s executors rather than touching
+    ``client.chat.completions`` itself, so this carries the arguments they take
+    and each rung adds only its own (a ``response_format``, or
+    ``tools``/``tool_choice`` and an edited message list). Bypassing the
+    executors is what left the ladder without the ``reasoning_effort``
+    drop-and-retry, the per-request timeout, the concurrency slot and the
+    reserved-key guard — all of which the ``api='responses'`` leg one function
+    away already had.
 
-    1. base (``model``, ``messages``, ``max_completion_tokens``, ``temperature``,
-       ``reasoning_effort`` when set)
-    2. the leg's own fields
-    3. ``extra_kwargs`` — a caller's provider options (``extra_body``, a
-       reasoning-model ``temperature`` override, user ``llm_kwargs``) win over
-       the base fields without a "multiple values for keyword" error
-    4. trace headers, merged (not replaced) into any caller ``extra_headers`` so
-       the active span's traceparent propagates either way, then pipeline
-       metadata, which fills in defaults only.
+    Merge order is the executors' and is therefore defined once, for both
+    endpoints, in `execute_chat_completion` / `execute_chat_parse`:
 
-    Note ``extra_kwargs`` wins over the leg's own fields too: structural keys are
-    already rejected by the caller, so what remains cannot displace the schema.
+    1. the structural fields (``model``, ``messages``, ``max_completion_tokens``,
+       ``temperature``, ``reasoning_effort`` when set)
+    2. the rung's own fields
+    3. ``extra_kwargs`` — a caller's provider options (a reasoning-model
+       ``temperature`` override, user ``llm_kwargs``) applied **last**, so they
+       win over both, having already been checked against the reserved set
+    4. pipeline metadata (defaults only) and trace headers, merged into any
+       caller ``extra_headers`` so the active span's traceparent propagates.
+
+    ``span`` is the ladder's single chat span, shared by every rung: the ladder
+    is one logical call, and the rung that answered is recorded on it by
+    `_mark_leg`.
     """
 
-    def _params(leg_kwargs: dict[str, Any]) -> dict[str, Any]:
-        base: dict[str, Any] = {
-            'model': model,
-            # Cast — the OpenAI SDK accepts dict literals at runtime; the
-            # TypedDict union just doesn't type-narrow from dict[str, Any].
-            'messages': cast('Any', messages),
+    client: AsyncOpenAI
+    model: str
+    messages: list[dict[str, Any]]
+    max_tokens: int
+    label: str
+    span: Span | None
+    temperature: float | None = None
+    reasoning_effort: str | None = None
+    timeout_s: float = _STRUCTURED_TIMEOUT_S
+    extra_body: dict[str, Any] | None = None
+    extra_kwargs: dict[str, Any] | None = None
+
+    def executor_kwargs(self, **rung: Any) -> dict[str, Any]:
+        """The shared executor arguments, with a rung's own fields layered on."""
+        return {
+            'client': self.client,
+            'model': self.model,
+            'messages': self.messages,
+            'span': self.span,
+            'timeout_s': self.timeout_s,
+            'temperature': self.temperature,
             # max_completion_tokens, not max_tokens: OpenAI rejects max_tokens
             # outright for the o-series and gpt-5 families, and every other chat
             # call in the repo already sends this key.
-            'max_completion_tokens': max_tokens,
-            **leg_kwargs,
+            'max_completion_tokens': self.max_tokens,
+            'reasoning_effort': self.reasoning_effort,
+            'extra_body': self.extra_body,
+            'extra_kwargs': self.extra_kwargs,
+            **rung,
         }
-        if temperature is not None:
-            base['temperature'] = temperature
-        if reasoning_effort:
-            base['reasoning_effort'] = reasoning_effort
-        if extra_kwargs:
-            base.update(extra_kwargs)
-        if trace_headers:
-            base['extra_headers'] = {**(base.get('extra_headers') or {}), **trace_headers}
-        apply_pipeline_metadata(base)
-        return base
-
-    return _params
 
 
 def _validate_content(content: str, *, response_format: type[T], label: str, leg: str) -> T | None:
@@ -473,9 +584,13 @@ def _validate_content(content: str, *, response_format: type[T], label: str, leg
     degraded far enough down the ladder to answer in prose is exactly the one
     that wraps its JSON in a ```json fence. Returns ``None`` after a warning
     when nothing validates, which lets the caller try the next leg rather than
-    handing back content no one checked.
+    handing back content no one checked. Empty content warns too: it is the same
+    outcome for the same caller, and warning on one branch but not the neighbour
+    made a provider that answers with nothing look like a provider that answered
+    off-schema — one logged, the other silent.
     """
     if not content:
+        logger.warning('%s: the %s rung returned empty content, continuing the ladder', label, leg)
         return None
     try:
         return response_format.model_validate_json(extract_json_from_response(content))
@@ -497,25 +612,40 @@ def _mark_leg(span: Span | None, leg: str) -> None:
     span.set_attribute('orq.structured_output.fallback', leg != _LEG_PARSE)
 
 
-async def _leg_strict_parse(
-    client: AsyncOpenAI,
-    params_for: Callable[[dict[str, Any]], dict[str, Any]],
-    *,
-    response_format: type[T],
-    label: str,
-    span: Span | None,
-    max_tokens: int,
-    model: str,
-) -> StructuredResult[T]:
+def _record_tool_nudge(span: Span | None, nudge: str) -> None:
+    """Record rung 3's appended user turn under its own span attribute.
+
+    `common.tracing.record_llm_input` **sets** ``gen_ai.input.messages`` rather
+    than appending, and every rung calls it on this ladder's one shared span, so
+    a rung 4 that runs after rung 3 overwrites the nudged list and the nudge
+    disappears — exactly the run where a reader needs to see it, since rung 3
+    failing is why rung 4 ran at all. A dedicated attribute is written once by
+    the only rung that edits the prompt and no later rung touches it.
+    """
+    if span is None:
+        return
+    span.set_attribute('orq.structured_output.tool_nudge', nudge)
+
+
+async def _leg_strict_parse(call: _ChatLadderCall, *, response_format: type[T]) -> StructuredResult[T]:
     """Rung 1: strict schema-enforced structured output via ``parse()``.
 
-    Continues the ladder on a 400 whose body names the schema form, and on a
-    response the SDK could not validate. Raises on a refusal (it must not be
-    retried on another rung), on truncation, and on any other error.
+    Continues the ladder on a 400 whose body names the schema form, on a response
+    the SDK could not validate, and on a response with no ``choices`` at all —
+    warning in the same shape the tool rung and `_content_result` do, rather than
+    raising ``IndexError`` from under the ladder. Raises on a refusal (it must not
+    be retried on another rung), on truncation, and on any other error.
+
+    ``with_retry`` around `execute_chat_parse` is the **only** retry layer:
+    `generate_structured` disarms the client's SDK budget before any rung runs,
+    the executor deliberately does not retry ("the caller owns retry and error
+    policy"), and its reasoning drop-and-retry-once is a different request, not
+    a second backoff loop.
     """
+    label = call.label
     try:
-        response = await with_retry(
-            lambda: client.chat.completions.parse(**params_for({'response_format': response_format})),  # pyright: ignore[reportUnknownLambdaType]
+        response, raw_usage = await with_retry(
+            lambda: execute_chat_parse(**call.executor_kwargs(response_model=response_format)),
             label=label,
         )
     except APIStatusError as e:
@@ -525,31 +655,28 @@ async def _leg_strict_parse(
         # Rejected before the model ran: nothing was billed, so no usage.
         return StructuredResult(None, '')
     except LengthFinishReasonError as exc:
-        raise _truncated_output_error(label, max_tokens) from exc
-    record_llm_response(span, response)
-    usage = await _rung_usage(response, client=client, model=model, label=label, leg=_LEG_PARSE)
+        raise _truncated_output_error(
+            label,
+            call.max_tokens,
+            await _truncation_usage(exc, call, leg=_LEG_PARSE),
+        ) from exc
+    usage = _rung_usage(raw_usage, response, label=label, leg=_LEG_PARSE)
+    if not response.choices:
+        logger.warning('%s: parse() returned no choices, trying the non-strict schema', label)
+        return StructuredResult(None, '', usage)
     message = response.choices[0].message
     refusal = getattr(message, 'refusal', None)
     if refusal:
-        raise RuntimeError(f'{label}: model refused to generate: {refusal}')
+        raise StructuredGenerationError(f'{label}: model refused to generate: {refusal}', usage=usage)
     parsed = message.parsed
     if parsed is None:
         logger.debug('%s: parse() returned None, trying the non-strict schema', label)
         return StructuredResult(None, '', usage)
-    _mark_leg(span, _LEG_PARSE)
-    return StructuredResult(parsed, '', usage)
+    _mark_leg(call.span, _LEG_PARSE)
+    return StructuredResult(cast('T', parsed), '', usage)
 
 
-async def _leg_json_schema(
-    client: AsyncOpenAI,
-    params_for: Callable[[dict[str, Any]], dict[str, Any]],
-    *,
-    response_format: type[T],
-    label: str,
-    span: Span | None,
-    max_tokens: int,
-    model: str,
-) -> StructuredResult[T]:
+async def _leg_json_schema(call: _ChatLadderCall, *, response_format: type[T]) -> StructuredResult[T]:
     """Rung 2: the same schema, non-strict, via plain ``create()``.
 
     Non-strict on purpose: strict mode is what rung 1 already tried and what the
@@ -558,6 +685,7 @@ async def _leg_json_schema(
     to emit. Content that does not validate continues the ladder rather than
     returning here — the rungs below are stricter, not looser.
     """
+    label = call.label
     schema_format: dict[str, Any] = {
         'type': 'json_schema',
         'json_schema': {
@@ -567,8 +695,8 @@ async def _leg_json_schema(
         },
     }
     try:
-        response = await with_retry(
-            lambda: client.chat.completions.create(**params_for({'response_format': schema_format})),  # pyright: ignore[reportUnknownLambdaType]
+        response, raw_usage = await with_retry(
+            lambda: execute_chat_completion(**call.executor_kwargs(response_format=schema_format)),
             label=f'{label} (json_schema fallback)',
         )
     except APIStatusError as e:
@@ -576,30 +704,16 @@ async def _leg_json_schema(
             raise
         logger.warning('%s: json_schema not accepted, trying a forced tool call', label)
         return StructuredResult(None, '')
-    return await _content_result(
+    return _content_result(
         response,
+        raw_usage,
+        call=call,
         response_format=response_format,
-        label=label,
-        span=span,
-        max_tokens=max_tokens,
         leg=_LEG_JSON_SCHEMA,
-        client=client,
-        model=model,
     )
 
 
-async def _leg_forced_tool(
-    client: AsyncOpenAI,
-    params_for: Callable[[dict[str, Any]], dict[str, Any]],
-    *,
-    response_format: type[T],
-    messages: list[dict[str, Any]],
-    label: str,
-    span: Span | None,
-    max_tokens: int,
-    model: str,
-    extra_kwargs: dict[str, Any] | None,
-) -> StructuredResult[T]:
+async def _leg_forced_tool(call: _ChatLadderCall, *, response_format: type[T]) -> StructuredResult[T]:
     """Rung 3: force a named tool call carrying the same schema.
 
     Stricter than the two rungs below it: ``tool_choice`` naming the function
@@ -612,40 +726,52 @@ async def _leg_forced_tool(
     **This is the only rung that changes the prompt.** It appends one user turn
     telling the model the tool will be called, which rescues providers that
     accept ``tools`` but quietly downgrade a named ``tool_choice`` to auto. The
-    turn is passed through ``params_for``, never appended to the caller's list,
-    so it is visible in the span's recorded input rather than hidden — and if a
-    model's answer differs between rungs, the prompt is one of the reasons.
+    turn is sent as this rung's own message list, never appended to the caller's.
+    If a model's answer differs between rungs, the prompt is one of the reasons,
+    so the nudge is recorded on the ladder's span under
+    ``orq.structured_output.tool_nudge`` by `_record_tool_nudge`. That attribute,
+    not the recorded input, is the durable record: `execute_chat_parse` does
+    record the messages it sends, but `record_llm_input` *sets*
+    ``gen_ai.input.messages`` on the shared span, so a rung 4 running after this
+    one overwrites the nudged list.
 
     Skipped entirely when the caller supplied their own ``tools`` or
     ``tool_choice``: those are functional, and forcing ours would break the call
     this leg is only trying to salvage.
     """
-    caller_kwargs = extra_kwargs or {}
+    label = call.label
+    caller_kwargs = call.extra_kwargs or {}
     if 'tools' in caller_kwargs or 'tool_choice' in caller_kwargs:
         logger.debug('%s: caller supplied tools, skipping the forced tool call leg', label)
         return StructuredResult(None, '')
 
     tool = pydantic_function_tool(response_format)
     tool_name = tool['function']['name']
-    leg_kwargs: dict[str, Any] = {
-        'tools': [tool],
-        'tool_choice': {'type': 'function', 'function': {'name': tool_name}},
-        'messages': cast(
-            'Any',
-            [
-                *messages,
-                {
-                    'role': 'user',
-                    'content': (
-                        f'Respond by calling the `{tool_name}` tool with the requested fields. Do not reply with text.'
-                    ),
-                },
-            ],
-        ),
-    }
+    # The SDK's TypedDict is a dict at runtime; the executor's signature takes
+    # the plain shape, so widen it once here rather than casting at the call.
+    tool_param: dict[str, Any] = dict(tool)
+    nudged_messages: list[dict[str, Any]] = [
+        *call.messages,
+        {
+            'role': 'user',
+            'content': (
+                f'Respond by calling the `{tool_name}` tool with the requested fields. Do not reply with text.'
+            ),
+        },
+    ]
+    _record_tool_nudge(call.span, cast('str', nudged_messages[-1]['content']))
     try:
-        response = await with_retry(
-            lambda: client.chat.completions.parse(**params_for(leg_kwargs)),  # pyright: ignore[reportUnknownLambdaType]
+        response, raw_usage = await with_retry(
+            lambda: execute_chat_parse(
+                # No response_model: a provider that rejected the schema form is
+                # exactly the one this rung works around, so the schema travels
+                # as the tool definition instead.
+                **call.executor_kwargs(
+                    messages=nudged_messages,
+                    tools=[tool_param],
+                    tool_choice={'type': 'function', 'function': {'name': tool_name}},
+                )
+            ),
             label=f'{label} (forced tool call)',
         )
     except APIStatusError as e:
@@ -654,17 +780,21 @@ async def _leg_forced_tool(
         logger.warning('%s: forced tool call not accepted, falling back to json_object', label)
         return StructuredResult(None, '')
     except LengthFinishReasonError as exc:
-        raise _truncated_output_error(label, max_tokens) from exc
-    record_llm_response(span, response)
-    usage = await _rung_usage(response, client=client, model=model, label=label, leg=_LEG_TOOL)
+        raise _truncated_output_error(
+            label,
+            call.max_tokens,
+            await _truncation_usage(exc, call, leg=_LEG_TOOL),
+        ) from exc
+    usage = _rung_usage(raw_usage, response, label=label, leg=_LEG_TOOL)
     if not response.choices:
+        logger.warning('%s: forced tool call returned no choices, falling back to json_object', label)
         return StructuredResult(None, '', usage)
     message = response.choices[0].message
     refusal = getattr(message, 'refusal', None)
     if refusal:
-        raise RuntimeError(f'{label}: model refused to generate: {refusal}')
+        raise StructuredGenerationError(f'{label}: model refused to generate: {refusal}', usage=usage)
     if response.choices[0].finish_reason == 'length':
-        raise _truncated_output_error(label, max_tokens)
+        raise _truncated_output_error(label, call.max_tokens, usage)
 
     tool_calls = message.tool_calls or []
     if not tool_calls:
@@ -680,20 +810,11 @@ async def _leg_forced_tool(
         parsed = _validate_content(raw, response_format=response_format, label=label, leg=_LEG_TOOL)
     if parsed is None:
         return StructuredResult(None, raw, usage)
-    _mark_leg(span, _LEG_TOOL)
+    _mark_leg(call.span, _LEG_TOOL)
     return StructuredResult(parsed, raw, usage)
 
 
-async def _leg_json_object(
-    client: AsyncOpenAI,
-    params_for: Callable[[dict[str, Any]], dict[str, Any]],
-    *,
-    response_format: type[T],
-    label: str,
-    span: Span | None,
-    max_tokens: int,
-    model: str,
-) -> StructuredResult[T]:
+async def _leg_json_object(call: _ChatLadderCall, *, response_format: type[T]) -> StructuredResult[T]:
     """Rung 4: bare ``json_object``, the last rung.
 
     Asks for "some JSON" and leaves the field names to chance, which is what
@@ -701,32 +822,26 @@ async def _leg_json_object(
     the ladder ends, not where it starts. A provider that rejects even this
     raises, since there is nothing left to degrade to.
     """
-    response = await with_retry(
-        lambda: client.chat.completions.create(**params_for({'response_format': {'type': 'json_object'}})),  # pyright: ignore[reportUnknownLambdaType]
-        label=f'{label} (json_object fallback)',
+    response, raw_usage = await with_retry(
+        lambda: execute_chat_completion(**call.executor_kwargs(response_format={'type': 'json_object'})),
+        label=f'{call.label} (json_object fallback)',
     )
-    return await _content_result(
+    return _content_result(
         response,
+        raw_usage,
+        call=call,
         response_format=response_format,
-        label=label,
-        span=span,
-        max_tokens=max_tokens,
         leg=_LEG_JSON_OBJECT,
-        client=client,
-        model=model,
     )
 
 
-async def _content_result(
+def _content_result(
     response: Any,
+    raw_usage: TokenUsage | None,
     *,
+    call: _ChatLadderCall,
     response_format: type[T],
-    label: str,
-    span: Span | None,
-    max_tokens: int,
     leg: str,
-    client: AsyncOpenAI,
-    model: str,
 ) -> StructuredResult[T]:
     """Turn a text-answering leg's response into a `StructuredResult`.
 
@@ -736,17 +851,17 @@ async def _content_result(
     like ordinary content — ``extract_json_from_response`` would salvage half an
     object and the caller would score a half-answer.
     """
-    record_llm_response(span, response)
-    usage = await _rung_usage(response, client=client, model=model, label=label, leg=leg)
+    usage = _rung_usage(raw_usage, response, label=call.label, leg=leg)
     if not response.choices:
+        logger.warning('%s: the %s rung returned no choices, continuing the ladder', call.label, leg)
         return StructuredResult(None, '', usage)
     choice = response.choices[0]
     if choice.finish_reason == 'length':
-        raise _truncated_output_error(label, max_tokens)
+        raise _truncated_output_error(call.label, call.max_tokens, usage)
     content = choice.message.content or ''
-    parsed = _validate_content(content, response_format=response_format, label=label, leg=leg)
+    parsed = _validate_content(content, response_format=response_format, label=call.label, leg=leg)
     if parsed is not None:
-        _mark_leg(span, leg)
+        _mark_leg(call.span, leg)
     return StructuredResult(parsed, content, usage)
 
 
@@ -786,47 +901,128 @@ async def generate_structured(
     ``usage`` is the sum over **every rung that reached the provider**, not just
     the one that answered: a call that burned rungs 1-3 before rung 4 succeeded
     paid for all four, and reporting only the last would understate the spend
-    (RES-1295). Each rung is priced individually through `price_usage` before
-    being added — that helper refuses to price an aggregate — so a rung the
-    catalogue does not cover contributes tokens without a cost and shows up as
+    (RES-1295). Each rung is priced individually inside the executor that made
+    it (`price_usage` refuses to price an aggregate), so a rung the catalogue
+    does not cover contributes tokens without a cost and shows up as
     ``priced_calls < calls``. A rung whose usage block cannot be read is counted
-    as one unpriced call after a warning, never as zero. ``usage is None`` means
-    no rung ever reached a provider.
+    as one unpriced call after a warning, never as zero.
+
+    ``usage is None`` on a **returned** result means no rung ever reached a
+    provider. On a **raised** one it means every rung was rejected before
+    billing — a truncation, a refusal and a validation failure all carry the
+    spend of the rung that raised, the ``parse()`` rungs included, since
+    ``LengthFinishReasonError`` hands back the completion it refused to parse
+    (`_truncation_usage`). Nothing is lost on the way out either: every exception
+    leaving this function carries the ladder total as ``exc.usage`` (see
+    `StructuredGenerationError`), because a ladder that truncated on rungs 1-2
+    and raised on rung 3 still billed three calls that used to vanish with the
+    frame.
 
     ``reasoning_effort`` is sent only when truthy, as a flat ``reasoning_effort``
     field on the chat legs and as ``reasoning={'effort': ...}`` on the Responses
     leg (mirroring `LLMCallConfig.request_params`) — a
     caller wanting it must be on Chat Completions or the Responses API, since
-    only those two shapes are rendered here.
+    only those two shapes are rendered here. A model that 400s on it is handled
+    by the executors' drop-and-retry-once on **both** legs, so an effort set on
+    a non-reasoning model degrades the parameter, not the call.
 
-    ``timeout_s`` bounds only the Responses leg's request (``execute_response``);
-    the chat legs are governed by the client's own timeout. Defaults to 300s —
-    generous relative to `LLMCallConfig`'s 90s default because a batched
-    generation asking for tens of items is a slow call by design.
+    ``timeout_s`` bounds each provider request, on the Responses leg and on
+    every chat rung alike — all of them go through `common.llm_call`, which
+    takes it. Defaults to 300s — generous relative to `LLMCallConfig`'s 90s
+    default because a batched generation asking for tens of items is a slow call
+    by design. Note it bounds **one request, not the call**: each rung is
+    wrapped in `with_retry` (up to ``MAX_RETRY_ATTEMPTS`` = 5 attempts, plus its
+    backoff waits), each attempt can issue a second request if the model rejects
+    ``reasoning_effort``, and ``api='responses'`` adds a fifth rung in front of
+    the four. The worst case is on the order of *rungs x 5 x 2* requests — about
+    fifty timeouts' worth on the Responses path, not four — so bound a whole call
+    with an outer timeout rather than with this. Disarming the client's SDK
+    retries does not change that figure: the outer ``with_retry`` attempts are
+    the dominant term, not the SDK's.
 
     ``temperature`` is sent only when not ``None`` (some callers deliberately let
     the provider default stand). ``extra_kwargs`` is merged into every rung's
-    params by ``_chat_params``, whose docstring states the order; structural
-    fields (``model``, ``messages``, ``response_format``) are reserved and raise
-    ``ValueError``, since an ``extra_kwargs`` entry silently replacing the schema
-    would defeat the helper. A caller's own ``tools``/``tool_choice`` are not
-    reserved — they skip the tool rung instead.
+    params last, so a caller's provider options win over the rung's own fields;
+    `_ChatLadderCall`'s docstring states the full order. Structural fields —
+    ``_STRUCTURAL_KEYS_BY_API[api]``, wider than the chat trio and different per
+    endpoint — are reserved and raise ``ValueError``, since an ``extra_kwargs``
+    entry silently replacing the schema or the token budget would defeat the
+    helper. A caller's own ``tools``/``tool_choice`` are not reserved — they skip
+    the tool rung instead.
 
-    On a length-truncated response this raises ``RuntimeError`` rather than
-    falling back (a same-budget retry would truncate again). "Loud" is scoped to
-    this helper: it surfaces a specific, actionable reason instead of returning
-    cut-off JSON. Both report call sites still wrap the call in a broad
-    ``except`` and skip that one item, so a truncation degrades a single section
-    — but with a clear log line naming the budget, not a silent drop.
+    On a length-truncated response this raises ``RuntimeError`` (specifically
+    `StructuredGenerationError`) rather than falling back (a same-budget retry
+    would truncate again). "Loud" is scoped to this helper: it surfaces a
+    specific, actionable reason instead of returning cut-off JSON. Both report
+    call sites still wrap the call in a broad ``except`` and skip that one item,
+    so a truncation degrades a single section — but with a clear log line naming
+    the budget, not a silent drop.
 
     """
-    check_reserved_keys(extra_kwargs or {}, _STRUCTURAL_KEYS_BY_API[api])
-    # The call-site-owned router body stays OUT of extra_kwargs. The Responses
-    # leg forwards it to `execute_response`, which owns the `extra_body=`
-    # parameter and reserves the key inside extra_kwargs — folding it in here
-    # would trip that guard on every call. The chat legs build their params
-    # dict directly for the SDK, so they take it as a plain key (below).
+    # Every rung is wrapped in `with_retry`, so the SDK's own budget is disarmed
+    # here — once, for the Responses leg and all four chat rungs — rather than
+    # per rung. Without it the two layers multiply on evaluatorq's own default
+    # path: `resolve_llm_client` builds clients with `max_retries=2` and
+    # `redteam/runner.py` builds one with `max_retries=retry_count`, so five
+    # outer attempts over an SDK doing two retries is fifteen requests per rung.
+    # `without_client_retries` clones rather than mutates, so an injected client
+    # is untouched, and it returns a client with no integer budget (a test
+    # double) unchanged. Mirrors `common.judge`, which disarms the same way one
+    # line before its own ladder.
+    client = without_client_retries(client)
     usages: list[TokenUsage | None] = []
+    try:
+        return await _generate_structured(
+            client,
+            usages,
+            model=model,
+            messages=messages,
+            response_format=response_format,
+            max_tokens=max_tokens,
+            label=label,
+            temperature=temperature,
+            extra_kwargs=extra_kwargs,
+            api=api,
+            reasoning_effort=reasoning_effort,
+            timeout_s=timeout_s,
+            extra_body=extra_body,
+        )
+    except Exception as exc:
+        # The rungs below this frame have already billed. Fold what they spent
+        # onto the exception — including the raising rung's own usage, which it
+        # attached before raising — so a caller's `except` can still report it.
+        # Without this the whole ladder's spend died with the frame and
+        # `log_structured_usage` reported "no usage reported by the provider".
+        _attach_usage(exc, sum_structured_usage([*usages, getattr(exc, 'usage', None)]))
+        raise
+
+
+async def _generate_structured(
+    client: AsyncOpenAI,
+    usages: list[TokenUsage | None],
+    *,
+    model: str,
+    messages: list[dict[str, Any]],
+    response_format: type[T],
+    max_tokens: int,
+    label: str,
+    temperature: float | None,
+    extra_kwargs: dict[str, Any] | None,
+    api: Literal['chat_completions', 'responses'],
+    reasoning_effort: str | None,
+    timeout_s: float,
+    extra_body: dict[str, Any] | None,
+) -> StructuredResult[T]:
+    """The ladder itself; `generate_structured` owns the docstring and the usage boundary.
+
+    ``usages`` is passed in rather than owned here so the caller still holds
+    every rung's spend when this function leaves by raising.
+    """
+    check_reserved_keys(extra_kwargs or {}, _STRUCTURAL_KEYS_BY_API[api])
+    # The call-site-owned router body stays OUT of extra_kwargs: both legs
+    # forward it to `common.llm_call` through the dedicated `extra_body=`
+    # parameter, which reserves the key inside extra_kwargs — folding it in here
+    # would trip that guard on every call.
     if api == 'responses':
         via_responses = await _generate_structured_via_responses(
             client,
@@ -857,31 +1053,26 @@ async def generate_structured(
         input_messages=messages,
         attributes={'orq.llm.purpose': label},
     ) as span:
-        params_for = _chat_params(
+        call = _ChatLadderCall(
+            client=client,
             model=model,
             messages=messages,
             max_tokens=max_tokens,
+            label=label,
+            span=span,
             temperature=temperature,
-            # The chat rungs hand their params straight to the SDK, so the
-            # router body rides as a plain key here rather than a parameter.
-            extra_kwargs={**(extra_kwargs or {}), 'extra_body': extra_body} if extra_body else extra_kwargs,
-            trace_headers=await get_trace_context_headers(),
             reasoning_effort=reasoning_effort,
+            timeout_s=timeout_s,
+            extra_body=extra_body,
+            extra_kwargs=extra_kwargs,
         )
-        common: dict[str, Any] = {
-            'response_format': response_format,
-            'label': label,
-            'span': span,
-            'max_tokens': max_tokens,
-            'model': model,
-        }
         # Thunks, not coroutines: returning on rung 1 would leave three
         # never-awaited coroutine objects behind (and a RuntimeWarning each).
         legs: tuple[Callable[[], Awaitable[StructuredResult[T]]], ...] = (
-            lambda: _leg_strict_parse(client, params_for, **common),
-            lambda: _leg_json_schema(client, params_for, **common),
-            lambda: _leg_forced_tool(client, params_for, messages=messages, extra_kwargs=extra_kwargs, **common),
-            lambda: _leg_json_object(client, params_for, **common),
+            lambda: _leg_strict_parse(call, response_format=response_format),
+            lambda: _leg_json_schema(call, response_format=response_format),
+            lambda: _leg_forced_tool(call, response_format=response_format),
+            lambda: _leg_json_object(call, response_format=response_format),
         )
         last_raw = ''
         for leg in legs:
@@ -890,4 +1081,11 @@ async def generate_structured(
             last_raw = result.raw or last_raw
             if result.parsed is not None:
                 return StructuredResult(result.parsed, result.raw, sum_structured_usage(usages))
+        logger.warning(
+            '%s: all four chat rungs ran and none produced output validating against %s '
+            '(%d provider call(s) billed); returning the last raw text for salvage',
+            label,
+            response_format.__name__,
+            sum(1 for usage in usages if usage is not None),
+        )
         return StructuredResult(None, last_raw, sum_structured_usage(usages))

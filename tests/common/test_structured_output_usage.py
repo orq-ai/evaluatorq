@@ -14,6 +14,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from openai import LengthFinishReasonError
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
@@ -63,7 +64,14 @@ def _parsed_completion(
     )
 
 
-def _text_completion(content: str, *, prompt: int, completion: int, usage: bool = True) -> ChatCompletion:
+def _text_completion(
+    content: str,
+    *,
+    prompt: int,
+    completion: int,
+    usage: bool = True,
+    finish_reason: Any = 'stop',
+) -> ChatCompletion:
     """A ``.create()`` response — rung 2/4's shape."""
     return ChatCompletion(
         id='cmpl-text',
@@ -73,7 +81,7 @@ def _text_completion(content: str, *, prompt: int, completion: int, usage: bool 
         choices=[
             Choice(
                 index=0,
-                finish_reason='stop',
+                finish_reason=finish_reason,
                 message=ChatCompletionMessage(role='assistant', content=content),
             )
         ],
@@ -352,3 +360,178 @@ async def test_redteam_condense_returns_the_usage_of_the_call_it_made(monkeypatc
 
     assert 'it worked' in block
     assert usage == billed
+
+
+# --- usage survives the raising paths too --------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_usage_billed_before_a_raise_comes_back_on_the_exception() -> None:
+    """The scenario the fold-on-return-only version lost entirely.
+
+    Rung 1 answers unusably and rung 2 comes back truncated, which raises. Two
+    provider calls were billed; before the exception carried them, both vanished
+    past the ``return`` that folded ``usages`` and the phase logged "no usage
+    reported by the provider".
+    """
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(return_value=_parsed_completion(None, prompt=10, completion=1))
+    client.chat.completions.create = AsyncMock(
+        return_value=_text_completion('{"value": "half a str', prompt=20, completion=2, finish_reason='length')
+    )
+
+    with pytest.raises(RuntimeError, match='Raise the max_tokens budget') as error:
+        await _generate(client)
+
+    usage = getattr(error.value, 'usage', None)
+    assert usage is not None
+    assert usage.calls == 2
+    assert usage.input_tokens == 30
+    assert usage.output_tokens == 3
+
+
+@pytest.mark.asyncio
+async def test_a_truncated_parse_rung_bills_the_tokens_it_generated() -> None:
+    """`LengthFinishReasonError` carries the completion it refused to parse, usage and all.
+
+    This is the most common raising path and the most expensive one — the model
+    generated the whole `max_tokens` budget. Reading the usage off the response
+    is impossible here (the SDK raised instead of returning), so it comes off the
+    exception; dropping it reported the priciest failure the ladder has as free.
+    """
+    register_model(
+        MODEL,
+        ModelInfo(input_cost_per_1k=1.0, output_cost_per_1k=2.0, provider='test', supports_responses=False),
+    )
+    truncated = _text_completion('{"value": "half a str', prompt=1000, completion=64, finish_reason='length')
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(side_effect=LengthFinishReasonError(completion=truncated))
+    client.chat.completions.create = AsyncMock()
+
+    with pytest.raises(RuntimeError, match='Raise the max_tokens budget') as error:
+        await _generate(client)
+
+    usage = getattr(error.value, 'usage', None)
+    assert usage is not None
+    assert usage.calls == 1
+    assert usage.input_tokens == 1000
+    assert usage.output_tokens == 64
+    # Priced here rather than in the executor, which never returned.
+    assert usage.priced_calls == 1
+    assert usage.total_cost == pytest.approx(1000 / 1000 * 1.0 + 64 / 1000 * 2.0)
+    # The ladder does not continue past a truncation.
+    client.chat.completions.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_truncated_parse_rung_without_usage_is_unpriced_not_free(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The ladder's "never as zero" policy applies to the raising path too."""
+    truncated = _text_completion('{"value": "half', prompt=0, completion=0, usage=False, finish_reason='length')
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(side_effect=LengthFinishReasonError(completion=truncated))
+
+    with caplog.at_level(logging.WARNING), pytest.raises(RuntimeError, match='Raise the max_tokens budget') as error:
+        await _generate(client)
+
+    usage = getattr(error.value, 'usage', None)
+    assert usage is not None
+    assert usage.calls == 1
+    assert usage.priced_calls == 0
+    assert usage.total_cost is None
+    assert 'no readable usage block' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_provider_error_keeps_its_type_and_still_carries_the_usage() -> None:
+    """The last rung's provider error must not be masked by a RuntimeError to carry usage.
+
+    A caller that reads ``status_code`` off the exception is doing the right
+    thing; the spend rides along as an attribute instead of a new type.
+    """
+    import httpx
+    from openai import APIStatusError
+
+    request = httpx.Request('POST', 'https://router.example/v3/router')
+    # A 400 that is neither a schema nor a tool rejection: no rung degrades on
+    # it and `with_retry` does not retry it, so it leaves the ladder as itself.
+    context_length = APIStatusError(
+        "This model's maximum context length is 8192 tokens",
+        response=httpx.Response(400, request=request),
+        body=None,
+    )
+
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(return_value=_parsed_completion(None, prompt=10, completion=1))
+    client.chat.completions.create = AsyncMock(
+        side_effect=[_text_completion('not json', prompt=20, completion=2), context_length]
+    )
+
+    with pytest.raises(APIStatusError) as error:
+        await _generate(client, extra_kwargs={'tools': [{'type': 'function', 'function': {'name': 'caller_tool'}}]})
+
+    assert error.value.status_code == 400
+    usage = getattr(error.value, 'usage', None)
+    assert usage is not None
+    # Rungs 1 and 2 billed; rung 3 was skipped (caller tools) and rung 4 raised.
+    assert usage.calls == 2
+    assert usage.total_tokens == 33
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_carries_the_usage_of_the_call_that_refused() -> None:
+    """The refusing rung billed as surely as one that answered."""
+    client = MagicMock()
+    refused = _parsed_completion(None, prompt=10, completion=1)
+    refused.choices[0].message.refusal = 'no'
+    client.chat.completions.parse = AsyncMock(return_value=refused)
+
+    with pytest.raises(RuntimeError, match='model refused to generate') as error:
+        await _generate(client)
+
+    usage = getattr(error.value, 'usage', None)
+    assert usage is not None
+    assert usage.calls == 1
+    assert usage.total_tokens == 11
+
+
+@pytest.mark.asyncio
+async def test_an_error_before_any_provider_call_carries_no_invented_usage() -> None:
+    """Nothing billed means nothing to report — not a zero-token phantom call."""
+    client = MagicMock()
+
+    with pytest.raises(ValueError, match='structural') as error:
+        await _generate(client, extra_kwargs={'response_format': {'type': 'json_object'}})
+
+    assert getattr(error.value, 'usage', None) is None
+
+
+# --- the reserved-key sets may be wider than contracts', never narrower --------
+
+
+def test_structured_output_reserved_keys_derive_from_the_contracts_sets() -> None:
+    """A key added to `contracts.py` must reach `generate_structured` on the same commit.
+
+    The two sets here were restated rather than derived, so `contracts.py`'s
+    claim that this module "imports them rather than keeping its own copies" was
+    false and a new structural key would have been enforced on the executors but
+    not on the ladder. They are supersets by construction now; this fails if
+    someone re-hardcodes them.
+    """
+    from evaluatorq.common.structured_output import (
+        _STRUCTURAL_KEYS,
+        _STRUCTURAL_KEYS_BY_API,
+        _STRUCTURAL_KEYS_RESPONSES,
+    )
+    from evaluatorq.contracts import _RESERVED_COMPLETION_KEYS, _RESERVED_RESPONSES_KEYS
+
+    assert _RESERVED_COMPLETION_KEYS <= _STRUCTURAL_KEYS
+    assert _RESERVED_RESPONSES_KEYS <= _STRUCTURAL_KEYS_RESPONSES
+    # An api='responses' call can still fall through to the chat rungs, so its
+    # reserved set is the union of both endpoints' — deliberately, not by accident.
+    assert _STRUCTURAL_KEYS_BY_API['chat_completions'] == _STRUCTURAL_KEYS
+    assert _STRUCTURAL_KEYS_BY_API['responses'] == _STRUCTURAL_KEYS | _STRUCTURAL_KEYS_RESPONSES
+    # The extra breadth is the ladder's own, and is documented as such.
+    assert {'max_completion_tokens'} <= _STRUCTURAL_KEYS
+    assert {'text_format', 'max_output_tokens'} <= _STRUCTURAL_KEYS_RESPONSES

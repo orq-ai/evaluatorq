@@ -82,7 +82,6 @@ def _tail(name: str) -> str:
 # assertion below exists so growing it is a deliberate, visible edit.
 LLM_CALL_ALLOW = frozenset({
     'common/llm_call.py',  # canonical
-    'common/structured_output.py',  # canonical for schema output
     'openresponses/target.py',  # Responses API transport
     'redteam/backends/openai.py',  # backend transport
     'redteam/backends/orq.py',  # backend transport
@@ -93,7 +92,7 @@ LLM_CALL_ALLOW = frozenset({
 
 
 def test_llm_call_allowlist_does_not_grow() -> None:
-    assert len(LLM_CALL_ALLOW) == 8, (
+    assert len(LLM_CALL_ALLOW) == 7, (
         'LLM_CALL_ALLOW changed size. Removing an entry (good) means lowering this '
         'number; adding one means a new direct call site slipped in — route it '
         'through evaluatorq.common.llm_call instead.'

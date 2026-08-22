@@ -61,11 +61,19 @@ _REASONING_EFFORT_REJECTORS: set[tuple[str, bool]] = set()
 # Kept as a separate memo so the two param shapes never cross-strip.
 _RESPONSES_REASONING_REJECTORS: set[tuple[str, bool]] = set()
 
+# (endpoint, model, has_tools) triples whose up-front strip has already been
+# announced at WARNING level. The first strip is news — the configured effort is
+# not in force — but a per-call warning on a long run is noise, so later strips
+# drop to DEBUG. Separate from the rejector memos above so clearing one does not
+# depend on the other's shape.
+_ANNOUNCED_STRIPS: set[tuple[str, str, bool]] = set()
+
 
 def reset_reasoning_rejectors() -> None:
     """Clear the process-lifetime rejection memos; exists for test isolation."""
     _REASONING_EFFORT_REJECTORS.clear()
     _RESPONSES_REASONING_REJECTORS.clear()
+    _ANNOUNCED_STRIPS.clear()
 
 
 def _reasoning_key(model: str, params: dict[str, Any]) -> tuple[str, bool]:
@@ -73,10 +81,39 @@ def _reasoning_key(model: str, params: dict[str, Any]) -> tuple[str, bool]:
     return (model, bool(params.get('tools')))
 
 
+def _announce_strip(endpoint: str, model: str, key: tuple[str, bool], field: str) -> None:
+    """Say that a configured reasoning setting was dropped before the call.
+
+    Silence here is what made the memo a trap: the 400 warns once, and every call
+    afterwards runs at the provider default while the user still believes their
+    configured effort is in force (and a pre-flight check that inspected the
+    request would report it as sent). Warn the first time for each
+    (endpoint, model, has_tools) key, then debug — a per-call warning across a
+    long run is noise, not signal.
+    """
+    announce_key = (endpoint, model, key[1])
+    if announce_key in _ANNOUNCED_STRIPS:
+        logger.debug('Model %s: %s stripped again (known rejector, tools=%s)', model, field, key[1])
+        return
+    _ANNOUNCED_STRIPS.add(announce_key)
+    logger.warning(
+        'Model %s previously rejected %s (tools=%s); stripping it up front — this call runs at '
+        'the provider default effort, not the configured one',
+        model,
+        field,
+        key[1],
+    )
+
+
 def _strip_known_rejected_reasoning(model: str, params: dict[str, Any]) -> None:
-    """Drop `reasoning_effort` before the call if this (model, has_tools) rejected it."""
-    if _reasoning_key(model, params) in _REASONING_EFFORT_REJECTORS:
-        params.pop('reasoning_effort', None)
+    """Drop `reasoning_effort` before the call if this (model, has_tools) rejected it.
+
+    Logs whenever it actually removes the parameter (see `_announce_strip`); a
+    call that never carried one degrades nothing and stays quiet.
+    """
+    key = _reasoning_key(model, params)
+    if key in _REASONING_EFFORT_REJECTORS and params.pop('reasoning_effort', None) is not None:
+        _announce_strip('chat_completions', model, key, 'reasoning_effort')
 
 
 def _is_reasoning_effort_rejection(params: dict[str, Any], exc: BadRequestError) -> bool:
@@ -90,10 +127,13 @@ def strip_known_rejected_responses_reasoning(model: str, params: dict[str, Any])
 
     Mirrors ``_strip_known_rejected_reasoning`` for the Responses API so a
     non-reasoning model (e.g. gpt-4o-mini) pays the 400 + retry once per process
-    instead of on every judge / user-simulator call.
+    instead of on every judge / user-simulator call. Announces the strip on the
+    same first-warning-then-debug schedule, for the same reason: a silently
+    downgraded call looks identical to one that honoured the request.
     """
-    if _reasoning_key(model, params) in _RESPONSES_REASONING_REJECTORS:
-        params.pop('reasoning', None)
+    key = _reasoning_key(model, params)
+    if key in _RESPONSES_REASONING_REJECTORS and params.pop('reasoning', None) is not None:
+        _announce_strip('responses', model, key, 'the reasoning block')
 
 
 def is_responses_reasoning_rejection(params: dict[str, Any], exc: BadRequestError) -> bool:
@@ -226,10 +266,12 @@ async def execute_chat_parse(
     messages: list[dict[str, Any]],
     span: Span | None,
     timeout_s: float,
-    response_model: type[BaseModel],
+    response_model: type[BaseModel] | None = None,
     temperature: float | None = None,
     max_completion_tokens: int | None = None,
     reasoning_effort: str | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: Any | None = None,
     inject_trace_headers: bool = True,
     extra_body: dict[str, Any] | None = None,
     extra_kwargs: dict[str, Any] | None = None,
@@ -240,8 +282,23 @@ async def execute_chat_parse(
     reasoning_effort drop-retry) but routes through ``client.chat.completions.parse``
     with a Pydantic ``response_model``. The parsed object is available on
     ``response.choices[0].message.parsed`` (or ``.refusal``).
+
+    ``response_model`` is optional so a caller can use ``.parse`` for its *tool*
+    validation alone: `common.structured_output`'s forced-tool rung sends
+    ``tools`` + a named ``tool_choice`` and **no** ``response_format``, because a
+    provider that rejected the schema form is exactly the one being worked
+    around. ``tool_choice`` is passed verbatim rather than defaulted to
+    ``'auto'`` (as `execute_chat_completion` does) — that rung's whole point is
+    naming the function. The SDK then fills
+    ``message.tool_calls[0].function.parsed_arguments`` where it can.
     """
-    params: dict[str, Any] = {'model': model, 'messages': messages, 'response_format': response_model}
+    params: dict[str, Any] = {'model': model, 'messages': messages}
+    if response_model is not None:
+        params['response_format'] = response_model
+    if tools:
+        params['tools'] = tools
+    if tool_choice is not None:
+        params['tool_choice'] = tool_choice
     if temperature is not None:
         params['temperature'] = temperature
     if max_completion_tokens is not None:
