@@ -16,7 +16,14 @@ committed next to this file as `routine.json`. It is applied by hand, so a
 change there is not live until someone asks Claude to push it via the
 `RemoteTrigger` API. Say which you changed in the PR body.
 
-## Step 0 — what keys do we have
+## Step 0 — where am I, and what keys do we have
+
+The session starts in `/home/user`, not in a checkout. `cd` into the evaluatorq
+one before anything else; every relative path in this file is relative to it.
+
+```bash
+cd /home/user/evaluatorq 2>/dev/null || cd "$(git rev-parse --show-toplevel)"
+```
 
 ```bash
 for k in ORQ_API_KEY OPENAI_API_KEY; do
@@ -156,8 +163,10 @@ never ends.
 ### Track A — adversarial critique
 
 The `hate` skill lives in the `orq-ai/research` checkout, which `routine.json`
-mounts as a second source. Its path is `<research checkout>/.claude/skills/hate/SKILL.md`.
-Resolve it, and fall back to a search only if that path is wrong:
+mounts as a second source. In the cloud sandbox the two checkouts are siblings
+under `/home/user`, so it is at `/home/user/research/.claude/skills/hate/SKILL.md`
+— verified from a real run, not assumed. Fall back to a search only if that path
+is wrong:
 
 ```bash
 find .. "$HOME/.claude/skills" -path '*skills/hate/SKILL.md' -print -quit 2>/dev/null
