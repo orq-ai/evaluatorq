@@ -20,7 +20,7 @@
 | src/evaluatorq/common/extract\_json.py                                   |       79 |       10 |     87% |32, 40, 67-68, 121, 140-141, 149-152 |
 | src/evaluatorq/common/fields.py                                          |        6 |        0 |    100% |           |
 | src/evaluatorq/common/hook\_compose.py                                   |       16 |        0 |    100% |           |
-| src/evaluatorq/common/judge.py                                           |      198 |        5 |     97% |149-150, 244, 258, 606 |
+| src/evaluatorq/common/judge.py                                           |      216 |        5 |     98% |230-231, 325, 339, 695 |
 | src/evaluatorq/common/jury.py                                            |      299 |        8 |     97% |115, 132, 145-146, 229, 442, 777, 826 |
 | src/evaluatorq/common/llm\_call.py                                       |      131 |        1 |     99% |       293 |
 | src/evaluatorq/common/llm\_client.py                                     |       48 |        0 |    100% |           |
@@ -53,7 +53,7 @@
 | src/evaluatorq/common/tracing.py                                         |      303 |       27 |     91% |155-166, 204-206, 213, 409, 446-448, 531-533, 570-571, 583-584 |
 | src/evaluatorq/common/ui/\_\_init\_\_.py                                 |        0 |        0 |    100% |           |
 | src/evaluatorq/common/ui/launch.py                                       |       20 |       12 |     40% |23, 35-39, 55-79 |
-| src/evaluatorq/contracts.py                                              |      517 |       17 |     97% |58, 81, 134-136, 781, 852, 854, 856, 858, 908, 913, 917, 922, 924, 1043, 1299, 1603 |
+| src/evaluatorq/contracts.py                                              |      517 |       16 |     97% |58, 81, 134-136, 781, 857, 861, 863, 913, 918, 922, 927, 929, 1048, 1304, 1608 |
 | src/evaluatorq/dashboard/\_\_init\_\_.py                                 |        0 |        0 |    100% |           |
 | src/evaluatorq/dashboard/\_compat.py                                     |       23 |       14 |     39% | 39-53, 71 |
 | src/evaluatorq/dashboard/app.py                                          |      277 |       39 |     86% |84-85, 88-89, 259-260, 280-281, 318, 321, 324, 327-329, 345, 349-351, 378, 407, 411-413, 444, 447, 455-457, 483, 494, 502-504, 518, 549, 552, 560-562 |
@@ -100,7 +100,7 @@
 | src/evaluatorq/integrations/vercel\_ai\_sdk\_integration/\_\_init\_\_.py |        2 |        0 |    100% |           |
 | src/evaluatorq/integrations/vercel\_ai\_sdk\_integration/target.py       |      121 |        8 |     93% |234, 263, 266, 271-272, 276-277, 333 |
 | src/evaluatorq/job\_helper.py                                            |       25 |        2 |     92% |    82, 99 |
-| src/evaluatorq/llm\_jury.py                                              |      207 |        4 |     98% |143, 274, 709, 814 |
+| src/evaluatorq/llm\_jury.py                                              |      207 |        4 |     98% |145, 276, 711, 816 |
 | src/evaluatorq/openresponses/\_\_init\_\_.py                             |        4 |        0 |    100% |           |
 | src/evaluatorq/openresponses/client.py                                   |        9 |        0 |    100% |           |
 | src/evaluatorq/openresponses/convert\_models.py                          |      121 |        3 |     98% |   168-175 |
@@ -120,7 +120,7 @@
 | src/evaluatorq/redteam/\_\_init\_\_.py                                   |       34 |        5 |     85% |   253-262 |
 | src/evaluatorq/redteam/adaptive/\_\_init\_\_.py                          |        7 |        0 |    100% |           |
 | src/evaluatorq/redteam/adaptive/agent\_context.py                        |       12 |       12 |      0% |      3-42 |
-| src/evaluatorq/redteam/adaptive/attack\_generator.py                     |       54 |        2 |     96% |  219, 234 |
+| src/evaluatorq/redteam/adaptive/attack\_generator.py                     |       54 |        2 |     96% |  221, 236 |
 | src/evaluatorq/redteam/adaptive/blackbox\_classifier.py                  |      131 |       11 |     92% |263-268, 324-329, 392 |
 | src/evaluatorq/redteam/adaptive/capability\_classifier.py                |      107 |        6 |     94% |165, 184, 255, 258, 328, 340 |
 | src/evaluatorq/redteam/adaptive/evaluator.py                             |       87 |        1 |     99% |       119 |
@@ -232,7 +232,7 @@
 | src/evaluatorq/tracing/setup.py                                          |      136 |       39 |     71% |103-113, 134-137, 142, 171, 177-183, 191-201, 235-243, 292-293, 314 |
 | src/evaluatorq/tracing/spans.py                                          |       84 |        1 |     99% |       130 |
 | src/evaluatorq/types.py                                                  |       86 |        2 |     98% |   32, 274 |
-| **TOTAL**                                                                | **26707** | **4188** | **84%** |           |
+| **TOTAL**                                                                | **26725** | **4187** | **84%** |           |
 
 
 ## Setup coverage badge
