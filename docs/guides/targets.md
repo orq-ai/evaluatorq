@@ -127,8 +127,8 @@ It is also importable from `evaluatorq.openresponses` and
 
 ### What config it honours
 
-Everything routes through `LLMCallConfig.responses_params()`, so one config object
-covers the whole call:
+Everything routes through `LLMCallConfig.request_params(api="responses")`, so one
+config object covers the whole call:
 
 | Field | Sent as | Notes |
 |---|---|---|
@@ -153,6 +153,15 @@ Two guards are worth knowing before you reach for `extra_kwargs`:
 
 A response truncated at `max_output_tokens` raises rather than returning a half
 answer: judging a cut-off reply as a refusal is worse than failing the call.
+
+!!! note "`retry_attempts` defaults to 1 — no retry"
+    `OrqResponsesTarget(..., retry_attempts=1)` is the default: a single attempt,
+    no retry, because `call_target_with_retry` is the single retry owner for
+    target calls on every surface that drives a target (red team and
+    simulation). Raise `retry_attempts` only when you construct the target
+    yourself and call `respond()` directly, outside that wrapper — under it, the
+    two budgets multiply (5 inner attempts under 3 outer ones is 15 calls to a
+    target that is already refusing).
 
 ### Stateless, per call
 

@@ -6,28 +6,22 @@ including LLM interaction with retry logic.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
-from openai import BadRequestError
-
 from evaluatorq.common.llm_call import (
     execute_chat_completion,
-    is_responses_reasoning_rejection,
-    remember_responses_reasoning_rejection,
-    strip_known_rejected_responses_reasoning,
+    execute_response,
 )
 from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.responses import first_responses_refusal, responses_stop_reason
 from evaluatorq.common.retry import with_retry
-from evaluatorq.common.thread_context import pipeline_metadata, thread_body_param
-from evaluatorq.common.tracing import get_trace_context_headers, record_llm_input, record_llm_response
+from evaluatorq.common.thread_context import thread_body_param
+from evaluatorq.common.tracing import record_llm_input
 from evaluatorq.contracts import (
-    _RESERVED_RESPONSES_KEYS,
     DEFAULT_TARGET_MAX_TOKENS,
     AgentResponse,
     FunctionCall,
@@ -35,7 +29,6 @@ from evaluatorq.contracts import (
     StrategyToolCall,
     TextOutputItem,
     ToolCallOutputItem,
-    check_reserved_keys,
 )
 from evaluatorq.openresponses.client import build_simulation_client
 from evaluatorq.openresponses.input_items import messages_to_responses_input
@@ -386,7 +379,7 @@ class BaseAgent(UsageTracking, ABC):
         ``self.config`` value wins, else this call site's literal (``temperature``
         param here — e.g. the judge's ``0.0``), else the call-time env fallback.
         ``self.config.extra_kwargs`` rides along last, so it can still override
-        any of the above (matches `LLMCallConfig.completion_params`'s contract).
+        any of the above (matches `LLMCallConfig.request_params`'s chat-completions contract).
         """
         temp = self._resolved_temperature(temperature, 0.7)
         max_tok = self._resolved_max_tokens(max_tokens)
@@ -485,9 +478,12 @@ class BaseAgent(UsageTracking, ABC):
         Effective ``temperature`` / ``max_tokens`` / ``timeout`` / reasoning
         effort follow the same config-beats-call-site-beats-fallback order as
         `_call_chat_completions` (see `_resolved_temperature` etc.).
-        ``self.config.extra_kwargs`` is merged in last (structural keys guarded
-        by `check_reserved_keys`), so it can override any of the above —
-        matching `LLMCallConfig.responses_params`'s contract.
+        The request itself goes through `common.llm_call.execute_response`, so
+        this leg gets the same slot limiting, reasoning-rejection memo, pipeline
+        metadata, trace headers and `price_usage` call as every other Responses
+        caller. `self.config.extra_kwargs` is merged in there last (structural
+        keys guarded by `check_reserved_keys`), so it can override any of the
+        above — `LLMCallConfig.request_params`'s Responses contract.
         """
         timeout_s = self._resolved_timeout_s(timeout)
         resolved_temp = self._resolved_temperature(temperature, None)
@@ -498,27 +494,6 @@ class BaseAgent(UsageTracking, ABC):
         # the Orq router silently drops it, leaving the judge blind to the agent's
         # replies (RES-1308). Never hand-build this list.
         input_messages = messages_to_responses_input(messages)
-
-        params: dict[str, Any] = {
-            'model': self._model,
-            'input': input_messages,
-            'instructions': self.system_prompt,
-        }
-
-        if tools:
-            params['tools'] = [_responses_tool_schema(tool) for tool in tools]
-
-        if resolved_temp is not None:
-            params['temperature'] = resolved_temp
-
-        params['max_output_tokens'] = max_tok
-
-        if reasoning_effort:
-            params['reasoning'] = {'effort': reasoning_effort}
-
-        if self.config.extra_kwargs:
-            check_reserved_keys(self.config.extra_kwargs, _RESERVED_RESPONSES_KEYS)
-            params.update(self.config.extra_kwargs)
 
         async with with_llm_span(
             model=self._model,
@@ -537,69 +512,42 @@ class BaseAgent(UsageTracking, ABC):
             # renders an assistant turn as `[{'type': 'output_text', ...}]`, which
             # `record_llm_input` would `str()` into a Python repr on the span.
             # Mirrors runner/simulation.py's target_call span. See CLAUDE.md's
-            # `content_to_text` row.
+            # `content_to_text` row. `record_input=False` below keeps
+            # `execute_response` from overwriting it with the wire shape.
             record_llm_input(span, [{'role': m.role, 'content': span_message_text(m.content)} for m in messages])
-            trace_headers = await get_trace_context_headers()
+
+            # Config body layered last: the caller's keys win per key, the call
+            # site's thread grouping survives the ones they did not set.
+            extra_body = thread_body_param() if client_routes_through_orq(self._client) else {}
+            if self.config.extra_body:
+                extra_body = {**extra_body, **self.config.extra_body}
 
             async def _do_call() -> LLMResult:
-                call_kwargs: dict[str, Any] = dict(params)
-                if trace_headers:
-                    call_kwargs['extra_headers'] = trace_headers
-                # Metadata is supported natively by every Responses endpoint;
-                # thread is specific to the Orq router.
-                metadata = pipeline_metadata()
-                if metadata:
-                    call_kwargs['metadata'] = metadata
-                extra_body = thread_body_param() if client_routes_through_orq(self._client) else {}
-                # Config body layered last: the caller's keys win per key, the
-                # call site's thread grouping survives the ones they did not set.
-                if self.config.extra_body:
-                    extra_body = {**extra_body, **self.config.extra_body}
-                if extra_body:
-                    call_kwargs['extra_body'] = {**call_kwargs.get('extra_body', {}), **extra_body}
-                # Drop reasoning up front if this model already rejected it once, so
-                # a non-reasoning model (e.g. gpt-4o-mini) 400s + retries once per
-                # process instead of on every judge / user-simulator call.
-                strip_known_rejected_responses_reasoning(self.config.model, call_kwargs)
-                try:
-                    response = await asyncio.wait_for(
-                        self._client.responses.create(**call_kwargs),
-                        timeout=timeout_s,
-                    )
-                except BadRequestError as exc:
-                    # "where possible": drop reasoning and retry if the endpoint
-                    # rejects it, rather than failing the call. Gate on the error
-                    # body so an unrelated 400 isn't masked by a stripped retry.
-                    if not is_responses_reasoning_rejection(call_kwargs, exc):
-                        raise
-                    remember_responses_reasoning_rejection(self.config.model, call_kwargs)
-                    logger.warning(
-                        '%s._call_responses: model %s rejected reasoning; dropping it and retrying once',
-                        self.name,
-                        self.config.model,
-                    )
-                    call_kwargs.pop('reasoning', None)
-                    response = await asyncio.wait_for(
-                        self._client.responses.create(**call_kwargs),
-                        timeout=timeout_s,
-                    )
+                response, usage = await execute_response(
+                    client=self._client,
+                    model=self._model,
+                    messages=input_messages,
+                    span=span,
+                    timeout_s=timeout_s,
+                    temperature=resolved_temp,
+                    max_output_tokens=max_tok,
+                    reasoning_effort=reasoning_effort,
+                    instructions=self.system_prompt,
+                    tools=[_responses_tool_schema(tool) for tool in tools] if tools else None,
+                    record_input=False,
+                    extra_body=extra_body or None,
+                    extra_kwargs=self.config.extra_kwargs or None,
+                )
+                self._accumulate(usage)
 
                 stop_reason = responses_stop_reason(response)
                 if stop_reason == 'length':
                     raise RuntimeError(
                         f'{self.name}._call_responses: response truncated at max_output_tokens='
-                        f'{params["max_output_tokens"]}; raise the budget via EVALUATORQ_LLM_MAX_TOKENS.'
+                        f'{max_tok}; raise the budget via EVALUATORQ_LLM_MAX_TOKENS.'
                     )
                 refusal = first_responses_refusal(response)
-                agent_response = AgentResponse.from_openresponses(response)
-                output_items = agent_response.output
-                usage = agent_response.usage
-
-                record_llm_response(span, response)
-
-                # Accumulate token usage (from_openresponses leaves calls=0, add 1)
-                if usage is not None:
-                    self._accumulate(usage.with_calls(1))
+                output_items = AgentResponse.from_openresponses(response).output
 
                 # Separate text from tool-call items; isinstance guards prevent
                 # ReasoningOutputItem.text leaking into response content.

@@ -359,7 +359,7 @@ async def generate_focus_area_recommendations(
     recommendations: RedTeamRecommendationConfig | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     cfg: LLMConfig | None = None,
-) -> list[FocusAreaRecommendation]:
+) -> tuple[list[FocusAreaRecommendation], TokenUsage | None]:
     """Analyze failed traces and generate actionable recommendations per focus area.
 
     Args:
@@ -376,19 +376,21 @@ async def generate_focus_area_recommendations(
             are not broken by a hardcoded value.
 
     Returns:
-        List of ``FocusAreaRecommendation`` objects, one per analyzed area.
+        Tuple of (list of ``FocusAreaRecommendation`` objects, one per analyzed
+        area; the summed usage of every LLM call this function made — condense
+        calls included — or ``None`` if no call billed usage). The caller folds
+        the usage into ``report.summary.post_processing_token_usage``.
     """
     cfg = cfg or PIPELINE_CONFIG
     limits = recommendations or RedTeamRecommendationConfig()
     top_areas = _compute_top_risk_areas(report, limits.max_areas)
     if not top_areas:
-        return []
+        return [], None
 
     generated: list[FocusAreaRecommendation] = []
     # Every LLM call this function makes — condense calls included — so the phase
-    # reports one figure. It has no report field to land in: `red_team()` runs
-    # this after `summary.token_usage_total` is finalized, and that total is
-    # documented to equal `token_usage_by_source` (RES-1295).
+    # reports one figure, returned to the caller for
+    # `report.summary.post_processing_token_usage` (RES-1295).
     usages: list[TokenUsage | None] = []
 
     # Two dicts, two roles. `extra_kwargs` is user-owned sampling/provider options in
@@ -495,5 +497,6 @@ async def generate_focus_area_recommendations(
             )
             continue
 
-    log_structured_usage(sum_structured_usage(usages), phase='Red-team recommendations')
-    return generated
+    total_usage = sum_structured_usage(usages)
+    log_structured_usage(total_usage, phase='Red-team recommendations')
+    return generated, total_usage

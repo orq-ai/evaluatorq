@@ -121,9 +121,21 @@ async def populate_run_executive_summary(
         max_tokens=EXECUTIVE_SUMMARY_MAX_TOKENS,
         purpose='executive_summary',
     ):
-        run.executive_summary = await generate_executive_summary(
+        summary = await generate_executive_summary(
             build_sim_facts(run.results),
             llm_client=resolved.client,
             model=model,
             system_prompt=SIM_EXECUTIVE_SUMMARY_SYSTEM_PROMPT,
         )
+        run.executive_summary = summary.text
+        # This is the last usage-producing step in a run's lifecycle (it runs
+        # after every other post-processing step, and on the CLI path after
+        # _simulate_core has already returned) — folding it in here, in place,
+        # is what keeps run.token_usage_total from going stale. A summary that
+        # was skipped (blank facts) or failed reports usage=None, which
+        # sum_structured_usage leaves the running total unchanged for, per the
+        # "no optimistic zero" rule.
+        if summary.usage is not None:
+            from evaluatorq.common.structured_output import sum_structured_usage
+
+            run.token_usage_total = sum_structured_usage([run.token_usage_total, summary.usage])

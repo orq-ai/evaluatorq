@@ -66,7 +66,7 @@ async def test_generate_returns_prose_and_passes_prompt():
         extra_body={'foo': 'bar'},
         extra_kwargs={'seed': 7},
     )
-    assert out == 'Across 10 attacks, the agent resisted 80%.'
+    assert out.text == 'Across 10 attacks, the agent resisted 80%.'
     call = client.chat.completions.calls[0]
     assert call['model'] == 'openai/gpt-4o-mini'
     assert call['temperature'] == 0.3
@@ -80,7 +80,7 @@ async def test_generate_returns_prose_and_passes_prompt():
 async def test_generate_returns_none_on_blank_facts():
     client = _StubClient('should not be called')
     out = await generate_executive_summary('   ', llm_client=cast(AsyncOpenAI, cast(object, client)), model='m')
-    assert out is None
+    assert out.text is None
     assert client.chat.completions.calls == []
 
 
@@ -88,14 +88,14 @@ async def test_generate_returns_none_on_blank_facts():
 async def test_generate_returns_none_on_empty_completion():
     client = _StubClient(None)
     out = await generate_executive_summary('facts', llm_client=cast(AsyncOpenAI, cast(object, client)), model='m')
-    assert out is None
+    assert out.text is None
 
 
 @pytest.mark.asyncio
 async def test_generate_returns_none_on_exception():
     client = _StubClient(None, raise_exc=RuntimeError('boom'))
     out = await generate_executive_summary('facts', llm_client=cast(AsyncOpenAI, cast(object, client)), model='m')
-    assert out is None
+    assert out.text is None
 
 
 @pytest.mark.asyncio
@@ -116,7 +116,7 @@ async def test_extra_kwargs_temperature_reaches_the_call_instead_of_raising_type
         temperature=0.0,
         extra_kwargs={'temperature': 1},
     )
-    assert out == 'Some summary.'
+    assert out.text == 'Some summary.'
     call = client.chat.completions.calls[0]
     assert call['temperature'] == 1
 
@@ -140,5 +140,5 @@ async def test_extra_kwargs_extra_body_is_rejected_not_clobbered():
     # best-effort `except Exception`, so the contract observable from the
     # public function is "no summary produced", not a raised exception — but
     # the call must never reach the client with the clobbered body.
-    assert out is None
+    assert out.text is None
     assert client.chat.completions.calls == []

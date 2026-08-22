@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from evaluatorq.contracts import AgentTarget, Message
+from evaluatorq.contracts import AgentTarget, Message, TokenUsage
 from evaluatorq.redteam import get_category_info, list_categories, red_team
 from evaluatorq.redteam.contracts import AgentResponse, Pipeline, RedTeamReport, ReportSummary, parse_target
 from evaluatorq.redteam.runner import RedTeamRunMetrics, _deduplicate_target_labels
@@ -781,3 +781,91 @@ class TestApplyCoveragePolicy:
         assert isinstance(report, RedTeamReport)
         assert report.summary.min_evaluation_coverage == 0.8
         assert report.summary.coverage_below_minimum is True
+
+
+class TestPostProcessingTokenUsage:
+    """The recommendation phase and the executive summary both bill LLM calls
+    after the attack-only totals are computed; red_team() must fold that spend
+    into `summary.token_usage_total` and expose it separately (RES-1295)."""
+
+    @pytest.mark.asyncio
+    async def test_post_processing_usage_is_added_to_the_run_total(self):
+        """token_usage_total ends strictly greater than the attack-only aggregate,
+        and post_processing_token_usage equals exactly the difference."""
+        from unittest.mock import AsyncMock, patch
+
+        from evaluatorq.common.reports.executive_summary import ExecutiveSummary
+
+        attack_only_usage = TokenUsage(input_tokens=100, output_tokens=50, total_tokens=150, calls=1)
+        rec_usage = TokenUsage(input_tokens=10, output_tokens=5, total_tokens=15, calls=1)
+        exec_usage = TokenUsage(input_tokens=20, output_tokens=10, total_tokens=30, calls=1)
+
+        mock_report = _make_report(
+            pipeline=Pipeline.STATIC,
+            summary=ReportSummary(token_usage_total=attack_only_usage),
+        )
+
+        with (
+            patch(
+                'evaluatorq.redteam.runner._run_static',
+                new_callable=AsyncMock,
+                return_value=_run_result(mock_report),
+            ),
+            patch(
+                'evaluatorq.redteam.runner.generate_focus_area_recommendations',
+                new_callable=AsyncMock,
+                return_value=([], rec_usage),
+            ),
+            patch(
+                'evaluatorq.common.reports.executive_summary.generate_executive_summary',
+                new_callable=AsyncMock,
+                return_value=ExecutiveSummary(text='some summary', usage=exec_usage),
+            ),
+        ):
+            result = await red_team(
+                'agent:test',
+                mode='static',
+                dataset='local.json',
+                llm_client=AsyncMock(),
+                recommendations=True,
+                generate_executive_summary=True,
+            )
+
+        assert result.summary.token_usage_total is not None
+        assert result.summary.token_usage_total.total_tokens == 195
+        assert result.summary.token_usage_total.total_tokens > attack_only_usage.total_tokens
+        assert result.summary.post_processing_token_usage is not None
+        assert result.summary.post_processing_token_usage.total_tokens == 45
+        assert (
+            result.summary.token_usage_total.total_tokens - attack_only_usage.total_tokens
+            == result.summary.post_processing_token_usage.total_tokens
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_post_processing_usage_leaves_total_and_field_unchanged(self):
+        """Neither step billing anything (or both skipped) leaves the attack-only
+        total untouched and post_processing_token_usage stays None — no optimistic
+        zero is recorded."""
+        from unittest.mock import AsyncMock, patch
+
+        attack_only_usage = TokenUsage(input_tokens=100, output_tokens=50, total_tokens=150, calls=1)
+        mock_report = _make_report(
+            pipeline=Pipeline.STATIC,
+            summary=ReportSummary(token_usage_total=attack_only_usage),
+        )
+
+        with patch(
+            'evaluatorq.redteam.runner._run_static',
+            new_callable=AsyncMock,
+            return_value=_run_result(mock_report),
+        ):
+            result = await red_team(
+                'agent:test',
+                mode='static',
+                dataset='local.json',
+                recommendations=False,
+                generate_executive_summary=False,
+            )
+
+        assert result.summary.token_usage_total == attack_only_usage
+        assert result.summary.post_processing_token_usage is None

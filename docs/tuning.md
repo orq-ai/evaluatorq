@@ -181,7 +181,7 @@ thread and memory body wholesale.
 
 ```python
 # WRONG — raises ValueError: extra_kwargs cannot override structural request fields
-LLMCallConfig(extra_kwargs={"extra_body": {"my": "option"}}).completion_params()
+LLMCallConfig(extra_kwargs={"extra_body": {"my": "option"}}).request_params()
 ```
 
 ### Adding fields to the request body
@@ -225,9 +225,12 @@ same key through `extra_kwargs`:
 | `extra_kwargs={"max_completion_tokens": 4000}` | `LLMCallConfig(max_tokens=4000)` |
 | `extra_kwargs={"temperature": 0.2}` | `LLMCallConfig(temperature=0.2)` |
 
-`LLMCallConfig` renders those per endpoint for you: `completion_params()` emits
-`max_completion_tokens` and a flat `reasoning_effort`, `responses_params()` emits
-`max_output_tokens` and `reasoning={"effort": ...}`.
+`LLMCallConfig` renders those per endpoint for you through a single builder,
+`request_params(api=None, **params)`: it defaults to `self.api`, or renders
+whichever endpoint you pass explicitly (a call site that only speaks one
+endpoint passes `api="chat_completions"` or `api="responses"`). On chat
+completions it emits `max_completion_tokens` and a flat `reasoning_effort`; on
+Responses it emits `max_output_tokens` and `reasoning={"effort": ...}`.
 
 ## Where to next
 

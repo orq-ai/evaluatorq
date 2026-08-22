@@ -287,7 +287,10 @@ async def execute_response(
     temperature: float | None = None,
     max_output_tokens: int | None = None,
     reasoning_effort: str | None = None,
+    instructions: str | None = None,
+    tools: list[dict[str, Any]] | None = None,
     inject_trace_headers: bool = True,
+    record_input: bool = True,
     extra_body: dict[str, Any] | None = None,
     extra_kwargs: dict[str, Any] | None = None,
 ) -> tuple[Any, TokenUsage | None]:
@@ -304,11 +307,22 @@ async def execute_response(
     already filled in, so the ``price_usage`` call below is a no-op on the Orq
     path and only covers a non-Orq endpoint or an unpriced model (RES-1295).
 
-    ``messages`` are passed straight through as Responses ``input`` items; the
-    system entry rides along as a message rather than as ``instructions``, which
-    keeps the judge prompt assembly identical across both endpoints.
+    ``messages`` are passed straight through as Responses ``input`` items. The
+    judge legs leave ``instructions`` unset and let the system entry ride along
+    as a message, which keeps prompt assembly identical across both endpoints;
+    the simulation agents set it, because the Responses endpoint is the only one
+    they speak.
+
+    Set ``record_input=False`` when the caller records its own input on the span
+    — a caller holding the pre-render `Message` objects can put readable text
+    there, where the wire payload's ``output_text`` parts would `str()` into a
+    Python repr (see CLAUDE.md's ``content_to_text`` row).
     """
     params: dict[str, Any] = {'model': model, 'input': messages}
+    if instructions is not None:
+        params['instructions'] = instructions
+    if tools:
+        params['tools'] = tools
     if temperature is not None:
         params['temperature'] = temperature
     if max_output_tokens is not None:
@@ -329,7 +343,8 @@ async def execute_response(
     strip_known_rejected_responses_reasoning(model, params)
     apply_pipeline_metadata(params)
 
-    record_llm_input(span, messages)
+    if record_input:
+        record_llm_input(span, messages)
 
     if inject_trace_headers:
         await apply_trace_headers(params)

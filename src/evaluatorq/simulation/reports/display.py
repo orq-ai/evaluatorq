@@ -16,7 +16,7 @@ from evaluatorq.simulation.reports.sections import build_report_sections
 if TYPE_CHECKING:
     from rich.console import Console
 
-    from evaluatorq.contracts import ReportSection
+    from evaluatorq.contracts import ReportSection, Usage
     from evaluatorq.simulation.types import SimulationResult
 
 
@@ -26,6 +26,7 @@ def print_simulation_summary(
     executive_summary: str | None = None,
     experiment_url: str | None = None,
     console: Console | None = None,
+    run_token_usage_total: Usage | None = None,
 ) -> None:
     """Print a Rich multi-section summary of simulation results to *console*.
 
@@ -39,6 +40,12 @@ def print_simulation_summary(
         stderr console so the summary does not interfere with piped stdout.
     executive_summary:
         Optional LLM-generated narrative from the persisted simulation run.
+    run_token_usage_total:
+        ``SimulationRun.token_usage_total`` — pass this when *results* is the
+        run's full result set so the printed token total also shows the
+        whole-run figure (simulation + generation + executive summary),
+        labelled distinctly from the simulation-only "Total Tokens" row.
+        Omit for a filtered/partial *results* list.
     """
     from rich import box
     from rich.console import Console as RichConsole
@@ -55,7 +62,14 @@ def print_simulation_summary(
         console.print('[dim]No results (run aborted or produced nothing).[/dim]')
         return
 
-    sections = {s.kind: s for s in build_report_sections(results, executive_summary=executive_summary)}
+    sections = {
+        s.kind: s
+        for s in build_report_sections(
+            results,
+            executive_summary=executive_summary,
+            run_token_usage_total=run_token_usage_total,
+        )
+    }
 
     summ = sections['summary'].data
     rate = summ['success_rate']

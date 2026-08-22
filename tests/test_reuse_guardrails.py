@@ -88,14 +88,12 @@ LLM_CALL_ALLOW = frozenset({
     'redteam/backends/orq.py',  # backend transport
     'redteam/adaptive/blackbox_classifier.py',
     'redteam/adaptive/tool_chaining.py',
-    'simulation/agents/base.py',
     'simulation/generators/first_message_generator.py',
-    'common/reports/executive_summary.py',
 })
 
 
 def test_llm_call_allowlist_does_not_grow() -> None:
-    assert len(LLM_CALL_ALLOW) == 10, (
+    assert len(LLM_CALL_ALLOW) == 8, (
         'LLM_CALL_ALLOW changed size. Removing an entry (good) means lowering this '
         'number; adding one means a new direct call site slipped in — route it '
         'through evaluatorq.common.llm_call instead.'

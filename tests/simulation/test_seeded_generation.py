@@ -105,7 +105,7 @@ async def test_generate_personas_scenarios_seeds_override_num(captured):
     other dimension still auto-generates."""
     from evaluatorq.simulation.api import _generate_personas_scenarios
 
-    personas, scenarios = await _generate_personas_scenarios(
+    personas, scenarios, _usage = await _generate_personas_scenarios(
         agent_description="support agent",
         num_personas=99,  # ignored — seeds win
         num_scenarios=3,

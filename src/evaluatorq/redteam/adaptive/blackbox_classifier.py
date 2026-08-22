@@ -380,7 +380,7 @@ async def _judge_transcript(
             model=model,
             messages=judge_messages,
             response_format=BlackboxCapabilityInference,
-            **cfg.attacker.completion_params(extra_body=cfg.retry_extra_body(llm_client)),
+            **cfg.attacker.request_params(api='chat_completions', extra_body=cfg.retry_extra_body(llm_client)),
         )
         parsed = response.choices[0].message.parsed
         record_llm_response(

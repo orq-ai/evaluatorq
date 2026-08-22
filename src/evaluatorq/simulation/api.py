@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
     from evaluatorq.common.run_manifest import ManifestWriter
-    from evaluatorq.contracts import AgentResponse, AgentTarget
+    from evaluatorq.contracts import AgentResponse, AgentTarget, TokenUsage
     from evaluatorq.simulation.agents.base import BaseAgent
     from evaluatorq.simulation.evaluators.scorers import SimulationScorer, SimulationScoringConfig
     from evaluatorq.simulation.generators import FirstMessageGenerator
@@ -779,7 +779,7 @@ async def _generate_datapoints_inner(
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
     edge_case_percentage: float | None = None,
-) -> tuple[list[SimulationDatapoint], AsyncOpenAI, bool]:
+) -> tuple[list[SimulationDatapoint], AsyncOpenAI, bool, TokenUsage | None]:
     """Shared generation trio: personas/scenarios + first-message datapoints.
 
     Builds one shared generation client (mirrors the pattern both callers
@@ -791,13 +791,15 @@ async def _generate_datapoints_inner(
     own tracing span so child spans nest correctly (span nesting is
     implicit via OTel contextvars).
 
-    Returns ``(datapoints, gen_client, gen_owned)``. Callers own closing the
-    client: `generate` has no further use for it and closes it right
-    away, while `_generate_and_simulate_run` keeps it open to pass
+    Returns ``(datapoints, gen_client, gen_owned, generation_usage)``. Callers
+    own closing the client: `generate` has no further use for it and closes it
+    right away, while `_generate_and_simulate_run` keeps it open to pass
     into ``SimulationConfig.generation_client`` for the simulate stage and
     closes it only after ``_simulate_core`` returns. On any exception raised
     from within this helper (before the client is handed back to the
-    caller), the client is closed here so it can't leak.
+    caller), the client is closed here so it can't leak. ``generation_usage``
+    is the persona+scenario cost from `_generate_personas_scenarios` (``None``
+    if nothing was billed); first-message generation cost is not included.
     """
     from evaluatorq.common.async_utils import await_maybe
     from evaluatorq.openresponses.client import build_simulation_client
@@ -806,7 +808,7 @@ async def _generate_datapoints_inner(
     gen_client, gen_owned = build_simulation_client(generation_client, max_retries=0)
     try:
         gen_hooks = hooks or DefaultHooks()
-        gen_personas, gen_scenarios = await _generate_personas_scenarios(
+        gen_personas, gen_scenarios, generation_usage = await _generate_personas_scenarios(
             agent_description=agent_description,
             num_personas=num_personas,
             num_scenarios=num_scenarios,
@@ -834,7 +836,7 @@ async def _generate_datapoints_inner(
         if gen_owned:
             await gen_client.close()
         raise
-    return datapoints, gen_client, gen_owned
+    return datapoints, gen_client, gen_owned, generation_usage
 
 
 async def _generate_and_simulate_run(
@@ -941,8 +943,9 @@ async def _generate_and_simulate_run(
                     # emit_datapoints callback raises between generation and simulate.
                     try:
                         await await_maybe(composed_hooks.on_stage_start(SimStage.GENERATE, {}))
+                        generation_usage: TokenUsage | None = None
                         try:
-                            datapoints, gen_client, gen_owned = await _generate_datapoints_inner(
+                            datapoints, gen_client, gen_owned, generation_usage = await _generate_datapoints_inner(
                                 caller='generate_and_simulate',
                                 agent_description=resolved_agent_description,
                                 num_personas=num_personas,
@@ -986,6 +989,7 @@ async def _generate_and_simulate_run(
                             user_simulator=user_simulator,
                             judge=judge,
                             generation_client=gen_client,
+                            generation_token_usage=generation_usage,
                             upload_results=upload_results,
                             evaluation_description=evaluation_description,
                             orq_results_path=orq_results_path,
@@ -1097,7 +1101,7 @@ async def generate(
                 )
                 await await_maybe(gen_hooks.on_stage_start(SimStage.GENERATE, {}))
                 try:
-                    datapoints, gen_client, gen_owned = await _generate_datapoints_inner(
+                    datapoints, gen_client, gen_owned, _generation_usage = await _generate_datapoints_inner(
                         caller='generate',
                         agent_description=agent_description,
                         num_personas=num_personas,
@@ -1317,7 +1321,7 @@ async def _generate_personas_scenarios(
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
     edge_case_percentage: float | None = None,
-) -> tuple[list[Persona], list[Scenario]]:
+) -> tuple[list[Persona], list[Scenario], TokenUsage | None]:
     """Generate personas and scenarios concurrently from an agent description.
 
     Shared by `generate` and `generate_and_simulate`. When
@@ -1331,6 +1335,13 @@ async def _generate_personas_scenarios(
     (0.2 for personas, 0.3 for scenarios) on the auto-generated (non-seeded)
     branch only — a seeded dimension already fixes ``edge_case_percentage=0.0``
     on purpose (one object per seed, no padding) and must not be overridden.
+
+    Returns ``(personas, scenarios, usage)`` — ``usage`` is the combined,
+    priced cost of every generator call made here (including the seeded
+    fan-out and any structured-output fallback rungs), or ``None`` when
+    nothing was billed. Callers that reach a ``SimulationRun`` fold this into
+    ``token_usage_total``; `generate()` (which returns no run) discards it —
+    `log_structured_usage` below is still the record of what it cost.
     """
     from evaluatorq.common.structured_output import log_structured_usage, sum_structured_usage
     from evaluatorq.openresponses.client import build_simulation_client
@@ -1373,18 +1384,17 @@ async def _generate_personas_scenarios(
             else scenario_gen.generate(**scenario_kwargs)
         )
         gen_personas, gen_scenarios = await asyncio.gather(personas_coro, scenarios_coro)
-        # Generation happens before a run object exists, so there is no report
-        # field for what it cost; the log line is where that spend surfaces
+        # Generation happens before a run object exists, so callers that build
+        # one (generate_and_simulate) fold this into SimulationRun.token_usage_total;
+        # the log line remains the record for `generate()`, which returns no run
         # (RES-1295). Both generators accumulate across every call they made,
         # including the seeded fan-out and the fallback rungs.
-        log_structured_usage(
-            sum_structured_usage([persona_gen.get_usage(), scenario_gen.get_usage()]),
-            phase='Persona/scenario generation',
-        )
+        generation_usage = sum_structured_usage([persona_gen.get_usage(), scenario_gen.get_usage()])
+        log_structured_usage(generation_usage, phase='Persona/scenario generation')
     finally:
         if gen_owned:
             await gen_client.close()
-    return gen_personas, gen_scenarios
+    return gen_personas, gen_scenarios, generation_usage
 
 
 def _log_saved_run(path: Path) -> None:
@@ -1599,6 +1609,18 @@ async def _simulate_core(
             # Persist the cases themselves so this run can be replayed later.
             datapoints=sim_datapoints,
         )
+
+        # Seed the run total from the two sources known at this point (every
+        # datapoint's own usage, plus the GENERATE stage's persona/scenario cost
+        # for generate_and_simulate — None for plain simulate). Updated again
+        # below once the executive summary (the third, later-arriving source)
+        # has run, so the final value reflects the whole run, not a snapshot
+        # taken before post-processing.
+        from evaluatorq.common.structured_output import sum_structured_usage
+        from evaluatorq.contracts import Usage
+
+        results_usage = sum((r.token_usage for r in results), Usage())
+        run.token_usage_total = sum_structured_usage([results_usage, config.generation_token_usage])
 
         # Remediation suggestions, generated before persistence so a saved run carries
         # them, and inside the pipeline span so their LLM calls bind the run metadata.

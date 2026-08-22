@@ -286,10 +286,12 @@ systematically blocked judge shows up as one named cause (`evaluation/api_status
 ## What a run costs
 
 `report.summary.token_usage_total` covers usage recorded for attack generation,
-the target, and the judge. It includes `calls` and `priced_calls` alongside token
-counts and the dollar figure. If `priced_calls < calls`, some calls reported
-usage without a provider price, so the displayed cost is a lower bound. Use the
-calculator below to include the fixed setup calls in a planning estimate.
+the target, and the judge, plus post-processing spend (recommendations and the
+executive summary — see [below](#what-the-totals-do-not-include)) once that runs.
+It includes `calls` and `priced_calls` alongside token counts and the dollar
+figure. If `priced_calls < calls`, some calls reported usage without a provider
+price, so the displayed cost is a lower bound. Use the calculator below to
+include the fixed setup calls in a planning estimate.
 
 ### Ballpark the cost
 
@@ -405,13 +407,15 @@ default model, see the [`11_redteam_config.py` cookbook](../examples/redteam/11_
 
 ### What the totals do not include
 
-`token_usage_total` records the calls the run makes on the attack path. Setup and
-post-processing calls are real spend that lands outside it:
+`token_usage_total` covers the attack path plus post-processing spend —
+`report.summary.post_processing_token_usage` (recommendation generation,
+including trace condensing, plus the executive-summary narrative) is folded in
+explicitly once both steps have run, been skipped, or failed. What still lands
+outside it:
 
 - Capability classification (resource inference, tool classification) and
   blackbox target classification.
 - Strategy and objective generation.
-- Recommendations, trace condensing, and the executive summary.
 - Target-side usage, when the backend does not report it back.
 
 A structured-output call's own fallback ladder is no longer among them. When a
@@ -419,11 +423,12 @@ provider rejects the strict schema, the helper degrades through a non-strict
 schema, a forced tool call and a bare `json_object` request — up to four billed
 calls for one answer. Every rung that reached the provider is now counted in that
 call's usage, not just the rung that answered, so a call that degraded twice is
-priced as three calls rather than one. Whether that figure reaches
-`token_usage_total` still depends on where the call sits: the recommendations and
-trace-condensing calls above run after the summary is finalized, so their totals
-are written to the run log (`Red-team recommendations: N tokens over M LLM
-call(s), $X`) rather than into the report.
+priced as three calls rather than one. The recommendations and trace-condensing
+calls run after the attack-only totals are computed, so their usage is recorded
+separately (`report.summary.post_processing_token_usage`) and then added into
+`token_usage_total` — it also still appears in the run log (`Red-team
+recommendations: N tokens over M LLM call(s), $X`) for visibility during the run,
+before the report is finalized.
 
 If `priced_calls < calls` in the summary, some counted calls had no provider
 price either, so the dollar figure is a lower bound on a subset. The same is true

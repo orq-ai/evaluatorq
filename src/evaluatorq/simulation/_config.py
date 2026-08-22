@@ -34,7 +34,7 @@ from pydantic import BaseModel, ConfigDict
 # static typing) — pydantic resolves annotations at class-creation time even
 # with `from __future__ import annotations`, so they must be real, importable
 # names in this module's namespace and can't live behind `TYPE_CHECKING`.
-from evaluatorq.contracts import AgentTarget  # noqa: TC001
+from evaluatorq.contracts import AgentTarget, TokenUsage  # noqa: TC001
 from evaluatorq.simulation.evaluators.scorers import SimulationScoringConfig  # noqa: TC001
 from evaluatorq.simulation.hooks import SimulationHooks  # noqa: TC001
 from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig  # noqa: TC001
@@ -120,6 +120,10 @@ class SimulationConfig(BaseModel):
     hooks: SimulationHooks | None = None
     generation_client: Any = None
     """``AsyncOpenAI | None`` — ``Any`` at runtime, see module note above."""
+    generation_token_usage: TokenUsage | None = None
+    """Combined persona+scenario generation cost from `generate_and_simulate`'s
+    GENERATE stage (``None`` for `simulate`, which never generates), folded into
+    ``SimulationRun.token_usage_total`` by ``_simulate_core``."""
     upload_results: bool = True
     evaluation_description: str | None = None
     orq_results_path: str | None = None

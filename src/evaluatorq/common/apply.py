@@ -263,7 +263,8 @@ async def _merge_call(
     call_extra_body: dict[str, Any] | None = None
     extra_kwargs: dict[str, Any] = {}
     if cfg is not None:
-        role_kwargs: dict[str, Any] = cfg.evaluator.as_call_config().completion_params(
+        role_kwargs: dict[str, Any] = cfg.evaluator.as_call_config().request_params(
+            api='chat_completions',
             model=model,
             messages=messages,
             max_completion_tokens=max_tokens,

@@ -168,30 +168,25 @@ def _create_openresponses_backend(
     pipeline_config: LLMConfig | None = None,
     **_: object,  # absorbs unknown kwargs from resolve_backend's uniform signature
 ) -> Backend:
-    """Build an OpenResponses target with target retries owned by the orchestrator.
+    """Build an OpenResponses target. Injected clients are cloned with SDK retries off.
 
-    ``retry_attempts=1`` leaves the target's internal ``with_retry`` boundary as
-    a single SDK call; ``call_target_with_retry`` owns the actual target retry
-    budget. Injected clients are cloned with SDK retries disabled before they
-    reach that boundary.
+    Target retry is `call_target_with_retry`'s, per the `AgentTarget` contract —
+    `OrqResponsesTarget` already defaults to a single attempt, so nothing is set here.
     """
     from evaluatorq.redteam.backends.openresponses import OpenResponsesBackend
 
     instructions = target_config.system_prompt if target_config else None
     timeout_ms = pipeline_config.target_agent_timeout_ms if pipeline_config else None
-    # call_target_with_retry owns retry here; keep one inner attempt, no second budget.
     if pipeline_config is not None:
         warn_ignored_target_retries(
             'OpenResponses',
             retry_count=pipeline_config.retry_count,
             retry_on_codes=pipeline_config.retry_on_codes,
         )
-    retry_attempts = 1
     return OpenResponsesBackend(
         client=without_client_retries(llm_client) if llm_client is not None else None,
         instructions=instructions,
         timeout_ms=timeout_ms,
-        retry_attempts=retry_attempts,
         reasoning_effort=pipeline_config.target_reasoning_effort if pipeline_config else None,
     )
 

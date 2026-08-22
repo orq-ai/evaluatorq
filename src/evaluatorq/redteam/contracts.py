@@ -1673,10 +1673,21 @@ class ReportSummary(BaseModel):
         description='Rows that failed before an attack job could execute',
     )
     errors_by_type: dict[str, int] = Field(default_factory=dict, description='Error counts grouped by type')
-    token_usage_total: TokenUsage | None = Field(default=None, description='Aggregated token usage across all results')
+    token_usage_total: TokenUsage | None = Field(
+        default=None,
+        description='Aggregated token usage across all attack results plus post_processing_token_usage '
+        '(recommendation generation and the executive-summary narrative), when either ran and billed usage.',
+    )
     token_usage_by_source: dict[str, TokenUsage] = Field(
         default_factory=dict,
-        description='Token usage grouped by datapoint source (static/template_dynamic/generated_dynamic); sums to token_usage_total',
+        description='Token usage grouped by datapoint source (static/template_dynamic/generated_dynamic); sums to '
+        'the attack-result portion of token_usage_total, i.e. token_usage_total minus post_processing_token_usage.',
+    )
+    post_processing_token_usage: TokenUsage | None = Field(
+        default=None,
+        description='Token usage billed after attack execution: the focus-area recommendation phase '
+        '(condense + per-area calls) and the executive-summary narrative. None if neither ran or neither '
+        'billed usage. Already folded into token_usage_total.',
     )
     by_vulnerability: dict[str, VulnerabilitySummary] = Field(default_factory=dict)
     by_category: dict[str, CategorySummary] = Field(default_factory=dict)

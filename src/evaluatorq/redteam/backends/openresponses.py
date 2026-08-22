@@ -41,7 +41,7 @@ class OpenResponsesBackend(Backend):
         client: AsyncOpenAI | None = None,
         instructions: str | None = None,
         timeout_ms: int | None = None,
-        retry_attempts: int | None = None,
+        retry_attempts: int = 1,
         retry_statuses: list[int] | None = None,
         reasoning_effort: str | None = None,
         require_orq: bool = True,

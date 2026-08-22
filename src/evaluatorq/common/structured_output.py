@@ -195,7 +195,7 @@ async def _rung_usage(
 # owned by this helper, and letting extra_kwargs swap them out would silently
 # break the call it rides on (e.g. replacing the response_format schema this
 # helper exists to enforce). Enforced through the same shared `check_reserved_keys`
-# guard `LLMCallConfig.completion_params` / `.responses_params` use (contracts.py),
+# guard `LLMCallConfig.request_params` use (contracts.py),
 # so there is exactly one implementation of "raise on a structural-key clash" in
 # the package — this module previously hand-rolled its own `reserved = ... &
 # keys(); if reserved: raise` copy of that check, which is what let it drift out
@@ -795,7 +795,7 @@ async def generate_structured(
 
     ``reasoning_effort`` is sent only when truthy, as a flat ``reasoning_effort``
     field on the chat legs and as ``reasoning={'effort': ...}`` on the Responses
-    leg (mirroring `LLMCallConfig.completion_params` / `.responses_params`) — a
+    leg (mirroring `LLMCallConfig.request_params`) — a
     caller wanting it must be on Chat Completions or the Responses API, since
     only those two shapes are rendered here.
 

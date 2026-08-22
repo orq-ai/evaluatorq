@@ -426,7 +426,11 @@ def _build_evaluator_scores_section(results: list[SimulationResult]) -> ReportSe
     )
 
 
-def _build_token_usage_section(results: list[SimulationResult]) -> ReportSection:
+def _build_token_usage_section(
+    results: list[SimulationResult],
+    *,
+    run_token_usage_total: Usage | None = None,
+) -> ReportSection:
     # Usage.__add__ aggregates cost alongside tokens, keeping None ("provider
     # did not report cost") distinct from 0.0 ("provider reported free").
     usage_total: Usage = sum((r.token_usage for r in results), Usage())
@@ -437,34 +441,54 @@ def _build_token_usage_section(results: list[SimulationResult]) -> ReportSection
     cache_creation = usage_total.cache_creation_tokens
     reasoning = usage_total.reasoning_tokens
     n = len(results) or 1
+    data: dict[str, Any] = {
+        # Legacy prompt_/completion_ keys retained for downstream consumers.
+        # These figures are the *simulation-only* total — the results passed
+        # in, which may be a filtered subset of the run and never include
+        # generation or executive-summary cost. Labelled 'simulation_*' in the
+        # data so a renderer that also has run_token_usage_total can't
+        # conflate the two numbers.
+        'prompt_tokens': input_tokens,
+        'completion_tokens': output_tokens,
+        'input_tokens': input_tokens,
+        'output_tokens': output_tokens,
+        'total_tokens': total,
+        'cached_tokens': cached,
+        'cache_creation_tokens': cache_creation,
+        'reasoning_tokens': reasoning,
+        'avg_total_per_conversation': total / n,
+        'avg_input_per_conversation': input_tokens / n,
+        'avg_output_per_conversation': output_tokens / n,
+        'avg_prompt_per_conversation': input_tokens / n,
+        'avg_completion_per_conversation': output_tokens / n,
+        'input_cost': usage_total.input_cost,
+        'output_cost': usage_total.output_cost,
+        'total_cost': usage_total.total_cost,
+        # Cost coverage: without these the renderer's cost_coverage() call
+        # always sees 0 and silently drops the "(N of M calls)" qualifier,
+        # so a partial total reads as authoritative.
+        'calls': usage_total.calls,
+        'priced_calls': usage_total.priced_calls,
+        'unknown_usage_conversations': sum(1 for r in results if not r.token_usage_known),
+    }
+    # The run-wide figure (SimulationRun.token_usage_total): simulation +
+    # generation + executive summary. Only present when the caller passed the
+    # full run's total — e.g. a filtered dashboard view has no single figure
+    # that fairly represents "the run", so it's omitted there rather than
+    # silently narrowed to the filtered subset. Kept as its own labelled block
+    # so the two numbers (simulation-only vs whole-run) can never be confused
+    # for one another in the rendered report.
+    if run_token_usage_total is not None:
+        data['run_total_input_tokens'] = run_token_usage_total.input_tokens
+        data['run_total_output_tokens'] = run_token_usage_total.output_tokens
+        data['run_total_total_tokens'] = run_token_usage_total.total_tokens
+        data['run_total_cost'] = run_token_usage_total.total_cost
+        data['run_total_calls'] = run_token_usage_total.calls
+        data['run_total_priced_calls'] = run_token_usage_total.priced_calls
     return ReportSection(
         kind='token_usage',
         title='Token Usage',
-        data={
-            # Legacy prompt_/completion_ keys retained for downstream consumers.
-            'prompt_tokens': input_tokens,
-            'completion_tokens': output_tokens,
-            'input_tokens': input_tokens,
-            'output_tokens': output_tokens,
-            'total_tokens': total,
-            'cached_tokens': cached,
-            'cache_creation_tokens': cache_creation,
-            'reasoning_tokens': reasoning,
-            'avg_total_per_conversation': total / n,
-            'avg_input_per_conversation': input_tokens / n,
-            'avg_output_per_conversation': output_tokens / n,
-            'avg_prompt_per_conversation': input_tokens / n,
-            'avg_completion_per_conversation': output_tokens / n,
-            'input_cost': usage_total.input_cost,
-            'output_cost': usage_total.output_cost,
-            'total_cost': usage_total.total_cost,
-            # Cost coverage: without these the renderer's cost_coverage() call
-            # always sees 0 and silently drops the "(N of M calls)" qualifier,
-            # so a partial total reads as authoritative.
-            'calls': usage_total.calls,
-            'priced_calls': usage_total.priced_calls,
-            'unknown_usage_conversations': sum(1 for r in results if not r.token_usage_known),
-        },
+        data=data,
     )
 
 
@@ -678,11 +702,21 @@ def build_report_sections(
     *,
     executive_summary: str | None = None,
     recommendations: list[SimulationRecommendation] | None = None,
+    run_token_usage_total: Usage | None = None,
 ) -> list[ReportSection]:
     """Produce the ordered list of report sections from simulation results.
 
     ``recommendations`` are pre-generated (LLM calls happen at run time, not
     render time); when absent or empty the section is omitted entirely.
+
+    ``run_token_usage_total`` is ``SimulationRun.token_usage_total`` — the
+    whole-run figure (simulation + generation + executive summary). Pass it
+    when *results* is the run's full, unfiltered result set so the rendered
+    token-usage section can show both the simulation-only total (recomputed
+    from *results*, so it stays correct even when *results* is filtered) and
+    the run total side by side, labelled distinctly. Omit it (the default)
+    when *results* is a subset — a filtered dashboard view, for instance — for
+    which the whole-run figure would be misleading.
     """
     sections: list[ReportSection] = []
     # Order tells the story worst-first: verdict -> what failed -> how it failed
@@ -712,7 +746,7 @@ def build_report_sections(
     if errors is not None:
         sections.append(errors)
     sections.extend((
-        _build_token_usage_section(results),
+        _build_token_usage_section(results, run_token_usage_total=run_token_usage_total),
         _build_individual_results_section(results),
     ))
     return sections

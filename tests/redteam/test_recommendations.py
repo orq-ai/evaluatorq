@@ -11,6 +11,7 @@ hardcoded value.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -146,7 +147,7 @@ async def test_default_cfg_uses_reasoning_safe_temperature(
     (``temperature=1.0``) — which reasoning models accept."""
     client, captured = mock_client_and_capture
 
-    recs = await generate_focus_area_recommendations(_empty_report(), client, model='openai/gpt-5-mini')
+    recs, _ = await generate_focus_area_recommendations(_empty_report(), client, model='openai/gpt-5-mini')
 
     assert recs, 'Expected at least one recommendation'
     assert recs[0].recommendations == ['Reduce agent permissions']
@@ -273,7 +274,7 @@ async def test_fenced_json_object_fallback_parses(monkeypatch: pytest.MonkeyPatc
     client.chat.completions.parse = AsyncMock(side_effect=fake_parse)
     client.chat.completions.create = AsyncMock(side_effect=fake_create)
 
-    recs = await generate_focus_area_recommendations(_empty_report(), client, model='some/legacy-model')
+    recs, _ = await generate_focus_area_recommendations(_empty_report(), client, model='some/legacy-model')
 
     assert recs, 'fenced fallback payload should still produce a recommendation'
     assert recs[0].recommendations == ['Add an allowlist']
@@ -300,7 +301,7 @@ async def test_malformed_fallback_is_swallowed(monkeypatch: pytest.MonkeyPatch) 
     client.chat.completions.parse = AsyncMock(side_effect=fake_parse)
     client.chat.completions.create = AsyncMock(side_effect=fake_create)
 
-    recs = await generate_focus_area_recommendations(_empty_report(), client, model='some/legacy-model')
+    recs, _ = await generate_focus_area_recommendations(_empty_report(), client, model='some/legacy-model')
 
     assert recs == []
 
@@ -323,7 +324,7 @@ async def test_chat_completion_failure_returns_empty_without_raising(
     client = MagicMock()
     client.chat.completions.parse = AsyncMock(side_effect=fake_parse)
 
-    recs = await generate_focus_area_recommendations(_empty_report(), client, model='openai/gpt-5-mini')
+    recs, _ = await generate_focus_area_recommendations(_empty_report(), client, model='openai/gpt-5-mini')
 
     assert recs == []
 
@@ -388,11 +389,55 @@ async def test_fallback_tolerates_non_string_items(monkeypatch: pytest.MonkeyPat
     client.chat.completions.parse = AsyncMock(side_effect=fake_parse)
     client.chat.completions.create = AsyncMock(side_effect=fake_create)
 
-    recs = await generate_focus_area_recommendations(_empty_report(), client, model='some/legacy-model')
+    recs, _ = await generate_focus_area_recommendations(_empty_report(), client, model='some/legacy-model')
 
     assert recs, 'one bad item must not drop the section'
     assert recs[0].recommendations == ['1', 'Add an allowlist']
     assert recs[0].patterns_observed == '5'
+
+
+# ---------------------------------------------------------------------------
+# Returned usage (RES-1295): the caller folds this into
+# report.summary.post_processing_token_usage.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_returns_summed_usage_for_the_run(
+    mock_client_and_capture: tuple[Any, dict[str, Any]],
+) -> None:
+    """The tuple's second element is the summed usage of every LLM call the run
+    made (condense calls included), for the caller to fold into
+    ``report.summary.post_processing_token_usage`` — not just logged and dropped."""
+    client, captured = mock_client_and_capture
+
+    async def fake_parse_with_usage(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        response = _parsed_response()
+        response.usage = SimpleNamespace(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+        return response
+
+    client.chat.completions.parse = AsyncMock(side_effect=fake_parse_with_usage)
+
+    recs, usage = await generate_focus_area_recommendations(_empty_report(), client, model='openai/gpt-5-mini')
+
+    assert recs, 'Expected at least one recommendation'
+    assert usage is not None
+    assert usage.input_tokens == 10
+    assert usage.output_tokens == 5
+    assert usage.total_tokens == 15
+
+
+@pytest.mark.asyncio
+async def test_returns_none_usage_when_no_areas_are_analyzed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No top risk areas means no LLM call at all, so usage stays ``None`` rather
+    than an optimistic zero."""
+    monkeypatch.setattr(rec_mod, '_compute_top_risk_areas', lambda _r, _n: [])
+
+    recs, usage = await generate_focus_area_recommendations(_empty_report(), MagicMock(), model='openai/gpt-5-mini')
+
+    assert recs == []
+    assert usage is None
 
 
 # ---------------------------------------------------------------------------
@@ -429,7 +474,7 @@ async def test_config_drives_token_budget_and_suggestion_cap(monkeypatch: pytest
 
     client, captured = _capturing_client(monkeypatch, ['one', 'two', 'three'])
 
-    recs = await generate_focus_area_recommendations(
+    recs, _ = await generate_focus_area_recommendations(
         _empty_report(),
         client,
         model='openai/gpt-5-mini',
@@ -574,7 +619,7 @@ async def test_failed_condense_truncates_instead_of_losing_the_area(monkeypatch:
     client = MagicMock()
     client.chat.completions.parse = AsyncMock(side_effect=fake_parse)
 
-    recs = await generate_focus_area_recommendations(
+    recs, _ = await generate_focus_area_recommendations(
         _empty_report(),
         client,
         model='openai/gpt-5-mini',

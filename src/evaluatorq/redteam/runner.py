@@ -37,7 +37,7 @@ from evaluatorq.common.thread_context import (
     evaluatorq_pipeline,
 )
 from evaluatorq.common.tracing import AttrMap, set_span_attrs, truncate_for_span
-from evaluatorq.contracts import AgentTarget, Message
+from evaluatorq.contracts import AgentTarget, Message, TokenUsage
 from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities, classify_agent_capabilities
 from evaluatorq.redteam.adaptive.orchestrator import ProgressDisplay, _get_active_progress
 from evaluatorq.redteam.adaptive.pipeline import (
@@ -1060,6 +1060,14 @@ async def red_team(
                     'prompt-based red teaming (requires live-system testing).',
                 )
 
+            # Post-processing usage (recommendations + executive summary) is billed
+            # after the attack-only totals below are computed, so it is folded into
+            # `report.summary.token_usage_total` explicitly once both steps have run
+            # (or been skipped/failed) rather than being lost to a log line. A step
+            # that was skipped or failed contributes None, never a zero.
+            post_processing_usages: list[TokenUsage | None] = []
+            from evaluatorq.common.structured_output import sum_structured_usage
+
             # Generate LLM-based recommendations for focus areas (on by default)
             if recommendation_config is not None:
                 try:
@@ -1073,13 +1081,15 @@ async def red_team(
                         'orq.redteam.recommendations',
                         {'orq.redteam.model': evaluator_model},
                     ):
-                        report.focus_area_recommendations = await generate_focus_area_recommendations(
+                        focus_area_recommendations, rec_usage = await generate_focus_area_recommendations(
                             report=report,
                             llm_client=rec_client,
                             model=evaluator_model,
                             recommendations=recommendation_config,
                             cfg=config,
                         )
+                        report.focus_area_recommendations = focus_area_recommendations
+                        post_processing_usages.append(rec_usage)
                 except (TypeError, AttributeError, ImportError, NameError, KeyError):
                     raise
                 except Exception:
@@ -1106,7 +1116,7 @@ async def red_team(
                         'orq.redteam.executive_summary',
                         {'orq.redteam.model': evaluator_model},
                     ):
-                        report.executive_summary = await _gen_exec_summary(
+                        executive_summary_result = await _gen_exec_summary(
                             build_redteam_facts(report),
                             llm_client=es_client,
                             model=evaluator_model,
@@ -1118,6 +1128,8 @@ async def red_team(
                             extra_body=config.retry_extra_body(es_client),
                             extra_kwargs=config.evaluator.extra_kwargs,
                         )
+                        report.executive_summary = executive_summary_result.text
+                        post_processing_usages.append(executive_summary_result.usage)
                 except (TypeError, AttributeError, ImportError, NameError, KeyError):
                     raise
                 except Exception:
@@ -1125,6 +1137,17 @@ async def red_team(
                     report.pipeline_warnings.append(
                         'Failed to generate executive summary. Check LLM credentials and model configuration.'
                     )
+
+            # Fold post-processing spend into the run total now that both steps above
+            # have run (or been skipped/failed) — `report.summary.token_usage_total` up
+            # to this point only covers attack results (see `_aggregate_token_usage`).
+            post_processing_usage = sum_structured_usage(post_processing_usages)
+            if post_processing_usage is not None:
+                report.summary.post_processing_token_usage = post_processing_usage
+                report.summary.token_usage_total = sum_structured_usage([
+                    report.summary.token_usage_total,
+                    post_processing_usage,
+                ])
 
             # Persist report according to the save mode. 'detail' mode already had
             # the inner pipeline write 01/02/03 to resolved_output_dir, so here we

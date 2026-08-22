@@ -688,7 +688,7 @@ because that count is the denominator its shares are computed over. A run that
 produced fewer datapoints than traces has those warnings behind it.
 
 Generation runs before a simulation exists, so its spend has no field on any
-result. Each phase reports its own total to the run log instead — `Trace
+*result*. Each phase reports its own total to the run log — `Trace
 summarization`, `Trace persona/scenario inference`, `Trace traffic profiling`,
 `Persona/scenario generation` and `Simulation recommendations` each log the
 tokens, the number of LLM calls, and the cost when the models are priced. The
@@ -696,6 +696,15 @@ call count includes the fallback rungs a structured-output call burned on the wa
 to an answer, and a rung whose usage the provider did not report is counted as
 one unpriced call rather than as zero, so the figure reads as a lower bound
 instead of a confident total.
+
+`SimulationRun.token_usage_total` is the run-level figure: every result's
+`token_usage`, plus — for `generate_and_simulate()` — the GENERATE stage's
+persona/scenario generation cost, plus the executive summary's own completion
+cost when one was generated. It is recomputed after the executive summary runs
+so it never goes stale relative to that later-arriving cost. **Recommendation
+generation is not folded in** — that spend stays log-only (`Simulation
+recommendations: N tokens over M LLM call(s), $X`), the same as the trace-analysis
+phases above. `None` only when nothing in the run was ever billed.
 
 ##### What lands in the generated dataset
 

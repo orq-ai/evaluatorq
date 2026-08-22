@@ -88,7 +88,7 @@ class OrqResponsesTarget(AgentTarget):
         tools: list[dict[str, Any]] | None = None,
         memory_entity_id: str | None = None,
         client: AsyncOpenAI | None = None,
-        retry_attempts: int | None = None,
+        retry_attempts: int = 1,
         retry_statuses: Iterable[int] | None = None,
         require_orq: bool = False,
     ) -> None:
@@ -200,11 +200,13 @@ class OrqResponsesTarget(AgentTarget):
     ) -> AgentResponse:
         """Pure call into ``client.responses.create``; no instance mutation.
 
-        Applies retry (rate-limit / server errors) via `with_retry` and
-        converts `asyncio.TimeoutError` into a descriptive RuntimeError. The
-        red-team backend sets ``retry_attempts=1`` so
-        ``call_target_with_retry`` owns the target retry budget; simulation
-        callers may instead configure this boundary's ``with_retry`` budget.
+        Converts `asyncio.TimeoutError` into a descriptive RuntimeError.
+
+        ``retry_attempts`` defaults to 1 — a single attempt, no retry — because
+        ``call_target_with_retry`` owns the target retry budget on every surface
+        that drives a target (see ``AgentTarget``). Raise it only when calling
+        ``respond`` directly, outside that wrapper; under it, the two budgets
+        multiply.
         """
         timeout_s = self.config.timeout_ms / 1000.0 if self.config.timeout_ms else None
 
@@ -220,11 +222,11 @@ class OrqResponsesTarget(AgentTarget):
             if routes_through_orq and self.memory_entity_id:
                 body_extra['memory'] = {'entity_id': self.memory_entity_id}
 
-            # ``responses_params`` folds temperature/max_output_tokens/reasoning
+            # ``request_params`` folds temperature/max_output_tokens/reasoning
             # and ``extra_kwargs`` (top_p, store, truncation, tool_choice, ...)
             # into one dict, ``extra_kwargs`` winning last so a caller-supplied
             # value overrides these computed ones. ``extra_body`` is one of the
-            # structural keys ``responses_params`` guards — a caller cannot
+            # structural keys ``request_params`` guards — a caller cannot
             # replace the router's thread/memory body wholesale via
             # ``extra_kwargs={'extra_body': ...}``; it 400s instead of silently
             # dropping ``body_extra`` above. A caller that needs to add to
@@ -239,7 +241,7 @@ class OrqResponsesTarget(AgentTarget):
                 call_params['metadata'] = metadata
             kwargs: dict[str, Any] = {
                 'model': self.config.model,
-                **self.config.responses_params(**call_params),
+                **self.config.request_params(api='responses', **call_params),
             }
             if body_extra:
                 kwargs['extra_body'] = {**kwargs.get('extra_body', {}), **body_extra}
@@ -336,9 +338,7 @@ class OrqResponsesTarget(AgentTarget):
             return agent_response.model_copy(update=updates)
 
         try:
-            retry_kwargs: dict[str, Any] = {}
-            if self.retry_attempts is not None:
-                retry_kwargs['max_attempts'] = self.retry_attempts
+            retry_kwargs: dict[str, Any] = {'max_attempts': self.retry_attempts}
             if self.retry_statuses is not None:
                 retry_kwargs['retry_statuses'] = self.retry_statuses
             return await with_retry(

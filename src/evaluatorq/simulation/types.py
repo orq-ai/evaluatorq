@@ -647,6 +647,19 @@ class SimulationRun(BaseModel):
     written so a future format change reports itself instead of failing
     structurally. None for runs saved before versioning, which read as v1."""
     executive_summary: str | None = None
+    token_usage_total: TokenUsage | None = None
+    """Combined priced token usage for the entire run: every datapoint's
+    ``SimulationResult.token_usage`` (``simulate`` and ``generate_and_simulate``
+    both fold this in), plus — for ``generate_and_simulate`` — the GENERATE
+    stage's persona+scenario generation cost, plus the executive summary's own
+    completion cost when one was generated. Set once by ``_simulate_core``
+    right after the per-datapoint total is known, then updated in place after
+    every later post-processing step that can spend tokens (currently the
+    executive summary) — so it always reflects the finished run, never a
+    snapshot taken before generation or the summary ran. A step that fails or
+    reports no usage (no LLM creds, an error, or nothing billed) leaves this
+    field unchanged rather than folding in a zero. ``None`` only for runs
+    saved before this field existed."""
     run_id: str | None = None
     """Client-minted run-grouping id (uuid hex, not an Orq-side run id) shared by every
     conversation's ``thread_id`` (``{run_id}:{index}``). Powers the dashboard's

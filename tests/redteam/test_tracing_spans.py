@@ -21,6 +21,7 @@ from opentelemetry import trace
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
 
+from evaluatorq.common.reports.executive_summary import ExecutiveSummary
 from evaluatorq.redteam.contracts import Pipeline, RedTeamReport, ReportSummary, SaveMode
 from evaluatorq.redteam.runner import RedTeamRunMetrics
 from evaluatorq.tracing import TracingContext
@@ -184,12 +185,12 @@ async def test_red_team_owns_whole_pipeline_span(
         patch(
             'evaluatorq.redteam.runner.generate_focus_area_recommendations',
             new_callable=AsyncMock,
-            return_value=MagicMock(),
+            return_value=([], None),
         ),
         patch(
             'evaluatorq.common.reports.executive_summary.generate_executive_summary',
             new_callable=AsyncMock,
-            return_value=MagicMock(),
+            return_value=ExecutiveSummary(text=None, usage=None),
         ),
     ):
         from evaluatorq.redteam.runner import red_team
@@ -247,12 +248,12 @@ async def test_root_span_carries_evaluatorq_run_id(
         patch(
             'evaluatorq.redteam.runner.generate_focus_area_recommendations',
             new_callable=AsyncMock,
-            return_value=MagicMock(),
+            return_value=([], None),
         ),
         patch(
             'evaluatorq.common.reports.executive_summary.generate_executive_summary',
             new_callable=AsyncMock,
-            return_value=MagicMock(),
+            return_value=ExecutiveSummary(text=None, usage=None),
         ),
     ):
         from evaluatorq.redteam.runner import red_team

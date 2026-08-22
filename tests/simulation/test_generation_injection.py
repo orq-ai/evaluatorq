@@ -55,9 +55,9 @@ async def test_generate_and_simulate_uses_orq_agent_description_when_omitted(mon
     )
     generated_descriptions: list[object] = []
 
-    def capture_generation(**kwargs: object) -> tuple[list[Persona], list[Scenario]]:
+    def capture_generation(**kwargs: object) -> tuple[list[Persona], list[Scenario], None]:
         generated_descriptions.append(kwargs["agent_description"])
-        return [_persona()], [_scenario()]
+        return [_persona()], [_scenario()], None
 
     with (
         patch(
@@ -88,9 +88,9 @@ async def test_generate_and_simulate_prefers_an_explicit_description(monkeypatch
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     generated_descriptions: list[object] = []
 
-    def capture_generation(**kwargs: object) -> tuple[list[Persona], list[Scenario]]:
+    def capture_generation(**kwargs: object) -> tuple[list[Persona], list[Scenario], None]:
         generated_descriptions.append(kwargs["agent_description"])
-        return [_persona()], [_scenario()]
+        return [_persona()], [_scenario()], None
 
     with (
         patch("evaluatorq.redteam.backends.registry.make_agent_backend") as make_backend,
@@ -240,7 +240,7 @@ async def test_generate_and_simulate_emit_datapoints_called_once(monkeypatch):
     with (
         patch(
             "evaluatorq.simulation.api._generate_personas_scenarios",
-            new=AsyncMock(return_value=([_persona()], [_scenario()])),
+            new=AsyncMock(return_value=([_persona()], [_scenario()], None)),
         ),
         patch(
             "evaluatorq.simulation.api._resolve_or_generate_datapoints",
@@ -345,7 +345,7 @@ async def test_sim_model_propagates_to_config_model(monkeypatch):
     with (
         patch(
             "evaluatorq.simulation.api._generate_datapoints_inner",
-            new=AsyncMock(return_value=(fake_datapoints, MagicMock(), False)),
+            new=AsyncMock(return_value=(fake_datapoints, MagicMock(), False, None)),
         ),
         patch(
             "evaluatorq.simulation.api._simulate_via_evaluatorq",
@@ -376,7 +376,7 @@ async def test_generate_and_simulate_closes_owned_generation_client_once(monkeyp
         ),
         patch(
             "evaluatorq.simulation.api._generate_personas_scenarios",
-            new=AsyncMock(return_value=([_persona()], [_scenario()])),
+            new=AsyncMock(return_value=([_persona()], [_scenario()], None)),
         ),
         patch(
             "evaluatorq.simulation.api._resolve_or_generate_datapoints",
@@ -408,7 +408,7 @@ async def test_generate_and_simulate_does_not_close_injected_generation_client(m
     with (
         patch(
             "evaluatorq.simulation.api._generate_personas_scenarios",
-            new=AsyncMock(return_value=([_persona()], [_scenario()])),
+            new=AsyncMock(return_value=([_persona()], [_scenario()], None)),
         ),
         patch(
             "evaluatorq.simulation.api._resolve_or_generate_datapoints",
@@ -450,7 +450,7 @@ async def test_generate_and_simulate_closes_owned_client_when_emit_datapoints_ra
         ),
         patch(
             "evaluatorq.simulation.api._generate_personas_scenarios",
-            new=AsyncMock(return_value=([_persona()], [_scenario()])),
+            new=AsyncMock(return_value=([_persona()], [_scenario()], None)),
         ),
         patch(
             "evaluatorq.simulation.api._resolve_or_generate_datapoints",
@@ -479,7 +479,7 @@ async def test_generate_and_simulate_threads_seeds_and_edge_case_percentage(monk
 
     async def capture_generate_datapoints_inner(**kwargs):  # noqa: ANN003
         captured.update(kwargs)
-        return fake_datapoints, MagicMock(), False
+        return fake_datapoints, MagicMock(), False, None
 
     with (
         patch(
@@ -522,7 +522,7 @@ async def test_generate_and_simulate_threads_target_agent_knobs(monkeypatch):
     with (
         patch(
             "evaluatorq.simulation.api._generate_datapoints_inner",
-            new=AsyncMock(return_value=(fake_datapoints, MagicMock(), False)),
+            new=AsyncMock(return_value=(fake_datapoints, MagicMock(), False, None)),
         ),
         patch(
             "evaluatorq.simulation.api._simulate_via_evaluatorq",

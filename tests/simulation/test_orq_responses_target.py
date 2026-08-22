@@ -113,12 +113,15 @@ def _make_target(
     instructions: str | None = None,
     timeout_ms: int = 30_000,
     tools: list[dict[str, Any]] | None = None,
+    retry_attempts: int = 1,
 ) -> OrqResponsesTarget:
     """Create an OrqResponsesTarget with an injected mock client."""
     if client is None:
         client = _make_client()
     config = LLMCallConfig(model="gpt-4o", timeout_ms=timeout_ms)
-    return OrqResponsesTarget(config, instructions=instructions, tools=tools, client=client)
+    return OrqResponsesTarget(
+        config, instructions=instructions, tools=tools, client=client, retry_attempts=retry_attempts
+    )
 
 
 def _responses_http_response(
@@ -484,6 +487,17 @@ class TestOrqResponsesTargetNew:
         client = _make_client()
         target = OrqResponsesTarget(LLMCallConfig(model="gpt-4o"), tools=tools, client=client)
         assert target.new().tools == target.tools
+
+    def test_default_is_a_single_attempt(self):
+        """`call_target_with_retry` owns the target retry budget on every surface.
+
+        A default > 1 here multiplies against that outer budget instead of adding
+        to it — 5 inner attempts under 3 outer ones is 15 calls to a target that
+        is already refusing.
+        """
+        target = OrqResponsesTarget(LLMCallConfig(model="gpt-4o"), client=_make_client())
+        assert target.retry_attempts == 1
+        assert target.new().retry_attempts == 1
 
     def test_new_preserves_retry_settings(self):
         client = _make_client()
@@ -853,12 +867,31 @@ class TestOrqResponsesTargetRetry:
         )
         good = _make_response(response_id="resp-after-retry")
         client.responses.create = AsyncMock(side_effect=[rate_limit, good])
-        target = _make_target(client=client)
+        # Opt-in: the default is a single attempt because call_target_with_retry
+        # owns the budget. Raising it is for callers driving respond() directly.
+        target = _make_target(client=client, retry_attempts=2)
 
         result = await target.respond(_make_messages())
 
         assert client.responses.create.await_count == 2
         assert isinstance(result, AgentResponse)
+
+    @pytest.mark.asyncio
+    async def test_does_not_retry_by_default(self, monkeypatch):
+        """The default must not stack under `call_target_with_retry`."""
+        from openai import APIStatusError
+
+        monkeypatch.setattr("evaluatorq.common.retry.asyncio.sleep", AsyncMock(return_value=None))
+
+        client = _make_client()
+        rate_limit = APIStatusError("rate limited", response=MagicMock(status_code=429, headers={}), body=None)
+        client.responses.create = AsyncMock(side_effect=rate_limit)
+        target = _make_target(client=client)
+
+        with pytest.raises(APIStatusError):
+            await target.respond(_make_messages())
+
+        assert client.responses.create.await_count == 1
 
     @pytest.mark.asyncio
     async def test_does_not_retry_on_non_retryable_error(self, monkeypatch):

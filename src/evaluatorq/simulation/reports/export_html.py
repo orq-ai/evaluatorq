@@ -56,7 +56,7 @@ from evaluatorq.simulation.reports.sections import build_report_sections
 from evaluatorq.simulation.reports.token_usage import build_token_usage_rows
 
 if TYPE_CHECKING:
-    from evaluatorq.contracts import ReportSection
+    from evaluatorq.contracts import ReportSection, Usage
     from evaluatorq.simulation.types import SimulationRecommendation, SimulationResult
 
 # Heatmap colour direction:
@@ -691,6 +691,7 @@ def render_report_body(
     executive_summary: str | None = None,
     experiment_url: str | None = None,
     recommendations: list[SimulationRecommendation] | None = None,
+    run_token_usage_total: Usage | None = None,
 ) -> str:
     """Render simulation results as an HTML body fragment (no ``<html>`` or ``<head>`` wrapper).
 
@@ -710,11 +711,21 @@ def render_report_body(
         recommendations: Pre-generated remediation suggestions
             (``SimulationRun.recommendations``); rendered as their own
             section when non-empty.
+        run_token_usage_total: ``SimulationRun.token_usage_total`` — pass this
+            when *results* is the run's full result set so the Token Usage
+            section also shows the whole-run figure (simulation + generation +
+            executive summary), labelled distinctly from the simulation-only
+            total. Omit for a filtered/partial *results* list.
 
     Returns:
         An HTML fragment string (no ``<!DOCTYPE>``, ``<html>``, or ``<head>``).
     """
-    sections = build_report_sections(results, executive_summary=executive_summary, recommendations=recommendations)
+    sections = build_report_sections(
+        results,
+        executive_summary=executive_summary,
+        recommendations=recommendations,
+        run_token_usage_total=run_token_usage_total,
+    )
     summary_data = next((s.data for s in sections if s.kind == 'summary'), {})
 
     sd = summary_data
@@ -773,6 +784,7 @@ def export_html(
     executive_summary: str | None = None,
     experiment_url: str | None = None,
     recommendations: list[SimulationRecommendation] | None = None,
+    run_token_usage_total: Usage | None = None,
 ) -> str:
     """Render a list of simulation results as a self-contained HTML document."""
     head = (
@@ -788,6 +800,7 @@ def export_html(
         executive_summary=executive_summary,
         experiment_url=experiment_url,
         recommendations=recommendations,
+        run_token_usage_total=run_token_usage_total,
     )
     return (
         '<!DOCTYPE html>\n'

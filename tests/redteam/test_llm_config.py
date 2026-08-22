@@ -170,21 +170,21 @@ def test_retry_extra_body_empty_for_client_without_base_url():
 
 
 # ---------------------------------------------------------------------------
-# completion_params: extra_kwargs must merge, never collide
+# request_params (chat completions): extra_kwargs must merge, never collide
 # ---------------------------------------------------------------------------
 
 
-def test_completion_params_defaults_and_site_params():
+def test_request_params_defaults_and_site_params():
     from evaluatorq.contracts import LLMCallConfig
 
     cfg = LLMCallConfig(temperature=0.7, max_tokens=1234)
-    params = cfg.completion_params(model='m', messages=[{'role': 'user', 'content': 'q'}])
+    params = cfg.request_params(api='chat_completions', model='m', messages=[{'role': 'user', 'content': 'q'}])
     assert params['temperature'] == 0.7
     assert params['max_completion_tokens'] == 1234
     assert params['model'] == 'm'
 
 
-def test_completion_params_extra_kwargs_override_instead_of_typeerror():
+def test_request_params_extra_kwargs_override_instead_of_typeerror():
     # Regression: splatting extra_kwargs next to explicit temperature=/
     # max_completion_tokens= keywords raised TypeError ('got multiple values')
     # the moment a user routed those keys through extra_kwargs, turning every
@@ -192,16 +192,16 @@ def test_completion_params_extra_kwargs_override_instead_of_typeerror():
     from evaluatorq.contracts import LLMCallConfig
 
     cfg = LLMCallConfig(temperature=0.7, extra_kwargs={'temperature': 1.0, 'max_completion_tokens': 99})
-    params = cfg.completion_params(model='m', messages=[])
+    params = cfg.request_params(api='chat_completions', model='m', messages=[])
     assert params['temperature'] == 1.0
     assert params['max_completion_tokens'] == 99
 
 
-def test_completion_params_site_params_override_field_defaults():
+def test_request_params_site_params_override_field_defaults():
     from evaluatorq.contracts import LLMCallConfig
 
     cfg = LLMCallConfig(max_tokens=1000)
-    params = cfg.completion_params(max_completion_tokens=1500)
+    params = cfg.request_params(api='chat_completions', max_completion_tokens=1500)
     assert params['max_completion_tokens'] == 1500
 
 
@@ -210,7 +210,7 @@ def test_no_call_site_splats_extra_kwargs_next_to_explicit_sampling_kwargs():
 
     A call carrying explicit temperature=/max_completion_tokens= keywords AND a
     **...extra_kwargs splat raises TypeError on a duplicate key. All call sites
-    must go through LLMCallConfig.completion_params (or an equivalent dict
+    must go through LLMCallConfig.request_params (or an equivalent dict
     merge) instead.
     """
     import re
@@ -239,7 +239,7 @@ def test_openai_backend_factory_forwards_pipeline_timeout():
     assert backend._timeout_ms == 123_456
 
 
-def test_completion_params_rejects_structural_extra_kwargs():
+def test_request_params_rejects_structural_extra_kwargs():
     """extra_kwargs tunes sampling/provider options; silently replacing
     model/messages/response_format/extra_body would break the call it rides
     on (e.g. dropping a required JSON response format)."""
@@ -247,12 +247,12 @@ def test_completion_params_rejects_structural_extra_kwargs():
 
     cfg = LLMCallConfig(model='m', extra_kwargs={'response_format': None, 'temperature': 1})
     with pytest.raises(ValueError, match='structural'):
-        cfg.completion_params(model='m', messages=[])
+        cfg.request_params(api='chat_completions', model='m', messages=[])
 
 
-def test_completion_params_sampling_extra_kwargs_still_pass():
+def test_request_params_sampling_extra_kwargs_still_pass():
     from evaluatorq.contracts import LLMCallConfig
 
     cfg = LLMCallConfig(model='m', extra_kwargs={'top_p': 0.9})
-    params = cfg.completion_params(model='m', messages=[])
+    params = cfg.request_params(api='chat_completions', model='m', messages=[])
     assert params['top_p'] == 0.9
