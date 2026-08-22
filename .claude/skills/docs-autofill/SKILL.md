@@ -1,6 +1,6 @@
 ---
 name: docs-autofill
-description: Weekly unattended run that finds the top docs coverage gap, writes the page, runs every code block in it, has it reviewed by adversarial critics and roleplaying users, and opens a PR. Triggers on "docs autofill", "fill a docs gap", and from the docs-autofill cloud routine.
+description: Weekly unattended run that finds the top docs coverage gap, writes the page, runs every code block in it, has it reviewed by adversarial critics and roleplaying users until they can complete the task, and opens a PR. Triggers on "docs autofill", "fill a docs gap", and from the docs-autofill cloud routine.
 ---
 
 # docs-autofill
@@ -11,60 +11,77 @@ expected outcome, not a failure.
 Runs unattended in a cloud session. Every decision that would normally be a
 question to the user has to be a rule here instead.
 
-## Step 0 — env guard
+The routine's own config — cron, model, environment, sources, tools — is
+committed next to this file as `routine.json`. It is applied by hand, so a
+change there is not live until someone asks Claude to push it via the
+`RemoteTrigger` API. Say which you changed in the PR body.
+
+## Step 0 — what keys do we have
 
 ```bash
-uv sync --all-extras --all-groups
-uv run eq --help >/dev/null && uv run eq redteam --help >/dev/null && echo "ENV OK"
+for k in ORQ_API_KEY OPENAI_API_KEY; do
+  [ -n "${!k}" ] && echo "HAVE $k" || echo "MISSING $k"
+done
 ```
 
-No `ENV OK` → stop, Slack the failure (step 9), open nothing. Without the
-`redteam` extra whole axes vanish and the matrix reports phantom gaps, so a
-run on a broken env produces a confidently wrong PR.
+This is an inventory, not a gate. It feeds step 2: a gap whose examples cannot
+run without a key we do not have is not eligible this week. There is no
+"documented but unverified" tier — a page whose central example never executed
+is the exact artifact this routine exists to stop shipping.
 
-Also confirm keys are present:
+The environment guard proper lives in `docs-coverage` step 0 and runs at step 2.
+Do not repeat it here.
+
+## Step 1 — the ledger
+
+`ledger.md`, next to this file, is the only memory this routine has. One row per
+attempt: date, matrix cell, branch, outcome.
+
+Read it from `main` **and** from every unmerged autofill branch — an attempt that
+was rejected never merged its own row, and that is exactly the attempt you most
+need to remember:
 
 ```bash
-[ -n "$ORQ_API_KEY" ] && [ -n "$OPENAI_API_KEY" ] && echo "KEYS OK"
+git fetch --prune origin
+git pull --ff-only
+git show origin/main:.claude/skills/docs-autofill/ledger.md
+for b in $(git branch -r --list 'origin/docs/autofill-*' --format='%(refname:short)'); do
+  git show "$b:.claude/skills/docs-autofill/ledger.md" 2>/dev/null
+done
 ```
 
-No `KEYS OK` → keep going, but step 5 drops to the no-key tier and the PR body
-says so.
+Every cell that appears in any of those is off the table. A gap this routine has
+already tried is not a gap it gets to try again — if the attempt was wrong, a
+human closed it, and repeating it weekly is the worst failure mode available.
 
-## Step 1 — don't stack on yourself
-
-```bash
-gh pr list --repo orq-ai/evaluatorq --label docs-autofill --state open --json number,title,headRefName
-```
-
-- ≥2 open → stop. Slack one line saying the queue is full and name the PRs.
-  Unreviewed docs PRs pile up faster than anyone reads them.
-- 1 open → note the gap it fills; that gap is off the table this run.
-
-Create the label once if it does not exist:
-`gh label create docs-autofill --color 0e8a16 --description "Docs gap filled by the weekly autofill routine" 2>/dev/null || true`
-
-Also `git pull` so the matrix is computed against current `main`.
+This routine never inspects pull requests. It creates one. Branch names and the
+ledger are its whole view of history.
 
 ## Step 2 — find the gap
 
-Read `.claude/skills/docs-coverage/SKILL.md` and run it. It writes
-`.context/docs-coverage-matrix.md`.
+Read `.claude/skills/docs-coverage/SKILL.md` and run it, including its step 0
+environment guard. Its abort is this routine's abort: no `ENV OK`, stop and Slack
+the failure (step 9). Without the `redteam` extra whole axes vanish and the
+matrix reports phantom gaps, so a run on a broken env produces a confidently
+wrong PR.
 
-Pick **one** gap:
+It writes `.context/docs-coverage-matrix.md`. Pick **one** gap:
 
 1. Tier 1 only. Tier 2 gaps do not justify an unattended PR.
-2. Skip any gap already covered by an open `docs-autofill` PR (step 1).
-3. Among the rest, prefer the gap whose usage path a user is most likely to hit
+2. Not in the ledger (step 1).
+3. Every example it needs must be runnable with the keys from step 0. A gap that
+   needs a provider we have no key for is skipped — record it in the ledger with
+   outcome `skipped-no-key` so next week does not re-derive the same dead end.
+4. Among the rest, prefer the gap whose usage path a user is most likely to hit
    first — an entry point or CLI command over a niche axis crossing.
 
-**No qualifying Tier 1 gap → write no PR.** Slack the no-op line (step 9) with
-what you checked, and end the run. Do not downgrade to a Tier 2 gap to have
-something to show.
+**No qualifying gap → write no PR.** Slack the no-op line (step 9) with what you
+checked, and end the run. Do not downgrade to a Tier 2 gap to have something to
+show.
 
-The docs-coverage skill says to ask the user before writing. That instruction
-is superseded here — the gap-selection rules above are the standing answer, and
-the PR is the place the decision gets reviewed.
+The docs-coverage skill says to ask the user before writing. That instruction is
+superseded here — the rules above are the standing answer, and the PR is where
+the decision gets reviewed.
 
 ## Step 3 — write it
 
@@ -74,36 +91,41 @@ Scope: one page, or one section on an existing page. Not two. If the gap is
 genuinely too large for one page, write the page that covers the most common
 half and say in the PR body what you deliberately left out.
 
-Rules that are not negotiable, all from `CLAUDE.md` and the docs skills:
+Rules that are not negotiable:
 
 - **A new page goes in `mkdocs.yml` twice** — under `nav:` and under
   `plugins.llmstxt.sections`. The build fails on the mismatch, but fix it at
-  write time rather than discovering it in step 6.
+  write time rather than discovering it in step 5.
 - **Every code sample is fenced with a language.** No indented blocks, no bare
   `Example::`.
 - **Every code sample runs.** If you cannot make it run, it does not go in the
-  page. A sample that needs a key it does not have is not "runnable" — cut it or
-  reduce it to the part that does run.
+  page.
 - If a cell resolved `N/A` for a reason not yet listed, add it to
-  `.claude/skills/docs-coverage/axes.md` in the same branch. That is how the
-  false-gap list stays useful.
+  `.claude/skills/docs-coverage/axes.md` in the same branch — and say so in the
+  **PR title**. That file decides what counts as a gap at all; an agent quietly
+  narrowing its own future workload is the one edit here a human must see.
 - Do not touch `src/` beyond fixing a docstring fence that the build rejects.
 - No drive-by edits to unrelated pages.
 
+The rest of the rules that bind a docs page in this repo are in `CLAUDE.md` under
+**Docs**. Read it; do not expect this file to restate it.
+
 ## Step 4 — the receipt
 
-Extract every fenced block from the new/changed docs into `.context/` and run
-each one. Keep a receipt table — command, exit code, first ~5 lines of output —
-you will paste it into the PR body verbatim. A docs PR whose examples were never
-executed is the exact thing this routine exists to stop shipping.
+Extract every fenced block from the new/changed docs into `.context/` and run it.
+**One persistent shell per page, blocks in document order** — a page where block
+2 uses an export from block 1 is normal prose, and a per-block runner would force
+the author to write worse pages to satisfy the runner. Python blocks run under
+`uv run python`, in that same session's working directory.
 
-Bash blocks run as-is. Python blocks run with `uv run python`. A block that is
-deliberately illustrative (a directory tree, a config excerpt, a truncated
-response) is exempt — mark it `-` in the receipt with a one-word reason, do not
-silently omit the row.
+Keep a receipt table — command, exit code, first ~5 lines of output — and paste
+it into the PR body verbatim. A docs PR whose examples were never executed is the
+thing this routine exists to stop shipping.
 
-If `KEYS OK` did not print in step 0: run the blocks that need no network, and
-mark the rest `SKIPPED (no key)` in the receipt. Say it in the PR body too.
+A block that cannot be executed *by nature* — a directory tree, a config excerpt,
+a truncated API response — is exempt. Mark it `— illustrative (<what it is>)` in
+the receipt; never drop the row. The exemption is a claim the critics in step 6
+are told to check, so do not use it to retire a block that merely failed.
 
 ## Step 5 — validate
 
@@ -121,40 +143,48 @@ uv run basedpyright
 uv run pytest -m 'not integration'
 ```
 
-`basedpyright` is never scoped to a path. Everything must be green before review.
+`basedpyright` is never scoped to a path. Everything green before review.
 
 ## Step 6 — review, in parallel
 
-Two review tracks, dispatched together, sonnet for all of them. Wait for both
-before revising.
+Two tracks, dispatched together, sonnet for all of them. Both must return before
+revising. **No track holds the barrier forever**: once the others are in, wait a
+little longer, then proceed without the missing agent and name it in the PR body
+and in the Slack line. A partial review someone knows is partial beats a run that
+never ends.
 
 ### Track A — adversarial critique
 
-Read the hate skill and follow it, in `--apply --sonnet` mode, targeting the
-branch diff:
-
-The skill lives in the `orq-ai/research` checkout, not this one, so locate it
-rather than assuming a path:
+The `hate` skill lives in the `orq-ai/research` checkout, which `routine.json`
+mounts as a second source. Its path is `<research checkout>/.claude/skills/hate/SKILL.md`.
+Resolve it, and fall back to a search only if that path is wrong:
 
 ```bash
 find .. "$HOME/.claude/skills" -path '*skills/hate/SKILL.md' -print -quit 2>/dev/null
 ```
 
-Not found → skip track A, say so in the PR body in one line, and run track B
-alone. A missing critic is not a reason to skip the personas.
+Not found → run track B alone, say so in the PR body, and **say so in the Slack
+message** — half the review pipeline vanishing must not be visible only to
+someone who opens the PR.
 
-Two overrides for unattended use:
+Run it in `--apply --sonnet` mode. Two overrides for unattended use:
 
-- Its "ask, then STOP" branch does not apply — `--apply` mode is in force, so
-  Recommendations get applied and Decisions stay open.
+- Its "ask, then STOP" branch does not apply; `--apply` is in force, so
+  Recommendations get applied and Decisions stay open for the PR body.
 - Its Linear-comment step is replaced by the PR body. There is no ticket.
+- Its Context Resolution table has no pattern for "diff against main". Give it
+  the diff explicitly: commit step 3's work as a single commit before dispatch,
+  so its `git diff HEAD~1` fallback resolves to the whole page.
+
+Tell the critics to check the receipt's `illustrative` exemptions against the
+page. That claim is the only part of step 4 nothing else verifies.
 
 ### Track B — roleplaying users
 
-Four agents. Each gets a task **derived from the gap being filled**, not a
-generic one — the point is to test whether the new page makes *its own* usage
-path achievable. Write the four tasks yourself from the gap, one per persona,
-phrased as something a person wants to accomplish, never as "review this page".
+Four agents. Each gets a task **derived from the gap being filled** — the point
+is to test whether the new page makes *its own* usage path achievable. Write the
+four tasks yourself from the gap, one per persona, phrased as something a person
+wants to accomplish, never as "review this page".
 
 | Persona | Angle the task should take |
 |---|---|
@@ -165,8 +195,10 @@ phrased as something a person wants to accomplish, never as "review this page".
 
 Rules given to every persona agent:
 
-- You are a user, not a reviewer. You have the docs site and a terminal. You have
-  **not** seen the diff and must not read it.
+- You are a user, not a reviewer. You have the docs site and a terminal.
+- **Do not read the diff, the git log, or the raw markdown source.** Read the
+  built site. This is on your honour — nothing enforces it, and a persona that
+  peeks produces a report that looks fine and is worthless.
 - Start from `docs/index.md` and navigate. If you cannot find the page, that is
   the finding — say so and stop.
 - **Run the commands. Do not read them and assume.** Paste what actually happened.
@@ -177,38 +209,54 @@ Rules given to every persona agent:
 Their finding class is the one the critics structurally cannot produce: *the page
 is correct and I still could not do it.*
 
-## Step 7 — revise, once
+## Step 7 — iterate until nobody is blocked, max 3 rounds
 
-Apply the hate Recommendations and every persona finding that is a real
-navigability or completeness defect. One round only — docs quality does not
-improve on round three, cost does.
+A round is: apply the hate Recommendations and every persona finding that is a
+real navigability or completeness defect, re-run steps 4 and 5, then re-dispatch
+**only the personas that did not end COMPLETED**, with the same tasks.
 
-Re-run steps 4 and 5 after revising. The receipt in the PR is the post-revision
-one.
+Stop as soon as no persona is BLOCKED. Hard cap of 3 rounds — a page that is
+still blocking a reader after three rewrites has a problem the routine cannot see.
 
-Anything you did not apply goes in the PR body under **Not addressed**, with the
-reason. A persona that ended BLOCKED and was not unblocked must be called out in
-the PR title — that is a PR the human should read first.
+**Still BLOCKED after round 3:** open the PR anyway, put `[BLOCKED]` and the
+persona name in the title, and **DM Bauke on Slack** (`U09BR0B0Q7P`) rather than
+only posting to the channel. The work is worth keeping; the judgement is not the
+routine's to make.
+
+The receipt in the PR is the one from the final round.
+
+Anything not applied goes in the PR body under **Not addressed**, with the reason.
 
 ## Step 8 — PR
 
-Conventional commit, `docs:` type. Never `feat!`/`fix!`.
+Append the ledger row first, in the same commit as the docs:
 
-```bash
-gh pr create --assignee @me --label docs-autofill --base main
+```markdown
+| 2026-08-24 | `entry point × hybrid` | docs/autofill-hybrid-mode | opened |
 ```
 
-CODEOWNERS requests reviewers; do not pass `--reviewer`. Never merge.
+Then, body to a file — `gh pr create` prompts for a title and body it is not
+given, and a headless session has no terminal to prompt at:
+
+```bash
+gh pr create --title "docs: <what the page covers>" \
+             --body-file .context/pr-body.md \
+             --assignee @me --label docs-autofill --base main
+```
+
+Conventional commit, `docs:` type. Never `feat!`/`fix!`. CODEOWNERS requests
+reviewers; do not pass `--reviewer`. Never merge.
 
 PR body, in this order:
 
-1. **The gap** — the matrix cell, quoted, and why it ranked first.
+1. **The gap** — the matrix cell as a literal `gap: <axis> × <axis>` line, then why it ranked first.
 2. **What the page covers**, and what it deliberately does not.
-3. **Receipt** — the step 4 table.
-4. **Persona verdicts** — one line each, persona → task → verdict.
+3. **Receipt** — the step 4 table, final round.
+4. **Persona verdicts** — one line each, persona → task → verdict, and how many rounds it took.
 5. **Open decisions** — the hate Decisions, unresolved, each with its Lean.
 6. **Not addressed** — findings skipped, with reasons.
-7. One line noting this was opened by the weekly docs-autofill routine.
+7. Any missing reviewer, and whether `routine.json` changed.
+8. One line noting this was opened by the weekly docs-autofill routine.
 
 ## Step 9 — Slack
 
@@ -216,18 +264,20 @@ Channel `research-assistant` (`C0BNKRH9FGR`) via `slack_send_message`.
 **Standard Markdown, not Slack mrkdwn** — the tool converts it itself. Links as
 `[#123](url)`, bold as `**bold**`, bullets as `• `.
 
-Post exactly one message per run, in every case:
+Exactly one message per run, in every case:
 
-- **PR opened:** the gap in one clause, the PR link, persona verdict counts, and
-  the number of open decisions.
-- **No-op:** one line — what was checked, why no gap cleared the bar.
-- **Aborted:** env guard failed, or the PR queue was full. Name the cause.
+- **PR opened** — the gap in one clause, the PR link, persona verdicts and rounds
+  taken, open decision count. Name any reviewer that did not run.
+- **PR blocked after 3 rounds** — as above, plus a DM to `U09BR0B0Q7P`.
+- **No-op** — what was checked, why no gap cleared the bar.
+- **Aborted** — env guard failed, or `gh pr create` failed after the work was
+  done. Name the cause; a failure at the last step is the most expensive one.
 
-A cloud run that dies silently is worse than one that fails loudly. If the
-channel post fails with `not_in_channel` or `channel_not_found`, DM
-`U09BR0B0Q7P` and say the channel post failed.
+A cloud run that dies silently is worse than one that fails loudly. If the channel
+post fails with `not_in_channel` or `channel_not_found`, DM `U09BR0B0Q7P` and say
+the channel post failed.
 
 ## Caps
 
-One gap. One revision round. Nine agents (4 critics + 4 personas + 1 author).
-Never merge. Never touch `src/` beyond a docstring fence.
+One gap. Three revision rounds. Never merge. Never touch `src/` beyond a docstring
+fence.

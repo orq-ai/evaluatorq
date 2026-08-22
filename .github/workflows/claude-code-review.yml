@@ -1,0 +1,68 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  claude-review:
+    # Dependabot runs read the Dependabot secret store, where CLAUDE_CODE_OAUTH_TOKEN
+    # does not exist, and the action refuses bot actors anyway.
+    if: github.actor != 'dependabot[bot]'
+
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Review this pull request and give feedback on:
+            - Code quality and best practices
+            - Potential bugs or issues
+            - Performance considerations
+            - Security concerns
+            - Test coverage
+
+            Then run the docs check below. Use the repository's CLAUDE.md for style
+            and conventions. Be constructive and specific.
+
+            ## Docs check
+
+            This repo's rule is that docs ship in the same PR as the feature. Decide
+            whether this PR touches public surface: `__all__`, CLI commands or flags,
+            defaults, environment variables, or members of an enum or registry.
+
+            If it does not, say "no public surface touched" in one line and skip the
+            rest of this section. Most PRs land here — do not manufacture a docs
+            finding to have something to say.
+
+            If it does, name each public-surface change and say whether the diff also
+            updates the page that documents it. `.claude/skills/docs-coverage/axes.md`
+            describes the axes users choose between; a change that adds a new value on
+            one of those axes needs prose, not only a generated API page. A new dimension
+            means editing that file too.
+
+            Report undocumented public surface as a finding, one line each, naming the
+            page you would expect it on. This is advisory — it never blocks the merge,
+            and the weekly docs-autofill routine backfills what slips through.
+
+            Leave the whole review as a single PR comment with `gh pr comment`.
+
+          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
+          claude_args: '--allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Read,Glob,Grep"'
