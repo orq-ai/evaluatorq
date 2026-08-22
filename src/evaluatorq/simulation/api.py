@@ -23,7 +23,12 @@ from evaluatorq.common.llm_limit import llm_concurrency_limit
 from evaluatorq.common.parallelism import resolve_datapoint_parallelism
 from evaluatorq.common.recommendations import resolve_recommendations
 from evaluatorq.common.thread_context import _evaluatorq_run_scope, build_thread_id, evaluatorq_pipeline
-from evaluatorq.simulation._config import SimulationConfig
+from evaluatorq.simulation._config import (
+    DEFAULT_MAX_TARGET_RETRIES,
+    DEFAULT_MAX_TOOL_RESULT_CHARS,
+    DEFAULT_TARGET_AGENT_TIMEOUT_MS,
+    SimulationConfig,
+)
 from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig
 from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MAX_TURNS, DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run, build_simulation_run, fetch_agent_info, write_report
@@ -195,10 +200,10 @@ async def simulate(
     datapoint_parallelism: int | None = None,
     llm_parallelism: int | None = None,
     parallelism: int | None = None,
-    target_agent_timeout_ms: int = 240_000,
-    max_target_retries: int = 2,
+    target_agent_timeout_ms: int = DEFAULT_TARGET_AGENT_TIMEOUT_MS,
+    max_target_retries: int = DEFAULT_MAX_TARGET_RETRIES,
     target_reasoning_effort: str | None = None,
-    max_tool_result_chars: int = 500,
+    max_tool_result_chars: int = DEFAULT_MAX_TOOL_RESULT_CHARS,
     per_simulation_timeout_s: float | None = None,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
@@ -454,10 +459,10 @@ async def _simulate_run(
     scoring: SimulationScoringConfig | None = None,
     datapoint_parallelism: int = 10,
     llm_parallelism: int | None = None,
-    target_agent_timeout_ms: int = 240_000,
-    max_target_retries: int = 2,
+    target_agent_timeout_ms: int = DEFAULT_TARGET_AGENT_TIMEOUT_MS,
+    max_target_retries: int = DEFAULT_MAX_TARGET_RETRIES,
     target_reasoning_effort: str | None = None,
-    max_tool_result_chars: int = 500,
+    max_tool_result_chars: int = DEFAULT_MAX_TOOL_RESULT_CHARS,
     per_simulation_timeout_s: float | None = None,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
@@ -597,10 +602,10 @@ async def generate_and_simulate(
     datapoint_parallelism: int | None = None,
     llm_parallelism: int | None = None,
     parallelism: int | None = None,
-    target_agent_timeout_ms: int = 240_000,
-    max_target_retries: int = 2,
+    target_agent_timeout_ms: int = DEFAULT_TARGET_AGENT_TIMEOUT_MS,
+    max_target_retries: int = DEFAULT_MAX_TARGET_RETRIES,
     target_reasoning_effort: str | None = None,
-    max_tool_result_chars: int = 500,
+    max_tool_result_chars: int = DEFAULT_MAX_TOOL_RESULT_CHARS,
     per_simulation_timeout_s: float | None = None,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
@@ -849,10 +854,10 @@ async def _generate_and_simulate_run(
     scoring: SimulationScoringConfig | None = None,
     datapoint_parallelism: int = 10,
     llm_parallelism: int | None = None,
-    target_agent_timeout_ms: int = 240_000,
-    max_target_retries: int = 2,
+    target_agent_timeout_ms: int = DEFAULT_TARGET_AGENT_TIMEOUT_MS,
+    max_target_retries: int = DEFAULT_MAX_TARGET_RETRIES,
     target_reasoning_effort: str | None = None,
-    max_tool_result_chars: int = 500,
+    max_tool_result_chars: int = DEFAULT_MAX_TOOL_RESULT_CHARS,
     per_simulation_timeout_s: float | None = None,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
@@ -1950,9 +1955,9 @@ def _build_simulation_job_and_cache(
     generation_client: AsyncOpenAI | None,
     hooks: SimulationHooks | None,
     run_id: str | None = None,
-    target_agent_timeout_ms: int = 240_000,
-    max_target_retries: int = 2,
-    max_tool_result_chars: int = 500,
+    target_agent_timeout_ms: int = DEFAULT_TARGET_AGENT_TIMEOUT_MS,
+    max_target_retries: int = DEFAULT_MAX_TARGET_RETRIES,
+    max_tool_result_chars: int = DEFAULT_MAX_TOOL_RESULT_CHARS,
     per_simulation_timeout_s: float | None = None,
 ) -> tuple[
     Callable[[DataPoint, int], Awaitable[dict[str, Any]]],

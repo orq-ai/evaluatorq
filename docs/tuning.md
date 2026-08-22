@@ -48,9 +48,12 @@ comes back as a 400, which the executors turn into a drop-the-block-and-retry-on
 remembered for the rest of the process so later calls to the same model skip the
 block up front.
 
-Reasoning effort reaches the target only on **Responses-capable** targets
-(`agent:<key>` on the Orq router). A direct OpenAI-backend target, a callable
-target, or a Vercel endpoint has nowhere to put it.
+Reasoning effort reaches the target on **Responses-capable** targets (`agent:<key>`
+on the Orq router) and on the direct OpenAI backend, which sends it as the flat
+`reasoning_effort` chat-completions field. A `model:`/`deployment:` target executes
+via the ORQ SDK agents endpoint, which has no reasoning parameter; a callable target
+or a Vercel endpoint has nowhere to put it either. In all three cases the setting is
+accepted, a warning names the drop, and the run proceeds.
 
 !!! tip "Pre-validate against the catalogue"
     The model catalogue publishes the accepted reasoning-effort values per model.

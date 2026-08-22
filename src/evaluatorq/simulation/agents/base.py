@@ -34,12 +34,12 @@ from evaluatorq.contracts import (
     LLMCallConfig,
     StrategyToolCall,
     TextOutputItem,
-    TokenUsage,
     ToolCallOutputItem,
     check_reserved_keys,
 )
 from evaluatorq.openresponses.client import build_simulation_client
 from evaluatorq.openresponses.input_items import messages_to_responses_input
+from evaluatorq.simulation._usage import UsageTracking
 from evaluatorq.simulation.tracing import span_message_text, with_llm_span
 from evaluatorq.simulation.types import DEFAULT_MODEL, Message
 
@@ -187,7 +187,7 @@ def _config_from_agent_config(agent_cfg: AgentConfig) -> tuple[LLMCallConfig, st
     return LLMCallConfig(**kwargs), agent_cfg.api_key
 
 
-class BaseAgent(ABC):
+class BaseAgent(UsageTracking, ABC):
     """Abstract base class for simulation agents.
 
     Provides common LLM interaction functionality with exponential-backoff
@@ -209,7 +209,7 @@ class BaseAgent(ABC):
         self._client_owned: bool
         self._client: AsyncOpenAI = self._build_client(extra_api_key)
         self._model = self.config.model
-        self._usage = TokenUsage()
+        self.reset_usage()
 
     # ---------------------------------------------------------------------------
     # Abstract interface
@@ -249,14 +249,6 @@ class BaseAgent(ABC):
         if not result.content:
             raise RuntimeError(f'{self.name}: LLM call failed -- no content in response')
         return result.content
-
-    def get_usage(self) -> TokenUsage:
-        """Get cumulative token usage for this agent."""
-        return self._usage.model_copy()
-
-    def reset_usage(self) -> None:
-        """Reset token usage counters to zero."""
-        self._usage = TokenUsage()
 
     async def close(self) -> None:
         """Close the underlying HTTP client (only if agent-owned)."""
@@ -331,6 +323,12 @@ class BaseAgent(ABC):
         wins — including an explicit ``None``, which opts this agent out of the
         env fallback on purpose — else the call-time-resolved env fallback
         (`_default_reasoning_effort`, EVALUATORQ_REASONING_EFFORT).
+
+        The explicit-``None`` opt-out is reachable only by passing an
+        ``LLMCallConfig`` directly. `_config_from_agent_config` forwards only
+        non-``None`` fields, so on the legacy `AgentConfig` path
+        ``reasoning_effort=None`` is indistinguishable from unset and the env
+        fallback still applies.
         """
         if 'reasoning_effort' in self.config.model_fields_set:
             return self.config.reasoning_effort
@@ -431,7 +429,7 @@ class BaseAgent(ABC):
                         extra_kwargs=reasoning_kwargs,
                     )
                     if delta is not None:
-                        self._usage = self._usage + delta
+                        self._accumulate(delta)
 
                     choice = response.choices[0] if response.choices else None
                     if not choice:
@@ -601,7 +599,7 @@ class BaseAgent(ABC):
 
                 # Accumulate token usage (from_openresponses leaves calls=0, add 1)
                 if usage is not None:
-                    self._usage = self._usage + usage.with_calls(1)
+                    self._accumulate(usage.with_calls(1))
 
                 # Separate text from tool-call items; isinstance guards prevent
                 # ReasoningOutputItem.text leaking into response content.

@@ -143,9 +143,23 @@ class TestEvaluatorRegistry:
 class TestSimulationScoringConfig:
     """The config is the documented policy surface; these cover its bounds and threading."""
 
-    def test_defaults_reproduce_shipped_behaviour(self):
+    def test_omitting_config_matches_an_explicit_default(self):
         result = _make_result(goal_achieved=True, turn_count=4, criteria_results={"a": True, "b": False})
         assert conversation_quality_scorer(result) == conversation_quality_scorer(result, SimulationScoringConfig())
+
+    def test_default_turn_efficiency_curve_is_pinned(self):
+        """Pin the whole default curve, cliffs and tail, against literals.
+
+        Comparing the default path to `SimulationScoringConfig()` only proves the two
+        agree; it passes just as happily if both are wrong. These are the numbers a
+        report actually shows.
+        """
+        expected = {1: 1.0, 2: 1.0, 3: 0.9, 4: 0.9, 5: 0.7, 6: 0.7, 7: 0.6, 8: 0.5, 12: 0.3, 20: 0.3}
+        actual = {
+            turns: turn_efficiency_scorer(_make_result(goal_achieved=True, turn_count=turns))
+            for turns in expected
+        }
+        assert actual == expected
 
     def test_worked_example_from_the_docstring(self):
         # goal_achieved 1.0 * 0.4 + criteria_met 0.5 * 0.3 + turn_efficiency 0.9 * 0.3 = 0.82

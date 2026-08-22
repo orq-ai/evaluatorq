@@ -30,8 +30,11 @@ class SimulationScoringConfig(BaseModel):
     ``goal_achieved`` and ``criteria_met`` read the judge's verdicts and have nothing to
     tune. The other two make judgement calls this class exposes, mirroring
     ``SimulationRecommendationConfig``: bounded fields, ``extra='forbid'``, and defaults
-    that reproduce the previous hardcoded behaviour, so a caller who passes nothing sees
-    no change. Pass an instance as ``simulate(scoring=...)`` /
+    that carry over the previously hardcoded cliffs verbatim. The one deliberate
+    difference is the tail past the last cliff, which now decays from that cliff's score
+    instead of restarting from ``1.0`` — the old curve scored 7 turns higher than 6, so a
+    run past the last cliff scores lower than it used to. See ``CHANGELOG.md``. Pass an
+    instance as ``simulate(scoring=...)`` /
     ``generate_and_simulate(scoring=...)``, or to ``get_evaluator`` /
     ``get_all_evaluators`` when driving the scorers directly.
 

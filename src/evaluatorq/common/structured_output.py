@@ -238,9 +238,23 @@ _SCHEMA_KEYWORDS = (
 )
 
 
-def _looks_like_schema_rejection(exc: APIStatusError) -> bool:
+# The forced-tool rung fails on a different capability, so it recognises a
+# different vocabulary. Same rule as above: a bare 400 is not evidence.
+_TOOL_KEYWORDS = (
+    'tool_choice',
+    'tools',
+    'function call',
+    'function_call',
+)
+
+
+def _looks_like_capability_rejection(exc: APIStatusError, keywords: tuple[str, ...]) -> bool:
     err_body = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
-    return any(kw in err_body for kw in _SCHEMA_KEYWORDS)
+    return any(kw in err_body for kw in keywords)
+
+
+def _looks_like_schema_rejection(exc: APIStatusError) -> bool:
+    return _looks_like_capability_rejection(exc, _SCHEMA_KEYWORDS)
 
 
 # The Responses leg's per-request ceiling. A batched generation asking for tens
@@ -558,7 +572,7 @@ async def _leg_json_schema(
             label=f'{label} (json_schema fallback)',
         )
     except APIStatusError as e:
-        if e.status_code != 400:
+        if e.status_code != 400 or not _looks_like_schema_rejection(e):
             raise
         logger.warning('%s: json_schema not accepted, trying a forced tool call', label)
         return StructuredResult(None, '')
@@ -635,7 +649,7 @@ async def _leg_forced_tool(
             label=f'{label} (forced tool call)',
         )
     except APIStatusError as e:
-        if e.status_code != 400:
+        if e.status_code != 400 or not _looks_like_capability_rejection(e, _SCHEMA_KEYWORDS + _TOOL_KEYWORDS):
             raise
         logger.warning('%s: forced tool call not accepted, falling back to json_object', label)
         return StructuredResult(None, '')

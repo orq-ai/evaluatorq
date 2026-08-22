@@ -40,6 +40,13 @@ from evaluatorq.simulation.hooks import SimulationHooks  # noqa: TC001
 from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig  # noqa: TC001
 from evaluatorq.simulation.types import DEFAULT_MODEL, Message, Persona, Scenario, SimulationDatapoint
 
+# The public defaults for the three target-facing knobs. Named because every
+# `simulate` / `generate_and_simulate` overload repeats them in its signature;
+# as literals they drifted one signature at a time.
+DEFAULT_TARGET_AGENT_TIMEOUT_MS = 240_000
+DEFAULT_MAX_TARGET_RETRIES = 2
+DEFAULT_MAX_TOOL_RESULT_CHARS = 500
+
 
 class SimulationConfig(BaseModel):
     """Shared simulation parameters, threaded through the internal call layers.
@@ -77,12 +84,12 @@ class SimulationConfig(BaseModel):
     (cliffs, decay, floor, composite weights). ``None`` uses
     ``DEFAULT_SCORING_CONFIG`` — the shipped defaults."""
     datapoint_parallelism: int = 10
-    target_agent_timeout_ms: int = 240_000
+    target_agent_timeout_ms: int = DEFAULT_TARGET_AGENT_TIMEOUT_MS
     """Per-call timeout for the target under test, threaded into
     ``SimulationRunner``. Mirrors red team's equivalent knob — a slow
     self-hosted target needs this raised; ``EVALUATORQ_LLM_TIMEOUT_S`` only
     covers the simulator's own (user-simulator / judge) LLM calls."""
-    max_target_retries: int = 2
+    max_target_retries: int = DEFAULT_MAX_TARGET_RETRIES
     """Retries for a failed target call, threaded into ``SimulationRunner``.
     Mirrors red team's equivalent knob."""
     target_reasoning_effort: str | None = None
@@ -92,7 +99,7 @@ class SimulationConfig(BaseModel):
     default. Distinct from the simulator's own ``EVALUATORQ_REASONING_EFFORT``
     fallback (see ``simulation.agents.base``), which drives the user-simulator
     and judge, not the target."""
-    max_tool_result_chars: int = 500
+    max_tool_result_chars: int = DEFAULT_MAX_TOOL_RESULT_CHARS
     """Cap on each tool result rendered into the text the user-simulator sees
     for a tool-only turn (``runner.simulation._tool_traffic_text``). 500 by
     default; raise it for a tool-heavy agent whose results are being cut

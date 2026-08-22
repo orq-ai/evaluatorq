@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.structured_output import token_budget_for_items
-from evaluatorq.contracts import TokenUsage
+from evaluatorq.simulation._usage import UsageTracking
 from evaluatorq.simulation.types import DEFAULT_MODEL, CommunicationStyle, Persona
 from evaluatorq.simulation.utils.structured_output import generate_structured
 
@@ -90,7 +90,7 @@ class PersonaListResponse(BaseModel):
     personas: list[Persona]
 
 
-class PersonaGenerator:
+class PersonaGenerator(UsageTracking):
     """Generates personas from agent descriptions."""
 
     def __init__(
@@ -108,22 +108,7 @@ class PersonaGenerator:
             extra_api_key=api_key,
             max_retries=0,
         )
-        # Mirrors `BaseAgent._usage` (simulation/agents/base.py): generation runs
-        # before any run object exists, so this accumulator is the only place a
-        # caller can read what persona generation cost (RES-1295).
-        self._usage = TokenUsage()
-
-    def get_usage(self) -> TokenUsage:
-        """Token usage accumulated across every generation call on this instance.
-
-        Includes the fallback rungs `generate_structured` burned on the way to an
-        answer, not just the rung that answered.
-        """
-        return self._usage.model_copy()
-
-    def reset_usage(self) -> None:
-        """Zero the accumulator; mirrors `BaseAgent.reset_usage`."""
-        self._usage = TokenUsage()
+        self.reset_usage()
 
     async def close(self) -> None:
         """Close the HTTP client (only if this generator built it)."""
@@ -227,7 +212,7 @@ Return ONLY a JSON array, no other text."""
                 label='PersonaGenerator.generate',
                 api='responses',
             )
-            self._usage = self._usage + result.usage
+            self._accumulate(result.usage)
             personas = result.parsed.personas if result.parsed is not None else self._parse_personas(result.raw or '[]')
 
             if len(personas) < num_personas:
@@ -354,7 +339,7 @@ Return ONLY a JSON array, no other text."""
                 label='PersonaGenerator.generate_with_coverage',
                 api='responses',
             )
-            self._usage = self._usage + result.usage
+            self._accumulate(result.usage)
             personas = result.parsed.personas if result.parsed is not None else self._parse_personas(result.raw or '[]')
 
             # Validate coverage and fill gaps

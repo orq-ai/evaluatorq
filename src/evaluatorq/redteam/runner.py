@@ -1826,6 +1826,53 @@ async def _prepare_target(
 # ---------------------------------------------------------------------------
 
 
+async def _preflight_target_reasoning_effort(
+    effort: str,
+    targets: list[str],
+    resolved_agent_targets: list[AgentTarget],
+    agent_target_labels: dict[int, str],
+    model_for: Callable[[str, str], str | None],
+    llm_client: AsyncOpenAI | None,
+) -> None:
+    """Validate ``effort`` against each target's resolved model before the run spends anything.
+
+    Runs here and not at the first target call: an agent's model is only known once
+    context resolution has run, and everything after this point (capability
+    classification, strategy generation, attack generation) costs LLM calls that a
+    400 on the first target invocation would throw away.
+
+    Only ``TargetKind.AGENT`` string targets route through a backend that forwards
+    the setting (``make_agent_backend``'s OpenResponses exec leg). Model/deployment
+    string targets execute via the ORQ SDK agents endpoint, which has no reasoning
+    parameter, and a bare ``AgentTarget`` may or may not send it — this pre-flight
+    cannot know. Both warn and skip rather than raise: a setting the target would
+    never have received must not kill a run that never needed it.
+
+    ``model_for`` maps ``(target_str, parsed_value)`` to the resolved model, because
+    the dynamic leg keys its context map on the full target string and the static
+    leg keys it on the parsed value.
+    """
+    for target_str in targets:
+        target_kind, value = parse_target(target_str)
+        if target_kind != TargetKind.AGENT:
+            logger.warning(
+                f'target_reasoning_effort={effort!r} is set but target {target_str!r} '
+                f'(kind={target_kind.value}) executes via a backend that does not forward it; '
+                'skipping the pre-flight check for it.'
+            )
+            continue
+        model = model_for(target_str, value)
+        if model:
+            await validate_reasoning_effort(effort, model, llm_client)
+    for at in resolved_agent_targets:
+        label = agent_target_labels[id(at)]
+        logger.warning(
+            f'target_reasoning_effort={effort!r} is set but AgentTarget {label!r} is a bare '
+            'user-supplied target whose ability to forward it is unknown; skipping the pre-flight '
+            'check for it. The provider will reject an unsupported value at call time instead.'
+        )
+
+
 async def _run_dynamic_or_hybrid(
     *,
     targets: list[str],
@@ -1947,40 +1994,15 @@ async def _run_dynamic_or_hybrid(
             at_ctx = AgentContext(key=at_deduped_label)
         at_contexts[id(at)] = at_ctx
 
-    # Pre-flight the target reasoning effort against the resolved model, here and
-    # not at the first target call: an agent's model is only known once context
-    # resolution has run, and everything after this point (capability
-    # classification, strategy generation, attack generation) costs LLM calls
-    # that a 400 on the first target invocation would throw away.
-    #
-    # Only ``TargetKind.AGENT`` string targets actually route through a backend
-    # that forwards ``target_reasoning_effort`` (make_agent_backend's OpenResponses
-    # exec leg). Model/deployment string targets execute via the ORQ SDK agents
-    # endpoint, which has no reasoning parameter, and a bare ``AgentTarget`` may
-    # or may not send it at all — this pre-flight cannot know. Both cases warn
-    # and skip rather than raise: a setting the target would never have received
-    # must not be able to kill a run that never needed it.
     if pipeline_config is not None and pipeline_config.target_reasoning_effort:
-        effort = pipeline_config.target_reasoning_effort
-        for target_str in targets:
-            target_kind, _value = parse_target(target_str)
-            if target_kind != TargetKind.AGENT:
-                logger.warning(
-                    f'target_reasoning_effort={effort!r} is set but target {target_str!r} '
-                    f'(kind={target_kind.value}) executes via a backend that does not forward it; '
-                    'skipping the pre-flight check for it.'
-                )
-                continue
-            ctx = all_agent_contexts[target_str]
-            if ctx.model:
-                await validate_reasoning_effort(effort, ctx.model, llm_client)
-        for at in resolved_agent_targets:
-            label = agent_target_labels[id(at)]
-            logger.warning(
-                f'target_reasoning_effort={effort!r} is set but AgentTarget {label!r} is a bare '
-                'user-supplied target whose ability to forward it is unknown; skipping the pre-flight '
-                'check for it. The provider will reject an unsupported value at call time instead.'
-            )
+        await _preflight_target_reasoning_effort(
+            pipeline_config.target_reasoning_effort,
+            targets,
+            resolved_agent_targets,
+            agent_target_labels,
+            lambda target_str, _value: all_agent_contexts[target_str].model,
+            llm_client,
+        )
 
     if targets:
         first_agent_context = all_agent_contexts[targets[0]]
@@ -3104,33 +3126,19 @@ async def _run_static(
         except Exception:
             logger.warning(f'Could not retrieve agent context for {label!r} — proceeding without it')
 
-    # Pre-flight the target reasoning effort, restricted the same way as the
-    # dynamic leg: only AGENT-kind string targets route through a backend
-    # (make_agent_backend / OpenResponses) that forwards it. Model/deployment
-    # string targets execute via the ORQ SDK agents endpoint (no reasoning
-    # parameter), and a bare AgentTarget's ability to forward it is unknown —
-    # both warn and skip rather than raise.
+    def _static_target_model(_target_str: str, value: str) -> str | None:
+        ctx = agent_contexts.get(value)
+        return ctx.model if ctx is not None else None
+
     if pipeline_config is not None and pipeline_config.target_reasoning_effort:
-        effort = pipeline_config.target_reasoning_effort
-        for t in targets:
-            target_kind, value = parse_target(t)
-            if target_kind != TargetKind.AGENT:
-                logger.warning(
-                    f'target_reasoning_effort={effort!r} is set but target {t!r} '
-                    f'(kind={target_kind.value}) executes via a backend that does not forward it; '
-                    'skipping the pre-flight check for it.'
-                )
-                continue
-            ctx = agent_contexts.get(value)
-            if ctx is not None and ctx.model:
-                await validate_reasoning_effort(effort, ctx.model, llm_client)
-        for at in resolved_agent_targets:
-            label = agent_target_labels[id(at)]
-            logger.warning(
-                f'target_reasoning_effort={effort!r} is set but AgentTarget {label!r} is a bare '
-                'user-supplied target whose ability to forward it is unknown; skipping the pre-flight '
-                'check for it. The provider will reject an unsupported value at call time instead.'
-            )
+        await _preflight_target_reasoning_effort(
+            pipeline_config.target_reasoning_effort,
+            targets,
+            resolved_agent_targets,
+            agent_target_labels,
+            _static_target_model,
+            llm_client,
+        )
 
     from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
 

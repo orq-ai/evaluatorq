@@ -80,6 +80,8 @@ an `AgentTarget`. It is what an `agent:<key>` red-team run uses under the hood t
 execute turns, and it is exported so you can use it directly:
 
 ```python
+import asyncio
+
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.redteam import OrqResponsesTarget, red_team
 
@@ -95,7 +97,14 @@ target = OrqResponsesTarget(
     instructions="You are a support assistant for Acme Corp.",
 )
 
-report = await red_team(target=target, mode="dynamic", categories=["LLM01"])
+
+
+async def main():
+    report = await red_team(target=target, mode="dynamic", categories=["LLM01"])
+    print(report.summary.pass_rate)
+
+
+asyncio.run(main())
 ```
 
 It is also importable from `evaluatorq.openresponses` and
@@ -338,8 +347,9 @@ class SupportBotTarget(AgentTarget):
         super().__init__(memory_entity_id=None)
         self.model = model
         # max_retries=0: call_target_with_retry owns the retry budget for target
-        # calls, and a second SDK budget underneath it multiplies attempts.
-        self.client = client or AsyncOpenAI(max_retries=0)
+        # calls, and a second SDK budget underneath it multiplies attempts. An
+        # injected client carries its own budget, so override it there too.
+        self.client = client.with_options(max_retries=0) if client else AsyncOpenAI(max_retries=0)
 
     @property
     def name(self) -> str:
