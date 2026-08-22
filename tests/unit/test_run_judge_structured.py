@@ -8,7 +8,7 @@ import pytest
 from openai import BadRequestError
 from pydantic import BaseModel, create_model
 
-from evaluatorq.common.judge import JudgeError, run_judge
+from evaluatorq.common.judge import EvaluatorResponsePayload, JudgeError, run_judge
 from evaluatorq.contracts import LLMCallConfig
 
 
@@ -69,6 +69,8 @@ async def test_tier1_refusal_maps_to_abstain():
 
 @pytest.mark.asyncio
 async def test_tier1_parse_preserves_abstain_on_payload_rebuild():
+    # The judge returned abstain=True *and* value=False. The abstention is preserved,
+    # the contradictory value is dropped, and the coercion is reported on the outcome.
     client = MagicMock()
     completion, verdict_model = _abstaining_completion()
     client.chat.completions.parse = AsyncMock(return_value=completion)
@@ -77,8 +79,36 @@ async def test_tier1_parse_preserves_abstain_on_payload_rebuild():
         prompt_template='t', replacements={}, system_prompt='s', response_model=verdict_model,
     )
     assert out.payload is not None
-    assert out.payload.value is False
     assert out.payload.abstain is True
+    assert out.payload.value is None
+    assert out.verdict_coerced is True
+
+
+def test_payload_coerces_abstain_with_value():
+    payload = EvaluatorResponsePayload(explanation='unsure', abstain=True, value='vulnerable')
+    assert payload.value is None
+    assert payload.abstain is True
+    assert payload.coerced_abstain is True
+
+
+def test_payload_leaves_consistent_verdicts_alone():
+    decisive = EvaluatorResponsePayload(explanation='resisted', value=True)
+    assert decisive.value is True
+    assert decisive.coerced_abstain is False
+
+    # The mirror shape (no value, no abstain flag) is NOT normalised: the jury layer
+    # counts it as a failed repetition, and promoting it to a clean abstention here
+    # would hide that.
+    empty = EvaluatorResponsePayload(explanation='')
+    assert empty.value is None
+    assert empty.abstain is False
+    assert empty.coerced_abstain is False
+
+
+def test_payload_coercion_survives_json_validation():
+    payload = EvaluatorResponsePayload.model_validate_json('{"explanation": "x", "abstain": true, "value": 0.7}')
+    assert payload.value is None
+    assert payload.coerced_abstain is True
 
 
 @pytest.mark.asyncio
