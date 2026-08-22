@@ -44,23 +44,37 @@ jobs:
 
             ## Docs check
 
-            This repo's rule is that docs ship in the same PR as the feature. Decide
-            whether this PR touches public surface: `__all__`, CLI commands or flags,
-            defaults, environment variables, or members of an enum or registry.
+            This repo's rule is that docs ship in the same PR as the feature. Check the
+            code this PR changed or added, not the repo as a whole.
 
-            If it does not, say "no public surface touched" in one line and skip the
-            rest of this section. Most PRs land here — do not manufacture a docs
-            finding to have something to say.
+            First read `.claude/skills/docs-coverage/axes.md`. It defines the axes users
+            choose between — entry point, surface, target kind, mode, data source,
+            evaluator kind — and the combinations that are impossible.
 
-            If it does, name each public-surface change and say whether the diff also
-            updates the page that documents it. `.claude/skills/docs-coverage/axes.md`
-            describes the axes users choose between; a change that adds a new value on
-            one of those axes needs prose, not only a generated API page. A new dimension
-            means editing that file too.
+            Then, for the diff only:
 
-            Report undocumented public surface as a finding, one line each, naming the
-            page you would expect it on. This is advisory — it never blocks the merge,
-            and the weekly docs-autofill routine backfills what slips through.
+            1. **New axis values.** Does the diff add a value on any of those axes — a new
+               mode, backend, target kind, entry point, CLI command, evaluator kind? Name
+               each one.
+            2. **Usage paths it opens.** For each new value, what combinations
+               can a user now reach that they could not before? Check whether any hand-written
+               page explains one of them. A generated API page under `reference/` does not
+               count; neither does a passing mention without a runnable example.
+            3. **Changed surface.** `__all__`, CLI flags, defaults, env vars, enum or
+               registry members that the diff altered — does the page documenting each one
+               still say something true?
+            4. **A new axis entirely.** If the diff adds a dimension `axes.md` does not
+               list, that file must be edited in this PR or coverage checking silently
+               stops seeing it. Say so explicitly.
+
+            If the diff opens no new usage path and changes no documented surface, say
+            "no docs impact" in one line and skip the rest. Most PRs land here — do not
+            manufacture a docs finding to have something to say.
+
+            Report each gap as one line: the usage path the diff opened, and the page you
+            would expect to explain it. Advisory only — it never blocks the merge, and the
+            weekly docs-autofill routine backfills what slips through. Say that, so nobody
+            reads a finding as a merge blocker.
 
             Leave the whole review as a single PR comment with `gh pr comment`.
 
