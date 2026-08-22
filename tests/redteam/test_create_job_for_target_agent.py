@@ -215,3 +215,72 @@ class TestModelBranchUnchanged:
             _create_job_for_target("agent:foo", llm_client=None, system_prompt=None)
 
         mock_cmj.assert_not_called()
+
+
+class TestPipelineConfigThreadedToCreateModelJob:
+    """The deployment branch must hand its per-run cfg to create_model_job.
+
+    ``create_model_job`` reads ``cfg`` for the target timeout, the retry budget
+    and reasoning effort (see tests/redteam/test_model_job_cfg.py). If
+    ``_create_job_for_target`` stops threading it, every deployment run silently
+    reverts to the module-level ``PIPELINE_CONFIG`` defaults — the flags the CLI
+    exposes would have no effect and nothing would fail.
+    """
+
+    def test_deployment_branch_receives_the_supplied_pipeline_config(self):
+        from evaluatorq.redteam.contracts import LLMConfig
+        from evaluatorq.redteam.runner import _create_job_for_target
+
+        cfg = LLMConfig(target_agent_timeout_ms=4321, max_target_retries=5, target_reasoning_effort="high")
+
+        with patch(f"{_RUNNER}.create_model_job", return_value=MagicMock()) as mock_cmj:
+            _create_job_for_target(
+                "deployment:bar",
+                llm_client=None,
+                system_prompt=None,
+                pipeline_config=cfg,
+                run_id="run-42",
+            )
+
+        kwargs = mock_cmj.call_args.kwargs
+        assert kwargs["cfg"] is cfg
+        assert kwargs["run_id"] == "run-42"
+
+    def test_deployment_branch_falls_back_to_module_pipeline_config(self):
+        """No caller cfg means the module default is passed explicitly, not None.
+
+        ``create_model_job(cfg=None)`` would also fall back, but only by accident;
+        pinning the explicit hand-off keeps the two fallbacks from drifting.
+        """
+        from evaluatorq.redteam.contracts import PIPELINE_CONFIG
+        from evaluatorq.redteam.runner import _create_job_for_target
+
+        with patch(f"{_RUNNER}.create_model_job", return_value=MagicMock()) as mock_cmj:
+            _create_job_for_target("deployment:bar", llm_client=None, system_prompt=None)
+
+        assert mock_cmj.call_args.kwargs["cfg"] is PIPELINE_CONFIG
+
+
+class TestModelBranchIsUnreachableFromAStringTarget:
+    """``create_model_job(model=value)`` cannot be reached via a target string.
+
+    ``parse_target`` returns only AGENT or DEPLOYMENT: a bare string is AGENT,
+    ``llm:``/``openai:``/``direct:`` and unknown kinds all raise. The trailing
+    ``return create_model_job(model=value)`` in ``_create_job_for_target`` is
+    therefore dead code on this path. This pins the reachable set so a future
+    ``TargetKind`` that lands in the fallback is a deliberate choice.
+    """
+
+    def test_parse_target_only_yields_agent_or_deployment(self):
+        from evaluatorq.redteam.contracts import TargetKind, parse_target
+
+        assert parse_target("foo") == (TargetKind.AGENT, "foo")
+        assert parse_target("agent:foo") == (TargetKind.AGENT, "foo")
+        assert parse_target("deployment:bar") == (TargetKind.DEPLOYMENT, "bar")
+
+    @pytest.mark.parametrize("target", ["llm:gpt-4o-mini", "openai:gpt-4o-mini", "direct:x", "model:gpt-4o-mini"])
+    def test_other_prefixes_raise(self, target: str):
+        from evaluatorq.redteam.contracts import parse_target
+
+        with pytest.raises(ValueError):
+            parse_target(target)
