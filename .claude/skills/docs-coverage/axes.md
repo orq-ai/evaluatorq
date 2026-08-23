@@ -19,25 +19,33 @@ feature that changed it.
 | **entry point** | `evaluatorq.__all__` + `evaluatorq.simulation.__all__` + `evaluatorq.redteam.__all__` | `evaluatorq()`, `red_team()`, `simulate()`, `generate_and_simulate()`, `wrap_simulation_agent()`, pairwise `build_report()`, `deployment()` / `invoke()` |
 | **surface** | fixed | Python API · CLI (`eq`) · dashboard (`eq dashboard` / `eq ui`) |
 | **target kind** | `_BACKEND_REGISTRY` in `redteam/backends/registry.py` + CLI `--target` prefixes | `agent:<key>`, `deployment:<key>`, direct OpenAI backend, custom `AgentTarget` / `CallableTarget` |
-| **mode** | `--mode` on `eq redteam run`, **plus `replay`** (see below) | `dynamic`, `static`, `hybrid`, `replay` |
-| **data source** | `evaluatorq()` / `red_team()` dataset params | inline `DataPoint`s, ORQ dataset id, HuggingFace dataset, generated |
+| **mode** | `--mode` on `eq redteam run` | `dynamic`, `static`, `hybrid` |
+| **data source** | `evaluatorq()` / `red_team()` dataset params, **plus `replay`** (see below) | inline `DataPoint`s, ORQ dataset id, HuggingFace dataset, generated, replay of a stored run |
 | **evaluator kind** | `VULNERABILITY_EVALUATOR_REGISTRY`, `SIMULATION_EVALUATORS`, pairwise types | built-in scorer, LLM jury, pairwise jury, custom `Evaluator` |
 
-### `replay` is a mode value that no enum contains
+### `replay` is a data source, not a fourth mode
 
-`--mode` accepts only `dynamic`, `static` and `hybrid` (validated as a plain
-string in `redteam/runner.py`). Replay is reached by a *different* flag,
-`--from-run`, which is explicitly **incompatible** with `--mode` — it re-runs a
-previous run's exact attacks, so only the target and models may differ.
+Replay is reached by `previous_run=` / `--from-run`, which is explicitly
+**incompatible** with `--mode`. The reason is not that they are rival ways of
+saying the same thing — it is that a replayed run *already has* a mode. Replay
+loads a stored run and does `mode = replay.pipeline` (`redteam/runner.py`), so
+replaying a run that was `static` runs static, and replaying a `hybrid` run runs
+hybrid. Passing `--mode` alongside would be supplying a value that is about to be
+overwritten, which is why it raises instead of silently losing.
 
-Behaviourally that makes replay a fourth mode: it is the same choice a user makes
-at the same point, expressed through another flag. Source-derived values can
-never see it, so it is hardcoded here on purpose. **Do not resolve this by adding
-`replay` to the accepted `--mode` values in code** — that would be a public
-surface change, and it contradicts the two flags being mutually exclusive.
+So replay does not sit *among* the modes, it crosses *with* them. What it
+actually replaces is the data source: instead of generating attacks or reading a
+dataset, the attack set comes from a run you already did. That is the axis it
+belongs on, and it is the axis that makes its value obvious — holding the attacks
+fixed is the only way a moved resistance rate means the agent moved.
 
-Replay exists on both `eq redteam run` and `eq sim simulate`; treat it as a mode
-value for both when building the matrix.
+Source-derived values can never see it (there is no enum to read), so it is
+hardcoded on this axis on purpose. **Do not resolve this by adding `replay` to
+the accepted `--mode` values in code** — it is not a mode, and the docs-autofill
+routine may not touch `src/` regardless.
+
+Replay exists on both `eq redteam run` and `eq sim simulate`; treat it as a data
+source for both when building the matrix.
 
 ## Impossible or meaningless combinations
 
@@ -70,3 +78,14 @@ count: a docstring is not discovery.
 
 **Tier 2 — API reference suffices.** Supporting types, contracts, backends, and
 subpackage `__all__` members. Flag only when there is no docstring at all.
+
+**Not a gap at all — a symbol reached only as a parameter value, whose output is
+documented.** A name with no prose is not automatically Tier 1. Ask how a user
+reaches it: if the answer is "they pass a string to some other function's
+argument" and the *result* they get back is already explained in prose, the
+symbol is an implementation detail and prose about it would document something
+nobody types. `bt_sigma_aggregation` is the worked example — it is reached only
+via `build_report(aggregation='bt-sigma')`, and what a reader actually needs, the
+`report.bt_sigma` output and how to read it, is covered at
+`pairwise-judging.md:168-245`. A symbol-name grep flags it every time; it has
+never been a real gap. Resolve these `N/A`, not `GAP`.
