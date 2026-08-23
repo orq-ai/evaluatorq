@@ -7,8 +7,10 @@ compatible with evaluatorq integration.
 from __future__ import annotations
 
 from collections.abc import Callable
+from functools import partial
 
 from loguru import logger
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from evaluatorq.simulation.types import CriteriaMeta, SimulationResult, TerminatedBy, parse_criteria_meta
 
@@ -18,6 +20,138 @@ from evaluatorq.simulation.types import CriteriaMeta, SimulationResult, Terminat
 UNEVALUATED_TERMINATIONS = (TerminatedBy.error, TerminatedBy.timeout)
 
 SimulationScorer = Callable[[SimulationResult], float]
+
+_WEIGHT_SUM_TOLERANCE = 1e-9
+
+
+class SimulationScoringConfig(BaseModel):
+    """Tunables for the two built-in scorers that encode a *policy*, not a fact.
+
+    ``goal_achieved`` and ``criteria_met`` read the judge's verdicts and have nothing to
+    tune. The other two make judgement calls this class exposes, mirroring
+    ``SimulationRecommendationConfig``: bounded fields, ``extra='forbid'``, and defaults
+    that carry over the previously hardcoded cliffs verbatim. The one deliberate
+    difference is the tail past the last cliff, which now decays from that cliff's score
+    instead of restarting from ``1.0`` — the old curve scored 7 turns higher than 6, so a
+    run past the last cliff scores lower than it used to. See ``CHANGELOG.md``. Pass an
+    instance as ``simulate(scoring=...)`` /
+    ``generate_and_simulate(scoring=...)``, or to ``get_evaluator`` /
+    ``get_all_evaluators`` when driving the scorers directly.
+
+    **What `turn_efficiency` measures.** It is a *cost* proxy, not a quality one: given
+    that the goal was reached, how many conversational turns did it take? The assumption
+    is that a user who got what they came for in two turns had a better experience — and
+    cost less to serve — than one who needed twelve, because the extra turns are usually
+    the agent asking for something it could have inferred, re-asking, or wandering. A run
+    that did **not** reach the goal scores ``0.0`` outright: efficiency at failing is not
+    a virtue worth crediting.
+
+    **Where that assumption breaks.** A task that legitimately needs many turns — a long
+    intake form, a multi-step troubleshooting tree, a negotiation — is penalised by this
+    metric for doing its job properly. If your scenarios look like that, either move the
+    cliffs out (``turn_efficiency_cliffs=((6, 1.0), (10, 0.9), (16, 0.7))``) so the curve
+    matches a realistic conversation length, or leave ``turn_efficiency`` out of
+    ``evaluator_names`` and ignore the score. It is not in
+    ``DEFAULT_EVALUATOR_NAMES`` precisely because it is not universally meaningful.
+
+    Worked example — a 4-turn conversation that reached its goal and met 1 of 2 criteria,
+    scored with the defaults:
+
+    ```python
+    from evaluatorq.simulation.evaluators import SimulationScoringConfig, conversation_quality_scorer
+
+    # goal_achieved   = 1.0    (the judge set goal_achieved)
+    # criteria_met    = 0.5    (1 of 2 criteria met)
+    # turn_efficiency = 0.9    (4 turns: past the <=2 cliff, inside the <=4 one)
+    #
+    # conversation_quality = 1.0 * 0.4 + 0.5 * 0.3 + 0.9 * 0.3
+    #                      = 0.4 + 0.15 + 0.27 = 0.82
+    conversation_quality_scorer(result)  # 0.82
+
+    # Same conversation, scored as if only the goal mattered:
+    goal_only = SimulationScoringConfig(
+        goal_achieved_weight=1.0, criteria_met_weight=0.0, turn_efficiency_weight=0.0
+    )
+    conversation_quality_scorer(result, goal_only)  # 1.0
+    ```
+    """
+
+    model_config = ConfigDict(extra='forbid', frozen=True)
+
+    turn_efficiency_cliffs: tuple[tuple[int, float], ...] = ((2, 1.0), (4, 0.9), (6, 0.7))
+    """``(max_turns, score)`` steps, first match wins: a conversation of ``turn_count``
+    turns scores the first entry whose ``max_turns`` it does not exceed. Must be ordered
+    by strictly increasing ``max_turns`` and non-increasing ``score`` — a curve that pays
+    *more* for a longer conversation is a config bug, and is rejected at construction
+    rather than producing a quietly nonsensical report."""
+
+    turn_efficiency_decay_per_turn: float = Field(default=0.1, ge=0.0, le=1.0)
+    """Beyond the last cliff, each additional turn costs this much, starting from the last
+    cliff's score. With the defaults: 7 turns -> ``0.7 - 0.1 = 0.6``, 8 -> ``0.5``."""
+
+    turn_efficiency_floor: float = Field(default=0.3, ge=0.0, le=1.0)
+    """The decay stops here, so a very long conversation that *did* reach the goal keeps a
+    non-zero score — it is inefficient, not a failure. Must not exceed the last cliff's
+    score, or the floor would raise long conversations above shorter ones."""
+
+    goal_achieved_weight: float = Field(default=0.4, ge=0.0, le=1.0)
+    """Weight in ``conversation_quality`` of ``goal_achieved``: 1.0 when the judge decided
+    the persona's goal was reached, 0.0 otherwise."""
+
+    criteria_met_weight: float = Field(default=0.3, ge=0.0, le=1.0)
+    """Weight in ``conversation_quality`` of ``criteria_met``: the fraction of the
+    scenario's ``must_happen`` / ``must_not_happen`` criteria the judge audited and found
+    satisfied (0.0 for an errored, timed-out or unverified run)."""
+
+    turn_efficiency_weight: float = Field(default=0.3, ge=0.0, le=1.0)
+    """Weight in ``conversation_quality`` of ``turn_efficiency``, the turn-count cost proxy
+    described above."""
+
+    @field_validator('turn_efficiency_cliffs')
+    @classmethod
+    def _validate_cliffs(cls, value: tuple[tuple[int, float], ...]) -> tuple[tuple[int, float], ...]:
+        if not value:
+            raise ValueError('turn_efficiency_cliffs must contain at least one (max_turns, score) step')
+        previous_turns = 0
+        previous_score = None
+        for max_turns, score in value:
+            if max_turns < 1:
+                raise ValueError(f'turn_efficiency_cliffs: max_turns must be >= 1, got {max_turns}')
+            if max_turns <= previous_turns:
+                raise ValueError(
+                    f'turn_efficiency_cliffs: max_turns must strictly increase, got {max_turns} after {previous_turns}'
+                )
+            if not 0.0 <= score <= 1.0:
+                raise ValueError(f'turn_efficiency_cliffs: score must be in [0.0, 1.0], got {score}')
+            if previous_score is not None and score > previous_score:
+                raise ValueError(
+                    f'turn_efficiency_cliffs: score must not increase with turns, got {score} after {previous_score} '
+                    '(that curve rewards a longer conversation)'
+                )
+            previous_turns, previous_score = max_turns, score
+        return value
+
+    @model_validator(mode='after')
+    def _validate_shape(self) -> SimulationScoringConfig:
+        last_score = self.turn_efficiency_cliffs[-1][1]
+        if self.turn_efficiency_floor > last_score:
+            raise ValueError(
+                f'turn_efficiency_floor ({self.turn_efficiency_floor}) exceeds the last cliff score ({last_score}); '
+                'that scores a long conversation above a shorter one'
+            )
+        total = self.goal_achieved_weight + self.criteria_met_weight + self.turn_efficiency_weight
+        if abs(total - 1.0) > _WEIGHT_SUM_TOLERANCE:
+            raise ValueError(
+                f'conversation_quality weights must sum to 1.0, got {total} '
+                f'(goal_achieved={self.goal_achieved_weight}, criteria_met={self.criteria_met_weight}, '
+                f'turn_efficiency={self.turn_efficiency_weight}); an unnormalised sum makes the composite '
+                'incomparable with other runs'
+            )
+        return self
+
+
+DEFAULT_SCORING_CONFIG = SimulationScoringConfig()
+"""The shipped policy. Used whenever a scorer is called without a ``config``."""
 
 
 def read_criteria_meta(result: SimulationResult) -> tuple[list[CriteriaMeta], list[object]]:
@@ -114,40 +248,53 @@ def criteria_met_scorer(result: SimulationResult) -> float:
     return met / len(criteria_results)
 
 
-def turn_efficiency_scorer(result: SimulationResult) -> float:
-    """Evaluate conversation efficiency (fewer turns = better).
+def turn_efficiency_scorer(result: SimulationResult, config: SimulationScoringConfig | None = None) -> float:
+    """How cheaply the goal was reached, 0..1 — fewer turns scores higher.
 
-    Returns a value between 0 and 1.
+    A run that did not reach its goal scores ``0.0``: this is a cost metric conditioned on
+    success, and "failed quickly" is not efficiency. Otherwise the turn count is mapped
+    through ``config.turn_efficiency_cliffs`` (first match wins), then decayed by
+    ``turn_efficiency_decay_per_turn`` from the last cliff's score down to
+    ``turn_efficiency_floor``.
+
+    The assumption — extra turns mean re-asking, clarifying or wandering — does not hold
+    for tasks that legitimately need many turns. See ``SimulationScoringConfig`` for how to
+    move the cliffs, or drop this scorer for such scenarios.
     """
-    total_turns = result.turn_count
-    goal_achieved = result.goal_achieved
+    config = config or DEFAULT_SCORING_CONFIG
 
-    if not goal_achieved:
+    if not result.goal_achieved:
         return 0.0
 
-    if total_turns <= 2:
-        return 1.0
-    if total_turns <= 4:
-        return 0.9
-    if total_turns <= 6:
-        return 0.7
+    total_turns = result.turn_count
+    for max_turns, score in config.turn_efficiency_cliffs:
+        if total_turns <= max_turns:
+            return score
 
-    return max(0.3, 1.0 - (total_turns - 6) * 0.1)
+    last_turns, last_score = config.turn_efficiency_cliffs[-1]
+    decayed = last_score - (total_turns - last_turns) * config.turn_efficiency_decay_per_turn
+    # Round: repeated float subtraction turns 0.6 into 0.6000000000000001, which then
+    # renders in a report as a 16-digit score.
+    return round(max(config.turn_efficiency_floor, decayed), 4)
 
 
-def conversation_quality_scorer(result: SimulationResult) -> float:
-    """Evaluate overall conversation quality.
+def conversation_quality_scorer(result: SimulationResult, config: SimulationScoringConfig | None = None) -> float:
+    """Weighted composite of the other three scorers, 0..1, rounded to 2 decimals.
 
-    Composite score based on:
-    - Goal achievement (40%)
-    - Criteria met (30%)
-    - Turn efficiency (30%)
+    Defaults: ``goal_achieved`` 0.4, ``criteria_met`` 0.3, ``turn_efficiency`` 0.3. The
+    weights are validated to sum to 1.0 at config construction, so the composite stays on
+    the same 0..1 scale as its parts and is comparable across runs.
     """
+    config = config or DEFAULT_SCORING_CONFIG
     goal_score = goal_achieved_scorer(result)
     criteria_score = criteria_met_scorer(result)
-    efficiency_score = turn_efficiency_scorer(result)
+    efficiency_score = turn_efficiency_scorer(result, config)
 
-    score = goal_score * 0.4 + criteria_score * 0.3 + efficiency_score * 0.3
+    score = (
+        goal_score * config.goal_achieved_weight
+        + criteria_score * config.criteria_met_weight
+        + efficiency_score * config.turn_efficiency_weight
+    )
     return round(score * 100) / 100
 
 
@@ -163,19 +310,26 @@ SIMULATION_EVALUATORS: dict[str, SimulationScorer] = {
 }
 
 
-def get_evaluator(name: str) -> SimulationScorer:
-    """Get a built-in simulation evaluator by name.
+def get_evaluator(name: str, config: SimulationScoringConfig | None = None) -> SimulationScorer:
+    """Get a built-in simulation evaluator by name, bound to ``config`` when given.
+
+    ``config`` only affects ``turn_efficiency`` and ``conversation_quality``; the other two
+    read the judge's verdicts and have nothing to tune, so they are returned unwrapped.
 
     Raises:
             ValueError: If evaluator not found.
     """
-    evaluator = SIMULATION_EVALUATORS.get(name)
+    evaluator = get_all_evaluators(config).get(name)
     if not evaluator:
         available = ', '.join(SIMULATION_EVALUATORS.keys())
         raise ValueError(f'Unknown evaluator: {name}. Available: {available}')
     return evaluator
 
 
-def get_all_evaluators() -> dict[str, SimulationScorer]:
-    """Get all built-in simulation evaluators."""
-    return dict(SIMULATION_EVALUATORS)
+def get_all_evaluators(config: SimulationScoringConfig | None = None) -> dict[str, SimulationScorer]:
+    """Get all built-in simulation evaluators, bound to ``config`` when given."""
+    evaluators = dict(SIMULATION_EVALUATORS)
+    if config is not None:
+        evaluators['turn_efficiency'] = partial(turn_efficiency_scorer, config=config)
+        evaluators['conversation_quality'] = partial(conversation_quality_scorer, config=config)
+    return evaluators

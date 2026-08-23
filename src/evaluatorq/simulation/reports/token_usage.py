@@ -58,4 +58,22 @@ def build_token_usage_rows(data: Mapping[str, Any]) -> list[list[str]]:
         # bound, not a total — say so rather than let it read as authoritative.
         coverage = cost_coverage(int(token_value(data, 'priced_calls')), int(token_value(data, 'calls')))
         rows.append(['Total Cost', f'{fmt_cost(total_cost)}{coverage}'])
+
+    # Whole-run figure, rendered as its own labelled rows so it cannot be mistaken
+    # for the simulation-only numbers above.
+    if 'run_total_total_tokens' in data:
+        rows.append([
+            'Run Total Tokens (incl. generation & summary)',
+            f'{token_value(data, "run_total_total_tokens"):,}',
+        ])
+        run_total_cost = data.get('run_total_cost')
+        if (
+            run_total_cost is not None
+            and isinstance(run_total_cost, int | float)
+            and not isinstance(run_total_cost, bool)
+        ):
+            coverage = cost_coverage(
+                int(token_value(data, 'run_total_priced_calls')), int(token_value(data, 'run_total_calls'))
+            )
+            rows.append(['Run Total Cost (incl. generation & summary)', f'{fmt_cost(run_total_cost)}{coverage}'])
     return rows

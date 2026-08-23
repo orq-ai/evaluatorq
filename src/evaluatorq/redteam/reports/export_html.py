@@ -860,36 +860,20 @@ def _render_mini_donut_chart(label: str, data: dict[str, Any]) -> str:
 
 
 def _render_turn_scope_breakdown_html(section: ReportSection) -> str:
-    """Render turn-type and domain breakdown as side-by-side mini donut charts and tables."""
-    by_turn_type: dict[str, Any] = section.data.get('by_turn_type', {})
+    """Render the vulnerability-domain breakdown as mini donut charts and a table."""
     by_domain: dict[str, Any] = section.data.get('by_domain', {})
 
-    if not by_turn_type and not by_domain:
-        return f'<h2>{_esc(section.title)}</h2>\n<p>No turn type or domain data available.</p>'
+    if not by_domain:
+        return f'<h2>{_esc(section.title)}</h2>\n<p>No domain data available.</p>'
 
     parts = [f'<h2>{_esc(section.title)}</h2>']
 
     charts_html = ''
-    for group_label, group_data in by_turn_type.items():
-        charts_html += _render_mini_donut_chart(group_label, group_data)
     for group_label, group_data in by_domain.items():
         charts_html += _render_mini_donut_chart(group_label, group_data)
 
     if charts_html:
         parts.append(f'<div style="display:flex;flex-wrap:wrap;gap:1rem;align-items:flex-start">{charts_html}</div>')
-
-    # Turn type table
-    if by_turn_type:
-        tt_rows = [
-            [
-                _esc(turn_type),
-                _esc(str(d.get('total_attacks', 0))),
-                _esc(str(d.get('vulnerabilities_found', 0))),
-                _pct(d.get('vulnerability_rate', 0.0)),
-            ]
-            for turn_type, d in by_turn_type.items()
-        ]
-        parts.extend(('<h3>By Turn Type</h3>', _html_table(['Turn Type', 'Attacks', 'Hits', 'ASR'], tt_rows)))
 
     # Domain table
     if by_domain:

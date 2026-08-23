@@ -22,6 +22,35 @@ feature that changed it.
 | **mode** | `--mode` on `eq redteam run`, **plus `replay`** (see below) | `dynamic`, `static`, `hybrid`, `replay` |
 | **data source** | `evaluatorq()` / `red_team()` dataset params | inline `DataPoint`s, ORQ dataset id, HuggingFace dataset, generated |
 | **evaluator kind** | `VULNERABILITY_EVALUATOR_REGISTRY`, `SIMULATION_EVALUATORS`, pairwise types | built-in scorer, LLM jury, pairwise jury, custom `Evaluator` |
+| **reasoning-effort scope** | fixed (see below) | target under test · pipeline attacker/judge · simulator's own calls · core-evaluation judge |
+| **API endpoint** | `LLMCallConfig.api` / `EvaluatorConfig.api` (`contracts.py`, `redteam/contracts.py`) | `chat_completions` · `responses` |
+
+### `reasoning-effort scope` is a choice, not a value
+
+Four settings carry the words "reasoning effort" and they apply to four
+different models: `target_reasoning_effort` (the agent under test),
+`LLMCallConfig.reasoning_effort` on `attacker=` / `evaluator=` (red team's own
+calls), `EVALUATORQ_REASONING_EFFORT` (the simulator's user-simulator and judge),
+and `llm_jury(reasoning_effort=...)` / `llm_jury_pairwise` / `PairwiseComparator`
+(the judge in core `evaluatorq()`). Picking the wrong one is silent — the call
+just runs at the default — so this is a dimension a user chooses along, not a
+tuning number.
+
+Values are fixed here because no registry enumerates them; the *accepted efforts*
+per model come from the model catalogue and are a different thing entirely.
+
+### `API endpoint` is a per-role choice with a per-role default
+
+`LLMCallConfig.api` defaults to `chat_completions`; `EvaluatorConfig.api` defaults
+to `responses`, because that is the endpoint the Orq router prices. The endpoint
+decides the spelling of every knob (`max_completion_tokens` vs `max_output_tokens`,
+flat `reasoning_effort` vs a `reasoning` block), which keys `check_reserved_keys`
+rejects inside `extra_kwargs`, and whether the call records cost at all.
+
+It is honoured by the judge (`common/judge.py`) and by simulation agents
+(`simulation/agents/base.py`). Red team's attacker call sites pass
+`api='chat_completions'` explicitly, so the field is inert there — treat that as a
+gap to document, not an `N/A`, until the code either honours it or warns.
 
 ### `replay` is a mode value that no enum contains
 
@@ -61,6 +90,15 @@ Marked `N/A` in the matrix, never reported as a gap.
 | `red_team()` × data source `inline DataPoint`s | `dataset` takes a `Path` or specifier string; there is no inline-datapoint parameter |
 | `static` mode × generated data source | static mode consumes a fixed dataset by definition |
 | CLI × custom `AgentTarget` | custom targets are constructed in Python; the CLI resolves string identifiers |
+| reasoning-effort scope `simulator's own calls` × `red_team()` | red teaming has no user simulator; its own calls are the attacker/judge scope |
+| reasoning-effort scope `pipeline attacker/judge` × `simulate()` / `generate_and_simulate()` | simulation has no attacker; its own calls are the simulator scope |
+| reasoning-effort scope × dashboard | the dashboard reads saved artifacts; it invokes no model under test |
+| reasoning-effort scope `target under test` × `deployment:`, callable and Vercel targets | the ORQ SDK agents `invoke_async` payload has no reasoning field, and a callable or Vercel endpoint has nowhere to put it. Only `agent:<key>` carries it, as a `reasoning` block |
+| reasoning-effort scope `target under test` × direct OpenAI backend | `OpenAIBackend` does accept the effort, but nothing reaches it: every `resolve_backend(...)` in `src/` passes `'orq'` or `'openresponses'`, and `parse_target` yields only `AGENT` or `DEPLOYMENT`, so the `'openai'` registration has no caller on a `red_team()` path |
+| reasoning-effort scope `core-evaluation judge` × `red_team()` / `simulate()` | those surfaces score through their own judge roles, not `llm_jury()` |
+| API endpoint × `evaluatorq()` / `llm_jury()` | juries pin `api='responses'` internally; there is no parameter to choose |
+| API endpoint × dashboard | reads saved artifacts; issues no request |
+| API endpoint × target kind `deployment:` / callable / Vercel | these do not go through `request_params`; the endpoint is fixed by the transport |
 
 ## Tiers
 

@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from evaluatorq.contracts import AgentResponse
+from evaluatorq.contracts import AgentResponse, LLMCallConfig
 from evaluatorq.redteam.backends.registry import resolve_backend
 from evaluatorq.redteam.contracts import AgentContext, LLMConfig, TargetConfig
 from evaluatorq.openresponses.target import OrqResponsesTarget
@@ -40,6 +40,24 @@ class TestResolveBackendOpenResponses:
         target = backend.create_target("agent-id")
         assert isinstance(target, OrqResponsesTarget)
         assert target.instructions == "be safe"
+
+    def test_reasoning_effort_is_threaded_from_pipeline_config(self):
+        client = MagicMock()
+        backend = resolve_backend(
+            "openresponses",
+            llm_client=client,
+            pipeline_config=LLMConfig(target_reasoning_effort="high"),
+        )
+        target = backend.create_target("agent-id")
+        assert isinstance(target, OrqResponsesTarget)
+        assert target.config.reasoning_effort == "high"
+
+    def test_reasoning_effort_defaults_to_none(self):
+        client = MagicMock()
+        backend = resolve_backend("openresponses", llm_client=client)
+        target = backend.create_target("agent-id")
+        assert isinstance(target, OrqResponsesTarget)
+        assert target.config.reasoning_effort is None
 
     def test_pipeline_retry_settings_do_not_stack_on_target_path(self):
         client = MagicMock()
@@ -188,7 +206,7 @@ class TestCallResponsesApiTokenUsage:
         client.responses.create = AsyncMock(return_value=mock_response)
 
         target = OrqResponsesTarget(
-            MagicMock(model="gpt-4o", api="responses", timeout_ms=None, max_tokens=None),
+            LLMCallConfig(model="gpt-4o", api="responses"),
             client=client,
         )
 
@@ -215,7 +233,7 @@ class TestCallResponsesApiTokenUsage:
         client.responses.create = AsyncMock(return_value=mock_response)
 
         target = OrqResponsesTarget(
-            MagicMock(model="gpt-4o", api="responses", timeout_ms=None, max_tokens=None),
+            LLMCallConfig(model="gpt-4o", api="responses"),
             client=client,
         )
 
@@ -235,7 +253,7 @@ class TestCallResponsesApiTokenUsage:
         client.base_url = 'https://api.openai.com/v1'
         client.responses.create = AsyncMock(return_value=mock_response)
         target = OrqResponsesTarget(
-            MagicMock(model='gpt-4o', api='responses', timeout_ms=None, max_tokens=None),
+            LLMCallConfig(model='gpt-4o', api='responses'),
             client=client,
         )
 
@@ -258,7 +276,7 @@ class TestCallResponsesApiTokenUsage:
         client.base_url = 'https://my.orq.ai/v3/router'
         client.responses.create = AsyncMock(return_value=mock_response)
         target = OrqResponsesTarget(
-            MagicMock(model='gpt-4o', api='responses', timeout_ms=None, max_tokens=None),
+            LLMCallConfig(model='gpt-4o', api='responses'),
             client=client,
         )
 

@@ -44,19 +44,59 @@ if TYPE_CHECKING:
     from evaluatorq.contracts import Usage
 
 
-class ModelInfo(NamedTuple):
+class _ModelInfoFields(NamedTuple):
+    """Field layout for `ModelInfo`; see that class for the contract."""
+
+    input_cost_per_1k: float
+    output_cost_per_1k: float
+    provider: str
+    supports_responses: bool
+    # Accepted ``reasoning.effort`` values. ``None`` means the catalogue does not say
+    # — absence is "unknown", never "empty".
+    reasoning_efforts: frozenset[str] | None = None
+
+
+class ModelInfo(_ModelInfoFields):
     """One catalogue entry.
 
     Costs are USD **per 1000 tokens** — the unit ``/v2/models`` publishes, and the
     reason `price_usage` divides by 1000. The names carry the unit so the
     arithmetic stays self-checking: ``Usage.input_cost`` is absolute USD for a
     call, 1000x away from this field, and the two meet in one expression.
+
+    Split over a ``_ModelInfoFields`` base purely so ``__new__`` can normalize:
+    ``typing.NamedTuple`` refuses to let a class body override it.
     """
 
-    input_cost_per_1k: float
-    output_cost_per_1k: float
-    provider: str
-    supports_responses: bool
+    __slots__ = ()
+
+    def __new__(  # noqa: PYI034 — a NamedTuple subclass really does construct the subclass
+        cls,
+        input_cost_per_1k: float,
+        output_cost_per_1k: float,
+        provider: str,
+        supports_responses: bool,  # noqa: FBT001 — positional to match the tuple field order
+        reasoning_efforts: frozenset[str] | None = None,
+    ) -> ModelInfo:
+        """Normalize an empty ``reasoning_efforts`` to ``None``.
+
+        The two are not the same thing and the field's contract allows only one of
+        them: ``None`` is "unknown, cannot validate"; an empty set would have to
+        mean "this model accepts no effort at all". `validate_reasoning_effort`
+        branches on ``is not None``, so an empty set makes it reject *every* value —
+        including the defaults — with an empty accepted-values list, killing a run at
+        pre-flight over a state that means nothing. `_parse_reasoning_efforts` already
+        collapses the two; doing it in the type closes the same hole for
+        `register_model`, which takes whatever a caller hands it.
+        """
+        return super().__new__(
+            cls,
+            input_cost_per_1k,
+            output_cost_per_1k,
+            provider,
+            supports_responses,
+            reasoning_efforts or None,
+        )
 
 
 # host -> (model_id -> ModelInfo). A host is absent until its first fetch, and
@@ -69,6 +109,17 @@ _catalogues: dict[str, dict[str, ModelInfo]] = {}
 # time, and the CLI and test suite both drive several asyncio.run() loops, where
 # a lock bound to a dead loop raises "attached to a different loop".
 _lock: asyncio.Lock | None = None
+# Caller-registered entries, consulted before the fetched catalogue — the only way
+# to price or correct a model /v2/models does not list. Keyed on the BARE id:
+# `register_model` strips any `provider/` prefix so both spellings collapse to one.
+_overrides: dict[str, ModelInfo] = {}
+# Consecutive failed fetches per host: retry a few times, then give up for the
+# process rather than hammering a host that is genuinely down.
+_fetch_failures: dict[str, int] = {}
+_MAX_FETCH_FAILURES = 3
+# Env var rather than a parameter: `_load_catalogue` is called from pricing paths
+# with no config object to thread.
+_CATALOGUE_TIMEOUT_S = float(os.environ.get('EVALUATORQ_CATALOGUE_TIMEOUT_S', '30'))
 
 
 def _catalogue_lock() -> asyncio.Lock:
@@ -79,10 +130,100 @@ def _catalogue_lock() -> asyncio.Lock:
 
 
 def reset_catalogue_cache() -> None:
-    """Clear the process-lifetime catalogues; exists for test isolation."""
+    """Clear the process-lifetime catalogues; exists for test isolation.
+
+    Leaves `register_model` overrides in place — they are caller intent, not
+    cached state. Use `clear_model_overrides` for those.
+    """
     global _lock
     _catalogues.clear()
+    _fetch_failures.clear()
     _lock = None
+
+
+def register_model(model_id: str, info: ModelInfo) -> None:
+    """Register or override one catalogue entry for the rest of the process.
+
+    Takes priority over the fetched catalogue, so this both adds a model Orq
+    does not list and corrects one it lists wrongly. Without it an unknown model
+    is silently unpriced (`price_usage`), silently forced off the Responses
+    endpoint (`qualified_model`), and unvalidatable (`validate_reasoning_effort`)
+    — three degradations a caller could previously neither see nor fix.
+
+    ``model_id`` is stored **unprefixed**: ``'openai/gpt-x'`` and ``'gpt-x'`` name
+    the same model and register the same entry. Normalizing on write rather than
+    on read is what makes the two spellings interchangeable — the internal lookups
+    ask for the bare id (that is what `qualified_model` produces), so a qualified
+    registration stored verbatim would never be found and the override would be a
+    silent no-op. A second registration under the other spelling replaces the
+    first, which is correct: there is one model.
+
+    ```python
+    from evaluatorq.common.model_catalogue import ModelInfo, register_model
+
+    register_model(
+        'my-self-hosted-llama',
+        ModelInfo(
+            input_cost_per_1k=0.0002,
+            output_cost_per_1k=0.0008,
+            provider='self',
+            supports_responses=False,
+            reasoning_efforts=None,
+        ),
+    )
+    ```
+    """
+    _overrides[model_id.split('/', 1)[-1]] = info
+
+
+def clear_model_overrides() -> None:
+    """Drop every `register_model` entry."""
+    _overrides.clear()
+
+
+async def get_model_info(model: str, client: AsyncOpenAI | None = None) -> ModelInfo | None:
+    """The catalogue entry for ``model``, or ``None`` if nothing knows it.
+
+    Public counterpart of the internal lookup, so a caller can ask what the
+    catalogue believes instead of inferring it from an unpriced result.
+    """
+    return await _lookup(model, client)
+
+
+def _entry_metadata(entry: dict[str, object]) -> dict[str, object]:
+    """One entry's ``metadata`` mapping, or ``{}`` when it is any other shape.
+
+    Providers have returned ``metadata`` as a list. ``(x or {}).get(...)`` survives
+    an empty one and raises ``AttributeError`` on a populated one, which aborts the
+    whole catalogue parse over a single malformed entry.
+    """
+    metadata = entry.get('metadata')
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _parse_reasoning_efforts(entry: dict[str, object]) -> frozenset[str] | None:
+    """Accepted ``reasoning.effort`` values for one catalogue entry, or ``None``.
+
+    Read from ``parameters[parameter == 'reasoningEffort'].config.options[].value``
+    rather than the ``metadata.supports_reasoning_effort_*`` booleans: the two
+    disagree on 50 of the 148 live entries (``kimi-k3`` advertises low/high in the
+    flags and low/high/max in the options), and only the options list grows a new
+    level without a schema change. ``None`` when the entry has no such parameter,
+    which the caller must treat as "cannot validate", not "nothing allowed".
+    """
+    parameters = entry.get('parameters')
+    if not isinstance(parameters, list):
+        return None
+    for parameter in parameters:
+        if not isinstance(parameter, dict) or parameter.get('parameter') != 'reasoningEffort':
+            continue
+        config = parameter.get('config')
+        options = config.get('options') if isinstance(config, dict) else None
+        if not isinstance(options, list):
+            return None
+        values = {o['value'] for o in options if isinstance(o, dict) and isinstance(o.get('value'), str)}
+        return frozenset(values) or None
+    return None
 
 
 def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
@@ -127,7 +268,10 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
             input_cost_per_1k=float(inp),
             output_cost_per_1k=float(out),
             provider=provider,
-            supports_responses=bool((entry.get('metadata') or {}).get('supports_responses_api')),
+            # `metadata` is provider-shaped and has arrived as a list; `.get` on a
+            # non-mapping took the whole catalogue down rather than one model.
+            supports_responses=bool(_entry_metadata(entry).get('supports_responses_api')),
+            reasoning_efforts=_parse_reasoning_efforts(entry),
         )
         existing = models.get(model_id)
         if existing is not None:
@@ -174,11 +318,8 @@ async def _load_catalogue(client: AsyncOpenAI | None = None) -> dict[str, ModelI
         cached = _catalogues.get(host)
         if cached is not None:
             return cached
-        # When the host came from an injected client, that client's own key is
-        # the credential that matches it — an ambient ORQ_API_KEY for a
-        # different workspace/environment must not take priority, or the
-        # catalogue silently 401s (caching {}) or prices against the wrong
-        # workspace. Only fall back to the env var for the client-less path.
+        # An injected client's own key matches its host; an ambient ORQ_API_KEY for a
+        # different workspace would 401 (caching {}) or price against the wrong one.
         api_key = (
             (getattr(client, 'api_key', None) or os.environ.get('ORQ_API_KEY'))
             if client is not None
@@ -190,7 +331,7 @@ async def _load_catalogue(client: AsyncOpenAI | None = None) -> dict[str, ModelI
             return _catalogues[host]
         payload: object = None
         try:
-            async with httpx.AsyncClient(timeout=30.0) as http_client:
+            async with httpx.AsyncClient(timeout=_CATALOGUE_TIMEOUT_S) as http_client:
                 response = await http_client.get(
                     f'{host}/v2/models',
                     headers={'Authorization': f'Bearer {api_key}'},
@@ -200,24 +341,42 @@ async def _load_catalogue(client: AsyncOpenAI | None = None) -> dict[str, ModelI
         except (httpx.HTTPError, ValueError) as exc:
             # Narrow on purpose: a bug inside _parse_catalogue must not be cached
             # away as "the network was down", so parsing happens outside the try.
+            failures = _fetch_failures[host] = _fetch_failures.get(host, 0) + 1
+            give_up = failures >= _MAX_FETCH_FAILURES
             logger.warning(
-                'Orq model catalogue unavailable ({}: {}) at {}/v2/models — judges will run '
-                'on chat completions and report no cost for this run',
+                'Orq model catalogue unavailable ({}: {}) at {}/v2/models (attempt {} of {}) — '
+                'judges will run on chat completions and report no cost {}',
                 type(exc).__name__,
                 exc,
                 host,
+                failures,
+                _MAX_FETCH_FAILURES,
+                'for the rest of this process' if give_up else 'until a later call succeeds',
             )
-            _catalogues[host] = {}
-            return _catalogues[host]
+            if give_up:
+                _catalogues[host] = {}
+                return _catalogues[host]
+            # Not cached: a transient hiccup must not degrade the whole run.
+            return {}
+        _fetch_failures.pop(host, None)
         _catalogues[host] = _parse_catalogue(payload)
         logger.debug('Loaded catalogue for {} models from {}', len(_catalogues[host]), host)
         return _catalogues[host]
 
 
 async def _lookup(model: str, client: AsyncOpenAI | None = None) -> ModelInfo | None:
-    """Catalogue entry for ``model``, trying the id as given then unprefixed."""
+    """Catalogue entry for ``model``, trying the id as given then unprefixed.
+
+    Caller `register_model` overrides win over the fetched catalogue.
+    """
+    bare = model.split('/', 1)[-1]
+    # One probe, not two: `register_model` normalizes to the bare id on write, so
+    # the override key space has a single canonical spelling.
+    override = _overrides.get(bare)
+    if override is not None:
+        return override
     catalogue = await _load_catalogue(client)
-    return catalogue.get(model) or catalogue.get(model.split('/', 1)[-1])
+    return catalogue.get(model) or catalogue.get(bare)
 
 
 async def qualified_model(model: str, client: AsyncOpenAI | None = None) -> str | None:
@@ -235,6 +394,34 @@ async def qualified_model(model: str, client: AsyncOpenAI | None = None) -> str 
     if info is None or not info.supports_responses:
         return None
     return f'{info.provider}/{model}'
+
+
+async def validate_reasoning_effort(effort: str, model: str, client: AsyncOpenAI | None = None) -> None:
+    """Fail a run up front when ``model`` cannot serve ``effort``.
+
+    Raises ``ValueError`` only when the catalogue actually lists the accepted
+    values for ``model`` and ``effort`` is not among them. Every other case —
+    model absent from the catalogue (an ``agent/<key>`` id always is), catalogue
+    fetch failed, entry carries no ``reasoningEffort`` parameter — logs and
+    returns, leaving the provider as the authority. The point is to fail before
+    strategy generation and attack generation are paid for, not to become a
+    second source of truth about what a model accepts.
+    """
+    info = await _lookup(model, client)
+    if info is None or info.reasoning_efforts is None:
+        logger.warning(
+            'Cannot pre-validate reasoning effort {!r}: model {} is {} — the provider will '
+            'reject an unsupported value at call time instead.',
+            effort,
+            model,
+            'absent from the Orq catalogue' if info is None else 'listed without a reasoningEffort parameter',
+        )
+        return
+    if effort not in info.reasoning_efforts:
+        raise ValueError(
+            f'Reasoning effort {effort!r} is not accepted by {model}. '
+            f'Accepted values: {", ".join(sorted(info.reasoning_efforts))}.'
+        )
 
 
 async def price_usage(usage: Usage | None, model: str, client: AsyncOpenAI | None = None) -> Usage | None:
@@ -267,4 +454,13 @@ async def price_usage(usage: Usage | None, model: str, client: AsyncOpenAI | Non
     )
 
 
-__all__ = ['ModelInfo', 'price_usage', 'qualified_model', 'reset_catalogue_cache']
+__all__ = [
+    'ModelInfo',
+    'clear_model_overrides',
+    'get_model_info',
+    'price_usage',
+    'qualified_model',
+    'register_model',
+    'reset_catalogue_cache',
+    'validate_reasoning_effort',
+]

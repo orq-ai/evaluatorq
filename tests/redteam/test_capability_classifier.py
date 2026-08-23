@@ -226,3 +226,32 @@ class TestClassifyAgentCapabilities:
         assert result.has_any([AgentCapability.MEMORY_READ])
         assert result.has_any([AgentCapability.KNOWLEDGE_RETRIEVAL])
         assert not result.has_any([AgentCapability.CODE_EXECUTION])
+
+
+@pytest.mark.asyncio
+async def test_both_classifier_calls_forward_the_attacker_reasoning_effort():
+    """Both LLM legs must carry `attacker.reasoning_effort`, not just their siblings.
+
+    `attack_generator`, `objective_generator` and `orchestrator` all forward it; these
+    two call sites did not, so the same config produced a different request depending
+    on which stage of the pipeline made it.
+    """
+    from evaluatorq.redteam.contracts import LLMCallConfig, LLMConfig
+
+    seen: list[str | None] = []
+
+    async def _record(**kwargs: object) -> tuple[MagicMock, None]:
+        seen.append(kwargs.get('reasoning_effort'))  # pyright: ignore[reportArgumentType]
+        model = kwargs.get('response_model')
+        if model is ResourceCapabilityInference:
+            return _mock_resource_response(), None
+        return _mock_tool_response([ToolCapabilities(tool_name='t', capabilities=[])]), None
+
+    context = AgentContext(key='agent-key', tools=[ToolInfo(name='t', description='d')])
+    cfg = LLMConfig(attacker=LLMCallConfig(reasoning_effort='high'))
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr('evaluatorq.redteam.adaptive.capability_classifier.execute_chat_parse', _record)
+        await classify_agent_capabilities(context, MagicMock(), pipeline_config=cfg)
+
+    assert seen == ['high', 'high'], f'a classifier leg dropped reasoning_effort: {seen}'

@@ -2,7 +2,7 @@
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
@@ -11,6 +11,8 @@ from evaluatorq.redteam.contracts import (
     EvaluatorConfig,
     LLMCallConfig,
     LLMConfig,
+    _assert_call_config_fields_agree,
+    _CALL_CONFIG_DIVERGENCES,
 )
 
 if TYPE_CHECKING:
@@ -77,6 +79,122 @@ def test_evaluator_config_min_evaluation_coverage_accepts_none():
     assert cfg.min_evaluation_coverage is None
 
 
+def test_evaluator_config_accepts_llm_call_config_with_reasoning_effort():
+    """Regression (F1): EvaluatorConfig.model_validate(LLMCallConfig(...)) must
+    round-trip cleanly even when the LLMCallConfig carries reasoning_effort —
+    it used to hard-reject with 'Extra inputs are not permitted' because
+    EvaluatorConfig redeclared LLMCallConfig's fields by hand and had not been
+    updated when reasoning_effort was added there.
+    """
+    cfg = EvaluatorConfig.model_validate(LLMCallConfig(model='m', reasoning_effort='high'))
+    assert cfg.judges == ['m']
+    assert cfg.reasoning_effort == 'high'
+    call_cfg = cfg.as_call_config()
+    assert call_cfg.model == 'm'
+    assert call_cfg.reasoning_effort == 'high'
+
+
+def test_call_config_guard_accepts_the_real_evaluator_config():
+    """The shipped pair must satisfy the guard the module runs at import time."""
+    _assert_call_config_fields_agree(EvaluatorConfig)
+
+
+def test_call_config_guard_rejects_a_missing_field():
+    """A refactor back to composition/hand-listing that drops a field fails."""
+
+    class _Deficient(BaseModel):
+        model: str = DEFAULT_PIPELINE_MODEL
+
+    with pytest.raises(RuntimeError, match='missing from _Deficient'):
+        _assert_call_config_fields_agree(_Deficient, divergences={})
+
+
+def test_call_config_guard_rejects_a_silently_redeclared_default():
+    """The drift that actually bit: a redeclaration that keeps a stale default.
+
+    ``temperature`` is not in the divergence allowlist, so restating it with a
+    different default must fail even though the field name is present and the
+    annotation is unchanged — the name-set check this replaced could not see it.
+    """
+
+    class _StaleDefault(LLMCallConfig):
+        temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+
+    with pytest.raises(RuntimeError, match='temperature: _StaleDefault overrides'):
+        _assert_call_config_fields_agree(_StaleDefault, divergences={})
+
+
+def test_call_config_guard_rejects_a_tightened_constraint():
+    """Constraint metadata counts too, not just the default value."""
+
+    class _TightConstraint(LLMCallConfig):
+        max_tokens: int = Field(default=DEFAULT_TARGET_MAX_TOKENS, gt=0, le=100)
+
+    with pytest.raises(RuntimeError, match='max_tokens: _TightConstraint overrides'):
+        _assert_call_config_fields_agree(_TightConstraint, divergences={})
+
+
+def test_call_config_guard_rejects_an_exclude_only_override():
+    """``exclude`` changes behaviour without changing a type, default or constraint.
+
+    `EvaluatorConfig.as_call_config` and ``_accept_model_sugar`` both round-trip
+    through ``model_dump()``, so a subclass that only adds ``exclude=True`` drops
+    the field on the way to the provider. It is also the attribute ``model`` uses
+    to diverge, so a guard blind to it has a hole exactly where it is aimed.
+    """
+
+    class _Excluded(LLMCallConfig):
+        temperature: float = Field(default=1.0, ge=0.0, le=2.0, exclude=True)
+
+    with pytest.raises(RuntimeError, match='temperature: _Excluded overrides'):
+        _assert_call_config_fields_agree(_Excluded, divergences={})
+
+
+def test_call_config_guard_rejects_an_alias_only_override():
+    """An alias changes which key populates the field and which key it dumps under."""
+
+    class _Aliased(LLMCallConfig):
+        max_tokens: int = Field(default=DEFAULT_TARGET_MAX_TOKENS, gt=0, alias='maxTokens')
+
+    with pytest.raises(RuntimeError, match='max_tokens: _Aliased overrides'):
+        _assert_call_config_fields_agree(_Aliased, divergences={})
+
+
+def test_call_config_guard_allows_a_description_only_override():
+    """EvaluatorConfig.retry_count reuses this: docs may differ, behaviour may not."""
+
+    class _Reworded(LLMCallConfig):
+        retry_count: int = Field(default=1, ge=0, description='judge-side budget')
+
+    _assert_call_config_fields_agree(_Reworded, divergences={})
+
+
+def test_call_config_guard_rejects_a_stale_allowlist_entry():
+    """An allowlist entry must not outlive the divergence it excuses."""
+    with pytest.raises(RuntimeError, match='timeout_ms: listed as an intentional divergence'):
+        _assert_call_config_fields_agree(
+            EvaluatorConfig, divergences={**_CALL_CONFIG_DIVERGENCES, 'timeout_ms': 'no longer true'}
+        )
+
+
+def test_call_config_guard_rejects_an_allowlist_entry_for_an_unknown_field():
+    """A field renamed on LLMCallConfig must not leave a dangling excuse behind."""
+    with pytest.raises(RuntimeError, match='LLMCallConfig has no such field'):
+        _assert_call_config_fields_agree(EvaluatorConfig, divergences={'gone': 'renamed upstream'})
+
+
+def test_evaluator_config_inherits_call_config_defaults():
+    """The inherited fields must carry LLMCallConfig's values, not a stale copy."""
+    evaluator = EvaluatorConfig()
+    call = LLMCallConfig()
+    for name in ('temperature', 'max_tokens', 'timeout_ms', 'extra_kwargs', 'extra_body', 'reasoning_effort'):
+        assert getattr(evaluator, name) == getattr(call, name)
+    # The two deliberate divergences.
+    assert evaluator.api == 'responses'
+    assert call.api == 'chat_completions'
+    assert EvaluatorConfig.model_fields['model'].exclude is True
+
+
 def test_llm_config_no_backend_field():
     cfg = LLMConfig()
     assert not hasattr(cfg, 'backend')
@@ -139,21 +257,21 @@ def test_retry_extra_body_empty_for_client_without_base_url():
 
 
 # ---------------------------------------------------------------------------
-# completion_params: extra_kwargs must merge, never collide
+# request_params (chat completions): extra_kwargs must merge, never collide
 # ---------------------------------------------------------------------------
 
 
-def test_completion_params_defaults_and_site_params():
+def test_request_params_defaults_and_site_params():
     from evaluatorq.contracts import LLMCallConfig
 
     cfg = LLMCallConfig(temperature=0.7, max_tokens=1234)
-    params = cfg.completion_params(model='m', messages=[{'role': 'user', 'content': 'q'}])
+    params = cfg.request_params(api='chat_completions', model='m', messages=[{'role': 'user', 'content': 'q'}])
     assert params['temperature'] == 0.7
     assert params['max_completion_tokens'] == 1234
     assert params['model'] == 'm'
 
 
-def test_completion_params_extra_kwargs_override_instead_of_typeerror():
+def test_request_params_extra_kwargs_override_instead_of_typeerror():
     # Regression: splatting extra_kwargs next to explicit temperature=/
     # max_completion_tokens= keywords raised TypeError ('got multiple values')
     # the moment a user routed those keys through extra_kwargs, turning every
@@ -161,16 +279,16 @@ def test_completion_params_extra_kwargs_override_instead_of_typeerror():
     from evaluatorq.contracts import LLMCallConfig
 
     cfg = LLMCallConfig(temperature=0.7, extra_kwargs={'temperature': 1.0, 'max_completion_tokens': 99})
-    params = cfg.completion_params(model='m', messages=[])
+    params = cfg.request_params(api='chat_completions', model='m', messages=[])
     assert params['temperature'] == 1.0
     assert params['max_completion_tokens'] == 99
 
 
-def test_completion_params_site_params_override_field_defaults():
+def test_request_params_site_params_override_field_defaults():
     from evaluatorq.contracts import LLMCallConfig
 
     cfg = LLMCallConfig(max_tokens=1000)
-    params = cfg.completion_params(max_completion_tokens=1500)
+    params = cfg.request_params(api='chat_completions', max_completion_tokens=1500)
     assert params['max_completion_tokens'] == 1500
 
 
@@ -179,7 +297,7 @@ def test_no_call_site_splats_extra_kwargs_next_to_explicit_sampling_kwargs():
 
     A call carrying explicit temperature=/max_completion_tokens= keywords AND a
     **...extra_kwargs splat raises TypeError on a duplicate key. All call sites
-    must go through LLMCallConfig.completion_params (or an equivalent dict
+    must go through LLMCallConfig.request_params (or an equivalent dict
     merge) instead.
     """
     import re
@@ -208,7 +326,7 @@ def test_openai_backend_factory_forwards_pipeline_timeout():
     assert backend._timeout_ms == 123_456
 
 
-def test_completion_params_rejects_structural_extra_kwargs():
+def test_request_params_rejects_structural_extra_kwargs():
     """extra_kwargs tunes sampling/provider options; silently replacing
     model/messages/response_format/extra_body would break the call it rides
     on (e.g. dropping a required JSON response format)."""
@@ -216,12 +334,12 @@ def test_completion_params_rejects_structural_extra_kwargs():
 
     cfg = LLMCallConfig(model='m', extra_kwargs={'response_format': None, 'temperature': 1})
     with pytest.raises(ValueError, match='structural'):
-        cfg.completion_params(model='m', messages=[])
+        cfg.request_params(api='chat_completions', model='m', messages=[])
 
 
-def test_completion_params_sampling_extra_kwargs_still_pass():
+def test_request_params_sampling_extra_kwargs_still_pass():
     from evaluatorq.contracts import LLMCallConfig
 
     cfg = LLMCallConfig(model='m', extra_kwargs={'top_p': 0.9})
-    params = cfg.completion_params(model='m', messages=[])
+    params = cfg.request_params(api='chat_completions', model='m', messages=[])
     assert params['top_p'] == 0.9

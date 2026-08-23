@@ -114,6 +114,84 @@ def test_parse_catalogue_prefers_the_developers_own_provider():
     assert prices['m'].provider == 'openai'
 
 
+# --- reasoning effort pre-flight ----------------------------------------------
+
+
+def _entry_with_efforts(*values: str) -> dict[str, object]:
+    return {
+        'model_id': 'thinky',
+        'provider': 'openai',
+        'input_cost': 0.1,
+        'output_cost': 0.2,
+        'parameters': [
+            {'parameter': 'temperature', 'config': {'min': 0, 'max': 2}},
+            {
+                'parameter': 'reasoningEffort',
+                'config': {
+                    'default': 'medium',
+                    'options': [{'display_name': v.title(), 'value': v} for v in values],
+                },
+            },
+        ],
+    }
+
+
+def test_parse_catalogue_reads_reasoning_effort_options():
+    prices = pricing._parse_catalogue([_entry_with_efforts('low', 'medium', 'high', 'xhigh')])  # pyright: ignore[reportPrivateUsage]
+    assert prices['thinky'].reasoning_efforts == frozenset({'low', 'medium', 'high', 'xhigh'})
+
+
+def test_parse_catalogue_reasoning_efforts_is_none_without_the_parameter():
+    prices = pricing._parse_catalogue(  # pyright: ignore[reportPrivateUsage]
+        [{'model_id': 'plain', 'provider': 'openai', 'input_cost': 0.1, 'output_cost': 0.2}]
+    )
+    assert prices['plain'].reasoning_efforts is None
+
+
+def test_parse_catalogue_ignores_the_supports_reasoning_effort_flags():
+    """The flags disagree with the options on a third of the live catalogue;
+    the options list is the one that is right."""
+    entry = _entry_with_efforts('low', 'high', 'max')
+    entry['metadata'] = {'supports_reasoning_effort_low': True, 'supports_reasoning_effort_high': True}
+    prices = pricing._parse_catalogue([entry])  # pyright: ignore[reportPrivateUsage]
+    assert prices['thinky'].reasoning_efforts == frozenset({'low', 'high', 'max'})
+
+
+@pytest.fixture
+def _reasoning_catalogue(monkeypatch: pytest.MonkeyPatch):
+    async def fake_load(client=None):  # noqa: ANN001, ARG001
+        return {
+            'thinky': ModelInfo(
+                0.1, 0.2, 'openai', supports_responses=True, reasoning_efforts=frozenset({'low', 'high'})
+            ),
+            'plain': ModelInfo(0.1, 0.2, 'openai', supports_responses=True),
+        }
+
+    monkeypatch.setattr(pricing, '_load_catalogue', fake_load)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('_reasoning_catalogue')
+async def test_validate_reasoning_effort_accepts_a_listed_value():
+    await pricing.validate_reasoning_effort('high', 'openai/thinky')
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('_reasoning_catalogue')
+async def test_validate_reasoning_effort_rejects_an_unlisted_value():
+    with pytest.raises(ValueError, match='not accepted by'):
+        await pricing.validate_reasoning_effort('xhigh', 'thinky')
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('_reasoning_catalogue')
+async def test_validate_reasoning_effort_passes_when_the_catalogue_cannot_say():
+    """An agent/<key> id is never in the catalogue, and 86 of 148 live entries
+    carry no reasoningEffort parameter — neither may block a run."""
+    await pricing.validate_reasoning_effort('xhigh', 'agent/support')
+    await pricing.validate_reasoning_effort('xhigh', 'plain')
+
+
 # --- _parse_catalogue edge cases ---------------------------------------------
 
 
@@ -254,20 +332,87 @@ class _FakeAsyncClient:
 
 
 @pytest.mark.asyncio
-async def test_failed_fetch_caches_empty_and_does_not_refetch(monkeypatch: pytest.MonkeyPatch):
+async def test_failed_fetch_retries_then_gives_up_for_the_process(monkeypatch: pytest.MonkeyPatch):
+    """A transient fetch failure must not degrade the whole run to unpriced.
+
+    The catalogue is retried up to ``_MAX_FETCH_FAILURES`` times; only then is the
+    empty result cached for the process. Caching {} on the first hiccup used to
+    silently pin every later call in the run to unpriced and chat-completions-only.
+    """
     monkeypatch.setattr(pricing, '_catalogues', {})
+    monkeypatch.setattr(pricing, '_fetch_failures', {})
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
 
     calls: list[str] = []
     fake_client = _FakeAsyncClient(calls, lambda: _FakeResponse(500))
     monkeypatch.setattr(httpx, 'AsyncClient', fake_client)
 
-    first = await pricing.price_usage(_usage(), 'gpt-5-mini')
-    second = await pricing.price_usage(_usage(), 'gpt-5-mini')
+    for _ in range(pricing._MAX_FETCH_FAILURES):
+        result = await pricing.price_usage(_usage(), 'gpt-5-mini')
+        assert result is not None and result.total_cost is None
+    assert len(calls) == pricing._MAX_FETCH_FAILURES
 
-    assert first is not None and first.total_cost is None
-    assert second is not None and second.total_cost is None
-    assert len(calls) == 1
+    # Given up: the empty catalogue is now cached, so no further HTTP happens.
+    after = await pricing.price_usage(_usage(), 'gpt-5-mini')
+    assert after is not None and after.total_cost is None
+    assert len(calls) == pricing._MAX_FETCH_FAILURES
+
+
+@pytest.mark.asyncio
+async def test_transient_failure_then_success_prices_normally(monkeypatch: pytest.MonkeyPatch):
+    """One hiccup, then a good response: the run gets its prices back."""
+    monkeypatch.setattr(pricing, '_catalogues', {})
+    monkeypatch.setattr(pricing, '_fetch_failures', {})
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+
+    calls: list[str] = []
+    responses = [
+        _FakeResponse(500),
+        _FakeResponse(
+            200,
+            [{'model_id': 'gpt-5-mini', 'provider': 'openai', 'input_cost': 0.00025, 'output_cost': 0.002}],
+        ),
+    ]
+    monkeypatch.setattr(httpx, 'AsyncClient', _FakeAsyncClient(calls, lambda: responses.pop(0)))
+
+    failed = await pricing.price_usage(_usage(), 'gpt-5-mini')
+    assert failed is not None and failed.total_cost is None
+
+    priced = await pricing.price_usage(_usage(), 'gpt-5-mini')
+    assert priced is not None and priced.total_cost is not None
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_register_model_overrides_the_fetched_catalogue(monkeypatch: pytest.MonkeyPatch):
+    """A registered entry prices a model the catalogue does not list, with no HTTP."""
+    monkeypatch.setattr(pricing, '_catalogues', {})
+    monkeypatch.setattr(pricing, '_overrides', {})
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+
+    calls: list[str] = []
+    monkeypatch.setattr(httpx, 'AsyncClient', _FakeAsyncClient(calls, lambda: _FakeResponse(500)))
+
+    pricing.register_model(
+        'my-self-hosted',
+        pricing.ModelInfo(
+            input_cost_per_1k=0.001,
+            output_cost_per_1k=0.002,
+            provider='self',
+            supports_responses=True,
+            reasoning_efforts=frozenset({'low', 'high'}),
+        ),
+    )
+
+    priced = await pricing.price_usage(_usage(), 'my-self-hosted')
+    assert priced is not None and priced.total_cost is not None
+    assert await pricing.qualified_model('my-self-hosted') == 'self/my-self-hosted'
+    assert (await pricing.get_model_info('my-self-hosted')) is not None
+    # An override answers without ever reaching the network.
+    assert calls == []
+
+    with pytest.raises(ValueError, match='not accepted'):
+        await pricing.validate_reasoning_effort('medium', 'my-self-hosted')
 
 
 @pytest.mark.asyncio
@@ -373,3 +518,41 @@ async def test_env_key_used_when_no_client_given(monkeypatch: pytest.MonkeyPatch
 
     assert calls == ['https://prod.example/v2/models']
     assert headers[0]['Authorization'] == 'Bearer env-key'
+
+
+def test_parse_catalogue_survives_a_non_mapping_metadata():
+    """A provider returning `metadata` as a list must cost that one entry, not the catalogue.
+
+    `(entry.get('metadata') or {}).get(...)` survives an EMPTY list and raises
+    `AttributeError` on a populated one, so the empty case hid this until a live
+    payload happened to carry a non-empty one.
+    """
+    prices = pricing._parse_catalogue(  # pyright: ignore[reportPrivateUsage]
+        [
+            {
+                'model_id': 'listy',
+                'provider': 'openai',
+                'input_cost': 0.1,
+                'output_cost': 0.2,
+                'metadata': [{'supports_responses_api': True}],
+            },
+            {
+                'model_id': 'stringy',
+                'provider': 'openai',
+                'input_cost': 0.1,
+                'output_cost': 0.2,
+                'metadata': 'supports_responses_api',
+            },
+            {
+                'model_id': 'good',
+                'provider': 'openai',
+                'input_cost': 0.1,
+                'output_cost': 0.2,
+                'metadata': {'supports_responses_api': True},
+            },
+        ]
+    )
+    assert set(prices) == {'listy', 'stringy', 'good'}
+    assert prices['listy'].supports_responses is False
+    assert prices['stringy'].supports_responses is False
+    assert prices['good'].supports_responses is True

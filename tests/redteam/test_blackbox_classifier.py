@@ -25,7 +25,7 @@ from evaluatorq.redteam.adaptive.blackbox_classifier import (
     classify_agent_capabilities_blackbox,
 )
 from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities
-from evaluatorq.redteam.contracts import AgentCapability
+from evaluatorq.redteam.contracts import AgentCapability, LLMConfig
 
 # ---------------------------------------------------------------------------
 # Fakes
@@ -547,15 +547,20 @@ async def test_recall_clone_keeps_the_parent_memory_scope() -> None:
 
 
 @pytest.mark.asyncio
-async def test_budget_exhaustion_skips_recall_and_flags_gap(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_budget_exhaustion_skips_recall_and_flags_gap() -> None:
     """With the cap forced below the probe count, the recall never runs: the
-    turn count must respect the cap AND memory must read as a coverage gap."""
-    import evaluatorq.redteam.adaptive.blackbox_classifier as mod
+    turn count must respect the cap AND memory must read as a coverage gap.
 
-    monkeypatch.setattr(mod, 'MAX_PROBE_TURNS', 3)
+    F7: the probe-turn budget is now sourced from LLMConfig.max_probe_turns
+    (contracts.py) rather than the module-level MAX_PROBE_TURNS constant, so
+    a caller overrides it via pipeline_config instead of monkeypatching the
+    module attribute.
+    """
     target = _ScriptedTarget(['ok'] * 100)
 
-    result = await classify_agent_capabilities_blackbox(target, _judge(), model='m')
+    result = await classify_agent_capabilities_blackbox(
+        target, _judge(), model='m', pipeline_config=LLMConfig(max_probe_turns=3)
+    )
 
     assert len(target.calls) <= 3
     recall_text = PROBES['memory'][1]

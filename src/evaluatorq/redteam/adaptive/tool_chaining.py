@@ -149,7 +149,8 @@ class ToolChainingPlanner:
         logger.debug(f'Tool-chaining planner decomposing objective for agent={agent_name}, tools={tool_list}')
 
         cfg = self._cfg
-        call_params = cfg.attacker.completion_params(
+        call_params = cfg.attacker.request_params(
+            api='chat_completions',
             model=self._model,
             messages=[
                 {'role': 'system', 'content': _PLANNER_SYSTEM_PROMPT},

@@ -8,6 +8,8 @@ and their outputs.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 from evaluatorq.openresponses.dataset import (
     append_assistant_turn,
     append_user_followup,
@@ -44,6 +46,7 @@ __all__ = [
     'FunctionCallOutputDict',
     'Message',
     'MessageDict',
+    'OrqResponsesTarget',
     'OutputTextContent',
     'ResponseResource',
     'ResponseResourceDict',
@@ -63,3 +66,16 @@ __all__ = [
     'turns_to_openresponses_input',
     'user_input_item',
 ]
+
+
+if TYPE_CHECKING:
+    from evaluatorq.openresponses.target import OrqResponsesTarget
+
+
+def __getattr__(name: str) -> Any:
+    # Lazy: target.py imports evaluatorq.contracts, which imports this package.
+    if name == 'OrqResponsesTarget':
+        from evaluatorq.openresponses.target import OrqResponsesTarget
+
+        return OrqResponsesTarget
+    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')

@@ -163,7 +163,11 @@ async def plan_strategies_for_vulnerabilities(
                             llm_client=llm_client,
                             model=attack_model,
                             count=generated_strategy_count,
-                            turn_type=None,
+                            # Generated strategies always run multi-turn: a single-turn
+                            # generated attack gets one shot with no chance to adapt, which
+                            # under-tests the agent. Multi-turn still ends early the moment
+                            # the objective is achieved, so cheap wins stay cheap.
+                            turn_type=TurnType.MULTI,
                             max_turns=max_turns,
                             attacker_instructions=attacker_instructions,
                             llm_kwargs=llm_kwargs,

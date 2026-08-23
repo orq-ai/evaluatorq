@@ -2,27 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from loguru import logger
 
 from evaluatorq import DataPoint, Job, job
-from evaluatorq.common.llm_call import apply_pipeline_metadata, execute_chat_completion
-from evaluatorq.common.llm_client import client_routes_through_orq
+from evaluatorq.common.llm_call import apply_pipeline_metadata
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.orq_client import resolve_orq_client
+from evaluatorq.common.retry import with_retry
 from evaluatorq.common.thread_context import build_static_thread_id, conversation_thread, thread_body_param
 from evaluatorq.common.tracing import record_llm_response, set_span_attrs, truncate_for_span
 from evaluatorq.redteam.adaptive.orchestrator import _get_active_progress
-from evaluatorq.redteam.backends.registry import create_async_llm_client
-from evaluatorq.redteam.contracts import DEFAULT_TARGET_MAX_TOKENS, Message, TokenUsage
+from evaluatorq.redteam.contracts import PIPELINE_CONFIG, LLMConfig, Message, TokenUsage
 from evaluatorq.redteam.exceptions import CredentialError
 from evaluatorq.redteam.tracing import with_llm_span, with_redteam_span
-
-if TYPE_CHECKING:
-    from openai import AsyncOpenAI
 
 
 def _sanitize_job_name(value: str) -> str:
@@ -44,128 +41,55 @@ def _static_target_input(messages: list[dict[str, Any]]) -> str:
     return truncate_for_span('\n\n'.join(coerce_content_text(message.get('content')) for message in messages))
 
 
-def create_model_job(
-    model: str | None = None,
-    deployment_key: str | None = None,
-    llm_client: AsyncOpenAI | None = None,
-    system_prompt: str | None = None,
-    max_tokens: int = DEFAULT_TARGET_MAX_TOKENS,
+def create_deployment_job(
+    deployment_key: str,
     run_id: str | None = None,
+    cfg: LLMConfig | None = None,
 ) -> Job:
-    """Create an evaluatorq job for a router model or ORQ deployment.
+    """Create an evaluatorq job that invokes an ORQ deployment.
 
-    The model leg deliberately keeps roles intact as a richer interface, so its message shape differs from the
-    AgentTarget static leg.
+    Deployments manage their own decode configuration through the platform, so
+    ``max_tokens`` and ``target_reasoning_effort`` are not forwarded — a set
+    ``target_reasoning_effort`` logs a warning rather than passing silently.
 
-    ``max_tokens`` is applied to direct model calls (router jobs).
-    Deployment targets manage their own token limits via platform configuration,
-    so ``max_tokens`` is ignored for that path.
+    ``cfg`` (``PIPELINE_CONFIG`` when omitted) supplies ``target_agent_timeout_ms``
+    and ``max_target_retries``. Retry is a single layer: the Orq SDK deployment
+    client exposes no per-call retry knob here, so ``common.retry.with_retry``
+    owns it.
 
     Args:
-        model: Model name for direct LLM calls via the ORQ router or OpenAI.
         deployment_key: ORQ deployment key for deployment-based inference.
-        max_tokens: Maximum tokens for direct model responses; defaults to
-            ``DEFAULT_TARGET_MAX_TOKENS``.
         run_id: Red-team run id used to build the static-trace thread id so
             job spans correlate with the red-team pipeline; a per-target
             fallback is used when omitted.
+        cfg: Optional ``LLMConfig`` for per-run timeout/retry tuning; defaults
+            to the module-level ``PIPELINE_CONFIG``.
 
     Returns:
         An evaluatorq Job.
-
-    Raises:
-        ValueError: If no target parameter is provided.
     """
-    if deployment_key:
-        safe_key = _sanitize_job_name(deployment_key)
+    cfg = cfg or PIPELINE_CONFIG
+    safe_key = _sanitize_job_name(deployment_key)
+    if cfg.target_reasoning_effort:
+        # The invoke_async payload has no field for it, so a configured value is inert.
+        logger.warning(
+            f'target_reasoning_effort={cfg.target_reasoning_effort!r} is set but deployment '
+            f'{deployment_key!r} manages reasoning effort via its own platform configuration; '
+            'this value is not forwarded.'
+        )
 
-        api_key = os.environ.get('ORQ_API_KEY')
-        if not api_key:
-            raise CredentialError('ORQ_API_KEY environment variable is not set')
-        deployment_client = resolve_orq_client(api_key)
+    api_key = os.environ.get('ORQ_API_KEY')
+    if not api_key:
+        raise CredentialError('ORQ_API_KEY environment variable is not set')
+    deployment_client = resolve_orq_client(api_key)
 
-        @job(f'redteam:static:{safe_key}')
-        async def deployment_job(data: DataPoint, _row: int) -> dict[str, Any]:
-            """Invoke the ORQ deployment and return the response with token usage."""
-            messages = _build_messages(data)
-            attack_attrs = _static_attack_attrs(data)
-            target_input = _static_target_input(messages)
-            thread_id = build_static_thread_id(run_id, safe_key, _row)
-            async with (
-                with_redteam_span('orq.redteam.attack', attack_attrs),
-                with_redteam_span(
-                    'orq.redteam.target_call',
-                    {
-                        **attack_attrs,
-                        'input': target_input,
-                        'orq.redteam.input': target_input,
-                    },
-                ) as target_span,
-            ):
-                with conversation_thread(thread_id):
-                    async with with_llm_span(
-                        model=f'deployment:{deployment_key}',
-                        operation='invoke',
-                        provider='orq',
-                        input_messages=messages,
-                        attributes={'orq.redteam.llm_purpose': 'target'},
-                    ) as llm_span:
-                        invoke_kwargs: dict[str, Any] = {
-                            'key': deployment_key,
-                            'messages': messages,
-                        }
-                        # Deployment SDK calls do not go through the shared
-                        # chat-completion helper, so apply the active run
-                        # metadata explicitly. The helper preserves any
-                        # caller-supplied metadata if this path gains one.
-                        apply_pipeline_metadata(invoke_kwargs)
-                        invoke_kwargs.update(thread_body_param())
-                        completion = await deployment_client.deployments.invoke_async(**invoke_kwargs)
-                        content = _extract_deployment_content(completion)
-                        record_llm_response(llm_span, completion, output_content=content)
-                        output = truncate_for_span(content)
-                        set_span_attrs(target_span, {'output': output, 'orq.redteam.output': output})
-
-            # Advance the global progress bar for static attacks.
-            active_progress = _get_active_progress()
-            if active_progress is not None:
-                await active_progress.finish_attack(None)
-
-            # The Orq SDK's deployment client has no AsyncOpenAI to resolve a
-            # per-host catalogue from, so price_usage falls back to
-            # ORQ_BASE_URL — the same host the client above was built with, so
-            # the prices come from the deployment that served the call. Price
-            # against the model the deployment actually ran (completion.model),
-            # not the deployment_key alias (RES-1295).
-            priced_usage = await price_usage(
-                TokenUsage.from_completion(completion),
-                getattr(completion, 'model', deployment_key),
-                None,
-            )
-            return {
-                'response': content,
-                'token_usage': priced_usage,
-                'thread_id': thread_id,
-            }
-
-        return deployment_job
-
-    if model is None:
-        msg = "Provide one of: 'model' or 'deployment_key'"
-        raise ValueError(msg)
-
-    safe_model = _sanitize_job_name(model)
-
-    @job(f'redteam:static:{safe_model}')
-    async def router_job(data: DataPoint, _row: int) -> dict[str, Any]:
-        """Call the router model and return the response with token usage and finish reason."""
+    @job(f'redteam:static:{safe_key}')
+    async def deployment_job(data: DataPoint, _row: int) -> dict[str, Any]:
+        """Invoke the ORQ deployment and return the response with token usage."""
         messages = _build_messages(data)
-        if system_prompt:
-            messages = [{'role': 'system', 'content': system_prompt}, *messages]
-        client = llm_client or create_async_llm_client()
         attack_attrs = _static_attack_attrs(data)
         target_input = _static_target_input(messages)
-        thread_id = build_static_thread_id(run_id, safe_model, _row)
+        thread_id = build_static_thread_id(run_id, safe_key, _row)
         async with (
             with_redteam_span('orq.redteam.attack', attack_attrs),
             with_redteam_span(
@@ -179,53 +103,59 @@ def create_model_job(
         ):
             with conversation_thread(thread_id):
                 async with with_llm_span(
-                    model=model,
-                    max_tokens=max_tokens,
+                    model=f'deployment:{deployment_key}',
+                    operation='invoke',
+                    provider='orq',
                     input_messages=messages,
                     attributes={'orq.redteam.llm_purpose': 'target'},
                 ) as llm_span:
-                    extra_kwargs: dict[str, Any] = {}
-                    if client_routes_through_orq(client):
-                        # Run metadata is applied natively by execute_chat_completion
-                        # (llm_call.apply_pipeline_metadata); only thread grouping here.
-                        extra_kwargs['extra_body'] = thread_body_param()
-                    # ponytail: fixed 300s ceiling (was unbounded); thread a cfg
-                    # target timeout through create_model_job if per-run tuning is needed.
-                    # execute_chat_completion already prices this call's usage
-                    # (RES-1295); keep its returned Usage rather than re-deriving
-                    # an unpriced one from the raw response below.
-                    response, token_usage = await execute_chat_completion(
-                        client=client,
-                        model=model,
-                        messages=messages,
-                        span=llm_span,
-                        timeout_s=300.0,
-                        max_tokens=max_tokens,
-                        extra_kwargs=extra_kwargs or None,
+                    invoke_kwargs: dict[str, Any] = {
+                        'key': deployment_key,
+                        'messages': messages,
+                    }
+                    # This leg bypasses the shared chat-completion helper, so run
+                    # metadata is applied explicitly.
+                    apply_pipeline_metadata(invoke_kwargs)
+                    invoke_kwargs.update(thread_body_param())
+
+                    async def _invoke() -> Any:
+                        return await asyncio.wait_for(
+                            deployment_client.deployments.invoke_async(**invoke_kwargs),
+                            timeout=cfg.target_agent_timeout_ms / 1000.0,
+                        )
+
+                    # Sole retry layer for this leg (see docstring): the deployment
+                    # client exposes no per-call retry budget.
+                    completion = await with_retry(
+                        _invoke,
+                        max_attempts=cfg.max_target_retries + 1,
+                        label=f'deployment:{deployment_key}',
                     )
-                    content = response.choices[0].message.content or ''
+                    content = _extract_deployment_content(completion)
+                    record_llm_response(llm_span, completion, output_content=content)
                     output = truncate_for_span(content)
                     set_span_attrs(target_span, {'output': output, 'orq.redteam.output': output})
-        if not content:
-            sample_id = data.inputs.get('id', 'unknown')
-            finish_reason = response.choices[0].finish_reason
-            logger.warning(
-                f'Empty router response for {sample_id}: '
-                f'content={response.choices[0].message.content}, finish_reason={finish_reason}'
-            )
+
         # Advance the global progress bar for static attacks.
         active_progress = _get_active_progress()
         if active_progress is not None:
             await active_progress.finish_attack(None)
 
+        # No AsyncOpenAI to resolve a per-host catalogue from, so price_usage falls back
+        # to ORQ_BASE_URL — the host this client was built with. Price against the model
+        # the deployment ran, not the key alias (RES-1295).
+        priced_usage = await price_usage(
+            TokenUsage.from_completion(completion),
+            getattr(completion, 'model', deployment_key),
+            None,
+        )
         return {
             'response': content,
-            'token_usage': token_usage,
-            'finish_reason': response.choices[0].finish_reason,
+            'token_usage': priced_usage,
             'thread_id': thread_id,
         }
 
-    return router_job
+    return deployment_job
 
 
 def _build_messages(data: DataPoint) -> list[dict[str, Any]]:

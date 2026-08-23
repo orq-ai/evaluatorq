@@ -1294,7 +1294,7 @@ async def test_generate_fires_generate_stage_hooks(monkeypatch):
 
     # Stub the two generation internals so no LLM is called.
     async def _fake_personas_scenarios(**_kwargs):
-        return [], []
+        return [], [], None
 
     async def _fake_resolve(**_kwargs):
         return ['dp']  # sentinel — generate() returns this list verbatim

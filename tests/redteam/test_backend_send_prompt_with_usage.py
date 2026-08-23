@@ -419,10 +419,15 @@ class TestORQAgentTargetSendPromptWithUsage:
 
     @pytest.mark.asyncio
     async def test_orq_uses_pipeline_config_max_continuations(self) -> None:
-        """Loop bails after PIPELINE_CONFIG.max_tool_continuations continuations."""
-        from evaluatorq.redteam import contracts as contracts_module
+        """Loop bails after PIPELINE_CONFIG.max_tool_continuations continuations.
 
-        target, _ = self._make_target()
+        Resolved once at construction time (see ``ORQAgentTarget.__init__``), not
+        read live off the module global on every call — so this patches
+        PIPELINE_CONFIG *before* constructing the target, matching how a real
+        run threads ``pipeline_config.max_tool_continuations`` through
+        ``ORQBackend`` at target-creation time.
+        """
+        from evaluatorq.redteam import contracts as contracts_module
 
         pending_call = MagicMock()
         pending_call.id = "tool-call-persist"
@@ -447,6 +452,7 @@ class TestORQAgentTargetSendPromptWithUsage:
         try:
             # Monkeypatch to 2 so the loop stops after 2 continuations instead of 5
             contracts_module.PIPELINE_CONFIG.max_tool_continuations = 2
+            target, _ = self._make_target()
 
             with (
                 patch("asyncio.to_thread", side_effect=count_calls),
@@ -459,6 +465,53 @@ class TestORQAgentTargetSendPromptWithUsage:
 
         # 1 initial call + 2 continuation calls = 3 total
         assert call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_orq_agent_target_honours_explicit_max_tool_continuations(self) -> None:
+        """``max_tool_continuations`` passed at construction wins over PIPELINE_CONFIG.
+
+        Covers the F1 fix: ``ORQBackend.create_target`` threads the run's
+        resolved ``LLMConfig.max_tool_continuations`` into ``ORQAgentTarget``
+        instead of it reading the module-level default at call time.
+        """
+        from evaluatorq.redteam.backends.orq import ORQAgentTarget
+
+        mock_orq_client = MagicMock()
+        target = ORQAgentTarget(
+            agent_key="test-agent",
+            orq_client=mock_orq_client,
+            memory_entity_id="mem-001",
+            max_tool_continuations=1,
+        )
+
+        pending_call = MagicMock()
+        pending_call.id = "tool-call-persist"
+        continuing_response = _make_orq_response(
+            text="",
+            task_id="task-001",
+            prompt_tokens=5,
+            completion_tokens=2,
+            total_tokens=7,
+            pending_tool_calls=[pending_call],
+        )
+
+        call_count = 0
+
+        async def count_calls(fn: Any, **kwargs: Any) -> Any:
+            nonlocal call_count
+            call_count += 1
+            return continuing_response
+
+        with (
+            patch("asyncio.to_thread", side_effect=count_calls),
+            patch("evaluatorq.redteam.tracing.get_tracer", return_value=None),
+            pytest.raises(RuntimeError, match="Unresolved pending tool calls"),
+        ):
+            await target.respond([Message(role="user", content="prompt")])
+
+        # 1 initial call + 1 continuation call = 2 total, regardless of
+        # PIPELINE_CONFIG.max_tool_continuations (default 5).
+        assert call_count == 2
 
 
 # ===========================================================================
