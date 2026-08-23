@@ -61,11 +61,16 @@ setting is accepted, a warning names the drop, and the run proceeds.
     `register_model()` to fix that. See
     [Configuration › Model catalogue overrides](configuration.md#model-catalogue-overrides).
 
-`EVALUATORQ_REASONING_EFFORT` is read **at call time**, not at import, and it is
-only a fallback: an explicitly set `LLMCallConfig.reasoning_effort` on the agent's
-config always wins — including an explicit `None`, which opts that agent out of the
-env default on purpose. The same is true of `EVALUATORQ_LLM_TIMEOUT_S` and
-`EVALUATORQ_LLM_MAX_TOKENS`.
+`EVALUATORQ_REASONING_EFFORT` is **unset by default**, and unset means the parameter
+is not sent at all — the model applies its own default. There is deliberately no
+global effort: sending one costs a rejected request plus a retry on every model that
+does not accept the parameter, and overrides the tuned default on every model that
+does. Set it only when you want a specific effort across the simulator's own calls.
+
+It is read **at call time**, not at import, and it is only a fallback: an explicitly
+set `LLMCallConfig.reasoning_effort` on the agent's config always wins — including an
+explicit `None`, which opts that agent out of the env value on purpose. The same is
+true of `EVALUATORQ_LLM_TIMEOUT_S` and `EVALUATORQ_LLM_MAX_TOKENS`.
 
 ## Target-call reliability
 

@@ -16,7 +16,12 @@ from pydantic import BaseModel, BeforeValidator, Field
 
 from evaluatorq.common.extract_json import coerce_str, coerce_str_list, extract_json_from_response
 from evaluatorq.common.messages import coerce_content_text
-from evaluatorq.common.structured_output import generate_structured, log_structured_usage, sum_structured_usage
+from evaluatorq.common.structured_output import (
+    generate_structured,
+    log_structured_usage,
+    sum_structured_usage,
+    usage_from_exception,
+)
 from evaluatorq.redteam.contracts import (
     OWASP_CATEGORY_NAMES,
     PIPELINE_CONFIG,
@@ -299,9 +304,7 @@ async def _condense_attack(
         if not analysis:
             raise ValueError('condense returned an empty analysis')
     except Exception as exc:
-        # The ladder can bill four rungs before raising; it hands the total back
-        # on the exception, so the truncated block still reports what it cost.
-        usage = usage or getattr(exc, 'usage', None)
+        usage = usage or usage_from_exception(exc)
         logger.warning(
             f'Failed to condense a {len(block)}-char attack for {result.attack.category}; '
             f'truncating it to {limits.condense_above_chars} chars instead',
@@ -505,11 +508,7 @@ async def generate_focus_area_recommendations(
         except Exception as exc:
             # Same harvest as `_condense_attack`: the ladder can bill several rungs
             # before raising and hands the total back on the exception, so an area
-            # that produced no recommendations still reports what it cost. When the
-            # raise came from parsing *after* `usages.append(area_result.usage)` the
-            # exception carries no total and this appends ``None`` — never a double
-            # count. See `StructuredGenerationError`.
-            usages.append(getattr(exc, 'usage', None))
+            usages.append(usage_from_exception(exc))
             logger.warning(
                 f'Failed to generate recommendations for {area["category"]}',
                 exc_info=True,

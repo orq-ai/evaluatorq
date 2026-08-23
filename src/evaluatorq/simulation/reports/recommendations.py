@@ -20,7 +20,12 @@ from evaluatorq.common.extract_json import coerce_str_list, extract_json_from_re
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.recommendations import RecommendationConfigBase
 from evaluatorq.common.sanitize import xml_escape
-from evaluatorq.common.structured_output import generate_structured, log_structured_usage, sum_structured_usage
+from evaluatorq.common.structured_output import (
+    generate_structured,
+    log_structured_usage,
+    sum_structured_usage,
+    usage_from_exception,
+)
 from evaluatorq.simulation.reports.sections import (
     _criteria_rows,
     _is_errored,
@@ -293,8 +298,7 @@ async def generate_recommendations(
             )
         except Exception as exc:
             logger.warning(f'Failed to generate recommendations for result #{idx + 1}', exc_info=True)
-            # A raising ladder still billed its rungs; it carries the total.
-            return None, usage or getattr(exc, 'usage', None)
+            return None, usage or usage_from_exception(exc)
         return recommendation, usage
 
     # One span over the whole batch: without it each per-result call attaches

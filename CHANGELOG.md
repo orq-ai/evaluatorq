@@ -8,6 +8,7 @@ All notable changes to `evaluatorq` are documented here.
 
 ### Notable defaults
 
+- **`EVALUATORQ_REASONING_EFFORT` has no default — unset means the parameter is not sent, and the model applies its own.** It previously fell back to `"medium"` for the simulator's own calls (user simulator, judge). A global effort is the wrong default in both directions: on a model that does not accept the parameter it costs a rejected request plus a retry per `(model, tool shape)` — memoised per process, so a short run or CI job never amortises it — and on a model that does, it silently overrides the provider's own tuned value. Set the env var, or `LLMCallConfig.reasoning_effort` on the agent's config, when you actually want a specific effort. **Simulation only**; red teaming's `target_reasoning_effort` was already opt-in.
 - **`OrqResponsesTarget.retry_attempts` now defaults to `1` — a single attempt, no
   retry — down from falling through to `with_retry`'s default of `5`.**
   `common.target_call.call_target_with_retry` is the single retry owner for
@@ -224,6 +225,8 @@ target = CallableTarget(lambda messages: my_agent(messages[-1].content or ""))
 
 ### Internal
 
+- `create_model_job` split down to `create_deployment_job`: the router-model leg it also built was unreachable. `parse_target` returns only `AGENT` or `DEPLOYMENT` — `llm:`/`openai:`/`direct:` and unknown prefixes all raise — so `_create_job_for_target`'s trailing `create_model_job(model=value)` could not execute, and the `reasoning_effort` forwarding inside that leg was dead with it. The fallback now raises for a kind with no leg rather than routing it to a job no target string could produce. Not exported from any `__init__`, so this is internal surface only.
+- `usage_from_exception` in `common/structured_output.py` replaces five hand-copied `getattr(exc, 'usage', None)` sites, each of which carried its own copy of the harvest rationale. A guardrail in `tests/test_reuse_guardrails.py` now fails on a sixth.
 - `SaveMode` converted from `Literal` to `StrEnum`
 - Timeout defaults centralised in `contracts.py` (`DEFAULT_TARGET_TIMEOUT_MS = 240_000`); `PIPELINE_CONFIG` import removed from `openai.py` and `registry.py`
 - `MultiTurnOrchestrator.llm_kwargs` constructor param deprecated — merged into `_cfg.attacker.extra_kwargs` at init time; use `LLMCallConfig.extra_kwargs` instead

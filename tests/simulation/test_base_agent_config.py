@@ -66,7 +66,7 @@ def _messages() -> list[Message]:
 
 @pytest.fixture(autouse=True)
 def _clean_reasoning_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Isolate from a developer's real env and from the module default ("medium").
+    # Isolate from a developer's real env; there is no module-level default.
     monkeypatch.delenv("EVALUATORQ_REASONING_EFFORT", raising=False)
     monkeypatch.delenv("EVALUATORQ_LLM_MAX_TOKENS", raising=False)
     monkeypatch.delenv("EVALUATORQ_LLM_TIMEOUT_S", raising=False)
@@ -151,6 +151,24 @@ class TestChatCompletionsConfigPropagation:
 
         kwargs = client.chat.completions.create.await_args.kwargs
         assert kwargs["reasoning_effort"] == "low"
+
+    @pytest.mark.asyncio
+    async def test_unset_env_sends_no_reasoning_effort_at_all(self):
+        """No global default: an unset env var must leave the parameter off the wire.
+
+        A default here would spend a rejected request plus a retry on every model
+        that does not take the parameter, and would override the tuned default on
+        every model that does.
+        """
+        client = _make_client()
+        client.chat.completions.create.return_value = _chat_response()
+        config = LLMCallConfig(model="gpt-4o", api="chat_completions", client=client)
+        agent = _ConcreteAgent(config)
+
+        await agent._call_llm(_messages())
+
+        kwargs = client.chat.completions.create.await_args.kwargs
+        assert "reasoning_effort" not in kwargs
 
     @pytest.mark.asyncio
     async def test_config_reasoning_effort_none_opts_out_of_env_default(self, monkeypatch: pytest.MonkeyPatch):

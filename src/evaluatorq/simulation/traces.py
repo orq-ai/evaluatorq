@@ -35,7 +35,11 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from evaluatorq.common.sanitize import delimit
-from evaluatorq.common.structured_output import log_structured_usage, sum_structured_usage
+from evaluatorq.common.structured_output import (
+    log_structured_usage,
+    sum_structured_usage,
+    usage_from_exception,
+)
 from evaluatorq.simulation.types import DEFAULT_MODEL, Persona, Scenario, SimulationDatapoint
 from evaluatorq.simulation.utils.prompt_builders import generate_datapoint
 from evaluatorq.simulation.utils.structured_output import generate_structured
@@ -266,7 +270,7 @@ async def _summarize_conversation(
         )
     except Exception as exc:
         logger.warning('Summarizing trace %s failed (%s); dropping it', conversation.trace_id, exc)
-        return None, getattr(exc, 'usage', None)
+        return None, usage_from_exception(exc)
     if result.parsed is None or not result.parsed.summary.strip():
         logger.warning('Summarizing trace %s returned nothing usable; dropping it', conversation.trace_id)
         return None, result.usage
@@ -708,11 +712,7 @@ async def datapoints_from_traces(
                 )
             except Exception as exc:
                 # Append rather than replace: `usages` may already hold the
-                # summarize call's real figure, and the exception carries only
-                # what *this* call's ladder billed before it raised. Matches the
-                # harvest in `_summarize_conversation` (see
-                # `StructuredGenerationError`).
-                usages.append(getattr(exc, 'usage', None))
+                usages.append(usage_from_exception(exc))
                 logger.warning(
                     'Persona/scenario inference failed for trace %s: %s',
                     conversation.trace_id,

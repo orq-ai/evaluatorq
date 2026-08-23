@@ -91,12 +91,16 @@ def _default_max_tokens() -> int:
 
 
 def _default_reasoning_effort() -> str | None:
-    """Default reasoning effort fallback for reasoning-capable models. "medium"
-    keeps hidden reasoning bounded (far fewer tokens than the model's default),
-    which avoids budget-exhaustion truncation. Endpoints that don't support it
-    degrade gracefully (the param is dropped on a 400). Set "" / "none" via
-    EVALUATORQ_REASONING_EFFORT to omit it, or set ``LLMCallConfig.reasoning_effort``
-    per-agent (including explicit ``None`` to opt out, overriding this fallback).
+    """Reasoning effort from ``EVALUATORQ_REASONING_EFFORT``, or ``None`` when unset.
+
+    There is deliberately no global default. Sending an effort the user did not ask
+    for costs a rejected request plus a retry on every model that does not support
+    the parameter, and it overrides the model's own tuned default on every model
+    that does. Unset means "say nothing and let the model decide".
+
+    Set ``LLMCallConfig.reasoning_effort`` per-agent to override the env value
+    (including an explicit ``None`` to opt out). ``""`` / ``none`` / ``off`` in the
+    env var also resolve to ``None``.
 
     A separate knob from red team's ``LLMConfig.target_reasoning_effort``, which
     configures the agent *under test* rather than the simulator's own LLM calls
@@ -105,7 +109,7 @@ def _default_reasoning_effort() -> str | None:
     a `BaseAgent`'s config leaves it unset, that one via an explicit
     ``reasoning_effort=`` threaded into the target's backend construction.
     """
-    raw = os.environ.get('EVALUATORQ_REASONING_EFFORT', 'medium').strip().lower()
+    raw = os.environ.get('EVALUATORQ_REASONING_EFFORT', '').strip().lower()
     return raw if raw not in ('', 'none', 'off') else None
 
 

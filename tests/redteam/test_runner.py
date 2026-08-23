@@ -235,7 +235,7 @@ class TestStaticCoverageGuard:
                 side_effect=mock_get_evaluator,
             ),
             patch('evaluatorq.evaluatorq', return_value=[]) as mock_evaluatorq,
-            patch('evaluatorq.redteam.runtime.jobs.create_model_job', return_value=MagicMock()),
+            patch('evaluatorq.redteam.runtime.jobs.create_deployment_job', return_value=MagicMock()),
             patch(
                 'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.create_owasp_evaluator', return_value=MagicMock()
             ),

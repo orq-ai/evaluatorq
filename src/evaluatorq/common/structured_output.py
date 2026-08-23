@@ -147,13 +147,11 @@ class StructuredGenerationError(RuntimeError):
     try:
         result = await generate_structured(...)
     except Exception as exc:
-        usage = getattr(exc, 'usage', None)
+        usage = usage_from_exception(exc)
     ```
 
-    ``getattr`` rather than ``except StructuredGenerationError``: a provider
-    error (an `APIStatusError` from the last rung) propagates as **itself** —
-    masking a 429 behind a RuntimeError would cost the caller the status code —
-    and `_attach_usage` tags the accumulated total onto it in place.
+    Use `usage_from_exception` rather than reading the attribute directly — it is
+    the one place the harvest rule is written down.
     """
 
     def __init__(self, message: str, *, usage: TokenUsage | None = None) -> None:
@@ -175,6 +173,25 @@ def _attach_usage(exc: BaseException, usage: TokenUsage | None) -> None:
         exc.usage = usage  # pyright: ignore[reportAttributeAccessIssue]
     except AttributeError:  # pragma: no cover - defensive, no known such class
         logger.debug('could not attach structured-output usage to %s', type(exc).__name__)
+
+
+def usage_from_exception(exc: BaseException) -> TokenUsage | None:
+    """Spend the ladder billed before it raised, or ``None`` if it billed nothing.
+
+    `generate_structured` can pay for four rungs before giving up, so a failed
+    structured call is not a free one — dropping the total is how a run under-reports
+    its own cost. `_attach_usage` tags the accumulated figure onto whatever propagates.
+
+    ``getattr`` rather than ``except StructuredGenerationError``: a provider error
+    (an `APIStatusError` from the last rung) propagates as **itself**, because
+    masking a 429 behind a `RuntimeError` would cost the caller the status code.
+
+    Harvest once per failed call. When the raise came from parsing *after* the
+    caller already recorded that call's usage, the exception carries no total and
+    this returns ``None`` — so it never double-counts.
+    """
+    usage = getattr(exc, 'usage', None)
+    return usage if isinstance(usage, TokenUsage) else None
 
 
 def sum_structured_usage(usages: Sequence[TokenUsage | None]) -> TokenUsage | None:
@@ -993,7 +1010,7 @@ async def generate_structured(
         # attached before raising — so a caller's `except` can still report it.
         # Without this the whole ladder's spend died with the frame and
         # `log_structured_usage` reported "no usage reported by the provider".
-        _attach_usage(exc, sum_structured_usage([*usages, getattr(exc, 'usage', None)]))
+        _attach_usage(exc, sum_structured_usage([*usages, usage_from_exception(exc)]))
         raise
 
 

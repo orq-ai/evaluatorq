@@ -88,7 +88,7 @@ from evaluatorq.redteam.replay import DATAPOINTS_KEY as REPLAY_DATAPOINTS_KEY
 from evaluatorq.redteam.replay import RUN_CONFIG_KEY as REPLAY_RUN_CONFIG_KEY
 from evaluatorq.redteam.replay import RedTeamReplay, load_redteam_replay
 from evaluatorq.redteam.reports.recommendations import generate_focus_area_recommendations
-from evaluatorq.redteam.runtime.jobs import _build_messages, _sanitize_job_name, create_model_job
+from evaluatorq.redteam.runtime.jobs import _build_messages, _sanitize_job_name, create_deployment_job
 from evaluatorq.redteam.tracing import with_redteam_span
 from evaluatorq.redteam.vulnerability_registry import (
     get_primary_category,
@@ -1418,27 +1418,32 @@ def _create_job_for_target(
     pipeline_config: LLMConfig | None = None,
     run_id: str | None = None,
 ) -> Any:
-    """Create a model job for the given target string.
+    """Create a static-leg job for the given target string.
 
-    Dispatches on the target kind (``agent``, ``deployment``, or fallback to
-    model) and returns the appropriate
-    `create_model_job` result.
+    ``parse_target`` yields only ``AGENT`` or ``DEPLOYMENT`` — every other kind
+    raises there — so those are the two branches. A new ``TargetKind`` that
+    reaches the end of this function raises rather than defaulting into one of
+    them; the previous fallback routed it to a router-model job that no target
+    string could produce.
 
     Args:
         target:        Full target string, e.g. ``"agent:my-key"``.
         llm_client:    Optional pre-configured `openai.AsyncOpenAI`
-                       client.
-        system_prompt: Optional system prompt to pass to the job.
-        pipeline_config: Optional ``LLMConfig`` supplying ``max_tokens``
-            (via ``DEFAULT_TARGET_MAX_TOKENS`` fallback), ``target_agent_timeout_ms``
-            and ``max_target_retries`` for the model/deployment leg.
+                       client. Used by the agent leg only — a deployment
+                       invokes through its own Orq client.
+        system_prompt: Optional system prompt. Agent leg only; a deployment
+                       carries its own prompt in platform configuration.
+        pipeline_config: Optional ``LLMConfig`` supplying ``target_agent_timeout_ms``
+            and ``max_target_retries`` for either leg.
 
     Returns:
-        A job callable as returned by ``create_model_job``.
+        A job callable.
+
+    Raises:
+        ValueError: If ``parse_target`` yields a kind this function has no leg for.
     """
     cfg = pipeline_config or PIPELINE_CONFIG
     kind, value = parse_target(target)
-    common = dict(llm_client=llm_client, system_prompt=system_prompt, run_id=run_id, cfg=cfg)
     if kind == TargetKind.AGENT:
         tcfg = TargetConfig(system_prompt=system_prompt)
         backend = make_agent_backend(target_config=tcfg, pipeline_config=cfg)
@@ -1452,8 +1457,8 @@ def _create_job_for_target(
             run_id=run_id,
         )
     if kind == TargetKind.DEPLOYMENT:
-        return create_model_job(deployment_key=value, **common)
-    return create_model_job(model=value, **common)
+        return create_deployment_job(deployment_key=value, run_id=run_id, cfg=cfg)
+    raise ValueError(f'No static job leg for target kind {kind!r} (target {target!r}).')
 
 
 # ---------------------------------------------------------------------------
@@ -3282,7 +3287,7 @@ async def _run_static(
     for t in targets:
         t_kind, t_value = parse_target(t)
         safe = _make_safe_target(t_value)
-        # create_model_job names follow "redteam:static:<safe_target>" convention;
+        # create_deployment_job names follow "redteam:static:<safe_target>" convention;
         # use the safe slug for the lookup key to handle collisions gracefully.
         job_name_to_target[safe] = (t_kind, t_value)
     for at in resolved_agent_targets:

@@ -1,6 +1,6 @@
-"""``create_model_job`` must consume the ``LLMConfig`` it is handed, not the defaults.
+"""``create_deployment_job`` must consume the ``LLMConfig`` it is handed, not the defaults.
 
-``_create_job_for_target`` threads a per-run ``cfg`` into ``create_model_job``
+``_create_job_for_target`` threads a per-run ``cfg`` into ``create_deployment_job``
 (``redteam/runtime/jobs.py``). Both legs read it:
 
 * router leg — ``target_agent_timeout_ms`` (per-call timeout),
@@ -24,7 +24,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from evaluatorq import DataPoint
-from evaluatorq.redteam.contracts import DEFAULT_TARGET_MAX_TOKENS, LLMConfig
+from evaluatorq.redteam.contracts import LLMConfig
 
 _JOBS = 'evaluatorq.redteam.runtime.jobs'
 
@@ -48,120 +48,6 @@ def _tuned_cfg(**overrides: Any) -> LLMConfig:
     return LLMConfig(**values)
 
 
-def _chat_response() -> MagicMock:
-    response = MagicMock()
-    response.choices = [MagicMock()]
-    response.choices[0].message.content = 'target response'
-    response.choices[0].finish_reason = 'stop'
-    return response
-
-
-class TestRouterLegReadsCfg:
-    """The router leg forwards cfg to execute_chat_completion and its own client."""
-
-    @pytest.mark.asyncio
-    async def test_timeout_reasoning_effort_and_max_tokens_reach_the_call(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from evaluatorq.redteam.runtime.jobs import create_model_job
-
-        captured: dict[str, Any] = {}
-
-        async def fake_execute(**kwargs: Any) -> tuple[Any, None]:
-            captured.update(kwargs)
-            return _chat_response(), None
-
-        monkeypatch.setattr(f'{_JOBS}.execute_chat_completion', fake_execute)
-
-        cfg = _tuned_cfg()
-        job_fn = create_model_job(model='gpt-4o-mini', llm_client=MagicMock(), cfg=cfg)
-        await job_fn(_datapoint(), 0)
-
-        assert captured['timeout_s'] == pytest.approx(cfg.target_agent_timeout_ms / 1000.0)
-        assert captured['reasoning_effort'] == 'high'
-        # max_tokens is the factory's own default, not a cfg field — pinned so the
-        # documented DEFAULT_TARGET_MAX_TOKENS fallback cannot silently become None.
-        assert captured['max_tokens'] == DEFAULT_TARGET_MAX_TOKENS
-
-    @pytest.mark.asyncio
-    async def test_explicit_max_tokens_wins_over_the_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from evaluatorq.redteam.runtime.jobs import create_model_job
-
-        captured: dict[str, Any] = {}
-
-        async def fake_execute(**kwargs: Any) -> tuple[Any, None]:
-            captured.update(kwargs)
-            return _chat_response(), None
-
-        monkeypatch.setattr(f'{_JOBS}.execute_chat_completion', fake_execute)
-
-        job_fn = create_model_job(model='gpt-4o-mini', llm_client=MagicMock(), max_tokens=123)
-        await job_fn(_datapoint(), 0)
-
-        assert captured['max_tokens'] == 123
-
-    @pytest.mark.asyncio
-    async def test_omitted_cfg_falls_back_to_pipeline_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """No cfg means PIPELINE_CONFIG — the documented default, not a hardcoded constant."""
-        from evaluatorq.redteam.contracts import PIPELINE_CONFIG
-        from evaluatorq.redteam.runtime.jobs import create_model_job
-
-        captured: dict[str, Any] = {}
-
-        async def fake_execute(**kwargs: Any) -> tuple[Any, None]:
-            captured.update(kwargs)
-            return _chat_response(), None
-
-        monkeypatch.setattr(f'{_JOBS}.execute_chat_completion', fake_execute)
-
-        job_fn = create_model_job(model='gpt-4o-mini', llm_client=MagicMock())
-        await job_fn(_datapoint(), 0)
-
-        assert captured['timeout_s'] == pytest.approx(PIPELINE_CONFIG.target_agent_timeout_ms / 1000.0)
-        assert captured['reasoning_effort'] == PIPELINE_CONFIG.target_reasoning_effort
-
-    @pytest.mark.asyncio
-    async def test_self_built_client_gets_cfg_max_target_retries(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """One retry layer: the client this leg builds carries cfg.max_target_retries."""
-        from evaluatorq.redteam.runtime.jobs import create_model_job
-
-        built = MagicMock(return_value=MagicMock())
-        monkeypatch.setattr(f'{_JOBS}.create_async_llm_client', built)
-
-        async def fake_execute(**_kwargs: Any) -> tuple[Any, None]:
-            return _chat_response(), None
-
-        monkeypatch.setattr(f'{_JOBS}.execute_chat_completion', fake_execute)
-
-        job_fn = create_model_job(model='gpt-4o-mini', llm_client=None, cfg=_tuned_cfg())
-        await job_fn(_datapoint(), 0)
-
-        built.assert_called_once_with(max_retries=5)
-
-    @pytest.mark.asyncio
-    async def test_injected_client_keeps_its_own_retry_budget(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """An injected client is the caller's to configure — no second client is built."""
-        from evaluatorq.redteam.runtime.jobs import create_model_job
-
-        built = MagicMock()
-        monkeypatch.setattr(f'{_JOBS}.create_async_llm_client', built)
-
-        injected = MagicMock()
-        captured: dict[str, Any] = {}
-
-        async def fake_execute(**kwargs: Any) -> tuple[Any, None]:
-            captured.update(kwargs)
-            return _chat_response(), None
-
-        monkeypatch.setattr(f'{_JOBS}.execute_chat_completion', fake_execute)
-
-        job_fn = create_model_job(model='gpt-4o-mini', llm_client=injected, cfg=_tuned_cfg())
-        await job_fn(_datapoint(), 0)
-
-        built.assert_not_called()
-        assert captured['client'] is injected
-
-
 class TestDeploymentLegReadsCfg:
     """The deployment leg reads cfg for retries/timeout and warns on reasoning effort."""
 
@@ -180,7 +66,7 @@ class TestDeploymentLegReadsCfg:
         real attempts, so the test neither depends on which exception classes
         ``with_retry`` considers retryable nor pays its exponential backoff.
         """
-        from evaluatorq.redteam.runtime.jobs import create_model_job
+        from evaluatorq.redteam.runtime.jobs import create_deployment_job
 
         completion = MagicMock()
         completion.choices = [MagicMock()]
@@ -200,7 +86,7 @@ class TestDeploymentLegReadsCfg:
         monkeypatch.setattr(f'{_JOBS}.with_retry', fake_with_retry)
 
         cfg = _tuned_cfg(target_reasoning_effort=None)
-        job_fn = create_model_job(deployment_key='dep', cfg=cfg)
+        job_fn = create_deployment_job(deployment_key='dep', cfg=cfg)
         await job_fn(_datapoint(), 0)
 
         assert captured['max_attempts'] == cfg.max_target_retries + 1
@@ -211,7 +97,7 @@ class TestDeploymentLegReadsCfg:
         """A deployment slower than cfg.target_agent_timeout_ms is abandoned, not awaited."""
         import asyncio
 
-        from evaluatorq.redteam.runtime.jobs import create_model_job
+        from evaluatorq.redteam.runtime.jobs import create_deployment_job
 
         async def _never_returns(**_kwargs: Any) -> Any:
             await asyncio.sleep(30)
@@ -223,7 +109,7 @@ class TestDeploymentLegReadsCfg:
         from evaluatorq.job_helper import JobError
 
         cfg = LLMConfig(target_agent_timeout_ms=10, max_target_retries=0)
-        job_fn = create_model_job(deployment_key='dep', cfg=cfg)
+        job_fn = create_deployment_job(deployment_key='dep', cfg=cfg)
         # The @job decorator rewraps whatever the body raises, so the timeout is
         # asserted on the cause rather than the surfaced type.
         with pytest.raises(JobError) as excinfo:
@@ -237,13 +123,13 @@ class TestDeploymentLegReadsCfg:
         """A degraded path announces itself: the deployment leg cannot forward it."""
         from loguru import logger
 
-        from evaluatorq.redteam.runtime.jobs import create_model_job
+        from evaluatorq.redteam.runtime.jobs import create_deployment_job
 
         self._install_sdk(monkeypatch, MagicMock())
         records: list[str] = []
         sink_id = logger.add(lambda msg: records.append(msg), level='WARNING')
         try:
-            create_model_job(deployment_key='dep', cfg=_tuned_cfg())
+            create_deployment_job(deployment_key='dep', cfg=_tuned_cfg())
         finally:
             logger.remove(sink_id)
 
@@ -253,13 +139,13 @@ class TestDeploymentLegReadsCfg:
     async def test_no_warning_when_reasoning_effort_is_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from loguru import logger
 
-        from evaluatorq.redteam.runtime.jobs import create_model_job
+        from evaluatorq.redteam.runtime.jobs import create_deployment_job
 
         self._install_sdk(monkeypatch, MagicMock())
         records: list[str] = []
         sink_id = logger.add(lambda msg: records.append(msg), level='WARNING')
         try:
-            create_model_job(deployment_key='dep', cfg=_tuned_cfg(target_reasoning_effort=None))
+            create_deployment_job(deployment_key='dep', cfg=_tuned_cfg(target_reasoning_effort=None))
         finally:
             logger.remove(sink_id)
 
