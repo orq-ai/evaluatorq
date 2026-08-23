@@ -1,0 +1,60 @@
+{
+  "_comment": "Config for the claude.ai routine that runs .claude/skills/docs-autofill/SKILL.md. Applied by hand via the RemoteTrigger API \u2014 editing this file does not change the live routine. Ask Claude to push it.",
+  "trigger_id": "trig_01XKBGNr1Ave3u9P73vzKBBT",
+  "name": "Docs autofill (evaluatorq)",
+  "cron_expression": "0 6 * * 1",
+  "enabled": true,
+  "mcp_connections": [
+    {
+      "connector_uuid": "0adf0e98-5a5c-44e9-bec9-d7d4a2f28af3",
+      "name": "Slack",
+      "url": "https://mcp.slack.com/mcp"
+    }
+  ],
+  "job_config": {
+    "ccr": {
+      "environment_id": "env_011CURggSe2DxWks54ycLVVo",
+      "session_context": {
+        "model": "claude-opus-5",
+        "allowed_tools": [
+          "Bash",
+          "Read",
+          "Write",
+          "Edit",
+          "Glob",
+          "Grep",
+          "Agent",
+          "Task",
+          "WebFetch",
+          "Skill"
+        ],
+        "sources": [
+          {
+            "git_repository": {
+              "url": "https://github.com/orq-ai/evaluatorq"
+            }
+          },
+          {
+            "git_repository": {
+              "url": "https://github.com/orq-ai/research"
+            }
+          }
+        ]
+      },
+      "events": [
+        {
+          "data": {
+            "uuid": "3f8c1d24-9b6e-4a71-8c5f-2d0e7a91b4c3",
+            "session_id": "",
+            "type": "user",
+            "parent_tool_use_id": null,
+            "message": {
+              "role": "user",
+              "content": "Run the weekly docs-autofill routine for evaluatorq.\n\nThe session starts in `/home/user`. Both checkouts are siblings under it: `/home/user/evaluatorq` (work here) and `/home/user/research` (holds the `hate` review skill the routine uses). `cd /home/user/evaluatorq` first.\n\nRead `.claude/skills/docs-autofill/SKILL.md` in the evaluatorq checkout and follow it exactly, all nine steps, including the abort conditions and the Slack message in step 9.\n\nEverything that defines behaviour lives in that skill file \u2014 gap selection, the ledger, the code-block receipt, the reviewer tracks and their persona rules, the iteration cap, the PR body shape. This prompt is deliberately thin so changes ship as PRs to the repo, not as edits here.\n\nThis run is LIVE: it may open exactly one pull request and must never merge one.\n\nA week with no qualifying Tier 1 gap is a successful run. Post the no-op Slack message and end \u2014 do not manufacture work to have something to show."
+            }
+          }
+        }
+      ]
+    }
+  }
+}

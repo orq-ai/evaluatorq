@@ -935,6 +935,11 @@ class JuryVote(BaseModel):
 
     @model_validator(mode='after')
     def _check_vote_consistency(self) -> JuryVote:
+        # Raises where `EvaluatorResponsePayload` coerces (common/judge.py) — same
+        # abstained/value contradiction, opposite policy, deliberately. This is the
+        # backstop for a vote built without going through a judge payload; a payload
+        # that already reached the model has been billed, so a raise there would cost
+        # the whole run's report rather than one verdict.
         if self.success and self.value is None and not self.abstained:
             raise ValueError('successful JuryVote must have a non-null value unless abstained=True')
         if self.abstained and self.value is not None:

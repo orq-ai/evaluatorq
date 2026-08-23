@@ -51,7 +51,9 @@ def _build_verdict_model(
         score_range: The score range (min, max) for numeric verdicts
 
     Returns:
-        A Pydantic BaseModel class with 'value' and 'explanation' fields
+        A Pydantic BaseModel class with 'explanation' and 'value' fields, in
+        that order — the schema is generated in declaration order, so the
+        judge writes its reasoning before committing to a verdict.
     """
     if verdict_kind == 'categorical':
         value_annotation = bool if labels is None else typing.Literal[tuple(labels)]  # type: ignore[valid-type]
@@ -60,8 +62,8 @@ def _build_verdict_model(
 
     # Create model dynamically
     class VerdictModel(BaseModel):
-        value: value_annotation  # type: ignore  # pyright: ignore[reportInvalidTypeForm]
         explanation: str = Field(default='', description='Explanation for the verdict')
+        value: value_annotation  # type: ignore  # pyright: ignore[reportInvalidTypeForm]
 
     return VerdictModel
 
