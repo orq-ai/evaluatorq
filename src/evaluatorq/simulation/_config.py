@@ -40,9 +40,8 @@ from evaluatorq.simulation.hooks import SimulationHooks  # noqa: TC001
 from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig  # noqa: TC001
 from evaluatorq.simulation.types import DEFAULT_MODEL, Message, Persona, Scenario, SimulationDatapoint
 
-# The public defaults for the three target-facing knobs. Named because every
-# `simulate` / `generate_and_simulate` overload repeats them in its signature;
-# as literals they drifted one signature at a time.
+# Named because every `simulate` overload repeats them; as literals they drifted one
+# signature at a time.
 DEFAULT_TARGET_AGENT_TIMEOUT_MS = 240_000
 DEFAULT_MAX_TARGET_RETRIES = 2
 DEFAULT_MAX_TOOL_RESULT_CHARS = 500

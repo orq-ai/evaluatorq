@@ -442,12 +442,9 @@ def _build_token_usage_section(
     reasoning = usage_total.reasoning_tokens
     n = len(results) or 1
     data: dict[str, Any] = {
-        # Legacy prompt_/completion_ keys retained for downstream consumers.
-        # These figures are the *simulation-only* total — the results passed
-        # in, which may be a filtered subset of the run and never include
-        # generation or executive-summary cost. Labelled 'simulation_*' in the
-        # data so a renderer that also has run_token_usage_total can't
-        # conflate the two numbers.
+        # Legacy prompt_/completion_ keys retained for downstream consumers. These are
+        # the simulation-only total, labelled 'simulation_*' so a renderer holding
+        # run_token_usage_total too cannot conflate the two.
         'prompt_tokens': input_tokens,
         'completion_tokens': output_tokens,
         'input_tokens': input_tokens,
@@ -464,20 +461,14 @@ def _build_token_usage_section(
         'input_cost': usage_total.input_cost,
         'output_cost': usage_total.output_cost,
         'total_cost': usage_total.total_cost,
-        # Cost coverage: without these the renderer's cost_coverage() call
-        # always sees 0 and silently drops the "(N of M calls)" qualifier,
-        # so a partial total reads as authoritative.
+        # Without these cost_coverage() always sees 0 and drops the "(N of M calls)"
+        # qualifier, so a partial total reads as authoritative.
         'calls': usage_total.calls,
         'priced_calls': usage_total.priced_calls,
         'unknown_usage_conversations': sum(1 for r in results if not r.token_usage_known),
     }
-    # The run-wide figure (SimulationRun.token_usage_total): simulation +
-    # generation + executive summary. Only present when the caller passed the
-    # full run's total — e.g. a filtered dashboard view has no single figure
-    # that fairly represents "the run", so it's omitted there rather than
-    # silently narrowed to the filtered subset. Kept as its own labelled block
-    # so the two numbers (simulation-only vs whole-run) can never be confused
-    # for one another in the rendered report.
+    # Whole-run figure: simulation + generation + executive summary. Omitted when the
+    # caller has no figure that fairly represents the run (e.g. a filtered view).
     if run_token_usage_total is not None:
         data['run_total_input_tokens'] = run_token_usage_total.input_tokens
         data['run_total_output_tokens'] = run_token_usage_total.output_tokens

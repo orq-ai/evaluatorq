@@ -1384,11 +1384,9 @@ async def _generate_personas_scenarios(
             else scenario_gen.generate(**scenario_kwargs)
         )
         gen_personas, gen_scenarios = await asyncio.gather(personas_coro, scenarios_coro)
-        # Generation happens before a run object exists, so callers that build
-        # one (generate_and_simulate) fold this into SimulationRun.token_usage_total;
-        # the log line remains the record for `generate()`, which returns no run
-        # (RES-1295). Both generators accumulate across every call they made,
-        # including the seeded fan-out and the fallback rungs.
+        # No run object exists yet: generate_and_simulate folds this into
+        # SimulationRun.token_usage_total, and the log line is the record for
+        # bare `generate()` (RES-1295).
         generation_usage = sum_structured_usage([persona_gen.get_usage(), scenario_gen.get_usage()])
         log_structured_usage(generation_usage, phase='Persona/scenario generation')
     finally:
@@ -1610,12 +1608,8 @@ async def _simulate_core(
             datapoints=sim_datapoints,
         )
 
-        # Seed the run total from the two sources known at this point (every
-        # datapoint's own usage, plus the GENERATE stage's persona/scenario cost
-        # for generate_and_simulate — None for plain simulate). Updated again
-        # below once the executive summary (the third, later-arriving source)
-        # has run, so the final value reflects the whole run, not a snapshot
-        # taken before post-processing.
+        # Seeded from the two sources known here; updated again below once the
+        # executive summary — the third, later-arriving source — has run.
         from evaluatorq.common.structured_output import sum_structured_usage
         from evaluatorq.contracts import Usage
 

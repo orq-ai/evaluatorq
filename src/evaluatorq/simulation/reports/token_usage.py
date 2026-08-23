@@ -59,10 +59,8 @@ def build_token_usage_rows(data: Mapping[str, Any]) -> list[list[str]]:
         coverage = cost_coverage(int(token_value(data, 'priced_calls')), int(token_value(data, 'calls')))
         rows.append(['Total Cost', f'{fmt_cost(total_cost)}{coverage}'])
 
-    # Whole-run figure (SimulationRun.token_usage_total): simulation +
-    # generation + executive summary. Only present when the section was built
-    # with run_token_usage_total, and rendered as its own labelled rows so it
-    # can never be mistaken for the simulation-only numbers above.
+    # Whole-run figure, rendered as its own labelled rows so it cannot be mistaken
+    # for the simulation-only numbers above.
     if 'run_total_total_tokens' in data:
         rows.append([
             'Run Total Tokens (incl. generation & summary)',

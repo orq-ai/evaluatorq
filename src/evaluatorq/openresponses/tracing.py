@@ -116,10 +116,8 @@ def record_openresponses_request(span: Span | None, payload: dict[str, Any]) -> 
     reasoning = payload.get('reasoning')
     effort = reasoning.get('effort') if isinstance(reasoning, dict) else None
     if effort:
-        # Recorded unconditionally — like `orq.structured_output.leg`, this must
-        # stay visible with EVALUATORQ_CAPTURE_MESSAGE_CONTENT=false, otherwise
-        # two runs at different reasoning efforts are indistinguishable in
-        # traces (the full request dump below is gated on content capture).
+        # Unconditional: without it two runs at different efforts are indistinguishable
+        # when EVALUATORQ_CAPTURE_MESSAGE_CONTENT=false.
         span.set_attribute('gen_ai.request.reasoning_effort', str(effort))
     if not capture_message_content():
         return

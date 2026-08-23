@@ -105,14 +105,9 @@ PROBES: dict[str, list[str]] = {
     ],
 }
 
-# Default total probe-turn budget across all groups: the no-cfg fallback in
-# `_run_probes`, and the value the tests assert against. Sourced FROM
-# LLMConfig.max_probe_turns rather than restated, so the two cannot drift — a
-# hand-copied 8 here would silently disagree the day that field's default moves.
-# Guards the "each probe is a live call" cost even if PROBES is edited upward.
-# Kept above the current probe-turn count (7) so every group is always sent; a
-# raise there needs a matching review of which group would be starved if the sum
-# exceeds it.
+# Total probe-turn budget across all groups. Sourced from LLMConfig rather than
+# restated so the two cannot drift, and kept above the current probe count (7) so
+# no group is starved.
 MAX_PROBE_TURNS: int = LLMConfig.model_fields['max_probe_turns'].default
 
 

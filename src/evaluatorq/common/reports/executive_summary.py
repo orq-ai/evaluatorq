@@ -74,19 +74,13 @@ Rules:
   one sentence and stop. Do not manufacture risk."""
 
 
-# Request params for the executive-summary completion. Exposed as constants so
-# callers that trace the call (e.g. simulation's with_llm_span) report the exact
-# values sent instead of re-typing literals that could drift. Both are also
-# accepted as overridable keyword params on `generate_executive_summary` below —
-# the constants remain the defaults, not a hard ceiling. 400 completion tokens
-# is mostly consumed by hidden reasoning on a reasoning-class model (the
-# package default, DEFAULT_PIPELINE_MODEL), so an empty summary is a likely
-# outcome at this default regardless of the merge-order bug fixed below; raise
-# ``max_tokens`` if that turns out to be the case for your model.
+# Defaults for the executive-summary completion, overridable per call. Constants so
+# a tracing call site reports the exact values sent. 400 completion tokens is mostly
+# hidden reasoning on a reasoning-class model — raise it if summaries come back empty.
 EXECUTIVE_SUMMARY_TEMPERATURE = 0.7
 EXECUTIVE_SUMMARY_MAX_TOKENS = 400
-# One short paragraph off a finished report: generous enough for a slow
-# reasoning model, short enough that a hung call cannot hold up the report.
+# Generous for a slow reasoning model, short enough that a hung call cannot hold
+# up the report.
 EXECUTIVE_SUMMARY_TIMEOUT_S = 120.0
 
 

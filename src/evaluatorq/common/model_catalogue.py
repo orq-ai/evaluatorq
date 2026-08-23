@@ -51,9 +51,8 @@ class _ModelInfoFields(NamedTuple):
     output_cost_per_1k: float
     provider: str
     supports_responses: bool
-    # Accepted ``reasoning.effort`` values, from the entry's ``reasoningEffort``
-    # parameter. ``None`` means the catalogue does not say — most live entries
-    # carry no such parameter, so absence is "unknown", never "empty".
+    # Accepted ``reasoning.effort`` values. ``None`` means the catalogue does not say
+    # — absence is "unknown", never "empty".
     reasoning_efforts: frozenset[str] | None = None
 
 
@@ -110,21 +109,16 @@ _catalogues: dict[str, dict[str, ModelInfo]] = {}
 # time, and the CLI and test suite both drive several asyncio.run() loops, where
 # a lock bound to a dead loop raises "attached to a different loop".
 _lock: asyncio.Lock | None = None
-# Caller-registered entries, consulted before the fetched catalogue. This is the
-# only way to price, qualify or validate a model Orq's /v2/models does not list
-# (a self-hosted deployment, a model newer than the workspace's catalogue), and
-# the only way to correct an entry that is wrong. Keyed on the BARE id:
-# `register_model` strips any `provider/` prefix on write so the two spellings
-# collapse to one entry, and `_lookup` probes that single canonical key.
+# Caller-registered entries, consulted before the fetched catalogue — the only way
+# to price or correct a model /v2/models does not list. Keyed on the BARE id:
+# `register_model` strips any `provider/` prefix so both spellings collapse to one.
 _overrides: dict[str, ModelInfo] = {}
-# Consecutive failed fetches per host. A single HTTP hiccup used to cache {} for
-# the whole process, degrading every later call in the run to unpriced and
-# chat-completions-only. Retry a few times, then give up for good rather than
-# hammering a host that is genuinely down.
+# Consecutive failed fetches per host: retry a few times, then give up for the
+# process rather than hammering a host that is genuinely down.
 _fetch_failures: dict[str, int] = {}
 _MAX_FETCH_FAILURES = 3
-# Catalogue fetch timeout. One env var rather than a parameter: `_load_catalogue`
-# is called from deep inside pricing paths that have no config object to thread.
+# Env var rather than a parameter: `_load_catalogue` is called from pricing paths
+# with no config object to thread.
 _CATALOGUE_TIMEOUT_S = float(os.environ.get('EVALUATORQ_CATALOGUE_TIMEOUT_S', '30'))
 
 
@@ -324,11 +318,8 @@ async def _load_catalogue(client: AsyncOpenAI | None = None) -> dict[str, ModelI
         cached = _catalogues.get(host)
         if cached is not None:
             return cached
-        # When the host came from an injected client, that client's own key is
-        # the credential that matches it — an ambient ORQ_API_KEY for a
-        # different workspace/environment must not take priority, or the
-        # catalogue silently 401s (caching {}) or prices against the wrong
-        # workspace. Only fall back to the env var for the client-less path.
+        # An injected client's own key matches its host; an ambient ORQ_API_KEY for a
+        # different workspace would 401 (caching {}) or price against the wrong one.
         api_key = (
             (getattr(client, 'api_key', None) or os.environ.get('ORQ_API_KEY'))
             if client is not None

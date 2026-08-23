@@ -222,22 +222,9 @@ class OrqResponsesTarget(AgentTarget):
             if routes_through_orq and self.memory_entity_id:
                 body_extra['memory'] = {'entity_id': self.memory_entity_id}
 
-            # ``request_params`` folds temperature/max_output_tokens/reasoning
-            # and ``extra_kwargs`` (top_p, store, truncation, tool_choice, ...)
-            # into one dict, ``extra_kwargs`` winning last so a caller-supplied
-            # value overrides these computed ones. ``extra_body`` is one of the
-            # structural keys ``request_params`` guards — a caller cannot
-            # replace the router's thread/memory body wholesale via
-            # ``extra_kwargs={'extra_body': ...}``; ``check_reserved_keys``
-            # raises ``ValueError`` locally at param-build time instead. The
-            # router body assembled above (``body_extra``) is passed in as a
-            # call-site param rather than merged in after the fact, so
-            # ``_merge_extra_body`` stays the single place precedence is
-            # decided: this config's ``extra_body`` — the public seam for a
-            # caller who wants to add to it — is layered on top of
-            # ``body_extra`` per key, so a caller-supplied key wins a clash
-            # (e.g. scoping to a specific memory entity) while any router key
-            # the config does not mention still survives.
+            # `body_extra` goes in as a call-site param, not merged after, so
+            # `_merge_extra_body` stays the one place precedence is decided:
+            # this config's `extra_body` layers on top per key.
             call_params: dict[str, Any] = {'input': responses_input}
             if self.tools:
                 call_params['tools'] = self.tools
@@ -251,10 +238,8 @@ class OrqResponsesTarget(AgentTarget):
                 'model': self.config.model,
                 **self.config.request_params(api='responses', **call_params),
             }
-            # Drop the `reasoning` block up front if this model already 400'd on
-            # it this process — same memo `common.llm_call.execute_response` uses,
-            # so a rejection learned via the pipeline's own calls also short-circuits
-            # target calls, and vice versa.
+            # Same memo `common.llm_call.execute_response` uses, so a rejection learned
+            # on either path short-circuits the other.
             strip_known_rejected_responses_reasoning(self.config.model, kwargs)
 
             async with with_llm_span(
@@ -287,10 +272,8 @@ class OrqResponsesTarget(AgentTarget):
                 try:
                     response, response_headers = await _create()
                 except BadRequestError as exc:
-                    # Same drop-and-retry-once contract as
-                    # `common.llm_call.execute_response`: only a 400 naming
-                    # `reasoning` in both the request and the error body is
-                    # treated as a rejection; anything else propagates.
+                    # Same drop-and-retry-once contract as `execute_response`: only a 400
+                    # naming `reasoning` in both request and error body counts.
                     if not is_responses_reasoning_rejection(kwargs, exc):
                         raise
                     remember_responses_reasoning_rejection(self.config.model, kwargs)

@@ -260,10 +260,8 @@ async def generate_recommendations(
             {'role': 'system', 'content': _SYSTEM_PROMPT.format(max_suggestions=config.max_suggestions)},
             {'role': 'user', 'content': _build_user_prompt(result, triggers, config)},
         ]
-        # This opt-in post-processing step runs after per-simulation usage has
-        # already been summarized, so its spend has no report field; the phase
-        # total is logged by the caller instead (RES-1295). See "What the totals
-        # do not include" in docs/guides/red-teaming.md.
+        # Runs after per-simulation usage is summarized, so its spend has no report
+        # field; the caller logs the phase total instead (RES-1295).
         usage: TokenUsage | None = None
         try:
             result_out = await generate_structured(

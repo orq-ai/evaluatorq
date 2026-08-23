@@ -287,41 +287,11 @@ async def _truncation_usage(exc: LengthFinishReasonError, call: _ChatLadderCall,
     return _rung_usage(usage, completion, label=call.label, leg=leg)
 
 
-# Structural request fields a caller's extra_kwargs may not replace: they are
-# owned by this helper, and letting extra_kwargs swap them out would silently
-# break the call it rides on (e.g. replacing the response_format schema this
-# helper exists to enforce). Enforced through the same shared `check_reserved_keys`
-# guard `LLMCallConfig.request_params` use (contracts.py),
-# so there is exactly one implementation of "raise on a structural-key clash" in
-# the package — this module previously hand-rolled its own `reserved = ... &
-# keys(); if reserved: raise` copy of that check, which is what let it drift out
-# of step (see below).
-#
-# **Derived from the contracts sets, not restated.** These are deliberately
-# wider — the ladder owns the token-cap fields and `text_format` per rung — but
-# they are built with `|` so a key added to `_RESERVED_COMPLETION_KEYS` /
-# `_RESERVED_RESPONSES_KEYS` reaches `generate_structured` on the same commit.
-# Restating them is what made the contracts comment claim a sharing that did not
-# exist; a guardrail in tests/common/test_structured_output_usage.py asserts the
-# superset relation so a future copy-paste fails instead of drifting.
-#
-# `extra_body` is reserved here too, matching contracts.py. It carries the Orq
-# router body (retry policy, thread ids), which is owned by the call site, so it
-# arrives through the dedicated `extra_body=` parameter rather than smuggled
-# inside `extra_kwargs`. Before that parameter existed, callers such as
-# `redteam/reports/recommendations.py::_condense_attack` merged the two dicts by
-# hand and passed the result as `extra_kwargs` — which the `api='responses'` leg
-# rejected downstream anyway in `execute_response`, so the shape only ever worked
-# on the chat legs. One parameter, reserved on both legs, removes that split.
-#
-# Keyed by API because the two legs own different field names for the same
-# structural role. An api='responses' call may still fall through to the chat
-# legs, so its reserved set is the union — a key that is safe on the endpoint
-# actually reached is not safe on the one it degrades to. `max_completion_tokens`
-# (chat) and `max_output_tokens` (responses) are both reserved now — the chat
-# side used to omit its token-cap field while the responses side reserved its
-# own, an asymmetry that let extra_kwargs silently override the chat budget but
-# not the responses one.
+# Structural request fields extra_kwargs may not replace, derived from the
+# contracts sets with `|` so a key added there reaches this ladder too.
+# An api='responses' call can fall through to the chat legs, so its set is
+# the union — a key safe on the endpoint asked for is not safe on the one it
+# degrades to.
 _STRUCTURAL_KEYS = _RESERVED_COMPLETION_KEYS | {'max_completion_tokens'}
 _STRUCTURAL_KEYS_RESPONSES = _RESERVED_RESPONSES_KEYS | {'text_format', 'max_output_tokens'}
 _STRUCTURAL_KEYS_BY_API = {
@@ -1005,11 +975,8 @@ async def generate_structured(
             extra_body=extra_body,
         )
     except Exception as exc:
-        # The rungs below this frame have already billed. Fold what they spent
-        # onto the exception — including the raising rung's own usage, which it
-        # attached before raising — so a caller's `except` can still report it.
-        # Without this the whole ladder's spend died with the frame and
-        # `log_structured_usage` reported "no usage reported by the provider".
+        # Fold every rung's spend onto the exception so a caller's `except` can still
+        # report it, instead of it dying with the frame.
         _attach_usage(exc, sum_structured_usage([*usages, usage_from_exception(exc)]))
         raise
 
@@ -1036,10 +1003,8 @@ async def _generate_structured(
     every rung's spend when this function leaves by raising.
     """
     check_reserved_keys(extra_kwargs or {}, _STRUCTURAL_KEYS_BY_API[api])
-    # The call-site-owned router body stays OUT of extra_kwargs: both legs
-    # forward it to `common.llm_call` through the dedicated `extra_body=`
-    # parameter, which reserves the key inside extra_kwargs — folding it in here
-    # would trip that guard on every call.
+    # The router body travels in the dedicated `extra_body=` parameter; folding it
+    # into extra_kwargs here would trip the reserved-key guard on every call.
     if api == 'responses':
         via_responses = await _generate_structured_via_responses(
             client,
@@ -1057,10 +1022,8 @@ async def _generate_structured(
         usages.append(via_responses.usage)
         if via_responses.parsed is not None:
             return via_responses
-        # The warning naming the cause is emitted by the helper; the chat legs
-        # below are the fallback, so a provider without Responses structured
-        # output still gets an answer. Its usage stays in `usages`: the leg
-        # billed even though its payload was unusable.
+        # The helper warns; usage stays in `usages` because the leg billed even
+        # though its payload was unusable.
 
     async with with_llm_span(
         model=model,

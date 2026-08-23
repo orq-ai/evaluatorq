@@ -397,26 +397,11 @@ async def generate_focus_area_recommendations(
         return [], None
 
     generated: list[FocusAreaRecommendation] = []
-    # Every LLM call this function makes — condense calls included — so the phase
-    # reports one figure, returned to the caller for
-    # `report.summary.post_processing_token_usage` (RES-1295).
+    # Every LLM call this function makes, for `report.summary.post_processing_token_usage`.
     usages: list[TokenUsage | None] = []
 
-    # Two dicts, two roles. `extra_kwargs` is user-owned sampling/provider options in
-    # precedence order: the evaluator's own extra_kwargs (where a reasoning model's
-    # temperature=1.0 escape hatch lives), then user llm_kwargs on top.
-    # generate_structured splats these LAST over its base params, so an override wins
-    # without a "multiple values for keyword" error, and structural keys are rejected
-    # by generate_structured itself.
-    #
-    # `extra_body` is the call-site-owned router body and travels in its own parameter.
-    # A caller-supplied extra_body merges INTO the router retry body rather than
-    # replacing it, so retry hints cannot vanish silently — this is the one merge seam
-    # for the router body in the package. Layered call-site-first so caller keys win
-    # per key, per CLAUDE.md's `{**defaults, **caller}` rule: the router retry body,
-    # then `EvaluatorConfig.extra_body` (the first-class field), then the legacy
-    # `extra_kwargs['extra_body']` shape callers used before that field existed.
-    # Both built once: per-run, not per-area.
+    # Two dicts, two roles: `extra_kwargs` is user-owned sampling options, `extra_body`
+    # is the router body. Both layered caller-last so a caller key wins per key.
     user_extra: dict[str, Any] = {**cfg.evaluator.extra_kwargs, **(llm_kwargs or {})}
     extra_body: dict[str, Any] = {
         **cfg.retry_extra_body(llm_client),

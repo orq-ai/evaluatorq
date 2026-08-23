@@ -271,10 +271,8 @@ async def _merge_call(
             response_format={'type': 'json_object'},
             extra_body=cfg.retry_extra_body(llm_client),
         )
-        # The wrapper owns the structural fields; hand it only the sampling and
-        # provider extras (temperature, reasoning_effort, ...). `extra_body` is
-        # call-site-owned too and rides in its own parameter — `extra_kwargs`
-        # reserves the key, so it must not be left in this dict.
+        # The wrapper owns the structural fields and `extra_body`; hand it only the
+        # sampling and provider extras.
         for structural in ('model', 'messages', 'max_completion_tokens', 'response_format'):
             role_kwargs.pop(structural, None)
         call_temperature = role_kwargs.pop('temperature', None)

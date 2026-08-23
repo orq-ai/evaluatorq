@@ -61,11 +61,8 @@ _REASONING_EFFORT_REJECTORS: set[tuple[str, bool]] = set()
 # Kept as a separate memo so the two param shapes never cross-strip.
 _RESPONSES_REASONING_REJECTORS: set[tuple[str, bool]] = set()
 
-# (endpoint, model, has_tools) triples whose up-front strip has already been
-# announced at WARNING level. The first strip is news — the configured effort is
-# not in force — but a per-call warning on a long run is noise, so later strips
-# drop to DEBUG. Separate from the rejector memos above so clearing one does not
-# depend on the other's shape.
+# Triples already announced at WARNING: the first strip is news, later ones are
+# noise on a long run and drop to DEBUG.
 _ANNOUNCED_STRIPS: set[tuple[str, str, bool]] = set()
 
 

@@ -62,13 +62,8 @@ def _env_int(name: str, default: int) -> int:
         raise ValueError(f'Environment variable {name}={raw!r} must be an integer') from None
 
 
-# NOTE: the three functions below are resolved at CALL TIME, not import time —
-# `os.environ[...]` set after this module is imported (e.g. by a test, or a
-# caller composing several runs with different env in one process) takes
-# effect on the next LLM call. They are the process-global FALLBACK layer only:
-# `LLMCallConfig.timeout_ms` / `.max_tokens` / `.reasoning_effort`, when
-# explicitly set on an agent's config, always win over them (see
-# `BaseAgent._resolved_*` below).
+# The three functions below resolve at CALL TIME, and are the process-global
+# fallback only: an explicitly set `LLMCallConfig` field always wins.
 
 
 def _default_timeout_s() -> float:
@@ -113,12 +108,8 @@ def _default_reasoning_effort() -> str | None:
     return raw if raw not in ('', 'none', 'off') else None
 
 
-# Backward-compat snapshot for external callers/tests that inspect the shared
-# default budget (e.g. asserting it matches `DEFAULT_TARGET_MAX_TOKENS`). NOT
-# read by any call path in this module — every LLM call resolves the live
-# value via `_default_max_tokens()` at call time (see the module note above),
-# so this constant can go stale relative to `EVALUATORQ_LLM_MAX_TOKENS` set
-# after import without affecting behaviour.
+# Backward-compat snapshot for external callers. No call path reads it — every call
+# resolves `_default_max_tokens()` live — so it can go stale without effect.
 DEFAULT_MAX_TOKENS = _default_max_tokens()
 
 

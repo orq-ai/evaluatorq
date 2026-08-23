@@ -699,17 +699,9 @@ class EvaluatorConfig(LLMCallConfig):
         return self
 
 
-# ---------------------------------------------------------------------------
-# Guardrail for the desync this class used to have with LLMCallConfig (F1)
-# ---------------------------------------------------------------------------
-# Comparing the two *field name* sets cannot fail while the inheritance holds —
-# pydantic merges every parent field into a subclass — and it never caught the
-# drift that actually bit: EvaluatorConfig restated a parent field, LLMCallConfig
-# later changed that field's default or constraints, and the judge silently kept
-# the old one. So compare the declarations, and require each intentional
-# divergence to be listed here with a reason. Adding a row is the review moment.
-# Mirrors vulnerability_registry.py: a derived declaration is asserted against
-# its source of truth at import time, and the allowlist is frozen.
+# Comparing field *names* to LLMCallConfig cannot fail while the inheritance holds.
+# The drift that bit was a restated field whose parent default later moved, so
+# compare declarations and require each divergence to be listed with a reason.
 _CALL_CONFIG_DIVERGENCES: Mapping[str, str] = MappingProxyType({
     'model': 'judge shorthand: nullable and excluded from dumps; _accept_model_sugar '
     'folds it into judges[0], so it is not the required model id LLMCallConfig declares',
@@ -929,19 +921,11 @@ class LLMConfig(BaseModel):
     # which only cover HTTP errors via the ORQ router. 0 disables retries (the
     # unusable turn stops the attack immediately rather than being forwarded).
     max_content_filter_retries: int = Field(default=2, ge=0, le=10)
-    # Consecutive adversarial-LLM timeouts (across turns, not within a single
-    # regenerate_on_content_filter attempt) before the orchestrator abandons
-    # the attack. Distinct from max_content_filter_retries: a timeout is a
-    # transport failure the attacker never responded to, not a refusal it did.
+    # Consecutive adversarial-LLM timeouts across turns before abandoning the attack.
     max_consecutive_adversarial_timeouts: int = Field(default=2, ge=1, le=10)
-    # Objectives requested per attacker LLM call before objective_generator
-    # batches into multiple calls. Governs live-call cost directly: raising it
-    # asks for more objectives (and more output tokens) per call; ~150 tokens
-    # per objective is what keeps the default from truncating.
+    # Objectives per attacker call before objective_generator batches; ~150 tokens each.
     max_objectives_per_llm_call: int = Field(default=8, ge=1)
-    # Probe turns blackbox_classifier.classify_agent_capabilities_blackbox may
-    # send before giving up on capability inference. Each turn is a live call
-    # against the target, so this is a cost/latency knob, not just a loop guard.
+    # Probe turns for blackbox capability inference. Each is a live target call.
     max_probe_turns: int = Field(default=8, ge=1)
 
     # --- Cleanup timeout ------------------------------------------------------
@@ -953,16 +937,9 @@ class LLMConfig(BaseModel):
     # Sole retry owner: targets built for it must disable their own SDK budgets.
     # A retry never consumes a new attacker turn or changes the transcript.
     max_target_retries: int = Field(default=2, ge=0, le=10)
-    # Reasoning effort for the target agent. The value is forwarded verbatim; its
-    # *spelling* is per endpoint, exactly as ``LLMCallConfig.request_params``
-    # renders it — flat ``reasoning_effort=`` on chat completions (the OpenAI
-    # backend and the model/router job in `redteam/runtime/jobs.py`),
-    # ``reasoning={'effort': ...}`` on the Responses API (OrqResponsesTarget).
-    # The deployment job is the one leg that does NOT forward it at all: the
-    # invoke_async payload has no field for it, so that job warns and drops it.
-    # Read that method for the rule rather than enumerating wiring points here.
-    # Accepted values differ per model, so the provider validates and rejects an
-    # unsupported one with a 400.
+    # Reasoning effort for the target agent, forwarded verbatim; spelling is per
+    # endpoint, as `LLMCallConfig.request_params` renders it. The deployment job
+    # has no field for it and warns that it dropped it.
     target_reasoning_effort: str | None = None
 
     # --- Agent tool continuation cap ------------------------------------------

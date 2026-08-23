@@ -168,10 +168,8 @@ def _build_objective_prompt(
     return prompt
 
 
-# The objectives-per-call budget lives solely on LLMConfig.max_objectives_per_llm_call
-# (contracts.py); `_call_llm_for_objectives` resolves `cfg or PIPELINE_CONFIG` before
-# reading it, so there is no no-cfg path to fall back to. A module constant mirroring
-# that field would have no reader and would be free to drift from it.
+# The objectives-per-call budget lives solely on LLMConfig.max_objectives_per_llm_call;
+# a module constant mirroring it would have no reader and be free to drift.
 
 
 async def _call_llm_for_objectives_single(

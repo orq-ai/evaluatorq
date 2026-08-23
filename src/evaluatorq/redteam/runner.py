@@ -1060,11 +1060,8 @@ async def red_team(
                     'prompt-based red teaming (requires live-system testing).',
                 )
 
-            # Post-processing usage (recommendations + executive summary) is billed
-            # after the attack-only totals below are computed, so it is folded into
-            # `report.summary.token_usage_total` explicitly once both steps have run
-            # (or been skipped/failed) rather than being lost to a log line. A step
-            # that was skipped or failed contributes None, never a zero.
+            # Folded into `report.summary.token_usage_total` once both steps have run.
+            # A skipped or failed step contributes None, never a zero.
             post_processing_usages: list[TokenUsage | None] = []
             from evaluatorq.common.structured_output import sum_structured_usage
 
@@ -3130,16 +3127,9 @@ async def _run_static(
         for at in resolved_agent_targets
     )
 
-    # Fetch agent contexts for all targets (best-effort). Resolved before the
-    # evaluator/panel is built and before the confirm hook, not at report time:
-    # the report decorates itself with these (below), the self-judge/family-bias
-    # guard (RES-739) needs resolved model ids rather than raw target strings to
-    # fire at all, and the reasoning-effort pre-flight further down needs the
-    # target's model before the first target call is paid for. Kept
-    # unconditional (not gated on ``target_reasoning_effort``) because the first
-    # two consumers need it regardless of whether reasoning effort is configured.
-    # Still best-effort — a context that will not resolve must not stop a run
-    # that never needed it.
+    # Agent contexts, best-effort. Resolved before the evaluator and the confirm hook
+    # because the self-judge guard and the reasoning-effort pre-flight both need the
+    # target's model before the first paid call.
     agent_contexts: dict[str, AgentContext] = {}
     try:
         static_backend = resolve_backend(

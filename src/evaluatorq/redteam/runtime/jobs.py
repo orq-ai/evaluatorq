@@ -71,10 +71,7 @@ def create_deployment_job(
     cfg = cfg or PIPELINE_CONFIG
     safe_key = _sanitize_job_name(deployment_key)
     if cfg.target_reasoning_effort:
-        # Deployment targets manage their own decode/reasoning config via
-        # platform configuration — the
-        # invoke_async payload has no field for it, so a configured value
-        # here is silently inert unless flagged.
+        # The invoke_async payload has no field for it, so a configured value is inert.
         logger.warning(
             f'target_reasoning_effort={cfg.target_reasoning_effort!r} is set but deployment '
             f'{deployment_key!r} manages reasoning effort via its own platform configuration; '
@@ -116,10 +113,8 @@ def create_deployment_job(
                         'key': deployment_key,
                         'messages': messages,
                     }
-                    # Deployment SDK calls do not go through the shared
-                    # chat-completion helper, so apply the active run
-                    # metadata explicitly. The helper preserves any
-                    # caller-supplied metadata if this path gains one.
+                    # This leg bypasses the shared chat-completion helper, so run
+                    # metadata is applied explicitly.
                     apply_pipeline_metadata(invoke_kwargs)
                     invoke_kwargs.update(thread_body_param())
 
@@ -129,9 +124,8 @@ def create_deployment_job(
                             timeout=cfg.target_agent_timeout_ms / 1000.0,
                         )
 
-                    # Sole retry layer for this leg (see docstring): the Orq
-                    # SDK deployment client exposes no per-call retry_config
-                    # here, so with_retry owns it instead of a client budget.
+                    # Sole retry layer for this leg (see docstring): the deployment
+                    # client exposes no per-call retry budget.
                     completion = await with_retry(
                         _invoke,
                         max_attempts=cfg.max_target_retries + 1,
@@ -147,12 +141,9 @@ def create_deployment_job(
         if active_progress is not None:
             await active_progress.finish_attack(None)
 
-        # The Orq SDK's deployment client has no AsyncOpenAI to resolve a
-        # per-host catalogue from, so price_usage falls back to
-        # ORQ_BASE_URL — the same host the client above was built with, so
-        # the prices come from the deployment that served the call. Price
-        # against the model the deployment actually ran (completion.model),
-        # not the deployment_key alias (RES-1295).
+        # No AsyncOpenAI to resolve a per-host catalogue from, so price_usage falls back
+        # to ORQ_BASE_URL — the host this client was built with. Price against the model
+        # the deployment ran, not the key alias (RES-1295).
         priced_usage = await price_usage(
             TokenUsage.from_completion(completion),
             getattr(completion, 'model', deployment_key),

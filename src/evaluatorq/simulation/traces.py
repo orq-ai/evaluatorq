@@ -668,9 +668,8 @@ async def datapoints_from_traces(
     semaphore = asyncio.Semaphore(_INFER_CONCURRENCY)
 
     async def infer_one(conversation: TraceConversation) -> tuple[SimulationDatapoint | None, TokenUsage | None]:
-        # Usage rides back with the datapoint: this worker runs concurrently, so
-        # it owns no shared accumulator — the gather below sums what each task
-        # reports (RES-1295).
+        # Usage rides back with the datapoint: this worker runs concurrently and owns
+        # no shared accumulator (RES-1295).
         usages: list[TokenUsage | None] = []
         recorded_first_message = conversation.first_user_message
         if not recorded_first_message:
