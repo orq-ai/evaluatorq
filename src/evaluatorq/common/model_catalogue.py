@@ -196,6 +196,17 @@ async def get_model_info(model: str, client: AsyncOpenAI | None = None) -> Model
     return await _lookup(model, client)
 
 
+def _entry_metadata(entry: dict[str, object]) -> dict[str, object]:
+    """One entry's ``metadata`` mapping, or ``{}`` when it is any other shape.
+
+    Providers have returned ``metadata`` as a list. ``(x or {}).get(...)`` survives
+    an empty one and raises ``AttributeError`` on a populated one, which aborts the
+    whole catalogue parse over a single malformed entry.
+    """
+    metadata = entry.get('metadata')
+    return metadata if isinstance(metadata, dict) else {}
+
+
 def _parse_reasoning_efforts(entry: dict[str, object]) -> frozenset[str] | None:
     """Accepted ``reasoning.effort`` values for one catalogue entry, or ``None``.
 
@@ -263,7 +274,9 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
             input_cost_per_1k=float(inp),
             output_cost_per_1k=float(out),
             provider=provider,
-            supports_responses=bool((entry.get('metadata') or {}).get('supports_responses_api')),
+            # `metadata` is provider-shaped and has arrived as a list; `.get` on a
+            # non-mapping took the whole catalogue down rather than one model.
+            supports_responses=bool(_entry_metadata(entry).get('supports_responses_api')),
             reasoning_efforts=_parse_reasoning_efforts(entry),
         )
         existing = models.get(model_id)

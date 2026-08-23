@@ -518,3 +518,41 @@ async def test_env_key_used_when_no_client_given(monkeypatch: pytest.MonkeyPatch
 
     assert calls == ['https://prod.example/v2/models']
     assert headers[0]['Authorization'] == 'Bearer env-key'
+
+
+def test_parse_catalogue_survives_a_non_mapping_metadata():
+    """A provider returning `metadata` as a list must cost that one entry, not the catalogue.
+
+    `(entry.get('metadata') or {}).get(...)` survives an EMPTY list and raises
+    `AttributeError` on a populated one, so the empty case hid this until a live
+    payload happened to carry a non-empty one.
+    """
+    prices = pricing._parse_catalogue(  # pyright: ignore[reportPrivateUsage]
+        [
+            {
+                'model_id': 'listy',
+                'provider': 'openai',
+                'input_cost': 0.1,
+                'output_cost': 0.2,
+                'metadata': [{'supports_responses_api': True}],
+            },
+            {
+                'model_id': 'stringy',
+                'provider': 'openai',
+                'input_cost': 0.1,
+                'output_cost': 0.2,
+                'metadata': 'supports_responses_api',
+            },
+            {
+                'model_id': 'good',
+                'provider': 'openai',
+                'input_cost': 0.1,
+                'output_cost': 0.2,
+                'metadata': {'supports_responses_api': True},
+            },
+        ]
+    )
+    assert set(prices) == {'listy', 'stringy', 'good'}
+    assert prices['listy'].supports_responses is False
+    assert prices['stringy'].supports_responses is False
+    assert prices['good'].supports_responses is True

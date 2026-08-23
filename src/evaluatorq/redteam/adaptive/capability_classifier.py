@@ -245,6 +245,7 @@ async def _infer_resource_capabilities(
                 response_model=ResourceCapabilityInference,
                 temperature=cfg.attacker.temperature,
                 max_completion_tokens=cfg.attacker.max_tokens,
+                reasoning_effort=cfg.attacker.reasoning_effort,
                 extra_body=cfg.retry_extra_body(llm_client),
                 extra_kwargs=cfg.attacker.extra_kwargs,
             )
@@ -315,6 +316,7 @@ async def _classify_tools(
                 response_model=ToolCapabilitiesResponse,
                 temperature=cfg.attacker.temperature,
                 max_completion_tokens=cfg.attacker.max_tokens,
+                reasoning_effort=cfg.attacker.reasoning_effort,
                 extra_body=cfg.retry_extra_body(llm_client),
                 extra_kwargs=cfg.attacker.extra_kwargs,
             )

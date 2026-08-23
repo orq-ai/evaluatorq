@@ -148,10 +148,14 @@ class OpenAIModelTarget(AgentTarget):
         create_kwargs: dict[str, Any] = {
             'model': self.model,
             'messages': completion_messages,
-            'max_tokens': self.max_tokens,
         }
         if self.reasoning_effort:
+            # A reasoning model rejects `max_tokens` outright, so the two cannot ride
+            # together: asking for an effort has to switch the budget field with it.
             create_kwargs['reasoning_effort'] = self.reasoning_effort
+            create_kwargs['max_completion_tokens'] = self.max_tokens
+        else:
+            create_kwargs['max_tokens'] = self.max_tokens
         apply_pipeline_metadata(create_kwargs)
         if client_routes_through_orq(self.client):
             thread = thread_body_param()
