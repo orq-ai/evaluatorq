@@ -519,19 +519,14 @@ def test_structured_output_reserved_keys_derive_from_the_contracts_sets() -> Non
     not on the ladder. They are supersets by construction now; this fails if
     someone re-hardcodes them.
     """
-    from evaluatorq.common.structured_output import (
-        _STRUCTURAL_KEYS,
-        _STRUCTURAL_KEYS_BY_API,
-        _STRUCTURAL_KEYS_RESPONSES,
-    )
+    from evaluatorq.common.structured_output import _STRUCTURAL_KEYS
     from evaluatorq.contracts import _RESERVED_COMPLETION_KEYS, _RESERVED_RESPONSES_KEYS
 
-    assert _RESERVED_COMPLETION_KEYS <= _STRUCTURAL_KEYS
-    assert _RESERVED_RESPONSES_KEYS <= _STRUCTURAL_KEYS_RESPONSES
+    chat, responses = _STRUCTURAL_KEYS['chat_completions'], _STRUCTURAL_KEYS['responses']
+    assert _RESERVED_COMPLETION_KEYS <= chat
     # An api='responses' call can still fall through to the chat rungs, so its
     # reserved set is the union of both endpoints' — deliberately, not by accident.
-    assert _STRUCTURAL_KEYS_BY_API['chat_completions'] == _STRUCTURAL_KEYS
-    assert _STRUCTURAL_KEYS_BY_API['responses'] == _STRUCTURAL_KEYS | _STRUCTURAL_KEYS_RESPONSES
+    assert chat | _RESERVED_RESPONSES_KEYS <= responses
     # The extra breadth is the ladder's own, and is documented as such.
-    assert {'max_completion_tokens'} <= _STRUCTURAL_KEYS
-    assert {'text_format', 'max_output_tokens'} <= _STRUCTURAL_KEYS_RESPONSES
+    assert {'max_completion_tokens'} <= chat
+    assert {'text_format', 'max_output_tokens'} <= responses
