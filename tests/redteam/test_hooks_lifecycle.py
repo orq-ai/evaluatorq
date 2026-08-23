@@ -168,7 +168,7 @@ class TestStaticPipelineHooks:
                 'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.create_owasp_evaluator',
                 return_value=MagicMock(),
             ),
-            patch('evaluatorq.redteam.runtime.jobs.create_model_job', return_value=MagicMock()),
+            patch('evaluatorq.redteam.runtime.jobs.create_deployment_job', return_value=MagicMock()),
             patch('evaluatorq.evaluatorq', new_callable=AsyncMock, return_value=[]),
             patch(
                 'evaluatorq.redteam.reports.converters.static_evaluatorq_results_to_reports',
@@ -274,7 +274,7 @@ class TestStaticPipelineHooks:
                 'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.create_owasp_evaluator',
                 return_value=MagicMock(),
             ),
-            patch('evaluatorq.redteam.runtime.jobs.create_model_job', return_value=MagicMock()),
+            patch('evaluatorq.redteam.runtime.jobs.create_deployment_job', return_value=MagicMock()),
             patch('evaluatorq.evaluatorq', new_callable=AsyncMock, return_value=[]),
             patch(
                 'evaluatorq.redteam.reports.converters.static_evaluatorq_results_to_reports',
@@ -335,7 +335,7 @@ class TestStaticPipelineHooks:
                 'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.create_owasp_evaluator',
                 return_value=MagicMock(),
             ),
-            patch('evaluatorq.redteam.runtime.jobs.create_model_job', return_value=MagicMock()),
+            patch('evaluatorq.redteam.runtime.jobs.create_deployment_job', return_value=MagicMock()),
             patch('evaluatorq.evaluatorq', new_callable=AsyncMock, return_value=[]) as mock_eval,
         ):
             from evaluatorq.redteam.runner import _run_static
@@ -375,7 +375,7 @@ class TestStaticPipelineHooks:
                 'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.create_owasp_evaluator',
                 return_value=MagicMock(),
             ),
-            patch('evaluatorq.redteam.runtime.jobs.create_model_job', return_value=MagicMock()),
+            patch('evaluatorq.redteam.runtime.jobs.create_deployment_job', return_value=MagicMock()),
             patch('evaluatorq.evaluatorq', new_callable=AsyncMock, return_value=[]) as mock_eval,
         ):
             from evaluatorq.redteam.runner import _run_static
@@ -415,7 +415,7 @@ class TestStaticPipelineHooks:
                 'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.create_owasp_evaluator',
                 return_value=MagicMock(),
             ),
-            patch('evaluatorq.redteam.runtime.jobs.create_model_job', return_value=MagicMock()),
+            patch('evaluatorq.redteam.runtime.jobs.create_deployment_job', return_value=MagicMock()),
             patch('evaluatorq.evaluatorq', new_callable=AsyncMock, return_value=[]),
             patch(
                 'evaluatorq.redteam.runner.resolve_backend',

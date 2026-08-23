@@ -35,14 +35,17 @@ async def main() -> None:
 
     # --- Example 2: Tune per-role settings ---------------------------------
     # LLMCallConfig supports model, temperature, max_tokens, timeout_ms,
-    # extra_kwargs (merged into every LLM call), and an optional pre-built client.
+    # reasoning_effort, extra_kwargs (merged into every LLM call), and an
+    # optional pre-built client. Prefer the first-class fields over extra_kwargs:
+    # reasoning_effort is rendered per endpoint (flat on chat completions, a
+    # `reasoning` block on the Responses API), which extra_kwargs cannot do.
     config_tuned = LLMConfig(
         attacker=LLMCallConfig(
             model="openai/gpt-4o",
             temperature=0.7,
             max_tokens=4096,
             timeout_ms=90_000,
-            extra_kwargs={"reasoning_effort": "medium"},
+            reasoning_effort="medium",
         ),
         evaluator=LLMCallConfig(
             model="openai/gpt-4o-mini",

@@ -450,10 +450,9 @@ class MultiTurnOrchestrator:
                 timeout_s=llm_timeout_s,
                 temperature=self._cfg.attacker.temperature,
                 max_completion_tokens=self._cfg.attacker.max_tokens,
-                extra_kwargs={
-                    'extra_body': self._cfg.retry_extra_body(self.llm_client),
-                    **self._cfg.attacker.extra_kwargs,
-                },
+                reasoning_effort=self._cfg.attacker.reasoning_effort,
+                extra_body=self._cfg.retry_extra_body(self.llm_client),
+                extra_kwargs=self._cfg.attacker.extra_kwargs,
             )
 
             prompt = response.choices[0].message.content or ''
@@ -689,10 +688,9 @@ class MultiTurnOrchestrator:
                                 timeout_s=_timeout,
                                 temperature=self._cfg.attacker.temperature,
                                 max_completion_tokens=self._cfg.attacker.max_tokens,
-                                extra_kwargs={
-                                    'extra_body': self._cfg.retry_extra_body(self.llm_client),
-                                    **self._cfg.attacker.extra_kwargs,
-                                },
+                                reasoning_effort=self._cfg.attacker.reasoning_effort,
+                                extra_body=self._cfg.retry_extra_body(self.llm_client),
+                                extra_kwargs=self._cfg.attacker.extra_kwargs,
                             )
                             if usage is not None:
                                 # Fold usage when present (carries cached/reasoning/cost
@@ -727,7 +725,7 @@ class MultiTurnOrchestrator:
                                 'orq.redteam.finish_reason': 'adversarial_timeout',
                             },
                         )
-                        if consecutive_adversarial_timeouts >= 2:
+                        if consecutive_adversarial_timeouts >= self._cfg.max_consecutive_adversarial_timeouts:
                             error = (
                                 f'Adversarial LLM timed out {consecutive_adversarial_timeouts} consecutive turns '
                                 f'after {llm_timeout_s:.0f}s each'

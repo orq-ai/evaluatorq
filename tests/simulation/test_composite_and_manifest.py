@@ -242,7 +242,7 @@ def _stub_generation(monkeypatch, datapoint):
     from evaluatorq.simulation import api
 
     async def _fake_personas_scenarios(**_kwargs):
-        return [], []
+        return [], [], None
 
     async def _fake_resolve(**_kwargs):
         return [datapoint]
@@ -463,7 +463,7 @@ async def test_generate_fans_out_stage_events_to_multiple_user_hooks(monkeypatch
             calls.append(f'end:{name}')
 
     async def _fake_generate(**_kwargs):
-        return [], None, False
+        return [], None, False, None
 
     monkeypatch.setattr(api, '_generate_datapoints_inner', _fake_generate)
 
@@ -510,7 +510,7 @@ async def test_generate_phase_failure_marks_manifest_error_not_running(datapoint
     from evaluatorq.simulation.utils.run_store import get_sim_runs_dir
 
     async def _fake_personas_scenarios(**_kwargs):
-        return [], []
+        return [], [], None
 
     async def _boom_resolve(**_kwargs):
         raise RuntimeError('datapoint generation exploded')

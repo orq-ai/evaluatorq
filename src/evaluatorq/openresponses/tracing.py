@@ -113,6 +113,12 @@ def record_openresponses_request(span: Span | None, payload: dict[str, Any]) -> 
     max_output_tokens = payload.get('max_output_tokens')
     if isinstance(max_output_tokens, int):
         span.set_attribute('gen_ai.request.max_tokens', max_output_tokens)
+    reasoning = payload.get('reasoning')
+    effort = reasoning.get('effort') if isinstance(reasoning, dict) else None
+    if effort:
+        # Unconditional: without it two runs at different efforts are indistinguishable
+        # when EVALUATORQ_CAPTURE_MESSAGE_CONTENT=false.
+        span.set_attribute('gen_ai.request.reasoning_effort', str(effort))
     if not capture_message_content():
         return
     input_items = payload.get('input') or []

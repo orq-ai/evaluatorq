@@ -214,13 +214,13 @@ def _apply_edits(original: str, edits: list[dict[str, str]]) -> str | None:
     return text
 
 
-def _parse_edits(content: str) -> list[dict[str, str]] | None:
+def _parse_edits(content: str, *, max_edits: int = _MAX_EDITS) -> list[dict[str, str]] | None:
     """Validate the edits-mode response shape; None on anything off-contract."""
     try:
         raw = json.loads(extract_json_from_response(content)).get('edits')
     except (ValueError, AttributeError):
         return None
-    if not isinstance(raw, list) or not raw or len(raw) > _MAX_EDITS:
+    if not isinstance(raw, list) or not raw or len(raw) > max_edits:
         return None
     edits: list[dict[str, str]] = []
     for item in raw:
@@ -241,6 +241,8 @@ async def _merge_call(
     max_tokens: int,
     cfg: Any,
     temperature: float | None,
+    *,
+    timeout_s: float = _MERGE_TIMEOUT_S,
 ) -> str:
     """One JSON-mode completion, through the shared ``execute_chat_completion``
     wrapper so both surfaces get the request timeout, trace-header injection,
@@ -258,30 +260,34 @@ async def _merge_call(
         {'role': 'user', 'content': user_prompt},
     ]
     call_temperature = temperature
+    call_extra_body: dict[str, Any] | None = None
     extra_kwargs: dict[str, Any] = {}
     if cfg is not None:
-        role_kwargs: dict[str, Any] = cfg.evaluator.as_call_config().completion_params(
+        role_kwargs: dict[str, Any] = cfg.evaluator.as_call_config().request_params(
+            api='chat_completions',
             model=model,
             messages=messages,
             max_completion_tokens=max_tokens,
             response_format={'type': 'json_object'},
             extra_body=cfg.retry_extra_body(llm_client),
         )
-        # The wrapper owns the structural fields; hand it only the sampling and
-        # provider extras (temperature, extra_body, reasoning_effort, ...).
+        # The wrapper owns the structural fields and `extra_body`; hand it only the
+        # sampling and provider extras.
         for structural in ('model', 'messages', 'max_completion_tokens', 'response_format'):
             role_kwargs.pop(structural, None)
         call_temperature = role_kwargs.pop('temperature', None)
+        call_extra_body = role_kwargs.pop('extra_body', None)
         extra_kwargs = role_kwargs
     response, _usage = await execute_chat_completion(
         client=llm_client,
         model=model,
         messages=messages,
         span=None,
-        timeout_s=_MERGE_TIMEOUT_S,
+        timeout_s=timeout_s,
         temperature=call_temperature,
         max_completion_tokens=max_tokens,
         response_format={'type': 'json_object'},
+        extra_body=call_extra_body,
         extra_kwargs=extra_kwargs or None,
     )
     return response.choices[0].message.content or '{}'
@@ -297,6 +303,10 @@ async def _merge_instructions(
     temperature: float | None = None,
     intro: str = '',
     context: str = 'remediation recommendations from an evaluation of the agent',
+    timeout_s: float = _MERGE_TIMEOUT_S,
+    max_instructions_tokens: int = _MAX_INSTRUCTIONS_TOKENS,
+    max_edits_tokens: int = _MAX_EDITS_TOKENS,
+    max_edits: int = _MAX_EDITS,
 ) -> str:
     """Fold the recommendations into ``original`` and return the revised text.
 
@@ -307,8 +317,10 @@ async def _merge_instructions(
     edits_system = _EDITS_SYSTEM_PROMPT.format(intro=intro, context=context)
     rewrite_system = _REWRITE_SYSTEM_PROMPT.format(intro=intro, context=context)
     try:
-        content = await _merge_call(llm_client, model, edits_system, user_prompt, _MAX_EDITS_TOKENS, cfg, temperature)
-        edits = _parse_edits(content)
+        content = await _merge_call(
+            llm_client, model, edits_system, user_prompt, max_edits_tokens, cfg, temperature, timeout_s=timeout_s
+        )
+        edits = _parse_edits(content, max_edits=max_edits)
         if edits is not None:
             revised = _apply_edits(original, edits)
             if revised is not None and revised.strip() and revised != original:
@@ -318,7 +330,7 @@ async def _merge_instructions(
         logger.opt(exception=True).info('apply_recommendations: edits-mode call failed; falling back to full rewrite')
 
     content = await _merge_call(
-        llm_client, model, rewrite_system, user_prompt, _MAX_INSTRUCTIONS_TOKENS, cfg, temperature
+        llm_client, model, rewrite_system, user_prompt, max_instructions_tokens, cfg, temperature, timeout_s=timeout_s
     )
     try:
         return str(json.loads(extract_json_from_response(content)).get('instructions', '')).strip()
@@ -378,6 +390,10 @@ async def apply_recommendations(
     intro: str = '',
     context: str = 'remediation recommendations from an evaluation of the agent',
     version_description: str | None = None,
+    timeout_s: float = _MERGE_TIMEOUT_S,
+    max_instructions_tokens: int = _MAX_INSTRUCTIONS_TOKENS,
+    max_edits_tokens: int = _MAX_EDITS_TOKENS,
+    max_edits: int = _MAX_EDITS,
 ) -> ApplyRecommendationsResult:
     """Fold recommendations into an agent's instructions; write only on ``apply=True``.
 
@@ -404,6 +420,15 @@ async def apply_recommendations(
         context: What the recommendations are, spliced into the prompts.
         version_description: Version note for the write; a default naming the
             bullet count is used when omitted.
+        timeout_s: Per-merge-call timeout ceiling. The dashboard's apply flow
+            is a single interactive call, so a stuck provider should surface
+            as an error drawer rather than a hung request.
+        max_instructions_tokens: Completion budget for the full-rewrite
+            fallback leg, which returns the whole revised instructions text.
+        max_edits_tokens: Completion budget for the edits-mode leg, which
+            returns only the changed passages and so needs far less.
+        max_edits: Cap on how many search/replace edit blocks the edits-mode
+            leg may return before its response is treated as off-contract.
 
     Returns:
         An `ApplyRecommendationsResult`. When there are no new bullets,
@@ -420,7 +445,18 @@ async def apply_recommendations(
 
     new_instructions = (
         await _merge_instructions(
-            llm_client, model, original, recommendations, cfg=cfg, temperature=temperature, intro=intro, context=context
+            llm_client,
+            model,
+            original,
+            recommendations,
+            cfg=cfg,
+            temperature=temperature,
+            intro=intro,
+            context=context,
+            timeout_s=timeout_s,
+            max_instructions_tokens=max_instructions_tokens,
+            max_edits_tokens=max_edits_tokens,
+            max_edits=max_edits,
         )
     ).strip()
     if not new_instructions:

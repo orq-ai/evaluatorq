@@ -137,6 +137,7 @@ plugins:
           - evaluation-reference.md: Every evaluatorq() parameter, jobs, data sources, built-in evaluators, and CI gating.
           - structured-results.md: Multi-dimensional evaluator scores with EvaluationResultCell.
           - framework-integrations.md: Evaluate LangChain and LangGraph agents.
+          - guides/targets.md: The system under test — built-in target kinds and how to write your own AgentTarget.
           - guides/agent-simulation.md: Multi-turn, persona-driven conversation testing with an LLM judge.
           - guides/red-teaming.md: Adaptive OWASP-mapped adversarial security testing for agents.
           - custom-evaluators-and-frameworks.md: Define custom evaluators and frameworks.
@@ -147,6 +148,7 @@ plugins:
           - dashboard.md: Browse red team and simulation reports in a local web dashboard.
         Setup:
           - configuration.md: Configuration and environment variables.
+          - tuning.md: Timeouts, retries, reasoning effort, and provider options.
           - tracing.md: OpenTelemetry tracing.
           - orq-deployment.md: Running against Orq deployments.
         API reference:
@@ -206,6 +208,11 @@ plugins:
           # `show_submodules` on the integrations page, whose signatures annotate
           # against both. Anchors verified present in the built HTML.
           - "../#evaluatorq.DataPoint"
+          # Same `../` mapping quirk as the two above. `EvaluatorConfig` subclasses
+          # `LLMCallConfig`, so the redteam page renders a "Bases:" crossref; the
+          # class itself is deduped onto the simulation page by `_canonical_owner`.
+          # Anchor verified present in the built HTML.
+          - "../simulation/#evaluatorq.simulation.LLMCallConfig"
           - "../openresponses/#evaluatorq.openresponses.ResponseResourceDict"
 
 markdown_extensions:
@@ -246,6 +253,7 @@ nav:
   - Home: index.md
   - Setup:
       - Configuration: configuration.md
+      - Tuning: tuning.md
       - Tracing: tracing.md
       - Orq Deployment: orq-deployment.md
   - Guides:
@@ -253,6 +261,7 @@ nav:
       - Evaluation Reference: evaluation-reference.md
       - Structured Results: structured-results.md
       - Framework Integrations: framework-integrations.md
+      - Targets: guides/targets.md
       - Agent Simulation:
           - Overview: guides/agent-simulation.md
       - Dashboard: dashboard.md

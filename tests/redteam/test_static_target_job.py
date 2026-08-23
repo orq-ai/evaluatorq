@@ -420,3 +420,116 @@ async def test_hybrid_static_leg_closes_per_row_target(
     )
 
     assert close_calls == [1]
+
+
+# ---------------------------------------------------------------------------
+# Wiring: the ``agent:`` static leg must use its backend's mapper and the run cfg
+# ---------------------------------------------------------------------------
+
+
+class _MappingBackend:
+    """A backend whose map_error returns a backend-specific pair, like ORQBackend's."""
+
+    def __init__(self, target: Any) -> None:
+        self._target = target
+
+    def create_target(self, agent_key: str) -> Any:
+        return self._target
+
+    def map_error(self, exc: Exception) -> tuple[str, str]:
+        return ('orq.http.429', f'backend mapped: {exc}')
+
+
+async def test_agent_target_static_leg_uses_the_backends_error_mapper(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``_create_job_for_target('agent:…')`` wires ``backend.map_error`` into the job.
+
+    The helper-level test above proves ``_run_static_target_call`` honours a mapper
+    it is handed; this proves the ``agent:`` call site actually hands it one. If the
+    call site drops the argument, the mapper falls back to ``default_map_error`` and
+    the code degrades to the generic ``target_error`` — which is what this asserts
+    against.
+    """
+    from evaluatorq.redteam.runner import _create_job_for_target
+
+    backend = _MappingBackend(_RaisingTarget())
+    monkeypatch.setattr('evaluatorq.redteam.runner.make_agent_backend', lambda **_kwargs: backend)
+
+    job = _create_job_for_target('agent:victim', llm_client=None, system_prompt=None)
+    out = (await job(_datapoint(), 0))['output']
+
+    assert out['error_code'] == 'orq.http.429', f'expected the backend-mapped code, got {out["error_code"]!r}'
+    assert out['error'] is not None
+    assert 'backend mapped' in out['error']
+    assert out['error_stage'] == 'target_call'
+
+
+async def test_agent_target_static_leg_threads_the_run_cfg_into_the_target_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The per-run timeout and retry budget reach ``call_target_with_retry``.
+
+    Without this the CLI's ``--target-timeout-ms`` / ``--max-target-retries`` would
+    apply to every leg except the static ``agent:`` one, silently.
+    """
+    from evaluatorq.redteam.contracts import LLMConfig
+    from evaluatorq.redteam.runner import _create_job_for_target
+
+    backend = _MappingBackend(_StubTarget(AgentResponse(text='hi')))
+    monkeypatch.setattr('evaluatorq.redteam.runner.make_agent_backend', lambda **_kwargs: backend)
+
+    from evaluatorq.common.target_call import call_target_with_retry as real_call
+
+    captured: dict[str, Any] = {}
+
+    async def spy(target: Any, messages: Any, **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return await real_call(target, messages, **kwargs)
+
+    monkeypatch.setattr('evaluatorq.redteam.runner.call_target_with_retry', spy)
+
+    cfg = LLMConfig(target_agent_timeout_ms=4321, max_target_retries=5)
+    job = _create_job_for_target('agent:victim', llm_client=None, system_prompt=None, pipeline_config=cfg)
+    await job(_datapoint(), 0)
+
+    assert captured['target_agent_timeout_ms'] == 4321
+    assert captured['max_target_retries'] == 5
+    # The same call passes the backend's mapper, not the module default — asserted
+    # behaviourally so a bound-method identity check cannot make it vacuously true.
+    from evaluatorq.common.target_call import default_map_error
+
+    assert captured['map_error'] is not default_map_error
+    assert captured['map_error'](RuntimeError('x'))[0] == 'orq.http.429'
+
+
+async def test_agent_target_static_leg_success_still_emits_the_error_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A clean ``agent:`` attack emits ``error=None``, never a missing key.
+
+    ``output_error_text`` returns ``None`` for a payload with no ``error`` key,
+    which is indistinguishable from success — a dead target then comes back
+    RESISTANT. The key has to be present on both branches of this leg too.
+    """
+    from evaluatorq.redteam.runner import _create_job_for_target
+
+    backend = _MappingBackend(_StubTarget(AgentResponse(text='benign answer')))
+    monkeypatch.setattr('evaluatorq.redteam.runner.make_agent_backend', lambda **_kwargs: backend)
+
+    job = _create_job_for_target('agent:victim', llm_client=None, system_prompt=None)
+    out = (await job(_datapoint(), 0))['output']
+
+    assert 'error' in out
+    assert out['error'] is None
+    assert out['response'] == 'benign answer'
+
+
+async def test_static_leg_without_a_backend_mapper_falls_back_to_target_error() -> None:
+    """The documented ``default_map_error`` fallback — the contrast case for the wiring test."""
+    from evaluatorq.redteam.runner import _create_static_job_for_agent_target
+
+    job = _create_static_job_for_agent_target(lambda: _RaisingTarget(), 'lbl')
+    out = (await job(_datapoint(), 0))['output']
+
+    assert out['error_code'] == 'target_error'
+    assert out['error'] is not None
+    assert 'backend exploded' in out['error']

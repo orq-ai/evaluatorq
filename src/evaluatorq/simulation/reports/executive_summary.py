@@ -121,9 +121,16 @@ async def populate_run_executive_summary(
         max_tokens=EXECUTIVE_SUMMARY_MAX_TOKENS,
         purpose='executive_summary',
     ):
-        run.executive_summary = await generate_executive_summary(
+        summary = await generate_executive_summary(
             build_sim_facts(run.results),
             llm_client=resolved.client,
             model=model,
             system_prompt=SIM_EXECUTIVE_SUMMARY_SYSTEM_PROMPT,
         )
+        run.executive_summary = summary.text
+        # Last usage-producing step in a run, so folding it in here in place is what
+        # keeps run.token_usage_total from going stale.
+        if summary.usage is not None:
+            from evaluatorq.common.structured_output import sum_structured_usage
+
+            run.token_usage_total = sum_structured_usage([run.token_usage_total, summary.usage])

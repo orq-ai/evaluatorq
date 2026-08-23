@@ -82,20 +82,17 @@ def _tail(name: str) -> str:
 # assertion below exists so growing it is a deliberate, visible edit.
 LLM_CALL_ALLOW = frozenset({
     'common/llm_call.py',  # canonical
-    'common/structured_output.py',  # canonical for schema output
     'openresponses/target.py',  # Responses API transport
     'redteam/backends/openai.py',  # backend transport
     'redteam/backends/orq.py',  # backend transport
     'redteam/adaptive/blackbox_classifier.py',
     'redteam/adaptive/tool_chaining.py',
-    'simulation/agents/base.py',
     'simulation/generators/first_message_generator.py',
-    'common/reports/executive_summary.py',
 })
 
 
 def test_llm_call_allowlist_does_not_grow() -> None:
-    assert len(LLM_CALL_ALLOW) == 10, (
+    assert len(LLM_CALL_ALLOW) == 7, (
         'LLM_CALL_ALLOW changed size. Removing an entry (good) means lowering this '
         'number; adding one means a new direct call site slipped in — route it '
         'through evaluatorq.common.llm_call instead.'
@@ -238,3 +235,52 @@ def test_hand_written_properties_detector_actually_fires() -> None:
     # An empty properties dict is "no parameters", not a hand-rolled schema —
     # this is the real shape at simulation/agents/base.py's Responses fallback.
     assert _hand_written_properties_dict_lines('x = {"type": "object", "properties": {}}') == []
+
+
+# --- usage harvested off a raised exception -------------------------------
+# `generate_structured` bills its rungs before it raises, so a failed structured
+# call still cost money. Five modules each read the attribute directly, each with
+# its own copy of the rationale; `usage_from_exception` is now the one place that
+# rule is written down.
+USAGE_HARVEST_ALLOW = frozenset({
+    'common/structured_output.py',  # canonical
+})
+
+
+def _getattr_usage_sites() -> list[str]:
+    """``path:line`` for every ``getattr(<caught exception>, 'usage', ...)`` in the package.
+
+    Scoped to names bound by an ``except ... as`` in the same file. Reading
+    ``usage`` off a *response* is a different thing and stays allowed.
+    """
+    sites: list[str] = []
+    for path in sorted(SRC.rglob('*.py')):
+        rel = path.relative_to(SRC).as_posix()
+        if rel in USAGE_HARVEST_ALLOW:
+            continue
+        tree = ast.parse(path.read_text(encoding='utf-8'))
+        caught = {n.name for n in ast.walk(tree) if isinstance(n, ast.ExceptHandler) and n.name}
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == 'getattr'
+                and len(node.args) >= 2
+                and isinstance(node.args[0], ast.Name)
+                and node.args[0].id in caught
+                and isinstance(node.args[1], ast.Constant)
+                and node.args[1].value == 'usage'
+            ):
+                sites.append(f'{rel}:{node.lineno}')
+    return sites
+
+
+def test_exception_usage_goes_through_the_shared_helper() -> None:
+    sites = _getattr_usage_sites()
+    assert not sites, (
+        "getattr(<caught exception>, 'usage') outside the shared helper: "
+        + ', '.join(sites)
+        + '. Use evaluatorq.common.structured_output.usage_from_exception — it owns '
+        'the harvest rule (why getattr rather than an except clause, and when the '
+        'exception carries no total so the result must not be double-counted).'
+    )

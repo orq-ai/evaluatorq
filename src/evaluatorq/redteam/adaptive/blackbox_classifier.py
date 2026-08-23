@@ -105,11 +105,10 @@ PROBES: dict[str, list[str]] = {
     ],
 }
 
-# Total probe-turn budget across all groups. Guards the "each probe is a live
-# call" cost even if PROBES is edited upward. Kept above the current probe-turn
-# count (7) so every group is always sent; a raise here needs a matching review
-# of which group would be starved if the sum exceeds it.
-MAX_PROBE_TURNS = 8
+# Total probe-turn budget across all groups. Sourced from LLMConfig rather than
+# restated so the two cannot drift, and kept above the current probe count (7) so
+# no group is starved.
+MAX_PROBE_TURNS: int = LLMConfig.model_fields['max_probe_turns'].default
 
 
 class BlackboxAgentCapabilities(AgentCapabilities):
@@ -211,6 +210,7 @@ async def _run_probes(
     *,
     target_agent_timeout_ms: int,
     max_target_retries: int,
+    max_probe_turns: int = MAX_PROBE_TURNS,
 ) -> tuple[list[Message], set[str]]:
     """Send the probe turns to the agent and collect the running transcript.
 
@@ -284,19 +284,19 @@ async def _run_probes(
     # running it last also gives eventually-consistent stores time to index.
     memory_write_probe, memory_recall_probe = PROBES['memory']
     write_ok = False
-    if turns < MAX_PROBE_TURNS:
+    if turns < max_probe_turns:
         write_ok = await _send(memory_write_probe, 'memory', transcript)
     for group, probes in PROBES.items():
         if group == 'memory':
             continue
         for probe in probes:
-            if turns >= MAX_PROBE_TURNS:
-                logger.debug('Blackbox probe budget ({}) reached; stopping', MAX_PROBE_TURNS)
+            if turns >= max_probe_turns:
+                logger.debug('Blackbox probe budget ({}) reached; stopping', max_probe_turns)
                 break
             await _send(probe, group, transcript)
     recall_ok = False
     # A recall without a successful write tests nothing, so it is skipped.
-    if write_ok and turns < MAX_PROBE_TURNS:
+    if write_ok and turns < max_probe_turns:
         # The recall runs on a FRESH TARGET INSTANCE, not just a fresh message
         # list: targets like ORQAgentTarget thread server-side conversation
         # state via a per-instance task id and forward only the last turn, so a
@@ -377,10 +377,7 @@ async def _judge_transcript(
             model=model,
             messages=judge_messages,
             response_format=BlackboxCapabilityInference,
-            temperature=cfg.attacker.temperature,
-            max_completion_tokens=cfg.attacker.max_tokens,
-            extra_body=cfg.retry_extra_body(llm_client),
-            **cfg.attacker.extra_kwargs,
+            **cfg.attacker.request_params(api='chat_completions', extra_body=cfg.retry_extra_body(llm_client)),
         )
         parsed = response.choices[0].message.parsed
         record_llm_response(
@@ -439,6 +436,7 @@ async def classify_agent_capabilities_blackbox(
         agent_target,
         target_agent_timeout_ms=cfg.target_agent_timeout_ms,
         max_target_retries=cfg.max_target_retries,
+        max_probe_turns=cfg.max_probe_turns,
     )
 
     # Mechanism error: every probe turn raised, so there is nothing to judge.

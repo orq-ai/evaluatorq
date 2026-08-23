@@ -40,6 +40,9 @@ Targets — provide **exactly one**:
 | `--llm-parallelism` | `int` / unset | Ceiling on in-flight LLM requests for the whole run. |
 | `--num-personas` | `int` / `5` | Number of personas to generate. |
 | `--num-scenarios` | `int` / `5` | Number of scenarios to generate. |
+| `--persona-seed` | `str` (repeatable) / `None` | Archetype seed for a persona, e.g. `"angry retiree"` (repeatable). Each seed becomes one persona the LLM fleshes out — overrides `--num-personas`. Omit to auto-generate. |
+| `--scenario-seed` | `str` (repeatable) / `None` | Situation seed for a scenario, e.g. `"disputes a refund denial"` (repeatable). Each seed becomes one scenario — overrides `--num-scenarios`. Omit to auto-generate. |
+| `--target-reasoning-effort` | `str \| None` / `None` | Reasoning effort pinned on the target agent under test (`agent:<key>` targets only). Distinct from the user-simulator's and judge's own reasoning effort, which comes from `EVALUATORQ_REASONING_EFFORT` — see [Tuning](../tuning.md). |
 | `--evaluator` | `str` (repeatable) / API defaults | Evaluator name(s). Repeatable. |
 | `--no-save` | `bool` / `False` | Skip writing to `.evaluatorq/sim-runs/`. |
 | `--recommendations` / `--no-recommendations` | `bool` / `True` | Generate LLM remediation suggestions for failures, tied to their concrete cause. On by default; `--no-recommendations` skips the extra LLM call. Uses `--sim-model`. |
@@ -66,6 +69,10 @@ eq sim simulate --input dp.jsonl --target agent:<key>
 Targets — same three flags as `eq sim run`. Provide exactly one of four input
 sources: `--input` (`-i`), `--dataset-id`, `--experiment-id` (optionally narrowed
 by `--experiment-run-id`), or `--from-run`.
+
+There is no `--target-reasoning-effort` here — it is a `eq sim run` flag only. To
+pin the target's reasoning effort on a pre-built datapoint set, call `simulate()`
+with `target_reasoning_effort=` from Python (see [Tuning](../tuning.md)).
 
 | Flag | Type / Default | Description |
 |---|---|---|

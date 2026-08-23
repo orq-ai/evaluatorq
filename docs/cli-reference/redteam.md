@@ -26,8 +26,14 @@ eq redteam run --target agent:<key> [OPTIONS]
 | `--attack-model` | `str` / `openai/gpt-5.6-luna` | Model for adversarial prompt generation. |
 | `--attacker-instructions` | `str \| None` / `None` | Domain-specific context to steer attack generation. |
 | `--evaluator-model` | `str` / `openai/gpt-5.6-luna` | Model for OWASP evaluation scoring. |
+| `--min-evaluation-coverage` | `float` / `0.8` | Fraction of attacks that must produce a verdict, else exit non-zero. `0` warns instead of failing; a run where nothing could be scored still exits non-zero regardless. See **Exit codes** below. |
 | `--datapoint-parallelism` | `int` / `10` | Maximum concurrent datapoints/jobs. `--parallelism` is a deprecated alias. |
 | `--llm-parallelism` | `int` / unset | Ceiling on in-flight LLM requests for the whole run. |
+| `--target-timeout-ms` | `int` / `240000` | Per-call timeout (ms) for target invocations. Raise it for a slow self-hosted or tool-heavy target. |
+| `--max-target-retries` | `int` (0–10) / `2` | Retries for a failed target *transport* call before abandoning its attacker turn. A retry never consumes a new attacker turn or changes the transcript. Distinct from `--retry-count`. |
+| `--retry-count` | `int` (0–10) / `3` | Retries (after the initial call) for pipeline-owned LLM calls and Orq context/enrichment/cleanup — the attacker and generator calls, not the target. `0` disables. |
+| `--max-tool-continuations` | `int` / `5` | Maximum client-driven tool-result continuation rounds for Orq agents that emit `pending_tool_calls`. |
+| `--target-reasoning-effort` | `str \| None` / `None` | Reasoning effort pinned on the **target agent under test** (Responses-capable targets only). Accepted values differ per model; an unsupported one is rejected by the provider. Distinct from the attacker's and judge's own reasoning effort — see [Tuning](../tuning.md). |
 | `--generated-strategy-count` | `int` / `2` | Number of LLM-generated strategies per category. |
 | `--no-generate-strategies` | `bool` / `False` | Disable LLM-based strategy generation. |
 | `--max-dynamic-datapoints` | `int \| None` / `None` | Cap dynamically generated datapoints. |

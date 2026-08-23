@@ -1360,6 +1360,9 @@ async def test_executive_summary_emits_llm_span(span_collector: _CollectingExpor
     client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=_create)))
     run = SimpleNamespace(
         executive_summary=None,
+        # The summary is the last usage-producing step and folds its cost into
+        # this field in place, so the stand-in must carry it.
+        token_usage_total=None,
         results=[SimpleNamespace(goal_achieved=True, rules_broken=[], reason='')],
     )
 

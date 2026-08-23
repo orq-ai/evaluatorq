@@ -508,3 +508,54 @@ async def test_raising_callback_target_retried_then_terminates_with_error() -> N
     assert result.terminated_by == TerminatedBy.error
     assert any(m.role == 'assistant' for m in result.messages)
     assert result.metadata.get('error')
+
+
+async def test_run_with_timeout_accepts_and_stamps_thread_id() -> None:
+    """F4: _run_with_timeout previously had no thread_id parameter, so the
+    per-row simulate() path could not route through it without losing the
+    deterministic Orq thread id."""
+    target = _HangSecond()
+    runner = SimulationRunner(
+        target_agent=target,
+        max_target_retries=0,
+        target_agent_timeout_ms=60000,
+        user_simulator=_make_mock_user_simulator(),
+        judge=_make_continue_judge(),
+    )
+
+    result = await runner._run_with_timeout(
+        _make_datapoint(), max_turns=5, timeout_s=0.3, thread_id="fixed-thread-id"
+    )
+
+    assert result.terminated_by == TerminatedBy.timeout
+    assert result.thread_id == "fixed-thread-id"
+
+
+async def test_run_with_timeout_disabled_still_accepts_thread_id() -> None:
+    """timeout_s<=0 (the simulate() default) falls through to plain run(); the
+    thread_id must still reach it so the dashboard deep-link is unaffected."""
+    judge = _make_continue_judge()
+
+    async def _respond(messages: list[Message]) -> AgentResponse:
+        return AgentResponse(text="ok")
+
+    from evaluatorq.contracts import AgentTarget
+
+    class _FastTarget(AgentTarget):
+        def new(self) -> "_FastTarget":
+            return _FastTarget()
+
+        async def respond(self, messages: list[Message]) -> AgentResponse:
+            return await _respond(messages)
+
+    runner = SimulationRunner(
+        target_agent=_FastTarget(),
+        max_target_retries=0,
+        user_simulator=_make_mock_user_simulator(),
+        judge=judge,
+    )
+
+    result = await runner._run_with_timeout(
+        _make_datapoint(), max_turns=1, timeout_s=0, thread_id="fixed-thread-id-2"
+    )
+    assert result.thread_id == "fixed-thread-id-2"

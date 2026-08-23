@@ -1243,12 +1243,10 @@ def _render_technical_analysis(report: RedTeamReport, summary: ReportSummary) ->
 
     st.divider()
 
-    # Severity + Turn Type + Domain (only show panels with data)
+    # Severity + Domain (only show panels with data)
     breakdown_panels = []
     if summary.by_severity:
         breakdown_panels.append('severity')
-    if summary.by_turn_type:
-        breakdown_panels.append('turn_type')
     if summary.by_domain:
         breakdown_panels.append('domain')
 
@@ -1292,24 +1290,6 @@ def _render_technical_analysis(report: RedTeamReport, summary: ReportSummary) ->
                         margin=dict(l=20, r=20, t=10, b=20),
                     )
                     st.plotly_chart(fig, width='stretch')
-
-                elif bd_key == 'turn_type':
-                    st.subheader('By Turn Type')
-                    names = list(summary.by_turn_type.keys())
-                    totals = [v.total_attacks for v in summary.by_turn_type.values()]
-                    fig = go.Figure(
-                        go.Pie(
-                            labels=names,
-                            values=totals,
-                            marker_colors=QUALITATIVE[: len(names)],
-                            textinfo='label+value',
-                            hole=0.4,
-                        )
-                    )
-                    fig.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10), showlegend=False)
-                    st.plotly_chart(fig, width='stretch')
-                    for name, tt in summary.by_turn_type.items():
-                        st.caption(f'{name}: {pct(tt.vulnerability_rate)} vuln rate')
 
                 elif bd_key == 'domain':
                     st.subheader('By Domain')
@@ -1379,7 +1359,6 @@ def _render_interactive_breakdown(results: list[RedTeamResult], summary: ReportS
         'severity': 'Severity',
         'attack_technique': 'Attack Technique',
         'delivery_method': 'Delivery Method',
-        'turn_type': 'Turn Type',
         'source': 'Source',
     }
     dimensions = list(dim_labels.keys())
@@ -1418,8 +1397,6 @@ def _render_interactive_breakdown(results: list[RedTeamResult], summary: ReportS
                 if r.attack.delivery_methods
                 else 'unknown'
             )
-        if dim == 'turn_type':
-            return r.attack.turn_type.value if r.attack.turn_type else 'unknown'
         if dim == 'source':
             return r.attack.source
         return 'unknown'
@@ -1877,12 +1854,6 @@ def _render_data_explorer(report: RedTeamReport, summary: ReportSummary) -> None
             'Severity',
             f'{len(summary.by_severity)} unique',
             {k: v.total_attacks for k, v in summary.by_severity.items()},
-        ))
-    if summary.by_turn_type:
-        dimensions.append((
-            'Turn Type',
-            f'{len(summary.by_turn_type)} unique',
-            {k: v.total_attacks for k, v in summary.by_turn_type.items()},
         ))
     if summary.by_domain:
         dimensions.append((

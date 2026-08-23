@@ -346,58 +346,6 @@ class TestCreateOWASPEvaluatorLlmClient:
 
 
 # ---------------------------------------------------------------------------
-# 6. create_model_job — threads llm_client into router_job closure
-# ---------------------------------------------------------------------------
-
-class TestCreateModelJobLlmClient:
-    """Verify create_model_job uses provided llm_client in router_job."""
-
-    @pytest.mark.asyncio
-    @patch('evaluatorq.redteam.runtime.jobs.create_async_llm_client')
-    async def test_router_job_uses_custom_client(self, mock_create):
-        from evaluatorq import DataPoint
-        from evaluatorq.redteam.runtime.jobs import create_model_job
-
-        custom_client = AsyncMock(spec=AsyncOpenAI)
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = 'response text'
-        mock_response.choices[0].finish_reason = 'stop'
-        mock_response.usage = None
-        custom_client.chat.completions.create = AsyncMock(return_value=mock_response)
-
-        job_fn = create_model_job(model='gpt-4o', llm_client=custom_client)
-        data = DataPoint(inputs={'messages': [{'role': 'user', 'content': 'hello'}]})
-        result = await job_fn(data, 0)
-
-        custom_client.chat.completions.create.assert_awaited_once()
-        mock_create.assert_not_called()
-        assert result['output']['response'] == 'response text'
-
-    @pytest.mark.asyncio
-    @patch('evaluatorq.redteam.runtime.jobs.create_async_llm_client')
-    async def test_router_job_falls_back_when_no_client(self, mock_create):
-        from evaluatorq import DataPoint
-        from evaluatorq.redteam.runtime.jobs import create_model_job
-
-        fallback_client = AsyncMock(spec=AsyncOpenAI)
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = 'fallback response'
-        mock_response.choices[0].finish_reason = 'stop'
-        mock_response.usage = None
-        fallback_client.chat.completions.create = AsyncMock(return_value=mock_response)
-        mock_create.return_value = fallback_client
-
-        job_fn = create_model_job(model='gpt-4o', llm_client=None)
-        data = DataPoint(inputs={'messages': [{'role': 'user', 'content': 'hello'}]})
-        result = await job_fn(data, 0)
-
-        mock_create.assert_called_once()
-        assert result['output']['response'] == 'fallback response'
-
-
-# ---------------------------------------------------------------------------
 # 7. red_team() → _run_static — llm_client is forwarded
 # ---------------------------------------------------------------------------
 

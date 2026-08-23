@@ -16,10 +16,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, BadRequestError
 
 from evaluatorq.contracts import AgentResponse, LLMCallConfig, Message
 from evaluatorq.openresponses.target import OrqResponsesTarget
+
+
+def _bad_request(message: str) -> BadRequestError:
+    request = httpx.Request("POST", "https://my.orq.ai/v3/router/responses")
+    response = httpx.Response(400, request=request)
+    return BadRequestError(message, response=response, body={"error": {"message": message}})
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -106,12 +112,16 @@ def _make_target(
     client: Any | None = None,
     instructions: str | None = None,
     timeout_ms: int = 30_000,
+    tools: list[dict[str, Any]] | None = None,
+    retry_attempts: int = 1,
 ) -> OrqResponsesTarget:
     """Create an OrqResponsesTarget with an injected mock client."""
     if client is None:
         client = _make_client()
     config = LLMCallConfig(model="gpt-4o", timeout_ms=timeout_ms)
-    return OrqResponsesTarget(config, instructions=instructions, client=client)
+    return OrqResponsesTarget(
+        config, instructions=instructions, tools=tools, client=client, retry_attempts=retry_attempts
+    )
 
 
 def _responses_http_response(
@@ -478,6 +488,17 @@ class TestOrqResponsesTargetNew:
         target = OrqResponsesTarget(LLMCallConfig(model="gpt-4o"), tools=tools, client=client)
         assert target.new().tools == target.tools
 
+    def test_default_is_a_single_attempt(self):
+        """`call_target_with_retry` owns the target retry budget on every surface.
+
+        A default > 1 here multiplies against that outer budget instead of adding
+        to it — 5 inner attempts under 3 outer ones is 15 calls to a target that
+        is already refusing.
+        """
+        target = OrqResponsesTarget(LLMCallConfig(model="gpt-4o"), client=_make_client())
+        assert target.retry_attempts == 1
+        assert target.new().retry_attempts == 1
+
     def test_new_preserves_retry_settings(self):
         client = _make_client()
         target = OrqResponsesTarget(
@@ -572,6 +593,69 @@ class TestOrqResponsesTargetMemory:
         assert "extra_body" not in client.responses.create.call_args.kwargs
 
 
+class TestOrqResponsesTargetExtraBodyPrecedence:
+    """A config-supplied ``extra_body`` key must win over the router body
+    (``thread``/``memory``) on a clash, while a router key the config does not
+    mention must still reach the request. See CLAUDE.md: "Caller-supplied
+    values win merges."
+    """
+
+    @pytest.mark.asyncio
+    async def test_config_extra_body_key_wins_over_router_key(self):
+        from evaluatorq.common.thread_context import conversation_thread
+
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="agent/support", extra_body={"memory": {"entity_id": "tenant-A"}}),
+            memory_entity_id="auto-minted-id",
+            client=client,
+        )
+
+        with conversation_thread("thread-xyz"):
+            await target.respond(_make_messages())
+
+        extra_body = client.responses.create.call_args.kwargs["extra_body"]
+        # config's memory scope wins over the auto-minted memory_entity_id the
+        # router body would otherwise have set
+        assert extra_body["memory"] == {"entity_id": "tenant-A"}
+
+    @pytest.mark.asyncio
+    async def test_router_only_key_survives_when_config_does_not_mention_it(self):
+        from evaluatorq.common.thread_context import conversation_thread
+
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="agent/support", extra_body={"unrelated": "value"}),
+            client=client,
+        )
+
+        with conversation_thread("thread-xyz"):
+            await target.respond(_make_messages())
+
+        extra_body = client.responses.create.call_args.kwargs["extra_body"]
+        assert extra_body["thread"] == {"id": "thread-xyz"}
+        assert extra_body["unrelated"] == "value"
+
+    @pytest.mark.asyncio
+    async def test_router_body_still_sent_when_config_extra_body_is_empty(self):
+        """Common path: config sets no extra_body at all — body_extra must
+        still reach the request (the falsy-``self.extra_body`` early return in
+        ``_merge_extra_body`` must not swallow the call-site body)."""
+        from evaluatorq.common.thread_context import conversation_thread
+
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(LLMCallConfig(model="agent/support"), client=client)
+
+        with conversation_thread("thread-xyz"):
+            await target.respond(_make_messages())
+
+        extra_body = client.responses.create.call_args.kwargs["extra_body"]
+        assert extra_body["thread"] == {"id": "thread-xyz"}
+
+
 # ---------------------------------------------------------------------------
 # instructions / tools forwarding
 # ---------------------------------------------------------------------------
@@ -625,6 +709,141 @@ class TestOrqResponsesTargetTools:
         target_empty = OrqResponsesTarget(config, tools=[], client=client)
         await target_empty.respond(_make_messages())
         assert "tools" not in client.responses.create.call_args.kwargs
+
+
+class TestOrqResponsesTargetConfigParams:
+    @pytest.mark.asyncio
+    async def test_temperature_reaches_the_request(self):
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(LLMCallConfig(model="gpt-4o", temperature=0.3), client=client)
+
+        await target.respond(_make_messages())
+
+        assert client.responses.create.call_args.kwargs["temperature"] == 0.3
+
+    @pytest.mark.asyncio
+    async def test_extra_kwargs_reach_the_request(self):
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o", extra_kwargs={"top_p": 0.5, "store": True}),
+            client=client,
+        )
+
+        await target.respond(_make_messages())
+
+        kwargs = client.responses.create.call_args.kwargs
+        assert kwargs["top_p"] == 0.5
+        assert kwargs["store"] is True
+
+    @pytest.mark.asyncio
+    async def test_extra_kwargs_override_computed_values(self):
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o", temperature=0.3, extra_kwargs={"temperature": 0.9}),
+            client=client,
+        )
+
+        await target.respond(_make_messages())
+
+        assert client.responses.create.call_args.kwargs["temperature"] == 0.9
+
+    @pytest.mark.asyncio
+    async def test_extra_kwargs_cannot_replace_extra_body(self):
+        """``extra_body`` is a reserved structural key — it carries the internally
+        computed thread/memory router body, so a caller-supplied value must be
+        rejected rather than silently clobbering it."""
+        client = _make_client()
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o", extra_kwargs={"extra_body": {"malicious": True}}),
+            client=client,
+        )
+
+        with pytest.raises(ValueError, match="extra_body"):
+            await target.respond(_make_messages())
+
+        client.responses.create.assert_not_awaited()
+
+
+class TestOrqResponsesTargetReasoningEffort:
+    @pytest.mark.asyncio
+    async def test_reasoning_effort_forwarded_when_set(self):
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o", reasoning_effort="high"), client=client
+        )
+
+        await target.respond(_make_messages())
+
+        assert client.responses.create.call_args.kwargs["reasoning"] == {"effort": "high"}
+
+    @pytest.mark.asyncio
+    async def test_reasoning_omitted_when_unset(self):
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(LLMCallConfig(model="gpt-4o"), client=client)
+
+        await target.respond(_make_messages())
+
+        assert "reasoning" not in client.responses.create.call_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_reasoning_rejection_drops_and_retries_once(self):
+        """A 400 naming ``reasoning`` is dropped and retried once, like execute_response."""
+        client = _make_client()
+        rejection = _bad_request("Unsupported parameter: 'reasoning' is not supported with this model.")
+        good = _make_response(response_id="resp-after-drop")
+        client.responses.create = AsyncMock(side_effect=[rejection, good])
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o-mini", reasoning_effort="high"), client=client
+        )
+
+        result = await target.respond(_make_messages())
+
+        assert client.responses.create.await_count == 2
+        first_kwargs, second_kwargs = (c.kwargs for c in client.responses.create.call_args_list)
+        assert first_kwargs["reasoning"] == {"effort": "high"}
+        assert "reasoning" not in second_kwargs
+        assert result.model == "gpt-4o-mini" or result is not None
+
+    @pytest.mark.asyncio
+    async def test_unrelated_bad_request_propagates_without_retry(self):
+        """A 400 that does not name ``reasoning`` in the error body must not be swallowed."""
+        client = _make_client()
+        unrelated = _bad_request("Invalid value for 'temperature': must be between 0 and 2.")
+        client.responses.create = AsyncMock(side_effect=unrelated)
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o-mini", reasoning_effort="high"), client=client
+        )
+
+        with pytest.raises(BadRequestError):
+            await target.respond(_make_messages())
+
+        assert client.responses.create.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_memoized_rejection_strips_reasoning_up_front_on_next_call(self):
+        """After one rejection, a later call on the same target never re-sends ``reasoning``."""
+        client = _make_client()
+        rejection = _bad_request("Unsupported parameter: 'reasoning'.")
+        good = _make_response()
+        client.responses.create = AsyncMock(side_effect=[rejection, good, good])
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o-mini-memo", reasoning_effort="high"), client=client
+        )
+
+        await target.respond(_make_messages())
+        client.responses.create.reset_mock()
+        client.responses.create.side_effect = None
+        client.responses.create.return_value = good
+
+        await target.respond(_make_messages())
+
+        assert client.responses.create.await_count == 1
+        assert "reasoning" not in client.responses.create.call_args.kwargs
 
 
 # ---------------------------------------------------------------------------
@@ -711,12 +930,31 @@ class TestOrqResponsesTargetRetry:
         )
         good = _make_response(response_id="resp-after-retry")
         client.responses.create = AsyncMock(side_effect=[rate_limit, good])
-        target = _make_target(client=client)
+        # Opt-in: the default is a single attempt because call_target_with_retry
+        # owns the budget. Raising it is for callers driving respond() directly.
+        target = _make_target(client=client, retry_attempts=2)
 
         result = await target.respond(_make_messages())
 
         assert client.responses.create.await_count == 2
         assert isinstance(result, AgentResponse)
+
+    @pytest.mark.asyncio
+    async def test_does_not_retry_by_default(self, monkeypatch):
+        """The default must not stack under `call_target_with_retry`."""
+        from openai import APIStatusError
+
+        monkeypatch.setattr("evaluatorq.common.retry.asyncio.sleep", AsyncMock(return_value=None))
+
+        client = _make_client()
+        rate_limit = APIStatusError("rate limited", response=MagicMock(status_code=429, headers={}), body=None)
+        client.responses.create = AsyncMock(side_effect=rate_limit)
+        target = _make_target(client=client)
+
+        with pytest.raises(APIStatusError):
+            await target.respond(_make_messages())
+
+        assert client.responses.create.await_count == 1
 
     @pytest.mark.asyncio
     async def test_does_not_retry_on_non_retryable_error(self, monkeypatch):
@@ -834,3 +1072,42 @@ class TestOrqResponsesTargetClose:
             assert t._client_owned is True
 
         owned_client.close.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# agent context
+# ---------------------------------------------------------------------------
+
+
+class TestOrqResponsesTargetAgentContext:
+    @pytest.mark.asyncio
+    async def test_agent_context_carries_instructions(self):
+        target = _make_target(client=_make_client(), instructions="You are a cow.")
+
+        ctx = await target.get_agent_context()
+
+        assert ctx.instructions == "You are a cow."
+        assert ctx.key == target.config.model
+
+    @pytest.mark.asyncio
+    async def test_agent_context_instructions_empty_when_none(self):
+        target = _make_target(client=_make_client(), instructions=None)
+
+        assert (await target.get_agent_context()).instructions == ""
+
+    @pytest.mark.asyncio
+    async def test_agent_context_maps_tools(self):
+        target = _make_target(
+            client=_make_client(),
+            tools=[
+                {"type": "function", "name": "refund", "description": "Issue refund", "parameters": {"x": 1}},
+                {"type": "function", "function": {"name": "lookup", "description": "Find order"}},
+                {"type": "web_search"},
+            ],
+        )
+
+        ctx = await target.get_agent_context()
+
+        assert [t.name for t in ctx.tools] == ["refund", "lookup", "web_search"]
+        assert ctx.tools[0].parameters == {"x": 1}
+        assert ctx.tools[1].description == "Find order"

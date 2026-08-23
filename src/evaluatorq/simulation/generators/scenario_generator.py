@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.structured_output import token_budget_for_items
+from evaluatorq.simulation._usage import UsageTracking
 from evaluatorq.simulation.types import (
     DEFAULT_MODEL,
     Criterion,
@@ -191,7 +192,7 @@ def _parse_scenarios(scenario_dicts: list[dict[str, Any]]) -> list[Scenario]:
     return scenarios
 
 
-class ScenarioGenerator:
+class ScenarioGenerator(UsageTracking):
     """Generates scenarios from agent descriptions."""
 
     def __init__(
@@ -209,6 +210,7 @@ class ScenarioGenerator:
             extra_api_key=api_key,
             max_retries=0,
         )
+        self.reset_usage()
 
     async def close(self) -> None:
         """Close the HTTP client (only if this generator built it)."""
@@ -276,7 +278,7 @@ Return ONLY a JSON array, no other text."""
                     {'role': 'user', 'content': user_prompt},
                 ]
 
-                parsed, raw = await generate_structured(
+                result = await generate_structured(
                     self._client,
                     model=self._model,
                     messages=messages,
@@ -286,6 +288,8 @@ Return ONLY a JSON array, no other text."""
                     label='ScenarioGenerator.generate',
                     api='responses',
                 )
+                self._accumulate(result.usage)
+                parsed, raw = result.parsed, result.raw
 
                 if parsed is not None:
                     scenarios = parsed.scenarios
@@ -354,7 +358,7 @@ Return ONLY a JSON array, no other text."""
                     'orq.simulation.model': self._model,
                 },
             ):
-                parsed, raw = await generate_structured(
+                result = await generate_structured(
                     self._client,
                     model=self._model,
                     messages=messages,
@@ -364,6 +368,8 @@ Return ONLY a JSON array, no other text."""
                     label='ScenarioGenerator.generate_with_coverage',
                     api='responses',
                 )
+                self._accumulate(result.usage)
+                parsed, raw = result.parsed, result.raw
 
                 if parsed is not None:
                     scenarios = parsed.scenarios
@@ -430,7 +436,7 @@ Return ONLY a JSON array, no other text."""
                     'orq.simulation.model': self._model,
                 },
             ):
-                parsed, raw = await generate_structured(
+                result = await generate_structured(
                     self._client,
                     model=self._model,
                     messages=messages,
@@ -440,6 +446,8 @@ Return ONLY a JSON array, no other text."""
                     label='ScenarioGenerator.generate_edge_cases',
                     api='responses',
                 )
+                self._accumulate(result.usage)
+                parsed, raw = result.parsed, result.raw
 
                 if parsed is not None:
                     scenarios = [s.model_copy(update={'is_edge_case': True}) for s in parsed.scenarios]
@@ -497,7 +505,7 @@ Return ONLY a JSON array, no other text."""
                     'orq.simulation.model': self._model,
                 },
             ):
-                parsed, raw = await generate_structured(
+                result = await generate_structured(
                     self._client,
                     model=self._model,
                     messages=messages,
@@ -507,6 +515,8 @@ Return ONLY a JSON array, no other text."""
                     label='ScenarioGenerator.generate_boundary_scenarios',
                     api='responses',
                 )
+                self._accumulate(result.usage)
+                parsed, raw = result.parsed, result.raw
 
                 if parsed is not None:
                     scenarios = [s.model_copy(update={'is_edge_case': True}) for s in parsed.scenarios]
@@ -577,7 +587,7 @@ Return ONLY a JSON array, no other text."""
                     'orq.simulation.model': self._model,
                 },
             ):
-                parsed, raw = await generate_structured(
+                result = await generate_structured(
                     self._client,
                     model=self._model,
                     messages=messages,
@@ -587,6 +597,8 @@ Return ONLY a JSON array, no other text."""
                     label='ScenarioGenerator.generate_security_scenarios',
                     api='responses',
                 )
+                self._accumulate(result.usage)
+                parsed, raw = result.parsed, result.raw
 
                 if parsed is not None:
                     scenarios = [s.model_copy(update={'is_edge_case': True}) for s in parsed.scenarios]

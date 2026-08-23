@@ -121,3 +121,22 @@ def test_memory_entity_id_rejected_for_instance_target() -> None:
 
     with pytest.raises(ValueError, match="memory_entity_id"):
         _resolve_target(_StubTarget(), memory_entity_id="sim-e1")
+
+
+def test_target_reasoning_effort_reaches_agent_config() -> None:
+    """simulate()'s target_reasoning_effort must reach the built agent's
+    LLMCallConfig -- the simulation counterpart of red team's
+    LLMConfig.target_reasoning_effort (F5)."""
+    from evaluatorq.openresponses.target import OrqResponsesTarget
+
+    _, agent, _ = _resolve_target("agent:support", target_reasoning_effort="high")
+    assert isinstance(agent, OrqResponsesTarget)
+    assert agent.config.reasoning_effort == "high"
+
+
+def test_target_reasoning_effort_defaults_to_none() -> None:
+    from evaluatorq.openresponses.target import OrqResponsesTarget
+
+    _, agent, _ = _resolve_target("agent:support")
+    assert isinstance(agent, OrqResponsesTarget)
+    assert agent.config.reasoning_effort is None

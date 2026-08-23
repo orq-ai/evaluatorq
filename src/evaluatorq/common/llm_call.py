@@ -5,6 +5,12 @@ Owns ONLY: params assembly, input/response span recording, W3C trace-header
 injection, the timed ``create`` call, and token-usage extraction. Does NOT own the
 span (caller opens its own domain ``with_llm_span`` and passes it in), retry (caller
 wraps with ``with_retry`` if desired), or parsing/result-shaping.
+
+``extra_body`` is a **dedicated parameter, not an ``extra_kwargs`` key**. It carries
+the Orq router body (retry policy, thread/memory ids), which is owned by the call
+site, so `check_reserved_keys` rejects it inside ``extra_kwargs`` — a user routing
+it through there would silently replace the router body rather than add to it.
+Pass the call-site body as ``extra_body=`` and user options as ``extra_kwargs=``.
 """
 
 from __future__ import annotations
@@ -24,7 +30,12 @@ from evaluatorq.common.tracing import (
     record_llm_input,
     record_llm_response,
 )
-from evaluatorq.contracts import TokenUsage
+from evaluatorq.contracts import (
+    _RESERVED_COMPLETION_KEYS,
+    _RESERVED_RESPONSES_KEYS,
+    TokenUsage,
+    check_reserved_keys,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -50,11 +61,16 @@ _REASONING_EFFORT_REJECTORS: set[tuple[str, bool]] = set()
 # Kept as a separate memo so the two param shapes never cross-strip.
 _RESPONSES_REASONING_REJECTORS: set[tuple[str, bool]] = set()
 
+# Triples already announced at WARNING: the first strip is news, later ones are
+# noise on a long run and drop to DEBUG.
+_ANNOUNCED_STRIPS: set[tuple[str, str, bool]] = set()
+
 
 def reset_reasoning_rejectors() -> None:
     """Clear the process-lifetime rejection memos; exists for test isolation."""
     _REASONING_EFFORT_REJECTORS.clear()
     _RESPONSES_REASONING_REJECTORS.clear()
+    _ANNOUNCED_STRIPS.clear()
 
 
 def _reasoning_key(model: str, params: dict[str, Any]) -> tuple[str, bool]:
@@ -62,10 +78,39 @@ def _reasoning_key(model: str, params: dict[str, Any]) -> tuple[str, bool]:
     return (model, bool(params.get('tools')))
 
 
+def _announce_strip(endpoint: str, model: str, key: tuple[str, bool], field: str) -> None:
+    """Say that a configured reasoning setting was dropped before the call.
+
+    Silence here is what made the memo a trap: the 400 warns once, and every call
+    afterwards runs at the provider default while the user still believes their
+    configured effort is in force (and a pre-flight check that inspected the
+    request would report it as sent). Warn the first time for each
+    (endpoint, model, has_tools) key, then debug — a per-call warning across a
+    long run is noise, not signal.
+    """
+    announce_key = (endpoint, model, key[1])
+    if announce_key in _ANNOUNCED_STRIPS:
+        logger.debug('Model %s: %s stripped again (known rejector, tools=%s)', model, field, key[1])
+        return
+    _ANNOUNCED_STRIPS.add(announce_key)
+    logger.warning(
+        'Model %s previously rejected %s (tools=%s); stripping it up front — this call runs at '
+        'the provider default effort, not the configured one',
+        model,
+        field,
+        key[1],
+    )
+
+
 def _strip_known_rejected_reasoning(model: str, params: dict[str, Any]) -> None:
-    """Drop `reasoning_effort` before the call if this (model, has_tools) rejected it."""
-    if _reasoning_key(model, params) in _REASONING_EFFORT_REJECTORS:
-        params.pop('reasoning_effort', None)
+    """Drop `reasoning_effort` before the call if this (model, has_tools) rejected it.
+
+    Logs whenever it actually removes the parameter (see `_announce_strip`); a
+    call that never carried one degrades nothing and stays quiet.
+    """
+    key = _reasoning_key(model, params)
+    if key in _REASONING_EFFORT_REJECTORS and params.pop('reasoning_effort', None) is not None:
+        _announce_strip('chat_completions', model, key, 'reasoning_effort')
 
 
 def _is_reasoning_effort_rejection(params: dict[str, Any], exc: BadRequestError) -> bool:
@@ -79,10 +124,13 @@ def strip_known_rejected_responses_reasoning(model: str, params: dict[str, Any])
 
     Mirrors ``_strip_known_rejected_reasoning`` for the Responses API so a
     non-reasoning model (e.g. gpt-4o-mini) pays the 400 + retry once per process
-    instead of on every judge / user-simulator call.
+    instead of on every judge / user-simulator call. Announces the strip on the
+    same first-warning-then-debug schedule, for the same reason: a silently
+    downgraded call looks identical to one that honoured the request.
     """
-    if _reasoning_key(model, params) in _RESPONSES_REASONING_REJECTORS:
-        params.pop('reasoning', None)
+    key = _reasoning_key(model, params)
+    if key in _RESPONSES_REASONING_REJECTORS and params.pop('reasoning', None) is not None:
+        _announce_strip('responses', model, key, 'the reasoning block')
 
 
 def is_responses_reasoning_rejection(params: dict[str, Any], exc: BadRequestError) -> bool:
@@ -148,9 +196,11 @@ async def execute_chat_completion(
     temperature: float | None = None,
     max_tokens: int | None = None,
     max_completion_tokens: int | None = None,
+    reasoning_effort: str | None = None,
     tools: list[dict[str, Any]] | None = None,
     response_format: dict[str, Any] | None = None,
     inject_trace_headers: bool = True,
+    extra_body: dict[str, Any] | None = None,
     extra_kwargs: dict[str, Any] | None = None,
 ) -> tuple[ChatCompletion, TokenUsage | None]:
     """Execute one Chat Completions call. Records input/response on ``span``.
@@ -165,12 +215,17 @@ async def execute_chat_completion(
         params['max_tokens'] = max_tokens
     if max_completion_tokens is not None:
         params['max_completion_tokens'] = max_completion_tokens
+    if reasoning_effort:
+        params['reasoning_effort'] = reasoning_effort
     if tools:  # truthiness (not `is not None`) for parity with BaseAgent
         params['tools'] = tools
         params['tool_choice'] = 'auto'
     if response_format is not None:
         params['response_format'] = response_format
+    if extra_body:
+        params['extra_body'] = extra_body
     if extra_kwargs:
+        check_reserved_keys(extra_kwargs, _RESERVED_COMPLETION_KEYS)
         params.update(extra_kwargs)
 
     _strip_known_rejected_reasoning(model, params)
@@ -208,10 +263,14 @@ async def execute_chat_parse(
     messages: list[dict[str, Any]],
     span: Span | None,
     timeout_s: float,
-    response_model: type[BaseModel],
+    response_model: type[BaseModel] | None = None,
     temperature: float | None = None,
     max_completion_tokens: int | None = None,
+    reasoning_effort: str | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: Any | None = None,
     inject_trace_headers: bool = True,
+    extra_body: dict[str, Any] | None = None,
     extra_kwargs: dict[str, Any] | None = None,
 ) -> tuple[ParsedChatCompletion[Any], TokenUsage | None]:
     """Execute one structured Chat Completions call via ``.parse``.
@@ -220,13 +279,33 @@ async def execute_chat_parse(
     reasoning_effort drop-retry) but routes through ``client.chat.completions.parse``
     with a Pydantic ``response_model``. The parsed object is available on
     ``response.choices[0].message.parsed`` (or ``.refusal``).
+
+    ``response_model`` is optional so a caller can use ``.parse`` for its *tool*
+    validation alone: `common.structured_output`'s forced-tool rung sends
+    ``tools`` + a named ``tool_choice`` and **no** ``response_format``, because a
+    provider that rejected the schema form is exactly the one being worked
+    around. ``tool_choice`` is passed verbatim rather than defaulted to
+    ``'auto'`` (as `execute_chat_completion` does) — that rung's whole point is
+    naming the function. The SDK then fills
+    ``message.tool_calls[0].function.parsed_arguments`` where it can.
     """
-    params: dict[str, Any] = {'model': model, 'messages': messages, 'response_format': response_model}
+    params: dict[str, Any] = {'model': model, 'messages': messages}
+    if response_model is not None:
+        params['response_format'] = response_model
+    if tools:
+        params['tools'] = tools
+    if tool_choice is not None:
+        params['tool_choice'] = tool_choice
     if temperature is not None:
         params['temperature'] = temperature
     if max_completion_tokens is not None:
         params['max_completion_tokens'] = max_completion_tokens
+    if reasoning_effort:
+        params['reasoning_effort'] = reasoning_effort
+    if extra_body:
+        params['extra_body'] = extra_body
     if extra_kwargs:
+        check_reserved_keys(extra_kwargs, _RESERVED_COMPLETION_KEYS)
         params.update(extra_kwargs)
 
     _strip_known_rejected_reasoning(model, params)
@@ -261,7 +340,12 @@ async def execute_response(
     response_text_format: type[BaseModel] | None = None,
     temperature: float | None = None,
     max_output_tokens: int | None = None,
+    reasoning_effort: str | None = None,
+    instructions: str | None = None,
+    tools: list[dict[str, Any]] | None = None,
     inject_trace_headers: bool = True,
+    record_input: bool = True,
+    extra_body: dict[str, Any] | None = None,
     extra_kwargs: dict[str, Any] | None = None,
 ) -> tuple[Any, TokenUsage | None]:
     """Execute one Responses API call — ``.parse`` with a ``response_model``, else ``.create``.
@@ -277,16 +361,32 @@ async def execute_response(
     already filled in, so the ``price_usage`` call below is a no-op on the Orq
     path and only covers a non-Orq endpoint or an unpriced model (RES-1295).
 
-    ``messages`` are passed straight through as Responses ``input`` items; the
-    system entry rides along as a message rather than as ``instructions``, which
-    keeps the judge prompt assembly identical across both endpoints.
+    ``messages`` are passed straight through as Responses ``input`` items. The
+    judge legs leave ``instructions`` unset and let the system entry ride along
+    as a message, which keeps prompt assembly identical across both endpoints;
+    the simulation agents set it, because the Responses endpoint is the only one
+    they speak.
+
+    Set ``record_input=False`` when the caller records its own input on the span
+    — a caller holding the pre-render `Message` objects can put readable text
+    there, where the wire payload's ``output_text`` parts would `str()` into a
+    Python repr (see CLAUDE.md's ``content_to_text`` row).
     """
     params: dict[str, Any] = {'model': model, 'input': messages}
+    if instructions is not None:
+        params['instructions'] = instructions
+    if tools:
+        params['tools'] = tools
     if temperature is not None:
         params['temperature'] = temperature
     if max_output_tokens is not None:
         params['max_output_tokens'] = max_output_tokens
+    if reasoning_effort:
+        params['reasoning'] = {'effort': reasoning_effort}
+    if extra_body:
+        params['extra_body'] = extra_body
     if extra_kwargs:
+        check_reserved_keys(extra_kwargs, _RESERVED_RESPONSES_KEYS)
         params.update(extra_kwargs)
 
     if response_model is not None and response_text_format is not None:
@@ -297,7 +397,8 @@ async def execute_response(
     strip_known_rejected_responses_reasoning(model, params)
     apply_pipeline_metadata(params)
 
-    record_llm_input(span, messages)
+    if record_input:
+        record_llm_input(span, messages)
 
     if inject_trace_headers:
         await apply_trace_headers(params)

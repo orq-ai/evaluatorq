@@ -26,6 +26,7 @@ from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
     DeliveryMethod,
     EvaluatorConfig,
+    LLMConfig,
     Pipeline,
     SaveMode,
     Vulnerability,
@@ -348,6 +349,47 @@ def run(
             'still exits non-zero regardless.',
         ),
     ] = EvaluatorConfig.model_fields['min_evaluation_coverage'].default,
+    target_timeout_ms: Annotated[
+        int,
+        typer.Option(
+            '--target-timeout-ms',
+            help='Per-call timeout (ms) for target invocations.',
+        ),
+    ] = LLMConfig.model_fields['target_agent_timeout_ms'].default,
+    max_target_retries: Annotated[
+        int,
+        typer.Option(
+            '--max-target-retries',
+            min=0,
+            max=10,
+            help='Retries for a failed target transport call before abandoning its attacker turn.',
+        ),
+    ] = LLMConfig.model_fields['max_target_retries'].default,
+    retry_count: Annotated[
+        int,
+        typer.Option(
+            '--retry-count',
+            min=0,
+            max=10,
+            help='Retries (after the initial call) for pipeline-owned LLM calls and ORQ '
+            'context/enrichment/cleanup — distinct from --max-target-retries.',
+        ),
+    ] = LLMConfig.model_fields['retry_count'].default,
+    max_tool_continuations: Annotated[
+        int,
+        typer.Option(
+            '--max-tool-continuations',
+            help='Max client-driven tool-result continuation rounds for ORQ agents that emit pending_tool_calls.',
+        ),
+    ] = LLMConfig.model_fields['max_tool_continuations'].default,
+    target_reasoning_effort: Annotated[
+        str | None,
+        typer.Option(
+            '--target-reasoning-effort',
+            help='Reasoning effort for the target agent (Responses-capable targets only). '
+            'Accepted values differ per model; an unsupported one is rejected by the provider.',
+        ),
+    ] = None,
     datapoint_parallelism: Annotated[
         int,
         typer.Option(
@@ -473,7 +515,7 @@ def run(
 
     from evaluatorq.common.replay import ReplayError
     from evaluatorq.redteam import red_team
-    from evaluatorq.redteam.contracts import LLMCallConfig, LLMConfig, TargetConfig
+    from evaluatorq.redteam.contracts import LLMCallConfig, TargetConfig
     from evaluatorq.redteam.exceptions import CancelledError, RedTeamError
     from evaluatorq.redteam.hooks import RichHooks
 
@@ -541,6 +583,11 @@ def run(
     config = LLMConfig(
         attacker=LLMCallConfig(model=attack_model),
         evaluator=EvaluatorConfig(model=evaluator_model, min_evaluation_coverage=min_evaluation_coverage),
+        target_agent_timeout_ms=target_timeout_ms,
+        max_target_retries=max_target_retries,
+        retry_count=retry_count,
+        max_tool_continuations=max_tool_continuations,
+        target_reasoning_effort=target_reasoning_effort,
     )
 
     try:
