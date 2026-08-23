@@ -724,10 +724,13 @@ def _build_agent_context_section(report: RedTeamReport) -> ReportSection | None:
 
 
 def _build_turn_domain_breakdown_section(report: RedTeamReport) -> ReportSection | None:
-    """Build turn-type and vulnerability-domain breakdown statistics.
+    """Build vulnerability-domain breakdown statistics.
 
-    Returns ``None`` when neither ``by_turn_type`` nor ``by_domain`` contain
-    any data.
+    Turn type is deliberately not broken out: generated strategies are always
+    multi-turn, so the split carried no signal. ``_build_turn_depth_analysis_section``
+    covers depth with the turn count, which does.
+
+    Returns ``None`` when ``by_domain`` contains no data.
     """
     s = report.summary
 
@@ -740,19 +743,15 @@ def _build_turn_domain_breakdown_section(report: RedTeamReport) -> ReportSection
             'resistance_rate': getattr(obj, 'resistance_rate', None),
         }
 
-    by_turn_type = {k: _obj_to_dict(v) for k, v in s.by_turn_type.items()}
     by_domain = {k: _obj_to_dict(v) for k, v in s.by_domain.items()}
 
-    if not by_turn_type and not by_domain:
+    if not by_domain:
         return None
 
     return ReportSection(
         kind='turn_scope_breakdown',
-        title='Turn Type & Domain Breakdown',
-        data={
-            'by_turn_type': by_turn_type,
-            'by_domain': by_domain,
-        },
+        title='Domain Breakdown',
+        data={'by_domain': by_domain},
     )
 
 
