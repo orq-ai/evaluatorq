@@ -2,6 +2,19 @@
 
 This file provides guidance to Claude Code when working in `packages/evaluatorq-py`.
 
+## Surfacing something important
+
+When you flag something that changes what the user should do — a bug you found, a
+decision only they can make, a thing you could not finish, a risk in what they
+just asked for — **explain it like they are eight years old.** Not the tone, the
+*clarity*: say what broke, what happens because of it, and what you want from
+them, in words that carry no assumed context. Name the thing before the acronym
+for it. An explanation the reader has to already understand in order to follow is
+not a warning, it is a receipt.
+
+This is about the surfacing, not the work. Code, commits, and PR bodies stay
+normal.
+
 ## Parallel sessions
 
 Parallel agent sessions typically run in their own git worktree, so uncommitted
