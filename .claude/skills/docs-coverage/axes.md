@@ -1,16 +1,10 @@
 # Coverage axes and impossible combinations
 
-The interaction surface of evaluatorq, expressed as axes. `docs-coverage` crosses
-these pairwise and checks each meaningful pair appears in prose.
+The interaction surface of evaluatorq, expressed as axes. `docs-coverage` crosses these pairwise and checks each meaningful pair appears in prose.
 
-**Hand-maintained.** Axis *names* live here; axis *values* are pulled from source at
-run time, so a new mode or backend appears without editing this file. Edit this file
-only when a genuinely new **dimension** appears — a new entry point, a new surface, a
-new kind of thing a user chooses between.
+**Hand-maintained.** Axis *names* live here; axis *values* are pulled from source at run time, so a new mode or backend appears without editing this file. Edit this file only when a genuinely new **dimension** appears — a new entry point, a new surface, a new kind of thing a user chooses between.
 
-If this file rots, `docs-coverage` reports stale gaps and people stop reading it.
-Treat it as part of the public surface: changing it belongs in the same PR as the
-feature that changed it.
+If this file rots, `docs-coverage` reports stale gaps and people stop reading it. Treat it as part of the public surface: changing it belongs in the same PR as the feature that changed it.
 
 ## Axes
 
@@ -54,27 +48,13 @@ gap to document, not an `N/A`, until the code either honours it or warns.
 
 ### `replay` is a data source, not a fourth mode
 
-Replay is reached by `previous_run=` / `--from-run`, which is explicitly
-**incompatible** with `--mode`. The reason is not that they are rival ways of
-saying the same thing — it is that a replayed run *already has* a mode. Replay
-loads a stored run and does `mode = replay.pipeline` (`redteam/runner.py`), so
-replaying a run that was `static` runs static, and replaying a `hybrid` run runs
-hybrid. Passing `--mode` alongside would be supplying a value that is about to be
-overwritten, which is why it raises instead of silently losing.
+Replay is reached by `previous_run=` / `--from-run`, which is explicitly **incompatible** with `--mode`. The reason is not that they are rival ways of saying the same thing — it is that a replayed run *already has* a mode. Replay loads a stored run and does `mode = replay.pipeline` (`redteam/runner.py`), so replaying a run that was `static` runs static, and replaying a `hybrid` run runs hybrid. Passing `--mode` alongside would be supplying a value that is about to be overwritten, which is why it raises instead of silently losing.
 
-So replay does not sit *among* the modes, it crosses *with* them. What it
-actually replaces is the data source: instead of generating attacks or reading a
-dataset, the attack set comes from a run you already did. That is the axis it
-belongs on, and it is the axis that makes its value obvious — holding the attacks
-fixed is the only way a moved resistance rate means the agent moved.
+So replay does not sit *among* the modes, it crosses *with* them. What it actually replaces is the data source: instead of generating attacks or reading a dataset, the attack set comes from a run you already did. That is the axis it belongs on, and it is the axis that makes its value obvious — holding the attacks fixed is the only way a moved resistance rate means the agent moved.
 
-Source-derived values can never see it (there is no enum to read), so it is
-hardcoded on this axis on purpose. **Do not resolve this by adding `replay` to
-the accepted `--mode` values in code** — it is not a mode, and the docs-autofill
-routine may not touch `src/` regardless.
+Source-derived values can never see it (there is no enum to read), so it is hardcoded on this axis on purpose. **Do not resolve this by adding `replay` to the accepted `--mode` values in code** — it is not a mode, and the docs-autofill routine may not touch `src/` regardless.
 
-Replay exists on both `eq redteam run` and `eq sim simulate`; treat it as a data
-source for both when building the matrix.
+Replay exists on both `eq redteam run` and `eq sim simulate`; treat it as a data source for both when building the matrix.
 
 ## Impossible or meaningless combinations
 
@@ -111,9 +91,6 @@ Marked `N/A` in the matrix, never reported as a gap.
 
 ## Tiers
 
-**Tier 1 — needs prose.** Top-level `evaluatorq.__all__` entry points, every CLI
-command and subcommand, every env var. The generated API reference does **not**
-count: a docstring is not discovery.
+**Tier 1 — needs prose.** Top-level `evaluatorq.__all__` entry points, every CLI command and subcommand, every env var. The generated API reference does **not** count: a docstring is not discovery.
 
-**Tier 2 — API reference suffices.** Supporting types, contracts, backends, and
-subpackage `__all__` members. Flag only when there is no docstring at all.
+**Tier 2 — API reference suffices.** Supporting types, contracts, backends, and subpackage `__all__` members. Flag only when there is no docstring at all.
