@@ -162,21 +162,6 @@ async def test_previous_run_rejects_an_explicit_dynamic_mode(tmp_path: Path, mon
 
 
 @pytest.mark.asyncio
-async def test_previous_run_without_mode_reaches_the_stored_pipeline(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Omitting ``mode`` is not a conflict: it is how every replay is invoked."""
-    from evaluatorq.redteam import red_team
-
-    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path / '.evaluatorq'))
-    monkeypatch.setenv('OPENAI_API_KEY', 'test-key')
-
-    # Gets past the conflict check and fails on resolution instead.
-    with pytest.raises(ReplayError, match='Could not resolve previous red team run'):
-        await red_team(target='agent:demo', previous_run='nope')
-
-
-@pytest.mark.asyncio
 async def test_previous_run_reports_an_unresolvable_reference(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.redteam import red_team
 

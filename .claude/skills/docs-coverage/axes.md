@@ -68,6 +68,7 @@ Marked `N/A` in the matrix, never reported as a gap.
 | `red_team()` × target kind `Vercel` | Vercel AI SDK agents are a simulation target kind only |
 | `red_team()` × data source `inline DataPoint`s | `dataset` takes a `Path` or specifier string; there is no inline-datapoint parameter |
 | `static` mode × generated data source | static mode consumes a fixed dataset by definition |
+| any `mode` × data source `replay` | `previous_run=` restores the stored run's pipeline and raises if `mode` is also supplied; the pair cannot be expressed |
 | CLI × custom `AgentTarget` | custom targets are constructed in Python; the CLI resolves string identifiers |
 
 ## Tiers
@@ -78,14 +79,3 @@ count: a docstring is not discovery.
 
 **Tier 2 — API reference suffices.** Supporting types, contracts, backends, and
 subpackage `__all__` members. Flag only when there is no docstring at all.
-
-**Not a gap at all — a symbol reached only as a parameter value, whose output is
-documented.** A name with no prose is not automatically Tier 1. Ask how a user
-reaches it: if the answer is "they pass a string to some other function's
-argument" and the *result* they get back is already explained in prose, the
-symbol is an implementation detail and prose about it would document something
-nobody types. `bt_sigma_aggregation` is the worked example — it is reached only
-via `build_report(aggregation='bt-sigma')`, and what a reader actually needs, the
-`report.bt_sigma` output and how to read it, is covered at
-`pairwise-judging.md:168-245`. A symbol-name grep flags it every time; it has
-never been a real gap. Resolve these `N/A`, not `GAP`.
