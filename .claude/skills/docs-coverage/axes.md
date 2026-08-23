@@ -11,7 +11,7 @@ If this file rots, `docs-coverage` reports stale gaps and people stop reading it
 | Axis | Where values come from | Notes |
 |---|---|---|
 | **entry point** | `evaluatorq.__all__` + `evaluatorq.simulation.__all__` + `evaluatorq.redteam.__all__` | `evaluatorq()`, `red_team()`, `simulate()`, `generate_and_simulate()`, `wrap_simulation_agent()`, pairwise `build_report()`, `deployment()` / `invoke()` |
-| **surface** | fixed | Python API · CLI (`eq`) · dashboard (`eq dashboard` / `eq ui`) |
+| **surface** | fixed | Python API · CLI (`eq`) · dashboard (`eq dashboard`) |
 | **target kind** | `_BACKEND_REGISTRY` in `redteam/backends/registry.py` + CLI `--target` prefixes | `agent:<key>`, `deployment:<key>`, direct OpenAI backend, custom `AgentTarget` / `CallableTarget` |
 | **mode** | `--mode` on `eq redteam run` | `dynamic`, `static`, `hybrid` |
 | **data source** | `evaluatorq()` / `red_team()` dataset params, **plus `replay`** (see below) | inline `DataPoint`s, ORQ dataset id, HuggingFace dataset, generated, replay of a stored run |
