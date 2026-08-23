@@ -145,6 +145,38 @@ async def test_previous_run_rejects_data_selection_arguments(tmp_path: Path, mon
 
 
 @pytest.mark.asyncio
+async def test_previous_run_rejects_an_explicit_dynamic_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``mode`` is rejected by name even when its value equals the old default.
+
+    ``mode`` used to default to ``Pipeline.DYNAMIC``, so the conflict check could
+    not tell "caller passed dynamic" from "caller passed nothing" and silently
+    swallowed the ninth data-selection argument while naming the other eight.
+    """
+    from evaluatorq.redteam import red_team
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path / '.evaluatorq'))
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-key')
+
+    with pytest.raises(ValueError, match='cannot be combined with data-selection arguments: mode'):
+        await red_team(target='agent:demo', previous_run='latest', mode='dynamic')
+
+
+@pytest.mark.asyncio
+async def test_previous_run_without_mode_reaches_the_stored_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Omitting ``mode`` is not a conflict: it is how every replay is invoked."""
+    from evaluatorq.redteam import red_team
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path / '.evaluatorq'))
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-key')
+
+    # Gets past the conflict check and fails on resolution instead.
+    with pytest.raises(ReplayError, match='Could not resolve previous red team run'):
+        await red_team(target='agent:demo', previous_run='nope')
+
+
+@pytest.mark.asyncio
 async def test_previous_run_reports_an_unresolvable_reference(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.redteam import red_team
 

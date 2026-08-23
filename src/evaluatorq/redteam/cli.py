@@ -258,9 +258,9 @@ def run(
         typer.Option('--name', '-n', help="Experiment name (defaults to 'red-team')."),
     ] = None,
     mode: Annotated[
-        Pipeline,
-        typer.Option(help='Execution mode.'),
-    ] = Pipeline.DYNAMIC,
+        Pipeline | None,
+        typer.Option(help='Execution mode. Defaults to dynamic. Cannot be combined with --from-run.'),
+    ] = None,
     categories: Annotated[
         list[str] | None,
         typer.Option(
