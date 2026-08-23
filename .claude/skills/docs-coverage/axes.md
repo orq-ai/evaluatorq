@@ -21,30 +21,15 @@ If this file rots, `docs-coverage` reports stale gaps and people stop reading it
 
 ### `reasoning-effort scope` is a choice, not a value
 
-Four settings carry the words "reasoning effort" and they apply to four
-different models: `target_reasoning_effort` (the agent under test),
-`LLMCallConfig.reasoning_effort` on `attacker=` / `evaluator=` (red team's own
-calls), `EVALUATORQ_REASONING_EFFORT` (the simulator's user-simulator and judge),
-and `llm_jury(reasoning_effort=...)` / `llm_jury_pairwise` / `PairwiseComparator`
-(the judge in core `evaluatorq()`). Picking the wrong one is silent — the call
-just runs at the default — so this is a dimension a user chooses along, not a
-tuning number.
+Four settings carry the words "reasoning effort" and they apply to four different models: `target_reasoning_effort` (the agent under test), `LLMCallConfig.reasoning_effort` on `attacker=` / `evaluator=` (red team's own calls), `EVALUATORQ_REASONING_EFFORT` (the simulator's user-simulator and judge), and `llm_jury(reasoning_effort=...)` / `llm_jury_pairwise` / `PairwiseComparator` (the judge in core `evaluatorq()`). Picking the wrong one is silent — the call just runs at the default — so this is a dimension a user chooses along, not a tuning number.
 
-Values are fixed here because no registry enumerates them; the *accepted efforts*
-per model come from the model catalogue and are a different thing entirely.
+Values are fixed here because no registry enumerates them; the *accepted efforts* per model come from the model catalogue and are a different thing entirely.
 
 ### `API endpoint` is a per-role choice with a per-role default
 
-`LLMCallConfig.api` defaults to `chat_completions`; `EvaluatorConfig.api` defaults
-to `responses`, because that is the endpoint the Orq router prices. The endpoint
-decides the spelling of every knob (`max_completion_tokens` vs `max_output_tokens`,
-flat `reasoning_effort` vs a `reasoning` block), which keys `check_reserved_keys`
-rejects inside `extra_kwargs`, and whether the call records cost at all.
+`LLMCallConfig.api` defaults to `chat_completions`; `EvaluatorConfig.api` defaults to `responses`, because that is the endpoint the Orq router prices. The endpoint decides the spelling of every knob (`max_completion_tokens` vs `max_output_tokens`, flat `reasoning_effort` vs a `reasoning` block), which keys `check_reserved_keys` rejects inside `extra_kwargs`, and whether the call records cost at all.
 
-It is honoured by the judge (`common/judge.py`) and by simulation agents
-(`simulation/agents/base.py`). Red team's attacker call sites pass
-`api='chat_completions'` explicitly, so the field is inert there — treat that as a
-gap to document, not an `N/A`, until the code either honours it or warns.
+It is honoured by the judge (`common/judge.py`) and by simulation agents (`simulation/agents/base.py`). Red team's attacker call sites pass `api='chat_completions'` explicitly, so the field is inert there — treat that as a gap to document, not an `N/A`, until the code either honours it or warns.
 
 ### `replay` is a data source, not a fourth mode
 
