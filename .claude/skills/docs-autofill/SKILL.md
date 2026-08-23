@@ -79,7 +79,7 @@ Rules that are not negotiable:
 - **Every code sample is fenced with a language.** No indented blocks, no bare `Example::`.
 - **Every code sample runs.** If you cannot make it run, it does not go in the page.
 - If a cell resolved `N/A` for a reason not yet listed, add it to `.claude/skills/docs-coverage/axes.md` in the same branch — and mark it in the **PR title** with the bare tag `[axes]`, nothing more; the detail goes in the body. That file decides what counts as a gap at all; an agent quietly narrowing its own future workload is the one edit here a human must see.
-- **Never cut a sentence off.** Every sentence you write — in the page, in a table cell, in a docstring, in a PR body — ends. No trailing `…`, no `[...]`, no clause abandoned mid-thought because the line got long. Truncation is only ever allowed on *captured output* (a receipt's first ~5 lines), never on prose you authored. Too long is a signal to write less, not to chop the tail off.
+- **Never cut a sentence off, and do not hard-wrap the Markdown.** Both rules live in `CLAUDE.md` and bind every author, not just this routine. The one thing that is specific here: the receipt's captured output *is* the allowed truncation — the first ~5 lines of a command's output, never a sentence you wrote.
 - **Never edit `src/`. No exception, not even a one-character docstring fence.** A routine that can reach the code it documents will eventually document its way into changing behaviour, and the reviewer of a docs PR is not reading it for that. This is the hard boundary of the whole routine: it writes prose about code, and it never writes code.
 - **A code defect you find gets reported, not fixed, and never papered over.** When the code and the docs disagree — a flag the parser accepts but the help text denies, an argument silently swallowed, a docstring fence that breaks the build — you have three moves, in this order: say it in the PR body as an open Decision with its file and line; say it in the **step 9 Slack message** as a named inconsistency, because a human who never opens the PR still needs to know; and only then decide whether the page can honestly be written around it. If it cannot, drop the gap and record `skipped-code-defect` in the ledger. Writing a `!!! note` that explains an inconsistency as though it were a design is the failure mode here — it launders a bug into documented behaviour, and once documented it is much harder to fix.
 - No drive-by edits to unrelated pages.
@@ -88,7 +88,7 @@ The rest of the rules that bind a docs page in this repo are in `CLAUDE.md` unde
 
 ## Step 4 — the receipt
 
-**Write the runner before you run anything.** `.context/run_receipt.sh` — committed with the branch — extracts the blocks, runs them, and writes `.context/receipt.txt`. Ad-hoc shell functions are how a receipt and reality drift apart: an out-of-band re-run that fixes a block leaves the file on disk still saying it failed, and every downstream reader — including four critics — reviews the stale copy.
+**Write the runner before you run anything.** `.claude/skills/docs-autofill/run_receipt.sh` — a tracked path, committed with the branch — extracts the blocks, runs them, and writes `.context/receipt.txt`. The runner is tracked and the receipt is not, on purpose: `.gitignore` ignores `.context/`, so a runner written there cannot be committed and a reviewer cannot see what actually ran. Ad-hoc shell functions are how a receipt and reality drift apart: an out-of-band re-run that fixes a block leaves the file on disk still saying it failed, and every downstream reader — including four critics — reviews the stale copy.
 
 **Never hand-write or hand-patch receipt state.** The receipt is a generated artifact, not a summary you author. Changed a block? Re-run the whole runner. If what you are about to say about the receipt is not in the file the runner just wrote, it is not true yet.
 
@@ -112,7 +112,7 @@ uv run --group docs mkdocs build --strict
 uv run python scripts/validate_mermaid.py
 ```
 
-If anything under `src/` changed, also run CI's four, verbatim:
+If anything under `src/` changed, **the run is already broken** — step 3 forbids it, so a dirty `src/` means an edit slipped through. Revert that file, report it as an inconsistency (step 9), and re-run the build. The CI-four below exist only for that recovery path; on a correct run they never execute:
 
 ```bash
 uv run ruff check src
@@ -177,7 +177,7 @@ A round is: apply the hate Recommendations and every persona finding that is a r
 
 Stop when every persona ends **COMPLETED**. `COMPLETED WITH GUESSWORK` is not done — the guesswork *is* the gap, and a persona that guessed right this round is a reader who guesses wrong next round. Spend the round; there are only three. Hard cap of 3 rounds — a page that is still short of COMPLETED after three rewrites has a problem the routine cannot see. Stopping early on a looser reading and disclosing it in the PR is not the deal: the rounds are cheap and the disclosure lands on a human who cannot re-run the persona.
 
-**Still BLOCKED after round 3:** open the PR anyway, put `[BLOCKED]` and the persona name in the title (`COMPLETED WITH GUESSWORK` after round 3 goes in the body under persona verdicts, not the title), and **DM Bauke on Slack** (`U09BR0B0Q7P`) rather than only posting to the channel. The work is worth keeping; the judgement is not the routine's to make.
+**Still BLOCKED after round 3:** open the PR anyway, append the bare `[BLOCKED]` tag to the title — the persona's name and a `COMPLETED WITH GUESSWORK` verdict go in the body under persona verdicts, never in the title — and **DM Bauke on Slack** (`U09BR0B0Q7P`) rather than only posting to the channel. The work is worth keeping; the judgement is not the routine's to make.
 
 The receipt in the PR is the one from the final round.
 
@@ -185,11 +185,13 @@ Anything not applied goes in the PR body under **Not addressed**, with the reaso
 
 ## Step 8 — PR
 
-Append the ledger row first, in the same commit as the docs:
+Append the ledger row first, in the same commit as the docs, with outcome `prepared`:
 
 ```markdown
-| 2026-08-24 | `entry point × hybrid` | docs/autofill-hybrid-mode | opened |
+| 2026-08-24 | `entry point × hybrid` | docs/autofill-hybrid-mode | prepared |
 ```
+
+Amend it to `opened` only after `gh pr create` returns a URL. Writing `opened` up front means a failed PR creation still tells next week the gap was handled, and the gap is then skipped forever.
 
 Then, body to a file — `gh pr create` prompts for a title and body it is not given, and a headless session has no terminal to prompt at:
 
@@ -233,4 +235,4 @@ A cloud run that dies silently is worse than one that fails loudly. If the chann
 
 ## Caps
 
-One gap. Three revision rounds. Never merge. Never touch `src/` beyond a docstring fence.
+One gap. Three revision rounds. Never merge. Never touch `src/`, full stop.
