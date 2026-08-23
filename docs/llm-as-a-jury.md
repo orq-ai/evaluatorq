@@ -292,11 +292,30 @@ This is a distinct knob from red teaming's `target_reasoning_effort` (the agent
 simulator's user-simulator and judge). See
 [Tuning](tuning.md) for the full disambiguation.
 
-!!! note "`extra_body` has no seam here"
-    These helpers build their `LLMCallConfig` internally and expose
-    `extra_kwargs=` but no `extra_body=`, so provider options that must ride in
-    the request *body* are not reachable on the jury path. Use a judge configured
-    through `red_team()`'s `evaluator=` if you need one.
+## Provider options
+
+`llm_jury()`, `llm_jury_pairwise()` and `PairwiseComparator` take both injection
+seams, and they are not interchangeable:
+
+```python
+jury = llm_jury(
+    name='helpfulness',
+    criteria='Is the answer helpful?',
+    judges=['openai/gpt-5.6-luna'],
+    extra_kwargs={'top_p': 0.9},          # top-level call argument
+    extra_body={'my_router_field': 'x'},  # request body field
+)
+```
+
+`extra_kwargs` sets arguments on the SDK call and **replaces** the key.
+`extra_body` adds fields to the request body and is **merged** per key, so
+router-owned body fields survive alongside yours.
+
+!!! warning "`extra_body` inside `extra_kwargs` is rejected"
+    `extra_body` is one of the structural fields the call site owns, so passing
+    it through `extra_kwargs` raises — and because a judge failure is caught and
+    turned into a verdict, the symptom is a judge that always fails rather than a
+    crash. Use the `extra_body=` parameter.
 
 ## Full example
 

@@ -226,9 +226,8 @@ So there are exactly two injection seams, and they target different parts of the
 request: `extra_kwargs` for top-level call arguments, `extra_body` for body fields.
 Anything the provider accepts is reachable through one of them — wherever you can
 hand evaluatorq an `LLMCallConfig`. The jury evaluators (`llm_jury()`,
-`llm_jury_pairwise()`, `PairwiseComparator`) are the exception: they build their
-config internally and forward only `extra_kwargs=`, so body fields are not
-reachable on that path today.
+`llm_jury_pairwise()`, `PairwiseComparator`) build their config internally, so
+they take both as explicit parameters instead.
 
 Sampling fields have first-class parameters now — prefer them over routing the
 same key through `extra_kwargs`:
