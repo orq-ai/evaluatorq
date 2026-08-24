@@ -29,11 +29,13 @@ from evaluatorq.common.reports.html_helpers import (
     svg_donut,
 )
 from evaluatorq.common.reports.md_helpers import (
+    CACHED_TOKENS_LABEL,
     bar,
     bold_bar,
     center_table,
     cost_coverage,
     details_block,
+    fmt_cached_tokens,
     fmt_cost,
     md_table,
     pct,
@@ -59,6 +61,7 @@ from evaluatorq.common.reports.rich_styles import rate_style
 from evaluatorq.common.reports.vega import render_embed, render_svg
 
 __all__ = [
+    'CACHED_TOKENS_LABEL',
     'COLORS',
     'ORQ_SCALE_AGENT',
     'ORQ_SCALE_GOOD_BAD',
@@ -76,6 +79,7 @@ __all__ = [
     'cost_coverage',
     'details_block',
     'esc',
+    'fmt_cached_tokens',
     'fmt_cost',
     'format_date',
     'html_table',

@@ -13,10 +13,12 @@ from __future__ import annotations
 import operator
 from typing import TYPE_CHECKING, Any
 
+from evaluatorq.common.reports import CACHED_TOKENS_LABEL as _CACHED_TOKENS_LABEL
 from evaluatorq.common.reports import COLORS as _COLORS
 from evaluatorq.common.reports import STATUS_COLORS as _STATUS_COLORS_BASE
 from evaluatorq.common.reports import cost_coverage as _cost_coverage
 from evaluatorq.common.reports import esc as _esc
+from evaluatorq.common.reports import fmt_cached_tokens as _fmt_cached_tokens
 from evaluatorq.common.reports import fmt_cost as _fmt_cost
 from evaluatorq.common.reports import format_date as _format_date
 from evaluatorq.common.reports import html_table as _html_table
@@ -998,16 +1000,25 @@ def _render_token_usage_html(section: ReportSection) -> str:
         )
         parts.append(cards)
 
+        cached_tokens = overall.get('cached_tokens', 0)
         cache_creation_tokens = overall.get('cache_creation_tokens', 0)
+        cache_cards: list[str] = []
+        if cached_tokens:
+            cache_cards.append(
+                '<div class="kpi-card">'
+                f'<div class="kpi-value">{_esc(_fmt_cached_tokens(cached_tokens, prompt_tokens))}</div>'
+                f'<div class="kpi-label">{_CACHED_TOKENS_LABEL}</div>'
+                '</div>'
+            )
         if cache_creation_tokens:
-            parts.append(
-                '<div class="kpi-row">'
+            cache_cards.append(
                 '<div class="kpi-card">'
                 f'<div class="kpi-value">{_esc(str(cache_creation_tokens))}</div>'
                 '<div class="kpi-label">Cache-Write Tokens</div>'
                 '</div>'
-                '</div>'
             )
+        if cache_cards:
+            parts.append('<div class="kpi-row">' + ''.join(cache_cards) + '</div>')
 
         input_cost = overall.get('input_cost')
         output_cost = overall.get('output_cost')

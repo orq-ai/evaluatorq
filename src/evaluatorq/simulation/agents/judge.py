@@ -96,9 +96,10 @@ class _JudgeToolArgs(BaseModel):
     criteria_verdicts: list[CriterionVerdict] | None = Field(
         default=None,
         description='Occurrence audit. One entry for every criterion listed under EVALUATION CRITERIA, no '
-        'omissions. Skip any criterion marked ALREADY CONFIRMED — those are settled and re-reporting them '
-        'changes nothing; send [] when that leaves nothing to report. Report only what literally happened '
-        'in the conversation so far — do NOT judge whether that is good or bad.',
+        'omissions. Skip any criterion listed as ALREADY CONFIRMED in the final user message — those are '
+        'settled and re-reporting them changes nothing; send [] when that leaves nothing to report. '
+        'Report only what literally happened in the conversation so far — do NOT judge whether that '
+        'is good or bad.',
     )
     response_quality: float | None = _score(
         "Quality of the agent's last response: helpful, accurate, complete (0.0=poor, 1.0=excellent)"
@@ -577,8 +578,8 @@ Decision rules:
 CRITERIA AUDIT (every evaluation, continue or finish):
 You MUST return criteria_verdicts with exactly one entry for every criterion ID listed
 below — no omissions, even when nothing has changed since the last turn. The only
-exception is a criterion the list marks as already confirmed: those are settled, so
-skip them, and send [] when that leaves nothing to report.
+exception is a criterion the final user message lists as ALREADY CONFIRMED: those are
+settled, so skip them, and send [] when that leaves nothing to report.
 
 This is an OCCURRENCE report, not a verdict. For each criterion answer one question:
 "has the behaviour in this description actually appeared in the conversation so far?"
@@ -713,6 +714,14 @@ class JudgeAgent(BaseAgent):
 
     @property
     def system_prompt(self) -> str:
+        """Static for the whole conversation — deliberately.
+
+        The settled set changes every turn, and anything that varies here sits at
+        token position 0, so it would invalidate the cached prefix (system +
+        transcript + tool schemas) on every judgement. The dynamic part is
+        rendered into the trailing user message by `evaluate` instead, where it
+        lands past the common prefix and splits nothing.
+        """
         criteria_text = self._format_criteria()
 
         ground_truth_text = ''
@@ -727,11 +736,17 @@ class JudgeAgent(BaseAgent):
             *messages,
             Message(
                 role='user',
-                content='Evaluate the conversation above. Should it continue or end? Use the appropriate tool.',
+                content='Evaluate the conversation above. Should it continue or end? Use the appropriate tool.'
+                + self._settled_note(),
             ),
         ]
 
-        result = await self._call_llm(eval_messages, temperature=0.0, tools=JUDGE_TOOLS, llm_purpose='judge')
+        # volatile_tail=1: the instruction above is rebuilt every turn, so it is not
+        # part of the cacheable prefix. Marking it would cost a full-transcript write
+        # per judgement and read none of it back (see common.prompt_cache).
+        result = await self._call_llm(
+            eval_messages, temperature=0.0, tools=JUDGE_TOOLS, llm_purpose='judge', volatile_tail=1
+        )
         return self._parse_judgment(result)
 
     # ---------------------------------------------------------------------------
@@ -870,6 +885,19 @@ class JudgeAgent(BaseAgent):
             if c.type == 'must_not_happen' and criterion_id_for(i) in occurred
         ]
 
+    def _settled_note(self) -> str:
+        """Render the settled criteria for the trailing user message.
+
+        Occurrence is sticky, so a criterion the runner has seen occur stays
+        listed under EVALUATION CRITERIA — the judge still needs it to decide
+        whether to stop — but re-auditing it can only restate a settled fact, so
+        it is excluded from the audit payload. Sorted for a stable rendering.
+        """
+        if not self._settled:
+            return ''
+        ids = ', '.join(sorted(self._settled))
+        return f'\n\nALREADY CONFIRMED (occurrence is settled — do not re-report these in criteria_verdicts): {ids}'
+
     def _format_criteria(self) -> str:
         if not self._criteria:
             return 'No specific criteria defined.'
@@ -879,11 +907,6 @@ class JudgeAgent(BaseAgent):
         for i, c in enumerate(self._criteria):
             criterion_id = criterion_id_for(i)
             entry = f'- {criterion_id}: {delimit(c.description)} ({c.type})'
-            if criterion_id in self._settled:
-                # Already occurred, and occurrence is sticky — it stays listed so the
-                # judge can weigh it when deciding whether to stop, but re-auditing it
-                # cannot change the outcome, so it is excluded from the audit payload.
-                entry += ' [ALREADY CONFIRMED — do not re-report in criteria_verdicts]'
             if c.type == 'must_happen':
                 must_happen.append(entry)
             elif c.type == 'must_not_happen':

@@ -247,3 +247,46 @@ def test_export_marks_partial_coverage_on_per_agent_costs():
     # Overall total: markdown puts the qualifier on the value, HTML on the label.
     assert '$0.7500 (2 of 3 calls)' in md
     assert 'Total Cost (2 of 3 calls)' in html
+
+
+# ---------------------------------------------------------------------------
+# Cached-input share
+# ---------------------------------------------------------------------------
+
+
+def test_cached_input_share_renders_in_both_exports():
+    """A cached count is meaningless without the input it was cached against."""
+    results = [
+        _make_result(
+            agent_key='agent-a',
+            token_usage=TokenUsage(
+                prompt_tokens=100,
+                completion_tokens=10,
+                total_tokens=110,
+                cached_tokens=75,
+                total_cost=0.01,
+            ),
+        ),
+    ]
+    section = _build_token_usage_section(_make_report(results))
+    assert section is not None
+    assert section.data['overall']['cached_tokens'] == 75
+    assert section.data['per_agent'][0]['cached_tokens'] == 75
+
+    report = _make_report(results)
+    for rendered in (export_markdown(report), export_html(report)):
+        assert 'Cached Input Tokens' in rendered
+        assert '75 (75% of input tokens)' in rendered
+
+
+def test_cached_input_row_absent_when_nothing_was_cached():
+    """No cached tokens means no row — never a reassuring `0 (0% of input)`."""
+    results = [
+        _make_result(
+            agent_key='agent-a',
+            token_usage=TokenUsage(prompt_tokens=100, completion_tokens=10, total_tokens=110),
+        ),
+    ]
+    report = _make_report(results)
+    for rendered in (export_markdown(report), export_html(report)):
+        assert 'Cached Input Tokens' not in rendered

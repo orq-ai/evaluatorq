@@ -237,6 +237,55 @@ def test_hand_written_properties_detector_actually_fires() -> None:
     assert _hand_written_properties_dict_lines('x = {"type": "object", "properties": {}}') == []
 
 
+def _cache_control_dict_lines(source: str) -> list[int]:
+    """Line numbers of dict literals carrying a literal ``'cache_control'`` key.
+
+    AST-based, so the comments and docstrings that explain the convention are not
+    hits — only a marker actually written into a request body is.
+    """
+    return [
+        node.lineno
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Dict)
+        for key in node.keys
+        if isinstance(key, ast.Constant) and key.value == 'cache_control'
+    ]
+
+
+# The one module allowed to write the marker. Every other call site imports
+# `apply_cache_breakpoints` / `mark_responses_input` from it.
+_PROMPT_CACHE_OWNER = 'common/prompt_cache.py'
+
+
+def test_cache_control_is_written_only_by_prompt_cache() -> None:
+    """A hand-placed `cache_control` is the expensive kind of mistake.
+
+    A misplaced breakpoint costs a 1.25x write that nothing reads back and
+    nothing errors — it surfaces as a bill, not a bug. `common/prompt_cache.py`
+    owns placement so the `volatile_tail` contract, the router+model gate and the
+    minimum-size guard cannot be bypassed by writing the key directly.
+    """
+    hits = [
+        f'{path.relative_to(SRC).as_posix()}:{lineno}'
+        for path in sorted(SRC.rglob('*.py'))
+        if path.relative_to(SRC).as_posix() != _PROMPT_CACHE_OWNER
+        for lineno in _cache_control_dict_lines(path.read_text(encoding='utf-8'))
+    ]
+    assert not hits, (
+        'Hand-placed cache_control marker: '
+        + ', '.join(hits)
+        + '. Use common.prompt_cache.apply_cache_breakpoints (chat) or '
+        'mark_responses_input (Responses), gated on caching_applies — writing the '
+        'key directly skips the volatile_tail contract and the size guard.'
+    )
+
+
+def test_cache_control_detector_actually_fires() -> None:
+    """A guardrail nobody proved can fail is a guardrail that silently no-ops."""
+    assert _cache_control_dict_lines("x = {'cache_control': {'type': 'ephemeral'}}") == [1]
+    assert _cache_control_dict_lines("x = {'foo': 'cache_control'}") == []
+    assert _cache_control_dict_lines('# {"cache_control": {}}') == []
+    assert _cache_control_dict_lines('"""Docstring mentions cache_control."""') == []
 # --- usage harvested off a raised exception -------------------------------
 # `generate_structured` bills its rungs before it raises, so a failed structured
 # call still cost money. Five modules each read the attribute directly, each with
