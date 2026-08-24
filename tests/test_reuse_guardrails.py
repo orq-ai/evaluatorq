@@ -338,22 +338,55 @@ def test_exception_usage_goes_through_the_shared_helper() -> None:
 
 # Sphinx cross-reference roles (`:class:`Foo``) render as literal text on the
 # MkDocs site — the role prefix and the `~` shorthand both print. RES-1278.
-SPHINX_ROLE = re.compile(r':(?:class|func|meth|attr|mod|data|exc|obj):`')
+# Covers the autodoc object-reference roles plus the three doc-level roles
+# (`ref`, `paramref`, `term`) that break the same way. Domain-specific roles
+# nobody here writes (`:option:`, `:envvar:`, …) are out of scope until one shows up.
+SPHINX_ROLE = re.compile(r':(?:class|func|meth|attr|mod|data|exc|obj|ref|paramref|term):`')
+
+
+def _sphinx_role_lines(source: str) -> list[int]:
+    """Line numbers of every docstring in ``source`` carrying a Sphinx role.
+
+    A module docstring reports line 1: ``ast.Module`` has no ``lineno``.
+    Roles in comments or in ordinary strings are not docstrings and not hits.
+    """
+    lines: list[int] = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        doc = ast.get_docstring(node, clean=False)
+        if doc and SPHINX_ROLE.search(doc):
+            lines.append(getattr(node, 'lineno', 1))
+    return sorted(lines)
 
 
 def _sphinx_role_sites() -> list[str]:
     """``path:line`` for every docstring carrying a Sphinx cross-reference role."""
-    sites: list[str] = []
-    for path in sorted(SRC.rglob('*.py')):
-        rel = path.relative_to(SRC).as_posix()
-        tree = ast.parse(path.read_text(encoding='utf-8'))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
-                continue
-            doc = ast.get_docstring(node, clean=False)
-            if doc and SPHINX_ROLE.search(doc):
-                sites.append(f'{rel}:{getattr(node, "lineno", 1)}')
-    return sites
+    return [
+        f'{path.relative_to(SRC).as_posix()}:{line}'
+        for path in sorted(SRC.rglob('*.py'))
+        for line in _sphinx_role_lines(path.read_text(encoding='utf-8'))
+    ]
+
+
+def test_sphinx_role_detector_actually_fires() -> None:
+    """A guardrail nobody proved can fail is a guardrail that silently no-ops."""
+    assert _sphinx_role_lines('"""See :class:`Foo`."""') == [1]
+    assert _sphinx_role_lines('def f():\n    """Calls :func:`bar`."""') == [1]
+    assert _sphinx_role_lines('class C:\n    """Wraps :meth:`C.go`."""') == [1]
+    # The `~` shorthand prints too, and a fully qualified target is still a hit.
+    assert _sphinx_role_lines('"""A :class:`~evaluatorq.contracts.Message`."""') == [1]
+    # Every role in the pattern fires, including the three doc-level ones.
+    for role in ('attr', 'mod', 'data', 'exc', 'obj', 'ref', 'paramref', 'term'):
+        assert _sphinx_role_lines(f'"""See :{role}:`x`."""') == [1], role
+    # Two docstrings, two sites — the failure message names both.
+    assert _sphinx_role_lines('def f():\n    """:func:`a`."""\n\n\ndef g():\n    """:func:`b`."""') == [1, 5]
+    # Not docstrings: a comment, a bare expression string, an assigned string.
+    assert _sphinx_role_lines('# :class:`Foo`') == []
+    assert _sphinx_role_lines('def f():\n    pass\n\n\n":class:`Foo`"') == []
+    assert _sphinx_role_lines('x = ":class:`Foo`"') == []
+    # A plain code span is the fix, and must not be flagged.
+    assert _sphinx_role_lines('"""See `Foo`, or [Message][evaluatorq.contracts.Message]."""') == []
 
 
 def test_docstrings_carry_no_sphinx_roles() -> None:
