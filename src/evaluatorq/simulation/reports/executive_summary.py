@@ -117,11 +117,13 @@ async def populate_run_executive_summary(
         logger.warning('Skipping executive summary: no LLM credentials configured.')
         return
 
-    set_fields = llm_config.model_fields_set if llm_config is not None else frozenset()
-    temperature = llm_config.temperature if llm_config is not None and 'temperature' in set_fields else None
-    reasoning_effort = (
-        llm_config.reasoning_effort if llm_config is not None and 'reasoning_effort' in set_fields else None
+    overrides = (
+        llm_config.set_values('temperature', 'max_tokens', 'reasoning_effort', 'extra_body', 'extra_kwargs')
+        if llm_config is not None
+        else {}
     )
+    if llm_config is not None and 'timeout_ms' in llm_config.model_fields_set:
+        overrides['timeout_s'] = llm_config.timeout_ms / 1000.0
 
     # Span reports the same values generate_executive_summary sends — single
     # source of truth, so the trace can never drift from the real request. A
@@ -130,8 +132,8 @@ async def populate_run_executive_summary(
     async with with_llm_span(
         model=model,
         operation='chat',
-        temperature=temperature,
-        max_tokens=EXECUTIVE_SUMMARY_MAX_TOKENS,
+        temperature=overrides.get('temperature'),
+        max_tokens=overrides.get('max_tokens', EXECUTIVE_SUMMARY_MAX_TOKENS),
         purpose='executive_summary',
     ):
         summary = await generate_executive_summary(
@@ -139,8 +141,7 @@ async def populate_run_executive_summary(
             llm_client=resolved.client,
             model=model,
             system_prompt=SIM_EXECUTIVE_SUMMARY_SYSTEM_PROMPT,
-            temperature=temperature,
-            reasoning_effort=reasoning_effort,
+            **overrides,
         )
         run.executive_summary = summary.text
         # Last usage-producing step in a run, so folding it in here in place is what

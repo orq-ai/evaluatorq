@@ -12,12 +12,13 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import BaseModel
 
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.agents.base import AgentConfig
 from evaluatorq.simulation.agents.judge import JudgeAgentConfig
 from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgentConfig
-from evaluatorq.simulation.api import _resolve_sim_llm_config
+from evaluatorq.simulation._config import resolve_sim_llm_config
 from evaluatorq.simulation.generators import (
     FirstMessageGenerator,
     PersonaGenerator,
@@ -25,6 +26,10 @@ from evaluatorq.simulation.generators import (
 )
 from evaluatorq.simulation.runner.simulation import SimulationRunner
 from evaluatorq.simulation.types import DEFAULT_MODEL, CommunicationStyle, Persona, Scenario
+
+
+class _Answer(BaseModel):
+    answer: str
 
 
 def _persona() -> Persona:
@@ -40,7 +45,7 @@ def _persona() -> Persona:
 
 
 def test_sim_model_alone_sets_only_the_model() -> None:
-    resolved = _resolve_sim_llm_config(sim_model='openai/gpt-4o-mini', llm_config=None)
+    resolved = resolve_sim_llm_config(sim_model='openai/gpt-4o-mini', llm_config=None)
     assert resolved.model == 'openai/gpt-4o-mini'
     assert resolved.model_fields_set == {'model'}
 
@@ -48,7 +53,7 @@ def test_sim_model_alone_sets_only_the_model() -> None:
 def test_llm_config_wins_over_sim_model(caplog: pytest.LogCaptureFixture) -> None:
     cfg = LLMCallConfig(model='openai/gpt-4o', temperature=0.3)
     with caplog.at_level('WARNING'):
-        resolved = _resolve_sim_llm_config(sim_model='openai/gpt-4o-mini', llm_config=cfg)
+        resolved = resolve_sim_llm_config(sim_model='openai/gpt-4o-mini', llm_config=cfg)
     assert resolved is cfg
     assert 'contradicts' in caplog.text
 
@@ -56,7 +61,7 @@ def test_llm_config_wins_over_sim_model(caplog: pytest.LogCaptureFixture) -> Non
 def test_no_warning_when_sim_model_is_untouched(caplog: pytest.LogCaptureFixture) -> None:
     cfg = LLMCallConfig(model='openai/gpt-4o')
     with caplog.at_level('WARNING'):
-        assert _resolve_sim_llm_config(sim_model=DEFAULT_MODEL, llm_config=cfg) is cfg
+        assert resolve_sim_llm_config(sim_model=DEFAULT_MODEL, llm_config=cfg) is cfg
     assert caplog.text == ''
 
 
@@ -77,7 +82,7 @@ def test_from_call_config_round_trips_through_base_agent() -> None:
 
     cfg = LLMCallConfig(model='openai/gpt-4o', temperature=0.25, reasoning_effort='high')
     back, _api_key = _config_from_agent_config(AgentConfig.from_call_config(cfg))
-    assert back.model_fields_set >= {'model', 'temperature', 'reasoning_effort'}
+    assert back.model_fields_set == {'model', 'client', 'api', 'temperature', 'reasoning_effort'}
     assert back.temperature == 0.25
     assert back.reasoning_effort == 'high'
 
@@ -220,4 +225,99 @@ async def test_executive_summary_sends_no_temperature_when_unset(monkeypatch: py
     run = MagicMock()
     run.results = [MagicMock()]
     await populate_run_executive_summary(run, enabled=True, model='m', resolve_client=lambda: MagicMock())
-    assert seen['temperature'] is None
+    # Absent, not None: an unset field must leave generate_executive_summary's own default alone.
+    assert 'temperature' not in seen
+
+
+@pytest.mark.asyncio
+async def test_generate_structured_reads_only_set_config_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The one merge every generator funnels through — and the only test of it."""
+    import evaluatorq.common.structured_output as mod
+
+    seen: dict[str, Any] = {}
+
+    async def fake_parse(**kwargs: Any) -> Any:
+        seen.update(kwargs)
+        raise RuntimeError('stop after the params are built')
+
+    monkeypatch.setattr(mod, 'execute_chat_parse', fake_parse)
+    cfg = LLMCallConfig(model='config/model', temperature=0.7, extra_body={'from': 'config'})
+    with pytest.raises(Exception, match='stop after the params are built'):
+        await mod.generate_structured(
+            MagicMock(),
+            model='explicit/model',
+            messages=[{'role': 'user', 'content': 'hi'}],
+            response_format=_Answer,
+            max_tokens=64,
+            label='test',
+            config=cfg,
+        )
+    assert seen['temperature'] == 0.7
+    assert seen['extra_body'] == {'from': 'config'}
+    # config.model is deliberately not read — the call site stays the authority.
+    assert seen['model'] == 'explicit/model'
+
+
+@pytest.mark.asyncio
+async def test_generate_structured_explicit_keyword_beats_the_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    import evaluatorq.common.structured_output as mod
+
+    seen: dict[str, Any] = {}
+
+    async def fake_parse(**kwargs: Any) -> Any:
+        seen.update(kwargs)
+        raise RuntimeError('stop')
+
+    monkeypatch.setattr(mod, 'execute_chat_parse', fake_parse)
+    with pytest.raises(Exception, match='stop'):
+        await mod.generate_structured(
+            MagicMock(),
+            model='m',
+            messages=[{'role': 'user', 'content': 'hi'}],
+            response_format=_Answer,
+            max_tokens=64,
+            label='test',
+            temperature=0.0,
+            config=LLMCallConfig(model='m', temperature=0.7),
+        )
+    assert seen['temperature'] == 0.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('entry', ['summarize_conversations', 'datapoints_from_traces', 'extend_from_traces'])
+async def test_trace_helpers_use_the_config_model(monkeypatch: pytest.MonkeyPatch, entry: str) -> None:
+    """`generate_structured` ignores `config.model`, so the entry point must resolve it.
+
+    Without this the temperature applied and the model silently did not — the run
+    billed the default model while the caller read their own in the config.
+    """
+    import evaluatorq.simulation.traces as mod
+
+    seen: list[str] = []
+
+    async def fake(*_args: Any, **kwargs: Any) -> Any:
+        seen.append(kwargs['model'])
+        raise RuntimeError('stop')
+
+    monkeypatch.setattr(mod, 'generate_structured', fake)
+    monkeypatch.setattr(mod, 'build_simulation_client', lambda *_a, **_k: (MagicMock(), False), raising=False)
+    conversation = mod.TraceConversation(trace_id='t1', messages=[{'role': 'user', 'content': 'hello'}])
+    fn = getattr(mod, entry)
+    kwargs: dict[str, Any] = {'llm_config': LLMCallConfig(model='chosen/model'), 'client': MagicMock()}
+    if entry == 'extend_from_traces':
+        kwargs['num_datapoints'] = 1
+    try:
+        await fn([conversation], **kwargs)
+    except Exception:  # noqa: BLE001 — the fake raises once the model is observed
+        pass
+    assert seen and all(m == 'chosen/model' for m in seen), seen
+
+
+def test_extend_from_experiment_warns_on_a_contradicting_sim_model(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level('WARNING'):
+        resolve_sim_llm_config(
+            sim_model='openai/gpt-4o-mini',
+            llm_config=LLMCallConfig(model='openai/gpt-4o'),
+            caller='extend_from_experiment',
+        )
+    assert 'extend_from_experiment(): sim_model=' in caplog.text

@@ -717,17 +717,15 @@ async def generate_structured(
     config cannot silently redirect a call to another endpoint.
     """
     if config is not None:
-        set_fields = config.model_fields_set
-        if temperature is None and 'temperature' in set_fields:
-            temperature = config.temperature
-        if extra_kwargs is None and 'extra_kwargs' in set_fields:
-            extra_kwargs = config.extra_kwargs
-        if extra_body is None and 'extra_body' in set_fields:
-            extra_body = config.extra_body
-        if reasoning_effort is None and 'reasoning_effort' in set_fields:
-            reasoning_effort = config.reasoning_effort
-        if timeout_s == _STRUCTURED_TIMEOUT_S and 'timeout_ms' in set_fields:
-            timeout_s = config.timeout_ms / 1000
+        from_config = config.set_values('temperature', 'extra_kwargs', 'extra_body', 'reasoning_effort', 'timeout_ms')
+        temperature = from_config.get('temperature', temperature) if temperature is None else temperature
+        extra_kwargs = from_config.get('extra_kwargs', extra_kwargs) if extra_kwargs is None else extra_kwargs
+        extra_body = from_config.get('extra_body', extra_body) if extra_body is None else extra_body
+        reasoning_effort = (
+            from_config.get('reasoning_effort', reasoning_effort) if reasoning_effort is None else reasoning_effort
+        )
+        if timeout_s == _STRUCTURED_TIMEOUT_S and 'timeout_ms' in from_config:
+            timeout_s = from_config['timeout_ms'] / 1000.0
     # Every rung is wrapped in `with_retry`, so the SDK's own budget is disarmed
     # once here; otherwise five outer attempts over an SDK doing two retries is
     # fifteen requests per rung. `without_client_retries` clones rather than

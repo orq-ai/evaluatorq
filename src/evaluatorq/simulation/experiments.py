@@ -104,12 +104,16 @@ async def extend_from_experiment(
             generators. Derived from the seed scenarios' goals when omitted.
         api_key: Orq API key; falls back to ``ORQ_API_KEY``.
     """
+    from evaluatorq.simulation._config import resolve_sim_llm_config
     from evaluatorq.simulation.generators import DatapointGenerator
     from evaluatorq.simulation.types import DEFAULT_MODEL
 
+    llm_config = resolve_sim_llm_config(
+        sim_model=sim_model or DEFAULT_MODEL, llm_config=llm_config, caller='extend_from_experiment'
+    )
     seeds = await datapoints_from_experiment(experiment_id, run_id=run_id, api_key=api_key)
 
-    generator = DatapointGenerator(model=sim_model or DEFAULT_MODEL, config=llm_config)
+    generator = DatapointGenerator(model=llm_config.model, config=llm_config)
     try:
         return await generator.generate_from_description(
             agent_description=agent_description or _describe_agent(seeds),

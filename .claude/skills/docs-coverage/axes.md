@@ -36,7 +36,7 @@ It is honoured by the judge (`common/judge.py`) and by simulation agents (`simul
 
 Every surface makes LLM calls that are not the target under test — red team's attacker and evaluator, simulation's user simulator, judge and generators, the executive summary. Each of those has a config object the caller can supply: `red_team(llm_config=LLMConfig(attacker=..., evaluator=...))` and `simulate(llm_config=LLMCallConfig(...))`. The model-name shorthands (`sim_model=`, `model=`) set only the model on the same object; when both are given the full config wins and the contradiction is logged.
 
-Supplying neither is the common case and is not a gap: every field of `LLMCallConfig` is unset by default, so each call site's own literal applies and `temperature` is omitted from the request entirely. That last part is load-bearing — reasoning-class models answer `400` to `temperature` at any value.
+Supplying neither is the common case and is not a gap: a field the caller never touched is not forwarded at all (the check is `model_fields_set`, never the value), so each call site's own literal applies and `temperature` is omitted from the request entirely. That is why the check is on the set rather than on `is None`: `model`, `max_tokens`, `timeout_ms` and `retry_count` carry real defaults, and `None` is itself a meaningful explicit value for the rest. That last part is load-bearing — reasoning-class models answer `400` to `temperature` at any value.
 
 Never confuse this axis with the target under test. The target is the thing being measured; it is configured where it is constructed (`target_reasoning_effort`, the backend's own settings), never through this config.
 

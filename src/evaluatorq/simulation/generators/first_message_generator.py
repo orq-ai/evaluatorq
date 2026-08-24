@@ -160,7 +160,7 @@ Keep it natural - this is how they would actually open a conversation."""
                             model=self._model,
                             messages=cast('list[dict[str, Any]]', messages),
                             span=span,
-                            timeout_s=self._config.timeout_ms / 1000
+                            timeout_s=self._config.timeout_ms / 1000.0
                             if 'timeout_ms' in self._config.model_fields_set
                             else _TIMEOUT_S,
                             max_output_tokens=_MAX_OUTPUT_TOKENS,

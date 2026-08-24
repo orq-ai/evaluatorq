@@ -84,7 +84,9 @@ One config drives every simulation-side call: the user simulator, the judge, and
 
 Only the fields you set take effect. `LLMCallConfig(model="...")` alone leaves `temperature` unset, so the parameter stays out of the request and a reasoning-class model keeps working.
 
-The same `llm_config=` is on `summarize_conversations()`, `datapoints_from_traces()` and `extend_from_traces()` for the trace-derived generation paths.
+The same `llm_config=` is on `summarize_conversations()`, `datapoints_from_traces()`, `extend_from_traces()` and `extend_from_experiment()` for the trace- and experiment-derived generation paths, with the same precedence: the config's model wins over the `model=` / `sim_model=` shorthand and the contradiction is logged.
+
+This is also how you pin the judge back to deterministic scoring. `temperature` no longer defaults to `0.0` anywhere, so a judge left unconfigured samples at whatever the provider's default is and two runs over the same transcript can disagree. Pass `llm_config=LLMCallConfig(model="...", temperature=0.0)` when you need run-to-run comparability — but not on a reasoning-class model, which rejects `temperature` at any value.
 
 ## Target-call reliability
 

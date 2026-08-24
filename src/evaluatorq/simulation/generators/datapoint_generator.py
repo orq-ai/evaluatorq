@@ -47,8 +47,6 @@ class DatapointGenerator:
         max_concurrent_calls: int = _DEFAULT_MAX_CONCURRENT_CALLS,
         config: LLMCallConfig | None = None,
     ) -> None:
-        # ``config`` sets sampling for all three sub-generators; ``model`` is the
-        # shorthand for setting only the model on it.
         self._config = config if config is not None else LLMCallConfig(model=model)
         self._model = self._config.model
         self._rate_limit_delay = rate_limit_delay

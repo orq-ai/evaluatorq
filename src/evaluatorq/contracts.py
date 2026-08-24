@@ -241,6 +241,22 @@ class LLMCallConfig(BaseModel):
         'the two cannot multiply.',
     )
 
+    def set_values(self, *names: str) -> dict[str, Any]:
+        """The named fields the caller explicitly set, as a kwargs dict.
+
+        Keyed on ``model_fields_set``, never on the values: several fields
+        default to ``None`` and ``None`` is also a meaningful explicit value, so
+        a value check cannot tell "caller asked for no temperature" from "caller
+        said nothing". Callers that forward a config into a function with its
+        own per-call-site defaults use this so an unset field leaves that
+        default alone.
+
+        Fields with a non-``None`` default (``model``, ``max_tokens``,
+        ``timeout_ms``, ``retry_count``) are omitted when unset too, for the
+        same reason — a config's default must not shadow a call site's.
+        """
+        return {name: getattr(self, name) for name in names if name in self.model_fields_set}
+
     def request_params(
         self,
         *,

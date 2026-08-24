@@ -23,12 +23,12 @@ from evaluatorq.common.llm_limit import llm_concurrency_limit
 from evaluatorq.common.parallelism import resolve_datapoint_parallelism
 from evaluatorq.common.recommendations import resolve_recommendations
 from evaluatorq.common.thread_context import _evaluatorq_run_scope, build_thread_id, evaluatorq_pipeline
-from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation._config import (
     DEFAULT_MAX_TARGET_RETRIES,
     DEFAULT_MAX_TOOL_RESULT_CHARS,
     DEFAULT_TARGET_AGENT_TIMEOUT_MS,
     SimulationConfig,
+    resolve_sim_llm_config,
 )
 from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig
 from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MAX_TURNS, DEFAULT_MODEL
@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
     from evaluatorq.common.run_manifest import ManifestWriter
-    from evaluatorq.contracts import AgentResponse, AgentTarget, TokenUsage
+    from evaluatorq.contracts import AgentResponse, AgentTarget, LLMCallConfig, TokenUsage
     from evaluatorq.simulation.agents.base import BaseAgent
     from evaluatorq.simulation.evaluators.scorers import SimulationScorer, SimulationScoringConfig
     from evaluatorq.simulation.generators import FirstMessageGenerator
@@ -98,31 +98,6 @@ async def _attach_recommendations(
     finally:
         if resolved is not None and resolved.owned:
             await resolved.client.close()
-
-
-def _resolve_sim_llm_config(*, sim_model: str, llm_config: LLMCallConfig | None) -> LLMCallConfig:
-    """Fold the ``sim_model`` shorthand and the full ``llm_config`` into one config.
-
-    ``llm_config`` wins: it is the richer surface, and a caller who built one
-    said everything they wanted to say about the simulation-side calls. A
-    ``sim_model`` that contradicts it is a mistake worth a warning rather than a
-    silent loss — the two used to be resolved at different layers, so whichever
-    the reader looked at was the one they believed.
-
-    When ``llm_config`` is omitted the shorthand still works and produces a
-    config with only ``model`` set, so every other field stays unset and the
-    per-call-site defaults keep applying.
-    """
-    if llm_config is None:
-        return LLMCallConfig(model=sim_model)
-    if sim_model != DEFAULT_MODEL and llm_config.model != sim_model:
-        logger.warning(
-            'simulate(): sim_model=%r contradicts llm_config.model=%r; using llm_config.model. '
-            'Drop sim_model, or set the model on llm_config only.',
-            sim_model,
-            llm_config.model,
-        )
-    return llm_config
 
 
 def _agent_key_of(target: object) -> str | None:
@@ -534,7 +509,7 @@ async def _simulate_run(
     # brackets the whole run (bare simulate has only the SIMULATE stage — no
     # GENERATE phase). Minted before the span opens so it can be stamped as a
     # span attribute rather than set after the fact.
-    resolved_llm_config = _resolve_sim_llm_config(sim_model=sim_model, llm_config=llm_config)
+    resolved_llm_config = resolve_sim_llm_config(sim_model=sim_model, llm_config=llm_config, caller='simulate')
     run_id = uuid.uuid4().hex
 
     try:
@@ -943,7 +918,9 @@ async def _generate_and_simulate_run(
     # composed hooks thread through both the generate phase and _simulate_core, so
     # both stages are recorded. Minted before the span opens so it can be stamped
     # as a span attribute rather than set after the fact.
-    resolved_llm_config = _resolve_sim_llm_config(sim_model=sim_model, llm_config=llm_config)
+    resolved_llm_config = resolve_sim_llm_config(
+        sim_model=sim_model, llm_config=llm_config, caller='generate_and_simulate'
+    )
     run_id = uuid.uuid4().hex
 
     try:
@@ -1125,7 +1102,7 @@ async def generate(
 
     await init_tracing_if_needed()
 
-    resolved_llm_config = _resolve_sim_llm_config(sim_model=sim_model, llm_config=llm_config)
+    resolved_llm_config = resolve_sim_llm_config(sim_model=sim_model, llm_config=llm_config, caller='generate')
     # Minted before the span opens so it can be stamped as a span attribute.
     run_id = uuid.uuid4().hex
 
@@ -1213,7 +1190,8 @@ async def generate_personas(
     # opens `orq.simulation.persona_generation` with a child LLM span, and on the
     # sim paths those already nest under the run's root span.
     gen = PersonaGenerator(
-        client=generation_client, config=_resolve_sim_llm_config(sim_model=sim_model, llm_config=llm_config)
+        client=generation_client,
+        config=resolve_sim_llm_config(sim_model=sim_model, llm_config=llm_config, caller='generate_personas'),
     )
     try:
         batches = await asyncio.gather(*[
@@ -1282,7 +1260,8 @@ async def generate_scenarios(
     description = agent_description or 'a general-purpose conversational assistant'
     # No run id bound here — see the note in generate_personas.
     gen = ScenarioGenerator(
-        client=generation_client, config=_resolve_sim_llm_config(sim_model=sim_model, llm_config=llm_config)
+        client=generation_client,
+        config=resolve_sim_llm_config(sim_model=sim_model, llm_config=llm_config, caller='generate_scenarios'),
     )
     try:
         batches = await asyncio.gather(*[
@@ -1416,7 +1395,7 @@ async def _generate_personas_scenarios(
 
     gen_client, gen_owned = build_simulation_client(generation_client, max_retries=0)
     try:
-        resolved = _resolve_sim_llm_config(sim_model=model, llm_config=llm_config)
+        resolved = resolve_sim_llm_config(sim_model=model, llm_config=llm_config, caller='generate')
         persona_gen = PersonaGenerator(client=gen_client, config=resolved)
         scenario_gen = ScenarioGenerator(client=gen_client, config=resolved)
 
@@ -1970,7 +1949,7 @@ async def _resolve_or_generate_datapoints(
 
     gen_client, gen_owned = build_simulation_client(generation_client, max_retries=0)
     try:
-        resolved = _resolve_sim_llm_config(sim_model=model, llm_config=llm_config)
+        resolved = resolve_sim_llm_config(sim_model=model, llm_config=llm_config, caller='generate_and_simulate')
         first_msg_gen = FirstMessageGenerator(client=gen_client, config=resolved)
         pairs = [(p, s) for p in personas for s in scenarios]
 

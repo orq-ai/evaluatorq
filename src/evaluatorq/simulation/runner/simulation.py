@@ -681,9 +681,8 @@ class SimulationRunner:
         self._target_agent_timeout_ms = target_agent_timeout_ms
         self._max_target_retries = max_target_retries
         self._max_tool_result_chars = max_tool_result_chars
-        # ``llm_config`` configures the user simulator and the judge — never the
-        # target under test, which is the thing being measured. ``model`` is the
-        # shorthand for setting only the model on it; a full config wins.
+        # Never the target under test: that is the thing being measured, and it is
+        # configured where it is constructed.
         self._llm_config = llm_config if llm_config is not None else LLMCallConfig(model=model)
         self._model = self._llm_config.model
         self._max_turns = max_turns

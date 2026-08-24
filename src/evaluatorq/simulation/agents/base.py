@@ -12,6 +12,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
+from typing_extensions import Self
+
 from evaluatorq.common.llm_call import (
     execute_chat_completion,
     execute_response,
@@ -156,7 +158,7 @@ class AgentConfig:
     retry_count: int | None = None
 
     @classmethod
-    def from_call_config(cls, config: LLMCallConfig, *, api_key: str | None = None, **overrides: Any) -> Any:
+    def from_call_config(cls, config: LLMCallConfig, *, api_key: str | None = None, **overrides: Any) -> Self:
         """Build this config class from a `LLMCallConfig`, preserving caller intent.
 
         Only fields the caller explicitly set on ``config`` are carried over —
@@ -175,20 +177,21 @@ class AgentConfig:
         as ``None``, so the two collapse and the call-site literal applies. Pass
         `LLMCallConfig` straight to the agent when you need that distinction.
         """
-        set_fields = config.model_fields_set
-        kwargs: dict[str, Any] = {'model': config.model, 'client': config.client, 'api_key': api_key}
-        for name in (
-            'api',
-            'temperature',
-            'max_tokens',
-            'timeout_ms',
-            'extra_kwargs',
-            'extra_body',
-            'reasoning_effort',
-            'retry_count',
-        ):
-            if name in set_fields:
-                kwargs[name] = getattr(config, name)
+        kwargs: dict[str, Any] = {
+            'model': config.model,
+            'client': config.client,
+            'api_key': api_key,
+            **config.set_values(
+                'api',
+                'temperature',
+                'max_tokens',
+                'timeout_ms',
+                'extra_kwargs',
+                'extra_body',
+                'reasoning_effort',
+                'retry_count',
+            ),
+        }
         return cls(**{**kwargs, **overrides})
 
 

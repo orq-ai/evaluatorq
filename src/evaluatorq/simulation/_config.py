@@ -28,6 +28,7 @@ from collections.abc import (  # noqa: TC003 — used in real (non-TYPE_CHECKING
 from pathlib import Path  # noqa: TC003 — used in a real (non-TYPE_CHECKING) field annotation, see note below
 from typing import Any
 
+from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
 # NOTE: these two are used directly in field annotations below (not just for
@@ -151,3 +152,42 @@ class SimulationConfig(BaseModel):
     """Generate the LLM narrative summary in-core (before save). Off by default;
     the public ``simulate``/``generate_and_simulate`` flip it on. The CLI keeps
     it off here and generates its own after the run (avoids double generation)."""
+
+
+def resolve_sim_llm_config(
+    *, sim_model: str, llm_config: LLMCallConfig | None, caller: str = 'simulate'
+) -> LLMCallConfig:
+    """Fold the ``sim_model`` shorthand and the full ``llm_config`` into one config.
+
+    ``llm_config`` wins: it is the richer surface, and a caller who built one
+    said everything they wanted to say about the simulation-side calls. A
+    ``sim_model`` that contradicts it is a mistake worth a warning rather than a
+    silent loss — the two used to be resolved at different layers, so whichever
+    the reader looked at was the one they believed.
+
+    When ``llm_config`` is omitted the shorthand still works and produces a
+    config with only ``model`` set, so every other field stays unset and the
+    per-call-site defaults keep applying.
+
+    Every public simulation entry point that accepts both spellings calls this,
+    and then threads the returned config's ``.model`` onward rather than its own
+    ``sim_model``. ``generate_structured`` deliberately ignores ``config.model``,
+    so an entry point that skips this step honours the config's temperature and
+    silently runs on the default model.
+
+    Args:
+        sim_model: The shorthand model keyword as the public entry point spells it.
+        llm_config: The full config, or ``None``.
+        caller: Public function name, for the contradiction warning.
+    """
+    if llm_config is None:
+        return LLMCallConfig(model=sim_model)
+    if sim_model != DEFAULT_MODEL and llm_config.model != sim_model:
+        logger.warning(
+            '{}(): sim_model={!r} contradicts llm_config.model={!r}; using llm_config.model. '
+            'Drop sim_model, or set the model on llm_config only.',
+            caller,
+            sim_model,
+            llm_config.model,
+        )
+    return llm_config
