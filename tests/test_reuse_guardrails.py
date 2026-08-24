@@ -13,6 +13,7 @@ not be a way around the rule by accident.
 from __future__ import annotations
 
 import ast
+import re
 from functools import cache
 from pathlib import Path
 
@@ -283,4 +284,35 @@ def test_exception_usage_goes_through_the_shared_helper() -> None:
         + '. Use evaluatorq.common.structured_output.usage_from_exception — it owns '
         'the harvest rule (why getattr rather than an except clause, and when the '
         'exception carries no total so the result must not be double-counted).'
+    )
+
+
+# Sphinx cross-reference roles (`:class:`Foo``) render as literal text on the
+# MkDocs site — the role prefix and the `~` shorthand both print. RES-1278.
+SPHINX_ROLE = re.compile(r':(?:class|func|meth|attr|mod|data|exc|obj):`')
+
+
+def _sphinx_role_sites() -> list[str]:
+    """``path:line`` for every docstring carrying a Sphinx cross-reference role."""
+    sites: list[str] = []
+    for path in sorted(SRC.rglob('*.py')):
+        rel = path.relative_to(SRC).as_posix()
+        tree = ast.parse(path.read_text(encoding='utf-8'))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            doc = ast.get_docstring(node, clean=False)
+            if doc and SPHINX_ROLE.search(doc):
+                sites.append(f'{rel}:{getattr(node, "lineno", 1)}')
+    return sites
+
+
+def test_docstrings_carry_no_sphinx_roles() -> None:
+    sites = _sphinx_role_sites()
+    assert not sites, (
+        'Sphinx cross-reference role in a docstring: '
+        + ', '.join(sites)
+        + '. mkdocstrings has no idea what a role is, so `:class:` and the `~` '
+        'shorthand render as literal text on the API reference pages. Use a plain '
+        'code span, or an mkdocstrings autoref: [Message][evaluatorq.contracts.Message].'
     )
