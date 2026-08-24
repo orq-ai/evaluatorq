@@ -93,6 +93,87 @@ errors to stdout.
 - **Custom headers**: parsed from `OTEL_EXPORTER_OTLP_HEADERS` as
   `key1=value1,key2=value2`.
 
+### Batching and flush
+
+Spans are exported asynchronously by a `BatchSpanProcessor`: each finished span
+lands in an in-memory queue, and a background thread drains the queue in batches
+on a fixed schedule. The `TracerProvider` lives for the whole process — a
+long-lived host (the dashboard, a worker that runs many red-team or simulation
+runs back to back) never tears it down between runs, so the same queue absorbs
+every run's spans.
+
+Two failure modes follow from that, and both drop spans **silently** unless you
+tune the processor:
+
+- **Queue overflow.** If spans are produced faster than the exporter drains them —
+  a burst of parallel jobs, or a slow/unreachable OTLP endpoint — the queue fills
+  and the SDK discards the overflow. Nothing is raised; the trace just arrives
+  incomplete.
+- **Exit before flush.** At the end of each run evaluatorq force-flushes the
+  processor, and the SDK's `atexit` hook flushes again on a clean shutdown. But a
+  force-flush that exceeds its timeout, or a hard `SIGKILL` (an OOM kill, a CI job
+  cancelled mid-run), leaves whatever is still buffered unexported. A flush that
+  times out logs a `WARNING` — *"OTEL span flush timed out … some spans may not
+  have been exported"* — rather than failing the run.
+
+Four environment variables tune this. All are read once, when tracing
+initializes:
+
+| Variable | Default | What it controls |
+|---|---|---|
+| `ORQ_OTEL_MAX_QUEUE_SIZE` | `4096` | Maximum spans buffered before the processor drops the overflow. Raise it for a long-lived host that batches many runs. |
+| `ORQ_OTEL_MAX_BATCH_SIZE` | `512` | Maximum spans per export request. Capped to the queue size, so a batch size larger than the queue is silently clamped down. |
+| `ORQ_OTEL_SCHEDULE_DELAY_MS` | `5000` | Delay between scheduled batch exports. Lower it to export more eagerly (fewer spans sitting in the queue at any moment); raise it to send larger, less frequent batches. |
+| `ORQ_OTEL_FLUSH_TIMEOUT_MS` | `5000` | How long the per-run force-flush blocks waiting for the exporter before giving up and logging the timeout warning. |
+
+Each value must be a positive integer. A set-but-invalid value (non-numeric, zero
+or negative) is ignored with a `WARNING` and the default is used, so a typo never
+takes tracing down — but it also never silently takes effect.
+
+A CI or batch run that must not lose spans typically drains the queue more
+eagerly and allows a longer final flush:
+
+```bash
+export ORQ_API_KEY="your_orq_api_key"      # enables tracing
+export ORQ_OTEL_MAX_QUEUE_SIZE=16384       # absorb a burst of parallel jobs
+export ORQ_OTEL_SCHEDULE_DELAY_MS=1000     # export every second, not every five
+export ORQ_OTEL_FLUSH_TIMEOUT_MS=30000     # give the final flush up to 30s
+```
+
+With those set, a normal run needs no code changes — evaluatorq flushes at the
+end of each run, and the knobs above decide how much headroom that flush has:
+
+```python
+import asyncio
+
+from evaluatorq import DataPoint, evaluatorq, job, string_contains_evaluator
+
+
+@job("echo")
+async def echo(data: DataPoint, _row: int) -> str:
+    return str(data.inputs["question"])
+
+
+async def main() -> None:
+    data = [DataPoint(inputs={"question": "30 days"}, expected_output="30 days")]
+    # Spans for this run are queued, batched on the schedule above, and
+    # force-flushed when evaluatorq() returns — within ORQ_OTEL_FLUSH_TIMEOUT_MS.
+    await evaluatorq(
+        "tracing-batching-demo",
+        data=data,
+        jobs=[echo],
+        evaluators=[string_contains_evaluator()],
+    )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+Set `ORQ_DEBUG=1` to print the resolved endpoint and initialization diagnostics,
+which is the quickest way to confirm the exporter is configured the way you
+expect before a long run.
+
 ## Span hierarchy
 
 ### Evaluation runner spans
