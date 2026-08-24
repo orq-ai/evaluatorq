@@ -37,7 +37,7 @@ from typing import Any
 
 from loguru import logger
 
-from evaluatorq.common.reports import SEVERITY_RANK, SEVERITY_WEIGHTS
+from evaluatorq.common.reports.palette import SEVERITY_RANK, SEVERITY_WEIGHTS
 from evaluatorq.contracts import ReportSection, TokenUsage
 from evaluatorq.redteam.contracts import OWASP_CATEGORY_NAMES, SEVERITY_DEFINITIONS, RedTeamReport, RedTeamResult
 from evaluatorq.redteam.reports._utils import extract_prompt, extract_response
