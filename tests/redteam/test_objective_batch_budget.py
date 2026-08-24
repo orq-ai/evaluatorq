@@ -138,3 +138,13 @@ async def test_a_budget_above_the_default_collapses_batches_the_default_would_sp
 
     raised_prompts = await _generate(count=12, config=LLMConfig(max_objectives_per_llm_call=16))
     assert _requested_counts(raised_prompts) == [12]
+
+
+@pytest.mark.asyncio
+async def test_severity_values_in_prompt():
+    """The rendered objective prompt includes the available severity values."""
+    prompts = await _generate(count=1, config=None)
+
+    assert len(prompts) == 1
+    assert 'low' in prompts[0]
+    assert 'critical' in prompts[0]
