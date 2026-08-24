@@ -26,7 +26,7 @@ def from_orq_deployment(
 
     async def callback(messages: list[Message]) -> AgentResponse:
         from evaluatorq.common.thread_context import current_thread_id, pipeline_metadata
-        from evaluatorq.common.tracing import record_llm_response, with_llm_span
+        from evaluatorq.common.tracing import record_llm_response, record_token_usage, with_llm_span
         from evaluatorq.deployment import MessageDict, ThreadConfig, deployment
 
         metadata: dict[str, object] | None = dict(pipeline_metadata()) or None
@@ -51,6 +51,11 @@ def from_orq_deployment(
                 thread=thread,
             )
             record_llm_response(span, resp.raw, output_content=resp.content)
+            if resp.usage is not None:
+                # resp.raw is None on some deployment paths, so record_llm_response
+                # finds no usage there; resp.usage is already normalised. Guarded:
+                # an unconditional call writes 0/0/0, which reads as a free call.
+                record_token_usage(span, usage=resp.usage)
             return AgentResponse(text=resp.content, usage=resp.usage)
 
     # Carry the key so the run-metadata label can render "deployment:<key>",

@@ -652,6 +652,16 @@ class SimulationRunner:
         # swallowed it into a synthetic [ERROR: ...] response, so the run finished
         # with no target span, no HTTP call and terminated_by=error. Route it.
         if target is not None and isinstance(target, AgentTarget):
+            if target_agent is not None and target_agent is not target:
+                logger.warning(
+                    'Both target_agent and an AgentTarget target= were supplied; '
+                    'target_agent wins and the target= agent is ignored.'
+                )
+            else:
+                logger.warning(
+                    'An AgentTarget was passed as target=; routing it to target_agent. '
+                    'Pass it as target_agent= to silence this.'
+                )
             target_agent = target_agent or target
             target = None
 

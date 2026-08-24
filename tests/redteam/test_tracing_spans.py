@@ -355,8 +355,8 @@ async def test_llm_span_gen_ai_system(span_collector: _CollectingExporter):
         pass
 
     attrs = _attrs(span_collector.spans[0])
-    assert attrs['gen_ai.system'] == 'azure'
-    assert attrs['gen_ai.provider.name'] == 'azure'
+    assert attrs['gen_ai.system'] == 'azure.ai.openai'
+    assert attrs['gen_ai.provider.name'] == 'azure.ai.openai'
     assert attrs['gen_ai.request.model'] == 'azure/gpt-5-mini'
     assert attrs['gen_ai.operation.name'] == 'chat'
 
@@ -432,8 +432,8 @@ async def test_llm_span_with_all_genai_attrs(span_collector: _CollectingExporter
         pass
 
     attrs = _attrs(span_collector.spans[0])
-    assert attrs['gen_ai.system'] == 'azure'
-    assert attrs['gen_ai.provider.name'] == 'azure'
+    assert attrs['gen_ai.system'] == 'azure.ai.openai'
+    assert attrs['gen_ai.provider.name'] == 'azure.ai.openai'
     assert attrs['gen_ai.request.model'] == 'azure/gpt-5-mini'
     assert attrs['gen_ai.operation.name'] == 'chat'
     assert attrs['gen_ai.request.temperature'] == 0.7

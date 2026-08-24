@@ -1,7 +1,7 @@
 """OTel span helpers for the agent simulation module.
 
-Domain-specific span builders (with_simulation_span, with_llm_span) live here.
-Generic recording utilities are imported from evaluatorq.common.tracing.
+with_simulation_span is domain-specific; with_llm_span is a thin wrapper over
+the canonical builder in evaluatorq.common.tracing.
 
 Span hierarchy:
     Evaluatorq - Agent Simulation (root)
@@ -18,11 +18,11 @@ Span hierarchy:
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from evaluatorq.common.tracing import orq_span_type_for_operation
+from evaluatorq.common.tracing import with_llm_span as _common_with_llm_span
 from evaluatorq.contracts import content_to_text
 from evaluatorq.tracing.setup import get_tracer
 
@@ -60,18 +60,6 @@ def span_message_text(content: str | list[ContentPart] | None) -> str:
             types,
         )
         return f'<non-text content: {types}>'
-
-
-_PROVIDER_ALIASES: dict[str, str] = {
-    'azure': 'azure.ai.openai',
-}
-
-
-def _derive_provider(model: str) -> str:
-    if '/' in model:
-        prefix = model.split('/', 1)[0]
-        return _PROVIDER_ALIASES.get(prefix, prefix)
-    return 'openai'
 
 
 @asynccontextmanager
@@ -119,7 +107,7 @@ async def with_simulation_span(  # noqa: RUF029
 
 
 @asynccontextmanager
-async def with_llm_span(  # noqa: RUF029
+async def with_llm_span(
     *,
     model: str,
     operation: str = 'chat',
@@ -130,56 +118,20 @@ async def with_llm_span(  # noqa: RUF029
 ) -> AsyncGenerator[Span | None, None]:
     """Execute a block within a GenAI LLM span (SpanKind.CLIENT).
 
-    Span name is "{operation} {model}". Sets orq.simulation.llm_purpose when
-    purpose is provided.
+    Delegates to ``evaluatorq.common.tracing.with_llm_span`` after mapping
+    ``purpose`` onto the neutral ``orq.llm.purpose`` key and the legacy
+    ``orq.simulation.llm_purpose`` kept for dashboard back-compat.
 
     Yields:
-            The active span, or None when tracing is disabled.
+        The active span, or None when tracing is disabled.
     """
-    tracer = get_tracer()
-    if tracer is None:
-        yield None
-        return
-
-    try:
-        from opentelemetry.trace import SpanKind, Status, StatusCode
-    except ImportError as exc:
-        global _otel_import_warned
-        if not _otel_import_warned:
-            logger.warning('OpenTelemetry import failed; tracing disabled: %s', exc)
-            _otel_import_warned = True
-        yield None
-        return
-
-    resolved_provider = provider or _derive_provider(model)
-    span_name = f'{operation} {model}'
-
-    attrs: dict[str, Any] = {
-        'gen_ai.operation.name': operation,
-        'gen_ai.system': resolved_provider,
-        'gen_ai.provider.name': resolved_provider,
-        'gen_ai.request.model': model,
-    }
-    span_type = orq_span_type_for_operation(operation)
-    if span_type is not None:
-        attrs['orq.span_type'] = span_type
-    if temperature is not None:
-        attrs['gen_ai.request.temperature'] = temperature
-    if max_tokens is not None:
-        attrs['gen_ai.request.max_tokens'] = max_tokens
-    if purpose:
-        # Domain-neutral key (parity with openresponses.with_llm_span) so the
-        # platform can query orq.llm.purpose across all domains; the legacy
-        # orq.simulation.llm_purpose is emitted alongside for dashboard back-compat.
-        attrs['orq.llm.purpose'] = purpose
-        attrs['orq.simulation.llm_purpose'] = purpose
-
-    with tracer.start_as_current_span(span_name, kind=SpanKind.CLIENT, attributes=attrs) as span:
-        try:
-            yield span
-            span.set_status(Status(StatusCode.OK))
-        except BaseException as e:
-            span.set_status(Status(StatusCode.ERROR, str(e)))
-            span.record_exception(e)
-            span.set_attribute('error.type', type(e).__name__)
-            raise
+    attributes = {'orq.llm.purpose': purpose, 'orq.simulation.llm_purpose': purpose} if purpose else None
+    async with _common_with_llm_span(
+        model=model,
+        operation=operation,
+        provider=provider,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        attributes=attributes,
+    ) as span:
+        yield span

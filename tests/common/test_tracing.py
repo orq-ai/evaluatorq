@@ -37,7 +37,10 @@ def span_collector():
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     tracer = provider.get_tracer('test')
-    with patch('evaluatorq.simulation.tracing.get_tracer', return_value=tracer):
+    with (
+        patch('evaluatorq.simulation.tracing.get_tracer', return_value=tracer),
+        patch('evaluatorq.common.tracing.get_tracer', return_value=tracer),
+    ):
         yield exporter, tracer
     provider.shutdown()
 
@@ -811,7 +814,7 @@ async def test_openresponses_llm_span_emits_neutral_and_legacy_purpose() -> None
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     tracer = provider.get_tracer('test')
     try:
-        with patch('evaluatorq.openresponses.tracing.get_tracer', return_value=tracer):
+        with patch('evaluatorq.common.tracing.get_tracer', return_value=tracer):
             async with with_llm_span(model='openai/gpt-4o', operation='responses', purpose='target'):
                 pass
         attrs = _attrs(_span(exporter))

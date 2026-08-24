@@ -7,52 +7,35 @@ attributes, and hierarchy of the simulation tracing helpers.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
 from typing import Any
 from unittest.mock import patch
 
 import pytest
-from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
-from opentelemetry.sdk.trace.export import (
-    SimpleSpanProcessor,
-    SpanExporter,
-    SpanExportResult,
-)
+from opentelemetry.sdk.trace import ReadableSpan
 
-
-class _CollectingExporter(SpanExporter):
-    """Minimal in-memory exporter that collects finished spans."""
-
-    def __init__(self) -> None:
-        self.spans: list[ReadableSpan] = []
-
-    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
-        self.spans.extend(spans)
-        return SpanExportResult.SUCCESS
-
-    def shutdown(self) -> None:
-        pass
+from tests.simulation.conftest import CollectingExporter, new_collector
+from tests.simulation.conftest import span_attrs as _attrs
 
 
 @pytest.fixture
 def span_collector():
-    """Set up an in-memory OTel TracerProvider; patch the simulation tracer."""
-    exporter = _CollectingExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    tracer = provider.get_tracer('evaluatorq-simulation-test')
+    """In-memory OTel TracerProvider, patched into both tracer bindings.
 
-    with patch('evaluatorq.simulation.tracing.get_tracer', return_value=tracer):
+    with_simulation_span binds get_tracer in simulation.tracing; with_llm_span
+    delegates to common.tracing.
+    """
+    exporter, provider, tracer = new_collector()
+
+    with (
+        patch('evaluatorq.simulation.tracing.get_tracer', return_value=tracer),
+        patch('evaluatorq.common.tracing.get_tracer', return_value=tracer),
+    ):
         yield exporter
 
     provider.shutdown()
 
 
-def _attrs(span: ReadableSpan) -> dict[str, Any]:
-    return dict(span.attributes or {})
-
-
-def _find(exporter: _CollectingExporter, name: str) -> ReadableSpan:
+def _find(exporter: CollectingExporter, name: str) -> ReadableSpan:
     for s in exporter.spans:
         if s.name == name:
             return s
@@ -66,7 +49,7 @@ def _find(exporter: _CollectingExporter, name: str) -> ReadableSpan:
 
 @pytest.mark.asyncio
 async def test_simulation_span_creates_span_with_attrs(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
 ):
     from evaluatorq.simulation.tracing import with_simulation_span
 
@@ -84,7 +67,7 @@ async def test_simulation_span_creates_span_with_attrs(
 
 @pytest.mark.asyncio
 async def test_simulation_span_skips_none_attrs(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
 ):
     from evaluatorq.simulation.tracing import with_simulation_span
 
@@ -99,7 +82,7 @@ async def test_simulation_span_skips_none_attrs(
 
 @pytest.mark.asyncio
 async def test_simulation_span_records_exception(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
 ):
     from evaluatorq.simulation.tracing import with_simulation_span
 
@@ -120,7 +103,7 @@ async def test_simulation_span_records_exception(
 
 
 @pytest.mark.asyncio
-async def test_llm_span_name_and_attrs(span_collector: _CollectingExporter):
+async def test_llm_span_name_and_attrs(span_collector: CollectingExporter):
     from evaluatorq.simulation.tracing import with_llm_span
 
     async with with_llm_span(
@@ -146,7 +129,7 @@ async def test_llm_span_name_and_attrs(span_collector: _CollectingExporter):
 
 
 @pytest.mark.asyncio
-async def test_llm_span_responses_operation(span_collector: _CollectingExporter):
+async def test_llm_span_responses_operation(span_collector: CollectingExporter):
     from evaluatorq.simulation.tracing import with_llm_span
 
     async with with_llm_span(model='openai/gpt-4o', operation='responses'):
@@ -163,7 +146,7 @@ async def test_llm_span_responses_operation(span_collector: _CollectingExporter)
 
 @pytest.mark.asyncio
 async def test_record_token_usage_sets_genai_attrs(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
 ):
     from evaluatorq.common.tracing import record_token_usage
     from evaluatorq.simulation.tracing import with_llm_span
@@ -179,7 +162,7 @@ async def test_record_token_usage_sets_genai_attrs(
 
 @pytest.mark.asyncio
 async def test_record_llm_input_serializes_messages(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
 ):
     from evaluatorq.common.tracing import record_llm_input
     from evaluatorq.simulation.tracing import with_llm_span
@@ -200,7 +183,7 @@ async def test_record_llm_input_serializes_messages(
 
 @pytest.mark.asyncio
 async def test_record_llm_input_truncates_long_content(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
     monkeypatch: pytest.MonkeyPatch,
 ):
     from evaluatorq.common.tracing import (
@@ -230,7 +213,7 @@ async def test_record_llm_input_truncates_long_content(
 
 @pytest.mark.asyncio
 async def test_record_token_usage_preserves_zero_prompt_tokens(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
 ):
     """Zero input_tokens (e.g. fully-cached request) must not fall back to the
     truthy `prompt_tokens` alias. Regression guard for the falsy-or chain bug:
@@ -264,7 +247,7 @@ async def test_record_token_usage_preserves_zero_prompt_tokens(
 
 @pytest.mark.asyncio
 async def test_record_llm_response_responses_api_shape(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
 ):
     """recordLLMResponse with a Responses API-shaped object: output items
     have content[].text, not flat .text on the item."""
@@ -305,7 +288,7 @@ async def test_record_llm_response_responses_api_shape(
 
 @pytest.mark.asyncio
 async def test_record_llm_response_dict_responses_api_shape(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
 ):
     from evaluatorq.common.tracing import record_llm_response
     from evaluatorq.simulation.tracing import with_llm_span
@@ -338,7 +321,7 @@ async def test_record_llm_response_dict_responses_api_shape(
 
 @pytest.mark.asyncio
 async def test_record_openresponses_request_sets_max_tokens(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
 ):
     from evaluatorq.openresponses.tracing import record_openresponses_request
     from evaluatorq.simulation.tracing import with_llm_span
@@ -360,7 +343,7 @@ async def test_record_openresponses_request_sets_max_tokens(
 
 @pytest.mark.asyncio
 async def test_record_llm_response_tool_call_only_chat_output(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
 ):
     from evaluatorq.common.tracing import record_llm_response
     from evaluatorq.simulation.tracing import with_llm_span
@@ -399,7 +382,7 @@ async def test_record_llm_response_tool_call_only_chat_output(
 
 @pytest.mark.asyncio
 async def test_simulation_span_records_asyncio_cancellation(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
 ):
     """asyncio.CancelledError (a BaseException, not Exception) must be
     recorded on the span — otherwise timed-out simulations end with UNSET
@@ -419,7 +402,7 @@ async def test_simulation_span_records_asyncio_cancellation(
 
 @pytest.mark.asyncio
 async def test_llm_span_records_asyncio_cancellation(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
 ):
     """Mirror of the with_simulation_span cancellation test for the LLM
     span path (timed-out LLM calls must record as ERROR on the span)."""
@@ -438,7 +421,7 @@ async def test_llm_span_records_asyncio_cancellation(
 
 @pytest.mark.asyncio
 async def test_record_llm_response_responses_api_finish_reason(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
 ):
     """gen_ai.response.finish_reasons must be set from response.status when
     the response has no .choices (Responses API shape)."""
@@ -460,7 +443,7 @@ async def test_record_llm_response_responses_api_finish_reason(
 
 
 @pytest.mark.asyncio
-async def test_llm_span_records_exception(span_collector: _CollectingExporter):
+async def test_llm_span_records_exception(span_collector: CollectingExporter):
     """Exceptions inside with_llm_span are recorded with ERROR status."""
     from evaluatorq.simulation.tracing import with_llm_span
 
@@ -475,7 +458,7 @@ async def test_llm_span_records_exception(span_collector: _CollectingExporter):
 
 @pytest.mark.asyncio
 async def test_record_llm_response_chat_completions(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
 ):
     """recordLLMResponse with a Chat Completions-shaped object."""
     from evaluatorq.common.tracing import record_llm_response
@@ -520,7 +503,7 @@ async def test_record_llm_response_chat_completions(
 
 
 @pytest.mark.asyncio
-async def test_nested_spans_share_trace(span_collector: _CollectingExporter):
+async def test_nested_spans_share_trace(span_collector: CollectingExporter):
     from evaluatorq.simulation.tracing import with_llm_span, with_simulation_span
 
     async with with_simulation_span('Evaluatorq - Agent Simulation', None):
@@ -552,7 +535,7 @@ async def test_nested_spans_share_trace(span_collector: _CollectingExporter):
 
 @pytest.mark.asyncio
 async def test_end_to_end_simulation_produces_full_span_tree(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
     monkeypatch: pytest.MonkeyPatch,
 ):
     """End-to-end smoke test: run a 2-turn simulation with mocks and verify
@@ -705,7 +688,7 @@ async def test_end_to_end_simulation_produces_full_span_tree(
 
 @pytest.mark.asyncio
 async def test_run_span_carries_no_usage_and_result_carries_the_aggregate(
-    span_collector: _CollectingExporter, monkeypatch: pytest.MonkeyPatch
+    span_collector: CollectingExporter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Usage belongs on the per-call LLM spans; the sink aggregates from those.
 
@@ -779,7 +762,7 @@ async def test_run_span_carries_no_usage_and_result_carries_the_aggregate(
 
 @pytest.mark.asyncio
 async def test_pipeline_aggregate_span_carries_summed_call_count(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
 ) -> None:
     """The pipeline span built by `_simulate_via_evaluatorq` in
     simulation/api.py aggregates every result's `token_usage` (including
@@ -820,7 +803,7 @@ async def test_pipeline_aggregate_span_carries_summed_call_count(
 
 @pytest.mark.asyncio
 async def test_traceparent_injected_into_chat_completions_call(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
     monkeypatch: pytest.MonkeyPatch,
 ):
     """When tracing is enabled, _call_chat_completions should inject
@@ -887,7 +870,7 @@ async def test_traceparent_injected_into_chat_completions_call(
 
 @pytest.mark.asyncio
 async def test_traceparent_injected_into_first_message_generation_call(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
     monkeypatch: pytest.MonkeyPatch,
 ):
     from unittest.mock import AsyncMock, MagicMock
@@ -952,7 +935,7 @@ async def test_traceparent_injected_into_first_message_generation_call(
 
 @pytest.mark.asyncio
 async def test_generated_datapoint_first_message_has_simulation_span(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
     monkeypatch: pytest.MonkeyPatch,
 ):
     from unittest.mock import AsyncMock, MagicMock
@@ -1014,7 +997,7 @@ async def test_generated_datapoint_first_message_has_simulation_span(
 
 @pytest.mark.asyncio
 async def test_run_span_records_error_metadata_and_usage(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
     monkeypatch: pytest.MonkeyPatch,
 ):
     from unittest.mock import AsyncMock, MagicMock
@@ -1086,7 +1069,7 @@ async def test_run_span_records_error_metadata_and_usage(
 
 @pytest.mark.asyncio
 async def test_target_agent_usage_aggregated_into_run_result(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
     monkeypatch: pytest.MonkeyPatch,
 ):
     """`AgentTarget.respond().usage` must flow into `SimulationResult.token_usage`.
@@ -1119,7 +1102,7 @@ async def test_target_agent_usage_aggregated_into_run_result(
             self.call_count += 1
             return AgentResponse(text=f'reply #{self.call_count}', usage=self._usage)
 
-        def new(self) -> '_FakeAgentTarget':
+        def new(self) -> _FakeAgentTarget:
             # Shared on purpose: this test asserts usage aggregation on one
             # instance, not clone isolation (covered in test_target_isolation).
             return self
@@ -1216,7 +1199,7 @@ async def test_target_agent_usage_aggregated_into_run_result(
 
 @pytest.mark.asyncio
 async def test_run_span_records_cancellation_metadata_and_usage(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
     monkeypatch: pytest.MonkeyPatch,
 ):
     import asyncio
@@ -1286,7 +1269,7 @@ async def test_run_span_records_cancellation_metadata_and_usage(
 
 @pytest.mark.asyncio
 async def test_concurrent_runs_share_pipeline_parent(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
 ):
     """Two concurrent simulation spans started under one pipeline span both
     have the pipeline as their parent — confirms asyncio.gather doesn't leak
@@ -1346,7 +1329,7 @@ async def test_helpers_noop_when_tracing_disabled():
 
 
 @pytest.mark.asyncio
-async def test_executive_summary_emits_llm_span(span_collector: _CollectingExporter):
+async def test_executive_summary_emits_llm_span(span_collector: CollectingExporter):
     """populate_run_executive_summary wraps its LLM call in a GenAI span."""
     from types import SimpleNamespace
 
@@ -1394,7 +1377,7 @@ async def test_executive_summary_emits_llm_span(span_collector: _CollectingExpor
 
 
 @pytest.mark.asyncio
-async def test_executive_summary_no_span_when_disabled(span_collector: _CollectingExporter):
+async def test_executive_summary_no_span_when_disabled(span_collector: CollectingExporter):
     """enabled=False short-circuits before opening any span."""
     from types import SimpleNamespace
 
@@ -1409,7 +1392,7 @@ async def test_executive_summary_no_span_when_disabled(span_collector: _Collecti
 
 @pytest.mark.asyncio
 async def test_batched_first_message_generation_uses_one_span(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
     monkeypatch: pytest.MonkeyPatch,
 ):
     """The persona x scenario sweep opens ONE generation span; every pair's LLM
@@ -1479,7 +1462,7 @@ async def test_batched_first_message_generation_uses_one_span(
 
 @pytest.mark.asyncio
 async def test_first_message_generation_span_records_failures(
-    span_collector: _CollectingExporter,
+    span_collector: CollectingExporter,
     monkeypatch: pytest.MonkeyPatch,
 ):
     """Every pair failing marks the phase span ERROR and records one event per

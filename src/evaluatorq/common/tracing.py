@@ -441,9 +441,16 @@ def orq_span_type_for_operation(operation: str) -> str | None:
     return None
 
 
+_PROVIDER_ALIASES: dict[str, str] = {
+    # semconv spells the Azure OpenAI provider out; the model prefix does not.
+    'azure': 'azure.ai.openai',
+}
+
+
 def _derive_provider(model: str) -> str:
     if '/' in model:
-        return model.split('/', 1)[0]
+        prefix = model.split('/', 1)[0]
+        return _PROVIDER_ALIASES.get(prefix, prefix)
     return 'openai'
 
 

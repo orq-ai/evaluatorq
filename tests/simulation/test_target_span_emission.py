@@ -11,13 +11,9 @@ reaching the network.
 from __future__ import annotations
 
 import importlib
-from collections.abc import Sequence
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
 
 from evaluatorq.common.tracing import orq_span_type_for_operation
 from evaluatorq.contracts import AgentResponse, AgentTarget, LLMCallConfig
@@ -27,38 +23,11 @@ from evaluatorq.simulation.adapters import from_orq_deployment
 from evaluatorq.simulation.runner.simulation import SimulationRunner
 from evaluatorq.simulation.tracing import with_llm_span as simulation_llm_span
 from evaluatorq.simulation.types import Message
+from tests.simulation.conftest import find_span as _find
+from tests.simulation.conftest import new_collector as _provider
+from tests.simulation.conftest import span_attrs as _attrs
 
 _deployment_module = importlib.import_module('evaluatorq.deployment')
-
-
-class _CollectingExporter(SpanExporter):
-    def __init__(self) -> None:
-        self.spans: list[ReadableSpan] = []
-
-    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
-        self.spans.extend(spans)
-        return SpanExportResult.SUCCESS
-
-    def shutdown(self) -> None:
-        pass
-
-
-def _provider() -> tuple[_CollectingExporter, TracerProvider, Any]:
-    exporter = _CollectingExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    return exporter, provider, provider.get_tracer('evaluatorq-target-span-test')
-
-
-def _attrs(span: ReadableSpan) -> dict[str, Any]:
-    return dict(span.attributes or {})
-
-
-def _find(exporter: _CollectingExporter, prefix: str) -> ReadableSpan:
-    for span in exporter.spans:
-        if span.name.startswith(prefix):
-            return span
-    raise AssertionError(f'no span starting {prefix!r}; got {[s.name for s in exporter.spans]}')
 
 
 def test_span_type_only_overridden_for_responses_operations() -> None:
@@ -90,7 +59,7 @@ async def test_responses_target_span_claims_span_responses_type() -> None:
     client.responses.create = AsyncMock(return_value=response)
     target = OrqResponsesTarget(LLMCallConfig(model='agent/some-key'), client=client)
 
-    with patch('evaluatorq.openresponses.tracing.get_tracer', return_value=tracer):
+    with patch('evaluatorq.common.tracing.get_tracer', return_value=tracer):
         await target.respond([Message(role='user', content='hello')])
 
     provider.shutdown()
@@ -113,7 +82,7 @@ async def test_simulation_responses_span_claims_span_responses_type() -> None:
     """
     exporter, provider, tracer = _provider()
 
-    with patch('evaluatorq.simulation.tracing.get_tracer', return_value=tracer):
+    with patch('evaluatorq.common.tracing.get_tracer', return_value=tracer):
         async with simulation_llm_span(model='openai/gpt-4o-mini', operation='responses', purpose='judge'):
             pass
 
@@ -149,12 +118,14 @@ class _RecordingTarget(AgentTarget):
         super().__init__()
         self.calls = 0
 
-    async def respond(self, messages: list[Message]) -> AgentResponse:  # noqa: ARG002
+    async def respond(self, messages: list[Message]) -> AgentResponse:
         self.calls += 1
         return AgentResponse(text='ok')
 
     def new(self) -> _RecordingTarget:
-        return self
+        # Contract: new() returns a fresh instance — a shared one races on state
+        # when datapoints run concurrently (contracts.py AgentTarget.new).
+        return _RecordingTarget()
 
 
 def test_agent_target_passed_as_target_routes_to_target_agent() -> None:

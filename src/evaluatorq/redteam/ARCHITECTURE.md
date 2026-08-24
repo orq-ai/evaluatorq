@@ -81,12 +81,7 @@ The backend reuses `evaluatorq.openresponses.target.OrqResponsesTarget`, so
 redteam and simulation share retry behavior, `previous_response_id` threading,
 output parsing, and token-usage extraction.
 
-Trace spans use `gen_ai.*` attributes plus `orq.openresponses.request` /
-`orq.openresponses.response` so observability surfaces the exact payload that
-went over the wire. They also set `orq.span_type='span.responses'` and the
-unprefixed `openresponses.input` / `openresponses.output`, which is what makes
-Orq render them as a transcript rather than a raw JSON tree — see
-[docs/tracing.md](../../../docs/tracing.md).
+Trace spans use `gen_ai.*` attributes plus `orq.openresponses.request` / `orq.openresponses.response` so observability surfaces the exact payload that went over the wire. They also set `orq.span_type='span.responses'` and the unprefixed `openresponses.input` / `openresponses.output`, which is what makes Orq render them as a transcript rather than a raw JSON tree — see [docs/tracing.md](../../../docs/tracing.md).
 
 ### Dataset helpers
 
