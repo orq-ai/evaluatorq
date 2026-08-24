@@ -145,6 +145,7 @@ async def test_severity_values_in_prompt():
     """The rendered objective prompt includes the available severity values."""
     prompts = await _generate(count=1, config=None)
 
+    from evaluatorq.redteam.adaptive.objective_generator import _SEVERITY_VALUES
+
     assert len(prompts) == 1
-    assert 'low' in prompts[0]
-    assert 'critical' in prompts[0]
+    assert _SEVERITY_VALUES in prompts[0]
