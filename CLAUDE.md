@@ -127,6 +127,7 @@ Read the directory itself for the file list — it is always current, this file 
 | LLM-as-judge | `common.judge.run_judge`; multi-judge via `common.jury` | new judge prompt + parse loop |
 | OTel spans, token usage, cost | `common.tracing` (`with_llm_span`, `record_token_usage`, `record_llm_response`) | `get_tracer` / `start_as_current_span` outside a `tracing.py` module |
 | Surface-specific span naming | `redteam/tracing.py`, `simulation/tracing.py` — thin wrappers that delegate | new span vocabulary |
+| Prompt caching on a replayed conversation | `common.prompt_cache` (`apply_cache_breakpoints` for chat, `mark_responses_input` for Responses), gated on `caching_applies(client, model)` | hand-placed `cache_control`, a `prompt_cache_key` (OpenAI caches automatically; it needs none), or a bare `client_routes_through_orq` gate |
 | Prompt templating | `common.template_engine.render_template` | f-string prompt assembly |
 | Untrusted text into a prompt | `common.sanitize.delimit` | raw interpolation |
 | Run lifecycle state | `common.run_manifest` (`start_manifest`, `list_manifests`) | new status dict / sidecar file |
@@ -156,6 +157,9 @@ Distilled from review findings that recurred. Each cost a review round.
 - **Every filtered UI section renders an empty state.** A section that disappears on zero matches is indistinguishable from a bug.
 - **Never ask a judge for a verdict that inverts between types.** `must_happen` and `must_not_happen` mean opposite things by the same `passed` flag, and models get it backwards — gpt-5.4-mini marked a satisfied `must_happen` as unmet while its own `reason` said the opposite. Ask for the one factual thing (*did it occur?*) and map occurrence to pass/fail in code.
 - **Provider usage/cost shapes are not interchangeable.** Anthropic reports cache reads top-level where Orq/OpenAI nest them. Build the test fixture from the provider SDK's own models so a schema move fails the test instead of confirming the guess.
+- **Only write a cache breakpoint where the next turn will still have that prefix.** A write costs 1.25x and is read back only by a request repeating the marked prefix byte-for-byte, so marking a message the caller rebuilds each turn is a pure loss — the judge's per-turn instruction cost the whole transcript, every turn. `volatile_tail` is a **required** keyword for that reason: say how many trailing messages you rebuild (`0` when the whole list persists). On the Responses path the count is `volatile_items`, **not** messages — one tool-calling `Message` renders to several `input` items — so convert with `responses_volatile_items` and never pass a message count through. Never set `ttl` — the 5m default is right, `1h` costs more and only Anthropic honours it. Both APIs take a **positioned, per-item** marker, so this holds on either; do not use the Responses *top-level* `cache_control` body field, which marks the end of the whole input and so cannot be kept off a rebuilt trailing item (measured: 0 reads).
+- **Stable text goes before varying text.** Text stuck behind a placeholder is uncacheable however stable it is, because a breakpoint is per-message and cannot split one. The OWASP judge rubrics are the standing example: ~1500 stable tokens sit around the transcript placeholders and none of them can be marked.
+- **Mark a render, never a store.** `apply_cache_breakpoints` / `mark_responses_input` return a copy and never mutate; feed them the freshly-rendered `list[dict]` and let the result die with the request. Assigning the marked copy back onto the transcript you keep appending to is the one way to exceed Anthropic's 4-breakpoint limit — the old markers stay, two more are added each turn, and the API rejects the request several billed turns in. There is no runtime guard for this by design: annotate the transcript with its real type (`list[ChatCompletionMessageParam]`) and basedpyright refuses the assignment.
 
 Guardrails for the mechanical parts live in `tests/test_reuse_guardrails.py`. A failure there names the canonical helper — use it, don't extend the allowlist.
 
@@ -199,6 +203,10 @@ The reverse failure is quieter and worse: a job that returns **no** `error` key 
 - Mark integration tests with `@pytest.mark.integration`
 - Default pytest timeout is 120s (configured in `pyproject.toml`)
 - Use `pytest-asyncio` for async tests
+
+Prompt-cache behavior is covered by `tests/unit/test_prompt_cache.py`, `tests/openresponses/test_prompt_cache.py`, `tests/redteam/test_orchestrator_prompt_cache.py`, and `tests/simulation/test_agent_prompt_cache.py`. Run those together with `tests/test_reuse_guardrails.py` when changing cache placement, router/model gating, or transcript rendering: `uv run pytest tests/unit/test_prompt_cache.py tests/openresponses/test_prompt_cache.py tests/redteam/test_orchestrator_prompt_cache.py tests/simulation/test_agent_prompt_cache.py tests/test_reuse_guardrails.py`.
+
+These tests use fakes and do not require API credentials. The repository does not include a live provider probe; live cache measurements require a separately maintained investigation against the configured provider and model.
 
 ### Dependencies
 

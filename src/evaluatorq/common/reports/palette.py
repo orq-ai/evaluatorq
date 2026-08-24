@@ -54,6 +54,20 @@ SEVERITY_COLORS: dict[str, str] = {
 
 SEVERITY_ORDER: list[str] = ['critical', 'high', 'medium', 'low']
 
+SEVERITY_WEIGHTS: dict[str, int] = {
+    'critical': 8,
+    'high': 4,
+    'medium': 2,
+    'low': 1,
+}
+
+SEVERITY_RANK: dict[str, int] = {
+    'critical': 4,
+    'high': 3,
+    'medium': 2,
+    'low': 1,
+}
+
 STATUS_COLORS: dict[str, str] = {
     'vulnerable': COLORS['red_400'],
     'resistant': COLORS['success_400'],

@@ -12,20 +12,19 @@ from typing import TYPE_CHECKING
 
 from evaluatorq.common.reports.executive_summary import truncate_text
 from evaluatorq.common.reports.html_helpers import pct
+from evaluatorq.common.reports.palette import SEVERITY_RANK
 from evaluatorq.redteam.contracts import OWASP_CATEGORY_NAMES
 from evaluatorq.redteam.reports._utils import extract_prompt, extract_response
 
 if TYPE_CHECKING:
     from evaluatorq.redteam.contracts import RedTeamReport, RedTeamResult
 
-_SEVERITY_RANK = {'critical': 4, 'high': 3, 'medium': 2, 'low': 1}
-
 
 def _sharpest_finding(report: RedTeamReport) -> RedTeamResult | None:
     vulnerable = [r for r in report.results if r.vulnerable]
     if not vulnerable:
         return None
-    return max(vulnerable, key=lambda r: _SEVERITY_RANK.get(r.attack.severity.value, 0))
+    return max(vulnerable, key=lambda r: SEVERITY_RANK.get(r.attack.severity.value, 0))
 
 
 def build_redteam_facts(report: RedTeamReport) -> str:

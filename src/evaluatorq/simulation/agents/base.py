@@ -17,6 +17,12 @@ from evaluatorq.common.llm_call import (
     execute_response,
 )
 from evaluatorq.common.llm_client import client_routes_through_orq
+from evaluatorq.common.prompt_cache import (
+    apply_cache_breakpoints,
+    caching_applies,
+    mark_responses_input,
+    responses_volatile_items,
+)
 from evaluatorq.common.responses import first_responses_refusal, responses_stop_reason
 from evaluatorq.common.retry import with_retry
 from evaluatorq.common.thread_context import thread_body_param
@@ -225,14 +231,25 @@ class BaseAgent(UsageTracking, ABC):
         max_tokens: int | None = None,
         timeout: float | None = None,
         llm_purpose: str | None = None,
+        volatile_tail: int = 0,
     ) -> str:
-        """Generate a text response for a conversation."""
+        """Generate a text response for a conversation.
+
+        ``volatile_tail`` is the number of trailing messages this caller rebuilds
+        every turn instead of appending to the transcript — a per-call
+        instruction, a re-rendered scratchpad. It keeps the prompt-cache
+        breakpoint off them; see `common.prompt_cache`. It defaults to ``0``
+        because most callers replay a transcript verbatim, but a caller that
+        appends anything synthetic must say so or pay a per-turn cache write
+        nothing reads back.
+        """
         result = await self._call_llm(
             messages,
             temperature=temperature,
             max_tokens=max_tokens,
             timeout=timeout,
             llm_purpose=llm_purpose,
+            volatile_tail=volatile_tail,
         )
         if not result.content:
             raise RuntimeError(f'{self.name}: LLM call failed -- no content in response')
@@ -355,12 +372,19 @@ class BaseAgent(UsageTracking, ABC):
         timeout: float | None = None,
         tools: list[dict[str, Any]] | None = None,
         llm_purpose: str | None = None,
+        volatile_tail: int = 0,
     ) -> LLMResult:
         """Call the LLM with retry logic, dispatching to chat or responses API.
 
         Retries on rate-limit (429) and server errors (500+). All other errors
         are raised immediately. ``asyncio.TimeoutError`` is never retried. Retry
         is owned by ``with_retry``; client retries are disabled.
+
+        ``volatile_tail`` is the number of trailing messages this caller rebuilds
+        every turn instead of appending to the transcript. It keeps the cache
+        breakpoint off them on both paths — see `common.prompt_cache`:
+        `apply_cache_breakpoints` on the chat path, `mark_responses_input` on the
+        Responses path (which is the judge's default).
         """
         if self.config.api == 'responses':
             return await self._call_responses(
@@ -370,6 +394,7 @@ class BaseAgent(UsageTracking, ABC):
                 timeout=timeout,
                 tools=tools,
                 llm_purpose=llm_purpose,
+                volatile_tail=volatile_tail,
             )
         return await self._call_chat_completions(
             messages,
@@ -378,6 +403,7 @@ class BaseAgent(UsageTracking, ABC):
             timeout=timeout,
             tools=tools,
             llm_purpose=llm_purpose,
+            volatile_tail=volatile_tail,
         )
 
     async def _call_chat_completions(
@@ -389,6 +415,7 @@ class BaseAgent(UsageTracking, ABC):
         timeout: float | None = None,
         tools: list[dict[str, Any]] | None = None,
         llm_purpose: str | None = None,
+        volatile_tail: int = 0,
     ) -> LLMResult:
         """Call the LLM via the Chat Completions API with retry logic.
 
@@ -410,6 +437,11 @@ class BaseAgent(UsageTracking, ABC):
             {'role': 'system', 'content': self.system_prompt},
             *[m.to_chat_completion() for m in messages],
         ]
+        # Breakpoints on the system prompt and the end of the persisted transcript:
+        # simulation replays a growing append-only prefix, so without them Anthropic
+        # models re-encode the whole thing every turn (see common/prompt_cache.py).
+        if caching_applies(self._client, self._model):
+            full_messages = apply_cache_breakpoints(full_messages, volatile_tail=volatile_tail)
 
         async with with_llm_span(
             model=self._model,
@@ -487,6 +519,7 @@ class BaseAgent(UsageTracking, ABC):
         timeout: float | None = None,
         tools: list[dict[str, Any]] | None = None,
         llm_purpose: str | None = None,
+        volatile_tail: int = 0,
     ) -> LLMResult:
         """Call the LLM via the OpenAI Responses API with retry logic.
 
@@ -515,6 +548,16 @@ class BaseAgent(UsageTracking, ABC):
         # the Orq router silently drops it, leaving the judge blind to the agent's
         # replies (RES-1308). Never hand-build this list.
         input_messages = messages_to_responses_input(messages)
+        # A per-item breakpoint, not the top-level switch: the latter marks the end
+        # of the whole input, so a caller that rebuilds its trailing item (the
+        # judge) writes every turn and reads none. `volatile_tail` counts messages
+        # and this list counts items, which are not 1:1 — one tool-calling assistant
+        # message renders to several items.
+        if caching_applies(self._client, self._model):
+            input_messages = mark_responses_input(
+                input_messages,
+                volatile_items=responses_volatile_items(messages, volatile_tail=volatile_tail),
+            )
 
         async with with_llm_span(
             model=self._model,

@@ -19,6 +19,7 @@ from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
     OWASP_CATEGORY_NAMES,
     PIPELINE_CONFIG,
+    SEVERITY_DEFINITIONS,
     AgentCapability,
     AgentContext,
     AttackStrategy,
@@ -54,6 +55,8 @@ if not ATTACK_TECHNIQUE_POOL:
     raise ValueError('ATTACK_TECHNIQUE_POOL must not be empty')
 
 _DELIVERY_METHOD_VALUES = ', '.join(f'"{m.value}"' for m in DeliveryMethod)
+_SEVERITY_VALUES = ', '.join(f'"{s.value}"' for s in Severity)
+_SEVERITY_GUIDANCE = '; '.join(f'{level} = {desc.split(".")[0]}' for level, desc in SEVERITY_DEFINITIONS.items())
 
 
 class GeneratedObjective(BaseModel):
@@ -66,6 +69,10 @@ class GeneratedObjective(BaseModel):
     )
     requires_tools: bool = Field(default=False, description='Whether executing this objective requires agent tools')
     requires_memory: bool = Field(default=False, description='Whether executing this objective requires agent memory')
+    severity: Severity = Field(
+        default=Severity.MEDIUM,
+        description=f'Expected severity if this attack succeeds. One of: {_SEVERITY_VALUES}',
+    )
 
 
 class GeneratedObjectives(BaseModel):
@@ -109,6 +116,7 @@ Return JSON with exactly {count} entries in "objectives", each as:
 - delivery_method: one of {delivery_method_values}
 - requires_tools: boolean
 - requires_memory: boolean
+- severity: one of {severity_values} ({severity_guidance})
 """
 
 
@@ -159,6 +167,8 @@ def _build_objective_prompt(
             '{turn_type_guidance}': turn_type_guidance,
             '{max_turns}': str(max_turns),
             '{delivery_method_values}': _DELIVERY_METHOD_VALUES,
+            '{severity_values}': _SEVERITY_VALUES,
+            '{severity_guidance}': _SEVERITY_GUIDANCE,
         },
     )
 
@@ -506,7 +516,7 @@ def create_strategy_from_objective(
         attack_technique=technique,
         delivery_methods=[delivery_method],
         turn_type=resolved_turn_type,
-        severity=Severity.MEDIUM,
+        severity=objective.severity,
         requires_tools=objective.requires_tools,
         required_capabilities=required_capabilities,
         objective_template=objective_text,

@@ -110,5 +110,52 @@ async def test_respond_sends_only_system_and_user() -> None:
     messages = client.chat.completions.create.call_args.kwargs["messages"]
     assert messages[0]["role"] == "system"
     assert messages[1]["role"] == "user"
+    # A non-Orq client gets plain strings: `cache_control` inside a content part
+    # is outside the direct OpenAI schema (see evaluatorq.common.prompt_cache).
     assert messages[1]["content"] == "first message"
     assert len(messages) == 2
+
+
+@pytest.mark.asyncio
+async def test_respond_marks_cache_breakpoints_on_a_routed_anthropic_model() -> None:
+    """Both breakpoints: the system prompt reads back on every later turn, and
+    the prefix end is what the next appended turn reads."""
+    # Past CACHE_MIN_PROMPT_TOKENS; below it the helper correctly marks nothing.
+    long_turn = "first message " + "x " * 3000
+    client = MagicMock()
+    client.base_url = "https://my.orq.ai/v3/router"
+    client.chat.completions.create = AsyncMock(
+        return_value=_make_completion_response(content="reply")
+    )
+    target = OpenAIModelTarget(model="anthropic/claude-sonnet-4-6", client=client)
+    with patch("evaluatorq.redteam.tracing.get_tracer", return_value=None):
+        await target.respond([Message(role="user", content=long_turn)])
+
+    messages = client.chat.completions.create.call_args.kwargs["messages"]
+    assert messages[0]["content"] == [
+        {
+            "type": "text",
+            "text": target.system_prompt,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+    assert messages[1]["content"] == [
+        {"type": "text", "text": long_turn, "cache_control": {"type": "ephemeral"}}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_respond_leaves_a_routed_non_anthropic_model_alone() -> None:
+    """OpenAI caches automatically; a marker there is request-shape churn."""
+    long_turn = "first message " + "x " * 3000
+    client = MagicMock()
+    client.base_url = "https://my.orq.ai/v3/router"
+    client.chat.completions.create = AsyncMock(
+        return_value=_make_completion_response(content="reply")
+    )
+    target = OpenAIModelTarget(model="openai/gpt-4o", client=client)
+    with patch("evaluatorq.redteam.tracing.get_tracer", return_value=None):
+        await target.respond([Message(role="user", content=long_turn)])
+
+    messages = client.chat.completions.create.call_args.kwargs["messages"]
+    assert messages[1]["content"] == long_turn

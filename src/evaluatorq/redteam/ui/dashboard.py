@@ -20,6 +20,7 @@ import streamlit as st
 from loguru import logger
 
 from evaluatorq.common.reports.html_helpers import pct
+from evaluatorq.common.reports.palette import SEVERITY_WEIGHTS
 from evaluatorq.redteam.contracts import (
     OWASP_CATEGORY_NAMES,
     AgentContext,
@@ -662,13 +663,6 @@ def _render_dashboard() -> None:
 # Focus Areas (top-5 risk vulnerabilities with remediation guidance)
 # ---------------------------------------------------------------------------
 
-_SEVERITY_WEIGHTS: dict[str, int] = {
-    'critical': 8,
-    'high': 4,
-    'medium': 2,
-    'low': 1,
-}
-
 
 def _dominant_severity_for_vulnerability(results: list[RedTeamResult], vuln_id: str) -> str:
     """Return the most common severity among vulnerable results for the given vulnerability.
@@ -715,7 +709,7 @@ def _render_focus_areas(report: RedTeamReport) -> None:
             continue
         vuln_rate = 1.0 - vuln_summary.resistance_rate
         dominant_sev = _dominant_severity_for_vulnerability(report.results, vuln_id)
-        weight = _SEVERITY_WEIGHTS.get(dominant_sev, 2)
+        weight = SEVERITY_WEIGHTS.get(dominant_sev, 2)
         risk_score = vuln_rate * weight
         risk_items.append((vuln_summary, dominant_sev, risk_score))
 
