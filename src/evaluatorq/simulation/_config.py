@@ -77,10 +77,6 @@ class SimulationConfig(BaseModel):
     max_turns: int | None = None
     """None means "unset": resolved in ``_simulate_core`` to a replayed run's
     cap when replaying, else to ``DEFAULT_MAX_TURNS``."""
-    model: str = DEFAULT_MODEL
-    """Resolved simulation model. Always equals ``llm_config.model`` — both are
-    set together at the one seam that builds this config, so a reader that only
-    wants the model name does not have to know about ``llm_config``."""
     llm_config: LLMCallConfig = Field(default_factory=lambda: LLMCallConfig(model=DEFAULT_MODEL))
     """Sampling/transport settings for every simulation-side LLM call: the user
     simulator, the judge, and the persona / scenario / first-message generators.
@@ -91,6 +87,17 @@ class SimulationConfig(BaseModel):
     """Policy knobs for the ``turn_efficiency`` / ``conversation_quality`` scorers
     (cliffs, decay, floor, composite weights). ``None`` uses
     ``DEFAULT_SCORING_CONFIG`` — the shipped defaults."""
+
+    @property
+    def model(self) -> str:
+        """Resolved simulation model, for readers that want only the name.
+
+        Derived rather than stored: it was a second field set beside
+        ``llm_config`` at each construction site, which is a rule a third site
+        can forget. There is nothing to keep in step now.
+        """
+        return self.llm_config.model
+
     datapoint_parallelism: int = 10
     target_agent_timeout_ms: int = Field(default=DEFAULT_TARGET_AGENT_TIMEOUT_MS, gt=0)
     """Per-call timeout for the target under test, threaded into
