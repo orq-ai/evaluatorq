@@ -133,7 +133,7 @@ config object covers the whole call:
 | Field | Sent as | Notes |
 |---|---|---|
 | `model` | `model` | `agent/<key>` invokes a hosted Orq agent |
-| `temperature` | `temperature` | |
+| `temperature` | `temperature` | Unset by default — omitted from the request entirely unless you set it |
 | `max_tokens` | `max_output_tokens` | The Responses spelling, not `max_completion_tokens` |
 | `timeout_ms` | client-side `asyncio` timeout | `None` means unbounded |
 | `reasoning_effort` | `reasoning={"effort": ...}` | Not flat, as on chat completions |

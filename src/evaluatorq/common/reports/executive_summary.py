@@ -77,7 +77,6 @@ Rules:
 # Defaults for the executive-summary completion, overridable per call. Constants so
 # a tracing call site reports the exact values sent. 400 completion tokens is mostly
 # hidden reasoning on a reasoning-class model — raise it if summaries come back empty.
-EXECUTIVE_SUMMARY_TEMPERATURE = 0.7
 EXECUTIVE_SUMMARY_MAX_TOKENS = 400
 # Generous for a slow reasoning model, short enough that a hung call cannot hold
 # up the report.
@@ -125,7 +124,7 @@ async def generate_executive_summary(
     llm_client: AsyncChatCompletionsClient,
     model: str,
     system_prompt: str = EXECUTIVE_SUMMARY_SYSTEM_PROMPT,
-    temperature: float = EXECUTIVE_SUMMARY_TEMPERATURE,
+    temperature: float | None = None,
     max_tokens: int = EXECUTIVE_SUMMARY_MAX_TOKENS,
     timeout_s: float = EXECUTIVE_SUMMARY_TIMEOUT_S,
     reasoning_effort: str | None = None,

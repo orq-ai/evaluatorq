@@ -202,7 +202,15 @@ class LLMCallConfig(BaseModel):
 
     model: str = DEFAULT_PIPELINE_MODEL
     api: Literal['chat_completions', 'responses'] = 'chat_completions'
-    temperature: float = Field(default=1.0, ge=0.0, le=2.0)
+    temperature: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=2.0,
+        description='Sampling temperature. Unset by default: when None the parameter is omitted '
+        'from the request entirely, so the provider default applies and reasoning-class models '
+        'that reject ``temperature`` (gpt-5 and the o-series answer 400) keep working. Set it '
+        'only when you actually want to pin sampling.',
+    )
     max_tokens: int = Field(default=DEFAULT_TARGET_MAX_TOKENS, gt=0)
     timeout_ms: int = Field(default=90_000, gt=0)
     extra_kwargs: dict[str, Any] = Field(default_factory=dict)
@@ -285,21 +293,24 @@ class LLMCallConfig(BaseModel):
             )
         if endpoint == 'responses':
             check_reserved_keys(self.extra_kwargs, _RESERVED_RESPONSES_KEYS)
-            base: dict[str, Any] = {
-                'temperature': self.temperature,
-                'max_output_tokens': self.max_tokens,
-            }
+            base: dict[str, Any] = {'max_output_tokens': self.max_tokens}
+            if self.temperature is not None:
+                base['temperature'] = self.temperature
             if self.reasoning_effort:
                 base['reasoning'] = {'effort': self.reasoning_effort}
         else:
             check_reserved_keys(self.extra_kwargs, _RESERVED_COMPLETION_KEYS)
-            base = {
-                'temperature': self.temperature,
-                'max_completion_tokens': self.max_tokens,
-            }
+            base = {'max_completion_tokens': self.max_tokens}
+            if self.temperature is not None:
+                base['temperature'] = self.temperature
             if self.reasoning_effort:
                 base['reasoning_effort'] = self.reasoning_effort
         merged = {**base, **params, **self.extra_kwargs}
+        if merged.get('temperature') is None:
+            # A call site passing temperature=None means "leave it unset", not
+            # "send null": the provider rejects an explicit null, and reasoning
+            # models reject the parameter at all.
+            merged.pop('temperature', None)
         return self._merge_extra_body(merged, params)
 
     def _merge_extra_body(self, merged: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:

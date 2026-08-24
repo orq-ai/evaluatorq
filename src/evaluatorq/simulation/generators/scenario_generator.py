@@ -24,10 +24,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_TEMPERATURE_CREATIVE = 0.8
-_TEMPERATURE_BALANCED = 0.7
-_TEMPERATURE_EDGE_CASE = 0.9
-
 # A generated scenario costs roughly 300-400 output tokens; a flat cap truncated the
 # structured output (unrecoverable LengthFinishReasonError) once a caller asked for
 # ~15+ scenarios in one call. Every method here that takes a caller-controlled
@@ -283,7 +279,6 @@ Return ONLY a JSON array, no other text."""
                     model=self._model,
                     messages=messages,
                     response_format=ScenarioListResponse,
-                    temperature=_TEMPERATURE_CREATIVE,
                     max_tokens=_scenario_token_budget(num_scenarios),
                     label='ScenarioGenerator.generate',
                     api='responses',
@@ -363,7 +358,6 @@ Return ONLY a JSON array, no other text."""
                     model=self._model,
                     messages=messages,
                     response_format=ScenarioListResponse,
-                    temperature=_TEMPERATURE_BALANCED,
                     max_tokens=_scenario_token_budget(num_scenarios),
                     label='ScenarioGenerator.generate_with_coverage',
                     api='responses',
@@ -441,7 +435,6 @@ Return ONLY a JSON array, no other text."""
                     model=self._model,
                     messages=messages,
                     response_format=ScenarioListResponse,
-                    temperature=_TEMPERATURE_EDGE_CASE,
                     max_tokens=_scenario_token_budget(num_edge_cases),
                     label='ScenarioGenerator.generate_edge_cases',
                     api='responses',
@@ -510,7 +503,6 @@ Return ONLY a JSON array, no other text."""
                     model=self._model,
                     messages=messages,
                     response_format=ScenarioListResponse,
-                    temperature=_TEMPERATURE_EDGE_CASE,
                     max_tokens=_scenario_token_budget(num_scenarios),
                     label='ScenarioGenerator.generate_boundary_scenarios',
                     api='responses',
@@ -592,7 +584,6 @@ Return ONLY a JSON array, no other text."""
                     model=self._model,
                     messages=messages,
                     response_format=ScenarioListResponse,
-                    temperature=_TEMPERATURE_EDGE_CASE,
                     max_tokens=_scenario_token_budget(num_scenarios),
                     label='ScenarioGenerator.generate_security_scenarios',
                     api='responses',

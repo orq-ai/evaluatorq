@@ -99,7 +99,6 @@ async def populate_run_executive_summary(
     from evaluatorq.common.llm_client import MissingLLMCredentialsError, resolve_llm_client
     from evaluatorq.common.reports.executive_summary import (
         EXECUTIVE_SUMMARY_MAX_TOKENS,
-        EXECUTIVE_SUMMARY_TEMPERATURE,
         generate_executive_summary,
     )
     from evaluatorq.simulation.tracing import with_llm_span
@@ -112,12 +111,12 @@ async def populate_run_executive_summary(
         return
 
     # Span reports the same constants generate_executive_summary sends — single
-    # source of truth, so the trace can never drift from the real request. The
-    # call below doesn't override temperature, so the default IS the real value.
+    # source of truth, so the trace can never drift from the real request. No
+    # temperature attribute: the call does not send one, so the provider default
+    # applies and the span must not claim a value.
     async with with_llm_span(
         model=model,
         operation='chat',
-        temperature=EXECUTIVE_SUMMARY_TEMPERATURE,
         max_tokens=EXECUTIVE_SUMMARY_MAX_TOKENS,
         purpose='executive_summary',
     ):

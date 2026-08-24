@@ -18,9 +18,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_TEMPERATURE_CREATIVE = 0.8
-_TEMPERATURE_BALANCED = 0.7
-
 # A persona carries more prose than a scenario (background, quirks, speech
 # patterns), so it costs more per item. Same reason as the scenario budget: a
 # flat cap truncates the structured output once a caller asks for enough of
@@ -207,7 +204,6 @@ Return ONLY a JSON array, no other text."""
                 model=self._model,
                 messages=messages,
                 response_format=PersonaListResponse,
-                temperature=_TEMPERATURE_CREATIVE,
                 max_tokens=_persona_token_budget(num_personas),
                 label='PersonaGenerator.generate',
                 api='responses',
@@ -334,7 +330,6 @@ Return ONLY a JSON array, no other text."""
                 model=self._model,
                 messages=messages,
                 response_format=PersonaListResponse,
-                temperature=_TEMPERATURE_BALANCED,
                 max_tokens=_persona_token_budget(num_personas),
                 label='PersonaGenerator.generate_with_coverage',
                 api='responses',

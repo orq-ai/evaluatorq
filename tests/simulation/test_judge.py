@@ -1,13 +1,13 @@
 """Tests for JudgeAgent."""
 
 import json
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from evaluatorq.simulation.agents.base import LLMResult
 from evaluatorq.simulation.agents.judge import JUDGE_TOOLS, JudgeAgent, JudgeAgentConfig
-from evaluatorq.simulation.types import Criterion
+from evaluatorq.simulation.types import Criterion, Message
 
 
 @pytest.fixture
@@ -27,6 +27,27 @@ def judge():
 class TestJudgeAgent:
     def test_name(self, judge):
         assert judge.name == "JudgeAgent"
+
+    @pytest.mark.asyncio
+    async def test_evaluate_sends_no_temperature(self):
+        """The judge used to pin ``temperature=0.0``, which reasoning models reject.
+
+        Determinism is now the caller's to ask for via ``JudgeAgentConfig(temperature=...)``;
+        unset must reach the wire as an absent parameter, not as a value.
+        """
+        client = MagicMock()
+        client.responses = MagicMock()
+        response = MagicMock()
+        response.output = []
+        response.usage = None
+        client.responses.create = AsyncMock(return_value=response)
+        judge = JudgeAgent(JudgeAgentConfig(goal="Get a refund", client=client))
+
+        await judge.evaluate([Message(role="user", content="hello")])
+
+        call = client.responses.create.await_args
+        assert call is not None
+        assert "temperature" not in call.kwargs
 
     def test_system_prompt_contains_goal(self, judge):
         assert "Get a refund" in judge.system_prompt

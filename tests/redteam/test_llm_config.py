@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 def test_llm_call_config_defaults():
     cfg = LLMCallConfig()
     assert cfg.model == DEFAULT_PIPELINE_MODEL
-    assert cfg.temperature == 1.0
+    assert cfg.temperature is None
     assert cfg.max_tokens == DEFAULT_TARGET_MAX_TOKENS
     assert cfg.timeout_ms == 90_000
     assert cfg.extra_kwargs == {}
@@ -269,6 +269,30 @@ def test_request_params_defaults_and_site_params():
     assert params['temperature'] == 0.7
     assert params['max_completion_tokens'] == 1234
     assert params['model'] == 'm'
+
+
+def test_request_params_omits_unset_temperature():
+    """Default config sends no ``temperature`` at all.
+
+    Reasoning-class models (gpt-5, o-series) answer 400 to the parameter at any
+    value, so an unset temperature must be absent from the request rather than
+    defaulted to something "safe".
+    """
+    from evaluatorq.contracts import LLMCallConfig
+
+    cfg = LLMCallConfig()
+    for api in ('chat_completions', 'responses'):
+        params = cfg.request_params(api=api, model='m', messages=[])
+        assert 'temperature' not in params
+
+
+def test_request_params_drops_call_site_temperature_none():
+    """``temperature=None`` from a call site means unset, not an explicit null."""
+    from evaluatorq.contracts import LLMCallConfig
+
+    cfg = LLMCallConfig(temperature=0.7)
+    params = cfg.request_params(api='chat_completions', model='m', messages=[], temperature=None)
+    assert 'temperature' not in params
 
 
 def test_request_params_extra_kwargs_override_instead_of_typeerror():

@@ -731,7 +731,7 @@ class JudgeAgent(BaseAgent):
             ),
         ]
 
-        result = await self._call_llm(eval_messages, temperature=0.0, tools=JUDGE_TOOLS, llm_purpose='judge')
+        result = await self._call_llm(eval_messages, tools=JUDGE_TOOLS, llm_purpose='judge')
         return self._parse_judgment(result)
 
     # ---------------------------------------------------------------------------
