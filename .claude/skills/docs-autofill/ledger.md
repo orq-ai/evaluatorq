@@ -8,3 +8,4 @@ Outcomes: `opened` · `blocked` (3 rounds, persona still stuck) · `skipped-no-k
 
 | date | matrix cell | branch | outcome |
 |---|---|---|---|
+| 2026-08-24 | `env var (ORQ_OTEL_* export batching) × surface (tracing)` | docs/autofill-otel-batching | opened |
