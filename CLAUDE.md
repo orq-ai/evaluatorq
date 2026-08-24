@@ -204,6 +204,15 @@ The reverse failure is quieter and worse: a job that returns **no** `error` key 
 - Default pytest timeout is 120s (configured in `pyproject.toml`)
 - Use `pytest-asyncio` for async tests
 
+Prompt-cache behavior is covered by `tests/unit/test_prompt_cache.py`,
+`tests/openresponses/test_prompt_cache.py`,
+`tests/redteam/test_orchestrator_prompt_cache.py`, and
+`tests/simulation/test_agent_prompt_cache.py`. Run those together with
+`tests/test_reuse_guardrails.py` when changing cache placement, router/model
+gating, or transcript rendering. These tests use fakes and do not require API
+credentials; live provider measurements are intentionally a manual investigation
+outside the default test suite.
+
 ### Dependencies
 
 - `uv` (not pip), `hatchling` build. Runtime deps and extras are listed in `pyproject.toml` — read it there.
