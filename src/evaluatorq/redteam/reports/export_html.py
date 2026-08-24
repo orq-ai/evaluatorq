@@ -31,6 +31,7 @@ from evaluatorq.common.reports import truncate as _truncate
 # float-only variant — import the None-safe html_helpers one directly instead.
 from evaluatorq.common.reports.html_helpers import pct as _pct
 from evaluatorq.common.reports.html_helpers import scale_color as _scale_color
+from evaluatorq.common.reports.palette import SEVERITY_ORDER as _SEVERITY_ORDER
 from evaluatorq.common.reports.vega import render_svg as _render_svg
 from evaluatorq.common.reports.vega import vl_bar_h as _vl_bar_h
 from evaluatorq.common.reports.vega import vl_donut as _vl_donut
@@ -58,9 +59,6 @@ _STATUS_COLORS = {
     'resistant': _STATUS_COLORS_BASE['success'],
     'error': _STATUS_COLORS_BASE['warning'],
 }
-
-# Canonical order for severity labels in charts.
-_SEVERITY_ORDER = ['critical', 'high', 'medium', 'low']
 
 
 def _load_css() -> str:

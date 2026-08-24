@@ -25,14 +25,12 @@ from typing import TYPE_CHECKING, NamedTuple, TypeVar
 
 from loguru import logger
 
+from evaluatorq.common.reports.palette import SEVERITY_ORDER
 from evaluatorq.dashboard import library
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from datetime import datetime
-
-# Severity buckets in display order (matches the report severity scale).
-SEVERITY_ORDER = ('critical', 'high', 'medium', 'low')
 
 # Bucket for a vulnerability whose report does not record a severity. ``severity``
 # is a required field, so this only shows up in a truncated or hand-edited
