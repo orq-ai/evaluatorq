@@ -250,8 +250,10 @@ async def _merge_call(
 
     With a pipeline ``cfg`` (duck-typed: ``evaluator.as_call_config()`` and
     ``retry_extra_body``), the role config supplies sampling and provider
-    extras so reasoning models that require ``temperature=1.0`` are not broken
-    by a hardcoded value; the wrapper still owns the structural request fields.
+    extras. Its temperature is unset by default and then omitted from the
+    request, so reasoning models that reject the parameter outright are not
+    broken by a hardcoded value; the wrapper still owns the structural request
+    fields.
     Without one (the simulation path), the optional explicit ``temperature`` is
     used.
     """

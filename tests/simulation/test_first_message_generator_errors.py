@@ -82,6 +82,20 @@ def _client_raising(exc: Exception) -> MagicMock:
 
 @pytest.mark.asyncio
 class TestFirstMessageGeneratorErrors:
+    async def test_no_temperature_is_sent(self):
+        """RES-#168: this generator is where the weekly example run died.
+
+        It sent a hardcoded ``temperature=0.8``; the default pipeline model
+        answers 400 to the parameter, which failed every persona x scenario pair
+        and turned ``simulate()`` into a RuntimeError.
+        """
+        client = _client_with_response("hello there")
+        gen = FirstMessageGenerator(model="gpt-4o", client=client)
+
+        await gen.generate(_persona(), _scenario())
+
+        assert "temperature" not in client.responses.create.await_args.kwargs
+
     async def test_401_is_reraised_not_swallowed(self):
         client = _client_raising(_api_error(401))
         gen = FirstMessageGenerator(model="gpt-4o", client=client)

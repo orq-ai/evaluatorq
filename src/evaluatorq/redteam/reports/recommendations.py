@@ -380,9 +380,10 @@ async def generate_focus_area_recommendations(
             when omitted.
         llm_kwargs: Optional extra kwargs forwarded to the chat completion call.
         cfg: Pipeline LLM config; ``cfg.evaluator`` supplies temperature,
-            extra_kwargs, and retry config so reasoning models
-            (e.g. ``gpt-5*``, ``o*``) that require ``temperature=1.0``
-            are not broken by a hardcoded value.
+            extra_kwargs, and retry config. Temperature is unset by default and
+            then omitted from the request, so reasoning models
+            (e.g. ``gpt-5*``, ``o*``) that reject the parameter outright are not
+            broken by a hardcoded value.
 
     Returns:
         Tuple of (list of ``FocusAreaRecommendation`` objects, one per analyzed

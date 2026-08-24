@@ -1380,12 +1380,10 @@ async def test_executive_summary_emits_llm_span(span_collector: _CollectingExpor
     assert a['orq.simulation.llm_purpose'] == 'executive_summary'
     assert a['gen_ai.request.model'] == 'openai/gpt-4o'
     # Span reports the exact request params generate_executive_summary sends.
-    from evaluatorq.common.reports.executive_summary import (
-        EXECUTIVE_SUMMARY_MAX_TOKENS,
-        EXECUTIVE_SUMMARY_TEMPERATURE,
-    )
+    # No temperature is sent, so the span must not claim one.
+    from evaluatorq.common.reports.executive_summary import EXECUTIVE_SUMMARY_MAX_TOKENS
 
-    assert a['gen_ai.request.temperature'] == EXECUTIVE_SUMMARY_TEMPERATURE
+    assert 'gen_ai.request.temperature' not in a
     assert a['gen_ai.request.max_tokens'] == EXECUTIVE_SUMMARY_MAX_TOKENS
     # Token usage from the response lands on the span.
     assert a['gen_ai.usage.input_tokens'] == 12

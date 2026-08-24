@@ -744,9 +744,7 @@ class JudgeAgent(BaseAgent):
         # volatile_tail=1: the instruction above is rebuilt every turn, so it is not
         # part of the cacheable prefix. Marking it would cost a full-transcript write
         # per judgement and read none of it back (see common.prompt_cache).
-        result = await self._call_llm(
-            eval_messages, temperature=0.0, tools=JUDGE_TOOLS, llm_purpose='judge', volatile_tail=1
-        )
+        result = await self._call_llm(eval_messages, tools=JUDGE_TOOLS, llm_purpose='judge', volatile_tail=1)
         return self._parse_judgment(result)
 
     # ---------------------------------------------------------------------------

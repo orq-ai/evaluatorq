@@ -290,19 +290,21 @@ class BaseAgent(UsageTracking, ABC):
         self._client_owned = owned
         return client
 
-    def _resolved_temperature(self, call_value: float | None, fallback: float | None) -> float | None:
-        """Effective temperature: explicit ``self.config.temperature`` beats the
-        per-call-site literal (``call_value``, e.g. the judge's ``0.0`` or the
-        user simulator's first-message ``0.8``), which beats ``fallback``.
+    def _resolved_temperature(self, call_value: float | None) -> float | None:
+        """Effective temperature: an explicitly set ``self.config.temperature``
+        beats the per-call ``call_value`` — including an explicit ``None``, which
+        opts this agent out of the call site's value on purpose. Unresolved means
+        the request omits the parameter, which is what reasoning-class models
+        need: they answer 400 to ``temperature`` at any value.
 
-        ``self.config.temperature`` always carries a value (`LLMCallConfig`
-        defaults it to ``1.0``), so ``model_fields_set`` is the only way to tell
-        "caller explicitly configured this agent's temperature" from "this is
-        just the field default" — see `LLMCallConfig`.
+        Gated on ``model_fields_set`` rather than on the value, matching
+        `_resolved_max_tokens` / `_resolved_timeout_s` / `_resolved_reasoning_effort`.
+        `LLMCallConfig` now defaults ``temperature`` to ``None``, so a value check
+        could not tell an explicit ``None`` from an untouched field.
         """
         if 'temperature' in self.config.model_fields_set:
             return self.config.temperature
-        return call_value if call_value is not None else fallback
+        return call_value
 
     def _resolved_max_tokens(self, call_value: int | None) -> int:
         """Effective max-tokens budget: explicit ``self.config.max_tokens`` beats
@@ -420,12 +422,13 @@ class BaseAgent(UsageTracking, ABC):
         Effective ``temperature`` / ``max_tokens`` / ``timeout`` / reasoning
         effort come from `_resolved_temperature` / `_resolved_max_tokens` /
         `_resolved_timeout_s` / `_resolved_reasoning_effort`: an explicit
-        ``self.config`` value wins, else this call site's literal (``temperature``
-        param here — e.g. the judge's ``0.0``), else the call-time env fallback.
-        ``self.config.extra_kwargs`` rides along last, so it can still override
+        ``self.config`` value wins, else this call site's own argument, else the
+        call-time env fallback. Temperature has no env tier — nothing supplies one,
+        so an unresolved temperature is omitted from the request rather than
+        defaulted. ``self.config.extra_kwargs`` rides along last, so it can still override
         any of the above (matches `LLMCallConfig.request_params`'s chat-completions contract).
         """
-        temp = self._resolved_temperature(temperature, 0.7)
+        temp = self._resolved_temperature(temperature)
         max_tok = self._resolved_max_tokens(max_tokens)
         timeout_s = self._resolved_timeout_s(timeout)
         reasoning_effort = self._resolved_reasoning_effort()
@@ -527,7 +530,8 @@ class BaseAgent(UsageTracking, ABC):
 
         Effective ``temperature`` / ``max_tokens`` / ``timeout`` / reasoning
         effort follow the same config-beats-call-site-beats-fallback order as
-        `_call_chat_completions` (see `_resolved_temperature` etc.).
+        `_call_chat_completions`, temperature's missing env tier included
+        (see `_resolved_temperature` etc.).
         The request itself goes through `common.llm_call.execute_response`, so
         this leg gets the same slot limiting, reasoning-rejection memo, pipeline
         metadata, trace headers and `price_usage` call as every other Responses
@@ -536,7 +540,7 @@ class BaseAgent(UsageTracking, ABC):
         above — `LLMCallConfig.request_params`'s Responses contract.
         """
         timeout_s = self._resolved_timeout_s(timeout)
-        resolved_temp = self._resolved_temperature(temperature, None)
+        resolved_temp = self._resolved_temperature(temperature)
         max_tok = self._resolved_max_tokens(max_tokens)
         reasoning_effort = self._resolved_reasoning_effort()
 

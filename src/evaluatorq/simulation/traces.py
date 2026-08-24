@@ -53,7 +53,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_TEMPERATURE_ANALYSIS = 0.3
 _SPAN_FETCH_CONCURRENCY = 5
 _INFER_CONCURRENCY = 5
 # The traces list endpoint caps `limit` at 200 per page.
@@ -264,7 +263,6 @@ async def _summarize_conversation(
             model=model,
             messages=messages,
             response_format=_ConversationSummary,
-            temperature=_TEMPERATURE_ANALYSIS,
             max_tokens=config.summary_max_tokens,
             label='traces.summarize',
         )
@@ -705,7 +703,6 @@ async def datapoints_from_traces(
                     model=model,
                     messages=messages,
                     response_format=_InferredPersonaScenario,
-                    temperature=_TEMPERATURE_ANALYSIS,
                     max_tokens=config.max_tokens,
                     label='datapoints_from_traces',
                 )
@@ -886,7 +883,6 @@ async def extend_from_traces(
             model=model,
             messages=messages,
             response_format=_TrafficProfile,
-            temperature=_TEMPERATURE_ANALYSIS,
             max_tokens=config.max_tokens,
             label='extend_from_traces.profile',
         )
