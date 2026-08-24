@@ -233,6 +233,21 @@ LLM spans (`chat ...` / `responses ...`) carry standard GenAI attributes:
 | `gen_ai.input.messages` | JSON serialised input messages (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
 | `gen_ai.output.messages` | JSON serialised output messages (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
 | `orq.llm.purpose` | Cross-domain purpose tag (e.g. `"adversarial"`, `"evaluation"`, `"target"`) |
+| `orq.span_type` | `"span.responses"`, on Responses-API spans only (see the note below) |
+| `openresponses.input` / `openresponses.output` | Raw Responses items, on Responses-API spans only (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
+| `openresponses.instructions` | The request's `instructions`, when set (same gate) |
+
+!!! note "Why Responses spans claim their own span type"
+    Orq's OTLP ingest derives a span type from `gen_ai.operation.name` through a
+    fixed table that knows `chat` but not `responses`. An unmapped operation falls
+    through to span-name heuristics and lands on `span.generic`, which the trace UI
+    renders as a raw JSON tree instead of a message transcript. A client-supplied
+    `orq.span_type` overrides that derivation, so spans whose operation is
+    `responses` (or `agents.responses`) set it to `span.responses` explicitly and
+    get the transcript view. The `openresponses.*` attributes exist for the same
+    reason: that view's renderer understands raw Responses items, including
+    `function_call` and `reasoning` ones, which the `gen_ai.input.messages` path
+    drops because they carry no `role`.
 
 !!! note "Attribute aliases removed (August 2026, RES-985)"
     Earlier releases emitted every token count under up to three names: the canonical `gen_ai.usage.*` key above, a legacy alias (`gen_ai.usage.prompt_tokens`, `gen_ai.usage.completion_tokens`, `gen_ai.usage.prompt_tokens_details.cached_tokens`), and a bare un-namespaced key (`prompt_tokens`, `completion_tokens`, `input_tokens`, `output_tokens`, `total_tokens`, `calls`). The aliases and bare keys are no longer emitted. This was verified against the Orq platform's OTel ingest (`extractCommonUsage` in `orquesta-web` `apps/traces-api`): its attribute pattern lists try the canonical `gen_ai.usage.*` spellings first, cache counts are read from the `cache_read.input_tokens` / `cache_creation.input_tokens` keys kept here, and the bare keys and `calls` are read nowhere. Reasoning tokens moved from `gen_ai.usage.completion_tokens_details.reasoning_tokens` (a spelling the platform never read) to `gen_ai.usage.reasoning.output_tokens`, the one it does. Third-party OTLP consumers that matched the removed aliases must switch to the canonical keys.

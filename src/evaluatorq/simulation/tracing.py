@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from evaluatorq.common.tracing import orq_span_type_for_operation
 from evaluatorq.contracts import content_to_text
 from evaluatorq.tracing.setup import get_tracer
 
@@ -159,6 +160,9 @@ async def with_llm_span(  # noqa: RUF029
         'gen_ai.provider.name': resolved_provider,
         'gen_ai.request.model': model,
     }
+    span_type = orq_span_type_for_operation(operation)
+    if span_type is not None:
+        attrs['orq.span_type'] = span_type
     if temperature is not None:
         attrs['gen_ai.request.temperature'] = temperature
     if max_tokens is not None:

@@ -425,6 +425,22 @@ def record_llm_output(span: Span | None, output: str) -> None:
     span.set_attribute('output', serialized)
 
 
+def orq_span_type_for_operation(operation: str) -> str | None:
+    """Return the ``orq.span_type`` Orq ingest should store for this operation.
+
+    Orq's OTLP ingest maps ``gen_ai.operation.name`` to a span type through a
+    fixed table that knows ``chat`` but not ``responses``; an unmapped operation
+    falls through to span-name heuristics and lands on ``span.generic``, which
+    the trace UI renders as a raw JSON tree instead of a message transcript. A
+    client-supplied ``orq.span_type`` overrides that derivation, so Responses
+    calls claim ``span.responses`` explicitly. Returns ``None`` for operations
+    the ingest table already classifies correctly.
+    """
+    if operation == 'responses' or operation.endswith('.responses'):
+        return 'span.responses'
+    return None
+
+
 def _derive_provider(model: str) -> str:
     if '/' in model:
         return model.split('/', 1)[0]
@@ -472,6 +488,9 @@ async def with_llm_span(  # noqa: RUF029
         'gen_ai.provider.name': resolved_provider,
         'gen_ai.request.model': model,
     }
+    span_type = orq_span_type_for_operation(operation)
+    if span_type is not None:
+        genai_attrs['orq.span_type'] = span_type
     if temperature is not None:
         genai_attrs['gen_ai.request.temperature'] = float(temperature)
     if max_tokens is not None:

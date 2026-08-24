@@ -16,6 +16,7 @@ from loguru import logger
 
 from evaluatorq.common.tracing import (
     capture_message_content,
+    orq_span_type_for_operation,
     record_llm_response,
     truncate_for_span,
 )
@@ -81,6 +82,9 @@ async def with_llm_span(  # noqa: RUF029
         'gen_ai.provider.name': resolved_provider,
         'gen_ai.request.model': model,
     }
+    span_type = orq_span_type_for_operation(operation)
+    if span_type is not None:
+        attrs['orq.span_type'] = span_type
     if temperature is not None:
         attrs['gen_ai.request.temperature'] = temperature
     if max_tokens is not None:
@@ -125,6 +129,14 @@ def record_openresponses_request(span: Span | None, payload: dict[str, Any]) -> 
     serialized_input = truncate_for_span(json.dumps(input_items, ensure_ascii=False, default=str))
     span.set_attribute('gen_ai.input.messages', serialized_input)
     span.set_attribute('input', serialized_input)
+    # Unprefixed key, in addition to gen_ai.input.messages: Orq's transcript view
+    # reads `openresponses.input` through the renderer that understands Responses
+    # items, where the gen_ai path keeps only role-bearing ones and drops
+    # function_call / function_call_output / reasoning.
+    span.set_attribute('openresponses.input', serialized_input)
+    instructions = payload.get('instructions')
+    if instructions:
+        span.set_attribute('openresponses.instructions', truncate_for_span(instructions))
     span.set_attribute(
         'orq.openresponses.request',
         truncate_for_span(json.dumps(payload, ensure_ascii=False, default=str)),
@@ -154,3 +166,10 @@ def record_openresponses_response(span: Span | None, response: Any) -> None:
             'orq.openresponses.response',
             truncate_for_span(json.dumps(payload, ensure_ascii=False, default=str)),
         )
+        output_items = payload.get('output') if isinstance(payload, dict) else None
+        if output_items is not None:
+            # Counterpart to `openresponses.input` above — same renderer, same reason.
+            span.set_attribute(
+                'openresponses.output',
+                truncate_for_span(json.dumps(output_items, ensure_ascii=False, default=str)),
+            )
