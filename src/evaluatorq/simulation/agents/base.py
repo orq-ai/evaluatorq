@@ -151,8 +151,45 @@ class AgentConfig:
     max_tokens: int | None = None
     timeout_ms: int | None = None
     extra_kwargs: dict[str, Any] | None = None
+    extra_body: dict[str, Any] | None = None
     reasoning_effort: str | None = None
     retry_count: int | None = None
+
+    @classmethod
+    def from_call_config(cls, config: LLMCallConfig, *, api_key: str | None = None, **overrides: Any) -> Any:
+        """Build this config class from a `LLMCallConfig`, preserving caller intent.
+
+        Only fields the caller explicitly set on ``config`` are carried over —
+        keyed on ``model_fields_set``, not on the values — so a round trip back
+        through `_config_from_agent_config` reproduces the same
+        ``model_fields_set`` and the `BaseAgent` resolvers still tell "caller set
+        this" apart from "field default". Copying values instead would pin every
+        `LLMCallConfig` default onto the agent and shadow the per-call-site
+        literals, which is exactly what this class's docstring warns about.
+
+        ``overrides`` go to the subclass's own fields (``system_prompt``,
+        ``goal``, ...) and win over anything derived from ``config``.
+
+        One field cannot survive the round trip: an explicitly set
+        ``temperature=None``. ``AgentConfig`` spells "caller didn't touch this"
+        as ``None``, so the two collapse and the call-site literal applies. Pass
+        `LLMCallConfig` straight to the agent when you need that distinction.
+        """
+        set_fields = config.model_fields_set
+        kwargs: dict[str, Any] = {'model': config.model, 'client': config.client, 'api_key': api_key}
+        for name in (
+            'api',
+            'temperature',
+            'max_tokens',
+            'timeout_ms',
+            'extra_kwargs',
+            'extra_body',
+            'reasoning_effort',
+            'retry_count',
+        ):
+            if name in set_fields:
+                kwargs[name] = getattr(config, name)
+        return cls(**{**kwargs, **overrides})
 
 
 def _config_from_agent_config(agent_cfg: AgentConfig) -> tuple[LLMCallConfig, str | None]:
@@ -174,6 +211,8 @@ def _config_from_agent_config(agent_cfg: AgentConfig) -> tuple[LLMCallConfig, st
         kwargs['timeout_ms'] = agent_cfg.timeout_ms
     if agent_cfg.extra_kwargs is not None:
         kwargs['extra_kwargs'] = agent_cfg.extra_kwargs
+    if agent_cfg.extra_body is not None:
+        kwargs['extra_body'] = agent_cfg.extra_body
     if agent_cfg.reasoning_effort is not None:
         kwargs['reasoning_effort'] = agent_cfg.reasoning_effort
     if agent_cfg.retry_count is not None:

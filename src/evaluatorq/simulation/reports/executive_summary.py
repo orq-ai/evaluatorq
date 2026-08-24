@@ -40,6 +40,7 @@ Rules:
   sentence and stop. Do not manufacture problems."""
 
 if TYPE_CHECKING:
+    from evaluatorq.contracts import LLMCallConfig
     from evaluatorq.simulation.types import SimulationResult
 
 
@@ -80,6 +81,7 @@ async def populate_run_executive_summary(
     *,
     enabled: bool,
     model: str,
+    llm_config: LLMCallConfig | None = None,
     resolve_client: Any = None,
 ) -> None:
     """Populate ``run.executive_summary`` in place. Best-effort; never raises.
@@ -88,6 +90,11 @@ async def populate_run_executive_summary(
     a narrative is generated on every default-on path. Skips silently when
     disabled, when the run has no results, or when no LLM credentials are
     configured — a default-on run without creds still yields a valid report.
+
+    ``llm_config`` supplies the sampling knobs for this one call — the same
+    config the rest of the run's simulation-side calls use. Only the fields the
+    caller explicitly set on it are read, so an unset ``temperature`` still means
+    the request omits the parameter.
 
     ``resolve_client`` overrides the credential resolver (the CLI passes its own
     module-level ``resolve_llm_client`` so its test monkeypatch seam still works);
@@ -110,13 +117,20 @@ async def populate_run_executive_summary(
         logger.warning('Skipping executive summary: no LLM credentials configured.')
         return
 
-    # Span reports the same constants generate_executive_summary sends — single
-    # source of truth, so the trace can never drift from the real request. No
-    # temperature attribute: the call does not send one, so the provider default
-    # applies and the span must not claim a value.
+    set_fields = llm_config.model_fields_set if llm_config is not None else frozenset()
+    temperature = llm_config.temperature if llm_config is not None and 'temperature' in set_fields else None
+    reasoning_effort = (
+        llm_config.reasoning_effort if llm_config is not None and 'reasoning_effort' in set_fields else None
+    )
+
+    # Span reports the same values generate_executive_summary sends — single
+    # source of truth, so the trace can never drift from the real request. A
+    # `None` temperature is dropped by the span helper, which is right: the call
+    # then omits the parameter and the span must not claim a value.
     async with with_llm_span(
         model=model,
         operation='chat',
+        temperature=temperature,
         max_tokens=EXECUTIVE_SUMMARY_MAX_TOKENS,
         purpose='executive_summary',
     ):
@@ -125,6 +139,8 @@ async def populate_run_executive_summary(
             llm_client=resolved.client,
             model=model,
             system_prompt=SIM_EXECUTIVE_SUMMARY_SYSTEM_PROMPT,
+            temperature=temperature,
+            reasoning_effort=reasoning_effort,
         )
         run.executive_summary = summary.text
         # Last usage-producing step in a run, so folding it in here in place is what

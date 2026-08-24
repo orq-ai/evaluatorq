@@ -62,6 +62,7 @@ from evaluatorq.common.tracing import with_llm_span
 from evaluatorq.contracts import (
     _RESERVED_COMPLETION_KEYS,
     _RESERVED_RESPONSES_KEYS,
+    LLMCallConfig,
     TokenUsage,
     check_reserved_keys,
 )
@@ -674,6 +675,7 @@ async def generate_structured(
     reasoning_effort: str | None = None,
     timeout_s: float = _STRUCTURED_TIMEOUT_S,
     extra_body: dict[str, Any] | None = None,
+    config: LLMCallConfig | None = None,
 ) -> StructuredResult[T]:
     """Generate structured output, degrading through the rungs in the module docstring.
 
@@ -704,7 +706,28 @@ async def generate_structured(
     A length-truncated response raises `StructuredGenerationError` (a
     ``RuntimeError``) rather than falling back: a same-budget retry would
     truncate again.
+
+    ``config`` supplies the sampling knobs a caller holds as one object rather
+    than as five keywords: ``temperature``, ``extra_kwargs``, ``extra_body``,
+    ``reasoning_effort`` and ``timeout_ms``. Only the fields the caller
+    explicitly set on it are read (``model_fields_set``), and an explicit
+    keyword here still wins — a call site pinning ``temperature=0.0`` for a
+    reason keeps it. ``config.model`` and ``config.api`` are NOT read: this
+    function's own ``model`` / ``api`` arguments stay the single authority, so a
+    config cannot silently redirect a call to another endpoint.
     """
+    if config is not None:
+        set_fields = config.model_fields_set
+        if temperature is None and 'temperature' in set_fields:
+            temperature = config.temperature
+        if extra_kwargs is None and 'extra_kwargs' in set_fields:
+            extra_kwargs = config.extra_kwargs
+        if extra_body is None and 'extra_body' in set_fields:
+            extra_body = config.extra_body
+        if reasoning_effort is None and 'reasoning_effort' in set_fields:
+            reasoning_effort = config.reasoning_effort
+        if timeout_s == _STRUCTURED_TIMEOUT_S and 'timeout_ms' in set_fields:
+            timeout_s = config.timeout_ms / 1000
     # Every rung is wrapped in `with_retry`, so the SDK's own budget is disarmed
     # once here; otherwise five outer attempts over an SDK doing two retries is
     # fifteen requests per rung. `without_client_retries` clones rather than

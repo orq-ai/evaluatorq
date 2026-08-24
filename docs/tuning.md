@@ -63,6 +63,29 @@ cfg = LLMCallConfig(model="openai/gpt-4o-mini", temperature=0.2)
 
 The same holds per call: a `temperature=None` argument means "leave it unset", never "send null".
 
+### Where to put that config
+
+Red teaming already had a home for it: `LLMConfig(attacker=..., evaluator=...)` on `red_team()`. Simulation now has the matching one — `llm_config=` on `simulate()`, `generate_and_simulate()` and `generate()`:
+
+```python
+from evaluatorq.contracts import LLMCallConfig
+from evaluatorq.simulation import simulate
+
+await simulate(
+    target="agent:my-agent",
+    datapoints=datapoints,
+    llm_config=LLMCallConfig(model="openai/gpt-4o-mini", temperature=0.2),
+)
+```
+
+One config drives every simulation-side call: the user simulator, the judge, and the persona / scenario / first-message generators. It never touches the target under test — that is the thing being measured, and it is configured where it is constructed.
+
+`sim_model=` is the shorthand for setting only the model, and it still works. When both are given `llm_config.model` wins and the contradiction is logged, so a run cannot quietly use a model you did not pick.
+
+Only the fields you set take effect. `LLMCallConfig(model="...")` alone leaves `temperature` unset, so the parameter stays out of the request and a reasoning-class model keeps working.
+
+The same `llm_config=` is on `summarize_conversations()`, `datapoints_from_traces()` and `extend_from_traces()` for the trace-derived generation paths.
+
 ## Target-call reliability
 
 The target is the slow, flaky part of any run: it is a real agent running real tools. Four knobs bound it.

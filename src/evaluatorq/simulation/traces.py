@@ -49,7 +49,7 @@ if TYPE_CHECKING:
 
     from openai import AsyncOpenAI
 
-    from evaluatorq.contracts import TokenUsage
+    from evaluatorq.contracts import LLMCallConfig, TokenUsage
 
 logger = logging.getLogger(__name__)
 
@@ -232,6 +232,7 @@ async def _summarize_conversation(
     llm_client: AsyncOpenAI,
     model: str,
     config: TraceAnalysisConfig,
+    llm_config: LLMCallConfig | None = None,
 ) -> tuple[str | None, TokenUsage | None]:
     """Summarize one conversation, with what the call cost; ``None`` summary if it failed.
 
@@ -265,6 +266,7 @@ async def _summarize_conversation(
             response_format=_ConversationSummary,
             max_tokens=config.summary_max_tokens,
             label='traces.summarize',
+            config=llm_config,
         )
     except Exception as exc:
         logger.warning('Summarizing trace %s failed (%s); dropping it', conversation.trace_id, exc)
@@ -279,6 +281,7 @@ async def summarize_conversations(
     conversations: list[TraceConversation],
     *,
     model: str = DEFAULT_MODEL,
+    llm_config: LLMCallConfig | None = None,
     client: AsyncOpenAI | None = None,
     api_key: str | None = None,
     config: TraceAnalysisConfig | None = None,
@@ -321,7 +324,7 @@ async def summarize_conversations(
     async def one(conversation: TraceConversation) -> tuple[str, str | None, TokenUsage | None]:
         async with semaphore:
             summary, usage = await _summarize_conversation(
-                conversation, llm_client=llm_client, model=model, config=config
+                conversation, llm_client=llm_client, model=model, llm_config=llm_config, config=config
             )
         return conversation.trace_id, summary, usage
 
@@ -631,6 +634,7 @@ async def datapoints_from_traces(
     conversations: list[TraceConversation],
     *,
     model: str = DEFAULT_MODEL,
+    llm_config: LLMCallConfig | None = None,
     client: AsyncOpenAI | None = None,
     api_key: str | None = None,
     config: TraceAnalysisConfig | None = None,
@@ -659,7 +663,9 @@ async def datapoints_from_traces(
     config = config or TraceAnalysisConfig()
     llm_client, owned = build_simulation_client(client, extra_api_key=api_key, max_retries=0)
     first_message_generator = (
-        FirstMessageGenerator(model=model, client=llm_client) if config.generate_first_message else None
+        FirstMessageGenerator(model=model, client=llm_client, config=llm_config)
+        if config.generate_first_message
+        else None
     )
     # Inference dominates wall-clock, so it runs bounded-concurrent like the
     # span-fetch phase (and DatapointGenerator, which uses the same width).
@@ -682,7 +688,7 @@ async def datapoints_from_traces(
                     return None, None
             else:
                 summary, summary_usage = await _summarize_conversation(
-                    conversation, llm_client=llm_client, model=model, config=config
+                    conversation, llm_client=llm_client, model=model, llm_config=llm_config, config=config
                 )
                 usages.append(summary_usage)
                 if summary is None:
@@ -705,6 +711,7 @@ async def datapoints_from_traces(
                     response_format=_InferredPersonaScenario,
                     max_tokens=config.max_tokens,
                     label='datapoints_from_traces',
+                    config=llm_config,
                 )
             except Exception as exc:
                 # Append rather than replace: `usages` may already hold the
@@ -788,6 +795,7 @@ async def extend_from_traces(
     num_datapoints: int,
     agent_description: str | None = None,
     model: str = DEFAULT_MODEL,
+    llm_config: LLMCallConfig | None = None,
     client: AsyncOpenAI | None = None,
     api_key: str | None = None,
     config: TraceAnalysisConfig | None = None,
@@ -846,7 +854,7 @@ async def extend_from_traces(
                 return summaries.get(conversation.trace_id)
             async with semaphore:
                 summary, usage = await _summarize_conversation(
-                    conversation, llm_client=llm_client, model=model, config=config
+                    conversation, llm_client=llm_client, model=model, llm_config=llm_config, config=config
                 )
             # Appended from a concurrent task, but only between awaits, so the
             # list needs no lock; the order of entries does not matter to the sum.
@@ -885,6 +893,7 @@ async def extend_from_traces(
             response_format=_TrafficProfile,
             max_tokens=config.max_tokens,
             label='extend_from_traces.profile',
+            config=llm_config,
         )
         profile_usages.append(result.usage)
         if result.parsed is None:
@@ -899,7 +908,7 @@ async def extend_from_traces(
     num_personas = max(1, round(math.sqrt(num_datapoints)))
     num_scenarios = math.ceil(num_datapoints / num_personas)
 
-    generator = DatapointGenerator(model=model)
+    generator = DatapointGenerator(model=model, config=llm_config)
     try:
         datapoints = await generator.generate_from_description(
             agent_description=agent_description or 'The agent described by this production traffic profile.',

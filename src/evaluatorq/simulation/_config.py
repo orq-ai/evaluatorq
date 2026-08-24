@@ -34,7 +34,7 @@ from pydantic import BaseModel, ConfigDict, Field
 # static typing) — pydantic resolves annotations at class-creation time even
 # with `from __future__ import annotations`, so they must be real, importable
 # names in this module's namespace and can't live behind `TYPE_CHECKING`.
-from evaluatorq.contracts import AgentTarget, TokenUsage  # noqa: TC001
+from evaluatorq.contracts import AgentTarget, LLMCallConfig, TokenUsage
 from evaluatorq.simulation.evaluators.scorers import SimulationScoringConfig  # noqa: TC001
 from evaluatorq.simulation.hooks import SimulationHooks  # noqa: TC001
 from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig  # noqa: TC001
@@ -77,6 +77,14 @@ class SimulationConfig(BaseModel):
     """None means "unset": resolved in ``_simulate_core`` to a replayed run's
     cap when replaying, else to ``DEFAULT_MAX_TURNS``."""
     model: str = DEFAULT_MODEL
+    """Resolved simulation model. Always equals ``llm_config.model`` — both are
+    set together at the one seam that builds this config, so a reader that only
+    wants the model name does not have to know about ``llm_config``."""
+    llm_config: LLMCallConfig = Field(default_factory=lambda: LLMCallConfig(model=DEFAULT_MODEL))
+    """Sampling/transport settings for every simulation-side LLM call: the user
+    simulator, the judge, and the persona / scenario / first-message generators.
+    Never the target under test — that is the thing being measured, and it is
+    configured where it is constructed."""
     evaluator_names: list[str] | None = None
     scoring: SimulationScoringConfig | None = None
     """Policy knobs for the ``turn_efficiency`` / ``conversation_quality`` scorers

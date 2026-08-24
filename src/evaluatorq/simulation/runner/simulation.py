@@ -12,7 +12,7 @@ from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry, default_map_error
 from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pipeline
 from evaluatorq.common.tracing import record_llm_input, record_llm_output, set_span_attrs
-from evaluatorq.contracts import AgentTarget, ResponseTrace, TokenUsage, content_to_text, render_tool_call
+from evaluatorq.contracts import AgentTarget, LLMCallConfig, ResponseTrace, TokenUsage, content_to_text, render_tool_call
 from evaluatorq.integrations.callable_integration import CallableTarget
 from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
 from evaluatorq.simulation.agents.user_simulator import (
@@ -626,6 +626,7 @@ class SimulationRunner:
         judge: BaseAgent | None = None,
         hooks: SimulationHooks | None = None,
         llm_client: AsyncOpenAI | None = None,
+        llm_config: LLMCallConfig | None = None,
     ) -> None:
         if not target_agent and not target:
             raise ValueError('Must provide either target_agent or target')
@@ -680,7 +681,11 @@ class SimulationRunner:
         self._target_agent_timeout_ms = target_agent_timeout_ms
         self._max_target_retries = max_target_retries
         self._max_tool_result_chars = max_tool_result_chars
-        self._model = model
+        # ``llm_config`` configures the user simulator and the judge — never the
+        # target under test, which is the thing being measured. ``model`` is the
+        # shorthand for setting only the model on it; a full config wins.
+        self._llm_config = llm_config if llm_config is not None else LLMCallConfig(model=model)
+        self._model = self._llm_config.model
         self._max_turns = max_turns
         self._shared_client: AsyncOpenAI | None = llm_client
         self._client_owned: bool = False
@@ -861,9 +866,9 @@ class SimulationRunner:
             if client is None:
                 client = self._get_shared_client()
             user_simulator = UserSimulatorAgent(
-                UserSimulatorAgentConfig(
-                    model=self._model,
-                    client=client,
+                UserSimulatorAgentConfig.from_call_config(
+                    self._llm_config,
+                    client=self._llm_config.client or client,
                     system_prompt=system_prompt,
                 )
             )
@@ -891,9 +896,9 @@ class SimulationRunner:
             if client is None:
                 client = self._get_shared_client()
             judge = JudgeAgent(
-                JudgeAgentConfig(
-                    model=self._model,
-                    client=client,
+                JudgeAgentConfig.from_call_config(
+                    self._llm_config,
+                    client=self._llm_config.client or client,
                     goal=scenario.goal if scenario else '',
                     criteria=list(scenario.criteria) if scenario and scenario.criteria else [],
                     ground_truth=scenario.ground_truth or '' if scenario else '',

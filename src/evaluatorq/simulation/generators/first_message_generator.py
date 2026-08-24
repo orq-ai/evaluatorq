@@ -16,6 +16,7 @@ from evaluatorq.common.llm_call import execute_response
 from evaluatorq.common.responses import first_responses_refusal, responses_stop_reason
 from evaluatorq.common.retry import with_retry
 from evaluatorq.common.tracing import record_llm_input
+from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.tracing import with_llm_span
 from evaluatorq.simulation.types import DEFAULT_MODEL, Persona, Scenario
 from evaluatorq.simulation.utils.prompt_builders import (
@@ -85,8 +86,15 @@ class FirstMessageGenerator:
         model: str = DEFAULT_MODEL,
         client: AsyncOpenAI | None = None,
         api_key: str | None = None,
+        config: LLMCallConfig | None = None,
     ) -> None:
-        self._model = model
+        """``config`` carries the sampling settings for this generator's own LLM
+        calls; ``model`` is the shorthand for setting just the model on it. When
+        both are given ``config.model`` wins, because a caller who built a whole
+        config said everything they meant to say.
+        """
+        self._config = config if config is not None else LLMCallConfig(model=model)
+        self._model = self._config.model
         from evaluatorq.openresponses.client import build_simulation_client
 
         self._client, self._client_owned = build_simulation_client(
@@ -152,8 +160,14 @@ Keep it natural - this is how they would actually open a conversation."""
                             model=self._model,
                             messages=cast('list[dict[str, Any]]', messages),
                             span=span,
-                            timeout_s=_TIMEOUT_S,
+                            timeout_s=self._config.timeout_ms / 1000
+                            if 'timeout_ms' in self._config.model_fields_set
+                            else _TIMEOUT_S,
                             max_output_tokens=_MAX_OUTPUT_TOKENS,
+                            temperature=self._config.temperature,
+                            reasoning_effort=self._config.reasoning_effort,
+                            extra_body=self._config.extra_body or None,
+                            extra_kwargs=self._config.extra_kwargs or None,
                         ),
                         label='FirstMessageGenerator.generate',
                     )
