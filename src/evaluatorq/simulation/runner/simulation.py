@@ -715,11 +715,18 @@ class SimulationRunner:
         )
 
     def _get_shared_client(self) -> AsyncOpenAI:
-        """Return the generation client; ``with_retry`` owns retrying calls."""
+        """Return the generation client; ``with_retry`` owns retrying calls.
+
+        Precedence is `build_simulation_client`'s own: the constructor's
+        ``llm_client``, then ``llm_config.client``, then the environment. The
+        config's client is handed over rather than consulted after the fact —
+        resolving the environment first made a caller who supplied their own
+        client fail for want of credentials it was never going to use.
+        """
         if not self._shared_client:
             from evaluatorq.openresponses.client import build_simulation_client
 
-            self._shared_client, self._client_owned = build_simulation_client(max_retries=0)
+            self._shared_client, self._client_owned = build_simulation_client(self._llm_config.client, max_retries=0)
         return self._shared_client
 
     async def run(
@@ -867,7 +874,7 @@ class SimulationRunner:
             user_simulator = UserSimulatorAgent(
                 UserSimulatorAgentConfig.from_call_config(
                     self._llm_config,
-                    client=self._llm_config.client or client,
+                    client=client,
                     system_prompt=system_prompt,
                 )
             )
@@ -897,7 +904,7 @@ class SimulationRunner:
             judge = JudgeAgent(
                 JudgeAgentConfig.from_call_config(
                     self._llm_config,
-                    client=self._llm_config.client or client,
+                    client=client,
                     goal=scenario.goal if scenario else '',
                     criteria=list(scenario.criteria) if scenario and scenario.criteria else [],
                     ground_truth=scenario.ground_truth or '' if scenario else '',

@@ -96,6 +96,9 @@ async def populate_run_executive_summary(
     caller explicitly set on it are read, so an unset ``temperature`` still means
     the request omits the parameter.
 
+    ``llm_config.client``, when set, is handed to the resolver as the client to
+    use rather than being consulted after the environment has already been asked.
+
     ``resolve_client`` overrides the credential resolver (the CLI passes its own
     module-level ``resolve_llm_client`` so its test monkeypatch seam still works);
     defaults to `evaluatorq.common.llm_client.resolve_llm_client`.
@@ -112,7 +115,11 @@ async def populate_run_executive_summary(
 
     resolver = resolve_client or resolve_llm_client
     try:
-        resolved = resolver()
+        # A client on the config is the caller's own; resolving the environment
+        # first would fail for want of credentials it was never going to use.
+        resolved = (
+            resolver(llm_config.client) if llm_config is not None and llm_config.client is not None else resolver()
+        )
     except MissingLLMCredentialsError:
         logger.warning('Skipping executive summary: no LLM credentials configured.')
         return

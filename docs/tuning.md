@@ -86,6 +86,8 @@ Only the fields you set take effect. `LLMCallConfig(model="...")` alone leaves `
 
 The same `llm_config=` is on `summarize_conversations()`, `datapoints_from_traces()`, `extend_from_traces()` and `extend_from_experiment()` for the trace- and experiment-derived generation paths, with the same precedence: the config's model wins over the `model=` / `sim_model=` shorthand and the contradiction is logged.
 
+`llm_config.client` is honoured everywhere too: pass your own `AsyncOpenAI` and no credentials need to be in the environment at all. Precedence is the same on every path — an explicitly passed client argument, then the config's, then `ORQ_API_KEY` / `OPENAI_API_KEY`.
+
 This is also how you pin the judge back to deterministic scoring. `temperature` no longer defaults to `0.0` anywhere, so a judge left unconfigured samples at whatever the provider's default is and two runs over the same transcript can disagree. Pass `llm_config=LLMCallConfig(model="...", temperature=0.0)` when you need run-to-run comparability — but not on a reasoning-class model, which rejects `temperature` at any value.
 
 ## Target-call reliability

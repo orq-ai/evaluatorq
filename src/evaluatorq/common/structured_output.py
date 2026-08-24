@@ -48,7 +48,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, Literal, NamedTuple, TypeVar, cast
 
 from openai import APIStatusError, AsyncOpenAI, LengthFinishReasonError, pydantic_function_tool
 from pydantic import BaseModel, ValidationError
@@ -246,6 +246,68 @@ def _looks_like_schema_rejection(exc: APIStatusError) -> bool:
 # Per-request ceiling. A batched generation asking for tens of items is a slow
 # call by design, so this is well above LLMCallConfig's 90s default.
 _STRUCTURED_TIMEOUT_S = 300.0
+
+
+class Unset:
+    """Sentinel for "this keyword was not passed".
+
+    ``None`` cannot serve: it is a meaningful explicit value for every optional
+    sampling keyword here (``temperature=None`` means "omit the parameter", which
+    is what a reasoning-class model needs). Overloading it made
+    ``generate_structured``'s documented precedence — an explicit keyword beats
+    ``config`` — untrue for exactly the callers who most needed it.
+    """
+
+    def __repr__(self) -> str:
+        return '<unset>'
+
+
+UNSET = Unset()
+
+
+class _CallSettings(NamedTuple):
+    """The sampling knobs after the caller's keywords and ``config`` are folded."""
+
+    temperature: float | None
+    extra_kwargs: dict[str, Any] | None
+    extra_body: dict[str, Any] | None
+    reasoning_effort: str | None
+    timeout_s: float
+
+
+def _fold_config(
+    *,
+    config: LLMCallConfig | None,
+    temperature: float | Unset | None,
+    extra_kwargs: dict[str, Any] | Unset | None,
+    extra_body: dict[str, Any] | Unset | None,
+    reasoning_effort: str | Unset | None,
+    timeout_s: float | Unset,
+) -> _CallSettings:
+    """Explicit keyword beats ``config`` beats the call-site default.
+
+    A keyword still at ``UNSET`` is one the caller never passed; anything else
+    they meant, ``None`` included.
+    """
+    from_config = (
+        config.set_values('temperature', 'extra_kwargs', 'extra_body', 'reasoning_effort', 'timeout_ms')
+        if config is not None
+        else {}
+    )
+    if isinstance(timeout_s, Unset):
+        timeout_ms = from_config.get('timeout_ms')
+        resolved_timeout_s = timeout_ms / 1000.0 if timeout_ms is not None else _STRUCTURED_TIMEOUT_S
+    else:
+        resolved_timeout_s = timeout_s
+    return _CallSettings(
+        temperature=from_config.get('temperature') if isinstance(temperature, Unset) else temperature,
+        extra_kwargs=from_config.get('extra_kwargs') if isinstance(extra_kwargs, Unset) else extra_kwargs,
+        extra_body=from_config.get('extra_body') if isinstance(extra_body, Unset) else extra_body,
+        reasoning_effort=(
+            from_config.get('reasoning_effort') if isinstance(reasoning_effort, Unset) else reasoning_effort
+        ),
+        timeout_s=resolved_timeout_s,
+    )
 
 
 def _truncated_output_error(
@@ -669,12 +731,12 @@ async def generate_structured(
     response_format: type[T],
     max_tokens: int,
     label: str,
-    temperature: float | None = None,
-    extra_kwargs: dict[str, Any] | None = None,
+    temperature: float | Unset | None = UNSET,
+    extra_kwargs: dict[str, Any] | Unset | None = UNSET,
     api: Literal['chat_completions', 'responses'] = 'chat_completions',
-    reasoning_effort: str | None = None,
-    timeout_s: float = _STRUCTURED_TIMEOUT_S,
-    extra_body: dict[str, Any] | None = None,
+    reasoning_effort: str | Unset | None = UNSET,
+    timeout_s: float | Unset = UNSET,
+    extra_body: dict[str, Any] | Unset | None = UNSET,
     config: LLMCallConfig | None = None,
 ) -> StructuredResult[T]:
     """Generate structured output, degrading through the rungs in the module docstring.
@@ -711,21 +773,24 @@ async def generate_structured(
     than as five keywords: ``temperature``, ``extra_kwargs``, ``extra_body``,
     ``reasoning_effort`` and ``timeout_ms``. Only the fields the caller
     explicitly set on it are read (``model_fields_set``), and an explicit
-    keyword here still wins — a call site pinning ``temperature=0.0`` for a
-    reason keeps it. ``config.model`` and ``config.api`` are NOT read: this
-    function's own ``model`` / ``api`` arguments stay the single authority, so a
-    config cannot silently redirect a call to another endpoint.
+    keyword here always wins — including ``temperature=None`` ("omit the
+    parameter") and ``timeout_s=_STRUCTURED_TIMEOUT_S`` (the default, passed on
+    purpose). That is why those keywords default to a private ``UNSET``
+    sentinel rather than to ``None``: both spellings are real values a caller
+    means, so neither can double as "said nothing".
+
+    ``config.model`` and ``config.api`` are NOT read: this function's own
+    ``model`` / ``api`` arguments stay the single authority, so a config cannot
+    silently redirect a call to another endpoint.
     """
-    if config is not None:
-        from_config = config.set_values('temperature', 'extra_kwargs', 'extra_body', 'reasoning_effort', 'timeout_ms')
-        temperature = from_config.get('temperature', temperature) if temperature is None else temperature
-        extra_kwargs = from_config.get('extra_kwargs', extra_kwargs) if extra_kwargs is None else extra_kwargs
-        extra_body = from_config.get('extra_body', extra_body) if extra_body is None else extra_body
-        reasoning_effort = (
-            from_config.get('reasoning_effort', reasoning_effort) if reasoning_effort is None else reasoning_effort
-        )
-        if timeout_s == _STRUCTURED_TIMEOUT_S and 'timeout_ms' in from_config:
-            timeout_s = from_config['timeout_ms'] / 1000.0
+    temperature, extra_kwargs, extra_body, reasoning_effort, timeout_s = _fold_config(
+        config=config,
+        temperature=temperature,
+        extra_kwargs=extra_kwargs,
+        extra_body=extra_body,
+        reasoning_effort=reasoning_effort,
+        timeout_s=timeout_s,
+    )
     # Every rung is wrapped in `with_retry`, so the SDK's own budget is disarmed
     # once here; otherwise five outer attempts over an SDK doing two retries is
     # fifteen requests per rung. `without_client_retries` clones rather than

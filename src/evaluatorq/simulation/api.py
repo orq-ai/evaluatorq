@@ -67,7 +67,12 @@ from evaluatorq.simulation.exceptions import SimulationDroppedError
 
 
 async def _attach_recommendations(
-    run: SimulationRun, config: SimulationRecommendationConfig, model: str, *, persisted: bool = True
+    run: SimulationRun,
+    config: SimulationRecommendationConfig,
+    model: str,
+    *,
+    persisted: bool = True,
+    llm_config: LLMCallConfig | None = None,
 ) -> None:
     """Generate remediation suggestions and attach them to ``run``.
 
@@ -91,8 +96,12 @@ async def _attach_recommendations(
     try:
         # Retry is owned by generate_recommendations' with_retry calls; disable
         # the SDK layer so the two budgets cannot stack.
-        resolved = resolve_llm_client(max_retries=0)
-        run.recommendations = await generate_recommendations(run.results, resolved.client, model, config=config) or None
+        client = llm_config.client if llm_config is not None else None
+        resolved = resolve_llm_client(client, max_retries=0)
+        run.recommendations = (
+            await generate_recommendations(run.results, resolved.client, model, config=config, llm_config=llm_config)
+            or None
+        )
     except Exception:
         logger.warning('Failed to generate remediation suggestions (results still returned)', exc_info=True)
     finally:
@@ -826,7 +835,9 @@ async def _generate_datapoints_inner(
     from evaluatorq.openresponses.client import build_simulation_client
     from evaluatorq.simulation.hooks import DefaultHooks
 
-    gen_client, gen_owned = build_simulation_client(generation_client, max_retries=0)
+    gen_client, gen_owned = build_simulation_client(
+        generation_client or (llm_config.client if llm_config is not None else None), max_retries=0
+    )
     try:
         gen_hooks = hooks or DefaultHooks()
         gen_personas, gen_scenarios, generation_usage = await _generate_personas_scenarios(
@@ -1393,9 +1404,9 @@ async def _generate_personas_scenarios(
     from evaluatorq.simulation.exceptions import SimulationError
     from evaluatorq.simulation.generators import PersonaGenerator, ScenarioGenerator
 
-    gen_client, gen_owned = build_simulation_client(generation_client, max_retries=0)
+    resolved = resolve_sim_llm_config(sim_model=model, llm_config=llm_config, caller='generate')
+    gen_client, gen_owned = build_simulation_client(generation_client or resolved.client, max_retries=0)
     try:
-        resolved = resolve_sim_llm_config(sim_model=model, llm_config=llm_config, caller='generate')
         persona_gen = PersonaGenerator(client=gen_client, config=resolved)
         scenario_gen = ScenarioGenerator(client=gen_client, config=resolved)
 
@@ -1670,6 +1681,7 @@ async def _simulate_core(
                 config.recommendations,
                 model,
                 persisted=config.save or config.run_output is not None,
+                llm_config=config.llm_config,
             )
 
         # Generate the LLM narrative before persistence so a saved report carries
@@ -1947,9 +1959,9 @@ async def _resolve_or_generate_datapoints(
     from evaluatorq.simulation.generators import FirstMessageGenerator
     from evaluatorq.simulation.tracing import with_simulation_span
 
-    gen_client, gen_owned = build_simulation_client(generation_client, max_retries=0)
+    resolved = resolve_sim_llm_config(sim_model=model, llm_config=llm_config, caller='generate_and_simulate')
+    gen_client, gen_owned = build_simulation_client(generation_client or resolved.client, max_retries=0)
     try:
-        resolved = resolve_sim_llm_config(sim_model=model, llm_config=llm_config, caller='generate_and_simulate')
         first_msg_gen = FirstMessageGenerator(client=gen_client, config=resolved)
         pairs = [(p, s) for p in personas for s in scenarios]
 

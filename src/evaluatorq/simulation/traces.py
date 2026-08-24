@@ -321,7 +321,7 @@ async def summarize_conversations(
     llm_config = resolve_sim_llm_config(sim_model=model, llm_config=llm_config, caller='summarize_conversations')
     model = llm_config.model
     config = config or TraceAnalysisConfig()
-    llm_client, owned = build_simulation_client(client, extra_api_key=api_key, max_retries=0)
+    llm_client, owned = build_simulation_client(client or llm_config.client, extra_api_key=api_key, max_retries=0)
     semaphore = asyncio.Semaphore(_INFER_CONCURRENCY)
 
     async def one(conversation: TraceConversation) -> tuple[str, str | None, TokenUsage | None]:
@@ -667,7 +667,7 @@ async def datapoints_from_traces(
     llm_config = resolve_sim_llm_config(sim_model=model, llm_config=llm_config, caller='datapoints_from_traces')
     model = llm_config.model
     config = config or TraceAnalysisConfig()
-    llm_client, owned = build_simulation_client(client, extra_api_key=api_key, max_retries=0)
+    llm_client, owned = build_simulation_client(client or llm_config.client, extra_api_key=api_key, max_retries=0)
     first_message_generator = (
         FirstMessageGenerator(model=model, client=llm_client, config=llm_config)
         if config.generate_first_message
@@ -841,7 +841,7 @@ async def extend_from_traces(
         raise ValueError('num_datapoints must be >= 1')
 
     config = config or TraceAnalysisConfig()
-    llm_client, owned = build_simulation_client(client, extra_api_key=api_key, max_retries=0)
+    llm_client, owned = build_simulation_client(client or llm_config.client, extra_api_key=api_key, max_retries=0)
     # Declared outside the try so the `finally` can report a phase that failed
     # before the first summarize call.
     profile_usages: list[TokenUsage | None] = []

@@ -209,8 +209,10 @@ class ScenarioGenerator(UsageTracking):
         self._model = self._config.model
         from evaluatorq.openresponses.client import build_simulation_client
 
+        # `client` first, then the config's — `build_simulation_client` owns that
+        # order, so the config's client must reach it rather than be checked after.
         self._client, self._client_owned = build_simulation_client(
-            client,
+            client or self._config.client,
             extra_api_key=api_key,
             max_retries=0,
         )

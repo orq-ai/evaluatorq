@@ -321,3 +321,105 @@ def test_extend_from_experiment_warns_on_a_contradicting_sim_model(caplog: pytes
             caller='extend_from_experiment',
         )
     assert 'extend_from_experiment(): sim_model=' in caplog.text
+
+
+def test_runner_uses_the_config_client_without_env_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A caller who brings their own client must not need credentials in the environment."""
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    mine = MagicMock()
+    runner = SimulationRunner(target=lambda _messages: 'hi', llm_config=LLMCallConfig(model='m', client=mine))
+    assert runner._get_shared_client() is mine
+    # Not ours to close.
+    assert runner._client_owned is False
+
+
+@pytest.mark.parametrize('cls', [PersonaGenerator, ScenarioGenerator, FirstMessageGenerator])
+def test_generators_use_the_config_client_without_env_credentials(
+    monkeypatch: pytest.MonkeyPatch, cls: Any
+) -> None:
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    mine = MagicMock()
+    gen = cls(config=LLMCallConfig(model='m', client=mine))
+    assert gen._client is mine
+    assert gen._client_owned is False
+
+
+@pytest.mark.asyncio
+async def test_generate_structured_explicit_none_temperature_beats_the_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`None` means "omit the parameter" — a real value, not "caller said nothing"."""
+    import evaluatorq.common.structured_output as mod
+
+    seen: dict[str, Any] = {}
+
+    async def fake_parse(**kwargs: Any) -> Any:
+        seen.update(kwargs)
+        raise RuntimeError('stop')
+
+    monkeypatch.setattr(mod, 'execute_chat_parse', fake_parse)
+    with pytest.raises(Exception, match='stop'):
+        await mod.generate_structured(
+            MagicMock(),
+            model='m',
+            messages=[{'role': 'user', 'content': 'hi'}],
+            response_format=_Answer,
+            max_tokens=64,
+            label='test',
+            temperature=None,
+            config=LLMCallConfig(model='m', temperature=0.7),
+        )
+    assert seen['temperature'] is None
+
+
+@pytest.mark.asyncio
+async def test_generate_structured_explicit_default_timeout_beats_the_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Passing the default value on purpose is still passing it."""
+    import evaluatorq.common.structured_output as mod
+
+    seen: dict[str, Any] = {}
+
+    async def fake_parse(**kwargs: Any) -> Any:
+        seen.update(kwargs)
+        raise RuntimeError('stop')
+
+    monkeypatch.setattr(mod, 'execute_chat_parse', fake_parse)
+    with pytest.raises(Exception, match='stop'):
+        await mod.generate_structured(
+            MagicMock(),
+            model='m',
+            messages=[{'role': 'user', 'content': 'hi'}],
+            response_format=_Answer,
+            max_tokens=64,
+            label='test',
+            timeout_s=mod._STRUCTURED_TIMEOUT_S,
+            config=LLMCallConfig(model='m', timeout_ms=1000),
+        )
+    assert seen['timeout_s'] == mod._STRUCTURED_TIMEOUT_S
+
+
+@pytest.mark.asyncio
+async def test_recommendations_use_the_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    import evaluatorq.simulation.reports.recommendations as mod
+
+    seen: dict[str, Any] = {}
+
+    async def fake(**kwargs: Any) -> Any:
+        seen.update(kwargs)
+        raise RuntimeError('stop')
+
+    monkeypatch.setattr(mod, 'generate_structured', fake)
+    result = MagicMock()
+    result.rules_broken = ['be polite']
+    result.goal_achieved = False
+    monkeypatch.setattr(mod, 'find_triggers', lambda *_a, **_k: [('goal_not_achieved', 'evidence')])
+    cfg = LLMCallConfig(model='config/model', temperature=0.2)
+    assert await mod.generate_recommendations([result], MagicMock(), 'explicit/model', llm_config=cfg) == []
+    assert seen['config'] is cfg
+    # Not passed by this caller, so the config's value must survive to the merge.
+    assert isinstance(seen['temperature'], mod.Unset)
+    assert seen['model'] == 'explicit/model'
