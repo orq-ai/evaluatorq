@@ -89,7 +89,7 @@ config = LLMConfig(
         model="openai/gpt-5-mini",
         temperature=0.7,
         timeout_ms=90_000,
-        extra_kwargs={"reasoning_effort": "medium"},
+        reasoning_effort="medium",
     ),
     evaluator=LLMCallConfig(
         model="openai/gpt-5-mini",

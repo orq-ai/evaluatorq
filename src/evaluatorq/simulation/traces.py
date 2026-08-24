@@ -35,6 +35,11 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from evaluatorq.common.sanitize import delimit
+from evaluatorq.common.structured_output import (
+    log_structured_usage,
+    sum_structured_usage,
+    usage_from_exception,
+)
 from evaluatorq.simulation.types import DEFAULT_MODEL, Persona, Scenario, SimulationDatapoint
 from evaluatorq.simulation.utils.prompt_builders import generate_datapoint
 from evaluatorq.simulation.utils.structured_output import generate_structured
@@ -43,6 +48,8 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from openai import AsyncOpenAI
+
+    from evaluatorq.contracts import TokenUsage
 
 logger = logging.getLogger(__name__)
 
@@ -226,13 +233,18 @@ async def _summarize_conversation(
     llm_client: AsyncOpenAI,
     model: str,
     config: TraceAnalysisConfig,
-) -> str | None:
-    """Summarize one conversation for a downstream prompt, or ``None`` if it failed.
+) -> tuple[str | None, TokenUsage | None]:
+    """Summarize one conversation, with what the call cost; ``None`` summary if it failed.
 
     A failed or unparseable summarize call drops that conversation with a warning
     rather than substituting a cut-down transcript. The substitute was worse than it
     looked: it put raw, unredacted text into the prompt the summary exists to keep it
     out of, and cut it at exactly the point the summarize prompt aims for.
+
+    The usage element is returned even when the summary is unusable: the call
+    still billed, and the caller sums it into the phase total (RES-1295). A call
+    that *raised* carries what its rungs billed on the exception, so that is
+    returned too; ``None`` means nothing was billed.
     """
     messages: list[dict[str, Any]] = [
         {
@@ -247,7 +259,7 @@ async def _summarize_conversation(
         },
     ]
     try:
-        parsed, _raw = await generate_structured(
+        result = await generate_structured(
             llm_client,
             model=model,
             messages=messages,
@@ -258,11 +270,11 @@ async def _summarize_conversation(
         )
     except Exception as exc:
         logger.warning('Summarizing trace %s failed (%s); dropping it', conversation.trace_id, exc)
-        return None
-    if parsed is None or not parsed.summary.strip():
+        return None, usage_from_exception(exc)
+    if result.parsed is None or not result.parsed.summary.strip():
         logger.warning('Summarizing trace %s returned nothing usable; dropping it', conversation.trace_id)
-        return None
-    return parsed.summary.strip()
+        return None, result.usage
+    return result.parsed.summary.strip(), result.usage
 
 
 async def summarize_conversations(
@@ -308,17 +320,21 @@ async def summarize_conversations(
     llm_client, owned = build_simulation_client(client, extra_api_key=api_key, max_retries=0)
     semaphore = asyncio.Semaphore(_INFER_CONCURRENCY)
 
-    async def one(conversation: TraceConversation) -> tuple[str, str | None]:
+    async def one(conversation: TraceConversation) -> tuple[str, str | None, TokenUsage | None]:
         async with semaphore:
-            summary = await _summarize_conversation(conversation, llm_client=llm_client, model=model, config=config)
-        return conversation.trace_id, summary
+            summary, usage = await _summarize_conversation(
+                conversation, llm_client=llm_client, model=model, config=config
+            )
+        return conversation.trace_id, summary, usage
 
     try:
-        pairs = await asyncio.gather(*(one(c) for c in conversations))
+        triples = await asyncio.gather(*(one(c) for c in conversations))
     finally:
         if owned:
             await llm_client.close()
-    return {trace_id: summary for trace_id, summary in pairs if summary}
+    # Every summarize call billed, including the ones whose output was unusable.
+    log_structured_usage(sum_structured_usage([usage for _, _, usage in triples]), phase='Trace summarization')
+    return {trace_id: summary for trace_id, summary, _usage in triples if summary}
 
 
 # ---------------------------------------------------------------------------
@@ -651,10 +667,13 @@ async def datapoints_from_traces(
     # span-fetch phase (and DatapointGenerator, which uses the same width).
     semaphore = asyncio.Semaphore(_INFER_CONCURRENCY)
 
-    async def infer_one(conversation: TraceConversation) -> SimulationDatapoint | None:
+    async def infer_one(conversation: TraceConversation) -> tuple[SimulationDatapoint | None, TokenUsage | None]:
+        # Usage rides back with the datapoint: this worker runs concurrently and owns
+        # no shared accumulator (RES-1295).
+        usages: list[TokenUsage | None] = []
         recorded_first_message = conversation.first_user_message
         if not recorded_first_message:
-            return None
+            return None, None
         async with semaphore:
             if summaries is not None:
                 summary = summaries.get(conversation.trace_id)
@@ -662,11 +681,14 @@ async def datapoints_from_traces(
                     # A supplied mapping is authoritative: absence means the
                     # conversation was already attempted and already warned
                     # about — a second call here would bill and warn again.
-                    return None
+                    return None, None
             else:
-                summary = await _summarize_conversation(conversation, llm_client=llm_client, model=model, config=config)
+                summary, summary_usage = await _summarize_conversation(
+                    conversation, llm_client=llm_client, model=model, config=config
+                )
+                usages.append(summary_usage)
                 if summary is None:
-                    return None
+                    return None, sum_structured_usage(usages)
             messages: list[dict[str, Any]] = [
                 {'role': 'system', 'content': _INFER_SYSTEM_PROMPT.format(redaction_note=_redaction_note(config))},
                 {
@@ -678,7 +700,7 @@ async def datapoints_from_traces(
                 },
             ]
             try:
-                parsed, _raw = await generate_structured(
+                result = await generate_structured(
                     llm_client,
                     model=model,
                     messages=messages,
@@ -688,18 +710,22 @@ async def datapoints_from_traces(
                     label='datapoints_from_traces',
                 )
             except Exception as exc:
+                # Append rather than replace: `usages` may already hold the
+                usages.append(usage_from_exception(exc))
                 logger.warning(
                     'Persona/scenario inference failed for trace %s: %s',
                     conversation.trace_id,
                     exc,
                 )
-                return None
+                return None, sum_structured_usage(usages)
+            usages.append(result.usage)
+            parsed = result.parsed
             if parsed is None:
                 logger.warning(
                     'Persona/scenario inference returned no parseable output for trace %s',
                     conversation.trace_id,
                 )
-                return None
+                return None, sum_structured_usage(usages)
             first_message = recorded_first_message
             if first_message_generator is not None:
                 try:
@@ -710,13 +736,18 @@ async def datapoints_from_traces(
                         conversation.trace_id,
                         exc,
                     )
-        return generate_datapoint(parsed.persona, parsed.scenario, first_message).model_copy(
+        datapoint = generate_datapoint(parsed.persona, parsed.scenario, first_message).model_copy(
             update={'id': f'trace-{conversation.trace_id}'}
         )
+        return datapoint, sum_structured_usage(usages)
 
     try:
         results = await asyncio.gather(*(infer_one(c) for c in conversations))
-        return [dp for dp in results if dp is not None]
+        log_structured_usage(
+            sum_structured_usage([usage for _dp, usage in results]),
+            phase='Trace persona/scenario inference',
+        )
+        return [dp for dp, _usage in results if dp is not None]
     finally:
         if owned:
             await llm_client.close()
@@ -796,6 +827,9 @@ async def extend_from_traces(
 
     config = config or TraceAnalysisConfig()
     llm_client, owned = build_simulation_client(client, extra_api_key=api_key, max_retries=0)
+    # Declared outside the try so the `finally` can report a phase that failed
+    # before the first summarize call.
+    profile_usages: list[TokenUsage | None] = []
     try:
         sampled = conversations[: config.max_reduce_summaries]
         if len(conversations) > len(sampled):
@@ -814,7 +848,13 @@ async def extend_from_traces(
                 # a second call here would bill and warn again.
                 return summaries.get(conversation.trace_id)
             async with semaphore:
-                return await _summarize_conversation(conversation, llm_client=llm_client, model=model, config=config)
+                summary, usage = await _summarize_conversation(
+                    conversation, llm_client=llm_client, model=model, config=config
+                )
+            # Appended from a concurrent task, but only between awaits, so the
+            # list needs no lock; the order of entries does not matter to the sum.
+            profile_usages.append(usage)
+            return summary
 
         sampled_summaries = [s for s in await asyncio.gather(*(summarize_one(c) for c in sampled)) if s]
         if not sampled_summaries:
@@ -841,7 +881,7 @@ async def extend_from_traces(
                 ),
             },
         ]
-        parsed, _raw = await generate_structured(
+        result = await generate_structured(
             llm_client,
             model=model,
             messages=messages,
@@ -850,12 +890,15 @@ async def extend_from_traces(
             max_tokens=config.max_tokens,
             label='extend_from_traces.profile',
         )
-        if parsed is None:
+        profile_usages.append(result.usage)
+        if result.parsed is None:
             raise RuntimeError('Traffic profile generation returned no parseable output')
-        profile = parsed.profile
+        profile = result.parsed.profile
     finally:
         if owned:
             await llm_client.close()
+        # In `finally` so an unprofilable sample still reports what it burned.
+        log_structured_usage(sum_structured_usage(profile_usages), phase='Trace traffic profiling')
 
     num_personas = max(1, round(math.sqrt(num_datapoints)))
     num_scenarios = math.ceil(num_datapoints / num_personas)

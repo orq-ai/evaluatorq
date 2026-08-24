@@ -7,7 +7,7 @@ import pytest
 
 from evaluatorq.common.judge import reset_responses_rejectors
 from evaluatorq.common.llm_call import reset_reasoning_rejectors
-from evaluatorq.common.model_catalogue import reset_catalogue_cache
+from evaluatorq.common.model_catalogue import clear_model_overrides, reset_catalogue_cache
 
 
 class LeakedNetworkCall(AssertionError):
@@ -123,10 +123,17 @@ def _offline_model_catalogue(request, monkeypatch):
     from evaluatorq.common import model_catalogue
 
     reset_catalogue_cache()
+    # `reset_catalogue_cache` deliberately spares `register_model` overrides —
+    # they are caller intent, not cached state. That makes them process-lifetime
+    # here, so a test that registers one silently repriced every later test in
+    # the same process. Clear them alongside the cache: inside the suite there is
+    # no caller intent worth carrying across tests.
+    clear_model_overrides()
     if not request.node.get_closest_marker("integration"):
         monkeypatch.setattr(model_catalogue, "_catalogues", _OfflineCatalogues())
     yield
     reset_catalogue_cache()
+    clear_model_overrides()
 
 
 @pytest.fixture(autouse=True)

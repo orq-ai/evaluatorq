@@ -896,33 +896,25 @@ async def test_traceparent_injected_into_first_message_generation_call(
 
     captured: dict[str, object] = {}
 
-    class _Choice:
-        finish_reason = 'stop'
-
-        class message:  # noqa: N801
-            content = 'Need help with my order'
-            role = 'assistant'
-
     class _Usage:
-        prompt_tokens = 2
-        completion_tokens = 3
+        input_tokens = 2
+        output_tokens = 3
         total_tokens = 5
-        prompt_tokens_details = None
+        input_tokens_details = None
 
     class _Resp:
         id = 'fm_1'
         model = 'test'
         usage = _Usage()
-        choices = [_Choice()]
+        output_text = 'Need help with my order'
 
     async def fake_create(**kwargs: object) -> _Resp:
         captured.update(kwargs)
         return _Resp()
 
     fake_client = MagicMock()
-    fake_client.chat = MagicMock()
-    fake_client.chat.completions = MagicMock()
-    fake_client.chat.completions.create = AsyncMock(side_effect=fake_create)
+    fake_client.responses = MagicMock()
+    fake_client.responses.create = AsyncMock(side_effect=fake_create)
 
     from evaluatorq.simulation.generators.first_message_generator import (
         FirstMessageGenerator,
@@ -953,7 +945,7 @@ async def test_traceparent_injected_into_first_message_generation_call(
     headers = captured.get('extra_headers')
     assert isinstance(headers, dict)
     assert 'traceparent' in headers, f'expected traceparent in {headers}'
-    llm = _find(span_collector, 'chat test')
+    llm = _find(span_collector, 'responses test')
     parent = _find(span_collector, 'orq.simulation.first_message_generation')
     assert llm.parent.span_id == parent.context.span_id  # pyright: ignore[reportOptionalMemberAccess]
 
@@ -967,29 +959,21 @@ async def test_generated_datapoint_first_message_has_simulation_span(
 
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
 
-    class _Choice:
-        finish_reason = 'stop'
-
-        class message:  # noqa: N801
-            content = 'Hello there'
-            role = 'assistant'
-
     class _Usage:
-        prompt_tokens = 1
-        completion_tokens = 1
+        input_tokens = 1
+        output_tokens = 1
         total_tokens = 2
-        prompt_tokens_details = None
+        input_tokens_details = None
 
     class _Resp:
         id = 'dp_1'
         model = 'test'
         usage = _Usage()
-        choices = [_Choice()]
+        output_text = 'Hello there'
 
     fake_client = MagicMock()
-    fake_client.chat = MagicMock()
-    fake_client.chat.completions = MagicMock()
-    fake_client.chat.completions.create = AsyncMock(return_value=_Resp())
+    fake_client.responses = MagicMock()
+    fake_client.responses.create = AsyncMock(return_value=_Resp())
 
     from evaluatorq.simulation.api import _generate_single_datapoint
     from evaluatorq.simulation.generators.first_message_generator import (
@@ -1023,7 +1007,7 @@ async def test_generated_datapoint_first_message_has_simulation_span(
     assert datapoint.first_message == 'Hello there'
     pipeline = _find(span_collector, 'Evaluatorq - Agent Simulation')
     first_msg = _find(span_collector, 'orq.simulation.first_message_generation')
-    llm = _find(span_collector, 'chat test')
+    llm = _find(span_collector, 'responses test')
     assert first_msg.parent.span_id == pipeline.context.span_id  # pyright: ignore[reportOptionalMemberAccess]
     assert llm.parent.span_id == first_msg.context.span_id  # pyright: ignore[reportOptionalMemberAccess]
 
@@ -1376,6 +1360,9 @@ async def test_executive_summary_emits_llm_span(span_collector: _CollectingExpor
     client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=_create)))
     run = SimpleNamespace(
         executive_summary=None,
+        # The summary is the last usage-producing step and folds its cost into
+        # this field in place, so the stand-in must carry it.
+        token_usage_total=None,
         results=[SimpleNamespace(goal_achieved=True, rules_broken=[], reason='')],
     )
 
@@ -1434,29 +1421,21 @@ async def test_batched_first_message_generation_uses_one_span(
 
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
 
-    class _Choice:
-        finish_reason = 'stop'
-
-        class message:  # noqa: N801
-            content = 'Hello there'
-            role = 'assistant'
-
     class _Usage:
-        prompt_tokens = 1
-        completion_tokens = 1
+        input_tokens = 1
+        output_tokens = 1
         total_tokens = 2
-        prompt_tokens_details = None
+        input_tokens_details = None
 
     class _Resp:
         id = 'dp_1'
         model = 'test'
         usage = _Usage()
-        choices = [_Choice()]
+        output_text = 'Hello there'
 
     fake_client = MagicMock()
-    fake_client.chat = MagicMock()
-    fake_client.chat.completions = MagicMock()
-    fake_client.chat.completions.create = AsyncMock(return_value=_Resp())
+    fake_client.responses = MagicMock()
+    fake_client.responses.create = AsyncMock(return_value=_Resp())
 
     from evaluatorq.simulation.api import _resolve_or_generate_datapoints
     from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario
@@ -1495,7 +1474,7 @@ async def test_batched_first_message_generation_uses_one_span(
     assert a['orq.simulation.generated_count'] == 6
     assert a['orq.simulation.failed_count'] == 0
 
-    llm_spans = [s for s in span_collector.spans if s.name == 'chat test']
+    llm_spans = [s for s in span_collector.spans if s.name == 'responses test']
     assert len(llm_spans) == 6
     assert all(s.parent.span_id == gen_spans[0].context.span_id for s in llm_spans)  # pyright: ignore[reportOptionalMemberAccess]
 
@@ -1513,9 +1492,8 @@ async def test_first_message_generation_span_records_failures(
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
 
     fake_client = MagicMock()
-    fake_client.chat = MagicMock()
-    fake_client.chat.completions = MagicMock()
-    fake_client.chat.completions.create = AsyncMock(side_effect=RuntimeError('boom'))
+    fake_client.responses = MagicMock()
+    fake_client.responses.create = AsyncMock(side_effect=RuntimeError('boom'))
 
     from evaluatorq.simulation.api import _resolve_or_generate_datapoints
     from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario

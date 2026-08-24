@@ -16,7 +16,12 @@ from pydantic import BaseModel, BeforeValidator, Field
 
 from evaluatorq.common.extract_json import coerce_str, coerce_str_list, extract_json_from_response
 from evaluatorq.common.messages import coerce_content_text
-from evaluatorq.common.structured_output import generate_structured
+from evaluatorq.common.structured_output import (
+    generate_structured,
+    log_structured_usage,
+    sum_structured_usage,
+    usage_from_exception,
+)
 from evaluatorq.redteam.contracts import (
     OWASP_CATEGORY_NAMES,
     PIPELINE_CONFIG,
@@ -33,13 +38,16 @@ from evaluatorq.redteam.utils import xml_escape
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
+    from evaluatorq.contracts import TokenUsage
+
 
 class _FocusAreaLLMResponse(BaseModel):
     """Schema the analysis LLM fills for one focus area (RES-822).
 
     Structured-output-first: ``generate_structured`` enforces this via
-    ``parse()`` and falls back to ``json_object`` for models that reject it,
-    where a fenced payload is recovered with ``extract_json_from_response``.
+    ``parse()`` and degrades through a non-strict schema, a forced tool call and
+    ``json_object`` for models that reject it, recovering a fenced payload with
+    ``extract_json_from_response`` on every rung that answers in text.
     The coercing validators keep the fallback as tolerant as the code this
     replaced: a stray non-string item must not drop the whole focus area.
     """
@@ -257,15 +265,23 @@ async def _condense_attack(
     model: str,
     cfg: LLMConfig,
     extra_kwargs: dict[str, Any],
-) -> str:
+    extra_body: dict[str, Any],
+) -> tuple[str, TokenUsage | None]:
     """Replace one oversized attack block with an LLM analysis of the same attack.
 
     Best-effort, like everything else here: if the condense call fails there is still a
     usable focus-area prompt to build, so the block is hard-truncated to the same budget
     and the failure is logged rather than costing the whole area.
+
+    Returns the block alongside what the condense call billed — the failure path
+    included, since a call that answered unusably was still paid for. The usage
+    is ``None`` only when nothing was billed: a call that raised after a rung
+    reached the provider carries the ladder total on the exception, which the
+    ``except`` below harvests (see `StructuredGenerationError`).
     """
+    usage: TokenUsage | None = None
     try:
-        parsed, raw = await generate_structured(
+        condensed = await generate_structured(
             client=llm_client,
             model=model,
             messages=[
@@ -276,27 +292,35 @@ async def _condense_attack(
             temperature=cfg.evaluator.temperature,
             max_tokens=limits.condense_max_tokens,
             label='redteam_recommendations_condense',
+            reasoning_effort=cfg.evaluator.reasoning_effort,
             extra_kwargs=extra_kwargs,
+            extra_body=extra_body,
         )
+        usage = condensed.usage
+        parsed = condensed.parsed
         if parsed is None:
-            parsed = _CondensedAttackLLMResponse.model_validate_json(extract_json_from_response(raw))
+            parsed = _CondensedAttackLLMResponse.model_validate_json(extract_json_from_response(condensed.raw))
         analysis = parsed.analysis.strip()
         if not analysis:
             raise ValueError('condense returned an empty analysis')
-    except Exception:
+    except Exception as exc:
+        usage = usage or usage_from_exception(exc)
         logger.warning(
             f'Failed to condense a {len(block)}-char attack for {result.attack.category}; '
             f'truncating it to {limits.condense_above_chars} chars instead',
             exc_info=True,
         )
-        return _format_trace_to_budget(result, limits, limits.condense_above_chars)
+        return _format_trace_to_budget(result, limits, limits.condense_above_chars), usage
 
-    return '\n'.join([
-        '<trace>',
-        f'  <technique>{xml_escape(result.attack.attack_technique.value)}</technique>',
-        f'  <analysis>{xml_escape(analysis)}</analysis>',
-        '</trace>',
-    ])
+    return (
+        '\n'.join([
+            '<trace>',
+            f'  <technique>{xml_escape(result.attack.attack_technique.value)}</technique>',
+            f'  <analysis>{xml_escape(analysis)}</analysis>',
+            '</trace>',
+        ]),
+        usage,
+    )
 
 
 def _compute_top_risk_areas(
@@ -344,7 +368,7 @@ async def generate_focus_area_recommendations(
     recommendations: RedTeamRecommendationConfig | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     cfg: LLMConfig | None = None,
-) -> list[FocusAreaRecommendation]:
+) -> tuple[list[FocusAreaRecommendation], TokenUsage | None]:
     """Analyze failed traces and generate actionable recommendations per focus area.
 
     Args:
@@ -361,30 +385,30 @@ async def generate_focus_area_recommendations(
             are not broken by a hardcoded value.
 
     Returns:
-        List of ``FocusAreaRecommendation`` objects, one per analyzed area.
+        Tuple of (list of ``FocusAreaRecommendation`` objects, one per analyzed
+        area; the summed usage of every LLM call this function made — condense
+        calls included — or ``None`` if no call billed usage). The caller folds
+        the usage into ``report.summary.post_processing_token_usage``.
     """
     cfg = cfg or PIPELINE_CONFIG
     limits = recommendations or RedTeamRecommendationConfig()
     top_areas = _compute_top_risk_areas(report, limits.max_areas)
     if not top_areas:
-        return []
+        return [], None
 
     generated: list[FocusAreaRecommendation] = []
+    # Every LLM call this function makes, for `report.summary.post_processing_token_usage`.
+    usages: list[TokenUsage | None] = []
 
-    # extra_kwargs carries the same three things completion_params used to merge, in the
-    # same precedence: the router retry body, then the evaluator's own extra_kwargs
-    # (which is where a reasoning model's temperature=1.0 escape hatch lives), then user
-    # llm_kwargs on top. generate_structured splats these LAST over its base params, so
-    # an override wins without a "multiple values for keyword" error. A caller-supplied
-    # extra_body merges INTO the router retry body rather than replacing it, so retry
-    # hints cannot vanish silently; structural keys (model/messages/response_format) are
-    # rejected by generate_structured itself. Built once — it is per-run, not per-area.
+    # Two dicts, two roles: `extra_kwargs` is user-owned sampling options, `extra_body`
+    # is the router body. Both layered caller-last so a caller key wins per key.
     user_extra: dict[str, Any] = {**cfg.evaluator.extra_kwargs, **(llm_kwargs or {})}
     extra_body: dict[str, Any] = {
         **cfg.retry_extra_body(llm_client),
+        **cfg.evaluator.extra_body,
         **(user_extra.pop('extra_body', None) or {}),
     }
-    extra_kwargs: dict[str, Any] = {'extra_body': extra_body, **user_extra}
+    extra_kwargs: dict[str, Any] = user_extra
 
     for area in top_areas:
         vulnerable_results = area['vulnerable_results']
@@ -406,10 +430,12 @@ async def generate_focus_area_recommendations(
         oversized = [i for i, block in enumerate(blocks) if len(block) > limits.condense_above_chars]
         if oversized:
             condensed = await asyncio.gather(*[
-                _condense_attack(blocks[i], sampled[i], limits, llm_client, model, cfg, extra_kwargs) for i in oversized
+                _condense_attack(blocks[i], sampled[i], limits, llm_client, model, cfg, extra_kwargs, extra_body)
+                for i in oversized
             ])
-            for i, analysis in zip(oversized, condensed, strict=True):
+            for i, (analysis, condense_usage) in zip(oversized, condensed, strict=True):
                 blocks[i] = analysis
+                usages.append(condense_usage)
 
         user_prompt = _build_user_prompt(
             category=area['category'],
@@ -429,15 +455,7 @@ async def generate_focus_area_recommendations(
         try:
             # extra_kwargs is computed once for the whole run above (RES-1286); no per-area
             # recomputation here.
-            # RES-1295: generate_structured extracts no usage, so this call's
-            # tokens never reach any total. `report.summary.token_usage_total`
-            # is already finalized by the time this opt-in post-processing step
-            # runs, and `report.summary.token_usage_by_source` is documented to
-            # sum to it — folding this call's usage into either without
-            # maintaining that invariant across all summary breakdowns would be
-            # more than a one-line fix. See "What the totals do not include" in
-            # docs/guides/red-teaming.md.
-            parsed, raw = await generate_structured(
+            area_result = await generate_structured(
                 client=llm_client,
                 model=model,
                 messages=[
@@ -448,12 +466,16 @@ async def generate_focus_area_recommendations(
                 temperature=cfg.evaluator.temperature,
                 max_tokens=limits.max_tokens,
                 label='redteam_recommendations',
+                reasoning_effort=cfg.evaluator.reasoning_effort,
                 extra_kwargs=extra_kwargs,
+                extra_body=extra_body,
             )
+            usages.append(area_result.usage)
+            parsed = area_result.parsed
             if parsed is None:
                 # Fallback path: the model rejected structured output, so parse
                 # the json_object payload, tolerating a ```json fenced body.
-                parsed = _FocusAreaLLMResponse.model_validate_json(extract_json_from_response(raw))
+                parsed = _FocusAreaLLMResponse.model_validate_json(extract_json_from_response(area_result.raw))
 
             recs = [str(r) for r in parsed.recommendations if r][: limits.max_suggestions]
 
@@ -468,11 +490,16 @@ async def generate_focus_area_recommendations(
                 )
             )
 
-        except Exception:
+        except Exception as exc:
+            # Same harvest as `_condense_attack`: the ladder can bill several rungs
+            # before raising and hands the total back on the exception, so an area
+            usages.append(usage_from_exception(exc))
             logger.warning(
                 f'Failed to generate recommendations for {area["category"]}',
                 exc_info=True,
             )
             continue
 
-    return generated
+    total_usage = sum_structured_usage(usages)
+    log_structured_usage(total_usage, phase='Red-team recommendations')
+    return generated, total_usage

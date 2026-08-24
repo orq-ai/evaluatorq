@@ -12,11 +12,16 @@ imports — it is the lower layer both depend on.
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from loguru import logger
 
-from evaluatorq.common.llm_call import apply_pipeline_metadata
+from evaluatorq.common.llm_call import execute_chat_completion
+from evaluatorq.contracts import LLMCallConfig, TokenUsage
+
+if TYPE_CHECKING:
+    from openai import AsyncOpenAI
 
 
 class _ChatCompletions(Protocol):
@@ -69,11 +74,14 @@ Rules:
   one sentence and stop. Do not manufacture risk."""
 
 
-# Request params for the executive-summary completion. Exposed as constants so
-# callers that trace the call (e.g. simulation's with_llm_span) report the exact
-# values sent instead of re-typing literals that could drift.
+# Defaults for the executive-summary completion, overridable per call. Constants so
+# a tracing call site reports the exact values sent. 400 completion tokens is mostly
+# hidden reasoning on a reasoning-class model — raise it if summaries come back empty.
 EXECUTIVE_SUMMARY_TEMPERATURE = 0.7
 EXECUTIVE_SUMMARY_MAX_TOKENS = 400
+# Generous for a slow reasoning model, short enough that a hung call cannot hold
+# up the report.
+EXECUTIVE_SUMMARY_TIMEOUT_S = 120.0
 
 
 def _record_usage_on_current_span(response: Any) -> None:
@@ -98,6 +106,19 @@ def truncate_text(text: str, limit: int = 240) -> str:
     return text if len(text) <= limit else text[:limit].rstrip() + '…'
 
 
+@dataclass(frozen=True)
+class ExecutiveSummary:
+    """The narrative paragraph and what it cost.
+
+    ``usage`` is priced (`execute_chat_completion` runs it through `price_usage`)
+    so the caller can fold it into the run total. It is ``None`` when the call
+    never happened — blank facts — or failed.
+    """
+
+    text: str | None
+    usage: TokenUsage | None = None
+
+
 async def generate_executive_summary(
     facts: str,
     *,
@@ -105,45 +126,66 @@ async def generate_executive_summary(
     model: str,
     system_prompt: str = EXECUTIVE_SUMMARY_SYSTEM_PROMPT,
     temperature: float = EXECUTIVE_SUMMARY_TEMPERATURE,
+    max_tokens: int = EXECUTIVE_SUMMARY_MAX_TOKENS,
+    timeout_s: float = EXECUTIVE_SUMMARY_TIMEOUT_S,
+    reasoning_effort: str | None = None,
     extra_body: dict[str, Any] | None = None,
     extra_kwargs: dict[str, Any] | None = None,
-) -> str | None:
+) -> ExecutiveSummary:
     """Generate the executive-summary prose from a pre-built ``facts`` string.
 
-    Returns the stripped paragraph, or ``None`` when ``facts`` is blank, the
-    completion is empty, or any error occurs (logged, never raised).
+    Returns the stripped paragraph plus its priced usage, or a result whose
+    ``text`` is ``None`` when ``facts`` is blank, the completion is empty, or any
+    error occurs (logged, never raised) — this is an opt-in narrative step and
+    must not take down a report that is otherwise complete.
+
+    The call goes through `common.llm_call.execute_chat_completion`, so it gets
+    the same slot limiting, reasoning drop-and-retry, trace headers, pipeline
+    metadata and `price_usage` as every other chat call — and returns usage the
+    caller can add to the run total.
+
+    Params are built via `LLMCallConfig.request_params`, not a hand-rolled
+    dict splatted next to explicit ``temperature=``/``max_completion_tokens=``
+    keywords: the old shape raised ``TypeError: got multiple values for keyword
+    argument`` the moment a caller passed ``extra_kwargs={'temperature': 1}`` —
+    the documented escape hatch for reasoning-class models that reject a
+    lowered temperature — and that ``TypeError`` was swallowed by the blanket
+    ``except Exception`` below, so the failure surfaced only as a silently
+    ``None`` summary. ``request_params`` reserves the same escape hatch by
+    construction: caller-supplied ``extra_kwargs`` values win the merge.
     """
     if not facts or not facts.strip():
-        return None
+        return ExecutiveSummary(None)
     try:
-        # Merge splat kwargs into one dict for last-wins precedence and to keep
-        # basedpyright's platform-conditional overload checks happy.
-        merged_kwargs: Any = {
-            'extra_body': extra_body or {},
-            **(extra_kwargs or {}),
-        }
-        apply_pipeline_metadata(merged_kwargs)
-        # RES-1295: this call extracts no priced usage. `_record_usage_on_current_span`
-        # below annotates whatever span is active with token *counts* for
-        # tracing, but never calls `price_usage`, so this call's cost never
-        # reaches `report.summary.token_usage_total` — the summary is already
-        # finalized by the time this opt-in narrative step runs for both the
-        # redteam and simulation callers. See "What the totals do not
-        # include" in docs/guides/red-teaming.md.
-        response = await llm_client.chat.completions.create(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        cfg = LLMCallConfig(
             model=model,
-            messages=[  # pyright: ignore[reportArgumentType]
+            temperature=temperature,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
+            extra_kwargs=extra_kwargs or {},
+        )
+        params = cfg.request_params(api='chat_completions', extra_body=extra_body or {})
+        response, usage = await execute_chat_completion(
+            # The Protocol exists so a structural test double typechecks here;
+            # execute_chat_completion only ever touches `chat.completions`.
+            client=cast('AsyncOpenAI', llm_client),
+            model=model,
+            messages=[
                 {'role': 'system', 'content': system_prompt},
                 {'role': 'user', 'content': facts},
             ],
-            temperature=temperature,
-            max_completion_tokens=EXECUTIVE_SUMMARY_MAX_TOKENS,
-            **merged_kwargs,
+            span=None,
+            timeout_s=timeout_s,
+            temperature=params.pop('temperature', None),
+            max_completion_tokens=params.pop('max_completion_tokens', None),
+            reasoning_effort=params.pop('reasoning_effort', None),
+            extra_body=params.pop('extra_body', None),
+            extra_kwargs=params or None,
         )
         _record_usage_on_current_span(response)
         content = response.choices[0].message.content or ''
         text = content.strip()
-        return text or None
+        return ExecutiveSummary(text or None, usage)
     except Exception:
         logger.warning('Failed to generate executive summary', exc_info=True)
-        return None
+        return ExecutiveSummary(None)

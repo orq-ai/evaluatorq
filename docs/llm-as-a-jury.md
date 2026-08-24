@@ -265,6 +265,58 @@ whichever client it is given — the one either helper builds for itself when no
 layers never stack. There is no way to keep an injected client's own SDK
 retries active alongside `run_judge`'s.
 
+## Reasoning effort on a jury
+
+`llm_jury()`, `llm_jury_pairwise()` and `PairwiseComparator` take a
+`reasoning_effort=` argument that pins the effort on the *judge* model:
+
+```python
+from evaluatorq import llm_jury
+
+jury = llm_jury(
+    name='helpfulness',
+    criteria='Is the answer helpful and correct?',
+    judges=['openai/gpt-5.6-luna', 'anthropic/claude-sonnet-5'],
+    reasoning_effort='high',
+)
+```
+
+Because these judges send to the `responses` endpoint, the effort renders as a
+`reasoning` block — unless `run_judge` falls back to Chat Completions for one of
+the reasons above, in which case it renders as a flat `reasoning_effort` field.
+Either way the provider is the authority on which values it accepts.
+
+This is a distinct knob from red teaming's `target_reasoning_effort` (the agent
+*under test*), from `LLMCallConfig.reasoning_effort` on red teaming's own
+`attacker=` / `evaluator=` roles, and from `EVALUATORQ_REASONING_EFFORT` (the
+simulator's user-simulator and judge). See
+[Tuning](tuning.md) for the full disambiguation.
+
+## Provider options
+
+`llm_jury()`, `llm_jury_pairwise()` and `PairwiseComparator` take both injection
+seams, and they are not interchangeable:
+
+```python
+jury = llm_jury(
+    name='helpfulness',
+    criteria='Is the answer helpful?',
+    judges=['openai/gpt-5.6-luna'],
+    extra_kwargs={'top_p': 0.9},          # top-level call argument
+    extra_body={'my_router_field': 'x'},  # request body field
+)
+```
+
+`extra_kwargs` sets arguments on the SDK call and **replaces** the key.
+`extra_body` adds fields to the request body and is **merged** per key, so
+router-owned body fields survive alongside yours.
+
+!!! warning "`extra_body` inside `extra_kwargs` is rejected"
+    `extra_body` is one of the structural fields the call site owns, so passing
+    it through `extra_kwargs` raises — and because a judge failure is caught and
+    turned into a verdict, the symptom is a judge that always fails rather than a
+    crash. Use the `extra_body=` parameter.
+
 ## Full example
 
 A complete red-teaming script covering repetitions, replacements, the

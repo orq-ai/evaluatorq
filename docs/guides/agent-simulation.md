@@ -401,6 +401,103 @@ The callable passed to `target` is the only structural difference from the Orq p
 personas, scenarios, criteria, and the result shape are identical. Swap the
 callback body for any HTTP/LLM agent.
 
+## The four built-in scorers
+
+`evaluator_names` picks from four built-ins. Two read the judge's verdicts; two apply
+a *policy* you can change with `scoring=`:
+
+| Scorer | 0–1 meaning | Tunable |
+|---|---|---|
+| `goal_achieved` | `1.0` when the judge decided the persona's goal was reached, else `0.0`. | no |
+| `criteria_met` | Fraction of the scenario's criteria the judge audited and found satisfied. | no |
+| `turn_efficiency` | How few turns it took to reach the goal. `0.0` if the goal was missed. | yes |
+| `conversation_quality` | Weighted composite of the other three. | yes |
+
+The default is `["goal_achieved", "criteria_met"]` — the two that are meaningful for
+every scenario. The other two are opt-in.
+
+### What `turn_efficiency` actually measures
+
+It is a **cost** proxy, conditioned on success: *given that the goal was reached, how
+many conversational turns did it take?* The assumption behind "fewer is better" is that
+the extra turns are usually the agent re-asking for something it could have inferred,
+clarifying its own vague answer, or wandering — so a user who got what they came for in
+two turns had a better experience, and cost less to serve, than one who needed twelve.
+A run that did **not** reach the goal scores `0.0` outright: failing quickly is not
+efficiency.
+
+**Where that assumption breaks.** A task that legitimately needs many turns — a long
+intake form, a multi-step troubleshooting tree, a negotiation — is penalised by this
+metric for doing its job properly. If your scenarios look like that, either move the
+cliffs out so the curve matches a realistic conversation length, or leave
+`turn_efficiency` out of `evaluator_names` and ignore the score. Do not read a low
+`turn_efficiency` as a quality problem without checking the transcript length you
+actually expect.
+
+The default curve is a set of cliffs, then a linear decay to a floor:
+
+| Turns | 1–2 | 3–4 | 5–6 | 7 | 8 | 9 | 10+ |
+|---|---|---|---|---|---|---|---|
+| Score | 1.0 | 0.9 | 0.7 | 0.6 | 0.5 | 0.4 | 0.3 |
+
+Past the last cliff each turn costs `turn_efficiency_decay_per_turn` (0.1), starting
+from that cliff's score, until `turn_efficiency_floor` (0.3) — a very long conversation
+that *did* reach the goal keeps a non-zero score, because it was inefficient, not
+failed.
+
+### The `conversation_quality` composite
+
+One number per conversation, weighted across the other three scorers:
+
+| Weight field | Default | What it weighs |
+|---|---|---|
+| `goal_achieved_weight` | `0.4` | Did the judge mark the persona's goal as reached? |
+| `criteria_met_weight` | `0.3` | What share of the scenario's criteria were audited and satisfied? |
+| `turn_efficiency_weight` | `0.3` | How few turns that took (the cost proxy above). |
+
+The weights must sum to `1.0` — `SimulationScoringConfig` rejects any other sum at
+construction, so the composite stays on the same 0–1 scale as its parts and remains
+comparable across runs.
+
+**Worked example.** A refund conversation runs 4 turns, the judge marks the goal
+achieved, and 1 of the scenario's 2 criteria is met:
+
+- `goal_achieved` = `1.0`
+- `criteria_met` = `1/2` = `0.5`
+- `turn_efficiency` = `0.9` (4 turns: past the `<= 2` cliff, inside the `<= 4` one)
+- `conversation_quality` = `1.0 × 0.4 + 0.5 × 0.3 + 0.9 × 0.3` = `0.4 + 0.15 + 0.27` = **`0.82`**
+
+### Changing the policy
+
+```python
+from evaluatorq.simulation import SimulationScoringConfig, simulate
+
+results = await simulate(
+    evaluation_name="onboarding-sim",
+    target="agent:my-onboarding-agent",
+    evaluator_names=["goal_achieved", "criteria_met", "turn_efficiency", "conversation_quality"],
+    # A guided onboarding flow needs ~6 turns before anyone should call it slow.
+    scoring=SimulationScoringConfig(
+        turn_efficiency_cliffs=((6, 1.0), (10, 0.9), (16, 0.7)),
+        # Criteria matter more than speed for this agent.
+        goal_achieved_weight=0.4,
+        criteria_met_weight=0.5,
+        turn_efficiency_weight=0.1,
+    ),
+)
+```
+
+`scoring=` is accepted by both `simulate()` and `generate_and_simulate()`, and omitting
+it uses the defaults above. The config is bounded and rejects unknown fields, so a typo
+fails at construction rather than silently scoring with the shipped policy. Two shapes
+it refuses on purpose, because both produce a report that is quietly wrong rather than
+obviously broken:
+
+- cliffs that are not ordered — turn thresholds must strictly increase and scores must
+  not increase with them, so a longer conversation can never score higher than a
+  shorter one;
+- weights that do not sum to `1.0`.
+
 ## From existing traces and data
 
 You do not have to invent every test case from scratch. If you already have
@@ -590,6 +687,27 @@ mode logs how many of the sampled conversations actually reached the profile,
 because that count is the denominator its shares are computed over. A run that
 produced fewer datapoints than traces has those warnings behind it.
 
+Generation runs before a simulation exists, so its spend has no field on any
+*result*. Each phase reports its own total to the run log — `Trace
+summarization`, `Trace persona/scenario inference`, `Trace traffic profiling`,
+`Persona/scenario generation` and `Simulation recommendations` each log the
+tokens, the number of LLM calls, and the cost when the models are priced. The
+call count includes the fallback rungs a structured-output call burned on the way
+to an answer, and a rung whose usage the provider did not report is counted as
+one unpriced call rather than as zero, so the figure reads as a lower bound
+instead of a confident total. A call that *raised* is counted too — the rungs it
+burned before truncating or refusing were billed, and the exception carries their
+total for the phase to pick up.
+
+`SimulationRun.token_usage_total` is the run-level figure: every result's
+`token_usage`, plus — for `generate_and_simulate()` — the GENERATE stage's
+persona/scenario generation cost, plus the executive summary's own completion
+cost when one was generated. It is recomputed after the executive summary runs
+so it never goes stale relative to that later-arriving cost. **Recommendation
+generation is not folded in** — that spend stays log-only (`Simulation
+recommendations: N tokens over M LLM call(s), $X`), the same as the trace-analysis
+phases above. `None` only when nothing in the run was ever billed.
+
 ##### What lands in the generated dataset
 
 Trace-derived datapoints are built from real conversations, and a persona
@@ -761,3 +879,4 @@ transcript. Sources live in `examples/agent_simulation/` (files `06`–`09`).
 
 - **[Examples › Agent Simulation](../examples/index.md)** — tool simulation, hardening loops, LangGraph / CrewAI / OpenAI Agents targets.
 - **[Red Teaming](red-teaming.md)** — adversarial, attack-driven testing.
+- **[Tuning](../tuning.md)** — target timeouts, per-simulation wall clock, reasoning effort, and provider options.

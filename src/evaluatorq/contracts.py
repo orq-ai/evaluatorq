@@ -138,7 +138,7 @@ else:
 
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
     from openai import AsyncOpenAI
 
@@ -167,9 +167,27 @@ DEFAULT_TARGET_TIMEOUT_MS: int = 240_000
 # ---------------------------------------------------------------------------
 
 
-# Request fields extra_kwargs must never replace: they are structural (what
-# call is being made), not tunable sampling/provider options.
+# Request fields extra_kwargs must never replace: structural (what call is
+# being made), not tunable options. One set per endpoint because the field
+# names differ. `common.structured_output` derives wider sets from these
+# with `|` — widen there, never restate.
 _RESERVED_COMPLETION_KEYS = frozenset({'model', 'messages', 'response_format', 'extra_body'})
+_RESERVED_RESPONSES_KEYS = frozenset({'model', 'input', 'text', 'extra_body'})
+
+
+def check_reserved_keys(extra_kwargs: Mapping[str, Any], reserved: frozenset[str]) -> None:
+    """Raise if ``extra_kwargs`` would replace a structural request field.
+
+    Shared by `LLMCallConfig.request_params` and by the
+    `common.llm_call` executors, so a caller that reaches an executor without an
+    `LLMCallConfig` gets the same guard.
+    """
+    clash = reserved & extra_kwargs.keys()
+    if clash:
+        raise ValueError(
+            f'extra_kwargs cannot override structural request field(s) {sorted(clash)}; '
+            'these are owned by the call site.'
+        )
 
 
 class LLMCallConfig(BaseModel):
@@ -188,6 +206,23 @@ class LLMCallConfig(BaseModel):
     max_tokens: int = Field(default=DEFAULT_TARGET_MAX_TOKENS, gt=0)
     timeout_ms: int = Field(default=90_000, gt=0)
     extra_kwargs: dict[str, Any] = Field(default_factory=dict)
+    extra_body: dict[str, Any] = Field(
+        default_factory=dict,
+        description='Extra fields for the request BODY, for router/provider options the SDK has '
+        'no named parameter for. Distinct from ``extra_kwargs``, which sets top-level SDK call '
+        'arguments. This one **merges into** the body the call site builds (the Orq router retry '
+        'policy, thread and memory ids) rather than replacing it: your keys win per key, and the '
+        'call site keeps the keys you did not set. Replacing the whole body is what silently '
+        'dropped retry hints, which is why ``extra_body`` is rejected inside ``extra_kwargs``.',
+    )
+    reasoning_effort: str | None = Field(
+        default=None,
+        description='Reasoning effort. Rendered per endpoint by ``request_params``: '
+        "flat ``reasoning_effort=`` on chat completions, ``reasoning={'effort': ...}`` on the "
+        'Responses API. Not validated here: accepted values differ per model, so the provider '
+        'is the only authority — an unsupported value comes back as a provider 400, which the '
+        '`common.llm_call` executors turn into a drop-and-retry-once.',
+    )
     client: _Client = None
     retry_count: int = Field(
         default=1,
@@ -198,34 +233,86 @@ class LLMCallConfig(BaseModel):
         'the two cannot multiply.',
     )
 
-    def completion_params(self, **params: Any) -> dict[str, Any]:
-        """Merged kwargs for a chat-completions call: sampling fields first,
-        then call-site params, then ``extra_kwargs`` last so user keys override.
+    def request_params(
+        self,
+        *,
+        api: Literal['chat_completions', 'responses'] | None = None,
+        **params: Any,
+    ) -> dict[str, Any]:
+        """Merged kwargs for one LLM call, rendered for the endpoint ``api`` names.
 
-        Never splat ``extra_kwargs`` next to explicit ``temperature=`` /
-        ``max_completion_tokens=`` keywords: a user routing those keys through
-        ``extra_kwargs`` (the documented pre-refactor way to tune them) turns
-        every call into ``TypeError: got multiple values for keyword argument``.
-        The override order also doubles as the escape hatch for reasoning-class
-        models that reject a lowered temperature: ``extra_kwargs={'temperature': 1}``.
+        One builder, not two, because the endpoint is a property of the config:
+        two builders meant a call site could render a config that says
+        ``responses`` into chat-completions shape and no one would notice —
+        exactly the accepted-then-ignored failure this class exists to prevent.
 
-        Structural request fields are reserved: ``extra_kwargs`` tunes sampling
-        and provider options, and letting it silently replace ``model`` /
-        ``messages`` / ``response_format`` / ``extra_body`` would break the
-        call it rides on (e.g. dropping a required JSON response format).
+        ``api`` defaults to ``self.api``. Pass it explicitly only at a call site
+        that is structurally single-endpoint (a target that only speaks
+        Responses, a helper that calls ``chat.completions.parse`` directly); the
+        override is then greppable, and it warns when it contradicts an
+        explicitly set ``self.api`` rather than silently winning.
+
+        Merge order is sampling fields first, then call-site params, then
+        ``extra_kwargs`` last so caller-supplied values win. Never splat
+        ``extra_kwargs`` next to explicit ``temperature=`` / token-cap keywords:
+        a user routing those keys through ``extra_kwargs`` (the documented
+        pre-refactor way to tune them) turns every call into ``TypeError: got
+        multiple values for keyword argument``. The override order also doubles
+        as the escape hatch for reasoning-class models that reject a lowered
+        temperature: ``extra_kwargs={'temperature': 1}``.
+
+        Structural request fields are reserved per endpoint —
+        ``model``/``messages``/``response_format`` on chat completions,
+        ``model``/``input``/``text`` on Responses — because letting
+        ``extra_kwargs`` silently replace one would break the call it rides on.
+
+        The two endpoints spell two fields differently: the token cap is
+        ``max_completion_tokens`` vs ``max_output_tokens``, and reasoning effort
+        is flat vs a ``reasoning`` block. Rendering both from one config here is
+        what stops a field being honoured on one endpoint and dropped on the other.
+
+        ``extra_body`` is merged, not overridden. The call site owns the router
+        body (retry policy, thread ids); this config's ``extra_body`` is layered
+        on top per key, so a caller adds fields without dropping the ones the
+        call site set.
         """
-        reserved = _RESERVED_COMPLETION_KEYS & self.extra_kwargs.keys()
-        if reserved:
-            raise ValueError(
-                f'extra_kwargs cannot override structural request field(s) {sorted(reserved)}; '
-                'these are owned by the call site.'
+        endpoint = self.api if api is None else api
+        if api is not None and api != self.api and 'api' in self.model_fields_set:
+            logger.warning(
+                f'LLMCallConfig(api={self.api!r}) is set but this call site only speaks {api!r}; '
+                f'rendering {api!r} request parameters. The api field governs the call sites that '
+                'can choose — the judge and the target — not single-endpoint helpers.'
             )
-        return {
-            'temperature': self.temperature,
-            'max_completion_tokens': self.max_tokens,
-            **params,
-            **self.extra_kwargs,
-        }
+        if endpoint == 'responses':
+            check_reserved_keys(self.extra_kwargs, _RESERVED_RESPONSES_KEYS)
+            base: dict[str, Any] = {
+                'temperature': self.temperature,
+                'max_output_tokens': self.max_tokens,
+            }
+            if self.reasoning_effort:
+                base['reasoning'] = {'effort': self.reasoning_effort}
+        else:
+            check_reserved_keys(self.extra_kwargs, _RESERVED_COMPLETION_KEYS)
+            base = {
+                'temperature': self.temperature,
+                'max_completion_tokens': self.max_tokens,
+            }
+            if self.reasoning_effort:
+                base['reasoning_effort'] = self.reasoning_effort
+        merged = {**base, **params, **self.extra_kwargs}
+        return self._merge_extra_body(merged, params)
+
+    def _merge_extra_body(self, merged: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
+        """Layer this config's ``extra_body`` over the call site's, per key.
+
+        Replacing the body wholesale is the failure this exists to prevent: the
+        call site's keys are the Orq router's retry policy and thread ids, and a
+        caller who set one unrelated field used to drop all of them silently.
+        """
+        if not self.extra_body:
+            return merged
+        merged['extra_body'] = {**(params.get('extra_body') or {}), **self.extra_body}
+        return merged
 
 
 # ---------------------------------------------------------------------------
@@ -848,6 +935,11 @@ class JuryVote(BaseModel):
 
     @model_validator(mode='after')
     def _check_vote_consistency(self) -> JuryVote:
+        # Raises where `EvaluatorResponsePayload` coerces (common/judge.py) — same
+        # abstained/value contradiction, opposite policy, deliberately. This is the
+        # backstop for a vote built without going through a judge payload; a payload
+        # that already reached the model has been billed, so a raise there would cost
+        # the whole run's report rather than one verdict.
         if self.success and self.value is None and not self.abstained:
             raise ValueError('successful JuryVote must have a non-null value unless abstained=True')
         if self.abstained and self.value is not None:
@@ -993,6 +1085,7 @@ class AgentResponse(BaseModel):
         ``.text``       — all ``TextOutputItem`` contents concatenated, or ``""`` if none
         ``.tool_calls`` — list of `ToolCallOutputItem` filtered from
         `output` in order
+        ``.refusal``    — the first provider refusal, when the response contains one
     """
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
@@ -1011,6 +1104,7 @@ class AgentResponse(BaseModel):
     # routed through Orq or the router omits it.
     span_id: str | None = None
     finish_reason: str | None = None
+    refusal: str | None = None
     error: AgentResponseError | None = None
 
     if TYPE_CHECKING:
@@ -1026,6 +1120,7 @@ class AgentResponse(BaseModel):
             trace_id: str | None = None,
             span_id: str | None = None,
             finish_reason: str | None = None,
+            refusal: str | None = None,
             error: AgentResponseError | None = None,
         ) -> None: ...
 
@@ -1066,6 +1161,7 @@ class AgentResponse(BaseModel):
         applied by callers to the returned object's ``usage``.
         """
         items: list[OutputMessage] = []
+        refusal: str | None = None
         for item in _gf(response, 'output') or []:
             item_type = _gf(item, 'type')
             if item_type == 'message':
@@ -1078,6 +1174,8 @@ class AgentResponse(BaseModel):
                     # answer (and for red teaming, the *resistant* outcome), so
                     # it is carried as text rather than discarded.
                     text = _gf(part, 'text') if part_type == 'output_text' else _gf(part, 'refusal')
+                    if part_type == 'refusal' and isinstance(text, str) and refusal is None:
+                        refusal = text
                     if part_type in ('output_text', 'refusal') and text:
                         items.append(TextOutputItem(type='output_text', text=text, annotations=[], logprobs=[]))
                     elif part_type not in ('output_text', 'refusal'):
@@ -1130,6 +1228,7 @@ class AgentResponse(BaseModel):
             model=model if isinstance(model, str) else None,
             finish_reason=status if isinstance(status, str) else None,
             response_id=response_id if isinstance(response_id, str) else None,
+            refusal=refusal,
         )
 
 
@@ -1345,6 +1444,16 @@ class AgentTarget(ABC):
     ``map_error`` (provider-specific error codes); stateless targets inherit
     the safe defaults. ``memory_entity_id`` is an instance attribute (set in
     ``__init__``) so subclasses can mutate it without shadowing a class default.
+
+    **A target does not retry itself.** ``common.target_call.call_target_with_retry``
+    is the single retry layer for target calls, on every surface — red team static,
+    hybrid, pipeline and orchestrator, and simulation. It owns the budget
+    (``max_target_retries``), the per-call timeout and the backend error mapping.
+    A ``respond`` that retries internally multiplies against that budget rather
+    than adding to it: 5 inner attempts under 3 outer ones is 15 calls to a target
+    that is already refusing. Subclasses that wrap an SDK build their client with
+    ``max_retries=0`` (or clone an injected one via
+    ``common.retry.without_client_retries``) for the same reason.
     """
 
     def __init__(self, memory_entity_id: str | None = None) -> None:

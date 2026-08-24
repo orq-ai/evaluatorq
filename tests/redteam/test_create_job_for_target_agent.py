@@ -2,8 +2,8 @@
 
 Assertions:
 1. agent:foo  -> job driven by an OrqResponsesTarget with config.model == "agent/foo"
-2. deployment:bar -> create_model_job still called (unchanged branch)
-3. gpt-4o-mini    -> create_model_job still called (unchanged branch)
+2. deployment:bar -> create_deployment_job still called (unchanged branch)
+3. gpt-4o-mini    -> create_deployment_job still called (unchanged branch)
 """
 
 from __future__ import annotations
@@ -148,13 +148,13 @@ class TestAgentBranchUsesOrqResponsesTarget:
         assert target.instructions == instructions
 
 
-class TestDeploymentBranchUnchanged:
-    """deployment:bar still routes through create_model_job (deployment_key path)."""
+class TestDeploymentBranchCallsTheDeploymentFactory:
+    """deployment:bar still routes through create_deployment_job (deployment_key path)."""
 
-    def test_deployment_calls_create_model_job(self):
+    def test_deployment_calls_create_deployment_job(self):
         from evaluatorq.redteam.runner import _create_job_for_target
 
-        with patch(f"{_RUNNER}.create_model_job", return_value=MagicMock()) as mock_cmj:
+        with patch(f"{_RUNNER}.create_deployment_job", return_value=MagicMock()) as mock_cmj:
             _create_job_for_target("deployment:bar", llm_client=None, system_prompt=None)
 
         mock_cmj.assert_called_once()
@@ -164,25 +164,25 @@ class TestDeploymentBranchUnchanged:
         args = call_kwargs[0] if call_kwargs[0] else ()
         assert kwargs.get("deployment_key") == "bar" or (
             len(args) > 0 and args[0] == "bar"
-        ), f"create_model_job not called with deployment_key='bar'. Call: {call_kwargs}"
+        ), f"create_deployment_job not called with deployment_key='bar'. Call: {call_kwargs}"
 
 
-class TestModelBranchUnchanged:
+class TestBareStringRoutesToTheAgentBranch:
     """Bare strings (no prefix) parse as TargetKind.AGENT and route through the
     AGENT branch — parse_target returns (TargetKind.AGENT, key) when there is
-    no colon. The fallback model branch in _create_job_for_target is therefore
-    unreachable with valid TargetKind values; we verify the correct routing."""
+    no colon. A model name like 'gpt-4o-mini' is therefore an agent key here, not
+    a router model; the leg that would have treated it as one is gone."""
 
-    def test_bare_key_does_not_call_create_model_job(self):
+    def test_bare_key_does_not_call_create_deployment_job(self):
         """A bare key like 'gpt-4o-mini' (no colon) is parsed as AGENT and must
-        not call create_model_job — it uses _create_static_job_for_agent_target."""
+        not call create_deployment_job — it uses _create_static_job_for_agent_target."""
         from evaluatorq.redteam.backends.openresponses import OpenResponsesBackend
         from evaluatorq.redteam.runner import _create_job_for_target
 
         with (
             patch(_BUILD_SIM_CLIENT, side_effect=_fake_build_sim_client),
             patch(f"{_RUNNER}.resolve_backend") as mock_resolve,
-            patch(f"{_RUNNER}.create_model_job") as mock_cmj,
+            patch(f"{_RUNNER}.create_deployment_job") as mock_cmj,
         ):
             def _side_effect(name: str, **kwargs: object) -> object:
                 if name == "orq":
@@ -195,15 +195,15 @@ class TestModelBranchUnchanged:
 
         mock_cmj.assert_not_called()
 
-    def test_agent_branch_does_not_call_create_model_job(self):
-        """AGENT branch must NOT call create_model_job at all (uses static job helper)."""
+    def test_agent_branch_does_not_call_create_deployment_job(self):
+        """AGENT branch must NOT call create_deployment_job at all (uses static job helper)."""
         from evaluatorq.redteam.backends.openresponses import OpenResponsesBackend
         from evaluatorq.redteam.runner import _create_job_for_target
 
         with (
             patch(_BUILD_SIM_CLIENT, side_effect=_fake_build_sim_client),
             patch(f"{_RUNNER}.resolve_backend") as mock_resolve,
-            patch(f"{_RUNNER}.create_model_job") as mock_cmj,
+            patch(f"{_RUNNER}.create_deployment_job") as mock_cmj,
         ):
             def _side_effect(name: str, **kwargs: object) -> object:
                 if name == "orq":
@@ -215,3 +215,72 @@ class TestModelBranchUnchanged:
             _create_job_for_target("agent:foo", llm_client=None, system_prompt=None)
 
         mock_cmj.assert_not_called()
+
+
+class TestPipelineConfigThreadedToCreateDeploymentJob:
+    """The deployment branch must hand its per-run cfg to create_deployment_job.
+
+    ``create_deployment_job`` reads ``cfg`` for the target timeout, the retry budget
+    and reasoning effort (see tests/redteam/test_model_job_cfg.py). If
+    ``_create_job_for_target`` stops threading it, every deployment run silently
+    reverts to the module-level ``PIPELINE_CONFIG`` defaults — the flags the CLI
+    exposes would have no effect and nothing would fail.
+    """
+
+    def test_deployment_branch_receives_the_supplied_pipeline_config(self):
+        from evaluatorq.redteam.contracts import LLMConfig
+        from evaluatorq.redteam.runner import _create_job_for_target
+
+        cfg = LLMConfig(target_agent_timeout_ms=4321, max_target_retries=5, target_reasoning_effort="high")
+
+        with patch(f"{_RUNNER}.create_deployment_job", return_value=MagicMock()) as mock_cmj:
+            _create_job_for_target(
+                "deployment:bar",
+                llm_client=None,
+                system_prompt=None,
+                pipeline_config=cfg,
+                run_id="run-42",
+            )
+
+        kwargs = mock_cmj.call_args.kwargs
+        assert kwargs["cfg"] is cfg
+        assert kwargs["run_id"] == "run-42"
+
+    def test_deployment_branch_falls_back_to_module_pipeline_config(self):
+        """No caller cfg means the module default is passed explicitly, not None.
+
+        ``create_deployment_job(cfg=None)`` would also fall back, but only by accident;
+        pinning the explicit hand-off keeps the two fallbacks from drifting.
+        """
+        from evaluatorq.redteam.contracts import PIPELINE_CONFIG
+        from evaluatorq.redteam.runner import _create_job_for_target
+
+        with patch(f"{_RUNNER}.create_deployment_job", return_value=MagicMock()) as mock_cmj:
+            _create_job_for_target("deployment:bar", llm_client=None, system_prompt=None)
+
+        assert mock_cmj.call_args.kwargs["cfg"] is PIPELINE_CONFIG
+
+
+class TestOnlyAgentAndDeploymentReachAJob:
+    """``parse_target`` yields exactly the two kinds ``_create_job_for_target`` handles.
+
+    A bare string is AGENT, ``deployment:`` is DEPLOYMENT, and ``llm:``/``openai:``/
+    ``direct:`` and unknown kinds all raise. A router-model fallback used to sit at
+    the end of ``_create_job_for_target`` for a kind no target string could produce;
+    it now raises instead. This pins the reachable set so a new ``TargetKind`` has to
+    grow a leg deliberately rather than landing in whichever branch is last.
+    """
+
+    def test_parse_target_only_yields_agent_or_deployment(self):
+        from evaluatorq.redteam.contracts import TargetKind, parse_target
+
+        assert parse_target("foo") == (TargetKind.AGENT, "foo")
+        assert parse_target("agent:foo") == (TargetKind.AGENT, "foo")
+        assert parse_target("deployment:bar") == (TargetKind.DEPLOYMENT, "bar")
+
+    @pytest.mark.parametrize("target", ["llm:gpt-4o-mini", "openai:gpt-4o-mini", "direct:x", "model:gpt-4o-mini"])
+    def test_other_prefixes_raise(self, target: str):
+        from evaluatorq.redteam.contracts import parse_target
+
+        with pytest.raises(ValueError):
+            parse_target(target)

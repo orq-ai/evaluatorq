@@ -12,9 +12,10 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
     from openai.types.chat import ChatCompletionMessageParam
 
-from evaluatorq.common.llm_call import apply_pipeline_metadata
+from evaluatorq.common.llm_call import execute_response
+from evaluatorq.common.responses import first_responses_refusal, responses_stop_reason
 from evaluatorq.common.retry import with_retry
-from evaluatorq.common.tracing import get_trace_context_headers, record_llm_input, record_llm_response
+from evaluatorq.common.tracing import record_llm_input
 from evaluatorq.simulation.tracing import with_llm_span
 from evaluatorq.simulation.types import DEFAULT_MODEL, Persona, Scenario
 from evaluatorq.simulation.utils.prompt_builders import (
@@ -25,6 +26,9 @@ from evaluatorq.simulation.utils.prompt_builders import (
 logger = logging.getLogger(__name__)
 
 _TEMPERATURE_FIRST_MESSAGE = 0.8
+_MAX_OUTPUT_TOKENS = 500
+# An opening line is a small, fast call; a minute is already pathological.
+_TIMEOUT_S = 60.0
 
 _FIRST_MESSAGE_PROMPT = """You are generating the authentic first message a user would type to a support agent.
 
@@ -126,9 +130,9 @@ Keep it natural - this is how they would actually open a conversation."""
         try:
             async with with_llm_span(
                 model=self._model,
-                operation='chat',
+                operation='responses',
                 temperature=_TEMPERATURE_FIRST_MESSAGE,
-                max_tokens=500,
+                max_tokens=_MAX_OUTPUT_TOKENS,
                 purpose='first_message',
             ) as span:
                 record_llm_input(
@@ -138,33 +142,43 @@ Keep it natural - this is how they would actually open a conversation."""
                         for m in messages
                     ],
                 )
-                trace_headers = await get_trace_context_headers()
-                extra: dict[str, Any] = {'extra_headers': trace_headers} if trace_headers else {}
-                apply_pipeline_metadata(extra)
-                # RES-1295: neither retry attempt below extracts usage, so its
-                # tokens never reach any total. `generate()` returns a bare
-                # `str` and its only caller (`datapoint_generator.py`) tracks
-                # no usage today (same gap as `generate_structured` in
-                # `simulation/utils/structured_output.py`) — adding a sink
+                # RES-1295: `generate()` returns a bare `str`, so the usage
+                # execute_response now prices has nowhere to go — carrying it
                 # would mean widening this public return type. See "What the
                 # totals do not include" in docs/guides/red-teaming.md.
+                message = ''
                 for attempt in range(2):
-                    response = await with_retry(
-                        lambda: self._client.chat.completions.create(  # pyright: ignore[reportUnknownLambdaType]
+                    response, _usage = await with_retry(
+                        lambda: execute_response(
+                            client=self._client,
                             model=self._model,
-                            messages=messages,
+                            messages=cast('list[dict[str, Any]]', messages),
+                            span=span,
+                            timeout_s=_TIMEOUT_S,
                             temperature=_TEMPERATURE_FIRST_MESSAGE,
-                            max_tokens=500,
-                            **extra,
+                            max_output_tokens=_MAX_OUTPUT_TOKENS,
                         ),
                         label='FirstMessageGenerator.generate',
                     )
-                    record_llm_response(span, response)
 
-                    message = response.choices[0].message.content if response.choices else ''
-                    message = re.sub(r'^["\']|["\']$', '', (message or '').strip())
+                    refusal = first_responses_refusal(response)
+                    if refusal is not None:
+                        logger.warning('FirstMessageGenerator: model refused first message: %s', refusal)
+                        break
+                    if responses_stop_reason(response) == 'length':
+                        logger.warning(
+                            'FirstMessageGenerator: response truncated at max_output_tokens=%s before any text; '
+                            'raise the budget to get a persona-shaped opening',
+                            _MAX_OUTPUT_TOKENS,
+                        )
+                        break
+                    message = re.sub(r'^["\']|["\']$', '', (response.output_text or '').strip())
                     if message:
                         break
+                    # A reasoning model can spend the whole budget before it
+                    # answers, so empty text here often means truncation rather
+                    # than a lazy model. Retrying at the same budget would
+                    # truncate identically — name the cause and stop.
                     if attempt == 0:
                         logger.info('FirstMessageGenerator: LLM returned empty content, retrying once')
                 else:

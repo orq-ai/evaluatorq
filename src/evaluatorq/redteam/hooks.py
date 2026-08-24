@@ -394,15 +394,11 @@ class RichHooks:
 
     async def on_stage_end(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
         if stage == PipelineStage.CONTEXT_RETRIEVAL:
-            # Per RES-716: surface the classifier output for this target
-            # immediately after context retrieval. The runner places the
-            # classified caps (and any classifier error) on the meta dict.
-            # The table's caption absorbs the resource-type breakdown that
-            # _render_context_summary used to print, so we skip the one-liner
-            # when an agent_context is present. The trailing "completed in
-            # X.Xs" line is also suppressed for this stage — between
-            # multi-target tables it just adds noise, and the timing is
-            # already recorded as a span attribute on the trace.
+            # Per RES-716: surface the classifier output (caps + error, on meta)
+            # right after context retrieval. Its table caption absorbs the
+            # resource-type breakdown, so the plain one-liner and the trailing
+            # "completed in X.Xs" line are both skipped when agent_context is set —
+            # the timing is already on the trace span, not lost.
             agent_context = meta.get('agent_context')
             agent_capabilities = meta.get('agent_capabilities')
             if agent_context is not None:

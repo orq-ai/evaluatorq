@@ -12,6 +12,7 @@ traced via ``orq.simulation.persona_generation`` and its child LLM span.
 
 from __future__ import annotations
 
+import json
 # ruff: noqa: S101
 from types import SimpleNamespace
 from typing import Any, cast
@@ -44,9 +45,57 @@ class _FakeCompletions:
         return SimpleNamespace(choices=[SimpleNamespace(message=message, finish_reason='stop')], usage=None)
 
 
+class _FakeResponses:
+    """Captures the kwargs of the single raw Responses call generate_structured makes.
+
+    The generators run on the Responses API, so ``text.format`` carries the
+    schema and ``output_text`` carries the result.
+    """
+
+    def __init__(self, sink: dict[str, Any], build_parsed) -> None:
+        self._sink = sink
+        self._build_parsed = build_parsed
+
+    async def create(self, **kwargs: Any) -> Any:
+        self._sink.update(kwargs)
+        class _ResponseFormat:
+            def __init__(self, **fields: Any) -> None:
+                self._fields = fields
+
+            def model_dump_json(self) -> str:
+                return json.dumps(self._fields)
+
+        parsed = self._build_parsed(_ResponseFormat)
+        output_text = parsed.model_dump_json()
+        content = SimpleNamespace(type='output_text', text=output_text, annotations=[])
+        content.to_dict = lambda: {'type': content.type, 'text': content.text, 'annotations': content.annotations}
+        output = SimpleNamespace(type='message', role='assistant', content=[content], status='completed')
+        output.to_dict = lambda: {
+            'type': output.type,
+            'role': output.role,
+            'content': [content.to_dict()],
+            'status': output.status,
+        }
+        response = SimpleNamespace(
+            output=[output],
+            output_text=output_text,
+            stop_reason='stop',
+            incomplete_details=None,
+            usage=None,
+        )
+        response.to_dict = lambda: {
+            'output': [output.to_dict()],
+            'output_text': response.output_text,
+            'stop_reason': response.stop_reason,
+            'incomplete_details': response.incomplete_details,
+        }
+        return response
+
+
 class _FakeClient:
     def __init__(self, sink: dict[str, Any], build_parsed) -> None:
         self.chat = SimpleNamespace(completions=_FakeCompletions(sink, build_parsed))
+        self.responses = _FakeResponses(sink, build_parsed)
         self.base_url = 'https://my.orq.ai/v3/router'
 
     async def close(self) -> None:  # pragma: no cover - generator doesn't own us
@@ -284,8 +333,8 @@ async def test_generate_and_simulate_stamps_run_id_on_root_span(
     from evaluatorq.simulation import api
     from evaluatorq.simulation.api import generate_and_simulate
 
-    async def _fake_generate(**_kwargs: Any) -> tuple[list[Any], None, bool]:  # noqa: RUF029
-        return [], None, False
+    async def _fake_generate(**_kwargs: Any) -> tuple[list[Any], None, bool, None]:  # noqa: RUF029
+        return [], None, False, None
 
     monkeypatch.setattr(api, '_generate_datapoints_inner', _fake_generate)
     monkeypatch.setattr(api, '_simulate_core', AsyncMock(return_value=MagicMock(results=[])))
@@ -316,8 +365,8 @@ async def test_generate_stamps_run_id_on_root_span(
     from evaluatorq.simulation import api
     from evaluatorq.simulation.api import generate
 
-    async def _fake_generate(**_kwargs: Any) -> tuple[list[Any], None, bool]:
-        return [], None, False
+    async def _fake_generate(**_kwargs: Any) -> tuple[list[Any], None, bool, None]:
+        return [], None, False, None
 
     monkeypatch.setattr(api, '_generate_datapoints_inner', _fake_generate)
 
@@ -341,9 +390,9 @@ async def test_generate_binds_pipeline_and_run_id_metadata(monkeypatch: pytest.M
 
     seen_metadata: dict[str, str] = {}
 
-    async def _fake_generate(**_kwargs: Any) -> tuple[list[Any], None, bool]:
+    async def _fake_generate(**_kwargs: Any) -> tuple[list[Any], None, bool, None]:
         seen_metadata.update(pipeline_metadata())
-        return [], None, False
+        return [], None, False, None
 
     monkeypatch.setattr(api, '_generate_datapoints_inner', _fake_generate)
 
@@ -362,8 +411,8 @@ async def test_two_generate_calls_get_distinct_run_ids(
     from evaluatorq.simulation import api
     from evaluatorq.simulation.api import generate
 
-    async def _fake_generate(**_kwargs: Any) -> tuple[list[Any], None, bool]:
-        return [], None, False
+    async def _fake_generate(**_kwargs: Any) -> tuple[list[Any], None, bool, None]:
+        return [], None, False, None
 
     monkeypatch.setattr(api, '_generate_datapoints_inner', _fake_generate)
 

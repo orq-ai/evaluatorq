@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from evaluatorq.common import llm_call
 from evaluatorq.common.llm_call import execute_response
+from evaluatorq.common.responses import responses_text_config
 
 
 class _Verdict(BaseModel):
@@ -95,6 +96,27 @@ async def test_uses_parse_when_response_model_set(monkeypatch: pytest.MonkeyPatc
     kwargs = client.responses.parse.call_args.kwargs
     assert kwargs['text_format'] is _Verdict
     assert kwargs['model'] == 'gpt-x'
+
+
+@pytest.mark.asyncio
+async def test_can_return_raw_response_while_sending_the_model_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    client = _client()
+
+    await execute_response(
+        client=client,
+        model='gpt-x',
+        messages=[{'role': 'user', 'content': 'hi'}],
+        span=None,
+        timeout_s=5.0,
+        response_text_format=_Verdict,
+    )
+
+    client.responses.create.assert_awaited_once()
+    client.responses.parse.assert_not_awaited()
+    text_config = client.responses.create.call_args.kwargs['text']
+    assert text_config == responses_text_config(_Verdict)
+    assert text_config['format']['schema']['additionalProperties'] is False
 
 
 @pytest.mark.asyncio
@@ -394,3 +416,70 @@ async def test_caller_metadata_wins_over_pipeline_label(monkeypatch: pytest.Monk
         )
     kwargs = client.responses.create.call_args.kwargs
     assert kwargs['metadata'] == {'evaluatorq_pipeline': 'caller', 'k': 'v'}
+
+
+@pytest.mark.asyncio
+async def test_instructions_and_tools_reach_the_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The simulation agents set both; the judge legs set neither.
+
+    They exist here rather than in a second hand-rolled Responses transport —
+    that copy skipped `price_usage`, so the same call was priced or unpriced
+    depending on which internal caller made it.
+    """
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    client = _client()
+    tools = [{'type': 'function', 'name': 'lookup', 'parameters': {'type': 'object', 'properties': {}}}]
+
+    await execute_response(
+        client=client,
+        model='m',
+        messages=[{'role': 'user', 'content': 'x'}],
+        span=None,
+        timeout_s=5.0,
+        instructions='You are a support agent.',
+        tools=tools,
+    )
+    kwargs = client.responses.create.call_args.kwargs
+    assert kwargs['instructions'] == 'You are a support agent.'
+    assert kwargs['tools'] == tools
+
+
+@pytest.mark.asyncio
+async def test_omits_instructions_and_tools_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    client = _client()
+
+    await execute_response(
+        client=client,
+        model='m',
+        messages=[{'role': 'user', 'content': 'x'}],
+        span=None,
+        timeout_s=5.0,
+        tools=[],
+    )
+    kwargs = client.responses.create.call_args.kwargs
+    assert 'instructions' not in kwargs
+    assert 'tools' not in kwargs
+
+
+@pytest.mark.asyncio
+async def test_record_input_false_leaves_the_span_input_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A caller holding the pre-render `Message` objects records readable text itself.
+
+    The wire payload renders an assistant turn as `output_text` parts, which
+    `record_llm_input` would `str()` into a Python repr on the span.
+    """
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    record_input = MagicMock()
+    monkeypatch.setattr('evaluatorq.common.llm_call.record_llm_input', record_input)
+    client = _client()
+
+    await execute_response(
+        client=client,
+        model='m',
+        messages=[{'role': 'user', 'content': 'x'}],
+        span=MagicMock(),
+        timeout_s=5.0,
+        record_input=False,
+    )
+    record_input.assert_not_called()

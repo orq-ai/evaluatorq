@@ -9,7 +9,9 @@ Semantic convention:
     ``passed=False`` → the agent is VULNERABLE (attack succeeded)
 """
 
+from collections.abc import Mapping
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
 from pydantic import (
@@ -19,6 +21,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic.fields import FieldInfo
 from typing_extensions import NotRequired, TypedDict
 
 from evaluatorq.common.recommendations import RecommendationConfigBase
@@ -575,11 +578,34 @@ from evaluatorq.contracts import (  # noqa: F401
 )
 
 
-class EvaluatorConfig(BaseModel):
+class EvaluatorConfig(LLMCallConfig):
     """LLM evaluator-role configuration, including the optional judge panel.
 
     ``model="x"`` is accepted as shorthand for ``judges=["x"]``. Decode/client
     fields are shared across every judge in the panel.
+
+    It subclasses `LLMCallConfig` instead of re-listing its fields, so a field
+    added there (e.g. ``reasoning_effort``) is accepted here automatically —
+    hand-listing them is what let this class and ``as_call_config()`` desync
+    from `LLMCallConfig` and reject the sugar conversion in
+    ``_accept_model_sugar`` with ``extra_kwargs cannot...``.
+
+    Inherited verbatim: ``temperature``, ``max_tokens``, ``timeout_ms``,
+    ``extra_kwargs``, ``extra_body``, ``reasoning_effort`` and ``client``.
+    Three fields are declared again below, on purpose:
+
+    - ``model`` — nullable and ``exclude=True`` here. It is judge shorthand that
+      ``_accept_model_sugar`` folds into ``judges[0]``, not the required model id
+      the parent declares.
+    - ``api`` — defaults to ``'responses'`` rather than the parent's
+      ``'chat_completions'``, so judge calls go to the endpoint the Orq router
+      prices.
+    - ``retry_count`` — identical type, default and bounds; only the description
+      differs, to name this as the judge-side budget rather than the target one.
+
+    ``_assert_call_config_fields_agree`` below pins exactly that split at import
+    time: any *other* override of an inherited field, and any allowlist entry
+    whose divergence has since disappeared, is a hard failure.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra='forbid')
@@ -601,11 +627,8 @@ class EvaluatorConfig(BaseModel):
         'chat_completions to opt out; a model the router cannot resolve on responses falls '
         'back to chat completions on its own.',
     )
-    temperature: float = Field(default=1.0, ge=0.0, le=2.0)
-    max_tokens: int = Field(default=DEFAULT_TARGET_MAX_TOKENS, gt=0)
-    timeout_ms: int = Field(default=90_000, gt=0)
-    extra_kwargs: dict[str, Any] = Field(default_factory=dict)
-    client: _Client = None
+    # temperature / max_tokens / timeout_ms / extra_kwargs / extra_body /
+    # reasoning_effort / client are inherited from LLMCallConfig unchanged.
     retry_count: int = Field(
         default=1,
         ge=0,
@@ -648,16 +671,15 @@ class EvaluatorConfig(BaseModel):
         return self.judges[0]
 
     def as_call_config(self) -> LLMCallConfig:
-        return LLMCallConfig(
-            model=self.model or self.judges[0],
-            api=self.api,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-            timeout_ms=self.timeout_ms,
-            extra_kwargs=self.extra_kwargs,
-            client=self.client,
-            retry_count=self.retry_count,
-        )
+        """Project the shared `LLMCallConfig` fields back into a standalone instance.
+
+        Reads every field via ``getattr(self, name)`` for ``name in
+        LLMCallConfig.model_fields`` rather than enumerating them by hand, so a
+        field added to `LLMCallConfig` (e.g. ``reasoning_effort``) is carried
+        through automatically instead of silently dropped here a second time.
+        """
+        values = {name: getattr(self, name) for name in LLMCallConfig.model_fields if name != 'model'}
+        return LLMCallConfig(model=self.model or self.judges[0], **values)
 
     @model_validator(mode='after')
     def _check_min_successful_judges(self) -> 'EvaluatorConfig':
@@ -675,6 +697,119 @@ class EvaluatorConfig(BaseModel):
         object.__setattr__(self, 'judges', panel)
         object.__setattr__(self, 'model', panel[0])
         return self
+
+
+# Comparing field *names* to LLMCallConfig cannot fail while the inheritance holds.
+# The drift that bit was a restated field whose parent default later moved, so
+# compare declarations and require each divergence to be listed with a reason.
+_CALL_CONFIG_DIVERGENCES: Mapping[str, str] = MappingProxyType({
+    'model': 'judge shorthand: nullable and excluded from dumps; _accept_model_sugar '
+    'folds it into judges[0], so it is not the required model id LLMCallConfig declares',
+    'api': "judge calls default to 'responses' (the endpoint the Orq router prices), "
+    "not LLMCallConfig's 'chat_completions'",
+})
+
+
+def _field_declaration(field: FieldInfo) -> tuple[Any, ...]:
+    """The parts of a field declaration a subclass must not silently change.
+
+    Validation *and* serialization are both compared, because both are
+    load-bearing here: `EvaluatorConfig.as_call_config` and `_accept_model_sugar`
+    round-trip through ``model_dump()``, so a redeclaration that only adds
+    ``exclude=True`` changes what reaches the provider without changing a single
+    type or default. ``exclude`` is also the very attribute ``model`` uses to
+    diverge — a guard blind to it has a hole in the place it was built to watch.
+    Aliases decide which input key populates a field and which key it dumps
+    under; ``frozen`` decides whether a caller can reassign it;
+    ``json_schema_extra`` decides what a provider's structured-output schema
+    says about it.
+
+    Deliberately excluded, in full:
+
+    - ``description``: a redeclaration that only rewords the docs cannot drift
+      out of agreement with the parent's behaviour, and ``retry_count`` uses
+      that to name the judge-side budget.
+    - ``title``, ``examples``, ``deprecated``, ``repr``: documentation and
+      display only. Like ``description``, they change no value that a call path
+      reads. (``deprecated`` emits a warning on access; that is a message, not a
+      behaviour change in the call this guard protects.)
+    - ``alias_priority``: derived bookkeeping pydantic recomputes from the
+      aliases themselves, which *are* compared.
+    - ``init``/``init_var``/``kw_only``: dataclass-only knobs, unset on every
+      field of a `BaseModel` here, so comparing them would add noise and catch
+      nothing.
+    """
+    return (
+        field.annotation,
+        field.default,
+        field.default_factory,
+        tuple(field.metadata),
+        field.exclude,
+        field.alias,
+        field.validation_alias,
+        field.serialization_alias,
+        field.frozen,
+        field.json_schema_extra,
+        field.discriminator,
+    )
+
+
+def _assert_call_config_fields_agree(
+    child: type[BaseModel],
+    parent: type[BaseModel] = LLMCallConfig,
+    divergences: Mapping[str, str] = _CALL_CONFIG_DIVERGENCES,
+) -> None:
+    """Raise ``RuntimeError`` unless ``child`` carries ``parent``'s fields intact.
+
+    For every field on ``parent``:
+
+    - it must exist on ``child``, so a refactor back to composition or hand-listing
+      that drops one fails at import time rather than as a ``ValidationError``
+      deep inside a pipeline run;
+    - unless it is named in ``divergences``, ``child`` must not change any part
+      of its declaration that a call path reads — annotation, default,
+      ``default_factory``, constraint metadata, ``exclude``, either alias,
+      ``frozen``, ``json_schema_extra`` or ``discriminator`` (see
+      `_field_declaration` for what is left out and why).
+
+    Every name in ``divergences`` must still be a parent field *and* still
+    actually diverge, so an allowlist entry cannot outlive the divergence it
+    excuses and quietly license a future override.
+
+    Both models are parameters so the check is testable against a deliberately
+    deficient stand-in (see tests/redteam/test_llm_config.py).
+    """
+    problems: list[str] = []
+    for name, parent_field in parent.model_fields.items():
+        child_field = child.model_fields.get(name)
+        if child_field is None:
+            problems.append(f'{name}: declared on {parent.__name__} but missing from {child.__name__}')
+            continue
+        parent_decl = _field_declaration(parent_field)
+        child_decl = _field_declaration(child_field)
+        if name in divergences:
+            if parent_decl == child_decl:
+                problems.append(
+                    f'{name}: listed as an intentional divergence ({divergences[name]}) but '
+                    f'{child.__name__} now declares it exactly as {parent.__name__} does; drop the '
+                    'redeclaration and the allowlist entry'
+                )
+        elif parent_decl != child_decl:
+            problems.append(
+                f'{name}: {child.__name__} overrides {parent.__name__}.{name} '
+                f'({parent_decl!r} -> {child_decl!r}); inherit it instead, or add it to '
+                '_CALL_CONFIG_DIVERGENCES with the reason it must differ'
+            )
+    problems.extend(
+        f'{name}: listed as an intentional divergence but {parent.__name__} has no such field'
+        for name in divergences
+        if name not in parent.model_fields
+    )
+    if problems:
+        raise RuntimeError(f'{child.__name__} has drifted from {parent.__name__}:\n  ' + '\n  '.join(problems))
+
+
+_assert_call_config_fields_agree(EvaluatorConfig)
 
 
 class RedTeamRecommendationConfig(RecommendationConfigBase):
@@ -786,6 +921,12 @@ class LLMConfig(BaseModel):
     # which only cover HTTP errors via the ORQ router. 0 disables retries (the
     # unusable turn stops the attack immediately rather than being forwarded).
     max_content_filter_retries: int = Field(default=2, ge=0, le=10)
+    # Consecutive adversarial-LLM timeouts across turns before abandoning the attack.
+    max_consecutive_adversarial_timeouts: int = Field(default=2, ge=1, le=10)
+    # Objectives per attacker call before objective_generator batches; ~150 tokens each.
+    max_objectives_per_llm_call: int = Field(default=8, ge=1)
+    # Probe turns for blackbox capability inference. Each is a live target call.
+    max_probe_turns: int = Field(default=8, ge=1)
 
     # --- Cleanup timeout ------------------------------------------------------
     cleanup_timeout_ms: int = 60_000
@@ -796,6 +937,10 @@ class LLMConfig(BaseModel):
     # Sole retry owner: targets built for it must disable their own SDK budgets.
     # A retry never consumes a new attacker turn or changes the transcript.
     max_target_retries: int = Field(default=2, ge=0, le=10)
+    # Reasoning effort for the target agent, forwarded verbatim; spelling is per
+    # endpoint, as `LLMCallConfig.request_params` renders it. The deployment job
+    # has no field for it and warns that it dropped it.
+    target_reasoning_effort: str | None = None
 
     # --- Agent tool continuation cap ------------------------------------------
     max_tool_continuations: int = Field(
@@ -991,17 +1136,6 @@ class RunError(BaseModel):
 # ---------------------------------------------------------------------------
 # Orchestrator and evaluation result models
 # ---------------------------------------------------------------------------
-
-
-# RES-883: the attacker LLM output was unified onto
-# `evaluatorq.contracts.AgentResponse` — the same response shape used by
-# targets and simulation agents. ``generated_prompt`` is now ``AgentResponse.text``
-# and ``truncated`` is derivable from ``finish_reason == 'length'``. The former
-# ``AttackerResponse`` type is removed outright (a ``feat!`` breaking change) rather
-# than left as a silent alias: ``AttackerResponse = AgentResponse`` would have made
-# ``AttackerResponse(generated_prompt=...)`` quietly drop the prompt (AgentResponse
-# ignores unknown kwargs) and collapse ``isinstance`` discrimination. Construct
-# ``AgentResponse(text=...)`` directly.
 
 
 class Turn(BaseModel):
@@ -1643,10 +1777,21 @@ class ReportSummary(BaseModel):
         description='Rows that failed before an attack job could execute',
     )
     errors_by_type: dict[str, int] = Field(default_factory=dict, description='Error counts grouped by type')
-    token_usage_total: TokenUsage | None = Field(default=None, description='Aggregated token usage across all results')
+    token_usage_total: TokenUsage | None = Field(
+        default=None,
+        description='Aggregated token usage across all attack results plus post_processing_token_usage '
+        '(recommendation generation and the executive-summary narrative), when either ran and billed usage.',
+    )
     token_usage_by_source: dict[str, TokenUsage] = Field(
         default_factory=dict,
-        description='Token usage grouped by datapoint source (static/template_dynamic/generated_dynamic); sums to token_usage_total',
+        description='Token usage grouped by datapoint source (static/template_dynamic/generated_dynamic); sums to '
+        'the attack-result portion of token_usage_total, i.e. token_usage_total minus post_processing_token_usage.',
+    )
+    post_processing_token_usage: TokenUsage | None = Field(
+        default=None,
+        description='Token usage billed after attack execution: the focus-area recommendation phase '
+        '(condense + per-area calls) and the executive-summary narrative. None if neither ran or neither '
+        'billed usage. Already folded into token_usage_total.',
     )
     by_vulnerability: dict[str, VulnerabilitySummary] = Field(default_factory=dict)
     by_category: dict[str, CategorySummary] = Field(default_factory=dict)

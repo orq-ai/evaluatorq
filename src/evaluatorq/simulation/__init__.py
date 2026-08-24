@@ -68,6 +68,7 @@ if TYPE_CHECKING:
     from evaluatorq.simulation.evaluators import (
         SIMULATION_EVALUATORS,
         SimulationScorer,
+        SimulationScoringConfig,
         get_all_evaluators,
         get_evaluator,
     )
@@ -165,6 +166,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
         'SIMULATION_EVALUATORS',
     ),
     'SimulationScorer': ('evaluatorq.simulation.evaluators', 'SimulationScorer'),
+    'SimulationScoringConfig': (
+        'evaluatorq.simulation.evaluators',
+        'SimulationScoringConfig',
+    ),
     'get_all_evaluators': ('evaluatorq.simulation.evaluators', 'get_all_evaluators'),
     'get_evaluator': ('evaluatorq.simulation.evaluators', 'get_evaluator'),
     'DatapointGenerator': (
@@ -379,6 +384,7 @@ __all__ = [
     'SimulationRunMeta',
     'SimulationRunner',
     'SimulationScorer',
+    'SimulationScoringConfig',
     'StartingEmotion',
     'TerminatedBy',
     'TokenUsage',

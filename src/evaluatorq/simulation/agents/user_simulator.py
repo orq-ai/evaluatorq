@@ -39,6 +39,11 @@ class UserSimulatorAgentConfig(AgentConfig):
     system_prompt: str | None = None
 
     def __init__(self, system_prompt: str | None = None, **kwargs: Any) -> None:
+        # Default to the Responses API, as the judge does: it keeps every
+        # simulation LLM call on one endpoint, so a run's spans are all
+        # `responses ...` rather than a mix the trace UI types differently.
+        # Callers can still pass api='chat_completions'.
+        kwargs.setdefault('api', 'responses')
         super().__init__(**kwargs)
         self.system_prompt = system_prompt
 

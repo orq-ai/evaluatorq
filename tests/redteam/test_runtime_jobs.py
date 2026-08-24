@@ -272,18 +272,12 @@ class TestNormalizeUsage:
 
 
 # ===========================================================================
-# runtime/jobs.py — create_model_job
+# runtime/jobs.py — create_deployment_job
 # ===========================================================================
 
 
-class TestCreateModelJob:
-    """Tests for create_model_job() factory function."""
-
-    def test_raises_value_error_when_no_params(self):
-        from evaluatorq.redteam.runtime.jobs import create_model_job
-
-        with pytest.raises(ValueError, match="Provide one of: 'model' or 'deployment_key'"):
-            create_model_job()
+class TestCreateDeploymentJob:
+    """Tests for create_deployment_job() factory function."""
 
     @pytest.mark.asyncio
     async def test_deployment_job_prices_usage_from_catalogue(self, monkeypatch: pytest.MonkeyPatch):
@@ -292,7 +286,7 @@ class TestCreateModelJob:
         available to resolve the catalogue against (falls back to ORQ_BASE_URL,
         which is the host the deployment client itself was built with)."""
         from evaluatorq import DataPoint
-        from evaluatorq.redteam.runtime.jobs import create_model_job
+        from evaluatorq.redteam.runtime.jobs import create_deployment_job
 
         model_catalogue.reset_catalogue_cache()
 
@@ -314,7 +308,7 @@ class TestCreateModelJob:
         monkeypatch.setitem(sys.modules, 'orq_ai_sdk', module)
         monkeypatch.setenv('ORQ_API_KEY', 'test-key')
 
-        job_fn = create_model_job(deployment_key='test-deployment', run_id='static-run')
+        job_fn = create_deployment_job(deployment_key='test-deployment', run_id='static-run')
         result = await job_fn(
             DataPoint(
                 inputs={
@@ -341,7 +335,7 @@ class TestCreateModelJob:
         Without server_url the call goes to my.orq.ai while price_usage looks the model
         up in the ORQ_BASE_URL host's catalogue — a staging run priced off prod (RES-1295).
         """
-        from evaluatorq.redteam.runtime.jobs import create_model_job
+        from evaluatorq.redteam.runtime.jobs import create_deployment_job
 
         module = ModuleType('orq_ai_sdk')
         module.Orq = MagicMock(return_value=MagicMock(deployments=MagicMock()))  # pyright: ignore[reportAttributeAccessIssue]
@@ -349,50 +343,7 @@ class TestCreateModelJob:
         monkeypatch.setenv('ORQ_API_KEY', 'test-key')
         monkeypatch.setenv('ORQ_BASE_URL', 'https://staging.orq.ai')
 
-        create_model_job(deployment_key='test-deployment')
+        create_deployment_job(deployment_key='test-deployment')
 
         module.Orq.assert_called_once_with(api_key='test-key', server_url='https://staging.orq.ai')  # pyright: ignore[reportAttributeAccessIssue]
 
-    @pytest.mark.asyncio
-    async def test_router_job_returns_priced_usage(self, monkeypatch: pytest.MonkeyPatch):
-        """RES-1295: router_job must return the priced Usage execute_chat_completion
-        already computed, not re-derive an unpriced one from the raw response —
-        that re-derivation was the exact counted-but-unpriced defect this task closes."""
-        from evaluatorq import DataPoint
-        from evaluatorq.redteam.runtime.jobs import create_model_job
-
-        model_catalogue.reset_catalogue_cache()
-
-        async def fake_load(client=None):  # noqa: ANN001, ARG001
-            return {'gpt-4o-mini': model_catalogue.ModelInfo(0.00025, 0.002, 'openai', supports_responses=True)}
-
-        monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
-
-        response = MagicMock()
-        response.choices = [MagicMock()]
-        response.choices[0].message.content = 'mock target response'
-        response.choices[0].finish_reason = 'stop'
-        response.usage = MagicMock(prompt_tokens=10, completion_tokens=5, total_tokens=15)
-        client = AsyncMock()
-        client.base_url = 'https://api.openai.com/v1'
-        client.chat.completions.create = AsyncMock(return_value=response)
-
-        job_fn = create_model_job(model='gpt-4o-mini', llm_client=client, run_id='static-run')
-        result = await job_fn(
-            DataPoint(
-                inputs={
-                    'id': 'router-1',
-                    'category': 'ASI01',
-                    'messages': [{'role': 'user', 'content': 'hello'}],
-                }
-            ),
-            0,
-        )
-
-        usage = result['output']['token_usage']
-        assert usage is not None
-        assert usage.calls == usage.priced_calls == 1
-        assert usage.total_cost is not None
-        assert usage.total_cost > 0
-
-        model_catalogue.reset_catalogue_cache()

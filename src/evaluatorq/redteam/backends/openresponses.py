@@ -21,9 +21,13 @@ if TYPE_CHECKING:
 class OpenResponsesBackend(Backend):
     """Backend for OpenResponses targets backed by the simulation Responses target.
 
-    Targets are server-side stateful via ``previous_response_id`` threading,
-    but the server owns the memory lifecycle — ``cleanup_memory`` is a no-op
-    because we cannot delete prior responses by id.
+    Targets are stateless per call: ``OrqResponsesTarget`` sends the full
+    transcript on every ``respond()`` and never populates
+    ``previous_response_id`` (see ``openresponses/types.py``'s
+    ``ResponseResourceDict.previous_response_id``, which models the field but
+    nothing sets it). ``cleanup_memory`` is a no-op because the memory scope
+    referenced by ``memory_entity_id`` is owned and expired server-side; we
+    cannot delete it by id from here.
 
     This backend exclusively serves hosted ORQ ``agent/<key>`` targets, whose
     model id only resolves on the Orq router. ``require_orq`` therefore defaults
@@ -37,8 +41,9 @@ class OpenResponsesBackend(Backend):
         client: AsyncOpenAI | None = None,
         instructions: str | None = None,
         timeout_ms: int | None = None,
-        retry_attempts: int | None = None,
+        retry_attempts: int = 1,
         retry_statuses: list[int] | None = None,
+        reasoning_effort: str | None = None,
         require_orq: bool = True,
     ) -> None:
         super().__init__(name='openresponses')
@@ -47,6 +52,7 @@ class OpenResponsesBackend(Backend):
         self._timeout_ms = timeout_ms
         self._retry_attempts = retry_attempts
         self._retry_statuses = retry_statuses
+        self._reasoning_effort = reasoning_effort
         self._require_orq = require_orq
 
     def create_target(self, agent_key: str) -> OrqResponsesTarget:
@@ -57,6 +63,7 @@ class OpenResponsesBackend(Backend):
             model=agent_key,
             api='responses',
             timeout_ms=self._timeout_ms or 240_000,  # 240s matches Orq router default for long-tail tool calls
+            reasoning_effort=self._reasoning_effort,
         )
         return OrqResponsesTarget(
             config,

@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel
 
 from evaluatorq.common.sanitize import delimit
+from evaluatorq.common.structured_output import token_budget_for_items
+from evaluatorq.simulation._usage import UsageTracking
 from evaluatorq.simulation.types import DEFAULT_MODEL, CommunicationStyle, Persona
 from evaluatorq.simulation.utils.structured_output import generate_structured
 
@@ -18,6 +20,17 @@ logger = logging.getLogger(__name__)
 
 _TEMPERATURE_CREATIVE = 0.8
 _TEMPERATURE_BALANCED = 0.7
+
+# A persona carries more prose than a scenario (background, quirks, speech
+# patterns), so it costs more per item. Same reason as the scenario budget: a
+# flat cap truncates the structured output once a caller asks for enough of
+# them, and truncated structured output is unrecoverable.
+_TOKENS_PER_PERSONA = 600
+_MIN_PERSONA_TOKENS = 4000
+
+
+def _persona_token_budget(num_personas: int) -> int:
+    return token_budget_for_items(num_personas, per_item=_TOKENS_PER_PERSONA, minimum=_MIN_PERSONA_TOKENS)
 
 
 _PERSONA_GENERATOR_PROMPT = """You are an expert persona designer for AI agent testing. Create realistic, memorable user personas that feel like real people, not stereotypes.
@@ -77,7 +90,7 @@ class PersonaListResponse(BaseModel):
     personas: list[Persona]
 
 
-class PersonaGenerator:
+class PersonaGenerator(UsageTracking):
     """Generates personas from agent descriptions."""
 
     def __init__(
@@ -95,6 +108,7 @@ class PersonaGenerator:
             extra_api_key=api_key,
             max_retries=0,
         )
+        self.reset_usage()
 
     async def close(self) -> None:
         """Close the HTTP client (only if this generator built it)."""
@@ -188,16 +202,18 @@ Return ONLY a JSON array, no other text."""
                 {'role': 'user', 'content': user_prompt},
             ]
 
-            parsed, raw = await generate_structured(
+            result = await generate_structured(
                 self._client,
                 model=self._model,
                 messages=messages,
                 response_format=PersonaListResponse,
                 temperature=_TEMPERATURE_CREATIVE,
-                max_tokens=4000,
+                max_tokens=_persona_token_budget(num_personas),
                 label='PersonaGenerator.generate',
+                api='responses',
             )
-            personas = parsed.personas if parsed is not None else self._parse_personas(raw or '[]')
+            self._accumulate(result.usage)
+            personas = result.parsed.personas if result.parsed is not None else self._parse_personas(result.raw or '[]')
 
             if len(personas) < num_personas:
                 logger.warning(
@@ -313,16 +329,18 @@ Return ONLY a JSON array, no other text."""
                 'orq.simulation.model': self._model,
             },
         ):
-            parsed, raw = await generate_structured(
+            result = await generate_structured(
                 self._client,
                 model=self._model,
                 messages=messages,
                 response_format=PersonaListResponse,
                 temperature=_TEMPERATURE_BALANCED,
-                max_tokens=4000,
+                max_tokens=_persona_token_budget(num_personas),
                 label='PersonaGenerator.generate_with_coverage',
+                api='responses',
             )
-            personas = parsed.personas if parsed is not None else self._parse_personas(raw or '[]')
+            self._accumulate(result.usage)
+            personas = result.parsed.personas if result.parsed is not None else self._parse_personas(result.raw or '[]')
 
             # Validate coverage and fill gaps
             personas = self._ensure_style_coverage(personas, [CommunicationStyle(s) for s in styles])

@@ -2388,11 +2388,7 @@ def _rt_breakdowns_turn_scope_grid(by_kind: dict[str, Any]) -> str:
         bars = bar_rows(rows, width=420, label_w=110, color_scale=SCALE_HEAT_RT, fmt=pct, max_value=1.0)
         return panel(title, bars)
 
-    turn_type_html = _grid_panel('By turn type', data.get('by_turn_type', {}))
-    domain_html = _grid_panel('By domain', data.get('by_domain', {}))
-    if not turn_type_html and not domain_html:
-        return ''
-    return f'<div class="rt-breakdowns-grid-2">{turn_type_html}{domain_html}</div>'
+    return _grid_panel('By domain', data.get('by_domain', {}))
 
 
 def _rt_breakdowns(by_kind: dict[str, Any]) -> str:

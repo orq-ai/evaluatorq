@@ -46,7 +46,6 @@ _DIM_LABELS: dict[str, str] = {
     'severity': 'Severity',
     'attack_technique': 'Attack Technique',
     'delivery_method': 'Delivery Method',
-    'turn_type': 'Turn Type',
     'source': 'Source',
 }
 
@@ -97,8 +96,6 @@ def _dim_value(r: RedTeamResult, dim: str) -> str:
             dm = r.attack.delivery_methods[0]
             return delivery_method_str(dm)
         return 'unknown'
-    if dim == 'turn_type':
-        return r.attack.turn_type.value if r.attack.turn_type else 'unknown'
     if dim == 'source':
         return r.attack.source
     return 'unknown'

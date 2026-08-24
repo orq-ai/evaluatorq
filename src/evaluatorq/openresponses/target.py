@@ -6,14 +6,22 @@ import asyncio
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
+from openai import BadRequestError
 from typing_extensions import Self
 
+from evaluatorq.common.llm_call import (
+    is_responses_reasoning_rejection,
+    remember_responses_reasoning_rejection,
+    strip_known_rejected_responses_reasoning,
+)
 from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.prompt_cache import caching_applies, mark_responses_input
+from evaluatorq.common.responses import first_responses_refusal, responses_stop_reason
 from evaluatorq.common.retry import with_retry, without_client_retries
 from evaluatorq.common.thread_context import pipeline_metadata, thread_body_param
 from evaluatorq.common.tracing import get_trace_context_headers
-from evaluatorq.contracts import AgentContext, AgentResponse, AgentTarget, LLMCallConfig, Message
+from evaluatorq.contracts import AgentContext, AgentResponse, AgentTarget, LLMCallConfig, Message, ToolInfo
 from evaluatorq.openresponses.client import build_simulation_client
 from evaluatorq.openresponses.input_items import messages_to_responses_input
 from evaluatorq.openresponses.tracing import (
@@ -42,6 +50,24 @@ def _raw_responses_create(client: Any) -> Any | None:
     return raw_client.responses.create
 
 
+def _tool_info(tool: dict[str, Any]) -> ToolInfo:
+    """Map one Responses tool dict to a ``ToolInfo`` for the attack planner.
+
+    Accepts both the flat Responses shape (``{'type': 'function', 'name': ...}``)
+    and the nested Chat Completions shape (``{'function': {'name': ...}}``);
+    callers pass either through to the SDK. Unnamed/unknown tool shapes keep
+    their ``type`` as the name rather than being dropped silently.
+    """
+    nested = tool.get('function')
+    spec: dict[str, Any] = nested if isinstance(nested, dict) else tool
+    return ToolInfo(
+        name=str(spec.get('name') or tool.get('type') or 'unknown'),
+        description=spec.get('description'),
+        parameters=spec.get('parameters'),
+        action_type=tool.get('type'),
+    )
+
+
 class OrqResponsesTarget(AgentTarget):
     """Wraps the Orq Responses v3 API as a stateless ``AgentTarget``.
 
@@ -63,7 +89,7 @@ class OrqResponsesTarget(AgentTarget):
         tools: list[dict[str, Any]] | None = None,
         memory_entity_id: str | None = None,
         client: AsyncOpenAI | None = None,
-        retry_attempts: int | None = None,
+        retry_attempts: int = 1,
         retry_statuses: Iterable[int] | None = None,
         require_orq: bool = False,
     ) -> None:
@@ -146,8 +172,19 @@ class OrqResponsesTarget(AgentTarget):
         return clone
 
     async def get_agent_context(self) -> AgentContext:
-        """Describe this target — the configured model is the agent key."""
-        return AgentContext(key=self.config.model, model=self.config.model)
+        """Describe this target — the configured model is the agent key.
+
+        ``instructions`` is carried through so attack planners see the persona
+        the model actually runs with; dropping it makes them plan against a
+        generic assistant. Consumers read ``instructions or system_prompt``, so
+        filling this one alone is enough.
+        """
+        return AgentContext(
+            key=self.config.model,
+            model=self.config.model,
+            instructions=self.instructions or '',
+            tools=[_tool_info(t) for t in self.tools or []],
+        )
 
     async def close(self) -> None:
         """Close the underlying HTTP client if this instance owns it.
@@ -172,39 +209,47 @@ class OrqResponsesTarget(AgentTarget):
     ) -> AgentResponse:
         """Pure call into ``client.responses.create``; no instance mutation.
 
-        Applies retry (rate-limit / server errors) via `with_retry` and
-        converts `asyncio.TimeoutError` into a descriptive RuntimeError. The
-        red-team backend sets ``retry_attempts=1`` so
-        ``call_target_with_retry`` owns the target retry budget; simulation
-        callers may instead configure this boundary's ``with_retry`` budget.
+        Converts `asyncio.TimeoutError` into a descriptive RuntimeError.
+
+        ``retry_attempts`` defaults to 1 — a single attempt, no retry — because
+        ``call_target_with_retry`` owns the target retry budget on every surface
+        that drives a target (see ``AgentTarget``). Raise it only when calling
+        ``respond`` directly, outside that wrapper; under it, the two budgets
+        multiply.
         """
         timeout_s = self.config.timeout_ms / 1000.0 if self.config.timeout_ms else None
 
         async def _do_call() -> AgentResponse:
-            kwargs: dict[str, Any] = {
-                'model': self.config.model,
-                'input': responses_input,
-            }
-            if self.config.max_tokens:
-                kwargs['max_output_tokens'] = self.config.max_tokens
-            if self.tools:
-                kwargs['tools'] = self.tools
-            if self.instructions is not None:
-                kwargs['instructions'] = self.instructions
             # Metadata is a native Responses field on every endpoint. Threads are
             # an Orq-router extension, so direct OpenAI-compatible endpoints must
             # not receive them in ``extra_body``.
             metadata = pipeline_metadata()
-            if metadata:
-                kwargs['metadata'] = metadata
             routes_through_orq = client_routes_through_orq(self._client)
             body_extra = thread_body_param() if routes_through_orq else {}
             # Agents with memory tools reject the call outright without a memory
             # scope ("memory_entity_id_required"), so forward ours when set.
             if routes_through_orq and self.memory_entity_id:
                 body_extra['memory'] = {'entity_id': self.memory_entity_id}
+
+            # `body_extra` goes in as a call-site param, not merged after, so
+            # `_merge_extra_body` stays the one place precedence is decided:
+            # this config's `extra_body` layers on top per key.
+            call_params: dict[str, Any] = {'input': responses_input}
+            if self.tools:
+                call_params['tools'] = self.tools
+            if self.instructions is not None:
+                call_params['instructions'] = self.instructions
+            if metadata:
+                call_params['metadata'] = metadata
             if body_extra:
-                kwargs['extra_body'] = {**kwargs.get('extra_body', {}), **body_extra}
+                call_params['extra_body'] = body_extra
+            kwargs: dict[str, Any] = {
+                'model': self.config.model,
+                **self.config.request_params(api='responses', **call_params),
+            }
+            # Same memo `common.llm_call.execute_response` uses, so a rejection learned
+            # on either path short-circuits the other.
+            strip_known_rejected_responses_reasoning(self.config.model, kwargs)
 
             async with with_llm_span(
                 model=self.config.model,
@@ -222,15 +267,31 @@ class OrqResponsesTarget(AgentTarget):
                     kwargs['extra_headers'] = {**kwargs.get('extra_headers', {}), **trace_headers}
                 record_openresponses_request(span, kwargs)
                 raw_create = _raw_responses_create(self._client)
-                if raw_create is not None:
-                    raw_coro = raw_create(**kwargs)
-                    raw_response = await (asyncio.wait_for(raw_coro, timeout=timeout_s) if timeout_s else raw_coro)
-                    response_headers = raw_response.headers
-                    response = raw_response.parse()
-                else:
+
+                async def _create() -> tuple[Any, Any | None]:
+                    """Return ``(response, response_headers)`` for the current ``kwargs``."""
+                    if raw_create is not None:
+                        raw_coro = raw_create(**kwargs)
+                        raw_response = await (asyncio.wait_for(raw_coro, timeout=timeout_s) if timeout_s else raw_coro)
+                        return raw_response.parse(), raw_response.headers
                     coro = self._client.responses.create(**kwargs)
-                    response = await (asyncio.wait_for(coro, timeout=timeout_s) if timeout_s else coro)
-                    response_headers = None
+                    parsed = await (asyncio.wait_for(coro, timeout=timeout_s) if timeout_s else coro)
+                    return parsed, None
+
+                try:
+                    response, response_headers = await _create()
+                except BadRequestError as exc:
+                    # Same drop-and-retry-once contract as `execute_response`: only a 400
+                    # naming `reasoning` in both request and error body counts.
+                    if not is_responses_reasoning_rejection(kwargs, exc):
+                        raise
+                    remember_responses_reasoning_rejection(self.config.model, kwargs)
+                    logger.warning(
+                        'OrqResponsesTarget: model {} rejected the reasoning block; dropping it and retrying once',
+                        self.config.model,
+                    )
+                    kwargs.pop('reasoning', None)
+                    response, response_headers = await _create()
                 # Some SDK-compatible clients expose trace IDs on parsed response
                 # telemetry. The Orq SDK raw-response path instead gets the
                 # authoritative IDs from HTTP headers because its parser drops the
@@ -249,7 +310,16 @@ class OrqResponsesTarget(AgentTarget):
                 if span is not None and trace_id:
                     span.set_attribute('orq.trace_id', trace_id)
 
+            stop_reason = responses_stop_reason(response)
+            if stop_reason == 'length':
+                raise RuntimeError(
+                    f'OrqResponsesTarget: response truncated at max_output_tokens={self.config.max_tokens}; '
+                    'raise the configured token budget and retry.'
+                )
+            refusal = first_responses_refusal(response)
             agent_response = AgentResponse.from_openresponses(response)
+            if refusal is not None:
+                agent_response = agent_response.model_copy(update={'refusal': refusal})
             if not agent_response.output:
                 raise RuntimeError(
                     f'OrqResponsesTarget: response contained no extractable '
@@ -266,9 +336,7 @@ class OrqResponsesTarget(AgentTarget):
             return agent_response.model_copy(update=updates)
 
         try:
-            retry_kwargs: dict[str, Any] = {}
-            if self.retry_attempts is not None:
-                retry_kwargs['max_attempts'] = self.retry_attempts
+            retry_kwargs: dict[str, Any] = {'max_attempts': self.retry_attempts}
             if self.retry_statuses is not None:
                 retry_kwargs['retry_statuses'] = self.retry_statuses
             return await with_retry(

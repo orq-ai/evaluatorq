@@ -7,8 +7,10 @@ compatible with evaluatorq integration.
 from __future__ import annotations
 
 from evaluatorq.simulation.evaluators.scorers import (
+    DEFAULT_SCORING_CONFIG,
     SIMULATION_EVALUATORS,
     SimulationScorer,
+    SimulationScoringConfig,
     conversation_quality_scorer,
     criteria_met_scorer,
     get_all_evaluators,
@@ -18,8 +20,10 @@ from evaluatorq.simulation.evaluators.scorers import (
 )
 
 __all__ = [
+    'DEFAULT_SCORING_CONFIG',
     'SIMULATION_EVALUATORS',
     'SimulationScorer',
+    'SimulationScoringConfig',
     'conversation_quality_scorer',
     'criteria_met_scorer',
     'get_all_evaluators',
