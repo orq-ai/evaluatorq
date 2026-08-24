@@ -28,28 +28,7 @@ Both APIs take a **positioned, per-item** marker — `apply_cache_breakpoints` f
 Chat Completions, `mark_responses_input` for Responses. Responses also accepts a
 *top-level* ``cache_control`` body field, which marks the end of the whole input
 and therefore cannot be kept off a rebuilt trailing item; it is deliberately not
-used here. Measured on ``anthropic/claude-sonnet-4-6`` with a uuid-salted cold
-prefix, three judgements each
-(``scripts/manual_tests/prompt_cache_judge_check.py``):
-
-| path                  | call 1 | call 2 | call 3 |
-| --------------------- | ------ | ------ | ------ |
-| chat_completions      |      0 |  6,991 |  7,881 |
-| responses             |      0 |  7,417 |  8,304 |
-| responses, top-level  |      0 |      0 |      0 |
-
-The red-team attacker loop, five turns through the real orchestrator
-(``scripts/manual_tests/prompt_cache_redteam_probe.py``, same model and salting).
-Each turn reads back essentially the whole previous request, so only the newly
-appended pair pays full price — 2,696 of 2,948 tokens on turn 5:
-
-| turn       |     1 |     2 |     3 |     4 |     5 |
-| ---------- | ----- | ----- | ----- | ----- | ----- |
-| input      | 1,988 | 2,214 | 2,438 | 2,699 | 2,948 |
-| cache_read |     0 | 1,986 | 2,211 | 2,435 | 2,696 |
-
-``cache_creation_tokens`` is permanently 0 through the Orq router, so writes are
-unobservable and a read on the *next* turn is the only evidence a write landed.
+used here.
 
 Never set ``ttl``: 5m is the default, 1h costs more, and only Anthropic honours
 it.
@@ -250,11 +229,8 @@ def mark_responses_input(input_items: list[dict[str, Any]], *, volatile_items: i
 
     The Responses `input` is a list of items carrying content parts, exactly like
     a chat message list, and the router honours a **per-item** ``cache_control``
-    on the last part of an item. Measured against ``anthropic/claude-sonnet-4-6``
-    (``scripts/manual_tests/prompt_cache_responses_probe.py``): marking the end
-    of the persisted prefix produces a cache read on the next call, while the
-    top-level switch alone produces none, because it marks the end of the whole
-    input including a trailing item the caller rebuilt.
+    on the last part of an item. Marking the end of the persisted prefix keeps
+    the breakpoint off a trailing item the caller rebuilds.
 
     The count is ``volatile_items``, **not** ``volatile_tail``: one `Message`
     can render to several Responses items (an assistant turn with tool calls

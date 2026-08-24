@@ -164,7 +164,7 @@ async def test_volatile_tail_moves_the_breakpoint_off_the_last_message() -> None
 async def test_responses_marks_a_positioned_breakpoint_on_the_router() -> None:
     """Per-item, not the top-level switch: the switch marks the end of the whole
     input, so a caller that rebuilds its trailing item writes every turn and reads
-    none (measured — see scripts/manual_tests/prompt_cache_responses_probe.py)."""
+    none."""
     client = _responses_client()
 
     await _agent(client, api='responses')._call_llm(_transcript(), volatile_tail=1)
