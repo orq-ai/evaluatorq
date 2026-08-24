@@ -37,22 +37,11 @@ from typing import Any
 
 from loguru import logger
 
+from evaluatorq.common.reports.palette import SEVERITY_RANK, SEVERITY_WEIGHTS
 from evaluatorq.contracts import ReportSection, TokenUsage
 from evaluatorq.redteam.contracts import OWASP_CATEGORY_NAMES, SEVERITY_DEFINITIONS, RedTeamReport, RedTeamResult
 from evaluatorq.redteam.reports._utils import extract_prompt, extract_response
 from evaluatorq.redteam.reports.guidance import REMEDIATION_GUIDANCE
-
-# ---------------------------------------------------------------------------
-# Risk scoring weights
-# ---------------------------------------------------------------------------
-
-SEVERITY_WEIGHTS: dict[str, int] = {
-    'low': 1,
-    'medium': 2,
-    'high': 4,
-    'critical': 8,
-}
-
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -608,8 +597,7 @@ def _build_agent_disagreements_section(report: RedTeamReport) -> ReportSection:
         })
 
     # Sort so highest-severity disagreements appear first
-    severity_rank = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
-    disagreements.sort(key=lambda d: severity_rank.get(d['severity'], 4))
+    disagreements.sort(key=lambda d: -SEVERITY_RANK.get(d['severity'], 0))
 
     return ReportSection(
         kind='agent_disagreements',

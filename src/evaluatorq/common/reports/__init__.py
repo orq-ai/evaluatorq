@@ -48,6 +48,8 @@ from evaluatorq.common.reports.palette import (
     QUALITATIVE,
     SEVERITY_COLORS,
     SEVERITY_ORDER,
+    SEVERITY_RANK,
+    SEVERITY_WEIGHTS,
 )
 from evaluatorq.common.reports.render import (
     RendererRegistry,
@@ -69,6 +71,8 @@ __all__ = [
     'QUALITATIVE',
     'SEVERITY_COLORS',
     'SEVERITY_ORDER',
+    'SEVERITY_RANK',
+    'SEVERITY_WEIGHTS',
     'STATUS_COLORS',
     'RendererRegistry',
     'bar',
