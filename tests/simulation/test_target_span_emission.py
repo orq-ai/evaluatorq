@@ -30,12 +30,13 @@ from tests.simulation.conftest import span_attrs as _attrs
 _deployment_module = importlib.import_module('evaluatorq.deployment')
 
 
-def test_span_type_only_overridden_for_responses_operations() -> None:
+def test_span_type_overridden_only_for_operations_orq_cannot_map() -> None:
     # 'chat' is already in Orq's ingest table; overriding it would be noise.
     assert orq_span_type_for_operation('chat') is None
-    assert orq_span_type_for_operation('invoke') is None
     assert orq_span_type_for_operation('responses') == 'span.responses'
     assert orq_span_type_for_operation('agents.responses') == 'span.responses'
+    # The deployment legs: chat messages in and out, so the chat renderer fits.
+    assert orq_span_type_for_operation('invoke') == 'span.chat_completion'
 
 
 @pytest.mark.asyncio
@@ -109,6 +110,7 @@ async def test_deployment_target_emits_llm_span() -> None:
     attrs = _attrs(span)
     assert attrs['gen_ai.provider.name'] == 'orq'
     assert attrs['orq.llm.purpose'] == 'target'
+    assert attrs['orq.span_type'] == 'span.chat_completion'
 
 
 class _RecordingTarget(AgentTarget):

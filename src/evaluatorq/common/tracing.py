@@ -435,9 +435,15 @@ def orq_span_type_for_operation(operation: str) -> str | None:
     client-supplied ``orq.span_type`` overrides that derivation, so Responses
     calls claim ``span.responses`` explicitly. Returns ``None`` for operations
     the ingest table already classifies correctly.
+
+    ``invoke`` (the Orq deployment legs) is unmapped for the same reason and
+    claims ``span.chat_completion``: its input and output are chat messages, and
+    that is the type whose renderer shows them as a transcript.
     """
     if operation == 'responses' or operation.endswith('.responses'):
         return 'span.responses'
+    if operation == 'invoke':
+        return 'span.chat_completion'
     return None
 
 
