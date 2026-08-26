@@ -1,16 +1,21 @@
 name: Release
 
-# Tag-driven release. On push to main, compute the next version from conventional
-# commits, push a tag (the version source via hatch-vcs), then build, publish to
-# PyPI (token auth via the PYPI_TOKEN secret), and create a GitHub Release with PR-based
-# notes. Only a TAG is pushed — the Protect-main branch ruleset does not govern
-# tags, so a plain GITHUB_TOKEN suffices (no deploy key, no bypass, no commit to
+# Tag-driven release. After CI passes on main, compute the next version from
+# conventional commits, push a tag (the version source via hatch-vcs), then build,
+# publish to PyPI (token auth via the PYPI_TOKEN secret), and create a GitHub Release
+# with PR-based notes. Only a TAG is pushed — the Protect-main branch ruleset does not
+# govern tags, so a plain GITHUB_TOKEN suffices (no deploy key, no bypass, no commit to
 # main). An accidental major bump is refused unless explicitly forced — and the
 # refusal FAILS the run, so a blocked release is visible instead of green.
+#
+# The trigger is `workflow_run` on CI, NOT `push: main`: a direct push trigger races
+# CI on the same commit and ships a main that CI is about to fail. CI also runs on
+# pull_request, which fires workflow_run too, so the job gate below must check the
+# event and branch as well as the conclusion.
 on:
-  push:
-    branches:
-      - main
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       force_level:
@@ -33,10 +38,27 @@ jobs:
     name: Tag + publish
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # A workflow_run release requires a SUCCESSFUL CI run of a PUSH to MAIN. Dropping
+    # any of the three lets a green PR-branch CI run publish from that branch.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
     steps:
+      # A manual release off a feature branch would tag and publish it: tags are not
+      # governed by the branch ruleset, so nothing else stops it. Fail visibly.
+      - name: Refuse a dispatch that is not on main
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Refusing release: workflow_dispatch ref is ${{ github.ref }}, not refs/heads/main."
+          exit 1
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # full history + tags for version derivation
+          # The exact commit CI just validated — not whatever main points at now.
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.ref }}
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
@@ -52,14 +74,24 @@ jobs:
         env:
           FORCE_LEVEL: ${{ inputs.force_level }}
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Checking out a SHA leaves a detached HEAD, and PSR only computes a version
+          # on a branch matching [tool.semantic_release.branches.main]. Re-attach.
+          HEAD_SHA="$(git rev-parse HEAD)"
+          git checkout -B main "$HEAD_SHA"
+          # `[ -n ... ] && FORCE=...` would exit the script under `set -e` when the
+          # input is blank, which is the common case. Use a plain if.
           FORCE=""
-          [ -n "$FORCE_LEVEL" ] && FORCE="--$FORCE_LEVEL"
-          CUR="$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)"
+          if [ -n "$FORCE_LEVEL" ]; then FORCE="--$FORCE_LEVEL"; fi
+          # --match keeps non-version tags (backup/*, presync-*) out of the comparison.
+          # Unfiltered, one pushed backup tag makes cur_major non-numeric and aborts
+          # every release until someone deletes it.
+          CUR="$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || echo v0.0.0)"
           NEXT="v$(uvx --from 'python-semantic-release==10.5.3' semantic-release version --print $FORCE)"
-          echo "current=$CUR next=$NEXT force='$FORCE'"
-          if [ "$NEXT" = "$CUR" ] || git rev-parse -q --verify "refs/tags/$NEXT" >/dev/null; then
+          echo "current=$CUR next=$NEXT force='$FORCE' sha=$HEAD_SHA"
+          if [ "$NEXT" = "$CUR" ]; then
             echo "No new version to release."; echo "released=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
           cur_major="${CUR#v}"; cur_major="${cur_major%%.*}"
@@ -69,6 +101,18 @@ jobs:
           # blocked releases look identical to a docs-only push (all green).
           if [ "$next_major" -gt "$cur_major" ] && [ -z "$FORCE" ]; then
             echo "::error::Refusing automatic major bump $CUR -> $NEXT. Releases are BLOCKED until a human acts: re-run via workflow_dispatch with force_level=major to confirm the major, or force_level=minor/patch to ship the breaking changes at a lower level."
+            echo "released=false" >> "$GITHUB_OUTPUT"; exit 1
+          fi
+          # An existing tag means one of two very different things. Pointing at the
+          # commit we are releasing: already done, green. Pointing anywhere else: the
+          # release is blocked and a silent exit 0 hides that indefinitely.
+          if git rev-parse -q --verify "refs/tags/$NEXT" >/dev/null; then
+            tag_sha="$(git rev-parse "refs/tags/$NEXT^{commit}")"
+            if [ "$tag_sha" = "$HEAD_SHA" ]; then
+              echo "Tag $NEXT already points at $HEAD_SHA — already released."
+              echo "released=false" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+            echo "::error::Tag $NEXT already exists at $tag_sha but this run is releasing $HEAD_SHA. Releases are BLOCKED until a human reconciles the two: delete the stale tag, or release the tagged commit."
             echo "released=false" >> "$GITHUB_OUTPUT"; exit 1
           fi
           git tag "$NEXT"
