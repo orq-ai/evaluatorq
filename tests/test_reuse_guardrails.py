@@ -398,3 +398,39 @@ def test_docstrings_carry_no_sphinx_roles() -> None:
         'shorthand render as literal text on the API reference pages. Use a plain '
         'code span, or an mkdocstrings autoref: [Message][evaluatorq.contracts.Message].'
     )
+
+
+def _new_returns_hardcoded_class(source: str, path: str) -> list[str]:
+    """Return ``path:lineno`` for every ``new()`` that constructs a named class.
+
+    A ``new()`` returning ``MyTarget(...)`` instead of ``type(self)(...)`` silently
+    hands back a base instance for any subclass, on every parallel job.
+    """
+    hits: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.FunctionDef) or node.name != 'new':
+            continue
+        for call in (n for n in ast.walk(node) if isinstance(n, ast.Call)):
+            name = _dotted(call.func)
+            if name and name[:1].isupper() and name.endswith('Target'):
+                hits.append(f'{path}:{call.lineno}')
+    return hits
+
+
+def test_new_constructs_via_type_self() -> None:
+    hits = [
+        hit
+        for path in sorted(SRC.rglob('*.py'))
+        for hit in _new_returns_hardcoded_class(path.read_text(encoding='utf-8'), str(path.relative_to(SRC)))
+    ]
+    assert not hits, (
+        'AgentTarget.new() constructs a hardcoded class: '
+        + ', '.join(hits)
+        + '. Use type(self)(...) so a subclass does not silently degrade to its base class.'
+    )
+
+
+def test_new_hardcoded_class_detector_actually_fires() -> None:
+    source = 'class T:\n    def new(self):\n        return MyTarget(self._x)\n'
+    assert _new_returns_hardcoded_class(source, 'x.py') == ['x.py:3']
+    assert _new_returns_hardcoded_class(source.replace('MyTarget', 'type(self)'), 'x.py') == []
