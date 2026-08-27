@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 pytest.importorskip('langgraph')
 
-from langchain_core.messages import AIMessage  # noqa: E402
+from langchain_core.messages import AIMessage, ToolMessage  # noqa: E402
 
 from evaluatorq.contracts import Message  # noqa: E402
 from evaluatorq.integrations.langgraph_integration import LangGraphTarget  # noqa: E402
@@ -134,6 +134,39 @@ class TestLangGraphTarget:
         assert r2.tool_calls[0].name == 'tool_B'
 
     @pytest.mark.asyncio
+    async def test_anthropic_tool_call_id_does_not_become_a_responses_item_id(self) -> None:
+        """An Anthropic ``toolu_*`` id belongs in call_id only.
+
+        Replayed as a Responses ``function_call.id`` it 400s every downstream
+        call on that endpoint — the simulated user and the judge both run there.
+        """
+        from evaluatorq.contracts import render_tool_call
+        from evaluatorq.openresponses.input_items import messages_to_responses_input
+
+        tool_turn = AIMessage(
+            content='',
+            tool_calls=[{'name': 'search', 'args': {'q': 'x'}, 'id': 'toolu_01ABC', 'type': 'tool_call'}],
+        )
+        graph = MagicMock()
+        graph.name = 'test'
+        graph.ainvoke = AsyncMock(return_value={'messages': [tool_turn]})
+
+        response = await LangGraphTarget(graph).respond([Message(role='user', content='hi')])
+        item = response.tool_calls[0]
+        assert item.call_id == 'toolu_01ABC'
+        assert item.id.startswith('fc_')
+
+        rendered = render_tool_call(item.model_copy(update={'result': 'done'}))
+        assert rendered is not None
+        tool_call, tool_message = rendered
+        input_items = messages_to_responses_input(
+            [Message(role='assistant', content=None, tool_calls=[tool_call]), tool_message]
+        )
+        function_call = next(i for i in input_items if i['type'] == 'function_call')
+        assert function_call['call_id'] == 'toolu_01ABC'
+        assert function_call.get('id', 'fc_').startswith('fc_')
+
+    @pytest.mark.asyncio
     async def test_reset_uses_different_thread_id(self) -> None:
         """After reset, respond must invoke ainvoke with a different thread_id."""
         graph = _make_graph()
@@ -169,6 +202,109 @@ class TestLangGraphTarget:
         result = await target.respond([Message(role='user', content='after reset')])
         assert len(result.tool_calls) == 1
         assert result.tool_calls[0].name == 'tool_X'
+
+    @pytest.mark.asyncio
+    async def test_tool_result_is_backfilled_from_tool_message(self) -> None:
+        """A tool call paired with its ToolMessage survives into the transcript.
+
+        Without the pairing ``result`` stays None and `render_tool_call` drops the
+        call, so a judge asked "did the agent use the tool?" sees nothing.
+        """
+        from evaluatorq.contracts import render_tool_call
+
+        graph = MagicMock()
+        graph.name = 'test'
+        graph.ainvoke = AsyncMock(
+            return_value={
+                'messages': [
+                    AIMessage(
+                        content='',
+                        tool_calls=[{'name': 'order_status', 'args': {'id': 7}, 'id': 'call_1', 'type': 'tool_call'}],
+                    ),
+                    ToolMessage(content='shipped', tool_call_id='call_1'),
+                    AIMessage(content='Your order shipped.'),
+                ]
+            }
+        )
+
+        response = await LangGraphTarget(graph).respond([Message(role='user', content='where is my order')])
+        item = response.tool_calls[0]
+        assert item.result == 'shipped'
+        assert render_tool_call(item) is not None
+
+    @pytest.mark.asyncio
+    async def test_structured_tool_result_is_json_not_repr(self) -> None:
+        """A tool returning a dict renders as JSON — a judge cannot parse a Python repr."""
+        graph = MagicMock()
+        graph.name = 'test'
+        graph.ainvoke = AsyncMock(
+            return_value={
+                'messages': [
+                    {
+                        'role': 'assistant',
+                        'content': '',
+                        'tool_calls': [{'name': 'order_status', 'args': {}, 'id': 'call_1'}],
+                    },
+                    {'role': 'tool', 'content': {'status': 'shipped', 'eta': None}, 'tool_call_id': 'call_1'},
+                    {'role': 'assistant', 'content': 'done'},
+                ]
+            }
+        )
+
+        response = await LangGraphTarget(graph).respond([Message(role='user', content='hi')])
+        assert response.tool_calls[0].result == '{"status": "shipped", "eta": null}'
+
+    @pytest.mark.asyncio
+    async def test_empty_tool_result_is_retained_not_dropped(self) -> None:
+        """A tool that legitimately returns nothing is not the same as a missing result."""
+        from evaluatorq.contracts import render_tool_call
+
+        graph = MagicMock()
+        graph.name = 'test'
+        graph.ainvoke = AsyncMock(
+            return_value={
+                'messages': [
+                    AIMessage(
+                        content='',
+                        tool_calls=[{'name': 'noop', 'args': {}, 'id': 'call_1', 'type': 'tool_call'}],
+                    ),
+                    ToolMessage(content='', tool_call_id='call_1'),
+                    AIMessage(content='done'),
+                ]
+            }
+        )
+
+        response = await LangGraphTarget(graph).respond([Message(role='user', content='hi')])
+        assert response.tool_calls[0].result == ''
+        assert render_tool_call(response.tool_calls[0]) is not None
+
+    @pytest.mark.asyncio
+    async def test_tool_call_without_result_stays_none_and_is_dropped(self) -> None:
+        """No ToolMessage this turn (interrupt/resume graphs) keeps the documented drop-and-warn."""
+        from evaluatorq.contracts import render_tool_call
+
+        graph = MagicMock()
+        graph.name = 'test'
+        graph.ainvoke = AsyncMock(
+            return_value={
+                'messages': [
+                    AIMessage(
+                        content='',
+                        tool_calls=[{'name': 'order_status', 'args': {}, 'id': 'call_1', 'type': 'tool_call'}],
+                    ),
+                ]
+            }
+        )
+
+        response = await LangGraphTarget(graph).respond([Message(role='user', content='hi')])
+        assert response.tool_calls[0].result is None
+        assert render_tool_call(response.tool_calls[0]) is None
+
+    def test_new_preserves_subclass(self) -> None:
+        class Subclass(LangGraphTarget):
+            pass
+
+        assert type(Subclass(_make_graph()).new()) is Subclass
 
     @pytest.mark.asyncio
     async def test_extra_config_is_preserved(self) -> None:

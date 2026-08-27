@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.callbacks.base import BaseCallbackManager
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.outputs import LLMResult
 from langchain_core.runnables import RunnableConfig
 
@@ -202,6 +202,13 @@ class LangGraphTarget(AgentTarget):
         so ``respond`` forwards only the latest user turn. Token usage is
         collected via a per-call ``_TokenUsageCollector`` callback, drained in a
         ``finally:`` block so partial spend on error paths is preserved.
+
+        Each tool call is paired with its ``ToolMessage`` result within the same
+        turn. A call whose result arrives in a *later* ``ainvoke`` — the
+        ``interrupt()`` / resume shape, where a human approves between the call and
+        its execution — keeps ``result=None`` and is dropped from the rendered
+        transcript by `render_tool_call`. So is a tool call the graph emits without
+        an ``id``.
         """
         if not messages or messages[-1].role != 'user':
             raise ValueError("LangGraphTarget.respond requires messages[-1].role == 'user'")
@@ -276,17 +283,40 @@ class LangGraphTarget(AgentTarget):
                 len(result_messages),
             )
             sliced = result_messages
+        tool_index: dict[str, int] = {}
         for msg in sliced:
             if isinstance(msg, dict):
-                if msg.get('role') != 'assistant':
-                    continue
+                role = str(msg.get('role', ''))
                 msg_content = msg.get('content', '')
+                tool_call_id = str(msg.get('tool_call_id', '') or '')
                 tool_calls_iter = msg.get('tool_calls') or []
-            else:
-                if not isinstance(msg, AIMessage):
-                    continue
+            elif isinstance(msg, ToolMessage):
+                role = 'tool'
                 msg_content = getattr(msg, 'content', '')
+                tool_call_id = str(getattr(msg, 'tool_call_id', '') or '')
+                tool_calls_iter = []
+            elif isinstance(msg, AIMessage):
+                role = 'assistant'
+                msg_content = getattr(msg, 'content', '')
+                tool_call_id = ''
                 tool_calls_iter = getattr(msg, 'tool_calls', None) or []
+            else:
+                continue
+
+            if role == 'tool':
+                idx = tool_index.get(tool_call_id)
+                item = output_items[idx] if idx is not None else None
+                if idx is not None and isinstance(item, ToolCallOutputItem):
+                    output_items[idx] = item.model_copy(update={'result': tool_result_to_text(msg_content)})
+                else:
+                    logger.warning(
+                        'LangGraphTarget: tool result for call_id=%r has no matching tool call in this turn; '
+                        'the call will be dropped from the transcript.',
+                        tool_call_id,
+                    )
+                continue
+            if role != 'assistant':
+                continue
 
             msg_content = _lc_content_to_text(msg_content)
             if msg_content:
@@ -297,11 +327,17 @@ class LangGraphTarget(AgentTarget):
                 name = tc.get('name', '') if isinstance(tc, dict) else getattr(tc, 'name', '')
                 args = tc.get('args', {}) if isinstance(tc, dict) else getattr(tc, 'args', {})
                 args_str = json.dumps(args if isinstance(args, dict) else {}, default=str)
+                # ``id`` is the Responses-API item id (``fc_*``) and is left to
+                # its default: LangChain's tool-call id is the provider's own
+                # (``toolu_*`` on Anthropic), and replaying that as an item id 400s
+                # any later Responses call. ``call_id`` carries it instead.
                 output_items.append(
-                    ToolCallOutputItem(name=str(name), arguments=args_str, id=call_id, call_id=call_id)
+                    ToolCallOutputItem(name=str(name), arguments=args_str, call_id=call_id)
                     if call_id
                     else ToolCallOutputItem(name=str(name), arguments=args_str)
                 )
+                if call_id:
+                    tool_index[str(call_id)] = len(output_items) - 1
 
         self._prev_msg_count = len(result_messages)
 
@@ -360,7 +396,7 @@ class LangGraphTarget(AgentTarget):
         Each call gets a fresh ``memory_entity_id`` (and thus a fresh LangGraph
         thread), so parallel workers never share checkpointer state.
         """
-        return LangGraphTarget(
+        return type(self)(
             self._graph,
             config=dict(self._extra_config),
             agent_context=self._agent_context,

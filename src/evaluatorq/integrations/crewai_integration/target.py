@@ -153,7 +153,7 @@ class CrewAITarget(AgentTarget):
         factory if you run datapoints in parallel against a stateful crew).
         """
         crew = self._crew_factory() if self._crew_factory is not None else self._crew
-        return CrewAITarget(
+        return type(self)(
             crew,
             crew_factory=self._crew_factory,
             input_key=self._input_key,

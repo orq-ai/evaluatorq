@@ -155,7 +155,7 @@ class OrqResponsesTarget(AgentTarget):
         an unseeded one is re-minted per clone, keeping parallel jobs in
         independent memory scopes. Mirrors ``ORQAgentTarget.new()``.
         """
-        clone = OrqResponsesTarget(
+        clone = type(self)(
             self.config,
             instructions=self.instructions,
             tools=self.tools,
@@ -168,7 +168,7 @@ class OrqResponsesTarget(AgentTarget):
         if not self._memory_entity_seeded and self.memory_entity_id is not None:
             # Re-mint bypassing the seeding setter so grandchild clones keep
             # re-minting instead of inheriting this one as if it were seeded.
-            clone._memory_entity_id = str(uuid.uuid4())
+            clone._memory_entity_id = str(uuid.uuid4())  # noqa: SLF001 — same class; ruff only tracks this when the ctor is named literally
         return clone
 
     async def get_agent_context(self) -> AgentContext:

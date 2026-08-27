@@ -229,6 +229,8 @@ target = CallableTarget(lambda messages: my_agent(messages[-1].content or ""))
 - `generate_recommendations=True` now correctly uses `llm_config.evaluator.client` before falling back to `create_async_llm_client()`
 - All hardcoded timeout literals (`240_000`, `90_000`) replaced with config-driven values from `LLMConfig` / `DEFAULT_TARGET_TIMEOUT_MS`
 - `OpenAITargetFactory` now propagates `max_tokens` and `timeout_ms` to created targets
+- `LangGraphTarget` never populated `ToolCallOutputItem.result`: LangGraph returns tool results as separate `ToolMessage`s and `respond()` skipped every message that was not an `AIMessage`. `render_tool_call` drops a call whose result is `None`, so judges saw transcripts with zero tool calls and any "did the agent use tool X" criterion failed regardless of what the agent did. Results are now paired with their call within the turn, as the pydantic-ai and OpenAI Agents targets already did. A call whose `ToolMessage` arrives in a later `ainvoke` (interrupt/resume graphs) still drops, and now warns.
+- `new()` on every target (`LangGraphTarget`, `CallableTarget`, `CrewAITarget`, `VercelAISdkTarget`, `PydanticAITarget`, `OpenAIAgentTarget`, `OrqResponsesTarget`, `OpenAIModelTarget`, `ORQAgentTarget`) constructs via `type(self)` instead of a hardcoded class name, so a subclass no longer silently degrades to the base class on every parallel job.
 
 ### Internal
 

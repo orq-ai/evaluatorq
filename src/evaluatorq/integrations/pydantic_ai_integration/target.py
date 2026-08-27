@@ -137,7 +137,7 @@ class PydanticAITarget(AgentTarget):
         """Return an independent instance with fresh conversation state."""
         # The Agent is shared by reference: Pydantic AI agents are stateless, and
         # each clone owns its own _history, so parallel runs don't interfere.
-        return PydanticAITarget(
+        return type(self)(
             self._agent,
             run_kwargs=dict(self._run_kwargs),
             agent_context=self._agent_context,
@@ -208,8 +208,10 @@ def _build_output(result: Any) -> list[OutputMessage]:
                 args = getattr(part, 'args', '{}')
                 args_str = args if isinstance(args, str) else json.dumps(args, default=str)
                 call_id = str(getattr(part, 'tool_call_id', '') or '')
+                # ``id`` (the Responses-API ``fc_*`` item id) keeps its default:
+                # ``tool_call_id`` is the provider's id and is not a valid item id.
                 tc = (
-                    ToolCallOutputItem(name=name, arguments=args_str, id=call_id, call_id=call_id)
+                    ToolCallOutputItem(name=name, arguments=args_str, call_id=call_id)
                     if call_id
                     else ToolCallOutputItem(name=name, arguments=args_str)
                 )
