@@ -55,11 +55,6 @@ eq dashboard --host 0.0.0.0 --port 8888
 ORQ_WORKSPACE=orq-research eq dashboard
 ```
 
-The dashboard is a long-lived process, so its tracer provider — and the span
-queue behind it — is shared by every run it serves. If spans go missing from
-traces produced under it, see
-[Tracing → Batching and flush](tracing.md#batching-and-flush).
-
 | Invocation | What it scans |
 |---|---|
 | `eq dashboard` | Both default stores: `.evaluatorq/runs` (red team) and `.evaluatorq/sim-runs` (simulation) |

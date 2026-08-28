@@ -206,6 +206,8 @@ async def test_initialization_uses_documented_batching_defaults(
 ) -> None:
     """Pin the defaults published in docs/tracing.md and docs/configuration.md."""
     processor_options = _fake_tracing_sdk(monkeypatch)
+    warning = Mock()
+    monkeypatch.setattr(tracing_setup.logger, 'warning', warning)
     for name in (
         'ORQ_OTEL_MAX_QUEUE_SIZE',
         'ORQ_OTEL_MAX_BATCH_SIZE',
@@ -219,6 +221,8 @@ async def test_initialization_uses_documented_batching_defaults(
         'max_export_batch_size': 512,
         'schedule_delay_millis': 5000,
     }
+    # The clamp warning is conditional: defaults must not trip it.
+    warning.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -273,6 +277,27 @@ async def test_flush_tracing_does_not_warn_on_success(monkeypatch: pytest.Monkey
     await tracing_setup.flush_tracing()
 
     warning.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_flush_tracing_bounds_a_hanging_force_flush(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The SDK ignores the timeout it is handed, so ``asyncio.wait_for`` enforces it."""
+    warning = Mock()
+
+    async def never_returns(*_args: object, **_kwargs: object) -> bool:
+        await asyncio.sleep(30)
+        return True
+
+    monkeypatch.setattr(tracing_setup, '_sdk', Mock())
+    monkeypatch.setattr(tracing_setup.asyncio, 'to_thread', never_returns)
+    monkeypatch.setattr(tracing_setup.logger, 'warning', warning)
+    monkeypatch.setenv('ORQ_OTEL_FLUSH_TIMEOUT_MS', '10')
+
+    await tracing_setup.flush_tracing()
+
+    warning.assert_called_once_with(
+        'OTEL span flush timed out after {}ms; some spans may not have been exported.', 10
+    )
 
 
 @pytest.mark.asyncio
