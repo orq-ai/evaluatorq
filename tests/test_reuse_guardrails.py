@@ -459,3 +459,106 @@ def test_new_hardcoded_class_detector_actually_fires() -> None:
     assert _new_returns_hardcoded_class('class Backend:\n    def new(self):\n        return Backend()\n', 'x.py') == [
         'x.py:3'
     ]
+
+
+# --- an llm_config consumed in part, silently --------------------------------
+# `FirstMessageGenerator` dropped a caller's `llm_config.max_tokens` for as long
+# as it existed: it sizes its own budget and calls the Responses API itself, so
+# it never went through `generate_structured`, which is the thing that warns
+# about the fields it does not consume. That was found by hand. This is the
+# mechanical version.
+_SIM_GENERATORS = SRC / 'simulation' / 'generators'
+
+# Either one accounts for the whole config: the first warns on the caller's own
+# behalf, the second warns on its callers'.
+_CONFIG_ACCOUNTING_CALLS = frozenset({'warn_unread_config_fields', 'generate_structured'})
+
+# Accessors that turn a config into call parameters. Fields come from the model
+# itself so a new one is covered the day it is added.
+_CONFIG_ACCESSORS = frozenset({'set_values', 'timeout_s', 'request_params'})
+
+
+@cache
+def _call_setting_names() -> frozenset[str]:
+    """Every way of reading a *call setting* off an `LLMCallConfig`.
+
+    `model` and `client` are excluded: reading those is routing, not sampling,
+    and a generator that only routes (`DatapointGenerator`) hands the config on
+    to the generators that do the calling, which each account for it there.
+    """
+    from evaluatorq.contracts import LLMCallConfig
+
+    return (frozenset(LLMCallConfig.model_fields) | _CONFIG_ACCESSORS) - {'model', 'client'}
+
+
+def _config_accounting_gap(source: str) -> int | None:
+    """First line where ``source`` reads a call setting off a resolved config
+    without accounting for the settings it ignores, or ``None``.
+
+    A module qualifies when it resolves a config (`resolve_sim_llm_config`) and
+    then reads sampling settings off it. It is clear when it calls
+    `warn_unread_config_fields` or `generate_structured` anywhere in the module.
+    """
+    called = {_tail(name) for _, name in _calls(source)}
+    if 'resolve_sim_llm_config' not in called or called & _CONFIG_ACCOUNTING_CALLS:
+        return None
+    settings = _call_setting_names()
+    reads = sorted(
+        node.lineno
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Attribute) and node.attr in settings and 'config' in _dotted(node.value).lower()
+    )
+    return reads[0] if reads else None
+
+
+def test_simulation_generators_account_for_the_config_they_are_given() -> None:
+    """A generator that reads part of an `llm_config` must say what it drops.
+
+    Scope is `simulation/generators/` on purpose. A general "any function taking
+    `config: LLMCallConfig`" walk sweeps in `BaseAgent`, `contracts` and
+    `structured_output` itself and would need an allowlist to stay green, which
+    is the failure mode this file exists to avoid.
+    """
+    hits = [
+        f'{path.relative_to(SRC).as_posix()}:{line}'
+        for path in sorted(_SIM_GENERATORS.rglob('*.py'))
+        if (line := _config_accounting_gap(path.read_text(encoding='utf-8'))) is not None
+    ]
+    assert not hits, (
+        'Generator reads part of a resolved llm_config and drops the rest in silence: '
+        + ', '.join(hits)
+        + '. Call evaluatorq.common.structured_output.warn_unread_config_fields(config, '
+        '<fields you read>, caller=...) next to the resolve_sim_llm_config call — see '
+        '_READ_CONFIG_FIELDS in simulation/generators/first_message_generator.py — or '
+        'route the call through generate_structured, which warns on your behalf.'
+    )
+
+
+def test_config_accounting_detector_actually_fires() -> None:
+    """A guardrail nobody proved can fail is a guardrail that silently no-ops."""
+    violating = (
+        'class G:\n'
+        '    def __init__(self, config=None):\n'
+        '        self._config = resolve_sim_llm_config(sim_model=m, llm_config=config, caller="G")\n'
+        '    async def go(self):\n'
+        '        await self._client.responses.create(temperature=self._config.temperature)\n'
+    )
+    assert _config_accounting_gap(violating) == 5
+    # Cleared by warning itself...
+    warned = violating.replace('class G:', 'warn_unread_config_fields(c, f, caller="G")\n\n\nclass G:')
+    assert _config_accounting_gap(warned) is None
+    # ...or by letting generate_structured warn on its behalf.
+    assert _config_accounting_gap(violating.replace('self._client.responses.create', 'generate_structured')) is None
+    # A module that never resolves a config is out of scope.
+    assert _config_accounting_gap('x = self._config.temperature') is None
+    # Routing-only reads are not consumption: DatapointGenerator's shape.
+    assert (
+        _config_accounting_gap(
+            'self._config = resolve_sim_llm_config(sim_model=m, llm_config=config, caller="D")\n'
+            'self._model = self._config.model\n'
+            'sub = PersonaGenerator(client=self._config.client, config=self._config)\n'
+        )
+        is None
+    )
+    # Prose is not a read.
+    assert _config_accounting_gap('resolve_sim_llm_config()\n"""Mentions config.temperature."""') is None
