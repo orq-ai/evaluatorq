@@ -481,3 +481,83 @@ async def test_recommendations_use_the_config(monkeypatch: pytest.MonkeyPatch) -
     # Not passed by this caller, so the config's value must survive to the merge.
     assert isinstance(seen['temperature'], mod.Unset)
     assert seen['model'] == 'explicit/model'
+
+
+@pytest.mark.asyncio
+async def test_the_executive_summary_says_it_ignores_retry_count(caplog: pytest.LogCaptureFixture) -> None:
+    """Retry on this call is the client's own budget, so `retry_count` never reaches the
+    request. `simulate(llm_config=LLMCallConfig(retry_count=5))` hands the whole run config
+    here, and a silent drop makes a config that did nothing look like one that worked."""
+    from evaluatorq.common.reports.executive_summary import generate_executive_summary
+
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(side_effect=RuntimeError('no provider in a unit test'))
+    with caplog.at_level('WARNING'):
+        summary = await generate_executive_summary(
+            'facts',
+            llm_client=client,
+            model='m',
+            config=LLMCallConfig(model='m', retry_count=5, temperature=0.2),
+        )
+    assert summary.text is None
+    assert 'generate_executive_summary ignores llm_config retry_count' in caplog.text
+    # The fields it does read must not be named as dropped.
+    assert 'temperature' not in caplog.text.split('—')[0]
+
+
+def test_a_config_field_beaten_by_an_explicit_keyword_is_reported_as_dropped(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """`generate_recommendations(..., temperature=0.2, llm_config=cfg)` drops `cfg.temperature`.
+    Warning against the constant instead called it consumed, which is the same silent drop
+    this accounting exists to prevent."""
+    from evaluatorq.common.structured_output import _fold_config
+
+    cfg = LLMCallConfig(model='m', temperature=0.9, timeout_ms=1500, reasoning_effort='high')
+    with caplog.at_level('WARNING'):
+        settings = _fold_config(
+            config=cfg,
+            temperature=0.2,
+            extra_kwargs=UNSET,
+            extra_body=UNSET,
+            reasoning_effort=UNSET,
+            timeout_s=30.0,
+        )
+    assert settings.temperature == 0.2
+    assert settings.timeout_s == 30.0
+    assert 'generate_structured ignores llm_config temperature, timeout_ms' in caplog.text
+    # The one field no keyword beat is still read, so it must not be named.
+    assert settings.reasoning_effort == 'high'
+    assert 'reasoning_effort' not in caplog.text.split('—')[0]
+
+
+def test_a_config_field_no_keyword_beats_is_not_reported_as_dropped(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The other half of the rule: an untouched keyword leaves the config's value in force."""
+    from evaluatorq.common.structured_output import _fold_config
+
+    with caplog.at_level('WARNING'):
+        settings = _fold_config(
+            config=LLMCallConfig(model='m', temperature=0.9),
+            temperature=UNSET,
+            extra_kwargs=UNSET,
+            extra_body=UNSET,
+            reasoning_effort=UNSET,
+            timeout_s=UNSET,
+        )
+    assert settings.temperature == 0.9
+    assert 'ignores llm_config' not in caplog.text
+
+
+def test_the_agent_config_mirror_is_checked_against_llm_call_config() -> None:
+    """A field added to `LLMCallConfig` and not mirrored is dropped from the legacy
+    `AgentConfig` path in silence — which is what happened to `extra_body`. The mirror
+    is verified at import time; this is the same check with a field the mirror lacks."""
+    from dataclasses import fields as dataclass_fields
+
+    from evaluatorq.simulation.agents.base import _mirror_gaps
+
+    agent_fields = {f.name for f in dataclass_fields(AgentConfig)}
+    assert _mirror_gaps(LLMCallConfig.model_fields, agent_fields) == (set(), set())
+    assert _mirror_gaps([*LLMCallConfig.model_fields, 'new_knob'], agent_fields)[0] == {'new_knob'}

@@ -99,6 +99,8 @@ from evaluatorq.send_results import send_results_to_orq
 from evaluatorq.tracing import tracing_session
 
 if TYPE_CHECKING:
+    from openai import AsyncOpenAI
+
     from evaluatorq.types import DataPointResult
 
 
@@ -1122,12 +1124,7 @@ async def red_team(
                             build_redteam_facts(report),
                             llm_client=es_client,
                             model=evaluator_model,
-                            config=LLMCallConfig(
-                                model=evaluator_model,
-                                # No pipeline metadata: it would win the SDK merge and discard the tag the callee sets.
-                                extra_body=config.retry_extra_body(es_client),
-                                **config.evaluator.set_values('temperature', 'reasoning_effort', 'extra_kwargs'),
-                            ),
+                            config=_executive_summary_config(config, model=evaluator_model, client=es_client),
                         )
                         report.executive_summary = executive_summary_result.text
                         post_processing_usages.append(executive_summary_result.usage)
@@ -1200,6 +1197,22 @@ async def red_team(
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
+
+def _executive_summary_config(config: LLMConfig, *, model: str, client: AsyncOpenAI | None) -> LLMCallConfig:
+    """The executive-summary call's config: the evaluator role's sampling knobs, and only those.
+
+    Built with `LLMCallConfig.set_values` rather than attribute reads, so a field
+    the caller never set stays unset instead of arriving as an explicit ``None``
+    the callee then sends. ``extra_body`` carries the router retry policy, gated
+    on ``client`` actually routing through Orq; no pipeline metadata, which would
+    win the SDK merge and discard the tag the callee sets.
+    """
+    return LLMCallConfig(
+        model=model,
+        extra_body=config.retry_extra_body(client),
+        **config.evaluator.set_values('temperature', 'reasoning_effort', 'extra_kwargs'),
+    )
 
 
 def _safe_resolve_target_kind(at: Any) -> TargetKind:
