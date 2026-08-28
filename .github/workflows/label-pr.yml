@@ -1,8 +1,8 @@
 name: Label PR
 
 # Auto-label a PR from its conventional-commit title prefix so GitHub's
-# auto-generated release notes (.github/release.yml) categorize it. Titles are
-# enforced as conventional commits anyway, so the label derives for free.
+# auto-generated release notes (.github/release.yml) categorize it. pr-title.yml
+# enforces the conventional title, so the label derives for free.
 on:
   pull_request_target:
     types: [opened, edited, synchronize, reopened]
