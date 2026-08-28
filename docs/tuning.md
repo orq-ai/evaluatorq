@@ -78,7 +78,7 @@ await simulate(
 )
 ```
 
-One config drives every simulation-side call: the user simulator, the judge, and the persona / scenario / first-message generators. It never touches the target under test — that is the thing being measured, and it is configured where it is constructed.
+One config drives every simulation-side call — five roles: the user simulator, the judge, the persona / scenario / first-message generators, the recommendations pass and the executive summary. It never touches the target under test — that is the thing being measured, and it is configured where it is constructed.
 
 `sim_model=` is the shorthand for setting only the model, and it still works. When both are given `llm_config.model` wins and the contradiction is logged, so a run cannot quietly use a model you did not pick.
 
@@ -90,7 +90,7 @@ The same `llm_config=` is on `summarize_conversations()`, `datapoints_from_trace
 
 Simulation's own calls default to the **Responses API**, even though `LLMCallConfig.api` itself defaults to `chat_completions`: the judge sends function tools and `reasoning_effort` together, which chat completions rejects with a 400 on models like `gpt-5.4-mini`, and one endpoint per run keeps the trace UI from typing the spans two different ways. Set `LLMCallConfig(api="chat_completions")` to opt out. The default lives on `BaseAgent.DEFAULT_API`, not in an environment variable — it is a per-call setting, so it is on the config.
 
-Three fields on `llm_config` do not reach the generators, which own them: `max_tokens` (they size their own budget from the item count), `api` and `retry_count`. Each is logged when ignored, so a value that did not apply says so rather than disappearing.
+Three fields are narrower than the rest. `max_tokens` reaches the user simulator, the judge and the executive summary; the generators and the recommendations pass size their own budget from the item count instead. `api` and `retry_count` reach the two agents only — every other role is pinned to one endpoint and owns its own retry. Each is logged when ignored, so a value that did not apply says so rather than disappearing.
 
 One config covers every simulation-side role, so a sampling setting reaches the judge and the simulated user alike. That is the trade for a single knob: lowering `temperature` to make scoring more repeatable also flattens the variation the simulated user exists to produce, and reasoning-class models reject `temperature` at any value. When you want to configure one role and not the others, build that agent yourself and pass it as `judge=` or `user_simulator=` — an injected agent carries its own settings, and `simulate()` warns that `llm_config` will not reach it.
 

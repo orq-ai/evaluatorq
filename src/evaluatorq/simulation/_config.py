@@ -78,12 +78,22 @@ class SimulationConfig(BaseModel):
     """None means "unset": resolved in ``_simulate_core`` to a replayed run's
     cap when replaying, else to ``DEFAULT_MAX_TURNS``."""
     llm_config: LLMCallConfig = Field(default_factory=lambda: LLMCallConfig(model=DEFAULT_MODEL))
-    """Sampling/transport settings for every simulation-side LLM call: the user
-    simulator, the judge, and the persona / scenario / first-message generators.
-    Never the target under test — that is the thing being measured, and it is
-    configured where it is constructed. ``max_tokens`` is the one field the
-    generators do not read: they size their budget from the item count, because a
-    batched structured call that truncates is unrecoverable."""
+    """Sampling/transport settings for every simulation-side LLM call — five roles:
+    the user simulator, the judge, the persona / scenario / first-message
+    generators, the recommendations pass and the executive summary. Never the
+    target under test — that is the thing being measured, and it is configured
+    where it is constructed.
+
+    Three fields are narrower than the rest. ``max_tokens`` is read by the two
+    agents and the executive summary; the generators and the recommendations
+    pass size their own budget from the item count, because a batched structured
+    call that truncates is unrecoverable. ``api`` and ``retry_count`` are read by
+    the two agents only — every other role is pinned to one endpoint and owns its
+    own retry. A role that ignores one of the three logs it rather than dropping
+    it silently.
+
+    This docstring is the source the other surfaces quote: `simulate`'s
+    ``llm_config`` argument docs and ``docs/tuning.md``."""
     evaluator_names: list[str] | None = None
     scoring: SimulationScoringConfig | None = None
     """Policy knobs for the ``turn_efficiency`` / ``conversation_quality`` scorers

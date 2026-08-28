@@ -249,21 +249,22 @@ async def simulate(
             ``sim_model``. ``sim_model`` drives the user-simulator, the judge,
             and datapoint generators.
         judge: Pre-constructed ``BaseAgent`` used to evaluate each turn.
-        llm_config: Full ``LLMCallConfig`` for every simulation-side LLM call — the
-            user simulator, the judge, and the persona / scenario / first-message
-            generators. Never the target under test: that is the thing being
+        llm_config: Full ``LLMCallConfig`` for every simulation-side LLM call —
+            five roles: the user simulator, the judge, the persona / scenario /
+            first-message generators, the recommendations pass and the executive
+            summary. Never the target under test: that is the thing being
             measured, and it is configured where it is constructed. Use this
             instead of ``sim_model`` when you need more than the model name
             (``temperature``, ``reasoning_effort``, ``timeout_ms``, ``extra_body``);
             ``llm_config.model`` wins over ``sim_model`` and contradicting the two
             logs a warning. Only the fields you set take effect, so an unset
             ``temperature`` still means the parameter is omitted from the request.
-            Three fields are narrower. ``max_tokens``: the user simulator, the
-            judge and the executive summary read it, while the generators size
-            their own budget from the item count. ``api`` and ``retry_count``:
-            the two agents read them, the generators own both themselves. A
-            generator logs which of the three it ignored rather than dropping it
-            silently.
+            Three fields are narrower. ``max_tokens``: the two agents and the
+            executive summary read it, while the generators and the
+            recommendations pass size their own budget from the item count.
+            ``api`` and ``retry_count``: the two agents read them, every other
+            role owns both itself. A role logs which of the three it ignored
+            rather than dropping it silently.
         datapoint_parallelism: Maximum number of concurrent simulations (tasks).
             Defaults to 10.
         llm_parallelism: Ceiling on in-flight LLM requests for the whole
