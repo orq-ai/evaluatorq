@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_bd99fd52e146ff90_tracing_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.15.4">coverage.py v7.15.4</a>,
-            created at 2026-08-28 09:00 +0000
+            created at 2026-08-28 10:23 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -237,7 +237,7 @@
     <p class="pln"><span class="n"><a id="t155" href="#t155">155</a></span><span class="t"><span class="str">        an unseeded one is re-minted per clone, keeping parallel jobs in</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t156" href="#t156">156</a></span><span class="t"><span class="str">        independent memory scopes. Mirrors ``ORQAgentTarget.new()``.</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t157" href="#t157">157</a></span><span class="t"><span class="str">        &quot;&quot;&quot;</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t158" href="#t158">158</a></span><span class="t">        <span class="nam">clone</span> <span class="op">=</span> <span class="nam">OrqResponsesTarget</span><span class="op">(</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t158" href="#t158">158</a></span><span class="t">        <span class="nam">clone</span> <span class="op">=</span> <span class="nam">type</span><span class="op">(</span><span class="nam">self</span><span class="op">)</span><span class="op">(</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t159" href="#t159">159</a></span><span class="t">            <span class="nam">self</span><span class="op">.</span><span class="nam">config</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t160" href="#t160">160</a></span><span class="t">            <span class="nam">instructions</span><span class="op">=</span><span class="nam">self</span><span class="op">.</span><span class="nam">instructions</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
     <p class="run run2"><span class="n"><a id="t161" href="#t161">161</a></span><span class="t">            <span class="nam">tools</span><span class="op">=</span><span class="nam">self</span><span class="op">.</span><span class="nam">tools</span><span class="op">,</span>&nbsp;</span><span class="r"></span></p>
@@ -250,7 +250,7 @@
     <p class="run"><span class="n"><a id="t168" href="#t168">168</a></span><span class="t">        <span class="key">if</span> <span class="key">not</span> <span class="nam">self</span><span class="op">.</span><span class="nam">_memory_entity_seeded</span> <span class="key">and</span> <span class="nam">self</span><span class="op">.</span><span class="nam">memory_entity_id</span> <span class="key">is</span> <span class="key">not</span> <span class="key">None</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t169" href="#t169">169</a></span><span class="t">            <span class="com"># Re-mint bypassing the seeding setter so grandchild clones keep</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t170" href="#t170">170</a></span><span class="t">            <span class="com"># re-minting instead of inheriting this one as if it were seeded.</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t171" href="#t171">171</a></span><span class="t">            <span class="nam">clone</span><span class="op">.</span><span class="nam">_memory_entity_id</span> <span class="op">=</span> <span class="nam">str</span><span class="op">(</span><span class="nam">uuid</span><span class="op">.</span><span class="nam">uuid4</span><span class="op">(</span><span class="op">)</span><span class="op">)</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t171" href="#t171">171</a></span><span class="t">            <span class="nam">clone</span><span class="op">.</span><span class="nam">_memory_entity_id</span> <span class="op">=</span> <span class="nam">str</span><span class="op">(</span><span class="nam">uuid</span><span class="op">.</span><span class="nam">uuid4</span><span class="op">(</span><span class="op">)</span><span class="op">)</span>  <span class="com"># noqa: SLF001 &#8212; same class; ruff only tracks this when the ctor is named literally</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t172" href="#t172">172</a></span><span class="t">        <span class="key">return</span> <span class="nam">clone</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t173" href="#t173">173</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t174" href="#t174">174</a></span><span class="t">    <span class="key">async</span> <span class="key">def</span> <span class="nam">get_agent_context</span><span class="op">(</span><span class="nam">self</span><span class="op">)</span> <span class="op">-&gt;</span> <span class="nam">AgentContext</span><span class="op">:</span>&nbsp;</span><span class="r"></span></p>
@@ -440,7 +440,7 @@
             <a class="nav" href="z_bd99fd52e146ff90_tracing_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.15.4">coverage.py v7.15.4</a>,
-            created at 2026-08-28 09:00 +0000
+            created at 2026-08-28 10:23 +0000
         </p>
     </div>
 </footer>
