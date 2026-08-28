@@ -19,6 +19,7 @@ from evaluatorq.common.tracing import (
     truncate_for_span,
 )
 from evaluatorq.common.tracing import with_llm_span as _common_with_llm_span
+from evaluatorq.openresponses.otel_messages import items_to_input_messages, items_to_output_messages
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -76,13 +77,21 @@ def record_openresponses_request(span: Span | None, payload: dict[str, Any]) -> 
     if not capture_message_content():
         return
     input_items = payload.get('input') or []
-    serialized_input = truncate_for_span(json.dumps(input_items, ensure_ascii=False, default=str))
-    span.set_attribute('gen_ai.input.messages', serialized_input)
-    span.set_attribute('input', serialized_input)
-    # Flat, unprefixed key: the Orq transcript renderer reads it (docs/tracing.md).
-    span.set_attribute('openresponses.input', serialized_input)
+    # gen_ai.* gets the parts shape (see otel_messages): a reader that keys on
+    # `role` drops the role-less function_call / reasoning items otherwise.
+    serialized_messages = truncate_for_span(
+        json.dumps(items_to_input_messages(input_items), ensure_ascii=False, default=str)
+    )
+    span.set_attribute('gen_ai.input.messages', serialized_messages)
+    span.set_attribute('input', serialized_messages)
+    # Raw items, verbatim, under the key Orq's own gateway uses for them.
+    span.set_attribute(
+        'openresponses.input',
+        truncate_for_span(json.dumps(input_items, ensure_ascii=False, default=str)),
+    )
     instructions = payload.get('instructions')
     if instructions:
+        span.set_attribute('gen_ai.system_instructions', truncate_for_span(instructions))
         span.set_attribute('openresponses.instructions', truncate_for_span(instructions))
     span.set_attribute(
         'orq.openresponses.request',
@@ -119,3 +128,15 @@ def record_openresponses_response(span: Span | None, response: Any) -> None:
                 'openresponses.output',
                 truncate_for_span(json.dumps(output_items, ensure_ascii=False, default=str)),
             )
+            # Overwrites the flat {role, content} pair record_llm_response just
+            # wrote: same messages, parts shape, tool calls intact.
+            finish_reason = str(payload.get('status') or '') if isinstance(payload, dict) else ''
+            serialized_output = truncate_for_span(
+                json.dumps(
+                    items_to_output_messages(output_items, finish_reason),
+                    ensure_ascii=False,
+                    default=str,
+                )
+            )
+            span.set_attribute('gen_ai.output.messages', serialized_output)
+            span.set_attribute('output', serialized_output)
