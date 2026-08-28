@@ -176,7 +176,7 @@ class CallableTarget(AgentTarget):
         """Return a fresh copy sharing the same callable, with state reset via reset_fn."""
         if self._reset_fn is not None:
             self._reset_fn()
-        return CallableTarget(
+        return type(self)(
             self._fn,
             reset_fn=self._reset_fn,
             usage_fn=self._usage_fn,

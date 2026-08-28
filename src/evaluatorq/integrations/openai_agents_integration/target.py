@@ -242,7 +242,7 @@ class OpenAIAgentTarget(AgentTarget):
 
     def clone(self) -> OpenAIAgentTarget:
         """Return a fresh independent instance for parallel job safety."""
-        return OpenAIAgentTarget(self._agent, run_kwargs=dict(self._run_kwargs))
+        return type(self)(self._agent, run_kwargs=dict(self._run_kwargs))
 
     def new(self) -> OpenAIAgentTarget:
         """Return an independent instance for parallel simulation/red-team jobs."""

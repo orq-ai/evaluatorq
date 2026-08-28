@@ -17,6 +17,33 @@ if TYPE_CHECKING:
     from evaluatorq.contracts import ContentPart, Message
 
 
+def responses_function_call_item_id(item_id: str | None) -> str | None:
+    """Return ``item_id`` only when it is shaped like a Responses ``function_call`` item id.
+
+    Responses item ids are always ``fc_*``. Adapters for other providers put the
+    provider's own tool-call id into `StrategyToolCall.item_id` instead (LangGraph
+    on Anthropic yields ``toolu_*``, pydantic-ai ``run-*``), and replaying one
+    verbatim 400s the whole request on the OpenAI leg: "Expected an ID that begins
+    with 'fc'". Dropping it is safe — ``id`` is optional on input, and ``call_id``,
+    which is what pairs a call with its output, is untouched.
+
+    The check is on shape, not provenance: an ``fc_`` id minted locally by
+    `FunctionCall.id`'s ``default_factory`` also passes, which is what an adapter
+    that omits ``id=`` actually sends. That is accepted, but buys nothing over
+    omitting the field, so no caller should fabricate one.
+    """
+    if not item_id:
+        return None
+    if item_id.startswith('fc_'):
+        return item_id
+    logger.debug(
+        'Dropping non-Responses function_call item id {!r} from the Responses input: the API only '
+        "accepts item ids prefixed 'fc_'. Pairing is unaffected; call_id carries the provider's id.",
+        item_id,
+    )
+    return None
+
+
 def _content_parts(content: list[ContentPart]) -> list[dict[str, Any]]:
     """Serialize multi-part content to plain dicts the SDK can encode."""
     return [p.model_dump(mode='json') for p in content]
@@ -105,10 +132,9 @@ def message_to_responses_input_items(m: Message) -> list[dict[str, Any]]:
                 'name': tc.function.name,
                 'arguments': tc.function.arguments,
             }
-            # Echo the Responses-API item id (fc_*) when available so the
-            # function_call item round-trips intact across turns.
-            if tc.item_id:
-                fc['id'] = tc.item_id
+            # Echo a real fc_* item id so the call round-trips; drop a foreign one.
+            if (item_id := responses_function_call_item_id(tc.item_id)) is not None:
+                fc['id'] = item_id
             items.append(fc)
         return items
     # Assistant turns need output_text parts; every other role takes input_* parts
@@ -125,4 +151,4 @@ def messages_to_responses_input(messages: list[Message]) -> list[dict[str, Any]]
     return [item for m in messages for item in message_to_responses_input_items(m)]
 
 
-__all__ = ['message_to_responses_input_items', 'messages_to_responses_input']
+__all__ = ['message_to_responses_input_items', 'messages_to_responses_input', 'responses_function_call_item_id']

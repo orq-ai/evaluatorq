@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 MessageData = dict[str, Any] | BaseMessage
 
 
-def _get_attr(msg_data: MessageData, key: str, default: Any = None) -> Any:
+def get_attr(msg_data: MessageData, key: str, default: Any = None) -> Any:
     """Get attribute from dict or object."""
     if isinstance(msg_data, dict):
         return msg_data.get(key, default)
@@ -98,15 +98,15 @@ def convert_to_open_responses(
 
     for msg in messages:
         # Handle both message objects and dict format
-        msg_type = _get_message_type(msg)
-        msg_data = _get_message_data(msg)
+        msg_type = get_message_type(msg)
+        msg_data = get_message_data(msg)
 
         if msg_type == 'human':
             # User message goes into input
             content_text = _get_content(msg_data)
             input_message = Message(
                 type='message',
-                id=_get_attr(msg_data, 'id') or generate_item_id('msg'),
+                id=get_attr(msg_data, 'id') or generate_item_id('msg'),
                 role=MessageRole.user,
                 status=MessageStatus.completed,
                 content=[InputTextContent(type='input_text', text=content_text)],
@@ -142,7 +142,7 @@ def convert_to_open_responses(
             if content_text:
                 output_message = Message(
                     type='message',
-                    id=_get_attr(msg_data, 'id') or generate_item_id('msg'),
+                    id=get_attr(msg_data, 'id') or generate_item_id('msg'),
                     role=MessageRole.assistant,
                     status=MessageStatus.completed,
                     content=[
@@ -179,7 +179,7 @@ def convert_to_open_responses(
 
             function_call_output = FunctionCallOutput(
                 type='function_call_output',
-                id=_get_attr(msg_data, 'id') or generate_item_id('fco'),
+                id=get_attr(msg_data, 'id') or generate_item_id('fco'),
                 call_id=tool_call_id,
                 output=output_content,
                 status=FunctionCallOutputStatusEnum.completed,
@@ -191,7 +191,7 @@ def convert_to_open_responses(
             content_text = _get_content(msg_data)
             input_message = Message(
                 type='message',
-                id=_get_attr(msg_data, 'id') or generate_item_id('msg'),
+                id=get_attr(msg_data, 'id') or generate_item_id('msg'),
                 role=MessageRole.system,
                 status=MessageStatus.completed,
                 content=[InputTextContent(type='input_text', text=content_text)],
@@ -282,7 +282,7 @@ def convert_to_open_responses(
     }
 
 
-def _get_message_type(msg: MessageData) -> str:
+def get_message_type(msg: MessageData) -> str:
     if isinstance(msg, dict):
         msg_type = msg.get('type')
 
@@ -311,7 +311,7 @@ def _get_message_type(msg: MessageData) -> str:
     return 'unknown'
 
 
-def _get_message_data(msg: BaseMessage | dict[str, Any]) -> MessageData:
+def get_message_data(msg: BaseMessage | dict[str, Any]) -> MessageData:
     """Extract message data from message object or dict."""
     # Dict format (from messages_to_dict)
     if isinstance(msg, dict):
@@ -373,22 +373,22 @@ def _get_tool_calls(msg_data: MessageData) -> list[ToolCall]:
 
 def _get_tool_call_id(msg_data: MessageData) -> str:
     """Extract tool call ID from tool message data."""
-    return _get_attr(msg_data, 'tool_call_id', generate_item_id('call'))
+    return get_attr(msg_data, 'tool_call_id', generate_item_id('call'))
 
 
 def _get_response_metadata(msg_data: MessageData) -> dict[str, Any]:
     """Extract response metadata from message data."""
-    return _get_attr(msg_data, 'response_metadata', {}) or {}
+    return get_attr(msg_data, 'response_metadata', {}) or {}
 
 
 def _get_message_id(msg_data: MessageData) -> str | None:
     """Extract message ID from message data."""
-    return _get_attr(msg_data, 'id')
+    return get_attr(msg_data, 'id')
 
 
 def _extract_usage(msg_data: MessageData) -> UsageMetadata | None:
     """Extract usage metadata from message data."""
-    return _get_attr(msg_data, 'usage_metadata')
+    return get_attr(msg_data, 'usage_metadata')
 
 
 def _serialize_args(args: Any) -> str:

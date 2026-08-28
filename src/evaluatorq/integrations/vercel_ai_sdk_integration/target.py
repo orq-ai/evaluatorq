@@ -152,7 +152,7 @@ class VercelAISdkTarget(AgentTarget):
 
     def new(self) -> VercelAISdkTarget:
         """Return an independent instance for parallel simulation/red-team jobs."""
-        return VercelAISdkTarget(
+        return type(self)(
             self._url,
             headers=dict(self._headers),
             extra_body=dict(self._extra_body),

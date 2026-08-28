@@ -221,7 +221,7 @@ class OpenAIModelTarget(AgentTarget):
 
     def new(self) -> OpenAIModelTarget:
         """Return a fresh target instance for parallel job safety (satisfies the ``AgentTarget`` ABC)."""
-        return OpenAIModelTarget(
+        return type(self)(
             model=self.model,
             system_prompt=self.system_prompt,
             client=self.client,

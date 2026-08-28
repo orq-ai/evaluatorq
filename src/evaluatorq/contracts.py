@@ -1502,7 +1502,15 @@ class AgentTarget(ABC):
 
     @abstractmethod
     def new(self) -> AgentTarget:
-        """Return a fresh independent instance for a new attack."""
+        """Return a fresh independent instance for a new attack.
+
+        Construct via ``type(self)(...)``, never a hardcoded class name: a
+        subclass would otherwise be silently swapped for its base on every
+        parallel job. A subclass that changes ``__init__``'s signature must
+        therefore override ``new()`` too. Enforced by
+        ``tests/test_reuse_guardrails.py::test_new_constructs_via_type_self``,
+        which also checks ``clone()`` where ``new()`` delegates to it.
+        """
         ...
 
     async def get_agent_context(self) -> AgentContext:
