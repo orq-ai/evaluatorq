@@ -37,15 +37,9 @@ All configuration is via environment variables. No config file is required.
 
 ## Model catalogue overrides
 
-Prices, provider ids, Responses support and accepted reasoning-effort values come
-from Orq's `GET /v2/models`, fetched once per process. A model that catalogue does
-not list — a self-hosted deployment, or one newer than your workspace's catalogue —
-degrades silently in three ways: the call stays unpriced, `qualified_model()` sends
-it to Chat Completions instead of Responses, and its reasoning effort cannot be
-pre-validated.
+Prices, provider ids, Responses support and accepted reasoning-effort values come from Orq's `GET /v2/models`, fetched once per process. A model that catalogue does not list — a self-hosted deployment, or one newer than your workspace's catalogue — degrades silently in three ways: the call stays unpriced, `qualified_model()` sends it to Chat Completions instead of Responses, and its reasoning effort cannot be pre-validated.
 
-Register an entry to fix that. Registered entries take priority over the fetched
-catalogue, so this also corrects an entry that is wrong:
+Register an entry to fix that. Registered entries take priority over the fetched catalogue, so this also corrects an entry that is wrong:
 
 ```python
 from evaluatorq.common.model_catalogue import ModelInfo, get_model_info, register_model
@@ -66,12 +60,7 @@ info = await get_model_info('my-self-hosted-llama')
 
 Costs are USD **per 1000 tokens**, matching what `/v2/models` publishes.
 
-The id is stored unprefixed, so `'openai/gpt-x'` and `'gpt-x'` register and resolve
-the same entry — register either spelling and both lookups find it. Registering
-both replaces rather than duplicates: there is one model. `reasoning_efforts=None`
-means "unknown, cannot pre-validate"; an empty set means the same thing and is
-normalized to `None`, because a literally-empty accepted-values list would reject
-every effort including the defaults.
+The id is stored unprefixed, so `'openai/gpt-x'` and `'gpt-x'` register and resolve the same entry — register either spelling and both lookups find it. Registering both replaces rather than duplicates: there is one model. `reasoning_efforts=None` means "unknown, cannot pre-validate"; an empty set means the same thing and is normalized to `None`, because a literally-empty accepted-values list would reject every effort including the defaults.
 
 ## `.env` file
 
