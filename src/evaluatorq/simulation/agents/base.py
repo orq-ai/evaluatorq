@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import os
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from evaluatorq.common.llm_call import (
@@ -43,6 +43,8 @@ from evaluatorq.simulation.tracing import span_message_text, with_llm_span
 from evaluatorq.simulation.types import DEFAULT_MODEL, Message
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
@@ -129,7 +131,7 @@ class LLMResult:
 
 
 # A field missing here is dropped from the request, without a word, on the legacy `AgentConfig` path.
-_MIRRORED_FIELDS = (
+_MIRRORED_FIELDS: tuple[str, ...] = (
     'api',
     'temperature',
     'max_tokens',
@@ -167,6 +169,32 @@ class AgentConfig:
     extra_body: dict[str, Any] | None = None
     reasoning_effort: str | None = None
     retry_count: int | None = None
+
+
+def _mirror_gaps(config_fields: Iterable[str], agent_fields: Iterable[str]) -> tuple[set[str], set[str]]:
+    """What the hand-maintained `_MIRRORED_FIELDS` mirror is missing, in both directions.
+
+    Returns the `LLMCallConfig` fields nothing mirrors, and the mirrored names
+    `AgentConfig` has no attribute for. ``model`` and ``client`` are excluded
+    because `_config_from_agent_config` passes those outside the loop.
+    """
+    return (
+        set(config_fields) - set(_MIRRORED_FIELDS) - {'model', 'client'},
+        set(_MIRRORED_FIELDS) - set(agent_fields),
+    )
+
+
+# Checked at import time rather than trusted, the way the vulnerability registry checks
+# itself: a field added to `LLMCallConfig` and forgotten in the mirror vanishes from the
+# request without a word — that is what had happened to `extra_body`.
+_unmirrored, _unbacked = _mirror_gaps(LLMCallConfig.model_fields, {f.name for f in fields(AgentConfig)})
+if _unmirrored:
+    raise RuntimeError(
+        f'LLMCallConfig fields missing from _MIRRORED_FIELDS: {sorted(_unmirrored)}. Add each one there, and to '
+        'AgentConfig, or the legacy AgentConfig path drops it from the request in silence.'
+    )
+if _unbacked:
+    raise RuntimeError(f'_MIRRORED_FIELDS names fields AgentConfig does not have: {sorted(_unbacked)}.')
 
 
 def _config_from_agent_config(agent_cfg: AgentConfig) -> tuple[LLMCallConfig, str | None]:
