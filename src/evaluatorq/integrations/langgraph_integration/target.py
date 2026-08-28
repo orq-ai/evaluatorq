@@ -9,7 +9,6 @@ from uuid import uuid4
 
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.callbacks.base import BaseCallbackManager
-from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.outputs import LLMResult
 from langchain_core.runnables import RunnableConfig
 
@@ -27,6 +26,7 @@ from evaluatorq.contracts import (
     content_to_text,
     tool_result_to_text,
 )
+from evaluatorq.integrations.langchain_integration.convert import get_attr, get_message_data, get_message_type
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 # read from ``msg.tool_calls``, and reasoning is dropped from ``output`` anyway.
 _NON_TEXT_BLOCKS_HANDLED_ELSEWHERE = frozenset({'tool_use', 'thinking', 'redacted_thinking'})
 
-# ``BaseMessage.model_dump()`` keys the role on ``type``, not ``role``.
+# `get_message_type` speaks LangChain's vocabulary; this loop speaks the transcript's.
 _LC_TYPE_TO_ROLE = {'ai': 'assistant', 'tool': 'tool', 'human': 'user', 'system': 'system'}
 
 
@@ -74,39 +74,25 @@ def _lc_tool_result_to_text(content: Any) -> str:
     Anthropic-backed graphs return a list of typed blocks even for a plain-text
     tool result, so a bare ``tool_result_to_text`` hands the judge the block
     envelope (``[{"type": "text", "text": "shipped"}]``) instead of the tool's
-    answer, and embeds a whole image block into every judge prompt. Text blocks
-    are unwrapped; a list ``_lc_content_to_text`` cannot read falls back to JSON,
-    so a structured return still arrives as data rather than a Python repr.
+    answer, and embeds a whole image block into every judge prompt. A list that
+    yields no text falls back to JSON, so a structured return still arrives as
+    data rather than a Python repr — as does a block list of only empty text.
     """
-    if isinstance(content, list):
-        return _lc_content_to_text(content) or tool_result_to_text(content)
-    return tool_result_to_text(content)
+    return _lc_content_to_text(content) or tool_result_to_text(content)
 
 
 def _lc_message_role(msg: Any) -> str:
-    """Return ``'assistant'``/``'tool'`` for a LangGraph state message, or ``''``.
+    """Return ``'assistant'``/``'tool'`` for a LangGraph state message, or ``''`` when unreadable.
 
-    Graph state holds either LangChain message objects or their dict form. The
-    dict form keys the role on ``role`` when hand-built and on ``type`` when it
-    came from ``BaseMessage.model_dump()``; both are read here so a dumped
-    message does not silently lose its tool calls. ``''`` means unrecognized —
-    the caller warns rather than skipping in silence.
+    Graph state holds LangChain message objects or any of their dict encodings.
+    A hand-built dict keys the role on ``role``; every other shape is resolved by
+    `get_message_type`, which also handles the ``messages_to_dict()`` and lc
+    ``constructor`` envelopes. ``''`` means unrecognized — the caller warns
+    rather than skipping in silence.
     """
-    if isinstance(msg, ToolMessage):
-        return 'tool'
-    if isinstance(msg, AIMessage):
-        return 'assistant'
-    if isinstance(msg, dict):
-        role = str(msg.get('role') or '')
-        if role:
-            return role
-        return _LC_TYPE_TO_ROLE.get(str(msg.get('type') or ''), '')
-    return ''
-
-
-def _lc_get(msg: Any, key: str, default: Any = None) -> Any:
-    """Read ``key`` off a LangChain message object or its dict form."""
-    return msg.get(key, default) if isinstance(msg, dict) else getattr(msg, key, default)
+    if isinstance(msg, dict) and msg.get('role'):
+        return str(msg['role'])
+    return _LC_TYPE_TO_ROLE.get(get_message_type(msg), '')
 
 
 class _TokenUsageCollector(BaseCallbackHandler):
@@ -336,11 +322,12 @@ class LangGraphTarget(AgentTarget):
         tool_index: dict[str, int] = {}
         for msg in sliced:
             role = _lc_message_role(msg)
+            # Peels the messages_to_dict()/constructor envelope; a no-op on message objects.
+            data = get_message_data(msg)
 
             if role == 'tool':
-                tool_call_id = str(_lc_get(msg, 'tool_call_id', '') or '')
-                # ``pop``: a second ToolMessage for the same id is a distinct
-                # event, not a correction, and must not silently overwrite.
+                tool_call_id = str(get_attr(data, 'tool_call_id', '') or '')
+                # pop: a second ToolMessage for the same id must not overwrite the first.
                 idx = tool_index.pop(tool_call_id, None)
                 if idx is None:
                     logger.warning(
@@ -354,49 +341,40 @@ class LangGraphTarget(AgentTarget):
                 # tool_index only ever holds indices of ToolCallOutputItems.
                 item = cast('ToolCallOutputItem', output_items[idx])
                 output_items[idx] = item.model_copy(
-                    update={'result': _lc_tool_result_to_text(_lc_get(msg, 'content', ''))}
+                    update={'result': _lc_tool_result_to_text(get_attr(data, 'content', ''))}
+                )
+                continue
+            if not role:
+                logger.warning(
+                    'LangGraphTarget: skipping a state message of unrecognized shape (type=%r); any tool '
+                    'calls or results it carries will not appear in the transcript.',
+                    type(msg).__name__,
                 )
                 continue
             if role != 'assistant':
-                if not role:
-                    logger.warning(
-                        'LangGraphTarget: skipping a state message of unrecognized shape (type=%r); any tool '
-                        'calls or results it carries will not appear in the transcript.',
-                        type(msg).__name__,
-                    )
                 continue
 
-            tool_calls_iter = _lc_get(msg, 'tool_calls', None) or []
-            msg_content = _lc_content_to_text(_lc_get(msg, 'content', ''))
+            msg_content = _lc_content_to_text(get_attr(data, 'content', ''))
             if msg_content:
                 output_items.append(TextOutputItem(text=msg_content, annotations=[]))
 
-            for tc in tool_calls_iter:
-                call_id = tc.get('id', '') if isinstance(tc, dict) else getattr(tc, 'id', '')
-                name = tc.get('name', '') if isinstance(tc, dict) else getattr(tc, 'name', '')
-                args = tc.get('args', {}) if isinstance(tc, dict) else getattr(tc, 'args', {})
+            for tc in get_attr(data, 'tool_calls', None) or []:
+                call_id = get_attr(tc, 'id', '')
+                name = str(get_attr(tc, 'name', ''))
+                args = get_attr(tc, 'args', {})
                 args_str = json.dumps(args if isinstance(args, dict) else {}, default=str)
-                # ``id`` is the Responses-API *item* id and is deliberately not set
-                # from the provider's tool-call id: on the OpenAI leg a foreign id
-                # (``toolu_*`` on Anthropic, ``run-*`` on pydantic-ai) 400s the whole
-                # request with "Expected an ID that begins with 'fc'". Leaving it
-                # unset yields a locally minted ``fc_*`` from the model default —
-                # see ``openresponses.input_items.responses_function_call_item_id``.
-                # ``call_id``, which is what actually pairs a call with its output,
-                # carries the provider's id unchanged.
+                # ``id`` is the Responses item id, never the provider's — see
+                # ``openresponses.input_items.responses_function_call_item_id``.
                 if not call_id:
                     logger.warning(
                         'LangGraphTarget: tool call %r was emitted without an id, so its ToolMessage result '
                         'cannot be paired with it and the call is dropped from the transcript.',
-                        str(name),
+                        name,
                     )
-                output_items.append(
-                    ToolCallOutputItem(name=str(name), arguments=args_str, call_id=call_id)
-                    if call_id
-                    else ToolCallOutputItem(name=str(name), arguments=args_str)
-                )
-                if call_id:
-                    tool_index[str(call_id)] = len(output_items) - 1
+                    output_items.append(ToolCallOutputItem(name=name, arguments=args_str))
+                    continue
+                output_items.append(ToolCallOutputItem(name=name, arguments=args_str, call_id=call_id))
+                tool_index[str(call_id)] = len(output_items) - 1
 
         self._prev_msg_count = len(result_messages)
 

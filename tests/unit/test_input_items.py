@@ -109,10 +109,7 @@ class TestToolTurns:
 
     @pytest.mark.parametrize("foreign_id", ["toolu_01ABC", "call_abc", "run-1234", "c1"])
     def test_foreign_provider_item_id_is_not_replayed_as_an_item_id(self, foreign_id: str) -> None:
-        # Anthropic-backed agents (LangGraph, pydantic-ai) hand back their own
-        # tool-call id. Sending it as a Responses ``function_call.id`` 400s the
-        # whole request ("Expected an ID that begins with 'fc'"), which killed the
-        # simulated user mid-run. The id is dropped; call_id still pairs the call.
+        # A provider's own tool-call id 400s the request ("Expected an ID that begins with 'fc'").
         m = Message(role="assistant", content=None, tool_calls=[_tool_call(item_id=foreign_id)])
         item = message_to_responses_input_items(m)[0]
         assert "id" not in item

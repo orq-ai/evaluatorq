@@ -23,21 +23,14 @@ def responses_function_call_item_id(item_id: str | None) -> str | None:
     Responses item ids are always ``fc_*``. Adapters for other providers put the
     provider's own tool-call id into `StrategyToolCall.item_id` instead (LangGraph
     on Anthropic yields ``toolu_*``, pydantic-ai ``run-*``), and replaying one
-    verbatim 400s the entire request on the OpenAI leg: "Expected an ID that
-    begins with 'fc'". Measured against the Orq router: the Anthropic leg accepts
-    a foreign id, so this only ever bites on OpenAI-family models.
+    verbatim 400s the whole request on the OpenAI leg: "Expected an ID that begins
+    with 'fc'". Dropping it is safe — ``id`` is optional on input, and ``call_id``,
+    which is what pairs a call with its output, is untouched.
 
-    The check is on **shape, not provenance**: any ``fc_``-prefixed id passes,
-    including one minted locally by `FunctionCall.id`'s ``default_factory``, which
-    is what an adapter that omits ``id=`` actually sends. That was measured to be
-    accepted (200, tool result seen) on both provider families, but it buys
-    nothing over omitting the field, so no caller should fabricate one.
-
-    Dropping a foreign id is safe, and measured so on both legs: ``call_id`` is
-    what pairs a call with its output — omit it and the API answers
-    "No tool output found for function call" — while a missing item id is simply
-    assigned by the API. ``id`` is optional on input per the OpenAI spec, whose
-    ``function_call`` ``required`` list is ``[type, call_id, name, arguments]``.
+    The check is on shape, not provenance: an ``fc_`` id minted locally by
+    `FunctionCall.id`'s ``default_factory`` also passes, which is what an adapter
+    that omits ``id=`` actually sends. That is accepted, but buys nothing over
+    omitting the field, so no caller should fabricate one.
     """
     if not item_id:
         return None
@@ -139,9 +132,7 @@ def message_to_responses_input_items(m: Message) -> list[dict[str, Any]]:
                 'name': tc.function.name,
                 'arguments': tc.function.arguments,
             }
-            # Echo the Responses-API item id (fc_*) when available so the
-            # function_call item round-trips intact across turns. A foreign
-            # provider's id is dropped rather than replayed — see the helper.
+            # Echo a real fc_* item id so the call round-trips; drop a foreign one.
             if (item_id := responses_function_call_item_id(tc.item_id)) is not None:
                 fc['id'] = item_id
             items.append(fc)

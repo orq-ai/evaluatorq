@@ -400,32 +400,26 @@ def test_docstrings_carry_no_sphinx_roles() -> None:
     )
 
 
-#: Methods that must return a fresh instance of the *runtime* class. ``new()`` is
-#: the contract, but several targets implement it by delegating to ``clone()``, so
-#: a hardcoded class there degrades a subclass just as silently.
-_FRESH_INSTANCE_METHODS = frozenset({'new', 'clone'})
-
-
 def _new_returns_hardcoded_class(source: str, path: str) -> list[str]:
-    """Return ``path:lineno`` for every ``new()``/``clone()`` that constructs a named class.
+    """Return ``path:lineno`` for every ``new()``/``clone()`` that constructs a class from this module.
 
     A ``new()`` returning ``MyTarget(...)`` instead of ``type(self)(...)`` silently
     hands back a base instance for any subclass, on every parallel job. ``clone()``
     is checked too because ``OpenAIAgentTarget.new()`` is ``return self.clone()``,
     which puts the construction one call away from the method the contract names.
 
-    Only a call whose name is capitalized and ends in ``Target`` counts, so a
-    target class named otherwise is not seen — widen the suffix if one appears.
+    Constructing a class *defined in the same module* is the signal, rather than a
+    name convention: this stays AST-only, so no optional extra has to be installed
+    to run it.
     """
+    tree = ast.parse(source)
+    local_classes = {n.name for n in ast.walk(tree) if isinstance(n, ast.ClassDef)}
     hits: list[str] = []
-    for node in ast.walk(ast.parse(source)):
-        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-            continue
-        if node.name not in _FRESH_INSTANCE_METHODS:
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) or node.name not in ('new', 'clone'):
             continue
         for call in (n for n in ast.walk(node) if isinstance(n, ast.Call)):
-            name = _dotted(call.func)
-            if name and name[:1].isupper() and name.endswith('Target'):
+            if _dotted(call.func) in local_classes:
                 hits.append(f'{path}:{call.lineno}')
     return hits
 
@@ -444,13 +438,24 @@ def test_new_constructs_via_type_self() -> None:
 
 
 def test_new_hardcoded_class_detector_actually_fires() -> None:
-    source = 'class T:\n    def new(self):\n        return MyTarget(self._x)\n'
+    source = 'class MyTarget:\n    def new(self):\n        return MyTarget(self._x)\n'
     assert _new_returns_hardcoded_class(source, 'x.py') == ['x.py:3']
-    assert _new_returns_hardcoded_class(source.replace('MyTarget', 'type(self)'), 'x.py') == []
+    assert _new_returns_hardcoded_class(source.replace('return MyTarget', 'return type(self)'), 'x.py') == []
     # The shape this repo actually ships: new() delegates, clone() constructs.
-    delegating = 'class T:\n    def clone(self):\n        return MyTarget(self._x)\n\n    def new(self):\n        return self.clone()\n'
+    delegating = (
+        'class MyTarget:\n'
+        '    def clone(self):\n'
+        '        return MyTarget(self._x)\n'
+        '\n'
+        '    def new(self):\n'
+        '        return self.clone()\n'
+    )
     assert _new_returns_hardcoded_class(delegating, 'x.py') == ['x.py:3']
-    # An async new() is a FunctionDef of a different type; ast.walk must see it.
-    assert _new_returns_hardcoded_class('class T:\n    async def new(self):\n        return MyTarget()\n', 'x.py') == [
+    # An async new() is a different node type; ast.walk must still see it.
+    assert _new_returns_hardcoded_class(
+        'class MyTarget:\n    async def new(self):\n        return MyTarget()\n', 'x.py'
+    ) == ['x.py:3']
+    # No naming convention required: the old detector missed anything not ending in "Target".
+    assert _new_returns_hardcoded_class('class Backend:\n    def new(self):\n        return Backend()\n', 'x.py') == [
         'x.py:3'
     ]
