@@ -131,7 +131,7 @@ async def test_evaluatorq_passes_the_yielded_session_context_to_processing(
     ]
 
 
-@pytest.mark.parametrize('raw', [None, 'invalid', '0', '-1'])
+@pytest.mark.parametrize('raw', [None, '', '   ', 'invalid', '0', '-1'])
 def test_env_int_uses_default_for_unset_or_non_positive_values(
     monkeypatch: pytest.MonkeyPatch, raw: str | None
 ) -> None:
@@ -149,7 +149,7 @@ def test_env_int_returns_positive_parsed_value(monkeypatch: pytest.MonkeyPatch) 
     assert tracing_setup._env_int('X', 4096) == 8192
 
 
-@pytest.mark.parametrize('raw', ['invalid', '0', '-1'])
+@pytest.mark.parametrize('raw', ['', '   ', 'invalid', '0', '-1'])
 def test_env_int_warns_on_set_but_invalid_value(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
     warning = Mock()
     monkeypatch.setenv('X', raw)
@@ -159,10 +159,12 @@ def test_env_int_warns_on_set_but_invalid_value(monkeypatch: pytest.MonkeyPatch,
     warning.assert_called_once()
 
 
-@pytest.mark.asyncio
-async def test_initialization_caps_export_batch_size_to_queue_size(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def _fake_tracing_sdk(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
+    """Fake out the exporter and provider, returning the captured processor kwargs.
+
+    Drives real ``init_tracing_if_needed`` so the values the documented
+    ``ORQ_OTEL_*`` knobs resolve to are observed where they are actually used.
+    """
     from opentelemetry import trace
     from opentelemetry.exporter.otlp.proto.http import trace_exporter
     from opentelemetry.sdk import trace as sdk_trace
@@ -191,10 +193,41 @@ async def test_initialization_caps_export_batch_size_to_queue_size(
     monkeypatch.setattr(tracing_setup, '_tracer', None)
     monkeypatch.setattr(tracing_setup, '_is_initialized', False)
     monkeypatch.setattr(tracing_setup, '_initialization_attempted', False)
-    # Opt out of the suite-wide export guard: this test drives real setup with
-    # the exporter and provider faked out above.
+    # Opt out of the suite-wide export guard: this drives real setup with the
+    # exporter and provider faked out above.
     monkeypatch.delenv('ORQ_DISABLE_TRACING', raising=False)
     monkeypatch.setenv('OTEL_EXPORTER_OTLP_ENDPOINT', 'https://example.test')
+    return processor_options
+
+
+@pytest.mark.asyncio
+async def test_initialization_uses_documented_batching_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pin the defaults published in docs/tracing.md and docs/configuration.md."""
+    processor_options = _fake_tracing_sdk(monkeypatch)
+    for name in (
+        'ORQ_OTEL_MAX_QUEUE_SIZE',
+        'ORQ_OTEL_MAX_BATCH_SIZE',
+        'ORQ_OTEL_SCHEDULE_DELAY_MS',
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    assert await tracing_setup.init_tracing_if_needed() is True
+    assert processor_options == {
+        'max_queue_size': 4096,
+        'max_export_batch_size': 512,
+        'schedule_delay_millis': 5000,
+    }
+
+
+@pytest.mark.asyncio
+async def test_initialization_caps_export_batch_size_to_queue_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    processor_options = _fake_tracing_sdk(monkeypatch)
+    warning = Mock()
+    monkeypatch.setattr(tracing_setup.logger, 'warning', warning)
     monkeypatch.setenv('ORQ_OTEL_MAX_QUEUE_SIZE', '100')
     monkeypatch.setenv('ORQ_OTEL_MAX_BATCH_SIZE', '200')
     monkeypatch.setenv('ORQ_OTEL_SCHEDULE_DELAY_MS', '300')
@@ -205,6 +238,9 @@ async def test_initialization_caps_export_batch_size_to_queue_size(
         'max_export_batch_size': 100,
         'schedule_delay_millis': 300,
     }
+    # The clamp is a degraded path, so it announces itself.
+    warning.assert_called_once()
+    assert 'clamping' in warning.call_args.args[0]
 
 
 @pytest.mark.asyncio

@@ -23,7 +23,8 @@ Provider lifecycle and batching:
   tracing to initialize again in that interpreter.
 - Tune the long-lived batch processor with ``ORQ_OTEL_MAX_QUEUE_SIZE`` (default 4096),
   ``ORQ_OTEL_SCHEDULE_DELAY_MS`` (default 5000), and ``ORQ_OTEL_MAX_BATCH_SIZE``
-  (default 512).
+  (default 512, clamped to the queue size with a warning). These are passed to the
+  processor explicitly, so the SDK's own ``OTEL_BSP_*`` variables have no effect.
 - ``ORQ_OTEL_FLUSH_TIMEOUT_MS`` controls per-run force-flush (default 5000). A timeout
   logs a warning because some spans may not have been exported.
 - Exporter headers are bound at initialization: changing ``ORQ_API_KEY`` requires a
@@ -51,11 +52,18 @@ _initialization_attempted = False
 def _env_int(name: str, default: int) -> int:
     """Read a positive int from the environment, falling back to *default*.
 
-    A set-but-invalid value (non-integer or non-positive) logs a WARNING so a
-    misconfigured tuning knob is actionable instead of silently ignored.
+    A set-but-invalid value (empty, non-integer or non-positive) logs a WARNING
+    so a misconfigured tuning knob is actionable instead of silently ignored.
+    An empty value counts as set-but-invalid: in a CI ``env:`` block an
+    unresolved ``${{ vars.X }}`` expands to the empty string, which would
+    otherwise fall back to the default with no signal.
     """
     raw = os.environ.get(name)
+    if raw is None:
+        return default
+    raw = raw.strip()
     if not raw:
+        logger.warning('{} is set but empty; using default {}.', name, default)
         return default
     try:
         value = int(raw)
@@ -213,11 +221,20 @@ async def init_tracing_if_needed() -> bool:  # noqa: RUF029
         # drop spans. Larger defaults + env overrides reduce that risk.
         max_queue_size = _env_int('ORQ_OTEL_MAX_QUEUE_SIZE', 4096)
         requested_batch_size = _env_int('ORQ_OTEL_MAX_BATCH_SIZE', 512)
+        batch_size = min(requested_batch_size, max_queue_size)
+        if batch_size != requested_batch_size:
+            logger.warning(
+                'ORQ_OTEL_MAX_BATCH_SIZE ({}) exceeds ORQ_OTEL_MAX_QUEUE_SIZE ({}); '
+                'clamping the export batch size to {}.',
+                requested_batch_size,
+                max_queue_size,
+                batch_size,
+            )
         span_processor = BatchSpanProcessor(
             exporter,
             max_queue_size=max_queue_size,
             schedule_delay_millis=_env_int('ORQ_OTEL_SCHEDULE_DELAY_MS', 5000),
-            max_export_batch_size=min(requested_batch_size, max_queue_size),
+            max_export_batch_size=batch_size,
         )
 
         # Rely on the SDK default shutdown_on_exit=True for atexit teardown:
