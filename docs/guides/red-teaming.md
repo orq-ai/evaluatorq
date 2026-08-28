@@ -31,9 +31,9 @@ flowchart LR
   [hybrid mode cookbook](../examples/redteam/03_hybrid_mode.md) when you want
   both known attacks and generated coverage.
 
-Replay crosses with the modes rather than being one: it re-runs a previous run's
-exact attacks against whatever target you point it at now, so a before/after
-comparison isolates the agent. See
+Replay is not a separate mode. It re-runs a previous run's exact attacks against
+the target you give it now, so a before/after comparison changes the agent while
+holding the attack set fixed. See
 [Replay a previous run](#replay-a-previous-run).
 
 ```python
@@ -290,34 +290,34 @@ systematically blocked judge shows up as one named cause (`evaluation/api_status
 
 ## Replay a previous run
 
-A saved run stores the attacks it ran, not only the scores it gave them. Replay
-re-runs those exact cases — same attacks, same order, same turn budget — against
-whatever target you point it at now. Dynamic and hybrid runs generate fresh
-attacks every time, so re-running one after a fix changes the agent *and* the
-exam, and a resistance rate that moved cannot tell you which one moved it. Replay
-holds the exam fixed and varies only the agent.
+A saved run keeps the attacks it ran — its *cases* — not only the scores it gave
+them. Replay re-runs those exact cases, in the same order and with the same turn
+budget, against whatever target you point it at now. Dynamic and hybrid runs
+generate fresh attacks every time, so re-running one after a fix changes the
+agent *and* the exam, and a resistance rate that moved cannot tell you which one
+moved it. Replay holds the exam fixed and varies only the agent.
 
 ### What is replayable
 
-The cases travel in the auto-saved run in the run store, so replay needs a run
-that was written there. `save='none'` (`--save none`) writes nothing at all — no
-report, no run-store entry, nothing to replay and no row in
-[`eq redteam runs`](../cli-reference/redteam.md#eq-redteam-runs). A
-`--save detail` artifacts directory is **not** enough on its own either: the
+Cases travel with the auto-saved run in the run store — the directory evaluatorq
+writes saved runs to — so replay needs a run that was written there. `save='none'`
+(`--save none`) writes nothing at all: no report, no run-store entry, and no row
+in [`eq redteam runs`](../cli-reference/redteam.md#eq-redteam-runs). A
+`--save detail` artifacts directory is not enough either; the
 `03_summary_report.json` it writes carries scores, not cases.
 
-Everything else is listed by `eq redteam runs` whether or not it carries cases,
-so the listing is not a replayability check. Runs saved before replay support
-existed carry no cases and are refused with that reason rather than replayed as
-an empty set; so are runs stamped with a replay format newer than the installed
+`eq redteam runs` lists every run whether or not it carries cases, so a row in
+that listing is not a replayability check. Runs saved before replay support
+existed have no cases and are refused with that reason rather than replayed as an
+empty set; so are runs stamped with a replay format newer than the installed
 version understands — upgrade evaluatorq to read those.
 
-### Make a run to replay
+### Create a run to replay
 
-Replay needs something to replay. On a machine that has never run a red team,
-`previous_run="latest"` raises
-`ReplayError: No saved red team runs found in <runs directory> — nothing to replay.`,
-so start with one small static run:
+If you have not saved a red-team run yet, make one first. On a machine with no
+saved runs, `previous_run="latest"` raises
+`ReplayError: No saved red team runs found in <runs directory> — nothing to replay.`
+Start with one small static run:
 
 ```python
 import asyncio
@@ -344,19 +344,23 @@ print("baseline:", f"{rate:.0%}" if rate is not None else "no verdict")
 
 The examples below continue from this one, in order, in the same run store.
 
-### Replay it
+### Replay the run
 
-In Python, pass `previous_run=` — a run's file name, its name (the newest run
-with that name wins), its run id (in full or as an unambiguous prefix of at least
-8 characters), its path, or `"latest"`:
+In Python, `previous_run=` accepts:
+
+- `"latest"`;
+- a run's file name;
+- a run name — the newest run with that name wins;
+- a run id, in full or as an unambiguous prefix of at least 8 characters;
+- a path.
 
 ```python
 import asyncio
 
 from evaluatorq.redteam import OpenAIModelTarget, red_team
 
-# The agent as it stands after the fix — a different target than the one the
-# stored run was scored against. That difference is the point.
+# The target as it stands after the fix. Replay scores it against the same
+# attacks the stored run used.
 patched = OpenAIModelTarget(
     model="gpt-4o-mini",
     system_prompt=(
@@ -385,39 +389,47 @@ are looking for.
     safest.
 
 **The mode comes back with the cases.** The run above prints `static` without
-`mode=` ever being passed, because that is what the stored run was. `max_turns`
-and `attacker_instructions` are restored for the same reason — the stored cases
-do not pin them down, and replaying a 10-turn run at the 5-turn default would not
-be the same run. Passing either one explicitly still wins, which is the one
-supported way to make a replay differ from its original.
+`mode=` ever being passed, because that is what the stored run was. Replay
+restores `max_turns` and `attacker_instructions` too, so a run made with a
+10-turn budget is not replayed at the 5-turn default. Passing either one
+explicitly still wins, and that is the supported way to make a replay differ from
+its original.
 
-### Replay refuses to be steered
+### Keep the attack set fixed
 
-Anything that selects *which* attacks to run is rejected rather than quietly
-ignored, because the stored run already decided it — so
+Replay rejects any argument that selects *which* attacks to run, rather than
+silently ignoring it — the stored run already made that choice, so
 `red_team(target=..., previous_run="latest", categories=["ASI01"])` raises
-`ValueError`. The rejected set is `mode`, `dataset`, `categories`,
-`vulnerabilities`, `strategies`, `delivery_methods`, `max_per_category`,
-`max_dynamic_datapoints` and `max_static_datapoints`. They are rejected by name
-rather than by value, so `mode="dynamic"` raises even though it matches the mode
-a run would use by default. Only the target, the models, and the two restored
-knobs above may differ — that constraint is the feature, not a limitation of it.
+`ValueError`. The rejected arguments are:
 
-### Replay in CI
+- `mode`
+- `dataset`
+- `categories`
+- `vulnerabilities`
+- `strategies`
+- `delivery_methods`
+- `max_per_category`
+- `max_dynamic_datapoints`
+- `max_static_datapoints`
 
-CI runners start with an empty filesystem, and the run store is an ordinary
-directory: `.evaluatorq/` in the working directory, or whatever `EVALUATORQ_DIR`
-names, with the runs in a `runs/` subdirectory inside it. A fresh checkout
-therefore has nothing to replay, and `--from-run latest` fails with the same
-`nothing to replay` error. To gate a build on
-replay, persist the store between builds yourself — cache the directory, download
-it as a build artifact, or commit the run JSON — and set `EVALUATORQ_DIR` to the
-store root, **not** to the `runs/` directory inside it. Nothing restores it for
-you.
+They are rejected by name rather than by value, so `mode="dynamic"` raises even
+though it matches the mode a run would use by default. Only the target, the
+models, `max_turns` and `attacker_instructions` may differ — that constraint is
+the feature, not a limitation of it.
 
-The gate itself is the one in [In CI](#in-ci): `eq redteam run` exits `1` when a
-run cannot be scored, but it has **no** resistance-rate threshold, so a rate gate
-is Python. Combining the two — replay the stored attacks, then gate on the rate:
+### Use replay in CI
+
+To replay in CI, persist the run store between builds and point `EVALUATORQ_DIR`
+at its root. CI runners start with an empty filesystem, so a fresh checkout has
+nothing to replay and `--from-run latest` fails with the `nothing to replay`
+error. Cache the directory, download it as a build artifact, or commit the run
+JSON — and set `EVALUATORQ_DIR` to the store root (`.evaluatorq/` in the working
+directory by default), **not** to the `runs/` subdirectory inside it. Nothing
+restores it for you.
+
+To gate a build on the replayed rate, combine replay with the check in
+[In CI](#in-ci). `eq redteam run` exits `1` when a run cannot be scored, but it
+has **no** resistance-rate threshold, so the rate comparison is Python:
 
 ```python
 import asyncio
@@ -448,11 +460,11 @@ sys.exit(0 if rate >= floor else f"resistance {rate:.0%} below the {floor:.0%} g
 Set `REDTEAM_MIN_RESISTANCE` to the rate the previous run scored and the step
 becomes a regression gate rather than an absolute floor.
 
-Simulation replays through the same two flags — `simulate(previous_run=...)` and
-`eq sim simulate --from-run`, documented in the
+The same replay works for simulations: `simulate(previous_run=...)` in Python, or
+`eq sim simulate --from-run` on the CLI — see the
 [`eq sim simulate` flag table](../cli-reference/simulation.md#eq-sim-simulate).
-Handing a simulation run to red-team replay is detected and tells you which
-command you wanted instead.
+Hand a simulation run to red-team replay and it tells you which command you
+wanted instead.
 
 ## What a run costs
 
@@ -612,7 +624,7 @@ call count stays honest even when the tokens behind it are unknown.
 For a fast gate, run a small fixed set of attacks and assert a minimum
 resistance rate, failing the build if the target regresses. To hold the attacks
 identical across builds rather than merely fixed by a dataset, gate on a
-[replay](#replay-in-ci) instead.
+[replay](#use-replay-in-ci) instead.
 
 ```python
 report = await red_team(
