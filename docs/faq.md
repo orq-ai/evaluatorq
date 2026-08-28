@@ -80,13 +80,7 @@ Runs auto-save locally (red-team runs to `.evaluatorq/runs/`; simulation runs to
 
 ### Some spans are missing from my traces
 
-The span exporter batches in the background, so spans can be lost two ways, neither
-of which fails the run. Either the in-memory queue overflowed — spans produced faster
-than the exporter drained them — or the process exited before the final flush
-finished. Raise `ORQ_OTEL_MAX_QUEUE_SIZE` for the first and
-`ORQ_OTEL_FLUSH_TIMEOUT_MS` for the second. Both log a warning; a hard `SIGKILL`
-drops whatever was still buffered without one. See
-[Tracing › Batching and flush](tracing.md#batching-and-flush).
+The span exporter batches in the background, so spans can be lost two ways, neither of which fails the run. Either the in-memory queue overflowed — spans produced faster than the exporter drained them — or the process exited before the final flush finished. Raise `ORQ_OTEL_MAX_QUEUE_SIZE` for the first and `ORQ_OTEL_FLUSH_TIMEOUT_MS` for the second. Both log a warning; a hard `SIGKILL` drops whatever was still buffered without one. See [Tracing › Batching and flush](tracing.md#batching-and-flush).
 
 ### How do I run a plain evaluation?
 

@@ -85,8 +85,7 @@ errors to stdout.
 - **Protocol**: HTTP/protobuf (`OTLPSpanExporter` from
   `opentelemetry-exporter-otlp-proto-http`)
 - **Export mode**: `BatchSpanProcessor` (asynchronous batching)
-- **Timeout**: 5 seconds per export request. The separate end-of-run flush timeout
-  is set with `ORQ_OTEL_FLUSH_TIMEOUT_MS` (see below).
+- **Timeout**: 5 seconds per export request. The separate end-of-run flush timeout is set with `ORQ_OTEL_FLUSH_TIMEOUT_MS` (see below).
 - **Auth**: `Authorization: Bearer <ORQ_API_KEY>` is added automatically when
   the resolved endpoint's hostname ends in `.orq.ai` or is exactly `orq.ai`.
   For any other endpoint the header is not added; use `OTEL_EXPORTER_OTLP_HEADERS`
@@ -96,61 +95,25 @@ errors to stdout.
 
 ### Batching and flush
 
-The defaults suit one-off runs. Tune them for a long-lived worker process, or for a
-CI job where losing spans is unacceptable. The four `ORQ_OTEL_*` variables named
-below are listed with their defaults in
-[Configuration › Environment variables](configuration.md#environment-variables).
+The defaults suit one-off runs. Tune them for a long-lived worker process, or for a CI job where losing spans is unacceptable.
 
-The `TracerProvider` lives for the whole process. In a long-lived process that runs
-many evaluations, red-team or simulation runs back to back, the same span queue
-serves every run. These settings behave the same whether you export to Orq or to a
-third-party collector; only endpoint latency differs.
+| Variable | Default | Read | Raise or lower it when |
+|---|---|---|---|
+| `ORQ_OTEL_MAX_QUEUE_SIZE` | `4096` | at init | **Raise** after a `Queue full, dropping Span.` warning. Buys tolerance for bursts and for a stalled exporter; it does not raise throughput. |
+| `ORQ_OTEL_MAX_BATCH_SIZE` | `512` | at init | **Raise** to send fewer, larger export requests. Reaching it wakes the exporter immediately. Clamped down to the queue size, with a warning. |
+| `ORQ_OTEL_SCHEDULE_DELAY_MS` | `5000` | at init | **Lower** when a low-volume run leaves spans sitting in a partial batch. It does not throttle a full batch, so it does not help under a burst. |
+| `ORQ_OTEL_FLUSH_TIMEOUT_MS` | `5000` | per run | **Raise** when the end-of-run flush warns before finishing. Bounds the final flush only; the per-request export timeout stays fixed at 5 seconds. |
 
-Spans are dropped two ways. Neither fails the run, so the loss shows up in your logs
-rather than your exit code:
+The first three are fixed into the processor when tracing initializes and cannot change for the life of the process. `ORQ_OTEL_FLUSH_TIMEOUT_MS` is read on every flush, so a long-running process can raise it before a big run — and evaluatorq enforces that bound itself, because the SDK currently ignores the timeout handed to `force_flush`. Each value must be a positive integer: an empty, non-numeric, zero or negative value is ignored, and evaluatorq logs a warning and uses the default, so a typo neither disables tracing nor takes effect unnoticed.
 
-- **Queue overflow** — spans arrive faster than the exporter drains them. A burst of
-  parallel jobs (the `datapoint_parallelism` argument) or a slow endpoint will do it.
-  Once the queue is full the SDK evicts the *oldest* buffered span to make room, so a
-  trace comes back missing its early spans rather than its last ones. It logs
-  `Queue full, dropping Span.` through the stdlib logger
-  `opentelemetry.sdk._shared_internal`. Identical warnings are suppressed within
-  20-second buckets, so one line means loss started, not that exactly one span was
-  lost. Raise `ORQ_OTEL_MAX_QUEUE_SIZE` when it appears.
-- **Exit before flush** — `evaluatorq()`, `red_team()`, `simulate()` and
-  `generate_and_simulate()` each force-flush in a `finally`, so a run that raises
-  still flushes. Argument validation that fails before the run's tracing scope opens
-  does not, and the standalone pairwise entry points do not flush at all. The SDK's
-  `atexit` hook flushes again on a clean shutdown. What survives none of that is a
-  flush that hits its timeout, or a hard `SIGKILL` — an OOM kill, a CI job cancelled
-  mid-run — which drops the buffer with no warning at all. A flush that times out
-  logs `OTEL span flush timed out after <ms>ms; some spans may not have been
-  exported.` and one that fails outright logs `OTEL span flush failed (<error>);
-  some spans may not have been exported.`
+The `TracerProvider` lives for the whole process. In a long-lived process that runs many evaluations, red-team or simulation runs back to back, the same span queue serves every run. These settings behave the same whether you export to Orq or to a third-party collector; only endpoint latency differs.
 
-The queue drains continuously, not at the end of a run, and it does not drain on a
-fixed cadence. `ORQ_OTEL_SCHEDULE_DELAY_MS` is the idle timer: it decides how long a
-*partial* batch waits before going out. As soon as the queue reaches
-`ORQ_OTEL_MAX_BATCH_SIZE` the exporter wakes immediately and keeps exporting while
-the queue stays above that threshold. Two consequences follow. Under a burst,
-lowering the schedule delay changes nothing — throughput is bounded by how fast the
-collector accepts batches. And raising `ORQ_OTEL_MAX_QUEUE_SIZE` buys tolerance for
-bursts and for a stalled exporter; it does not raise throughput. Lower
-`ORQ_OTEL_SCHEDULE_DELAY_MS` when a low-volume run leaves spans sitting in a partial
-batch for too long.
+Spans are dropped two ways. Neither fails the run, so the loss shows up in your logs rather than your exit code:
 
-`ORQ_OTEL_MAX_QUEUE_SIZE`, `ORQ_OTEL_MAX_BATCH_SIZE` and
-`ORQ_OTEL_SCHEDULE_DELAY_MS` are fixed into the processor when tracing initializes
-and cannot change for the life of the process. A batch size larger than the queue
-size is clamped down to it, with a warning. `ORQ_OTEL_FLUSH_TIMEOUT_MS` is read on
-every flush, so a long-running process can raise it before a big run; it bounds the
-end-of-run flush only, and the per-request export timeout stays fixed at 5 seconds.
-evaluatorq enforces that bound itself, because the SDK currently ignores the timeout
-handed to `force_flush`.
+- **Queue overflow** — spans arrive faster than the exporter drains them. A burst of parallel jobs (the `datapoint_parallelism` argument) or a slow endpoint will do it. Once the queue is full the SDK evicts the *oldest* buffered span to make room, so a trace comes back missing its early spans rather than its last ones. It logs `Queue full, dropping Span.` through the stdlib logger `opentelemetry.sdk._shared_internal`. Identical warnings are suppressed within 20-second buckets, so one line means loss started, not that exactly one span was lost.
+- **Exit before flush** — `evaluatorq()`, `red_team()`, `simulate()` and `generate_and_simulate()` each force-flush in a `finally`, so a run that raises still flushes. Argument validation that fails before the run's tracing scope opens does not, and the standalone pairwise entry points do not flush at all. The SDK's `atexit` hook flushes again on a clean shutdown. What survives none of that is a flush that hits its timeout, or a hard `SIGKILL` — an OOM kill, a CI job cancelled mid-run — which drops the buffer with no warning at all. A flush that times out logs `OTEL span flush timed out after <ms>ms; some spans may not have been exported.` and one that fails outright logs `OTEL span flush failed (<error>); some spans may not have been exported.`
 
-Each value must be a positive integer. An empty, non-numeric, zero or negative value
-is ignored: evaluatorq logs a warning and uses the default, so a typo neither
-disables tracing nor takes effect unnoticed.
+The queue drains continuously, not at the end of a run, and it does not drain on a fixed cadence. `ORQ_OTEL_SCHEDULE_DELAY_MS` is the idle timer: it decides how long a *partial* batch waits before going out. As soon as the queue reaches `ORQ_OTEL_MAX_BATCH_SIZE` the exporter wakes immediately and keeps exporting while the queue stays above that threshold. Under a burst, then, lowering the schedule delay changes nothing — throughput is bounded by how fast the collector accepts batches.
 
 For CI, absorb the burst and allow a longer final flush:
 
@@ -169,9 +132,7 @@ env:
   ORQ_OTEL_FLUSH_TIMEOUT_MS: 30000
 ```
 
-The flush timeout is an upper bound on the wall-clock time added to the job. If the
-collector stops responding, the run waits the full 30 seconds, logs a warning, and
-continues.
+The flush timeout is an upper bound on the wall-clock time added to the job. If the collector stops responding, the run waits the full 30 seconds, logs a warning, and continues.
 
 ## Span hierarchy
 
@@ -261,9 +222,7 @@ Evaluatorq - Red Teaming         # root — one per red_team() call
   └── orq.redteam.memory_cleanup # post-run agent memory entity cleanup (only when cleanup is enabled, entities exist, and the target has configured memory stores)
 ```
 
-**Static mode is single-shot**, and its tree is correspondingly shorter: no
-`context_retrieval` or `datapoint_generation` work, and no `attack_turn` or
-`adversarial_generation` spans. One `target_call` per attack, then the evaluation:
+**Static mode is single-shot**, and its tree is correspondingly shorter: no `context_retrieval` or `datapoint_generation` work, and no `attack_turn` or `adversarial_generation` spans. One `target_call` per attack, then the evaluation:
 
 ```
 Evaluatorq - Red Teaming
@@ -275,15 +234,9 @@ Evaluatorq - Red Teaming
   └── orq.redteam.memory_cleanup
 ```
 
-There is no `orq.redteam.security_evaluation` span. The OWASP scorer annotates the
-framework's own `orq.evaluation` span in place rather than nesting a redundant layer
-between it and the judge's LLM span.
+There is no `orq.redteam.security_evaluation` span. The OWASP scorer annotates the framework's own `orq.evaluation` span in place rather than nesting a redundant layer between it and the judge's LLM span.
 
-The judge's span is named for the endpoint that served it. Evaluator configs default
-to `api='responses'`, so it is usually `responses {provider}/{model}`; it is
-`chat {model}` when the call falls back to Chat Completions — a non-router client,
-`structured_output=False`, a model the catalogue cannot qualify as
-Responses-capable, or `api='chat_completions'` set explicitly.
+The judge's span is named for the endpoint that served it. Evaluator configs default to `api='responses'`, so it is usually `responses {provider}/{model}`; it is `chat {model}` when the call falls back to Chat Completions — a non-router client, `structured_output=False`, a model the catalogue cannot qualify as Responses-capable, or `api='chat_completions'` set explicitly.
 
 LLM spans (`chat ...` / `responses ...`) carry standard GenAI attributes:
 
@@ -431,8 +384,7 @@ orq.evaluation {evaluator}         # from the core runner, when a jury backs an 
               └── responses {model}  # the judge's own LLM call(s), tagged orq.llm.purpose="judge"
 ```
 
-The leaf span is `responses {provider}/{model}` on the default `api='responses'`, and
-`chat {model}` when the call falls back to Chat Completions.
+The leaf span is `responses {provider}/{model}` on the default `api='responses'`, and `chat {model}` when the call falls back to Chat Completions.
 
 The panel opens no span of its own outside `orq.jury` — it can equally be
 called standalone (not nested under `orq.evaluation`), in which case `orq.jury`
