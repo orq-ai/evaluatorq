@@ -254,11 +254,16 @@ async def simulate(
             generators. Never the target under test: that is the thing being
             measured, and it is configured where it is constructed. Use this
             instead of ``sim_model`` when you need more than the model name
-            (``temperature``, ``reasoning_effort``, ``max_tokens``, ``timeout_ms``,
-            ``extra_body``); ``llm_config.model`` wins over ``sim_model`` and
-            contradicting the two logs a warning. Only the fields you set take
-            effect, so an unset ``temperature`` still means the parameter is
-            omitted from the request.
+            (``temperature``, ``reasoning_effort``, ``timeout_ms``, ``extra_body``);
+            ``llm_config.model`` wins over ``sim_model`` and contradicting the two
+            logs a warning. Only the fields you set take effect, so an unset
+            ``temperature`` still means the parameter is omitted from the request.
+            Three fields are narrower. ``max_tokens``: the user simulator, the
+            judge and the executive summary read it, while the generators size
+            their own budget from the item count. ``api`` and ``retry_count``:
+            the two agents read them, the generators own both themselves. A
+            generator logs which of the three it ignored rather than dropping it
+            silently.
         datapoint_parallelism: Maximum number of concurrent simulations (tasks).
             Defaults to 10.
         llm_parallelism: Ceiling on in-flight LLM requests for the whole
@@ -801,8 +806,7 @@ async def _generate_datapoints_inner(
     agent_description: str,
     num_personas: int,
     num_scenarios: int,
-    model: str = DEFAULT_MODEL,
-    llm_config: LLMCallConfig | None = None,
+    llm_config: LLMCallConfig,
     generation_client: AsyncOpenAI | None = None,
     hooks: SimulationHooks | None = None,
     persona_seeds: list[str] | None = None,
@@ -834,16 +838,13 @@ async def _generate_datapoints_inner(
     from evaluatorq.openresponses.client import build_simulation_client
     from evaluatorq.simulation.hooks import DefaultHooks
 
-    gen_client, gen_owned = build_simulation_client(
-        generation_client or (llm_config.client if llm_config is not None else None), max_retries=0
-    )
+    gen_client, gen_owned = build_simulation_client(generation_client or llm_config.client, max_retries=0)
     try:
         gen_hooks = hooks or DefaultHooks()
         gen_personas, gen_scenarios, generation_usage = await _generate_personas_scenarios(
             agent_description=agent_description,
             num_personas=num_personas,
             num_scenarios=num_scenarios,
-            model=model,
             llm_config=llm_config,
             generation_client=gen_client,
             persona_seeds=persona_seeds,
@@ -861,7 +862,6 @@ async def _generate_datapoints_inner(
             experiment_id=None,
             experiment_run_id=None,
             previous_run=None,
-            model=model,
             llm_config=llm_config,
             generation_client=gen_client,
         )
@@ -1187,6 +1187,10 @@ async def generate_personas(
     each archetype, the LLM fills every trait. Provider resolves via the shared
     factory (``ORQ_API_KEY`` → ``OPENAI_API_KEY``) unless ``generation_client``
     is injected.
+
+    ``llm_config`` is the fuller surface behind ``sim_model``: only the fields you set take effect,
+    so an unset ``temperature`` still omits the parameter from the request. When both name a model,
+    ``llm_config.model`` wins and the contradiction is logged.
     """
     from evaluatorq.simulation.exceptions import SimulationError
     from evaluatorq.simulation.generators import PersonaGenerator
@@ -1235,6 +1239,10 @@ async def generate_persona(
     """Generate one ``Persona`` from a short archetype seed (e.g. ``"angry customer"``).
 
     See `generate_personas` for the batch form and provider resolution.
+
+    ``llm_config`` is the fuller surface behind ``sim_model``: only the fields you set take effect,
+    so an unset ``temperature`` still omits the parameter from the request. When both name a model,
+    ``llm_config.model`` wins and the contradiction is logged.
     """
     personas = await generate_personas(
         [seed],
@@ -1260,6 +1268,10 @@ async def generate_scenarios(
 
     The scenario counterpart to `generate_personas`: you name each
     situation, the LLM fills the goal, context, and success/failure criteria.
+
+    ``llm_config`` is the fuller surface behind ``sim_model``: only the fields you set take effect,
+    so an unset ``temperature`` still omits the parameter from the request. When both name a model,
+    ``llm_config.model`` wins and the contradiction is logged.
     """
     from evaluatorq.simulation.exceptions import SimulationError
     from evaluatorq.simulation.generators import ScenarioGenerator
@@ -1305,6 +1317,10 @@ async def generate_scenario(
     """Generate one ``Scenario`` from a short situation seed.
 
     See `generate_scenarios` for the batch form and provider resolution.
+
+    ``llm_config`` is the fuller surface behind ``sim_model``: only the fields you set take effect,
+    so an unset ``temperature`` still omits the parameter from the request. When both name a model,
+    ``llm_config.model`` wins and the contradiction is logged.
     """
     scenarios = await generate_scenarios(
         [seed],
@@ -1369,8 +1385,7 @@ async def _generate_personas_scenarios(
     agent_description: str,
     num_personas: int,
     num_scenarios: int,
-    model: str = DEFAULT_MODEL,
-    llm_config: LLMCallConfig | None = None,
+    llm_config: LLMCallConfig,
     generation_client: AsyncOpenAI | None = None,
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
@@ -1402,7 +1417,7 @@ async def _generate_personas_scenarios(
     from evaluatorq.simulation.exceptions import SimulationError
     from evaluatorq.simulation.generators import PersonaGenerator, ScenarioGenerator
 
-    resolved = resolve_sim_llm_config(sim_model=model, llm_config=llm_config, caller='generate')
+    resolved = llm_config
     gen_client, gen_owned = build_simulation_client(generation_client or resolved.client, max_retries=0)
     try:
         persona_gen = PersonaGenerator(client=gen_client, config=resolved)
@@ -1892,8 +1907,7 @@ async def _resolve_or_generate_datapoints(
     experiment_id: str | None = None,
     experiment_run_id: str | None = None,
     previous_run: str | None = None,
-    model: str = DEFAULT_MODEL,
-    llm_config: LLMCallConfig | None = None,
+    llm_config: LLMCallConfig,
     generation_client: AsyncOpenAI | None = None,
     replayed: SimulationReplay | None = None,
 ) -> list[SimulationDatapoint]:
@@ -1957,7 +1971,7 @@ async def _resolve_or_generate_datapoints(
     from evaluatorq.simulation.generators import FirstMessageGenerator
     from evaluatorq.simulation.tracing import with_simulation_span
 
-    resolved = resolve_sim_llm_config(sim_model=model, llm_config=llm_config, caller='generate_and_simulate')
+    resolved = llm_config
     gen_client, gen_owned = build_simulation_client(generation_client or resolved.client, max_retries=0)
     try:
         first_msg_gen = FirstMessageGenerator(client=gen_client, config=resolved)

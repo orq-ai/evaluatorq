@@ -37,7 +37,7 @@ from evaluatorq.common.thread_context import (
     evaluatorq_pipeline,
 )
 from evaluatorq.common.tracing import AttrMap, set_span_attrs, truncate_for_span
-from evaluatorq.contracts import AgentTarget, Message, TokenUsage
+from evaluatorq.contracts import AgentTarget, LLMCallConfig, Message, TokenUsage
 from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities, classify_agent_capabilities
 from evaluatorq.redteam.adaptive.orchestrator import ProgressDisplay, _get_active_progress
 from evaluatorq.redteam.adaptive.pipeline import (
@@ -1122,13 +1122,12 @@ async def red_team(
                             build_redteam_facts(report),
                             llm_client=es_client,
                             model=evaluator_model,
-                            temperature=config.evaluator.temperature,
-                            # No pipeline metadata here: generate_executive_summary tags the
-                            # call itself (guarded on the client routing through Orq). Passing
-                            # it via extra_body too would win the SDK's merge and silently
-                            # discard that tag — extra_body takes precedence over named kwargs.
-                            extra_body=config.retry_extra_body(es_client),
-                            extra_kwargs=config.evaluator.extra_kwargs,
+                            config=LLMCallConfig(
+                                model=evaluator_model,
+                                # No pipeline metadata: it would win the SDK merge and discard the tag the callee sets.
+                                extra_body=config.retry_extra_body(es_client),
+                                **config.evaluator.set_values('temperature', 'reasoning_effort', 'extra_kwargs'),
+                            ),
                         )
                         report.executive_summary = executive_summary_result.text
                         post_processing_usages.append(executive_summary_result.usage)

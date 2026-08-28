@@ -56,7 +56,7 @@ class SimulationConfig(BaseModel):
     ``_simulate_core`` and ``_simulate_via_evaluatorq``.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True, extra='forbid')
 
     # --- Run identity / target resolution inputs -------------------------
     evaluation_name: str = ''
@@ -81,7 +81,9 @@ class SimulationConfig(BaseModel):
     """Sampling/transport settings for every simulation-side LLM call: the user
     simulator, the judge, and the persona / scenario / first-message generators.
     Never the target under test — that is the thing being measured, and it is
-    configured where it is constructed."""
+    configured where it is constructed. ``max_tokens`` is the one field the
+    generators do not read: they size their budget from the item count, because a
+    batched structured call that truncates is unrecoverable."""
     evaluator_names: list[str] | None = None
     scoring: SimulationScoringConfig | None = None
     """Policy knobs for the ``turn_efficiency`` / ``conversation_quality`` scorers
@@ -166,11 +168,18 @@ def resolve_sim_llm_config(
 ) -> LLMCallConfig:
     """Fold the ``sim_model`` shorthand and the full ``llm_config`` into one config.
 
-    ``llm_config`` wins: it is the richer surface, and a caller who built one
-    said everything they wanted to say about the simulation-side calls. A
-    ``sim_model`` that contradicts it is a mistake worth a warning rather than a
-    silent loss — the two used to be resolved at different layers, so whichever
-    the reader looked at was the one they believed.
+    An explicitly set ``llm_config.model`` wins: it is the richer surface, and a
+    caller who set it said everything they wanted to say about the
+    simulation-side calls. A ``sim_model`` that contradicts it is a mistake
+    worth a warning rather than a silent loss — the two used to be resolved at
+    different layers, so whichever the reader looked at was the one they
+    believed.
+
+    Presence is read from ``model_fields_set``, never from the value:
+    ``LLMCallConfig.model`` has a non-``None`` default, so a value check calls
+    ``simulate(sim_model=..., llm_config=LLMCallConfig(temperature=0.2))`` a
+    contradiction and runs the default model — the exact composition the
+    docstrings recommend.
 
     When ``llm_config`` is omitted the shorthand still works and produces a
     config with only ``model`` set, so every other field stays unset and the
@@ -189,6 +198,8 @@ def resolve_sim_llm_config(
     """
     if llm_config is None:
         return LLMCallConfig(model=sim_model)
+    if 'model' not in llm_config.model_fields_set:
+        return llm_config.model_copy(update={'model': sim_model})
     if sim_model != DEFAULT_MODEL and llm_config.model != sim_model:
         logger.warning(
             '{}(): sim_model={!r} contradicts llm_config.model={!r}; using llm_config.model. '

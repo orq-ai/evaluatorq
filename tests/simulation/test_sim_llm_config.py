@@ -14,9 +14,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from evaluatorq.contracts import LLMCallConfig
-from evaluatorq.simulation.agents.base import AgentConfig
-from evaluatorq.simulation.agents.judge import JudgeAgentConfig
-from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgentConfig
+from evaluatorq.common.structured_output import UNSET
+from evaluatorq.simulation.agents.base import AgentConfig, _config_from_agent_config
+from evaluatorq.simulation.agents.judge import JudgeAgent
+from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgent
 from evaluatorq.simulation._config import resolve_sim_llm_config
 from evaluatorq.simulation.generators import (
     FirstMessageGenerator,
@@ -60,32 +61,40 @@ def test_no_warning_when_sim_model_is_untouched(caplog: pytest.LogCaptureFixture
     assert caplog.text == ''
 
 
-@pytest.mark.parametrize('cls', [AgentConfig, UserSimulatorAgentConfig, JudgeAgentConfig])
-def test_from_call_config_carries_only_set_fields(cls: type[AgentConfig]) -> None:
-    cfg = LLMCallConfig(model='openai/gpt-4o', temperature=0.25)
-    agent_cfg = cls.from_call_config(cfg)
-    assert agent_cfg.model == 'openai/gpt-4o'
-    assert agent_cfg.temperature == 0.25
-    # Untouched on the LLMCallConfig, so they stay None here and the per-call-site
-    # literal keeps applying — copying the pydantic defaults would shadow it.
-    assert agent_cfg.max_tokens is None
-    assert agent_cfg.reasoning_effort is None
-
-
-def test_from_call_config_round_trips_through_base_agent() -> None:
+def test_legacy_agent_config_round_trips_into_a_call_config() -> None:
+    """`AgentConfig` is deprecated but still accepted; only fields the caller set
+    on it may reach the `LLMCallConfig`, or its `None` defaults would shadow the
+    per-call-site literals."""
     from evaluatorq.simulation.agents.base import _config_from_agent_config
 
-    cfg = LLMCallConfig(model='openai/gpt-4o', temperature=0.25, reasoning_effort='high')
-    back, _api_key = _config_from_agent_config(AgentConfig.from_call_config(cfg))
+    back, _api_key = _config_from_agent_config(
+        AgentConfig(model='openai/gpt-4o', temperature=0.25, reasoning_effort='high')
+    )
     assert back.model_fields_set == {'model', 'client', 'api', 'temperature', 'reasoning_effort'}
     assert back.temperature == 0.25
     assert back.reasoning_effort == 'high'
+    assert back.max_tokens not in back.model_fields_set
 
 
-def test_from_call_config_takes_subclass_overrides() -> None:
-    judge_cfg = JudgeAgentConfig.from_call_config(LLMCallConfig(model='m'), goal='refund the order')
-    assert judge_cfg.goal == 'refund the order'
-    assert judge_cfg.api == 'responses'
+def test_agents_default_to_the_responses_api_on_a_bare_call_config() -> None:
+    """`LLMCallConfig` defaults to chat_completions, which rejects function tools
+    plus reasoning_effort together with a 400 on the judge's models."""
+    cfg = LLMCallConfig(model='m', client=MagicMock())
+    assert JudgeAgent(cfg).config.api == 'responses'
+    assert UserSimulatorAgent(cfg).config.api == 'responses'
+    assert JudgeAgent(cfg.model_copy(update={'api': 'chat_completions'})).config.api == 'chat_completions'
+
+
+def test_the_legacy_config_classes_default_to_the_same_endpoint() -> None:
+    """They set `api` themselves, because `_config_from_agent_config` always writes
+    it and so `BaseAgent.DEFAULT_API` never reaches them — a second literal there
+    would drift the deprecated path off the endpoint the agents actually speak."""
+    from evaluatorq.simulation.agents.base import BaseAgent
+    from evaluatorq.simulation.agents.judge import JudgeAgentConfig
+    from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgentConfig
+
+    assert JudgeAgentConfig().api == BaseAgent.DEFAULT_API
+    assert UserSimulatorAgentConfig().api == BaseAgent.DEFAULT_API
 
 
 def test_runner_builds_its_agents_from_the_config() -> None:
@@ -158,7 +167,8 @@ async def test_first_message_generator_sends_no_temperature_when_unset(monkeypat
     monkeypatch.setattr(mod, 'execute_response', AsyncMock(side_effect=fake))
     gen = FirstMessageGenerator(client=MagicMock(), config=LLMCallConfig(model='m'))
     await gen.generate(_persona(), Scenario(name='S', goal='g'))
-    assert seen['temperature'] is None
+    # Absent, not present-and-None: `set_values` keeps an unset temperature out of the request.
+    assert 'temperature' not in seen
 
 
 def test_job_builder_hands_the_config_to_the_runner() -> None:
@@ -202,7 +212,9 @@ async def test_executive_summary_forwards_the_configured_temperature(monkeypatch
         llm_config=LLMCallConfig(model='m', temperature=0.15),
         resolve_client=lambda: MagicMock(),
     )
-    assert seen['temperature'] == 0.15
+    # Handed over whole, not exploded into keywords the callee rebuilds into a config.
+    assert 'temperature' not in seen
+    assert seen['config'].temperature == 0.15
 
 
 @pytest.mark.asyncio
@@ -220,8 +232,37 @@ async def test_executive_summary_sends_no_temperature_when_unset(monkeypatch: py
     run = MagicMock()
     run.results = [MagicMock()]
     await populate_run_executive_summary(run, enabled=True, model='m', resolve_client=lambda: MagicMock())
-    # Absent, not None: an unset field must leave generate_executive_summary's own default alone.
+    # No config at all, so generate_executive_summary keeps every one of its own defaults.
+    assert seen['config'] is None
     assert 'temperature' not in seen
+
+
+@pytest.mark.asyncio
+async def test_executive_summary_config_overrides_only_the_fields_it_sets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The receiving end of the config hand-over: a set `temperature=None` must
+    stay None (send no temperature), while `max_tokens` keeps the module default."""
+    import evaluatorq.common.reports.executive_summary as summary_mod
+
+    seen: dict[str, Any] = {}
+
+    async def fake_call(**kwargs: Any) -> Any:
+        seen.update(kwargs)
+        response = MagicMock()
+        response.choices[0].message.content = 'summary'
+        return response, None
+
+    monkeypatch.setattr(summary_mod, 'execute_chat_completion', fake_call)
+    await summary_mod.generate_executive_summary(
+        'facts',
+        llm_client=MagicMock(),
+        model='m',
+        config=LLMCallConfig(model='ignored', temperature=None, timeout_ms=1500),
+    )
+    assert seen['temperature'] is None
+    assert seen['timeout_s'] == 1.5
+    assert seen['max_completion_tokens'] == summary_mod.EXECUTIVE_SUMMARY_MAX_TOKENS
+    # `model` is the caller's, never the config's.
+    assert seen['model'] == 'm'
 
 
 @pytest.mark.asyncio
@@ -254,20 +295,137 @@ async def test_trace_helpers_use_the_config_model(monkeypatch: pytest.MonkeyPatc
     assert seen and all(m == 'chosen/model' for m in seen), seen
 
 
-def test_extend_from_experiment_warns_on_a_contradicting_sim_model(caplog: pytest.LogCaptureFixture) -> None:
+def test_extend_from_experiment_hands_the_config_to_the_generator(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The config must reach `DatapointGenerator`, not merely be resolved.
+
+    The previous version of this test called `resolve_sim_llm_config` directly with
+    a `caller` string it supplied itself, so `extend_from_experiment` could have
+    been deleted and it would still have passed.
+    """
+    import asyncio
+
+    from evaluatorq.simulation import experiments as mod
+    from evaluatorq.simulation import generators as gen_mod
+
+    seen: dict[str, Any] = {}
+
+    class _Gen:
+        def __init__(self, **kwargs: Any) -> None:
+            seen.update(kwargs)
+
+        async def generate_from_description(self, **_kwargs: Any) -> list[Any]:
+            return []
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(gen_mod, 'DatapointGenerator', _Gen)
+    monkeypatch.setattr(mod, 'datapoints_from_experiment', AsyncMock(return_value=[]))
+
+    cfg = LLMCallConfig(model='chosen/model', temperature=0.25)
+    asyncio.run(mod.extend_from_experiment('exp-1', llm_config=cfg))
+    assert seen.get('config') is cfg
+
+
+def test_sim_model_applies_when_the_config_leaves_the_model_unset(caplog: pytest.LogCaptureFixture) -> None:
+    """`sim_model=` for the model plus `llm_config=` for the sampling is the
+    composition the entry-point docstrings recommend, and it must not be read as
+    a contradiction: `LLMCallConfig.model` has a non-`None` default, so a value
+    check calls it one and silently runs the default model."""
+    with caplog.at_level('WARNING'):
+        resolved = resolve_sim_llm_config(
+            sim_model='openai/gpt-4o-mini',
+            llm_config=LLMCallConfig(temperature=0.2),
+            caller='simulate',
+        )
+    assert resolved.model == 'openai/gpt-4o-mini'
+    assert resolved.temperature == 0.2
+    assert 'contradicts' not in caplog.text
+
+
+def test_matching_sim_model_and_config_model_do_not_warn(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level('WARNING'):
         resolve_sim_llm_config(
-            sim_model='openai/gpt-4o-mini',
+            sim_model='openai/gpt-4o',
             llm_config=LLMCallConfig(model='openai/gpt-4o'),
-            caller='extend_from_experiment',
+            caller='simulate',
         )
-    assert 'extend_from_experiment(): sim_model=' in caplog.text
+    assert 'contradicts' not in caplog.text
+
+
+def test_the_runner_config_reaches_both_agents_intact() -> None:
+    """The runner hands its `LLMCallConfig` to each agent whole. An explicitly set
+    `temperature=None` — "send no temperature" — is the case a detour through the
+    legacy `AgentConfig` loses, because that class spells unset as `None` too."""
+    cfg = LLMCallConfig(model='chosen/model', temperature=None, reasoning_effort='high', client=MagicMock())
+    sim = UserSimulatorAgent(cfg, system_prompt='be brief')
+    judge = JudgeAgent(cfg, goal='g', criteria=[], ground_truth='')
+    for agent in (sim, judge):
+        assert agent.config.model == 'chosen/model'
+        assert 'temperature' in agent.config.model_fields_set
+        assert agent.config.temperature is None
+        assert agent.config.reasoning_effort == 'high'
+    assert sim._custom_system_prompt == 'be brief'
+    assert judge._goal == 'g'
+
+
+def test_injected_agents_warn_that_the_config_cannot_reach_them(caplog: pytest.LogCaptureFixture) -> None:
+    """An injected agent arrives fully built, so `llm_config` cannot configure it.
+    Silence there is indistinguishable from the config having been applied."""
+    from evaluatorq.simulation.agents.judge import JudgeAgent
+
+    judge = JudgeAgent.__new__(JudgeAgent)
+    with caplog.at_level('WARNING'):
+        SimulationRunner(
+            target=lambda _m: 'hi',
+            judge=judge,
+            llm_config=LLMCallConfig(model='chosen/model', temperature=0.0),
+        )
+    assert 'do not reach it' in caplog.text
+
+
+def test_the_first_message_generator_says_which_config_fields_it_ignores(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """It sizes its own budget and speaks one endpoint, so `max_tokens`, `api` and
+    `retry_count` never reach the request. Dropping them silently makes a config
+    that did nothing look like one that worked."""
+    with caplog.at_level('WARNING'):
+        FirstMessageGenerator(
+            client=MagicMock(),
+            config=LLMCallConfig(model='m', max_tokens=8000, retry_count=3, temperature=0.2),
+        )
+    assert 'FirstMessageGenerator ignores llm_config max_tokens, retry_count' in caplog.text
+    assert 'temperature' not in caplog.text.split('—')[0]
+
+
+def test_config_timeout_reaches_generate_structured_in_seconds() -> None:
+    """A unit slip here is invisible: 30000 ms read as seconds is a 500-minute
+    timeout that looks like a hang, and 30 ms read as seconds looks like it works."""
+    from evaluatorq.common.structured_output import _fold_config
+
+    settings = _fold_config(
+        config=LLMCallConfig(model='m', timeout_ms=1500),
+        temperature=UNSET,
+        extra_kwargs=UNSET,
+        extra_body=UNSET,
+        reasoning_effort=UNSET,
+        timeout_s=UNSET,
+    )
+    assert settings.timeout_s == 1.5
+
+
+def test_a_field_set_to_a_falsy_value_survives_the_agent_round_trip() -> None:
+    """`temperature=0.0` is the case that separates `model_fields_set` keying from
+    a truthiness or `is not None` check — every other test here uses 0.25."""
+    agent_cfg = AgentConfig(model='m', temperature=0.0)
+    back, _api_key = _config_from_agent_config(agent_cfg)
+    assert back.temperature == 0.0
+    assert 'temperature' in back.model_fields_set
 
 
 def test_runner_uses_the_config_client_without_env_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     """A caller who brings their own client must not need credentials in the environment."""
-    monkeypatch.delenv('ORQ_API_KEY', raising=False)
-    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
     mine = MagicMock()
     runner = SimulationRunner(target=lambda _messages: 'hi', llm_config=LLMCallConfig(model='m', client=mine))
     assert runner._get_shared_client() is mine
@@ -279,8 +437,6 @@ def test_runner_uses_the_config_client_without_env_credentials(monkeypatch: pyte
 def test_generators_use_the_config_client_without_env_credentials(
     monkeypatch: pytest.MonkeyPatch, cls: Any
 ) -> None:
-    monkeypatch.delenv('ORQ_API_KEY', raising=False)
-    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
     mine = MagicMock()
     gen = cls(config=LLMCallConfig(model='m', client=mine))
     assert gen._client is mine

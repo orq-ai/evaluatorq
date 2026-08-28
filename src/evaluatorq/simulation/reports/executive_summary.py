@@ -115,8 +115,7 @@ async def populate_run_executive_summary(
 
     resolver = resolve_client or resolve_llm_client
     try:
-        # A client on the config is the caller's own; resolving the environment
-        # first would fail for want of credentials it was never going to use.
+        # Resolving the environment first would demand credentials this caller's own client never needed.
         resolved = (
             resolver(llm_config.client) if llm_config is not None and llm_config.client is not None else resolver()
         )
@@ -124,23 +123,13 @@ async def populate_run_executive_summary(
         logger.warning('Skipping executive summary: no LLM credentials configured.')
         return
 
-    overrides = (
-        llm_config.set_values('temperature', 'max_tokens', 'reasoning_effort', 'extra_body', 'extra_kwargs')
-        if llm_config is not None
-        else {}
-    )
-    if llm_config is not None and 'timeout_ms' in llm_config.model_fields_set:
-        overrides['timeout_s'] = llm_config.timeout_ms / 1000.0
-
-    # Span reports the same values generate_executive_summary sends — single
-    # source of truth, so the trace can never drift from the real request. A
-    # `None` temperature is dropped by the span helper, which is right: the call
-    # then omits the parameter and the span must not claim a value.
+    # Only these two have span attributes; the other fields reach the request unseen here.
+    span_values = llm_config.set_values('temperature', 'max_tokens') if llm_config is not None else {}
     async with with_llm_span(
         model=model,
         operation='chat',
-        temperature=overrides.get('temperature'),
-        max_tokens=overrides.get('max_tokens', EXECUTIVE_SUMMARY_MAX_TOKENS),
+        temperature=span_values.get('temperature'),
+        max_tokens=span_values.get('max_tokens', EXECUTIVE_SUMMARY_MAX_TOKENS),
         purpose='executive_summary',
     ):
         summary = await generate_executive_summary(
@@ -148,7 +137,7 @@ async def populate_run_executive_summary(
             llm_client=resolved.client,
             model=model,
             system_prompt=SIM_EXECUTIVE_SUMMARY_SYSTEM_PROMPT,
-            **overrides,
+            config=llm_config,
         )
         run.executive_summary = summary.text
         # Last usage-producing step in a run, so folding it in here in place is what

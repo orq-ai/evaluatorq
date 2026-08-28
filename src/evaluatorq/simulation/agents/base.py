@@ -10,9 +10,7 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
-
-from typing_extensions import Self
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from evaluatorq.common.llm_call import (
     execute_chat_completion,
@@ -130,6 +128,19 @@ class LLMResult:
     refusal: str | None = None
 
 
+# A field missing here is dropped from the request, without a word, on the legacy `AgentConfig` path.
+_MIRRORED_FIELDS = (
+    'api',
+    'temperature',
+    'max_tokens',
+    'timeout_ms',
+    'extra_kwargs',
+    'extra_body',
+    'reasoning_effort',
+    'retry_count',
+)
+
+
 @dataclass
 class AgentConfig:
     """Configuration options for constructing an agent.
@@ -157,43 +168,6 @@ class AgentConfig:
     reasoning_effort: str | None = None
     retry_count: int | None = None
 
-    @classmethod
-    def from_call_config(cls, config: LLMCallConfig, *, api_key: str | None = None, **overrides: Any) -> Self:
-        """Build this config class from a `LLMCallConfig`, preserving caller intent.
-
-        Only fields the caller explicitly set on ``config`` are carried over —
-        keyed on ``model_fields_set``, not on the values — so a round trip back
-        through `_config_from_agent_config` reproduces the same
-        ``model_fields_set`` and the `BaseAgent` resolvers still tell "caller set
-        this" apart from "field default". Copying values instead would pin every
-        `LLMCallConfig` default onto the agent and shadow the per-call-site
-        literals, which is exactly what this class's docstring warns about.
-
-        ``overrides`` go to the subclass's own fields (``system_prompt``,
-        ``goal``, ...) and win over anything derived from ``config``.
-
-        One field cannot survive the round trip: an explicitly set
-        ``temperature=None``. ``AgentConfig`` spells "caller didn't touch this"
-        as ``None``, so the two collapse and the call-site literal applies. Pass
-        `LLMCallConfig` straight to the agent when you need that distinction.
-        """
-        kwargs: dict[str, Any] = {
-            'model': config.model,
-            'client': config.client,
-            'api_key': api_key,
-            **config.set_values(
-                'api',
-                'temperature',
-                'max_tokens',
-                'timeout_ms',
-                'extra_kwargs',
-                'extra_body',
-                'reasoning_effort',
-                'retry_count',
-            ),
-        }
-        return cls(**{**kwargs, **overrides})
-
 
 def _config_from_agent_config(agent_cfg: AgentConfig) -> tuple[LLMCallConfig, str | None]:
     """Convert a legacy AgentConfig into a LLMCallConfig + optional api_key.
@@ -206,20 +180,10 @@ def _config_from_agent_config(agent_cfg: AgentConfig) -> tuple[LLMCallConfig, st
     literal / env fallback with `LLMCallConfig`'s own field default.
     """
     kwargs: dict[str, Any] = {'model': agent_cfg.model, 'client': agent_cfg.client, 'api': agent_cfg.api}
-    if agent_cfg.temperature is not None:
-        kwargs['temperature'] = agent_cfg.temperature
-    if agent_cfg.max_tokens is not None:
-        kwargs['max_tokens'] = agent_cfg.max_tokens
-    if agent_cfg.timeout_ms is not None:
-        kwargs['timeout_ms'] = agent_cfg.timeout_ms
-    if agent_cfg.extra_kwargs is not None:
-        kwargs['extra_kwargs'] = agent_cfg.extra_kwargs
-    if agent_cfg.extra_body is not None:
-        kwargs['extra_body'] = agent_cfg.extra_body
-    if agent_cfg.reasoning_effort is not None:
-        kwargs['reasoning_effort'] = agent_cfg.reasoning_effort
-    if agent_cfg.retry_count is not None:
-        kwargs['retry_count'] = agent_cfg.retry_count
+    for field in _MIRRORED_FIELDS:
+        value = getattr(agent_cfg, field)
+        if field != 'api' and value is not None:
+            kwargs[field] = value
     return LLMCallConfig(**kwargs), agent_cfg.api_key
 
 
@@ -234,6 +198,10 @@ class BaseAgent(UsageTracking, ABC):
     The agent will NOT close an injected client.
     """
 
+    # Not LLMCallConfig's own chat_completions default: the judge sends function
+    # tools and reasoning_effort together, which chat completions answers with a 400.
+    DEFAULT_API: ClassVar[Literal['chat_completions', 'responses']] = 'responses'
+
     def __init__(self, config: LLMCallConfig | AgentConfig | None = None) -> None:
         # Normalise legacy AgentConfig into LLMCallConfig
         extra_api_key: str | None = None
@@ -241,6 +209,8 @@ class BaseAgent(UsageTracking, ABC):
             self.config, extra_api_key = _config_from_agent_config(config)
         else:
             self.config = config or LLMCallConfig(model=DEFAULT_MODEL)
+        if 'api' not in self.config.model_fields_set:
+            self.config = self.config.model_copy(update={'api': self.DEFAULT_API})
 
         self._client_owned: bool
         self._client: AsyncOpenAI = self._build_client(extra_api_key)
@@ -385,9 +355,7 @@ class BaseAgent(UsageTracking, ABC):
         `respond_async` / `_call_llm` use), which beats the call-time-resolved
         env fallback (`_default_timeout_s`, EVALUATORQ_LLM_TIMEOUT_S).
         """
-        if 'timeout_ms' in self.config.model_fields_set:
-            return self.config.timeout_ms / 1000.0
-        return call_value if call_value is not None else _default_timeout_s()
+        return self.config.timeout_s(call_value if call_value is not None else _default_timeout_s())
 
     def _resolved_reasoning_effort(self) -> str | None:
         """Effective reasoning effort: an explicitly set ``self.config.reasoning_effort``

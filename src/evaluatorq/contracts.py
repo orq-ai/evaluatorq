@@ -257,6 +257,15 @@ class LLMCallConfig(BaseModel):
         """
         return {name: getattr(self, name) for name in names if name in self.model_fields_set}
 
+    def timeout_s(self, default: float) -> float:
+        """``timeout_ms`` in seconds when the caller set it, else ``default``.
+
+        Same ``model_fields_set`` rule as `set_values`, plus the unit
+        conversion every call site was writing out by hand — three copies of one
+        division is how one of them ends up in milliseconds.
+        """
+        return self.timeout_ms / 1000.0 if 'timeout_ms' in self.model_fields_set else default
+
     def request_params(
         self,
         *,

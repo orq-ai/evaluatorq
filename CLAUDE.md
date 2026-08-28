@@ -120,7 +120,7 @@ Read the directory itself for the file list — it is always current, this file 
 | Any chat completion | `common.llm_call.execute_chat_completion` / `execute_chat_parse` | `client.chat.completions.create(...)` at a new call site |
 | Structured / schema output | `common.structured_output` (parse + `json_object` fallback) | hand-rolled `response_format` + `json.loads` |
 | Parsing JSON out of model text | `common.extract_json.extract_json_from_response` | bespoke fence-stripping regex |
-| Building call params | `LLMConfig.completion_params(...)` (`contracts.py`) | hand-built `extra_kwargs` dict — it skips the reserved-key guard |
+| Building call params | `LLMCallConfig.request_params(...)` (`contracts.py`) | hand-built `extra_kwargs` dict — it skips the reserved-key guard |
 | Resolving an LLM client | `common.llm_client.resolve_llm_client` | `AsyncOpenAI(...)` anywhere but that module |
 | Retry / backoff | `common.retry.with_retry`, or the SDK's own `max_retries` — **exactly one of the two** | a second retry layer on a client that already retries (they multiply) |
 | Calling the target under test | `common.target_call.call_target_with_retry` | ad-hoc `respond()` + try/except |

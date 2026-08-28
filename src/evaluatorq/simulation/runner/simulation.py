@@ -14,11 +14,8 @@ from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pip
 from evaluatorq.common.tracing import record_llm_input, record_llm_output, set_span_attrs
 from evaluatorq.contracts import AgentTarget, LLMCallConfig, ResponseTrace, TokenUsage, content_to_text, render_tool_call
 from evaluatorq.integrations.callable_integration import CallableTarget
-from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
-from evaluatorq.simulation.agents.user_simulator import (
-    UserSimulatorAgent,
-    UserSimulatorAgentConfig,
-)
+from evaluatorq.simulation.agents.judge import JudgeAgent
+from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgent
 from evaluatorq.simulation.tracing import span_message_text, with_simulation_span
 from evaluatorq.simulation.types import (
     DEFAULT_MODEL,
@@ -681,9 +678,10 @@ class SimulationRunner:
         self._target_agent_timeout_ms = target_agent_timeout_ms
         self._max_target_retries = max_target_retries
         self._max_tool_result_chars = max_tool_result_chars
-        # Never the target under test: that is the thing being measured, and it is
-        # configured where it is constructed.
-        self._llm_config = llm_config if llm_config is not None else LLMCallConfig(model=model)
+        # Never the target under test: that one is configured where it is constructed.
+        from evaluatorq.simulation._config import resolve_sim_llm_config
+
+        self._llm_config = resolve_sim_llm_config(sim_model=model, llm_config=llm_config, caller='SimulationRunner')
         self._model = self._llm_config.model
         self._max_turns = max_turns
         self._shared_client: AsyncOpenAI | None = llm_client
@@ -691,6 +689,16 @@ class SimulationRunner:
         # Injected agents (may be None; resolved lazily in run() when None)
         self._injected_user_simulator: BaseAgent | None = user_simulator
         self._injected_judge: BaseAgent | None = judge
+        # Warned once here, not per datapoint: an injected agent arrives built and llm_config cannot reach it.
+        injected = [name for name, agent in (('user_simulator', user_simulator), ('judge', judge)) if agent is not None]
+        carried = self._llm_config.model_fields_set - {'model', 'client'}
+        if injected and carried:
+            logger.warning(
+                'llm_config sets %s but %s was injected already built, so those settings do not reach it. '
+                'Configure the injected agent where it is constructed.',
+                ', '.join(sorted(carried)),
+                ' and '.join(injected),
+            )
 
         from evaluatorq.common.async_utils import warn_if_sync_hooks
         from evaluatorq.simulation.hooks import DefaultHooks
@@ -872,11 +880,8 @@ class SimulationRunner:
             if client is None:
                 client = self._get_shared_client()
             user_simulator = UserSimulatorAgent(
-                UserSimulatorAgentConfig.from_call_config(
-                    self._llm_config,
-                    client=client,
-                    system_prompt=system_prompt,
-                )
+                self._llm_config.model_copy(update={'client': client}),
+                system_prompt=system_prompt,
             )
 
         if self._injected_judge is not None:
@@ -902,13 +907,10 @@ class SimulationRunner:
             if client is None:
                 client = self._get_shared_client()
             judge = JudgeAgent(
-                JudgeAgentConfig.from_call_config(
-                    self._llm_config,
-                    client=client,
-                    goal=scenario.goal if scenario else '',
-                    criteria=list(scenario.criteria) if scenario and scenario.criteria else [],
-                    ground_truth=scenario.ground_truth or '' if scenario else '',
-                )
+                self._llm_config.model_copy(update={'client': client}),
+                goal=scenario.goal if scenario else '',
+                criteria=list(scenario.criteria) if scenario and scenario.criteria else [],
+                ground_truth=scenario.ground_truth or '' if scenario else '',
             )
 
         # Lazily captured on the first turn that reports a model identity.

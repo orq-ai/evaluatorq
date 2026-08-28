@@ -124,12 +124,7 @@ async def generate_executive_summary(
     llm_client: AsyncChatCompletionsClient,
     model: str,
     system_prompt: str = EXECUTIVE_SUMMARY_SYSTEM_PROMPT,
-    temperature: float | None = None,
-    max_tokens: int = EXECUTIVE_SUMMARY_MAX_TOKENS,
-    timeout_s: float = EXECUTIVE_SUMMARY_TIMEOUT_S,
-    reasoning_effort: str | None = None,
-    extra_body: dict[str, Any] | None = None,
-    extra_kwargs: dict[str, Any] | None = None,
+    config: LLMCallConfig | None = None,
 ) -> ExecutiveSummary:
     """Generate the executive-summary prose from a pre-built ``facts`` string.
 
@@ -143,7 +138,18 @@ async def generate_executive_summary(
     metadata and `price_usage` as every other chat call — and returns usage the
     caller can add to the run total.
 
-    Params are built via `LLMCallConfig.request_params`, not a hand-rolled
+    ``config`` is the only route for the sampling knobs; there are no
+    ``temperature=`` / ``max_tokens=`` / ``timeout_s=`` keywords beside it. Two
+    routes to one setting is a merge whose precedence someone has to guess, and
+    every caller here already holds an `LLMCallConfig`. Only the fields the
+    caller explicitly set are read, so an unset ``temperature`` means the
+    parameter is omitted from the request rather than sent as null, and an unset
+    ``max_tokens`` / ``timeout_ms`` keeps this module's own default.
+
+    ``model`` stays a keyword: the caller names the model for this call, and a
+    config carrying a different one does not redirect it.
+
+    Params are built via `LLMCallConfig.request_params`, never a hand-rolled
     dict splatted next to explicit ``temperature=``/``max_completion_tokens=``
     keywords: the old shape raised ``TypeError: got multiple values for keyword
     argument`` the moment a caller passed ``extra_kwargs={'temperature': 1}`` —
@@ -156,14 +162,10 @@ async def generate_executive_summary(
     if not facts or not facts.strip():
         return ExecutiveSummary(None)
     try:
-        cfg = LLMCallConfig(
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            reasoning_effort=reasoning_effort,
-            extra_kwargs=extra_kwargs or {},
-        )
-        params = cfg.request_params(api='chat_completions', extra_body=extra_body or {})
+        cfg = config.model_copy(update={'model': model}) if config is not None else LLMCallConfig(model=model)
+        if 'max_tokens' not in cfg.model_fields_set:
+            cfg = cfg.model_copy(update={'max_tokens': EXECUTIVE_SUMMARY_MAX_TOKENS})
+        params = cfg.request_params(api='chat_completions')
         response, usage = await execute_chat_completion(
             # The Protocol exists so a structural test double typechecks here;
             # execute_chat_completion only ever touches `chat.completions`.
@@ -174,7 +176,7 @@ async def generate_executive_summary(
                 {'role': 'user', 'content': facts},
             ],
             span=None,
-            timeout_s=timeout_s,
+            timeout_s=cfg.timeout_s(EXECUTIVE_SUMMARY_TIMEOUT_S),
             temperature=params.pop('temperature', None),
             max_completion_tokens=params.pop('max_completion_tokens', None),
             reasoning_effort=params.pop('reasoning_effort', None),

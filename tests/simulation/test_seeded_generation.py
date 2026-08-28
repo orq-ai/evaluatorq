@@ -12,6 +12,7 @@ from typing import Any, cast
 import pytest
 
 from evaluatorq.common.structured_output import StructuredResult
+from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation import (
     generate_persona,
     generate_personas,
@@ -109,7 +110,7 @@ async def test_generate_personas_scenarios_seeds_override_num(captured):
         agent_description="support agent",
         num_personas=99,  # ignored — seeds win
         num_scenarios=3,
-        model="m",
+        llm_config=LLMCallConfig(model="m"),
         generation_client=object(),  # pyright: ignore[reportArgumentType]
         persona_seeds=["angry retiree", "fraud dispute"],
     )
@@ -134,7 +135,7 @@ async def test_generate_personas_scenarios_threads_edge_case_percentage(captured
         agent_description="support agent",
         num_personas=5,
         num_scenarios=5,
-        model="m",
+        llm_config=LLMCallConfig(model="m"),
         generation_client=object(),  # pyright: ignore[reportArgumentType]
         edge_case_percentage=0.6,
     )
@@ -153,7 +154,7 @@ async def test_generate_personas_scenarios_default_edge_case_percentage_unchange
         agent_description="support agent",
         num_personas=5,
         num_scenarios=5,
-        model="m",
+        llm_config=LLMCallConfig(model="m"),
         generation_client=object(),  # pyright: ignore[reportArgumentType]
     )
     joined = " ".join(captured["prompts"])

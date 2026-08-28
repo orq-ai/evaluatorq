@@ -275,6 +275,38 @@ class _CallSettings(NamedTuple):
     timeout_s: float
 
 
+# `model` and `api` stay the call site's authority, so a config cannot redirect a call to another endpoint.
+_CONSUMED_CONFIG_FIELDS = frozenset({
+    'model',
+    'client',
+    'temperature',
+    'extra_kwargs',
+    'extra_body',
+    'reasoning_effort',
+    'timeout_ms',
+})
+
+
+def warn_unread_config_fields(config: LLMCallConfig | None, read: frozenset[str], *, caller: str) -> None:
+    """Warn that ``caller`` will not read fields the caller set on ``config``.
+
+    A call site that sizes its own budget, picks its own endpoint or owns its
+    own retry loop takes those fields off the config. Dropping them without a
+    word makes a config that did nothing look like a config that worked, so
+    every such call site says which ones it ignored.
+    """
+    if config is None:
+        return
+    ignored = config.model_fields_set - read
+    if ignored:
+        logger.warning(
+            '%s ignores llm_config %s — this call site owns those. Only %s are read.',
+            caller,
+            ', '.join(sorted(ignored)),
+            ', '.join(sorted(read - {'model', 'client'})),
+        )
+
+
 def _fold_config(
     *,
     config: LLMCallConfig | None,
@@ -290,13 +322,11 @@ def _fold_config(
     they meant, ``None`` included.
     """
     from_config = (
-        config.set_values('temperature', 'extra_kwargs', 'extra_body', 'reasoning_effort', 'timeout_ms')
-        if config is not None
-        else {}
+        config.set_values('temperature', 'extra_kwargs', 'extra_body', 'reasoning_effort') if config is not None else {}
     )
+    warn_unread_config_fields(config, _CONSUMED_CONFIG_FIELDS, caller='generate_structured')
     if isinstance(timeout_s, Unset):
-        timeout_ms = from_config.get('timeout_ms')
-        resolved_timeout_s = timeout_ms / 1000.0 if timeout_ms is not None else _STRUCTURED_TIMEOUT_S
+        resolved_timeout_s = config.timeout_s(_STRUCTURED_TIMEOUT_S) if config is not None else _STRUCTURED_TIMEOUT_S
     else:
         resolved_timeout_s = timeout_s
     return _CallSettings(

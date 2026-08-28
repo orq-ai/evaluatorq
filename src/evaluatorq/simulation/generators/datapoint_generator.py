@@ -11,7 +11,7 @@ from itertools import starmap
 from typing import Any
 from weakref import WeakValueDictionary
 
-from evaluatorq.contracts import LLMCallConfig
+from evaluatorq.contracts import LLMCallConfig  # noqa: TC001
 from evaluatorq.simulation.generators.first_message_generator import (
     FirstMessageGenerator,
 )
@@ -47,7 +47,9 @@ class DatapointGenerator:
         max_concurrent_calls: int = _DEFAULT_MAX_CONCURRENT_CALLS,
         config: LLMCallConfig | None = None,
     ) -> None:
-        self._config = config if config is not None else LLMCallConfig(model=model)
+        from evaluatorq.simulation._config import resolve_sim_llm_config
+
+        self._config = resolve_sim_llm_config(sim_model=model, llm_config=config, caller=type(self).__name__)
         self._model = self._config.model
         self._rate_limit_delay = rate_limit_delay
         self._max_concurrent_calls = max_concurrent_calls

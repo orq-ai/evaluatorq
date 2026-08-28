@@ -314,6 +314,10 @@ async def summarize_conversations(
     recorded = await datapoints_from_traces(conversations, summaries=summaries)
     synthetic = await extend_from_traces(conversations, num_datapoints=20, summaries=summaries)
     ```
+
+    ``llm_config`` is the fuller surface behind ``model``: only the fields you set take effect,
+    so an unset ``temperature`` still omits the parameter from the request. When both name a model,
+    ``llm_config.model`` wins and the contradiction is logged.
     """
     from evaluatorq.openresponses.client import build_simulation_client
     from evaluatorq.simulation._config import resolve_sim_llm_config
@@ -659,6 +663,10 @@ async def datapoints_from_traces(
             it was already attempted and already warned about, and is dropped here
             without a second summarize call. Summarizing happens here only when
             ``summaries is None``, i.e. no mapping was supplied at all.
+
+    ``llm_config`` is the fuller surface behind ``model``: only the fields you set take effect,
+    so an unset ``temperature`` still omits the parameter from the request. When both name a model,
+    ``llm_config.model`` wins and the contradiction is logged.
     """
     from evaluatorq.openresponses.client import build_simulation_client
     from evaluatorq.simulation._config import resolve_sim_llm_config
@@ -827,6 +835,10 @@ async def extend_from_traces(
             it was already attempted and already warned about, and is dropped here
             without a second summarize call. Summarizing happens here only when
             ``summaries is None``, i.e. no mapping was supplied at all.
+
+    ``llm_config`` is the fuller surface behind ``model``: only the fields you set take effect,
+    so an unset ``temperature`` still omits the parameter from the request. When both name a model,
+    ``llm_config.model`` wins and the contradiction is logged.
     """
     from evaluatorq.openresponses.client import build_simulation_client
     from evaluatorq.simulation._config import resolve_sim_llm_config

@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.structured_output import token_budget_for_items
-from evaluatorq.contracts import LLMCallConfig
+from evaluatorq.contracts import LLMCallConfig  # noqa: TC001
 from evaluatorq.simulation._usage import UsageTracking
 from evaluatorq.simulation.types import (
     DEFAULT_MODEL,
@@ -202,10 +202,12 @@ class ScenarioGenerator(UsageTracking):
     ) -> None:
         """``config`` carries the sampling settings for this generator's own LLM
         calls; ``model`` is the shorthand for setting just the model on it. When
-        both are given ``config.model`` wins, because a caller who built a whole
-        config said everything they meant to say.
+        both set the model, ``config.model`` wins and the contradiction is
+        logged — same rule, same warning, as the public entry points.
         """
-        self._config = config if config is not None else LLMCallConfig(model=model)
+        from evaluatorq.simulation._config import resolve_sim_llm_config
+
+        self._config = resolve_sim_llm_config(sim_model=model, llm_config=config, caller=type(self).__name__)
         self._model = self._config.model
         from evaluatorq.openresponses.client import build_simulation_client
 

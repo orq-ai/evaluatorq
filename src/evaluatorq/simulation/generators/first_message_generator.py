@@ -15,8 +15,9 @@ if TYPE_CHECKING:
 from evaluatorq.common.llm_call import execute_response
 from evaluatorq.common.responses import first_responses_refusal, responses_stop_reason
 from evaluatorq.common.retry import with_retry
+from evaluatorq.common.structured_output import warn_unread_config_fields
 from evaluatorq.common.tracing import record_llm_input
-from evaluatorq.contracts import LLMCallConfig
+from evaluatorq.contracts import LLMCallConfig  # noqa: TC001
 from evaluatorq.simulation.tracing import with_llm_span
 from evaluatorq.simulation.types import DEFAULT_MODEL, Persona, Scenario
 from evaluatorq.simulation.utils.prompt_builders import (
@@ -27,6 +28,17 @@ from evaluatorq.simulation.utils.prompt_builders import (
 logger = logging.getLogger(__name__)
 
 _MAX_OUTPUT_TOKENS = 500
+# One message of one size, so the budget and the endpoint are this call site's.
+_READ_CONFIG_FIELDS = frozenset({
+    'model',
+    'client',
+    'temperature',
+    'reasoning_effort',
+    'extra_body',
+    'extra_kwargs',
+    'timeout_ms',
+})
+
 # An opening line is a small, fast call; a minute is already pathological.
 _TIMEOUT_S = 60.0
 
@@ -90,10 +102,13 @@ class FirstMessageGenerator:
     ) -> None:
         """``config`` carries the sampling settings for this generator's own LLM
         calls; ``model`` is the shorthand for setting just the model on it. When
-        both are given ``config.model`` wins, because a caller who built a whole
-        config said everything they meant to say.
+        both set the model, ``config.model`` wins and the contradiction is
+        logged — same rule, same warning, as the public entry points.
         """
-        self._config = config if config is not None else LLMCallConfig(model=model)
+        from evaluatorq.simulation._config import resolve_sim_llm_config
+
+        self._config = resolve_sim_llm_config(sim_model=model, llm_config=config, caller=type(self).__name__)
+        warn_unread_config_fields(self._config, _READ_CONFIG_FIELDS, caller=type(self).__name__)
         self._model = self._config.model
         from evaluatorq.openresponses.client import build_simulation_client
 
@@ -141,6 +156,7 @@ Keep it natural - this is how they would actually open a conversation."""
                 model=self._model,
                 operation='responses',
                 max_tokens=_MAX_OUTPUT_TOKENS,
+                temperature=self._config.temperature,
                 purpose='first_message',
             ) as span:
                 record_llm_input(
@@ -162,14 +178,9 @@ Keep it natural - this is how they would actually open a conversation."""
                             model=self._model,
                             messages=cast('list[dict[str, Any]]', messages),
                             span=span,
-                            timeout_s=self._config.timeout_ms / 1000.0
-                            if 'timeout_ms' in self._config.model_fields_set
-                            else _TIMEOUT_S,
+                            timeout_s=self._config.timeout_s(_TIMEOUT_S),
                             max_output_tokens=_MAX_OUTPUT_TOKENS,
-                            temperature=self._config.temperature,
-                            reasoning_effort=self._config.reasoning_effort,
-                            extra_body=self._config.extra_body or None,
-                            extra_kwargs=self._config.extra_kwargs or None,
+                            **self._config.set_values('temperature', 'reasoning_effort', 'extra_body', 'extra_kwargs'),
                         ),
                         label='FirstMessageGenerator.generate',
                     )

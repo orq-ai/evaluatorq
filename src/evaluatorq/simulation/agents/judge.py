@@ -635,11 +635,8 @@ class JudgeAgentConfig(AgentConfig):
         ground_truth: str = '',
         **kwargs: Any,
     ) -> None:
-        # Default the judge to the Responses API: it supports function tools +
-        # reasoning_effort together, which chat/completions rejects with a 400 for
-        # models like gpt-5.4-mini. Callers can still pass api='chat_completions'
-        # (and their own client/base_url) to override.
-        kwargs.setdefault('api', 'responses')
+        # Also named here: _config_from_agent_config always writes `api`, so the base default cannot apply.
+        kwargs.setdefault('api', BaseAgent.DEFAULT_API)
         super().__init__(**kwargs)
         self.goal = goal
         self.criteria = criteria
@@ -656,16 +653,27 @@ class JudgeAgent(BaseAgent):
     def __init__(
         self,
         config: JudgeAgentConfig | AgentConfig | LLMCallConfig | None = None,
+        *,
+        goal: str | None = None,
+        criteria: list[Criterion] | None = None,
+        ground_truth: str | None = None,
     ) -> None:
+        """``config`` may be a `LLMCallConfig` with the scenario data beside it.
+
+        That is the shape the runner uses: converting a `LLMCallConfig` into
+        `JudgeAgentConfig` first only to have `BaseAgent` convert it straight
+        back loses an explicitly set ``temperature=None`` or
+        ``reasoning_effort=None``, because `AgentConfig` spells "unset" as
+        ``None`` and cannot tell the two apart (RES-1421). The same fields on a
+        `JudgeAgentConfig` still work and are used when the keyword is omitted.
+        """
         super().__init__(config)
-        if isinstance(config, JudgeAgentConfig):
-            self._goal = config.goal
-            self._criteria = config.criteria or []
-            self._ground_truth = config.ground_truth
-        else:
-            self._goal = ''
-            self._criteria: list[Criterion] = []
-            self._ground_truth = ''
+        from_cfg = config if isinstance(config, JudgeAgentConfig) else None
+        self._goal = goal if goal is not None else (from_cfg.goal if from_cfg else '')
+        self._criteria: list[Criterion] = (
+            criteria if criteria is not None else ((from_cfg.criteria or []) if from_cfg else [])
+        )
+        self._ground_truth = ground_truth if ground_truth is not None else (from_cfg.ground_truth if from_cfg else '')
         self._settled: frozenset[str] = frozenset()
 
     @property

@@ -120,24 +120,26 @@ class TestCallLlmDispatch:
         assert result.content == "responses response"
 
     @pytest.mark.asyncio
-    async def test_default_config_uses_chat_completions(self):
-        """LLMCallConfig with no api= specified defaults to chat_completions."""
+    async def test_agent_default_overrides_the_call_config_api_default(self):
+        """`LLMCallConfig` defaults to chat_completions, but a simulation agent
+        left to itself must speak Responses (`BaseAgent.DEFAULT_API`) — that is
+        the endpoint supporting function tools and reasoning_effort together."""
         client = _make_client()
-        # Explicitly confirm the default is "chat_completions"
         config = LLMCallConfig(model="gpt-4o", client=client)
         assert config.api == "chat_completions"
 
         agent = _ConcreteAgent(config)
+        assert agent.config.api == "responses"
 
         expected_result = LLMResult(content="default response")
         with (
-            patch.object(agent, "_call_chat_completions", new=AsyncMock(return_value=expected_result)) as mock_cc,
-            patch.object(agent, "_call_responses", new=AsyncMock()) as mock_resp,
+            patch.object(agent, "_call_responses", new=AsyncMock(return_value=expected_result)) as mock_resp,
+            patch.object(agent, "_call_chat_completions", new=AsyncMock()) as mock_cc,
         ):
             result = await agent._call_llm(_make_messages())
 
-        mock_cc.assert_awaited_once()
-        mock_resp.assert_not_awaited()
+        mock_resp.assert_awaited_once()
+        mock_cc.assert_not_awaited()
         assert result.content == "default response"
 
     @pytest.mark.asyncio

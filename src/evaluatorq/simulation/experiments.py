@@ -113,7 +113,7 @@ async def extend_from_experiment(
     )
     seeds = await datapoints_from_experiment(experiment_id, run_id=run_id, api_key=api_key)
 
-    generator = DatapointGenerator(model=llm_config.model, config=llm_config)
+    generator = DatapointGenerator(config=llm_config)
     try:
         return await generator.generate_from_description(
             agent_description=agent_description or _describe_agent(seeds),

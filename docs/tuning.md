@@ -88,7 +88,11 @@ The same `llm_config=` is on `summarize_conversations()`, `datapoints_from_trace
 
 `llm_config.client` is honoured everywhere too: pass your own `AsyncOpenAI` and no credentials need to be in the environment at all. Precedence is the same on every path — an explicitly passed client argument, then the config's, then `ORQ_API_KEY` / `OPENAI_API_KEY`.
 
-This is also how you pin the judge back to deterministic scoring. `temperature` no longer defaults to `0.0` anywhere, so a judge left unconfigured samples at whatever the provider's default is and two runs over the same transcript can disagree. Pass `llm_config=LLMCallConfig(model="...", temperature=0.0)` when you need run-to-run comparability — but not on a reasoning-class model, which rejects `temperature` at any value.
+Simulation's own calls default to the **Responses API**, even though `LLMCallConfig.api` itself defaults to `chat_completions`: the judge sends function tools and `reasoning_effort` together, which chat completions rejects with a 400 on models like `gpt-5.4-mini`, and one endpoint per run keeps the trace UI from typing the spans two different ways. Set `LLMCallConfig(api="chat_completions")` to opt out. The default lives on `BaseAgent.DEFAULT_API`, not in an environment variable — it is a per-call setting, so it is on the config.
+
+Three fields on `llm_config` do not reach the generators, which own them: `max_tokens` (they size their own budget from the item count), `api` and `retry_count`. Each is logged when ignored, so a value that did not apply says so rather than disappearing.
+
+One config covers every simulation-side role, so a sampling setting reaches the judge and the simulated user alike. That is the trade for a single knob: lowering `temperature` to make scoring more repeatable also flattens the variation the simulated user exists to produce, and reasoning-class models reject `temperature` at any value. When you want to configure one role and not the others, build that agent yourself and pass it as `judge=` or `user_simulator=` — an injected agent carries its own settings, and `simulate()` warns that `llm_config` will not reach it.
 
 ## Target-call reliability
 
