@@ -238,6 +238,8 @@ Span attributes on `orq.evaluation`:
 
 ### Red teaming spans
 
+This is the **dynamic** and **hybrid** shape:
+
 ```
 Evaluatorq - Red Teaming         # root — one per red_team() call
   ├── orq.redteam.context_retrieval
@@ -254,17 +256,40 @@ Evaluatorq - Red Teaming         # root — one per red_team() call
   │                 ├── orq.redteam.adversarial_generation
   │                 │     └── chat (llm_purpose=adversarial)
   │                 └── orq.redteam.target_call
-  ├── orq.evaluation             # security evaluator result
-  │     └── orq.redteam.security_evaluation
-  │           └── chat (llm_purpose=evaluation)
+  ├── orq.evaluation             # security evaluator result, annotated in place
+  │     └── responses (llm_purpose=evaluation)
   └── orq.redteam.memory_cleanup # post-run agent memory entity cleanup (only when cleanup is enabled, entities exist, and the target has configured memory stores)
 ```
 
-LLM spans (`chat ...`) carry standard GenAI attributes:
+**Static mode is single-shot**, and its tree is correspondingly shorter: no
+`context_retrieval` or `datapoint_generation` work, and no `attack_turn` or
+`adversarial_generation` spans. One `target_call` per attack, then the evaluation:
+
+```
+Evaluatorq - Red Teaming
+  ├── orq.job
+  │     └── orq.redteam.attack
+  │           └── orq.redteam.target_call
+  ├── orq.evaluation
+  │     └── responses (llm_purpose=evaluation)
+  └── orq.redteam.memory_cleanup
+```
+
+There is no `orq.redteam.security_evaluation` span. The OWASP scorer annotates the
+framework's own `orq.evaluation` span in place rather than nesting a redundant layer
+between it and the judge's LLM span.
+
+The judge's span is named for the endpoint that served it. Evaluator configs default
+to `api='responses'`, so it is usually `responses {provider}/{model}`; it is
+`chat {model}` when the call falls back to Chat Completions — a non-router client,
+`structured_output=False`, a model the catalogue cannot qualify as
+Responses-capable, or `api='chat_completions'` set explicitly.
+
+LLM spans (`chat ...` / `responses ...`) carry standard GenAI attributes:
 
 | Attribute | Value |
 |---|---|
-| `gen_ai.operation.name` | Operation name (e.g. `"chat"`) |
+| `gen_ai.operation.name` | Operation name (`"chat"` or `"responses"`) |
 | `gen_ai.system` | Provider name |
 | `gen_ai.request.model` | Model identifier |
 | `gen_ai.usage.input_tokens` | Prompt token count |
@@ -403,8 +428,11 @@ hierarchy:
 orq.evaluation {evaluator}         # from the core runner, when a jury backs an evaluator
   └── orq.jury                     # one per deliberation (orq.pairwise_jury in comparative mode)
         └── orq.judge              # one per judge (x2 in comparative mode — see below)
-              └── chat {model}     # the judge's own LLM call(s), tagged orq.llm.purpose="judge"
+              └── responses {model}  # the judge's own LLM call(s), tagged orq.llm.purpose="judge"
 ```
+
+The leaf span is `responses {provider}/{model}` on the default `api='responses'`, and
+`chat {model}` when the call falls back to Chat Completions.
 
 The panel opens no span of its own outside `orq.jury` — it can equally be
 called standalone (not nested under `orq.evaluation`), in which case `orq.jury`
@@ -520,7 +548,7 @@ judges with no reconciled vote *and* no flip (i.e. one or both orderings
 raised an error). A judge can be flipped, failed, or a normal decisive vote,
 but never counted under more than one of those buckets.
 
-`orq.evaluation`, `orq.jury` / `orq.pairwise_jury`, `orq.judge`, and the nested `chat {model}` LLM
+`orq.evaluation`, `orq.jury` / `orq.pairwise_jury`, `orq.judge`, and the nested LLM
 spans follow the ambient OTel context — nothing threads an explicit parent
 across the `orq.evaluation` → `orq.jury` seam, so a jury backing a custom
 evaluator's scorer nests correctly without extra plumbing.
