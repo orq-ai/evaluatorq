@@ -491,24 +491,79 @@ def _call_setting_names() -> frozenset[str]:
     return (frozenset(LLMCallConfig.model_fields) | _CONFIG_ACCESSORS) - {'model', 'client'}
 
 
+def _scope_nodes(root: ast.AST) -> list[ast.AST]:
+    """Every node under ``root``, minus the bodies of the classes nested in it.
+
+    A nested class is its own scope, so excluding it here keeps the enclosing
+    walk from seeing — or clearing on — code it does not own.
+    """
+    nodes: list[ast.AST] = []
+    stack: list[ast.AST] = [root]
+    while stack:
+        node = stack.pop()
+        nodes.append(node)
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.ClassDef) and child is not root:
+                continue
+            stack.append(child)
+    return nodes
+
+
+def _resolved_config_names(nodes: list[ast.AST]) -> set[str]:
+    """Names bound to a ``resolve_sim_llm_config(...)`` result in ``nodes``.
+
+    Catches a config held under a name that does not contain ``config``.
+    """
+    names: set[str] = set()
+    for node in nodes:
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign):
+            targets, value = [node.target], node.value
+        else:
+            continue
+        if not isinstance(value, ast.Call) or _tail(_dotted(value.func)) != 'resolve_sim_llm_config':
+            continue
+        for target in targets:
+            if isinstance(target, ast.Name):
+                names.add(target.id)
+            elif isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name):
+                names.add(f'{target.value.id}.{target.attr}')
+    return names
+
+
+def _scope_accounting_gap(nodes: list[ast.AST], settings: frozenset[str]) -> int | None:
+    """First unaccounted-for config read in one scope, or ``None``."""
+    called = {_tail(_dotted(node.func)) for node in nodes if isinstance(node, ast.Call)}
+    if 'resolve_sim_llm_config' not in called or called & _CONFIG_ACCOUNTING_CALLS:
+        return None
+    receivers = _resolved_config_names(nodes)
+    reads = sorted(
+        node.lineno
+        for node in nodes
+        if isinstance(node, ast.Attribute)
+        and node.attr in settings
+        and ('config' in (name := _dotted(node.value)).lower() or name in receivers)
+    )
+    return reads[0] if reads else None
+
+
 def _config_accounting_gap(source: str) -> int | None:
     """First line where ``source`` reads a call setting off a resolved config
     without accounting for the settings it ignores, or ``None``.
 
-    A module qualifies when it resolves a config (`resolve_sim_llm_config`) and
-    then reads sampling settings off it. It is clear when it calls
-    `warn_unread_config_fields` or `generate_structured` anywhere in the module.
+    Each ``class`` is its own scope, and module-level code outside every class
+    is one more. A scope qualifies when it resolves a config
+    (`resolve_sim_llm_config`) and then reads sampling settings off it; it is
+    clear when it calls `warn_unread_config_fields` or `generate_structured`.
+    Scoping matters: module-wide clearing let one `generate_structured` call
+    anywhere in a file excuse every other class in that same file.
     """
-    called = {_tail(name) for _, name in _calls(source)}
-    if 'resolve_sim_llm_config' not in called or called & _CONFIG_ACCOUNTING_CALLS:
-        return None
+    tree = ast.parse(source)
     settings = _call_setting_names()
-    reads = sorted(
-        node.lineno
-        for node in ast.walk(ast.parse(source))
-        if isinstance(node, ast.Attribute) and node.attr in settings and 'config' in _dotted(node.value).lower()
-    )
-    return reads[0] if reads else None
+    scopes: list[ast.AST] = [tree, *(node for node in ast.walk(tree) if isinstance(node, ast.ClassDef))]
+    hits = [line for scope in scopes if (line := _scope_accounting_gap(_scope_nodes(scope), settings)) is not None]
+    return min(hits) if hits else None
 
 
 def test_simulation_generators_account_for_the_config_they_are_given() -> None:
@@ -544,9 +599,14 @@ def test_config_accounting_detector_actually_fires() -> None:
         '        await self._client.responses.create(temperature=self._config.temperature)\n'
     )
     assert _config_accounting_gap(violating) == 5
-    # Cleared by warning itself...
-    warned = violating.replace('class G:', 'warn_unread_config_fields(c, f, caller="G")\n\n\nclass G:')
+    # Cleared by warning itself, in the same class that read the config...
+    warned = violating.replace(
+        'self._config = resolve',
+        'warn_unread_config_fields(config, {"temperature"}, caller="G")\n        self._config = resolve',
+    )
     assert _config_accounting_gap(warned) is None
+    # ...but a warn call outside that class accounts for nothing.
+    assert _config_accounting_gap(violating + '\nwarn_unread_config_fields(c, f, caller="other")\n') == 5
     # ...or by letting generate_structured warn on its behalf.
     assert _config_accounting_gap(violating.replace('self._client.responses.create', 'generate_structured')) is None
     # A module that never resolves a config is out of scope.
@@ -562,3 +622,18 @@ def test_config_accounting_detector_actually_fires() -> None:
     )
     # Prose is not a read.
     assert _config_accounting_gap('resolve_sim_llm_config()\n"""Mentions config.temperature."""') is None
+    # A cleared class does not clear its neighbours: the module-wide loophole.
+    cleared = 'class Fine:\n    def go(self):\n        return generate_structured()\n\n\n'
+    assert _config_accounting_gap(cleared + violating) == 10
+    # A config read through a name that never says "config" still counts.
+    assert _config_accounting_gap('cfg = resolve_sim_llm_config(sim_model=m, llm_config=c, caller="G")\nx = cfg.temperature\n') == 2
+    assert (
+        _config_accounting_gap(
+            'class G:\n'
+            '    def __init__(self):\n'
+            '        self._cfg: LLMCallConfig = resolve_sim_llm_config(sim_model=m, llm_config=c, caller="G")\n'
+            '    def go(self):\n'
+            '        return self._client.responses.create(**self._cfg.set_values("temperature"))\n'
+        )
+        == 5
+    )
