@@ -6,4 +6,4 @@ Outcomes: `prepared` (work committed, PR not yet created) · `opened` · `blocke
 
 | date | matrix cell | branch | outcome |
 |---|---|---|---|
-| 2026-08-23 | `entry point (red_team()) × mode (replay)` | docs/autofill-redteam-replay | opened |
+| 2026-08-23 | `entry point (red_team()) × data source (replay)` | docs/autofill-redteam-replay | opened |
