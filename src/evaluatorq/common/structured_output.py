@@ -275,7 +275,9 @@ class _CallSettings(NamedTuple):
     timeout_s: float
 
 
-# `model` and `api` stay the call site's authority, so a config cannot redirect a call to another endpoint.
+# What a call reads from a config when no explicit keyword beats it; `_fold_config`
+# takes the beaten fields back off before warning. `model` and `api` stay the call
+# site's authority, so a config cannot redirect a call to another endpoint.
 _CONSUMED_CONFIG_FIELDS = frozenset({
     'model',
     'client',
@@ -320,11 +322,29 @@ def _fold_config(
 
     A keyword still at ``UNSET`` is one the caller never passed; anything else
     they meant, ``None`` included.
+
+    The unread-field warning is computed from the keywords still at ``UNSET``
+    rather than from `_CONSUMED_CONFIG_FIELDS`: a config field an explicit
+    keyword beats was dropped, so it belongs in the warning. ``timeout_s`` the
+    keyword beats the ``timeout_ms`` config field.
     """
     from_config = (
         config.set_values('temperature', 'extra_kwargs', 'extra_body', 'reasoning_effort') if config is not None else {}
     )
-    warn_unread_config_fields(config, _CONSUMED_CONFIG_FIELDS, caller='generate_structured')
+    # A field the caller also passed as an explicit keyword is beaten, not read:
+    # warning against the constant would call it consumed while it was dropped.
+    beaten = {
+        name
+        for name, keyword in (
+            ('temperature', temperature),
+            ('extra_kwargs', extra_kwargs),
+            ('extra_body', extra_body),
+            ('reasoning_effort', reasoning_effort),
+            ('timeout_ms', timeout_s),
+        )
+        if not isinstance(keyword, Unset)
+    }
+    warn_unread_config_fields(config, _CONSUMED_CONFIG_FIELDS - beaten, caller='generate_structured')
     if isinstance(timeout_s, Unset):
         resolved_timeout_s = config.timeout_s(_STRUCTURED_TIMEOUT_S) if config is not None else _STRUCTURED_TIMEOUT_S
     else:
