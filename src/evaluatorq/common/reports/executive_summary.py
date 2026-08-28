@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 from loguru import logger
 
 from evaluatorq.common.llm_call import execute_chat_completion
+from evaluatorq.common.structured_output import warn_unread_config_fields
 from evaluatorq.contracts import LLMCallConfig, TokenUsage
 
 if TYPE_CHECKING:
@@ -81,6 +82,21 @@ EXECUTIVE_SUMMARY_MAX_TOKENS = 400
 # Generous for a slow reasoning model, short enough that a hung call cannot hold
 # up the report.
 EXECUTIVE_SUMMARY_TIMEOUT_S = 120.0
+
+# `retry_count` is the one field this call site does not read: retry is the SDK
+# client's here, and `api` is accounted for by `request_params`, which warns when
+# a config asking for the Responses endpoint reaches this chat-only call.
+_READ_CONFIG_FIELDS = frozenset({
+    'model',
+    'client',
+    'api',
+    'temperature',
+    'max_tokens',
+    'timeout_ms',
+    'reasoning_effort',
+    'extra_kwargs',
+    'extra_body',
+})
 
 
 def _record_usage_on_current_span(response: Any) -> None:
@@ -147,7 +163,9 @@ async def generate_executive_summary(
     ``max_tokens`` / ``timeout_ms`` keeps this module's own default.
 
     ``model`` stays a keyword: the caller names the model for this call, and a
-    config carrying a different one does not redirect it.
+    config carrying a different one does not redirect it. ``retry_count`` is not
+    read either — retry here is the client's own budget — so a config that sets
+    it gets a warning naming the field rather than a silent drop.
 
     Params are built via `LLMCallConfig.request_params`, never a hand-rolled
     dict splatted next to explicit ``temperature=``/``max_completion_tokens=``
@@ -162,6 +180,7 @@ async def generate_executive_summary(
     if not facts or not facts.strip():
         return ExecutiveSummary(None)
     try:
+        warn_unread_config_fields(config, _READ_CONFIG_FIELDS, caller='generate_executive_summary')
         cfg = config.model_copy(update={'model': model}) if config is not None else LLMCallConfig(model=model)
         if 'max_tokens' not in cfg.model_fields_set:
             cfg = cfg.model_copy(update={'max_tokens': EXECUTIVE_SUMMARY_MAX_TOKENS})
