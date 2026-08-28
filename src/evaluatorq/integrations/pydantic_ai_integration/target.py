@@ -208,8 +208,11 @@ def _build_output(result: Any) -> list[OutputMessage]:
                 args = getattr(part, 'args', '{}')
                 args_str = args if isinstance(args, str) else json.dumps(args, default=str)
                 call_id = str(getattr(part, 'tool_call_id', '') or '')
-                # ``id`` (the Responses-API ``fc_*`` item id) keeps its default:
-                # ``tool_call_id`` is the provider's id and is not a valid item id.
+                # ``id`` (the Responses-API item id) is left unset, so it gets a
+                # locally minted ``fc_*`` from the model default: ``tool_call_id``
+                # is the provider's id and is rejected as an item id — see
+                # ``openresponses.input_items.responses_function_call_item_id``.
+                # ``call_id`` carries it, and is what pairs call to output.
                 tc = (
                     ToolCallOutputItem(name=name, arguments=args_str, call_id=call_id)
                     if call_id

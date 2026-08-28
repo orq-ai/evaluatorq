@@ -75,6 +75,10 @@ class TestPydanticAIRespond:
         assert len(tools) == 1
         assert tools[0].name == 'lookup'
         assert tools[0].result == 'the answer'
+        # The provider's tool_call_id pairs the call with its output; it is not a
+        # Responses item id, and replaying it as one 400s the OpenAI leg.
+        assert tools[0].call_id == 'c1'
+        assert tools[0].id.startswith('fc_')
 
     @pytest.mark.asyncio
     async def test_structured_tool_return_is_json_not_repr(self) -> None:

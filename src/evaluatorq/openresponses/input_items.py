@@ -17,29 +17,36 @@ if TYPE_CHECKING:
     from evaluatorq.contracts import ContentPart, Message
 
 
-_RESPONSES_ITEM_ID_PREFIX = 'fc_'
-
-
 def responses_function_call_item_id(item_id: str | None) -> str | None:
-    """Return ``item_id`` only when it is a Responses-API ``function_call`` item id.
+    """Return ``item_id`` only when it is shaped like a Responses ``function_call`` item id.
 
-    A `StrategyToolCall.item_id` is only meaningful to the Responses API when it
-    came *from* the Responses API, where that item id is always ``fc_*``. Adapters
-    for other providers put the provider's own tool-call id there instead
-    (LangGraph on Anthropic yields ``toolu_*``), and replaying one verbatim 400s
-    the entire request: "Expected an ID that begins with 'fc'". Dropping a foreign
-    id is safe — ``call_id`` is what pairs a call with its output, and the API
-    assigns an item id when none is sent.
+    Responses item ids are always ``fc_*``. Adapters for other providers put the
+    provider's own tool-call id into `StrategyToolCall.item_id` instead (LangGraph
+    on Anthropic yields ``toolu_*``, pydantic-ai ``run-*``), and replaying one
+    verbatim 400s the entire request on the OpenAI leg: "Expected an ID that
+    begins with 'fc'". Measured against the Orq router: the Anthropic leg accepts
+    a foreign id, so this only ever bites on OpenAI-family models.
+
+    The check is on **shape, not provenance**: any ``fc_``-prefixed id passes,
+    including one minted locally by `FunctionCall.id`'s ``default_factory``, which
+    is what an adapter that omits ``id=`` actually sends. That was measured to be
+    accepted (200, tool result seen) on both provider families, but it buys
+    nothing over omitting the field, so no caller should fabricate one.
+
+    Dropping a foreign id is safe, and measured so on both legs: ``call_id`` is
+    what pairs a call with its output — omit it and the API answers
+    "No tool output found for function call" — while a missing item id is simply
+    assigned by the API. ``id`` is optional on input per the OpenAI spec, whose
+    ``function_call`` ``required`` list is ``[type, call_id, name, arguments]``.
     """
     if not item_id:
         return None
-    if item_id.startswith(_RESPONSES_ITEM_ID_PREFIX):
+    if item_id.startswith('fc_'):
         return item_id
     logger.debug(
-        'Dropping non-Responses function_call item id {!r} from the Responses input: '
-        'the API only accepts item ids prefixed {!r}.',
+        'Dropping non-Responses function_call item id {!r} from the Responses input: the API only '
+        "accepts item ids prefixed 'fc_'. Pairing is unaffected; call_id carries the provider's id.",
         item_id,
-        _RESPONSES_ITEM_ID_PREFIX,
     )
     return None
 

@@ -2,6 +2,8 @@
 
 from typing import Any
 
+import pytest
+
 from evaluatorq.contracts import TokenUsage
 from evaluatorq.openresponses.convert_models import (
     IncompleteDetails as ORIncompleteDetails,
@@ -295,7 +297,14 @@ class TestToolCallConversion:
             }
         ]
 
-    def test_function_call_id_generated_when_no_item_id(self):
+    @pytest.mark.parametrize("item_id", [None, "toolu_01ABC", "run-abc123", "call_1"])
+    def test_function_call_id_generated_when_item_id_is_absent_or_foreign(self, item_id):
+        """Only an ``fc_*`` item id may be replayed; anything else is replaced, never forwarded.
+
+        A provider's own tool-call id (``toolu_*`` on Anthropic, ``run-*`` on
+        pydantic-ai) 400s the OpenAI leg with "Expected an ID that begins with
+        'fc'". ``call_id`` is untouched — it is what pairs a call with its output.
+        """
         from evaluatorq.contracts import FunctionCall as CFunctionCall
         from evaluatorq.contracts import StrategyToolCall
 
@@ -304,7 +313,9 @@ class TestToolCallConversion:
                 Message(
                     role="assistant",
                     tool_calls=[
-                        StrategyToolCall(id="call_1", function=CFunctionCall(name="f", arguments="{}"))
+                        StrategyToolCall(
+                            id="call_1", item_id=item_id, function=CFunctionCall(name="f", arguments="{}")
+                        )
                     ],
                 ),
             ]
@@ -312,6 +323,8 @@ class TestToolCallConversion:
         item = to_open_responses(result)["output"][0]
         assert item["type"] == "function_call"
         assert item["id"].startswith("fc_")
+        assert item["id"] != item_id
+        assert item["call_id"] == "call_1"
 
     def test_tool_message_maps_to_function_call_output(self):
         result = _make_result(
