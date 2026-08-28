@@ -140,11 +140,11 @@ def mock_client_and_capture(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, dict[
 
 
 @pytest.mark.asyncio
-async def test_default_cfg_uses_reasoning_safe_temperature(
+async def test_default_cfg_omits_temperature(
     mock_client_and_capture: tuple[Any, dict[str, Any]],
 ) -> None:
-    """Without an explicit cfg, the call uses ``LLMConfig`` defaults
-    (``temperature=1.0``) — which reasoning models accept."""
+    """Without an explicit cfg, the call sends no ``temperature`` at all —
+    reasoning models reject the parameter outright, at any value."""
     client, captured = mock_client_and_capture
 
     recs, _ = await generate_focus_area_recommendations(_empty_report(), client, model='openai/gpt-5-mini')
@@ -152,7 +152,7 @@ async def test_default_cfg_uses_reasoning_safe_temperature(
     assert recs, 'Expected at least one recommendation'
     assert recs[0].recommendations == ['Reduce agent permissions']
     assert recs[0].patterns_observed == 'Agent acted beyond scope'
-    assert captured['temperature'] == 1.0
+    assert 'temperature' not in captured
 
 
 @pytest.mark.asyncio

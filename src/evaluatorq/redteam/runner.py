@@ -488,7 +488,7 @@ async def red_team(
     target: str | AgentTarget | list[str | AgentTarget],
     *,
     llm_config: LLMConfig | None = None,
-    mode: Pipeline | str = Pipeline.DYNAMIC,
+    mode: Pipeline | str | None = None,
     categories: list[str] | None = None,
     vulnerabilities: list[str] | None = None,
     strategies: list[str] | None = None,
@@ -527,6 +527,9 @@ async def red_team(
         target: Target identifier(s). A single string like ``"agent:<key>"``,
             an `AgentTarget` instance, or a list of either for multi-target runs.
         mode: Execution mode — ``"dynamic"``, ``"static"``, or ``"hybrid"``.
+            Defaults to ``"dynamic"`` when omitted. ``None`` is the "not supplied"
+            sentinel, which is what lets ``previous_run=`` reject an explicit
+            ``mode="dynamic"`` instead of silently overwriting it.
         categories: OWASP categories to test (e.g., ``["ASI01", "ASI03"]``).
             Defaults to all available categories. Ignored if ``vulnerabilities`` is set.
         vulnerabilities: Vulnerability IDs to test (e.g., ``["goal_hijacking", "prompt_injection"]``).
@@ -696,7 +699,7 @@ async def red_team(
         conflicting = [
             label
             for label, supplied in (
-                ('mode', Pipeline(mode) != Pipeline.DYNAMIC),
+                ('mode', mode is not None),
                 ('dataset', dataset is not None),
                 ('categories', categories is not None),
                 ('vulnerabilities', vulnerabilities is not None),
@@ -726,6 +729,8 @@ async def red_team(
         logger.info(
             f'Replaying {len(replay.datapoints)} datapoints from {replay.path.name} ({replay.pipeline.value} pipeline).'
         )
+    elif mode is None:
+        mode = Pipeline.DYNAMIC
 
     resolved_max_turns = max_turns if max_turns is not None else DEFAULT_MAX_TURNS
 

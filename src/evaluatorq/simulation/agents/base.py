@@ -17,6 +17,12 @@ from evaluatorq.common.llm_call import (
     execute_response,
 )
 from evaluatorq.common.llm_client import client_routes_through_orq
+from evaluatorq.common.prompt_cache import (
+    apply_cache_breakpoints,
+    caching_applies,
+    mark_responses_input,
+    responses_volatile_items,
+)
 from evaluatorq.common.responses import first_responses_refusal, responses_stop_reason
 from evaluatorq.common.retry import with_retry
 from evaluatorq.common.thread_context import thread_body_param
@@ -225,14 +231,25 @@ class BaseAgent(UsageTracking, ABC):
         max_tokens: int | None = None,
         timeout: float | None = None,
         llm_purpose: str | None = None,
+        volatile_tail: int = 0,
     ) -> str:
-        """Generate a text response for a conversation."""
+        """Generate a text response for a conversation.
+
+        ``volatile_tail`` is the number of trailing messages this caller rebuilds
+        every turn instead of appending to the transcript — a per-call
+        instruction, a re-rendered scratchpad. It keeps the prompt-cache
+        breakpoint off them; see `common.prompt_cache`. It defaults to ``0``
+        because most callers replay a transcript verbatim, but a caller that
+        appends anything synthetic must say so or pay a per-turn cache write
+        nothing reads back.
+        """
         result = await self._call_llm(
             messages,
             temperature=temperature,
             max_tokens=max_tokens,
             timeout=timeout,
             llm_purpose=llm_purpose,
+            volatile_tail=volatile_tail,
         )
         if not result.content:
             raise RuntimeError(f'{self.name}: LLM call failed -- no content in response')
@@ -273,19 +290,21 @@ class BaseAgent(UsageTracking, ABC):
         self._client_owned = owned
         return client
 
-    def _resolved_temperature(self, call_value: float | None, fallback: float | None) -> float | None:
-        """Effective temperature: explicit ``self.config.temperature`` beats the
-        per-call-site literal (``call_value``, e.g. the judge's ``0.0`` or the
-        user simulator's first-message ``0.8``), which beats ``fallback``.
+    def _resolved_temperature(self, call_value: float | None) -> float | None:
+        """Effective temperature: an explicitly set ``self.config.temperature``
+        beats the per-call ``call_value`` — including an explicit ``None``, which
+        opts this agent out of the call site's value on purpose. Unresolved means
+        the request omits the parameter, which is what reasoning-class models
+        need: they answer 400 to ``temperature`` at any value.
 
-        ``self.config.temperature`` always carries a value (`LLMCallConfig`
-        defaults it to ``1.0``), so ``model_fields_set`` is the only way to tell
-        "caller explicitly configured this agent's temperature" from "this is
-        just the field default" — see `LLMCallConfig`.
+        Gated on ``model_fields_set`` rather than on the value, matching
+        `_resolved_max_tokens` / `_resolved_timeout_s` / `_resolved_reasoning_effort`.
+        `LLMCallConfig` now defaults ``temperature`` to ``None``, so a value check
+        could not tell an explicit ``None`` from an untouched field.
         """
         if 'temperature' in self.config.model_fields_set:
             return self.config.temperature
-        return call_value if call_value is not None else fallback
+        return call_value
 
     def _resolved_max_tokens(self, call_value: int | None) -> int:
         """Effective max-tokens budget: explicit ``self.config.max_tokens`` beats
@@ -353,12 +372,19 @@ class BaseAgent(UsageTracking, ABC):
         timeout: float | None = None,
         tools: list[dict[str, Any]] | None = None,
         llm_purpose: str | None = None,
+        volatile_tail: int = 0,
     ) -> LLMResult:
         """Call the LLM with retry logic, dispatching to chat or responses API.
 
         Retries on rate-limit (429) and server errors (500+). All other errors
         are raised immediately. ``asyncio.TimeoutError`` is never retried. Retry
         is owned by ``with_retry``; client retries are disabled.
+
+        ``volatile_tail`` is the number of trailing messages this caller rebuilds
+        every turn instead of appending to the transcript. It keeps the cache
+        breakpoint off them on both paths — see `common.prompt_cache`:
+        `apply_cache_breakpoints` on the chat path, `mark_responses_input` on the
+        Responses path (which is the judge's default).
         """
         if self.config.api == 'responses':
             return await self._call_responses(
@@ -368,6 +394,7 @@ class BaseAgent(UsageTracking, ABC):
                 timeout=timeout,
                 tools=tools,
                 llm_purpose=llm_purpose,
+                volatile_tail=volatile_tail,
             )
         return await self._call_chat_completions(
             messages,
@@ -376,6 +403,7 @@ class BaseAgent(UsageTracking, ABC):
             timeout=timeout,
             tools=tools,
             llm_purpose=llm_purpose,
+            volatile_tail=volatile_tail,
         )
 
     async def _call_chat_completions(
@@ -387,18 +415,20 @@ class BaseAgent(UsageTracking, ABC):
         timeout: float | None = None,
         tools: list[dict[str, Any]] | None = None,
         llm_purpose: str | None = None,
+        volatile_tail: int = 0,
     ) -> LLMResult:
         """Call the LLM via the Chat Completions API with retry logic.
 
         Effective ``temperature`` / ``max_tokens`` / ``timeout`` / reasoning
         effort come from `_resolved_temperature` / `_resolved_max_tokens` /
         `_resolved_timeout_s` / `_resolved_reasoning_effort`: an explicit
-        ``self.config`` value wins, else this call site's literal (``temperature``
-        param here — e.g. the judge's ``0.0``), else the call-time env fallback.
-        ``self.config.extra_kwargs`` rides along last, so it can still override
+        ``self.config`` value wins, else this call site's own argument, else the
+        call-time env fallback. Temperature has no env tier — nothing supplies one,
+        so an unresolved temperature is omitted from the request rather than
+        defaulted. ``self.config.extra_kwargs`` rides along last, so it can still override
         any of the above (matches `LLMCallConfig.request_params`'s chat-completions contract).
         """
-        temp = self._resolved_temperature(temperature, 0.7)
+        temp = self._resolved_temperature(temperature)
         max_tok = self._resolved_max_tokens(max_tokens)
         timeout_s = self._resolved_timeout_s(timeout)
         reasoning_effort = self._resolved_reasoning_effort()
@@ -407,6 +437,11 @@ class BaseAgent(UsageTracking, ABC):
             {'role': 'system', 'content': self.system_prompt},
             *[m.to_chat_completion() for m in messages],
         ]
+        # Breakpoints on the system prompt and the end of the persisted transcript:
+        # simulation replays a growing append-only prefix, so without them Anthropic
+        # models re-encode the whole thing every turn (see common/prompt_cache.py).
+        if caching_applies(self._client, self._model):
+            full_messages = apply_cache_breakpoints(full_messages, volatile_tail=volatile_tail)
 
         async with with_llm_span(
             model=self._model,
@@ -484,6 +519,7 @@ class BaseAgent(UsageTracking, ABC):
         timeout: float | None = None,
         tools: list[dict[str, Any]] | None = None,
         llm_purpose: str | None = None,
+        volatile_tail: int = 0,
     ) -> LLMResult:
         """Call the LLM via the OpenAI Responses API with retry logic.
 
@@ -494,7 +530,8 @@ class BaseAgent(UsageTracking, ABC):
 
         Effective ``temperature`` / ``max_tokens`` / ``timeout`` / reasoning
         effort follow the same config-beats-call-site-beats-fallback order as
-        `_call_chat_completions` (see `_resolved_temperature` etc.).
+        `_call_chat_completions`, temperature's missing env tier included
+        (see `_resolved_temperature` etc.).
         The request itself goes through `common.llm_call.execute_response`, so
         this leg gets the same slot limiting, reasoning-rejection memo, pipeline
         metadata, trace headers and `price_usage` call as every other Responses
@@ -503,7 +540,7 @@ class BaseAgent(UsageTracking, ABC):
         above — `LLMCallConfig.request_params`'s Responses contract.
         """
         timeout_s = self._resolved_timeout_s(timeout)
-        resolved_temp = self._resolved_temperature(temperature, None)
+        resolved_temp = self._resolved_temperature(temperature)
         max_tok = self._resolved_max_tokens(max_tokens)
         reasoning_effort = self._resolved_reasoning_effort()
 
@@ -511,6 +548,16 @@ class BaseAgent(UsageTracking, ABC):
         # the Orq router silently drops it, leaving the judge blind to the agent's
         # replies (RES-1308). Never hand-build this list.
         input_messages = messages_to_responses_input(messages)
+        # A per-item breakpoint, not the top-level switch: the latter marks the end
+        # of the whole input, so a caller that rebuilds its trailing item (the
+        # judge) writes every turn and reads none. `volatile_tail` counts messages
+        # and this list counts items, which are not 1:1 — one tool-calling assistant
+        # message renders to several items.
+        if caching_applies(self._client, self._model):
+            input_messages = mark_responses_input(
+                input_messages,
+                volatile_items=responses_volatile_items(messages, volatile_tail=volatile_tail),
+            )
 
         async with with_llm_span(
             model=self._model,

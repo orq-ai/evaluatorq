@@ -25,7 +25,6 @@ from evaluatorq.simulation.utils.prompt_builders import (
 
 logger = logging.getLogger(__name__)
 
-_TEMPERATURE_FIRST_MESSAGE = 0.8
 _MAX_OUTPUT_TOKENS = 500
 # An opening line is a small, fast call; a minute is already pathological.
 _TIMEOUT_S = 60.0
@@ -131,7 +130,6 @@ Keep it natural - this is how they would actually open a conversation."""
             async with with_llm_span(
                 model=self._model,
                 operation='responses',
-                temperature=_TEMPERATURE_FIRST_MESSAGE,
                 max_tokens=_MAX_OUTPUT_TOKENS,
                 purpose='first_message',
             ) as span:
@@ -155,7 +153,6 @@ Keep it natural - this is how they would actually open a conversation."""
                             messages=cast('list[dict[str, Any]]', messages),
                             span=span,
                             timeout_s=_TIMEOUT_S,
-                            temperature=_TEMPERATURE_FIRST_MESSAGE,
                             max_output_tokens=_MAX_OUTPUT_TOKENS,
                         ),
                         label='FirstMessageGenerator.generate',

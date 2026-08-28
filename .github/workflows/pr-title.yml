@@ -1,0 +1,44 @@
+name: PR Title
+
+# Enforce a conventional-commit PR title. The release version is derived from the
+# commit subjects that land on main, and an unconventional subject is release-neutral
+# — so without this gate the failure mode is a release that silently never happens.
+#
+# The single-commit checks matter because the repo's squash setting is
+# COMMIT_OR_PR_TITLE: a one-commit PR squashes under the COMMIT subject, not the PR
+# title, so validating the title alone would still let an unconventional subject reach
+# main. Merge commits and rebase merges carry every commit subject through, which is
+# why the commits themselves are covered by CONTRIBUTING rather than by this gate.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  title:
+    name: Conventional title
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: amannn/action-semantic-pull-request@v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Keep in sync with [tool.semantic_release.commit_parser_options] in
+          # pyproject.toml — a type accepted here but unknown there is release-neutral.
+          types: |
+            build
+            chore
+            ci
+            docs
+            feat
+            fix
+            perf
+            refactor
+            revert
+            style
+            test
+          validateSingleCommit: true
+          validateSingleCommitMatchesPrTitle: true

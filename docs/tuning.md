@@ -72,6 +72,20 @@ set `LLMCallConfig.reasoning_effort` on the agent's config always wins — inclu
 explicit `None`, which opts that agent out of the env value on purpose. The same is
 true of `EVALUATORQ_LLM_TIMEOUT_S` and `EVALUATORQ_LLM_MAX_TOKENS`.
 
+## Temperature
+
+`LLMCallConfig.temperature` is **unset by default**, and unset means the parameter is not sent at all — the provider applies its own default. Reasoning-class models reject `temperature` outright (`gpt-5` and the o-series answer `400 Unsupported parameter: 'temperature' is not supported with this model`), so sending any value, even a "safe" one, breaks them.
+
+No evaluatorq call site sends a temperature of its own any more. Set one when you actually want to pin sampling:
+
+```python
+from evaluatorq.contracts import LLMCallConfig
+
+cfg = LLMCallConfig(model="openai/gpt-4o-mini", temperature=0.2)
+```
+
+The same holds per call: a `temperature=None` argument means "leave it unset", never "send null".
+
 ## Target-call reliability
 
 The target is the slow, flaky part of any run: it is a real agent running real

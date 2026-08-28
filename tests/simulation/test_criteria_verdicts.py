@@ -688,13 +688,19 @@ def test_settled_criteria_are_excluded_from_the_audit_but_stay_in_the_prompt():
     entry per turn and can only restate a settled fact. It stays listed — the judge
     still needs it to decide whether to stop — but is marked do-not-report."""
     judge = _judge()
-    assert 'ALREADY CONFIRMED' not in judge.system_prompt
+    before = judge.system_prompt
+    # The static instruction names the marker; no criterion is flagged with it.
+    assert 'criteria_0: ' in before and 'ALREADY CONFIRMED: criteria' not in before
 
     judge.mark_settled({'criteria_0'})
-    prompt = judge.system_prompt
-    assert 'criteria_0' in prompt and 'criteria_1' in prompt
-    assert prompt.count('ALREADY CONFIRMED') == 1
-    assert 'criteria_0' in prompt.split('ALREADY CONFIRMED')[0].rsplit('\n', 1)[-1]
+    # The system prompt is byte-identical: it sits at token position 0, so a
+    # per-turn edit there would invalidate the whole cached prefix.
+    assert judge.system_prompt == before
+    assert 'criteria_0' in before and 'criteria_1' in before
+
+    note = judge._settled_note()  # pyright: ignore[reportPrivateUsage]
+    assert note.count('ALREADY CONFIRMED') == 1
+    assert 'criteria_0' in note and 'criteria_1' not in note
 
 
 def test_mark_settled_rebinds_so_a_shallow_copy_cannot_leak_between_runs():

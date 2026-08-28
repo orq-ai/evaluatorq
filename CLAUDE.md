@@ -2,29 +2,21 @@
 
 This file provides guidance to Claude Code when working in `packages/evaluatorq-py`.
 
+## Surfacing something important
+
+When you flag something that changes what the user should do — a bug you found, a decision only they can make, a thing you could not finish, a risk in what they just asked for — **explain it like they are eight years old.** Not the tone, the *clarity*: say what broke, what happens because of it, and what you want from them, in words that carry no assumed context. Name the thing before the acronym for it. An explanation the reader has to already understand in order to follow is not a warning, it is a receipt.
+
+This is about the surfacing, not the work. Code, commits, and PR bodies stay normal.
+
 ## Parallel sessions
 
-Parallel agent sessions typically run in their own git worktree, so uncommitted
-changes you did not make may appear in the working tree from concurrent work.
-**Never run `git stash` (any subcommand) or `git reset`.** Not `stash` to clean
-the tree, and not `stash pop`/`apply` either: the stash holds other sessions'
-autostash entries, and popping one drops a merge into your tree and consumes the
-entry. `git checkout <path>` and `git checkout -- .` are equally destructive to
-uncommitted work you did not write. When committing, stage only the exact files
-your task changed.
+Parallel agent sessions typically run in their own git worktree, so uncommitted changes you did not make may appear in the working tree from concurrent work. **Never run `git stash` (any subcommand) or `git reset`.** Not `stash` to clean the tree, and not `stash pop`/`apply` either: the stash holds other sessions' autostash entries, and popping one drops a merge into your tree and consumes the entry. `git checkout <path>` and `git checkout -- .` are equally destructive to uncommitted work you did not write. When committing, stage only the exact files your task changed.
 
-The same applies to every subagent you dispatch — say it in the dispatch prompt.
-A reviewer that "just needed a clean tree for a moment" has already popped
-another session's autostash once.
+The same applies to every subagent you dispatch — say it in the dispatch prompt. A reviewer that "just needed a clean tree for a moment" has already popped another session's autostash once.
 
-To read a file as it is on HEAD without touching the tree, use
-`git show HEAD:<path>`. To see only your own changes on a shared dirty tree,
-diff the paths you touched: `git diff -- <your paths>`.
+To read a file as it is on HEAD without touching the tree, use `git show HEAD:<path>`. To see only your own changes on a shared dirty tree, diff the paths you touched: `git diff -- <your paths>`.
 
-Processes are shared too. **Never `pkill -f` a command name** (`mkdocs serve`,
-`uvicorn`, `pytest`) — every worktree runs the same ones, so the pattern kills a
-sibling session's server. Kill the port you own: `lsof -nP -iTCP:<port> -sTCP:LISTEN`,
-then the PID.
+Processes are shared too. **Never `pkill -f` a command name** (`mkdocs serve`, `uvicorn`, `pytest`) — every worktree runs the same ones, so the pattern kills a sibling session's server. Kill the port you own: `lsof -nP -iTCP:<port> -sTCP:LISTEN`, then the PID.
 
 ## Quick Reference
 
@@ -69,26 +61,20 @@ uv run --group docs mkdocs build --strict
 uv run python scripts/validate_mermaid.py
 ```
 
-When the user says **“do a test run”**, run the live trace validation for both
-pipelines using the configured agent key:
+When the user says **“do a test run”**, run the live trace validation for both pipelines using the configured agent key:
 
 ```bash
 ORQ_API_KEY=... EVALUATORQ_AGENT_KEY=... \
   uv run python scripts/live_trace_validation.py both
 ```
 
-This runs 3 personas × 3 scenarios for agent simulation and a small hybrid red-team
-check, then validates the root spans and run metadata. Use `orq traces list` to
-inspect the resulting traces.
+This runs 3 personas × 3 scenarios for agent simulation and a small hybrid red-team check, then validates the root spans and run metadata. Use `orq traces list` to inspect the resulting traces.
 
 ## Opening a PR
 
-**Assign the PR to its author.** `gh pr create` leaves the assignee empty, so
-open one with `--assignee @me` — an unassigned PR has no one the board can point
-at when it stalls.
+**Assign the PR to its author.** `gh pr create` leaves the assignee empty, so open one with `--assignee @me` — an unassigned PR has no one the board can point at when it stalls.
 
-Reviewers need no flag: `.github/CODEOWNERS` requests them on every PR and skips
-the author. Change that file, not the `gh` invocation, to change who reviews.
+Reviewers need no flag: `.github/CODEOWNERS` requests them on every PR and skips the author. Change that file, not the `gh` invocation, to change who reviews.
 
 ## Before pushing to a PR
 
@@ -101,21 +87,11 @@ uv run basedpyright                 # whole repo — NOT a path
 uv run pytest -m 'not integration'
 ```
 
-**Do not scope `basedpyright` to a path.** CI runs it bare, which covers `tests/`
-as well as `src/`. Running `uv run basedpyright src/` passes clean while CI fails
-on type errors in test files — parametrized args annotated `str` where the
-signature wants a `Literal`, raw dicts passed where a pydantic model is expected.
-That exact mistake left PR #119 red across all four Python versions for three
-commits without any local signal.
+**Do not scope `basedpyright` to a path.** CI runs it bare, which covers `tests/` as well as `src/`. Running `uv run basedpyright src/` passes clean while CI fails on type errors in test files — parametrized args annotated `str` where the signature wants a `Literal`, raw dicts passed where a pydantic model is expected. That exact mistake left PR #119 red across all four Python versions for three commits without any local signal.
 
-Note the asymmetry: **ruff** is scoped to `src` (tests are deliberately not
-ruff-formatted, so `ruff format --check tests/` reports the whole tree as
-unformatted — don't "fix" that). **basedpyright** is not scoped. Match CI, not
-intuition.
+Note the asymmetry: **ruff** is scoped to `src` (tests are deliberately not ruff-formatted, so `ruff format --check tests/` reports the whole tree as unformatted — don't "fix" that). **basedpyright** is not scoped. Match CI, not intuition.
 
-CI does not run integration tests. Real-API coverage runs weekly via
-`.github/workflows/examples-weekly.yml`, which opens an issue on failure rather
-than blocking a PR.
+CI does not run integration tests. Real-API coverage runs weekly via `.github/workflows/examples-weekly.yml`, which opens an issue on failure rather than blocking a PR.
 
 ## Package Map
 
@@ -137,9 +113,7 @@ Read the directory itself for the file list — it is always current, this file 
 
 ## Need X? Use Y. Do not reinvent.
 
-`common/` is the shared layer. Every module there exists because two surfaces
-drifted apart and a review consolidated them. Adding a third copy is the failure
-mode this table exists to prevent.
+`common/` is the shared layer. Every module there exists because two surfaces drifted apart and a review consolidated them. Adding a third copy is the failure mode this table exists to prevent.
 
 | Doing | Use | Never |
 |---|---|---|
@@ -153,6 +127,7 @@ mode this table exists to prevent.
 | LLM-as-judge | `common.judge.run_judge`; multi-judge via `common.jury` | new judge prompt + parse loop |
 | OTel spans, token usage, cost | `common.tracing` (`with_llm_span`, `record_token_usage`, `record_llm_response`) | `get_tracer` / `start_as_current_span` outside a `tracing.py` module |
 | Surface-specific span naming | `redteam/tracing.py`, `simulation/tracing.py` — thin wrappers that delegate | new span vocabulary |
+| Prompt caching on a replayed conversation | `common.prompt_cache` (`apply_cache_breakpoints` for chat, `mark_responses_input` for Responses), gated on `caching_applies(client, model)` | hand-placed `cache_control`, a `prompt_cache_key` (OpenAI caches automatically; it needs none), or a bare `client_routes_through_orq` gate |
 | Prompt templating | `common.template_engine.render_template` | f-string prompt assembly |
 | Untrusted text into a prompt | `common.sanitize.delimit` | raw interpolation |
 | Run lifecycle state | `common.run_manifest` (`start_manifest`, `list_manifests`) | new status dict / sidecar file |
@@ -182,21 +157,21 @@ Distilled from review findings that recurred. Each cost a review round.
 - **Every filtered UI section renders an empty state.** A section that disappears on zero matches is indistinguishable from a bug.
 - **Never ask a judge for a verdict that inverts between types.** `must_happen` and `must_not_happen` mean opposite things by the same `passed` flag, and models get it backwards — gpt-5.4-mini marked a satisfied `must_happen` as unmet while its own `reason` said the opposite. Ask for the one factual thing (*did it occur?*) and map occurrence to pass/fail in code.
 - **Provider usage/cost shapes are not interchangeable.** Anthropic reports cache reads top-level where Orq/OpenAI nest them. Build the test fixture from the provider SDK's own models so a schema move fails the test instead of confirming the guess.
+- **Only write a cache breakpoint where the next turn will still have that prefix.** A write costs 1.25x and is read back only by a request repeating the marked prefix byte-for-byte, so marking a message the caller rebuilds each turn is a pure loss — the judge's per-turn instruction cost the whole transcript, every turn. `volatile_tail` is a **required** keyword for that reason: say how many trailing messages you rebuild (`0` when the whole list persists). On the Responses path the count is `volatile_items`, **not** messages — one tool-calling `Message` renders to several `input` items — so convert with `responses_volatile_items` and never pass a message count through. Never set `ttl` — the 5m default is right, `1h` costs more and only Anthropic honours it. Both APIs take a **positioned, per-item** marker, so this holds on either; do not use the Responses *top-level* `cache_control` body field, which marks the end of the whole input and so cannot be kept off a rebuilt trailing item (measured: 0 reads).
+- **Stable text goes before varying text.** Text stuck behind a placeholder is uncacheable however stable it is, because a breakpoint is per-message and cannot split one. The OWASP judge rubrics are the standing example: ~1500 stable tokens sit around the transcript placeholders and none of them can be marked.
+- **Mark a render, never a store.** `apply_cache_breakpoints` / `mark_responses_input` return a copy and never mutate; feed them the freshly-rendered `list[dict]` and let the result die with the request. Assigning the marked copy back onto the transcript you keep appending to is the one way to exceed Anthropic's 4-breakpoint limit — the old markers stay, two more are added each turn, and the API rejects the request several billed turns in. There is no runtime guard for this by design: annotate the transcript with its real type (`list[ChatCompletionMessageParam]`) and basedpyright refuses the assignment.
 
-Guardrails for the mechanical parts live in `tests/test_reuse_guardrails.py`.
-A failure there names the canonical helper — use it, don't extend the allowlist.
+Guardrails for the mechanical parts live in `tests/test_reuse_guardrails.py`. A failure there names the canonical helper — use it, don't extend the allowlist.
 
 ## Keeping this file true
 
-This file only works if it absorbs what review teaches. When a review comment,
-CI failure, or bug traces back to a convention that was not written down:
+This file only works if it absorbs what review teaches. When a review comment, CI failure, or bug traces back to a convention that was not written down:
 
 1. Add it **in the same PR** — one table row or one house rule, not a paragraph.
 2. Add the mechanical check too, if one is possible (`tests/test_reuse_guardrails.py`, a ruff rule).
 3. Delete something stale while you are here. Above ~200 lines this file gets skimmed, and skimmed is the same as absent.
 
-Do not add a directory tree, a file inventory, or anything else the filesystem
-already answers.
+Do not add a directory tree, a file inventory, or anything else the filesystem already answers.
 
 ## Key Patterns
 
@@ -208,22 +183,11 @@ already answers.
 
 ### Target calls and error payloads
 
-**Every target call goes through `call_target_with_retry`** (`common/target_call.py`).
-Calling `target.respond()` directly skips retry, the per-call timeout, and backend
-error mapping — and, worse, tends to skip the error payload with it.
+**Every target call goes through `call_target_with_retry`** (`common/target_call.py`). Calling `target.respond()` directly skips retry, the per-call timeout, and backend error mapping — and, worse, tends to skip the error payload with it.
 
-**Never hand an `AgentResponseError` object to the report layer.** `JobOutputPayload.error`
-and `AttackOutput.error` are `str`; the object fails validation and takes down report
-generation for the **entire run**, after every attack has been executed, judged and
-billed. Flatten with `TargetCallResult.error_payload()` — it is the single source for
-the six `error*` fields, so the format can't drift between the static, hybrid, pipeline
-and orchestrator paths (it did, three ways, before it was consolidated).
+**Never hand an `AgentResponseError` object to the report layer.** `JobOutputPayload.error` and `AttackOutput.error` are `str`; the object fails validation and takes down report generation for the **entire run**, after every attack has been executed, judged and billed. Flatten with `TargetCallResult.error_payload()` — it is the single source for the six `error*` fields, so the format can't drift between the static, hybrid, pipeline and orchestrator paths (it did, three ways, before it was consolidated).
 
-The reverse failure is quieter and worse: a job that returns **no** `error` key at all
-makes `output_error_text` return `None`, so the judge scores the literal `[ERROR: ...]`
-marker as a genuine agent reply and a dead target comes back RESISTANT. Both static legs
-now emit the key unconditionally (`None` on success). A new job that calls a target must
-do the same.
+The reverse failure is quieter and worse: a job that returns **no** `error` key at all makes `output_error_text` return `None`, so the judge scores the literal `[ERROR: ...]` marker as a genuine agent reply and a dead target comes back RESISTANT. Both static legs now emit the key unconditionally (`None` on success). A new job that calls a target must do the same.
 
 ### Adding New Features
 
@@ -239,6 +203,10 @@ do the same.
 - Mark integration tests with `@pytest.mark.integration`
 - Default pytest timeout is 120s (configured in `pyproject.toml`)
 - Use `pytest-asyncio` for async tests
+
+Prompt-cache behavior is covered by `tests/unit/test_prompt_cache.py`, `tests/openresponses/test_prompt_cache.py`, `tests/redteam/test_orchestrator_prompt_cache.py`, and `tests/simulation/test_agent_prompt_cache.py`. Run those together with `tests/test_reuse_guardrails.py` when changing cache placement, router/model gating, or transcript rendering: `uv run pytest tests/unit/test_prompt_cache.py tests/openresponses/test_prompt_cache.py tests/redteam/test_orchestrator_prompt_cache.py tests/simulation/test_agent_prompt_cache.py tests/test_reuse_guardrails.py`.
+
+These tests use fakes and do not require API credentials. The repository does not include a live provider probe; live cache measurements require a separately maintained investigation against the configured provider and model.
 
 ### Dependencies
 
@@ -265,53 +233,34 @@ do the same.
 
 ### Releases
 
-Releases are **tag-driven**. The package version comes from the latest git tag via
-`hatch-vcs` (`[tool.hatch.version] source = "vcs"`) — there is **no `version` field
-in `pyproject.toml`** and nothing is committed back to `main` on release. The
-release workflow (`.github/workflows/release.yml`, on push to `main`) only pushes a
-**tag**, which the `Protect-main` branch ruleset does not govern, so a plain
-`GITHUB_TOKEN` is enough (no deploy key, no bypass). **You do not bump the version
-or tag by hand on the normal path** — commit messages drive it.
+Releases are **tag-driven**. The package version comes from the latest git tag via `hatch-vcs` (`[tool.hatch.version] source = "vcs"`) — there is **no `version` field in `pyproject.toml`** and nothing is committed back to `main` on release. The release workflow (`.github/workflows/release.yml`, on `workflow_run` of **CI** concluding `success` for a push to `main`) only pushes a **tag**, which the `Protect-main` branch ruleset does not govern, so a plain `GITHUB_TOKEN` is enough (no deploy key, no bypass). **You do not bump the version or tag by hand on the normal path** — commit messages drive it.
 
-- **Commits MUST follow [Conventional Commits](https://www.conventionalcommits.org).** python-semantic-release (used only as a *version calculator* — `semantic-release version --print`) maps the commit types since the last tag to the next version:
+- **Commits MUST follow [Conventional Commits](https://www.conventionalcommits.org).** `.github/workflows/pr-title.yml` gates the PR title, and — because squash uses `COMMIT_OR_PR_TITLE` — the subject of a single-commit PR too. python-semantic-release (used only as a *version calculator* — `semantic-release version --print`) maps the commit types since the last tag to the next version:
   - `feat:` → minor; `fix:`/`perf:` → patch; `feat!:`/`fix!:`/`BREAKING CHANGE:` → major; `docs:`/`chore:`/`ci:`/`test:`/`refactor:`/`style:`/`build:`/`revert:` → no release.
+- The workflow releases the **exact commit CI validated** (`workflow_run.head_sha`), never whatever `main` points at when the job starts. A manual `workflow_dispatch` off any ref other than `main` is refused before checkout — tags are not governed by the branch ruleset, so nothing else would stop a feature branch from being tagged and published.
 - On a release-worthy push the workflow: computes the next version, **pushes the tag `vX.Y.Z`**, builds the wheel/sdist (version derived from the tag), **publishes to PyPI via token auth** (the `PYPI_TOKEN` repo secret, passed to `pypa/gh-action-pypi-publish`), then creates a GitHub Release with PR-based auto-notes (`.github/release.yml` controls the categories — merged PRs + contributor attributions).
 - **Never write a breaking commit without explicit approval.** Do not use `feat!:`/`fix!:` or a `BREAKING CHANGE:` footer unless the user has explicitly approved a major release for that change. A single one halts **all** releases (see next bullet) until a human forces a bump — in July 2026 three `!` commits froze PyPI on `v1.10.1` for 24 days and 317 commits, and the client bug that surfaced it was already fixed in an unreleased commit. If a change is genuinely breaking, ask first; otherwise land it as `feat:`/`fix:`/`refactor:` and describe the break in the PR body.
-- **Accidental majors are refused.** A computed `major` bump is skipped unless you re-run via **workflow_dispatch** with `force_level=major`. Use `force_level=minor`/`patch` to override the computed level (e.g. to ship breaking changes as a minor deliberately). The refusal **fails the run** (`::error::` + `exit 1`) so a blocked release is visible; a genuine no-op (e.g. a `docs:`-only push, nothing to release) still exits 0 and stays green. The `!` commits stay in range until someone releases, so the block is permanent, not transient — a red Release run means act, not retry.
+- **Accidental majors are refused.** A computed `major` bump is skipped unless you re-run via **workflow_dispatch** with `force_level=major`. Use `force_level=minor`/`patch` to override the computed level (e.g. to ship breaking changes as a minor deliberately). The refusal **fails the run** (`::error::` + `exit 1`) so a blocked release is visible; a genuine no-op (a `docs:`-only push, or the tag already pointing at the commit being released) still exits 0 and stays green. A tag that already exists but points at a **different** commit fails the run with both SHAs rather than skipping quietly. The `!` commits stay in range until someone releases, so the block is permanent, not transient — a red Release run means act, not retry.
 - The GitHub Release notes are generated from merged PRs and are created last, non-blocking — a notes failure never blocks the PyPI publish. The committed `CHANGELOG.md` is hand-written and separate from them: a behaviour change to a public default belongs under its `### Notable defaults` section in the same PR, not only in a docstring.
 - PyPI publishing uses the **`PYPI_TOKEN`** repo secret (an API token). To switch to OIDC trusted publishing later, configure a **Trusted Publisher** on PyPI for this repo + `release.yml` (PyPI → project → Publishing) and delete the `with: password:` block in the publish step — `id-token: write` is already granted.
 
 ### Docs
 
-**Docs ship in the same PR as the feature.** If a change touches public surface
-(`__all__`, CLI flags or defaults, env vars, enum/registry members) or adds a
-feature, update the docs before opening the PR:
+**Docs ship in the same PR as the feature.** If a change touches public surface (`__all__`, CLI flags or defaults, env vars, enum/registry members) or adds a feature, update the docs before opening the PR:
 
 1. `docs-drift` skill, scoped to the diff — finds claims the change made untrue.
-2. `docs-coverage` skill — if the change opens a new usage path (a new mode,
-   backend, surface, entry point), write the prose now rather than deferring it.
+2. `docs-coverage` skill — if the change opens a new usage path (a new mode, backend, surface, entry point), write the prose now rather than deferring it.
 
-The interaction surface those skills reason about — the axes, the tier rules, and
-the impossible-combination list — is
-[`.claude/skills/docs-coverage/axes.md`](.claude/skills/docs-coverage/axes.md).
-Read it when adding anything users choose between; **a new dimension means editing
-that file in the same PR**, or coverage checking silently stops seeing it.
+The interaction surface those skills reason about — the axes, the tier rules, and the impossible-combination list — is [`.claude/skills/docs-coverage/axes.md`](.claude/skills/docs-coverage/axes.md). Read it when adding anything users choose between; **a new dimension means editing that file in the same PR**, or coverage checking silently stops seeing it.
 
 Rules live in the skills, not here. Both are under `.claude/skills/`.
 
-**A new docs page goes in `mkdocs.yml` twice.** Once under `nav:`, once under
-`plugins.llmstxt.sections` — the llmstxt plugin silently drops any nav page it
-does not list from `llms.txt` and `llms-full.txt` without failing the build, so
-`docs/hooks.py` fails `--strict` on the mismatch instead. The check is
-one-directional (nav → sections) and accepts globs, which is why
-`reference/evaluatorq/*.md` covers the generated API pages with one entry.
+**A new docs page goes in `mkdocs.yml` twice.** Once under `nav:`, once under `plugins.llmstxt.sections` — the llmstxt plugin silently drops any nav page it does not list from `llms.txt` and `llms-full.txt` without failing the build, so `docs/hooks.py` fails `--strict` on the mismatch instead. The check is one-directional (nav → sections) and accepts globs, which is why `reference/evaluatorq/*.md` covers the generated API pages with one entry.
 
-**Fence every code sample in a docstring, with a language.** An indented block or an
-RST `Example::` literal reaches Pygments with no lexer and renders as grey text; nothing
-warns, and `mkdocs build --strict` stays green. Keep the body under `Example:` / `Usage:`
-**un-indented** — griffe only opens a Google section when the body is indented, and an
-indented fence inside a `cleandoc`-ed docstring becomes a literal code block instead.
-In `examples/*.py`, a fence inside the module docstring is embedded in the generated
-page's own fence, so it must stay 3 backticks — `write_example_pages` widens the outer
-one to compensate. `docs/hooks.py` fails the build on any unhighlighted block, on
-**every** page; the two exemptions there are prose diagrams, not an escape hatch.
+**Never cut a sentence off.** Every sentence you write — in a docs page, a table cell, a docstring, a commit message, a PR title or body — ends. No trailing `…`, no `[...]`, no clause abandoned mid-thought because the line got long. Truncation belongs to *captured output* (a log excerpt, a receipt's first few lines), never to prose you authored. Too long is a signal to write less, not to chop the tail off. This binds humans, agents, and the docs-autofill routine equally.
+
+**Do not hard-wrap prose you are writing.** One line per paragraph or list item; let the reader's editor wrap. A sentence broken across source lines is the mechanism by which the rule above gets violated by accident, and it makes every later edit a multi-line diff. This covers every prose surface: any `.md` you touch, commit message bodies, PR titles and descriptions, issue bodies, and review comments — GitHub renders a hard-wrapped paragraph as one line anyway, so the breaks buy nothing and survive into every later quote of the text. Do not reflow a file you are not otherwise editing — that is drive-by reformatting.
+
+**The single exception is inside code**: source lines and the comments and docstrings attached to them wrap at the file's normal width, because that is what the formatter and the surrounding code do. Prose *about* code follows the no-wrap rule; prose *inside* a `.py` file follows the code.
+
+**Fence every code sample in a docstring, with a language.** An indented block or an RST `Example::` literal reaches Pygments with no lexer and renders as grey text; nothing warns, and `mkdocs build --strict` stays green. Keep the body under `Example:` / `Usage:` **un-indented** — griffe only opens a Google section when the body is indented, and an indented fence inside a `cleandoc`-ed docstring becomes a literal code block instead. In `examples/*.py`, a fence inside the module docstring is embedded in the generated page's own fence, so it must stay 3 backticks — `write_example_pages` widens the outer one to compensate. `docs/hooks.py` fails the build on any unhighlighted block, on **every** page; the two exemptions there are prose diagrams, not an escape hatch.

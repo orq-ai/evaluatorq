@@ -126,7 +126,11 @@ class TestChatCompletionsConfigPropagation:
 
     @pytest.mark.asyncio
     async def test_call_site_literal_wins_when_config_unset(self):
-        """No explicit config.temperature -> the call-site literal (e.g. judge's 0.0) applies."""
+        """No explicit config.temperature -> a call site's own argument applies.
+
+        No production call site passes one any more; this covers the public
+        ``respond_async(temperature=...)`` surface a subclass can still use.
+        """
         client = _make_client()
         client.chat.completions.create.return_value = _chat_response()
         config = LLMCallConfig(model="gpt-4o", api="chat_completions", client=client)
@@ -136,6 +140,55 @@ class TestChatCompletionsConfigPropagation:
 
         kwargs = client.chat.completions.create.await_args.kwargs
         assert kwargs["temperature"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_unset_temperature_sends_no_temperature_at_all(self):
+        """Nothing set anywhere -> the parameter must be off the wire.
+
+        This is the RES-#168 reproduction at agent level: reasoning-class models
+        answer 400 to ``temperature`` at any value, so a default here fails every
+        datapoint in the run rather than degrading.
+        """
+        client = _make_client()
+        client.chat.completions.create.return_value = _chat_response()
+        config = LLMCallConfig(model="gpt-4o", api="chat_completions", client=client)
+        agent = _ConcreteAgent(config)
+
+        await agent._call_llm(_messages())
+
+        kwargs = client.chat.completions.create.await_args.kwargs
+        assert "temperature" not in kwargs
+
+    @pytest.mark.asyncio
+    async def test_unset_temperature_sends_no_temperature_on_responses(self):
+        """Same as above for the Responses leg, which the simulator defaults to."""
+        client = _make_client()
+        client.responses.create.return_value = _responses_response()
+        config = LLMCallConfig(model="gpt-4o", api="responses", client=client)
+        agent = _ConcreteAgent(config)
+
+        await agent._call_llm(_messages())
+
+        kwargs = client.responses.create.await_args.kwargs
+        assert "temperature" not in kwargs
+
+    @pytest.mark.asyncio
+    async def test_explicit_config_none_beats_a_call_site_value(self):
+        """``LLMCallConfig(temperature=None)`` opts the agent out on purpose.
+
+        Gated on ``model_fields_set``, like the other three resolvers — a value
+        check cannot tell this from an untouched field now that the default is
+        ``None``, and would let the call site's value through instead.
+        """
+        client = _make_client()
+        client.chat.completions.create.return_value = _chat_response()
+        config = LLMCallConfig(model="gpt-4o", api="chat_completions", client=client, temperature=None)
+        agent = _ConcreteAgent(config)
+
+        await agent._call_llm(_messages(), temperature=0.0)
+
+        kwargs = client.chat.completions.create.await_args.kwargs
+        assert "temperature" not in kwargs
 
     @pytest.mark.asyncio
     async def test_env_reasoning_effort_applies_when_config_and_call_site_are_silent(

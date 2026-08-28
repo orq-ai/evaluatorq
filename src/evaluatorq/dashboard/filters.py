@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from evaluatorq.common.reports.palette import SEVERITY_ORDER
 from evaluatorq.redteam.delivery_method_registry import delivery_method_str
 from evaluatorq.simulation.metrics import TURN_METRICS
 
@@ -87,10 +88,6 @@ _REDTEAM_DIMS = [
 
 def _rt_options_from_results(results: list[Any]) -> dict[str, list[str]]:
     """Derive option lists from a list of RedTeamResult objects."""
-    from evaluatorq.redteam.contracts import Severity as _Severity  # local to avoid top-level circular
-
-    SEVERITY_ORDER = [s.value for s in _Severity]
-
     all_categories = sorted({r.attack.category for r in results})
     all_severities = [s for s in SEVERITY_ORDER if any(r.attack.severity.value == s for r in results)]
     all_techniques = sorted({r.attack.attack_technique.value for r in results})

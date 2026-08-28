@@ -75,7 +75,12 @@ class UserSimulatorAgent(BaseAgent):
         return DEFAULT_USER_SIMULATOR_PROMPT
 
     async def generate_first_message(self, messages: list[Message] | None = None) -> str:
-        """Generate the first message to start a conversation."""
+        """Generate the first message to start a conversation.
+
+        ``volatile_tail=1``: the appended instruction is synthetic and never
+        reaches the transcript the runner replays on later turns, so a cache
+        breakpoint on it would be a write nothing reads back.
+        """
         prompt_messages = list(messages or [])
         prompt_messages.append(
             Message(
@@ -83,7 +88,7 @@ class UserSimulatorAgent(BaseAgent):
                 content='Generate your first message to start the conversation. Remember your goal and persona.',
             )
         )
-        return await self.respond_async(prompt_messages, temperature=0.8, llm_purpose='first_message')
+        return await self.respond_async(prompt_messages, llm_purpose='first_message', volatile_tail=1)
 
     def update_context(
         self,

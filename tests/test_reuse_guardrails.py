@@ -13,6 +13,7 @@ not be a way around the rule by accident.
 from __future__ import annotations
 
 import ast
+import re
 from functools import cache
 from pathlib import Path
 
@@ -237,6 +238,55 @@ def test_hand_written_properties_detector_actually_fires() -> None:
     assert _hand_written_properties_dict_lines('x = {"type": "object", "properties": {}}') == []
 
 
+def _cache_control_dict_lines(source: str) -> list[int]:
+    """Line numbers of dict literals carrying a literal ``'cache_control'`` key.
+
+    AST-based, so the comments and docstrings that explain the convention are not
+    hits — only a marker actually written into a request body is.
+    """
+    return [
+        node.lineno
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Dict)
+        for key in node.keys
+        if isinstance(key, ast.Constant) and key.value == 'cache_control'
+    ]
+
+
+# The one module allowed to write the marker. Every other call site imports
+# `apply_cache_breakpoints` / `mark_responses_input` from it.
+_PROMPT_CACHE_OWNER = 'common/prompt_cache.py'
+
+
+def test_cache_control_is_written_only_by_prompt_cache() -> None:
+    """A hand-placed `cache_control` is the expensive kind of mistake.
+
+    A misplaced breakpoint costs a 1.25x write that nothing reads back and
+    nothing errors — it surfaces as a bill, not a bug. `common/prompt_cache.py`
+    owns placement so the `volatile_tail` contract, the router+model gate and the
+    minimum-size guard cannot be bypassed by writing the key directly.
+    """
+    hits = [
+        f'{path.relative_to(SRC).as_posix()}:{lineno}'
+        for path in sorted(SRC.rglob('*.py'))
+        if path.relative_to(SRC).as_posix() != _PROMPT_CACHE_OWNER
+        for lineno in _cache_control_dict_lines(path.read_text(encoding='utf-8'))
+    ]
+    assert not hits, (
+        'Hand-placed cache_control marker: '
+        + ', '.join(hits)
+        + '. Use common.prompt_cache.apply_cache_breakpoints (chat) or '
+        'mark_responses_input (Responses), gated on caching_applies — writing the '
+        'key directly skips the volatile_tail contract and the size guard.'
+    )
+
+
+def test_cache_control_detector_actually_fires() -> None:
+    """A guardrail nobody proved can fail is a guardrail that silently no-ops."""
+    assert _cache_control_dict_lines("x = {'cache_control': {'type': 'ephemeral'}}") == [1]
+    assert _cache_control_dict_lines("x = {'foo': 'cache_control'}") == []
+    assert _cache_control_dict_lines('# {"cache_control": {}}') == []
+    assert _cache_control_dict_lines('"""Docstring mentions cache_control."""') == []
 # --- usage harvested off a raised exception -------------------------------
 # `generate_structured` bills its rungs before it raises, so a failed structured
 # call still cost money. Five modules each read the attribute directly, each with
@@ -283,4 +333,68 @@ def test_exception_usage_goes_through_the_shared_helper() -> None:
         + '. Use evaluatorq.common.structured_output.usage_from_exception — it owns '
         'the harvest rule (why getattr rather than an except clause, and when the '
         'exception carries no total so the result must not be double-counted).'
+    )
+
+
+# Sphinx cross-reference roles (`:class:`Foo``) render as literal text on the
+# MkDocs site — the role prefix and the `~` shorthand both print. RES-1278.
+# Covers the autodoc object-reference roles plus the three doc-level roles
+# (`ref`, `paramref`, `term`) that break the same way. Domain-specific roles
+# nobody here writes (`:option:`, `:envvar:`, …) are out of scope until one shows up.
+SPHINX_ROLE = re.compile(r':(?:class|func|meth|attr|mod|data|exc|obj|ref|paramref|term):`')
+
+
+def _sphinx_role_lines(source: str) -> list[int]:
+    """Line numbers of every docstring in ``source`` carrying a Sphinx role.
+
+    A module docstring reports line 1: ``ast.Module`` has no ``lineno``.
+    Roles in comments or in ordinary strings are not docstrings and not hits.
+    """
+    lines: list[int] = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        doc = ast.get_docstring(node, clean=False)
+        if doc and SPHINX_ROLE.search(doc):
+            lines.append(getattr(node, 'lineno', 1))
+    return sorted(lines)
+
+
+def _sphinx_role_sites() -> list[str]:
+    """``path:line`` for every docstring carrying a Sphinx cross-reference role."""
+    return [
+        f'{path.relative_to(SRC).as_posix()}:{line}'
+        for path in sorted(SRC.rglob('*.py'))
+        for line in _sphinx_role_lines(path.read_text(encoding='utf-8'))
+    ]
+
+
+def test_sphinx_role_detector_actually_fires() -> None:
+    """A guardrail nobody proved can fail is a guardrail that silently no-ops."""
+    assert _sphinx_role_lines('"""See :class:`Foo`."""') == [1]
+    assert _sphinx_role_lines('def f():\n    """Calls :func:`bar`."""') == [1]
+    assert _sphinx_role_lines('class C:\n    """Wraps :meth:`C.go`."""') == [1]
+    # The `~` shorthand prints too, and a fully qualified target is still a hit.
+    assert _sphinx_role_lines('"""A :class:`~evaluatorq.contracts.Message`."""') == [1]
+    # Every role in the pattern fires, including the three doc-level ones.
+    for role in ('attr', 'mod', 'data', 'exc', 'obj', 'ref', 'paramref', 'term'):
+        assert _sphinx_role_lines(f'"""See :{role}:`x`."""') == [1], role
+    # Two docstrings, two sites — the failure message names both.
+    assert _sphinx_role_lines('def f():\n    """:func:`a`."""\n\n\ndef g():\n    """:func:`b`."""') == [1, 5]
+    # Not docstrings: a comment, a bare expression string, an assigned string.
+    assert _sphinx_role_lines('# :class:`Foo`') == []
+    assert _sphinx_role_lines('def f():\n    pass\n\n\n":class:`Foo`"') == []
+    assert _sphinx_role_lines('x = ":class:`Foo`"') == []
+    # A plain code span is the fix, and must not be flagged.
+    assert _sphinx_role_lines('"""See `Foo`, or [Message][evaluatorq.contracts.Message]."""') == []
+
+
+def test_docstrings_carry_no_sphinx_roles() -> None:
+    sites = _sphinx_role_sites()
+    assert not sites, (
+        'Sphinx cross-reference role in a docstring: '
+        + ', '.join(sites)
+        + '. mkdocstrings has no idea what a role is, so `:class:` and the `~` '
+        'shorthand render as literal text on the API reference pages. Use a plain '
+        'code span, or an mkdocstrings autoref: [Message][evaluatorq.contracts.Message].'
     )
