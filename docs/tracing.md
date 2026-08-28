@@ -230,12 +230,17 @@ LLM spans (`chat ...` / `responses ...`) carry standard GenAI attributes:
 | `gen_ai.usage.cache_read.input_tokens` | Cached prompt tokens, when the provider reports them |
 | `gen_ai.usage.cache_creation.input_tokens` | Cache-write prompt tokens, when the provider reports them |
 | `gen_ai.usage.reasoning.output_tokens` | Reasoning tokens, when the provider reports them |
-| `gen_ai.input.messages` | JSON serialised input messages (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
-| `gen_ai.output.messages` | JSON serialised output messages (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
+| `gen_ai.input.messages` | JSON serialised input messages, as `{role, parts}` objects (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
+| `gen_ai.output.messages` | JSON serialised output messages, as `{role, parts}` objects (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
 | `orq.llm.purpose` | Cross-domain purpose tag (e.g. `"adversarial"`, `"evaluation"`, `"target"`) |
 | `orq.span_type` | The span type Orq should store: `"span.responses"` for `responses` operations, `"span.chat_completion"` for the deployment legs' `invoke` (see the note below) |
-| `openresponses.input` / `openresponses.output` | Raw Responses items — only on spans made by the `openresponses` target, not on simulation or judge Responses spans (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
+| `openresponses.input` / `openresponses.output` | Raw Responses items, kept verbatim alongside the `gen_ai.*.messages` parts (see the note below) — only on spans made by the `openresponses` target, not on simulation or judge Responses spans (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
 | `openresponses.instructions` | The request's `instructions`, when set (same target, same gate) |
+
+!!! note "Why Responses items are rewritten into parts"
+    `gen_ai.input.messages` and `gen_ai.output.messages` take `{role, parts: [...]}` objects, where a tool call is a *part* of an assistant message. Responses items are a flat list of a different shape: `function_call`, `function_call_output` and `reasoning` entries carry a `type` but no `role`, so any consumer keying on `role` drops them. Written raw, a tool-using agent's transcript rendered as the user turn plus the final text and nothing in between.
+
+    `evaluatorq.openresponses.otel_messages` converts the items before they are recorded. It is a port of `openResponsesItemToInputMessages` / `openResponsesItemToOutputMessages` in Orq's own gateway, so the two agree on how each item type maps — including Orq's built-in tools, which arrive typed `orq:<tool name>` rather than as `function_call`. Item types neither side maps (web search, image generation) become a generic `data` part carrying the whole item, so nothing is lost. The raw items stay on `openresponses.input` / `openresponses.output`.
 
 !!! note "Why Responses spans claim their own span type"
     Orq's OTLP ingest derives a span type from `gen_ai.operation.name` through a fixed table that knows `chat` but not `responses`. An unmapped operation falls through to span-name heuristics and lands on `span.generic`, which the trace UI renders as a raw JSON tree instead of a message transcript. A client-supplied `orq.span_type` overrides that derivation, so spans whose operation is `responses` (or `agents.responses`) set it to `span.responses` explicitly and get the transcript view. `invoke`, used by the two Orq deployment legs, is unmapped for the same reason and claims `span.chat_completion` — its input and output are chat messages.
