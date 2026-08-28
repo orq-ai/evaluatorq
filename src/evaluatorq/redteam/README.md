@@ -121,10 +121,11 @@ override. That makes version-to-version regression on an identical case bank a
 single command; the target and the model configuration are what you vary.
 
 Because it fixes the data, `previous_run` cannot be combined with `mode`,
-`dataset`, `categories`, `vulnerabilities`, `strategies`, `delivery_methods`, or
-the `max_*_datapoints` caps — passing one raises rather than silently ignoring
-it. Runs saved before this shipped carry no datapoints and are rejected with an
-explanatory error, as are runs stamped with a replay format newer than the
+`dataset`, `categories`, `vulnerabilities`, `strategies`, `delivery_methods`,
+`max_per_category`, or the `max_*_datapoints` caps — passing one raises rather
+than silently ignoring it, by name rather than by value, so `mode='dynamic'`
+raises too. Runs saved before this shipped carry no datapoints and are rejected
+with an explanatory error, as are runs stamped with a replay format newer than the
 installed version understands.
 
 ## `red_team()` parameters

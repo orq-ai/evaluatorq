@@ -23,6 +23,7 @@ from evaluatorq.openresponses.convert_models import (
     OutputTokensDetails,
     Usage,
 )
+from evaluatorq.openresponses.input_items import responses_function_call_item_id
 
 # Message.content accepts any content part; simulation only emits text parts, but
 # the variable annotation must match the (invariant) list element union.
@@ -85,7 +86,7 @@ def to_open_responses(
             for tc in msg.tool_calls or []:
                 function_call = FunctionCall(
                     type='function_call',
-                    id=tc.item_id or _generate_item_id('fc'),
+                    id=responses_function_call_item_id(tc.item_id) or _generate_item_id('fc'),
                     call_id=tc.id,
                     name=tc.function.name,
                     arguments=tc.function.arguments,

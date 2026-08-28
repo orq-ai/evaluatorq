@@ -462,7 +462,7 @@ class ORQAgentTarget(AgentTarget):
         their own ``memory_entity_id`` (minted in ``__init__``) and never share
         server-side memory. ``_task_id`` starts fresh either way.
         """
-        return ORQAgentTarget(
+        return type(self)(
             agent_key=self.agent_key,
             orq_client=self.orq_client,
             memory_entity_id=self.memory_entity_id if self._memory_entity_seeded else None,

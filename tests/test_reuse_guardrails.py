@@ -398,3 +398,64 @@ def test_docstrings_carry_no_sphinx_roles() -> None:
         'shorthand render as literal text on the API reference pages. Use a plain '
         'code span, or an mkdocstrings autoref: [Message][evaluatorq.contracts.Message].'
     )
+
+
+def _new_returns_hardcoded_class(source: str, path: str) -> list[str]:
+    """Return ``path:lineno`` for every ``new()``/``clone()`` that constructs a class from this module.
+
+    A ``new()`` returning ``MyTarget(...)`` instead of ``type(self)(...)`` silently
+    hands back a base instance for any subclass, on every parallel job. ``clone()``
+    is checked too because ``OpenAIAgentTarget.new()`` is ``return self.clone()``,
+    which puts the construction one call away from the method the contract names.
+
+    Constructing a class *defined in the same module* is the signal, rather than a
+    name convention: this stays AST-only, so no optional extra has to be installed
+    to run it.
+    """
+    tree = ast.parse(source)
+    local_classes = {n.name for n in ast.walk(tree) if isinstance(n, ast.ClassDef)}
+    hits: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) or node.name not in ('new', 'clone'):
+            continue
+        for call in (n for n in ast.walk(node) if isinstance(n, ast.Call)):
+            if _dotted(call.func) in local_classes:
+                hits.append(f'{path}:{call.lineno}')
+    return hits
+
+
+def test_new_constructs_via_type_self() -> None:
+    hits = [
+        hit
+        for path in sorted(SRC.rglob('*.py'))
+        for hit in _new_returns_hardcoded_class(path.read_text(encoding='utf-8'), str(path.relative_to(SRC)))
+    ]
+    assert not hits, (
+        'AgentTarget.new()/clone() constructs a hardcoded class: '
+        + ', '.join(hits)
+        + '. Use type(self)(...) so a subclass does not silently degrade to its base class.'
+    )
+
+
+def test_new_hardcoded_class_detector_actually_fires() -> None:
+    source = 'class MyTarget:\n    def new(self):\n        return MyTarget(self._x)\n'
+    assert _new_returns_hardcoded_class(source, 'x.py') == ['x.py:3']
+    assert _new_returns_hardcoded_class(source.replace('return MyTarget', 'return type(self)'), 'x.py') == []
+    # The shape this repo actually ships: new() delegates, clone() constructs.
+    delegating = (
+        'class MyTarget:\n'
+        '    def clone(self):\n'
+        '        return MyTarget(self._x)\n'
+        '\n'
+        '    def new(self):\n'
+        '        return self.clone()\n'
+    )
+    assert _new_returns_hardcoded_class(delegating, 'x.py') == ['x.py:3']
+    # An async new() is a different node type; ast.walk must still see it.
+    assert _new_returns_hardcoded_class(
+        'class MyTarget:\n    async def new(self):\n        return MyTarget()\n', 'x.py'
+    ) == ['x.py:3']
+    # No naming convention required: the old detector missed anything not ending in "Target".
+    assert _new_returns_hardcoded_class('class Backend:\n    def new(self):\n        return Backend()\n', 'x.py') == [
+        'x.py:3'
+    ]

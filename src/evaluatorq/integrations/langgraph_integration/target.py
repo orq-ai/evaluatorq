@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.callbacks.base import BaseCallbackManager
-from langchain_core.messages import AIMessage
 from langchain_core.outputs import LLMResult
 from langchain_core.runnables import RunnableConfig
 
@@ -27,6 +26,7 @@ from evaluatorq.contracts import (
     content_to_text,
     tool_result_to_text,
 )
+from evaluatorq.integrations.langchain_integration.convert import get_attr, get_message_data, get_message_type
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
@@ -36,6 +36,9 @@ logger = logging.getLogger(__name__)
 # Carried by other channels, so skipping them loses nothing: tool_use blocks are
 # read from ``msg.tool_calls``, and reasoning is dropped from ``output`` anyway.
 _NON_TEXT_BLOCKS_HANDLED_ELSEWHERE = frozenset({'tool_use', 'thinking', 'redacted_thinking'})
+
+# `get_message_type` speaks LangChain's vocabulary; this loop speaks the transcript's.
+_LC_TYPE_TO_ROLE = {'ai': 'assistant', 'tool': 'tool', 'human': 'user', 'system': 'system'}
 
 
 def _lc_content_to_text(content: Any) -> str:
@@ -63,6 +66,33 @@ def _lc_content_to_text(content: Any) -> str:
             elif kind not in _NON_TEXT_BLOCKS_HANDLED_ELSEWHERE:
                 logger.warning('LangGraphTarget: dropping unrenderable content block type=%r', kind)
     return ''.join(parts)
+
+
+def _lc_tool_result_to_text(content: Any) -> str:
+    """Render a ``ToolMessage``'s content for the transcript.
+
+    Anthropic-backed graphs return a list of typed blocks even for a plain-text
+    tool result, so a bare ``tool_result_to_text`` hands the judge the block
+    envelope (``[{"type": "text", "text": "shipped"}]``) instead of the tool's
+    answer, and embeds a whole image block into every judge prompt. A list that
+    yields no text falls back to JSON, so a structured return still arrives as
+    data rather than a Python repr — as does a block list of only empty text.
+    """
+    return _lc_content_to_text(content) or tool_result_to_text(content)
+
+
+def _lc_message_role(msg: Any) -> str:
+    """Return ``'assistant'``/``'tool'`` for a LangGraph state message, or ``''`` when unreadable.
+
+    Graph state holds LangChain message objects or any of their dict encodings.
+    A hand-built dict keys the role on ``role``; every other shape is resolved by
+    `get_message_type`, which also handles the ``messages_to_dict()`` and lc
+    ``constructor`` envelopes. ``''`` means unrecognized — the caller warns
+    rather than skipping in silence.
+    """
+    if isinstance(msg, dict) and msg.get('role'):
+        return str(msg['role'])
+    return _LC_TYPE_TO_ROLE.get(get_message_type(msg), '')
 
 
 class _TokenUsageCollector(BaseCallbackHandler):
@@ -202,6 +232,18 @@ class LangGraphTarget(AgentTarget):
         so ``respond`` forwards only the latest user turn. Token usage is
         collected via a per-call ``_TokenUsageCollector`` callback, drained in a
         ``finally:`` block so partial spend on error paths is preserved.
+
+        Each tool call is paired with its ``ToolMessage`` result within the same
+        turn. Two shapes still drop the call from the rendered transcript, both
+        because ``render_tool_call`` cannot emit a call whose ``result`` is
+        ``None``, and both announced by a ``LangGraphTarget:`` warning naming the
+        call:
+
+        - A result that arrives in a *later* ``ainvoke`` — the ``interrupt()`` /
+          resume shape, where a human approves between the call and its execution.
+          The call is dropped in the turn that emitted it, and the result is
+          discarded in the turn that carried it, so neither reaches the judge.
+        - A tool call the graph emits without an ``id``, which nothing can pair.
         """
         if not messages or messages[-1].role != 'user':
             raise ValueError("LangGraphTarget.respond requires messages[-1].role == 'user'")
@@ -271,37 +313,68 @@ class LangGraphTarget(AgentTarget):
             # so the caller receives the current turn's response, not silence.
             logger.warning(
                 'LangGraphTarget: _prev_msg_count (%d) exceeds result len (%d); '
-                'graph may be trimming messages. Falling back to full result.',
+                'graph may be trimming messages. Falling back to full result, so tool calls already '
+                "reported in earlier turns are repeated in this turn's transcript.",
                 self._prev_msg_count,
                 len(result_messages),
             )
             sliced = result_messages
+        tool_index: dict[str, int] = {}
         for msg in sliced:
-            if isinstance(msg, dict):
-                if msg.get('role') != 'assistant':
-                    continue
-                msg_content = msg.get('content', '')
-                tool_calls_iter = msg.get('tool_calls') or []
-            else:
-                if not isinstance(msg, AIMessage):
-                    continue
-                msg_content = getattr(msg, 'content', '')
-                tool_calls_iter = getattr(msg, 'tool_calls', None) or []
+            role = _lc_message_role(msg)
+            # Peels the messages_to_dict()/constructor envelope; a no-op on message objects.
+            data = get_message_data(msg)
 
-            msg_content = _lc_content_to_text(msg_content)
+            if role == 'tool':
+                tool_call_id = str(get_attr(data, 'tool_call_id', '') or '')
+                # pop: a second ToolMessage for the same id must not overwrite the first.
+                idx = tool_index.pop(tool_call_id, None)
+                if idx is None:
+                    logger.warning(
+                        'LangGraphTarget: discarding the tool result for call_id=%r — no tool call with that '
+                        'id was emitted in this ainvoke. In interrupt()/resume graphs the call was emitted '
+                        '(and dropped, result=None) in an earlier turn, so neither it nor this result reaches '
+                        'the transcript.',
+                        tool_call_id,
+                    )
+                    continue
+                # tool_index only ever holds indices of ToolCallOutputItems.
+                item = cast('ToolCallOutputItem', output_items[idx])
+                output_items[idx] = item.model_copy(
+                    update={'result': _lc_tool_result_to_text(get_attr(data, 'content', ''))}
+                )
+                continue
+            if not role:
+                logger.warning(
+                    'LangGraphTarget: skipping a state message of unrecognized shape (type=%r); any tool '
+                    'calls or results it carries will not appear in the transcript.',
+                    type(msg).__name__,
+                )
+                continue
+            if role != 'assistant':
+                continue
+
+            msg_content = _lc_content_to_text(get_attr(data, 'content', ''))
             if msg_content:
                 output_items.append(TextOutputItem(text=msg_content, annotations=[]))
 
-            for tc in tool_calls_iter:
-                call_id = tc.get('id', '') if isinstance(tc, dict) else getattr(tc, 'id', '')
-                name = tc.get('name', '') if isinstance(tc, dict) else getattr(tc, 'name', '')
-                args = tc.get('args', {}) if isinstance(tc, dict) else getattr(tc, 'args', {})
+            for tc in get_attr(data, 'tool_calls', None) or []:
+                call_id = get_attr(tc, 'id', '')
+                name = str(get_attr(tc, 'name', ''))
+                args = get_attr(tc, 'args', {})
                 args_str = json.dumps(args if isinstance(args, dict) else {}, default=str)
-                output_items.append(
-                    ToolCallOutputItem(name=str(name), arguments=args_str, id=call_id, call_id=call_id)
-                    if call_id
-                    else ToolCallOutputItem(name=str(name), arguments=args_str)
-                )
+                # ``id`` is the Responses item id, never the provider's — see
+                # ``openresponses.input_items.responses_function_call_item_id``.
+                if not call_id:
+                    logger.warning(
+                        'LangGraphTarget: tool call %r was emitted without an id, so its ToolMessage result '
+                        'cannot be paired with it and the call is dropped from the transcript.',
+                        name,
+                    )
+                    output_items.append(ToolCallOutputItem(name=name, arguments=args_str))
+                    continue
+                output_items.append(ToolCallOutputItem(name=name, arguments=args_str, call_id=call_id))
+                tool_index[str(call_id)] = len(output_items) - 1
 
         self._prev_msg_count = len(result_messages)
 
@@ -360,7 +433,7 @@ class LangGraphTarget(AgentTarget):
         Each call gets a fresh ``memory_entity_id`` (and thus a fresh LangGraph
         thread), so parallel workers never share checkpointer state.
         """
-        return LangGraphTarget(
+        return type(self)(
             self._graph,
             config=dict(self._extra_config),
             agent_context=self._agent_context,
