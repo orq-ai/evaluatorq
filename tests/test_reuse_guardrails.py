@@ -469,9 +469,10 @@ def test_new_hardcoded_class_detector_actually_fires() -> None:
 # mechanical version.
 _SIM_GENERATORS = SRC / 'simulation' / 'generators'
 
-# Either one accounts for the whole config: the first warns on the caller's own
-# behalf, the second warns on its callers'.
-_CONFIG_ACCOUNTING_CALLS = frozenset({'warn_unread_config_fields', 'generate_structured'})
+# Declaring the read set covers the whole scope; `generate_structured` warns only
+# about the config it is handed, so it covers only the reads inside its own call.
+_SCOPE_ACCOUNTING_CALL = 'warn_unread_config_fields'
+_CALL_ACCOUNTING_CALL = 'generate_structured'
 
 # Accessors that turn a config into call parameters. Fields come from the model
 # itself so a new one is covered the day it is added.
@@ -503,7 +504,7 @@ def _scope_nodes(root: ast.AST) -> list[ast.AST]:
         node = stack.pop()
         nodes.append(node)
         for child in ast.iter_child_nodes(node):
-            if isinstance(child, ast.ClassDef) and child is not root:
+            if isinstance(child, ast.ClassDef):
                 continue
             stack.append(child)
     return nodes
@@ -532,16 +533,37 @@ def _resolved_config_names(nodes: list[ast.AST]) -> set[str]:
     return names
 
 
+def _receives_resolved_config(call: ast.Call, receivers: set[str]) -> bool:
+    """True when ``call`` hands a resolved config to its ``config=`` keyword.
+
+    Without that keyword `generate_structured` warns about nothing at all: it
+    warns through `_fold_config`, which no-ops when ``config is None``.
+    """
+    for keyword in call.keywords:
+        if keyword.arg == 'config':
+            name = _dotted(keyword.value)
+            return 'config' in name.lower() or name in receivers
+    return False
+
+
 def _scope_accounting_gap(nodes: list[ast.AST], settings: frozenset[str]) -> int | None:
     """First unaccounted-for config read in one scope, or ``None``."""
-    called = {_tail(_dotted(node.func)) for node in nodes if isinstance(node, ast.Call)}
-    if 'resolve_sim_llm_config' not in called or called & _CONFIG_ACCOUNTING_CALLS:
+    calls = [node for node in nodes if isinstance(node, ast.Call)]
+    called = {_tail(_dotted(node.func)) for node in calls}
+    if 'resolve_sim_llm_config' not in called or _SCOPE_ACCOUNTING_CALL in called:
         return None
     receivers = _resolved_config_names(nodes)
+    excused = {
+        id(inner)
+        for call in calls
+        if _tail(_dotted(call.func)) == _CALL_ACCOUNTING_CALL and _receives_resolved_config(call, receivers)
+        for inner in ast.walk(call)
+    }
     reads = sorted(
         node.lineno
         for node in nodes
         if isinstance(node, ast.Attribute)
+        and id(node) not in excused
         and node.attr in settings
         and ('config' in (name := _dotted(node.value)).lower() or name in receivers)
     )
@@ -555,9 +577,9 @@ def _config_accounting_gap(source: str) -> int | None:
     Each ``class`` is its own scope, and module-level code outside every class
     is one more. A scope qualifies when it resolves a config
     (`resolve_sim_llm_config`) and then reads sampling settings off it; it is
-    clear when it calls `warn_unread_config_fields` or `generate_structured`.
-    Scoping matters: module-wide clearing let one `generate_structured` call
-    anywhere in a file excuse every other class in that same file.
+    clear when it calls `warn_unread_config_fields`. A
+    `generate_structured(config=...)` call clears only the reads inside it, so a
+    new method reading the config next to one that delegates is still a hit.
     """
     tree = ast.parse(source)
     settings = _call_setting_names()
@@ -607,8 +629,21 @@ def test_config_accounting_detector_actually_fires() -> None:
     assert _config_accounting_gap(warned) is None
     # ...but a warn call outside that class accounts for nothing.
     assert _config_accounting_gap(violating + '\nwarn_unread_config_fields(c, f, caller="other")\n') == 5
-    # ...or by letting generate_structured warn on its behalf.
-    assert _config_accounting_gap(violating.replace('self._client.responses.create', 'generate_structured')) is None
+    # ...or by letting generate_structured warn on its behalf, but only when the config reaches it.
+    delegating = violating.replace('self._client.responses.create', 'generate_structured')
+    assert _config_accounting_gap(delegating) == 5
+    assert _config_accounting_gap(delegating.replace('temperature=self', 'config=self._config, temperature=self')) is None
+    # A sibling method that delegates does not excuse a method that reads the config itself.
+    assert (
+        _config_accounting_gap(
+            violating.replace('temperature=self', 'config=self._config, temperature=self').replace(
+                'self._client.responses.create', 'generate_structured'
+            )
+            + '    async def also(self):\n'
+            '        await self._client.responses.create(max_output_tokens=self._config.max_tokens)\n'
+        )
+        == 7
+    )
     # A module that never resolves a config is out of scope.
     assert _config_accounting_gap('x = self._config.temperature') is None
     # Routing-only reads are not consumption: DatapointGenerator's shape.
