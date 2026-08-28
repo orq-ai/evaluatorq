@@ -533,26 +533,30 @@ def _resolved_config_names(nodes: list[ast.AST]) -> set[str]:
     return names
 
 
-def _receives_resolved_config(call: ast.Call, receivers: set[str]) -> bool:
-    """True when ``call`` hands a resolved config to its ``config=`` keyword.
+def _receives_resolved_config(call: ast.Call, receivers: set[str], *, positional: bool = False) -> bool:
+    """True when ``call`` is handed a resolved config rather than nothing.
 
-    Without that keyword `generate_structured` warns about nothing at all: it
-    warns through `_fold_config`, which no-ops when ``config is None``.
+    Without it neither accounting call accounts for anything:
+    `generate_structured` warns through `_fold_config`, which no-ops when
+    ``config is None``, and `warn_unread_config_fields` returns early on the
+    same condition. ``positional`` also accepts the first positional argument,
+    which is how every real `warn_unread_config_fields` call passes the config.
     """
-    for keyword in call.keywords:
-        if keyword.arg == 'config':
-            name = _dotted(keyword.value)
-            return 'config' in name.lower() or name in receivers
-    return False
+    candidates = [keyword.value for keyword in call.keywords if keyword.arg == 'config']
+    if positional and call.args:
+        candidates.append(call.args[0])
+    return any('config' in (name := _dotted(candidate)).lower() or name in receivers for candidate in candidates)
 
 
 def _scope_accounting_gap(nodes: list[ast.AST], settings: frozenset[str]) -> int | None:
     """First unaccounted-for config read in one scope, or ``None``."""
     calls = [node for node in nodes if isinstance(node, ast.Call)]
-    called = {_tail(_dotted(node.func)) for node in calls}
-    if 'resolve_sim_llm_config' not in called or _SCOPE_ACCOUNTING_CALL in called:
-        return None
     receivers = _resolved_config_names(nodes)
+    if any(
+        _tail(_dotted(call.func)) == _SCOPE_ACCOUNTING_CALL and _receives_resolved_config(call, receivers, positional=True)
+        for call in calls
+    ):
+        return None
     excused = {
         id(inner)
         for call in calls
@@ -574,14 +578,28 @@ def _config_accounting_gap(source: str) -> int | None:
     """First line where ``source`` reads a call setting off a resolved config
     without accounting for the settings it ignores, or ``None``.
 
-    Each ``class`` is its own scope, and module-level code outside every class
-    is one more. A scope qualifies when it resolves a config
-    (`resolve_sim_llm_config`) and then reads sampling settings off it; it is
-    clear when it calls `warn_unread_config_fields`. A
+    A file qualifies when `resolve_sim_llm_config` appears anywhere in it, so a
+    config that arrives as a parameter is seen too. Accounting is then per
+    scope: each ``class`` is its own scope, module-level code outside every
+    class is one more, and a scope is clear when it calls
+    `warn_unread_config_fields` with the config. A
     `generate_structured(config=...)` call clears only the reads inside it, so a
     new method reading the config next to one that delegates is still a hit.
+
+    Two accepted gaps. Any receiver whose dotted name contains ``config``
+    counts as a read, so an unrelated ``self._span_config.temperature`` in a
+    generator module would be a false hit — that is the price of detecting
+    parameter-borne configs at all. And once a scope declares a read set, a
+    later read outside that set is not flagged: checking the declared set
+    against the attributes actually read needs cross-referencing the two, and
+    the failure it would catch is a *stale* warning rather than the silent drop
+    this guardrail exists for.
     """
     tree = ast.parse(source)
+    if not any(
+        isinstance(node, ast.Call) and _tail(_dotted(node.func)) == 'resolve_sim_llm_config' for node in ast.walk(tree)
+    ):
+        return None
     settings = _call_setting_names()
     scopes: list[ast.AST] = [tree, *(node for node in ast.walk(tree) if isinstance(node, ast.ClassDef))]
     hits = [line for scope in scopes if (line := _scope_accounting_gap(_scope_nodes(scope), settings)) is not None]
@@ -629,6 +647,17 @@ def test_config_accounting_detector_actually_fires() -> None:
     assert _config_accounting_gap(warned) is None
     # ...but a warn call outside that class accounts for nothing.
     assert _config_accounting_gap(violating + '\nwarn_unread_config_fields(c, f, caller="other")\n') == 5
+    # ...and neither does one that is handed no config, or some other object.
+    for handed in ('None', 'self._settings'):
+        assert (
+            _config_accounting_gap(
+                violating.replace(
+                    'self._config = resolve',
+                    f'warn_unread_config_fields({handed}, frozenset(), caller="G")\n        self._config = resolve',
+                )
+            )
+            == 6
+        )
     # ...or by letting generate_structured warn on its behalf, but only when the config reaches it.
     delegating = violating.replace('self._client.responses.create', 'generate_structured')
     assert _config_accounting_gap(delegating) == 5
@@ -643,6 +672,26 @@ def test_config_accounting_detector_actually_fires() -> None:
             '        await self._client.responses.create(max_output_tokens=self._config.max_tokens)\n'
         )
         == 7
+    )
+    # A config that arrives as a parameter is a read too, in a module function...
+    resolved_elsewhere = 'class Owner:\n    def __init__(self, c):\n        self._config = resolve_sim_llm_config(llm_config=c, caller="O")\n\n\n'
+    assert (
+        _config_accounting_gap(
+            resolved_elsewhere + 'async def generate_first_message(client, model, config):\n'
+            '    return await client.responses.create(temperature=config.temperature)\n'
+        )
+        == 7
+    )
+    # ...and in a class that takes one without resolving it itself.
+    assert (
+        _config_accounting_gap(
+            resolved_elsewhere + 'class Helper:\n'
+            '    def __init__(self, config):\n'
+            '        self._config = config\n'
+            '    async def go(self):\n'
+            '        return await self._client.responses.create(temperature=self._config.temperature)\n'
+        )
+        == 10
     )
     # A module that never resolves a config is out of scope.
     assert _config_accounting_gap('x = self._config.temperature') is None
