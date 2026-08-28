@@ -290,7 +290,7 @@ systematically blocked judge shows up as one named cause (`evaluation/api_status
 
 ## Replay a previous run
 
-A saved run keeps the attacks it ran — its *cases* — not only the scores it gave
+A saved run keeps its *cases*: the attacks it ran, not only the scores it gave
 them. Replay re-runs those exact cases, in the same order and with the same turn
 budget, against whatever target you point it at now. Dynamic and hybrid runs
 generate fresh attacks every time, so re-running one after a fix changes the
@@ -299,8 +299,8 @@ moved it. Replay holds the exam fixed and varies only the agent.
 
 ### What is replayable
 
-Cases travel with the auto-saved run in the run store — the directory evaluatorq
-writes saved runs to — so replay needs a run that was written there. `save='none'`
+Cases travel with the auto-saved run in the run store, the directory evaluatorq
+writes saved runs to. Replay needs a run that was written there. `save='none'`
 (`--save none`) writes nothing at all: no report, no run-store entry, and no row
 in [`eq redteam runs`](../cli-reference/redteam.md#eq-redteam-runs). A
 `--save detail` artifacts directory is not enough either; the
@@ -309,8 +309,8 @@ in [`eq redteam runs`](../cli-reference/redteam.md#eq-redteam-runs). A
 `eq redteam runs` lists every run whether or not it carries cases, so a row in
 that listing is not a replayability check. Runs saved before replay support
 existed have no cases and are refused with that reason rather than replayed as an
-empty set; so are runs stamped with a replay format newer than the installed
-version understands — upgrade evaluatorq to read those.
+empty set. So are runs stamped with a replay format newer than the installed
+version understands; upgrade evaluatorq to read those.
 
 ### Create a run to replay
 
@@ -379,11 +379,11 @@ see the [`eq redteam run` flag table](../cli-reference/redteam.md#eq-redteam-run
 
 Compare the two numbers yourself — there is no built-in report diff. `eq redteam
 runs` puts both rows side by side, and `merge_reports()` is not the tool for it:
-it concatenates results into one blended summary, which hides the very delta you
-are looking for.
+it concatenates results into one blended summary, which hides the delta you are
+looking for.
 
 !!! warning "`eq redteam runs` reports the inverse metric"
-    Its rate column — and the `vulnerability_rate` field in `--json` — is the
+    Its rate column (and the `vulnerability_rate` field in `--json`) reports the
     *complement* of the `resistance_rate` used everywhere else on this page.
     Gating a build on it without inverting it fails exactly when the agent is
     safest.
@@ -414,8 +414,7 @@ silently ignoring it — the stored run already made that choice, so
 
 They are rejected by name rather than by value, so `mode="dynamic"` raises even
 though it matches the mode a run would use by default. Only the target, the
-models, `max_turns` and `attacker_instructions` may differ — that constraint is
-the feature, not a limitation of it.
+models, `max_turns` and `attacker_instructions` may differ.
 
 ### Use replay in CI
 
