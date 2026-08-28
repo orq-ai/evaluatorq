@@ -70,10 +70,27 @@ def test_legacy_agent_config_round_trips_into_a_call_config() -> None:
     back, _api_key = _config_from_agent_config(
         AgentConfig(model='openai/gpt-4o', temperature=0.25, reasoning_effort='high')
     )
-    assert back.model_fields_set == {'model', 'client', 'api', 'temperature', 'reasoning_effort'}
+    assert back.model_fields_set == {'model', 'api', 'temperature', 'reasoning_effort'}
     assert back.temperature == 0.25
     assert back.reasoning_effort == 'high'
     assert back.max_tokens not in back.model_fields_set
+    assert 'client' not in back.model_fields_set
+
+
+def test_legacy_agent_config_only_marks_client_set_when_caller_supplied_one() -> None:
+    """A legacy `AgentConfig` left at its `client=None` default must not mark
+    `client` as caller-set on the resulting `LLMCallConfig`, or it would shadow
+    the per-call-site client resolution the same way a stray `None` does for
+    every other mirrored field."""
+    from evaluatorq.simulation.agents.base import _config_from_agent_config
+
+    without_client, _ = _config_from_agent_config(AgentConfig(model='openai/gpt-4o'))
+    assert 'client' not in without_client.model_fields_set
+
+    injected_client = MagicMock()
+    with_client, _ = _config_from_agent_config(AgentConfig(model='openai/gpt-4o', client=injected_client))
+    assert 'client' in with_client.model_fields_set
+    assert with_client.client is injected_client
 
 
 def test_agents_default_to_the_responses_api_on_a_bare_call_config() -> None:

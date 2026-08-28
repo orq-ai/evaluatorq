@@ -178,8 +178,16 @@ def _config_from_agent_config(agent_cfg: AgentConfig) -> tuple[LLMCallConfig, st
     resolvers in `BaseAgent` (``_resolved_temperature`` etc.) — a field left at
     its `AgentConfig` default of ``None`` must NOT shadow the per-call-site
     literal / env fallback with `LLMCallConfig`'s own field default.
+
+    ``api`` is the one deliberate exception: it always lands in
+    ``model_fields_set`` so that the legacy path stays pinned to
+    ``chat_completions`` against `BaseAgent.DEFAULT_API`, regardless of
+    whether the caller touched it. ``model`` is unconditional too, since it
+    has a non-``None`` default on `AgentConfig` and is always meaningful.
     """
-    kwargs: dict[str, Any] = {'model': agent_cfg.model, 'client': agent_cfg.client, 'api': agent_cfg.api}
+    kwargs: dict[str, Any] = {'model': agent_cfg.model, 'api': agent_cfg.api}
+    if agent_cfg.client is not None:
+        kwargs['client'] = agent_cfg.client
     for field in _MIRRORED_FIELDS:
         value = getattr(agent_cfg, field)
         if field != 'api' and value is not None:
