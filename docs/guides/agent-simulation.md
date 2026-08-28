@@ -1,7 +1,6 @@
 # Agent Simulation
 
-Drive your agent through realistic multi-turn conversations without writing test
-transcripts by hand. Three LLMs are in play:
+Drive your agent through realistic multi-turn conversations without writing test transcripts by hand. Three LLMs are in play:
 
 - **Your agent** — the target under test (a hosted Orq agent, a callback, or an Orq deployment).
 - **User simulator** — plays a **persona** pursuing a **scenario** goal, turn by turn.
@@ -53,9 +52,7 @@ sequenceDiagram
 
 ## Generate from a one-line description
 
-The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios,
-and opening messages from a short description of your agent — no hand-written
-`Persona(...)` / `Scenario(...)`.
+The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios, and opening messages from a short description of your agent — no hand-written `Persona(...)` / `Scenario(...)`.
 
 === "Orq agent"
 
@@ -145,24 +142,14 @@ and opening messages from a short description of your agent — no hand-written
         asyncio.run(main())
     ```
 
-`agent_description` drives generation; `num_personas × num_scenarios` is how many
-conversations run. The simulator and judge LLMs resolve their provider by
-precedence: if `ORQ_API_KEY` is set they route through the Orq AI Router;
-otherwise they fall back to OpenAI via `OPENAI_API_KEY` (an explicitly passed
-client always wins). See [Configuration](../configuration.md).
+`agent_description` drives generation; `num_personas × num_scenarios` is how many conversations run. The simulator and judge LLMs resolve their provider by precedence: if `ORQ_API_KEY` is set they route through the Orq AI Router; otherwise they fall back to OpenAI via `OPENAI_API_KEY` (an explicitly passed client always wins). See [Configuration](../configuration.md).
 
 !!! note "CI and local runs"
-    Dropped simulations raise by default; ordinary failed goals remain in the
-    returned results. Set `exit_on_failure=False` for exploratory runs. When
-    `ORQ_API_KEY` is available, results upload to Orq by default; pass
-    `upload_results=False` for a local-only run.
+    Dropped simulations raise by default; ordinary failed goals remain in the returned results. Set `exit_on_failure=False` for exploratory runs. When `ORQ_API_KEY` is available, results upload to Orq by default; pass `upload_results=False` for a local-only run.
 
 ## Seed by archetype
 
-The middle ground between "just give me five" and specifying every trait: name
-the archetype, and `generate_persona()` / `generate_scenario()` fill the rest.
-You get back real `Persona` / `Scenario` objects to inspect, tweak, and pass to
-`simulate()`.
+The middle ground between "just give me five" and specifying every trait: name the archetype, and `generate_persona()` / `generate_scenario()` fill the rest. You get back real `Persona` / `Scenario` objects to inspect, tweak, and pass to `simulate()`.
 
 ```python
 import asyncio
@@ -192,20 +179,13 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-Batch forms `generate_personas([...])` / `generate_scenarios([...])` take a list
-of seeds and return one object each.
+Batch forms `generate_personas([...])` / `generate_scenarios([...])` take a list of seeds and return one object each.
 
 ## Full control: hand-build personas
 
-When you want exact personas and pass/fail criteria, build them yourself and call
-`simulate()`. A **persona** is *who* is talking (patience, assertiveness, tone);
-a **scenario** is *what they want* plus the **criteria** the agent must (or must
-not) satisfy.
+When you want exact personas and pass/fail criteria, build them yourself and call `simulate()`. A **persona** is *who* is talking (patience, assertiveness, tone); a **scenario** is *what they want* plus the **criteria** the agent must (or must not) satisfy.
 
-A persona requires its core traits — `name`, `patience`, `assertiveness`,
-`politeness`, `technical_level`, `communication_style`, and `background`. Only
-`emotional_arc` and `cultural_context` default (to `None`). A scenario needs just
-`name` and `goal`; everything else, including `criteria`, is optional.
+A persona requires its core traits — `name`, `patience`, `assertiveness`, `politeness`, `technical_level`, `communication_style`, and `background`. Only `emotional_arc` and `cultural_context` default (to `None`). A scenario needs just `name` and `goal`; everything else, including `criteria`, is optional.
 
 === "Orq agent"
 
@@ -324,29 +304,18 @@ A persona requires its core traits — `name`, `patience`, `assertiveness`,
         asyncio.run(main())
     ```
 
-One persona × one scenario yields one `SimulationResult` with `goal_achieved`,
-`goal_completion_score`, `turn_count`, `rules_broken`, and the full message
-transcript.
+One persona × one scenario yields one `SimulationResult` with `goal_achieved`, `goal_completion_score`, `turn_count`, `rules_broken`, and the full message transcript.
 
 ### How criteria are scored
 
-The judge audits every `Criterion` on every turn and the runner folds those
-verdicts over the whole conversation, so a violation on turn 2 still shows up in a
-run that ends on turn 6:
+The judge audits every `Criterion` on every turn and the runner folds those verdicts over the whole conversation, so a violation on turn 2 still shows up in a run that ends on turn 6:
 
-- **`must_happen`** passes if it occurred in *any* turn. Never occurring is a
-  failure — intent, plans, and paraphrases do not count.
-- **`must_not_happen`** fails if it was violated in *any* turn. One violation is
-  permanent; a clean later turn does not clear it.
+- **`must_happen`** passes if it occurred in *any* turn. Never occurring is a failure — intent, plans, and paraphrases do not count.
+- **`must_not_happen`** fails if it was violated in *any* turn. One violation is permanent; a clean later turn does not clear it.
 
-The judge is only ever asked **what occurred**, never what passed — a pass/fail
-flag means the opposite thing for the two criterion types, and models invert it.
-Occurrence is mapped to pass/fail in code, so `rules_broken` is derived, not
-reported. Failures land in `rules_broken` (criterion ids), `criteria_results`
-(description → passed), and the `criteria_met` score.
+The judge is only ever asked **what occurred**, never what passed — a pass/fail flag means the opposite thing for the two criterion types, and models invert it. Occurrence is mapped to pass/fail in code, so `rules_broken` is derived, not reported. Failures land in `rules_broken` (criterion ids), `criteria_results` (description → passed), and the `criteria_met` score.
 
-Per-criterion detail is in `metadata['criteria_meta']`, where `audited` says whether
-the judge actually returned a verdict for that criterion:
+Per-criterion detail is in `metadata['criteria_meta']`, where `audited` says whether the judge actually returned a verdict for that criterion:
 
 ```python
 for c in result.metadata['criteria_meta']:
@@ -354,57 +323,32 @@ for c in result.metadata['criteria_meta']:
         print(f"{c['id']} was not audited by the judge")
 ```
 
-A `must_happen` the judge confirmed never occurred and one it did not audit both
-show `passed: False`; use `audited` to distinguish them. It has three states, not
-two: `True` audited, `False` not audited, and `None` on runs saved before the
-field existed — which is why the example tests `is False` rather than `not
-c['audited']`.
+A `must_happen` the judge confirmed never occurred and one it did not audit both show `passed: False`; use `audited` to distinguish them. It has three states, not two: `True` audited, `False` not audited, and `None` on runs saved before the field existed — which is why the example tests `is False` rather than `not c['audited']`.
 
-Each entry also carries **`evidence`** — the quote from the turn where the
-criterion's occurrence first flipped, taken from the judge's `criteria_verdicts`
-audit. It is `''` when the criterion never occurred (or occurred without a
-tracked quote) and `None` when no tracker was available, same as `audited`.
+Each entry also carries **`evidence`** — the quote from the turn where the criterion's occurrence first flipped, taken from the judge's `criteria_verdicts` audit. It is `''` when the criterion never occurred (or occurred without a tracked quote) and `None` when no tracker was available, same as `audited`.
 
-Both keys reach the reports. A criterion that was not audited renders as **not
-audited** (a neutral `?`, never a green tick) and is counted separately from the
-"N/M criteria met" tally. A run with `criteria_verified = False` says so above
-the criteria list.
+Both keys reach the reports. A criterion that was not audited renders as **not audited** (a neutral `?`, never a green tick) and is counted separately from the "N/M criteria met" tally. A run with `criteria_verified = False` says so above the criteria list.
 
-The `criteria_met` score applies the same rule: an unaudited criterion is **not
-met**, so the score and the tally beside it agree.
+The `criteria_met` score applies the same rule: an unaudited criterion is **not met**, so the score and the tally beside it agree.
 
 !!! warning "A custom `judge=` must report per-criterion verdicts"
 
-    The built-in `JudgeAgent` audits each unsettled criterion every turn. A custom
-    judge that does not populate `Judgment.criteria_verdicts` cannot provide a
-    reliable per-criterion audit.
+    The built-in `JudgeAgent` audits each unsettled criterion every turn. A custom judge that does not populate `Judgment.criteria_verdicts` cannot provide a reliable per-criterion audit.
 
-    That run is marked `SimulationResult.criteria_verified = False`, the runner logs
-    a warning naming the scenario, and `criteria_met` scores it `0.0` — unknown, not
-    met. Check the field, not the transcript:
+    That run is marked `SimulationResult.criteria_verified = False`, the runner logs a warning naming the scenario, and `criteria_met` scores it `0.0` — unknown, not met. Check the field, not the transcript:
 
     ```python
     if result.criteria_verified is False:
         print('criteria unverified — the judge returned no per-criterion audit')
     ```
 
-A run that ends in an error or a timeout never reaches the audit either. Those
-results also score `criteria_met` as `0.0` (not `1.0`) and log a warning, so neither
-a crashed run nor an unaudited one can inflate the average. A target that dies
-mid-run keeps whatever the judge had already **confirmed** — a `must_not_happen` it
-saw violated stays failed — while a `must_happen` that simply had not happened yet
-is reported as **unknown**, never as failed. The run was cut short before that
-criterion had its chance: it is not the judge's verdict that nothing happened;
-nobody looked.
+A run that ends in an error or a timeout never reaches the audit either. Those results also score `criteria_met` as `0.0` (not `1.0`) and log a warning, so neither a crashed run nor an unaudited one can inflate the average. A target that dies mid-run keeps whatever the judge had already **confirmed** — a `must_not_happen` it saw violated stays failed — while a `must_happen` that simply had not happened yet is reported as **unknown**, never as failed. The run was cut short before that criterion had its chance: it is not the judge's verdict that nothing happened; nobody looked.
 
-The callable passed to `target` is the only structural difference from the Orq path —
-personas, scenarios, criteria, and the result shape are identical. Swap the
-callback body for any HTTP/LLM agent.
+The callable passed to `target` is the only structural difference from the Orq path — personas, scenarios, criteria, and the result shape are identical. Swap the callback body for any HTTP/LLM agent.
 
 ## The four built-in scorers
 
-`evaluator_names` picks from four built-ins. Two read the judge's verdicts; two apply
-a *policy* you can change with `scoring=`:
+`evaluator_names` picks from four built-ins. Two read the judge's verdicts; two apply a *policy* you can change with `scoring=`:
 
 | Scorer | 0–1 meaning | Tunable |
 |---|---|---|
@@ -413,26 +357,13 @@ a *policy* you can change with `scoring=`:
 | `turn_efficiency` | How few turns it took to reach the goal. `0.0` if the goal was missed. | yes |
 | `conversation_quality` | Weighted composite of the other three. | yes |
 
-The default is `["goal_achieved", "criteria_met"]` — the two that are meaningful for
-every scenario. The other two are opt-in.
+The default is `["goal_achieved", "criteria_met"]` — the two that are meaningful for every scenario. The other two are opt-in.
 
 ### What `turn_efficiency` actually measures
 
-It is a **cost** proxy, conditioned on success: *given that the goal was reached, how
-many conversational turns did it take?* The assumption behind "fewer is better" is that
-the extra turns are usually the agent re-asking for something it could have inferred,
-clarifying its own vague answer, or wandering — so a user who got what they came for in
-two turns had a better experience, and cost less to serve, than one who needed twelve.
-A run that did **not** reach the goal scores `0.0` outright: failing quickly is not
-efficiency.
+It is a **cost** proxy, conditioned on success: *given that the goal was reached, how many conversational turns did it take?* The assumption behind "fewer is better" is that the extra turns are usually the agent re-asking for something it could have inferred, clarifying its own vague answer, or wandering — so a user who got what they came for in two turns had a better experience, and cost less to serve, than one who needed twelve. A run that did **not** reach the goal scores `0.0` outright: failing quickly is not efficiency.
 
-**Where that assumption breaks.** A task that legitimately needs many turns — a long
-intake form, a multi-step troubleshooting tree, a negotiation — is penalised by this
-metric for doing its job properly. If your scenarios look like that, either move the
-cliffs out so the curve matches a realistic conversation length, or leave
-`turn_efficiency` out of `evaluator_names` and ignore the score. Do not read a low
-`turn_efficiency` as a quality problem without checking the transcript length you
-actually expect.
+**Where that assumption breaks.** A task that legitimately needs many turns — a long intake form, a multi-step troubleshooting tree, a negotiation — is penalised by this metric for doing its job properly. If your scenarios look like that, either move the cliffs out so the curve matches a realistic conversation length, or leave `turn_efficiency` out of `evaluator_names` and ignore the score. Do not read a low `turn_efficiency` as a quality problem without checking the transcript length you actually expect.
 
 The default curve is a set of cliffs, then a linear decay to a floor:
 
@@ -440,10 +371,7 @@ The default curve is a set of cliffs, then a linear decay to a floor:
 |---|---|---|---|---|---|---|---|
 | Score | 1.0 | 0.9 | 0.7 | 0.6 | 0.5 | 0.4 | 0.3 |
 
-Past the last cliff each turn costs `turn_efficiency_decay_per_turn` (0.1), starting
-from that cliff's score, until `turn_efficiency_floor` (0.3) — a very long conversation
-that *did* reach the goal keeps a non-zero score, because it was inefficient, not
-failed.
+Past the last cliff each turn costs `turn_efficiency_decay_per_turn` (0.1), starting from that cliff's score, until `turn_efficiency_floor` (0.3) — a very long conversation that *did* reach the goal keeps a non-zero score, because it was inefficient, not failed.
 
 ### The `conversation_quality` composite
 
@@ -455,12 +383,9 @@ One number per conversation, weighted across the other three scorers:
 | `criteria_met_weight` | `0.3` | What share of the scenario's criteria were audited and satisfied? |
 | `turn_efficiency_weight` | `0.3` | How few turns that took (the cost proxy above). |
 
-The weights must sum to `1.0` — `SimulationScoringConfig` rejects any other sum at
-construction, so the composite stays on the same 0–1 scale as its parts and remains
-comparable across runs.
+The weights must sum to `1.0` — `SimulationScoringConfig` rejects any other sum at construction, so the composite stays on the same 0–1 scale as its parts and remains comparable across runs.
 
-**Worked example.** A refund conversation runs 4 turns, the judge marks the goal
-achieved, and 1 of the scenario's 2 criteria is met:
+**Worked example.** A refund conversation runs 4 turns, the judge marks the goal achieved, and 1 of the scenario's 2 criteria is met:
 
 - `goal_achieved` = `1.0`
 - `criteria_met` = `1/2` = `0.5`
@@ -487,31 +412,18 @@ results = await simulate(
 )
 ```
 
-`scoring=` is accepted by both `simulate()` and `generate_and_simulate()`, and omitting
-it uses the defaults above. The config is bounded and rejects unknown fields, so a typo
-fails at construction rather than silently scoring with the shipped policy. Two shapes
-it refuses on purpose, because both produce a report that is quietly wrong rather than
-obviously broken:
+`scoring=` is accepted by both `simulate()` and `generate_and_simulate()`, and omitting it uses the defaults above. The config is bounded and rejects unknown fields, so a typo fails at construction rather than silently scoring with the shipped policy. Two shapes it refuses on purpose, because both produce a report that is quietly wrong rather than obviously broken:
 
-- cliffs that are not ordered — turn thresholds must strictly increase and scores must
-  not increase with them, so a longer conversation can never score higher than a
-  shorter one;
+- cliffs that are not ordered — turn thresholds must strictly increase and scores must not increase with them, so a longer conversation can never score higher than a shorter one;
 - weights that do not sum to `1.0`.
 
 ## From existing traces and data
 
-You do not have to invent every test case from scratch. If you already have
-recorded conversations, real production traces, or a batch of datapoints from an
-earlier run, you can feed that history back into simulation in two ways: replay
-the exact same cases, or mine them for the archetypes that drive fresh ones.
+You do not have to invent every test case from scratch. If you already have recorded conversations, real production traces, or a batch of datapoints from an earlier run, you can feed that history back into simulation in two ways: replay the exact same cases, or mine them for the archetypes that drive fresh ones.
 
 ### Replay stored datapoints
 
-A `SimulationDatapoint` bundles one persona, one scenario, and the opening
-message. Every case simulation runs is one of these, and you can persist them for
-reuse. `eq sim generate` writes the cases it builds to a JSONL file with
-`--datapoints PATH` (one datapoint per line); `eq sim run` does the same alongside a
-live run with `--datapoints PATH`:
+A `SimulationDatapoint` bundles one persona, one scenario, and the opening message. Every case simulation runs is one of these, and you can persist them for reuse. `eq sim generate` writes the cases it builds to a JSONL file with `--datapoints PATH` (one datapoint per line); `eq sim run` does the same alongside a live run with `--datapoints PATH`:
 
 ```bash
 # Generate cases once and keep them
@@ -523,10 +435,7 @@ eq sim generate --agent-description "e-commerce support agent" \
 eq sim simulate --input cases.jsonl --target agent:my-support-agent
 ```
 
-Because the file pins the personas, scenarios, and first messages, the run is
-reproducible. That makes it the natural way to compare two agent versions, or the
-same agent under a new set of evaluators, on an identical bank of cases. From the
-SDK the same file loads via `load_datapoints_from_jsonl()`:
+Because the file pins the personas, scenarios, and first messages, the run is reproducible. That makes it the natural way to compare two agent versions, or the same agent under a new set of evaluators, on an identical bank of cases. From the SDK the same file loads via `load_datapoints_from_jsonl()`:
 
 ```python
 import asyncio
@@ -553,10 +462,7 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-If your cases already live in Orq as a dataset, point `simulate()` at it with
-`dataset_id=` and skip the local file entirely. Each row's `inputs` should carry a
-`datapoint` object (`persona`, `scenario`, `first_message`), or a `persona` +
-`scenario` pair, matching the `SimulationDatapoint` shape above:
+If your cases already live in Orq as a dataset, point `simulate()` at it with `dataset_id=` and skip the local file entirely. Each row's `inputs` should carry a `datapoint` object (`persona`, `scenario`, `first_message`), or a `persona` + `scenario` pair, matching the `SimulationDatapoint` shape above:
 
 ```python
 results = await simulate(
@@ -567,30 +473,20 @@ results = await simulate(
 )
 ```
 
-`simulate()` takes five mutually exclusive sources — `datapoints`, `dataset_id`,
-`experiment_id`, `previous_run`, and `personas` + `scenarios`. Pass exactly one
-per run.
+`simulate()` takes five mutually exclusive sources — `datapoints`, `dataset_id`, `experiment_id`, `previous_run`, and `personas` + `scenarios`. Pass exactly one per run.
 
 ### Ground new cases in real traces
 
-Replay reruns what you already have. The other move is to generate *new* cases
-that are shaped by what really happened. Production traces show you the user
-archetypes and situations your agent actually meets.
+Replay reruns what you already have. The other move is to generate *new* cases that are shaped by what really happened. Production traces show you the user archetypes and situations your agent actually meets.
 
-The direct route is `eq sim from-traces`, which pulls recent traces from the Orq
-traces API and writes one datapoint per conversation — persona and scenario
-inferred from a short summary of it, opening message written from that persona
-and scenario:
+The direct route is `eq sim from-traces`, which pulls recent traces from the Orq traces API and writes one datapoint per conversation — persona and scenario inferred from a short summary of it, opening message written from that persona and scenario:
 
 ```bash
 eq sim from-traces --output traces_datapoints.jsonl --limit 50 --lookback-hours 24
 eq sim simulate --input traces_datapoints.jsonl --target agent:my-agent
 ```
 
-Add `--extend N` to also generate N new datapoints matching the traffic
-distribution of the fetched traces, so you get cases *around* real traffic rather
-than only the recorded ones. The same thing is available from Python as
-`datapoints_from_traces()` and `extend_from_traces()`:
+Add `--extend N` to also generate N new datapoints matching the traffic distribution of the fetched traces, so you get cases *around* real traffic rather than only the recorded ones. The same thing is available from Python as `datapoints_from_traces()` and `extend_from_traces()`:
 
 ```python
 from evaluatorq.simulation import (
@@ -608,19 +504,9 @@ Full flag list: [`eq sim from-traces`](../cli-reference/simulation.md).
 
 #### What happens between a trace and a datapoint
 
-Fetching is shared; both modes are then map-then-reduce. Each conversation is
-summarized on its own (the map), and the summaries — never the raw transcripts —
-go into the call that produces the output (the reduce). That is what keeps a
-prompt's size a function of *how many* traces there are rather than how long any
-one of them ran: before it, a single long agentic session crowded out the twenty
-short conversations it should have been weighed against.
+Fetching is shared; both modes are then map-then-reduce. Each conversation is summarized on its own (the map), and the summaries — never the raw transcripts — go into the call that produces the output (the reduce). That is what keeps a prompt's size a function of *how many* traces there are rather than how long any one of them ran: before it, a single long agentic session crowded out the twenty short conversations it should have been weighed against.
 
-Both modes summarize unconditionally: every conversation gets exactly one
-summarize call, and nothing downstream reads the raw transcript again — direct
-mode's persona/scenario inference reads the summary, and so does extension
-mode's traffic-profile reduce. A run doing both calls `summarize_conversations`
-once and passes the result as `summaries=` to each, so no conversation is
-summarized twice.
+Both modes summarize unconditionally: every conversation gets exactly one summarize call, and nothing downstream reads the raw transcript again — direct mode's persona/scenario inference reads the summary, and so does extension mode's traffic-profile reduce. A run doing both calls `summarize_conversations` once and passes the result as `summaries=` to each, so no conversation is summarized twice.
 
 ```mermaid
 flowchart TD
@@ -645,8 +531,7 @@ flowchart TD
     N --> O["N new SimulationDatapoints<br/>synthetic, not replayed"]
 ```
 
-Every LLM-side limit lives on `TraceAnalysisConfig`, passed as `config=` to either
-function; the fetch-side ones are fixed:
+Every LLM-side limit lives on `TraceAnalysisConfig`, passed as `config=` to either function; the fetch-side ones are fixed:
 
 | Limit | Default | Why |
 |---|---|---|
@@ -660,96 +545,35 @@ function; the fetch-side ones are fixed:
 | `generate_first_message` | `True` | Write the opening from the persona; `False` replays the recorded one |
 | `redact_pii` | `True` | Instruct the model to replace identifying values with placeholders as it writes |
 
-`summary_target_tokens` is a target, not a cut, and deliberately so. Truncating a
-summary removes its end, which is exactly where the prompt puts what went wrong
-and what was unusual — the two things the next step most needs. A length the
-model can aim at (models reason in tokens, not characters) buys a soft bound that
-keeps whole sentences. The reduce prompt's expected size is that target times
-`max_reduce_summaries`.
+`summary_target_tokens` is a target, not a cut, and deliberately so. Truncating a summary removes its end, which is exactly where the prompt puts what went wrong and what was unusual — the two things the next step most needs. A length the model can aim at (models reason in tokens, not characters) buys a soft bound that keeps whole sentences. The reduce prompt's expected size is that target times `max_reduce_summaries`.
 
-The completion budgets, by contrast, are deliberately far above the answers they
-bound. Reasoning models spend most of a budget thinking before emitting anything,
-so a budget sized to the output gets consumed by reasoning tokens and truncates
-the answer to nothing — the prompt bounds the length, the budget bounds the
-failure. Truncation is never silent: `generate_structured` raises on a
-length-finished response on every path rather than handing back a cut-off object.
+The completion budgets, by contrast, are deliberately far above the answers they bound. Reasoning models spend most of a budget thinking before emitting anything, so a budget sized to the output gets consumed by reasoning tokens and truncates the answer to nothing — the prompt bounds the length, the budget bounds the failure. Truncation is never silent: `generate_structured` raises on a length-finished response on every path rather than handing back a cut-off object.
 
-Pagination stops when `--limit` is met, when the API says there is no more, or
-when a page returns rows that all lack a `trace_id` — a page that adds nothing
-cannot be followed by one that does, so that is where the loop ends, and it says
-so in a warning. There is no fixed page ceiling, so a large `--limit` is honoured
-for as many pages as it genuinely takes.
+Pagination stops when `--limit` is met, when the API says there is no more, or when a page returns rows that all lack a `trace_id` — a page that adds nothing cannot be followed by one that does, so that is where the loop ends, and it says so in a warning. There is no fixed page ceiling, so a large `--limit` is honoured for as many pages as it genuinely takes.
 
-A trace that fails its span fetch, returns a non-list payload, or yields no user
-message is dropped with a warning rather than failing the batch — likewise an
-inference or summarize call that raises or returns nothing parseable. Extension
-mode logs how many of the sampled conversations actually reached the profile,
-because that count is the denominator its shares are computed over. A run that
-produced fewer datapoints than traces has those warnings behind it.
+A trace that fails its span fetch, returns a non-list payload, or yields no user message is dropped with a warning rather than failing the batch — likewise an inference or summarize call that raises or returns nothing parseable. Extension mode logs how many of the sampled conversations actually reached the profile, because that count is the denominator its shares are computed over. A run that produced fewer datapoints than traces has those warnings behind it.
 
-Generation runs before a simulation exists, so its spend has no field on any
-*result*. Each phase reports its own total to the run log — `Trace
-summarization`, `Trace persona/scenario inference`, `Trace traffic profiling`,
-`Persona/scenario generation` and `Simulation recommendations` each log the
-tokens, the number of LLM calls, and the cost when the models are priced. The
-call count includes the fallback rungs a structured-output call burned on the way
-to an answer, and a rung whose usage the provider did not report is counted as
-one unpriced call rather than as zero, so the figure reads as a lower bound
-instead of a confident total. A call that *raised* is counted too — the rungs it
-burned before truncating or refusing were billed, and the exception carries their
-total for the phase to pick up.
+Generation runs before a simulation exists, so its spend has no field on any *result*. Each phase reports its own total to the run log — `Trace summarization`, `Trace persona/scenario inference`, `Trace traffic profiling`, `Persona/scenario generation` and `Simulation recommendations` each log the tokens, the number of LLM calls, and the cost when the models are priced. The call count includes the fallback rungs a structured-output call burned on the way to an answer, and a rung whose usage the provider did not report is counted as one unpriced call rather than as zero, so the figure reads as a lower bound instead of a confident total. A call that *raised* is counted too — the rungs it burned before truncating or refusing were billed, and the exception carries their total for the phase to pick up.
 
-`SimulationRun.token_usage_total` is the run-level figure: every result's
-`token_usage`, plus — for `generate_and_simulate()` — the GENERATE stage's
-persona/scenario generation cost, plus the executive summary's own completion
-cost when one was generated. It is recomputed after the executive summary runs
-so it never goes stale relative to that later-arriving cost. **Recommendation
-generation is not folded in** — that spend stays log-only (`Simulation
-recommendations: N tokens over M LLM call(s), $X`), the same as the trace-analysis
-phases above. `None` only when nothing in the run was ever billed.
+`SimulationRun.token_usage_total` is the run-level figure: every result's `token_usage`, plus — for `generate_and_simulate()` — the GENERATE stage's persona/scenario generation cost, plus the executive summary's own completion cost when one was generated. It is recomputed after the executive summary runs so it never goes stale relative to that later-arriving cost. **Recommendation generation is not folded in** — that spend stays log-only (`Simulation recommendations: N tokens over M LLM call(s), $X`), the same as the trace-analysis phases above. `None` only when nothing in the run was ever billed.
 
 ##### What lands in the generated dataset
 
-Trace-derived datapoints are built from real conversations, and a persona
-background or scenario context written straight from one carries whatever was in
-it — names, order numbers, emails — into a JSONL that then gets committed and
-shared. By default both the summarize and the persona/scenario prompts are
-instructed to redact as they write, replacing identifying values with
-placeholders (`[CUSTOMER_NAME]`, `[ORDER_ID]`) that keep the meaning; the profile
-prompt is told to carry placeholders through rather than invent concrete values.
+Trace-derived datapoints are built from real conversations, and a persona background or scenario context written straight from one carries whatever was in it — names, order numbers, emails — into a JSONL that then gets committed and shared. By default both the summarize and the persona/scenario prompts are instructed to redact as they write, replacing identifying values with placeholders (`[CUSTOMER_NAME]`, `[ORDER_ID]`) that keep the meaning; the profile prompt is told to carry placeholders through rather than invent concrete values.
 
-`--no-redact-pii` (or `TraceAnalysisConfig(redact_pii=False)`) turns it off, for
-when the concrete values are the point — reproducing a specific incident, or a
-fixture where a changed order number breaks the comparison — and the dataset
-stays somewhere the raw traffic could already go. With it off the profile prompt
-also drops its "keep the placeholders" line, since telling a model to preserve
-placeholders that were never introduced invites it to invent them, and invented
-placeholders read as redaction that did not happen.
+`--no-redact-pii` (or `TraceAnalysisConfig(redact_pii=False)`) turns it off, for when the concrete values are the point — reproducing a specific incident, or a fixture where a changed order number breaks the comparison — and the dataset stays somewhere the raw traffic could already go. With it off the profile prompt also drops its "keep the placeholders" line, since telling a model to preserve placeholders that were never introduced invites it to invent them, and invented placeholders read as redaction that did not happen.
 
-Either way this is an instruction to a model, not a guarantee. Treat a generated
-dataset from production traffic as needing the same review any export of that
-traffic would.
+Either way this is an instruction to a model, not a guarantee. Treat a generated dataset from production traffic as needing the same review any export of that traffic would.
 
 ##### Why the opening message is generated, not replayed
 
-Replaying the real user's first message looks like the faithful choice and
-behaves worse. The simulated user is the *persona*; if turn one is production
-text the persona would not have written, the conversation opens in one voice and
-continues in another, and whatever the agent does with that mismatch is not
-evidence about either. Reusing recorded text also carries any PII in it into a
-generated dataset that then gets committed and shared.
+Replaying the real user's first message looks like the faithful choice and behaves worse. The simulated user is the *persona*; if turn one is production text the persona would not have written, the conversation opens in one voice and continues in another, and whatever the agent does with that mismatch is not evidence about either. Reusing recorded text also carries any PII in it into a generated dataset that then gets committed and shared.
 
-`--replay-first-message` (or `TraceAnalysisConfig(generate_first_message=False)`)
-is the opt-out, for when you are reproducing one specific recorded case and want
-the exact opening back.
+`--replay-first-message` (or `TraceAnalysisConfig(generate_first_message=False)`) is the opt-out, for when you are reproducing one specific recorded case and want the exact opening back.
 
 #### Hand-picked seeds
 
-When you want curated archetypes rather than a straight pull from traffic, seed
-generation yourself. Pull the recurring patterns out of your traces (the impatient
-buyer disputing a charge, the confused first-time user, the edge case that broke
-last week), then hand them to `generate_personas()` / `generate_scenarios()` as
-short seed phrases:
+When you want curated archetypes rather than a straight pull from traffic, seed generation yourself. Pull the recurring patterns out of your traces (the impatient buyer disputing a charge, the confused first-time user, the edge case that broke last week), then hand them to `generate_personas()` / `generate_scenarios()` as short seed phrases:
 
 ```python
 import asyncio
@@ -781,24 +605,14 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-The seed is a steer, not a transcript: generation fills in the persona traits and
-scenario criteria and writes a natural opening message, so each run explores the
-space around the pattern rather than replaying one recorded conversation. Persist
-the generated cases (`eq sim generate --datapoints`, or `eq sim run
---datapoints`) and they become a replayable bank for the section above.
+The seed is a steer, not a transcript: generation fills in the persona traits and scenario criteria and writes a natural opening message, so each run explores the space around the pattern rather than replaying one recorded conversation. Persist the generated cases (`eq sim generate --datapoints`, or `eq sim run --datapoints`) and they become a replayable bank for the section above.
 
 !!! note "Seeds are a deliberate choice, not the only route"
-    Writing seed phrases by hand means you decide which archetypes matter, rather
-    than inheriting whatever your recent traffic happened to contain. When you'd
-    rather start from real traffic, use `eq sim from-traces` above — it infers the
-    personas and scenarios for you.
+    Writing seed phrases by hand means you decide which archetypes matter, rather than inheriting whatever your recent traffic happened to contain. When you'd rather start from real traffic, use `eq sim from-traces` above — it infers the personas and scenarios for you.
 
 ## Reading a run in the dashboard
 
-Runs are saved to `.evaluatorq/sim-runs/<name>_<timestamp>.json` — automatically
-by `eq sim run` (unless you pass `--no-save`), and by `simulate()` when called
-with `save=True`. `eq dashboard` browses those files locally, no external
-service:
+Runs are saved to `.evaluatorq/sim-runs/<name>_<timestamp>.json` — automatically by `eq sim run` (unless you pass `--no-save`), and by `simulate()` when called with `save=True`. `eq dashboard` browses those files locally, no external service:
 
 ```bash
 uv add "evaluatorq[dashboard]"
@@ -808,13 +622,9 @@ eq dashboard .evaluatorq/sim-runs  # scope to simulation runs
 ```
 
 !!! warning "The Python examples above don't save by default"
-    `simulate()` and `generate_and_simulate()` default to `save=False`, so a
-    script copy-pasted from earlier on this page leaves the dashboard empty.
-    Pass `save=True`, or drive the run from the CLI (`eq sim run`), which saves
-    unless you pass `--no-save`.
+    `simulate()` and `generate_and_simulate()` default to `save=False`, so a script copy-pasted from earlier on this page leaves the dashboard empty. Pass `save=True`, or drive the run from the CLI (`eq sim run`), which saves unless you pass `--no-save`.
 
-Land on the cross-surface overview, pick the run from **Agent Sim**, then work
-down the report tabs from headline to transcript:
+Land on the cross-surface overview, pick the run from **Agent Sim**, then work down the report tabs from headline to transcript:
 
 | Tab | What it answers |
 |---|---|
@@ -826,54 +636,29 @@ down the report tabs from headline to transcript:
 | **Config** | Run metadata plus the persona dials |
 | **Compare** | KPI and per-conversation deltas against a second run |
 
-Two easily conflated numbers: **pass rate** is the share of conversations where
-the judge set `goal_achieved`; **average score** is the mean
-`goal_completion_score`, so a run can average 0.7 while passing half its
-conversations. The **CONFIDENCE** badge is a band on the pass rate, not a
-statistical confidence — it carries no sample-size meaning.
+Two easily conflated numbers: **pass rate** is the share of conversations where the judge set `goal_achieved`; **average score** is the mean `goal_completion_score`, so a run can average 0.7 while passing half its conversations. The **CONFIDENCE** badge is a band on the pass rate, not a statistical confidence — it carries no sample-size meaning.
 
-The tab-by-tab walkthrough, with screenshots, lives in the Dashboard reference:
-[Reading a simulation run](../dashboard.md#reading-a-simulation-run). See also
-[filters](../dashboard.md#filters), [trace links](../dashboard.md#orq-trace-links)
-and [downloads](../dashboard.md#downloads).
+The tab-by-tab walkthrough, with screenshots, lives in the Dashboard reference: [Reading a simulation run](../dashboard.md#reading-a-simulation-run). See also [filters](../dashboard.md#filters), [trace links](../dashboard.md#orq-trace-links) and [downloads](../dashboard.md#downloads).
 
 ## External framework demos
 
-Each recording runs one framework's example end to end — the user simulator
-drives the conversation, the agent under test responds, and the judge scores the
-transcript. Sources live in `examples/agent_simulation/` (files `06`–`09`).
+Each recording runs one framework's example end to end — the user simulator drives the conversation, the agent under test responds, and the judge scores the transcript. Sources live in `examples/agent_simulation/` (files `06`–`09`).
 
 ### LangGraph
 
-<video controls muted playsinline preload="metadata" width="100%">
-  <source src="../../assets/sim-langgraph.mp4" type="video/mp4">
-  Your browser does not support the video tag —
-  <a href="../../assets/sim-langgraph.mp4">download the recording</a>.
-</video>
+<video controls muted playsinline preload="metadata" width="100%"> <source src="../../assets/sim-langgraph.mp4" type="video/mp4"> Your browser does not support the video tag — <a href="../../assets/sim-langgraph.mp4">download the recording</a>. </video>
 
 ### OpenAI Agents SDK
 
-<video controls muted playsinline preload="metadata" width="100%">
-  <source src="../../assets/sim-openai-agents.mp4" type="video/mp4">
-  Your browser does not support the video tag —
-  <a href="../../assets/sim-openai-agents.mp4">download the recording</a>.
-</video>
+<video controls muted playsinline preload="metadata" width="100%"> <source src="../../assets/sim-openai-agents.mp4" type="video/mp4"> Your browser does not support the video tag — <a href="../../assets/sim-openai-agents.mp4">download the recording</a>. </video>
 
 ### Pydantic AI
 
-<video controls muted playsinline preload="metadata" width="100%">
-  <source src="../../assets/sim-pydantic-ai.mp4" type="video/mp4">
-  Your browser does not support the video tag —
-  <a href="../../assets/sim-pydantic-ai.mp4">download the recording</a>.
-</video>
+<video controls muted playsinline preload="metadata" width="100%"> <source src="../../assets/sim-pydantic-ai.mp4" type="video/mp4"> Your browser does not support the video tag — <a href="../../assets/sim-pydantic-ai.mp4">download the recording</a>. </video>
 
 ### CrewAI
 
-<video controls muted playsinline preload="metadata" width="100%">
-  <source src="../../assets/sim-crewai.mp4" type="video/mp4">
-  Your browser does not support the video tag —
-  <a href="../../assets/sim-crewai.mp4">download the recording</a>.
-</video>
+<video controls muted playsinline preload="metadata" width="100%"> <source src="../../assets/sim-crewai.mp4" type="video/mp4"> Your browser does not support the video tag — <a href="../../assets/sim-crewai.mp4">download the recording</a>. </video>
 
 ## Where to next
 

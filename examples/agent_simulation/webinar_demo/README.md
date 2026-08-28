@@ -2,15 +2,11 @@
 
 Working dir for the agent-simulation webinar: slides + runnable demo.
 
-Structure mirrors the red-teaming demos (`../../redteam/refund_agent_demo`,
-`../../redteam/crypto_stealing_demo`): a self-contained HTML deck plus a runnable
-agent the deck demos live. The presentation theme/assets follow the orq brand
-(teal `#025558`, orange `q`).
+Structure mirrors the red-teaming demos (`../../redteam/refund_agent_demo`, `../../redteam/crypto_stealing_demo`): a self-contained HTML deck plus a runnable agent the deck demos live. The presentation theme/assets follow the orq brand (teal `#025558`, orange `q`).
 
 ## Start here
 
-Everything below needs an Orq API key for the workspace that will host the demo.
-Export it first (or copy `agent_build/.env.example` to `agent_build/.env` and fill it in):
+Everything below needs an Orq API key for the workspace that will host the demo. Export it first (or copy `agent_build/.env.example` to `agent_build/.env` and fill it in):
 
 ```bash
 export ORQ_API_KEY="sk-orq-..."     # the banking / CustomerDemo workspace key
@@ -26,9 +22,7 @@ make simulate       # run simulations against it
 
 ## Status
 
-The runnable webinar materials are ready: `webinar-deck.html` is the presentation
-deck and `webinar-script.html` is the speaker run-of-show. `RUNBOOK.md` contains
-the terminal flow and the known platform-dependent gaps.
+The runnable webinar materials are ready: `webinar-deck.html` is the presentation deck and `webinar-script.html` is the speaker run-of-show. `RUNBOOK.md` contains the terminal flow and the known platform-dependent gaps.
 
 - **`RUNBOOK.md`** — the live-demo script: 4 Acts, real commands, gaps to call out.
 - **`webinar-deck.html`** — the self-contained presentation deck.
@@ -48,11 +42,7 @@ open webinar-deck.html
 
 ## Demo agent
 
-The spine is **Sterling**, the **Bank of Holland credit-card support
-agent** — `openai/gpt-5.6-luna`, a 99-question Dutch/English FAQ knowledge base, and two
-code tools (`get_card_info`, `get_transaction_details`). `make provision` recreates it
-(and its tools + KB) in Orq from the definitions in `agent_build/`, using distinct demo
-keys so it never clobbers the customer's live entities.
+The spine is **Sterling**, the **Bank of Holland credit-card support agent** — `openai/gpt-5.6-luna`, a 99-question Dutch/English FAQ knowledge base, and two code tools (`get_card_info`, `get_transaction_details`). `make provision` recreates it (and its tools + KB) in Orq from the definitions in `agent_build/`, using distinct demo keys so it never clobbers the customer's live entities.
 
 ```
 agent_build/
@@ -62,9 +52,7 @@ agent_build/
   orq_export/             # agent + tool + KB definitions exported from the platform
 ```
 
-Run the demo flow with the Makefile: `make provision`, then `make generate`,
-`make simulate`, `make rerun`, `make upload`. See **`RUNBOOK.md`** for the narrated
-version with what each step demonstrates.
+Run the demo flow with the Makefile: `make provision`, then `make generate`, `make simulate`, `make rerun`, `make upload`. See **`RUNBOOK.md`** for the narrated version with what each step demonstrates.
 
 ## Prereqs
 

@@ -5,10 +5,7 @@ Agent simulation subcommand group. Registered only when `evaluatorq[simulation]`
 Three main verbs: `generate` (datapoints only), `simulate` (run against pre-built datapoints), `run` (generate then simulate in one shot).
 
 !!! note "Primary UI — `eq dashboard`"
-    The recommended way to browse saved simulation runs is the multi-run FastHTML
-    dashboard, `eq dashboard .evaluatorq/sim-runs` (scopes to simulation) or
-    `eq dashboard` (both stores). Passing a single JSON report file is an optional
-    direct deep-link.
+    The recommended way to browse saved simulation runs is the multi-run FastHTML dashboard, `eq dashboard .evaluatorq/sim-runs` (scopes to simulation) or `eq dashboard` (both stores). Passing a single JSON report file is an optional direct deep-link.
 
 --8<-- "docs/_snippets/openai-direct-model.md"
 
@@ -66,13 +63,9 @@ Run simulations from a pre-built datapoints JSONL file.
 eq sim simulate --input dp.jsonl --target agent:<key>
 ```
 
-Targets — same three flags as `eq sim run`. Provide exactly one of four input
-sources: `--input` (`-i`), `--dataset-id`, `--experiment-id` (optionally narrowed
-by `--experiment-run-id`), or `--from-run`.
+Targets — same three flags as `eq sim run`. Provide exactly one of four input sources: `--input` (`-i`), `--dataset-id`, `--experiment-id` (optionally narrowed by `--experiment-run-id`), or `--from-run`.
 
-There is no `--target-reasoning-effort` here — it is a `eq sim run` flag only. To
-pin the target's reasoning effort on a pre-built datapoint set, call `simulate()`
-with `target_reasoning_effort=` from Python (see [Tuning](../tuning.md)).
+There is no `--target-reasoning-effort` here — it is a `eq sim run` flag only. To pin the target's reasoning effort on a pre-built datapoint set, call `simulate()` with `target_reasoning_effort=` from Python (see [Tuning](../tuning.md)).
 
 | Flag | Type / Default | Description |
 |---|---|---|
@@ -103,17 +96,14 @@ with `target_reasoning_effort=` from Python (see [Tuning](../tuning.md)).
 
 ## `eq sim upload-dataset`
 
-Upload simulation datapoints to an Orq dataset, or append them to an existing
-dataset.
+Upload simulation datapoints to an Orq dataset, or append them to an existing dataset.
 
 ```bash
 eq sim upload-dataset -i cases.jsonl -n "Support simulation set"
 eq sim upload-dataset -i more.jsonl --dataset-id <id>
 ```
 
-Persona and scenario objects are JSON-stringified because the Orq dataset API
-accepts scalar `inputs` values. The simulation reader restores them when the
-dataset is used with `eq sim simulate --dataset-id`.
+Persona and scenario objects are JSON-stringified because the Orq dataset API accepts scalar `inputs` values. The simulation reader restores them when the dataset is used with `eq sim simulate --dataset-id`.
 
 | Flag | Type / Default | Description |
 |---|---|---|
@@ -157,12 +147,7 @@ eq sim from-traces --output dp.jsonl --limit 50 --lookback-hours 24
 eq sim from-traces --output dp.jsonl --extend 20 --agent-description "..."
 ```
 
-Fetches recent traces from the Orq traces API (requires `ORQ_API_KEY`) and builds
-one datapoint per trace conversation: persona and scenario are inferred from the
-transcript, and the first message is the real user's opening message verbatim.
-Pass `--extend N` to additionally generate `N` new datapoints matching the traffic
-distribution of the fetched traces (extra LLM calls). Feed the output file to
-`eq sim simulate --input` to run it.
+Fetches recent traces from the Orq traces API (requires `ORQ_API_KEY`) and builds one datapoint per trace conversation: persona and scenario are inferred from the transcript, and the first message is the real user's opening message verbatim. Pass `--extend N` to additionally generate `N` new datapoints matching the traffic distribution of the fetched traces (extra LLM calls). Feed the output file to `eq sim simulate --input` to run it.
 
 | Flag | Type / Default | Description |
 |---|---|---|
@@ -187,10 +172,7 @@ eq sim export --input results.jsonl --output payload.json
 eq sim export --input sim-report.json --output report.html --format html --recommendations
 ```
 
-Markdown/HTML exports include remediation suggestions if the input run JSON
-already carries them (runs generate them by default — see `--no-recommendations`),
-or if `--recommendations` is passed here to generate them at export time for a run
-that has none stored.
+Markdown/HTML exports include remediation suggestions if the input run JSON already carries them (runs generate them by default — see `--no-recommendations`), or if `--recommendations` is passed here to generate them at export time for a run that has none stored.
 
 | Flag | Type / Default | Description |
 |---|---|---|

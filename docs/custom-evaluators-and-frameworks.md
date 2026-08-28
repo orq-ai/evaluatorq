@@ -3,10 +3,7 @@
 This guide explains how to add custom evaluators, vulnerabilities, attack strategies, and frameworks to the evaluatorq red teaming system.
 
 !!! note "Requires editing the package source"
-    The extension points below modify evaluatorq's internal registries directly —
-    they are not a stable runtime API. Clone the repo and sync the dev
-    environment (`uv sync --all-extras --all-groups`), then make your changes
-    there. A runtime registration API is planned; see the [Roadmap](roadmap.md).
+    The extension points below modify evaluatorq's internal registries directly — they are not a stable runtime API. Clone the repo and sync the dev environment (`uv sync --all-extras --all-groups`), then make your changes there. A runtime registration API is planned; see the [Roadmap](roadmap.md).
 
 ## Architecture overview
 
@@ -199,12 +196,7 @@ my_strategies = [
 
 ### Registering strategies
 
-Create a strategy file (e.g., `frameworks/my_framework.py`) with a
-`dict[str, list[AttackStrategy]]` keyed by category code, then edit
-`adaptive/strategy_registry.py` directly. `STRATEGY_REGISTRY` and
-`VULNERABILITY_STRATEGY_REGISTRY` are frozen `MappingProxyType`s built at
-import time, so merge into the private `_strategy_registry` dict **before** it
-is wrapped — you cannot mutate the exported registries from outside the module:
+Create a strategy file (e.g., `frameworks/my_framework.py`) with a `dict[str, list[AttackStrategy]]` keyed by category code, then edit `adaptive/strategy_registry.py` directly. `STRATEGY_REGISTRY` and `VULNERABILITY_STRATEGY_REGISTRY` are frozen `MappingProxyType`s built at import time, so merge into the private `_strategy_registry` dict **before** it is wrapped — you cannot mutate the exported registries from outside the module:
 
 ```python
 from evaluatorq.redteam.frameworks.my_framework import MY_STRATEGIES
@@ -216,10 +208,7 @@ _strategy_registry: dict[str, list[AttackStrategy]] = {
 }
 ```
 
-No separate step is needed for the vulnerability-keyed registry — it is derived
-automatically from `_strategy_registry` via `CATEGORY_TO_VULNERABILITY`, as long
-as your category code is mapped to the vulnerability in
-`VulnerabilityDef.framework_mappings` (see "Adding a new vulnerability" above).
+No separate step is needed for the vulnerability-keyed registry — it is derived automatically from `_strategy_registry` via `CATEGORY_TO_VULNERABILITY`, as long as your category code is mapped to the vulnerability in `VulnerabilityDef.framework_mappings` (see "Adding a new vulnerability" above).
 
 ### Capability requirements
 
@@ -232,10 +221,7 @@ Available capability tags: `code_execution`, `shell_access`, `file_system`, `web
 
 ### Custom delivery methods
 
-`delivery_method` is an **open set**. The canonical methods live in the `DeliveryMethod`
-enum (each mapped to a technique family in `DELIVERY_METHOD_CATEGORY`), and
-`delivery_method_registry.py` mirrors the vulnerability registry so you can add your own
-without touching the enum:
+`delivery_method` is an **open set**. The canonical methods live in the `DeliveryMethod` enum (each mapped to a technique family in `DELIVERY_METHOD_CATEGORY`), and `delivery_method_registry.py` mirrors the vulnerability registry so you can add your own without touching the enum:
 
 ```python
 from evaluatorq.redteam.delivery_method_registry import (
@@ -249,21 +235,9 @@ register_delivery_method('emoji-smuggling', category='obfuscation')
 is_known_delivery_method('emoji-smuggling')  # True
 ```
 
-Unlike vulnerabilities (reject-unknown, since an unknown vuln has no strategies or
-evaluator), delivery methods are **coerce-known + passthrough-unknown**: an unregistered
-value is a harmless filter label that either matches a dataset row spelled the same or
-does not. Filtering therefore works without registering anything — registering only
-suppresses the "unknown delivery method" warnings: the `--delivery-method` CLI flag warns up
-front via `typer.echo`, and a programmatic `red_team()` run surfaces an unmatched method through
-the pipeline's post-filter check as a `loguru` warning (the `RedTeamInput` validator itself resolves
-silently). A registered value stays a plain string; only enum members
-resolve to a `DeliveryMethod` object.
+Unlike vulnerabilities (reject-unknown, since an unknown vuln has no strategies or evaluator), delivery methods are **coerce-known + passthrough-unknown**: an unregistered value is a harmless filter label that either matches a dataset row spelled the same or does not. Filtering therefore works without registering anything — registering only suppresses the "unknown delivery method" warnings: the `--delivery-method` CLI flag warns up front via `typer.echo`, and a programmatic `red_team()` run surfaces an unmatched method through the pipeline's post-filter check as a `loguru` warning (the `RedTeamInput` validator itself resolves silently). A registered value stays a plain string; only enum members resolve to a `DeliveryMethod` object.
 
-The registry is **in-memory and process-local** — it is not persisted and there is no
-plugin/entry-point loading. Registering in a standalone script does not make the value
-known to a separate `eq redteam run` process; to get the CLI benefit, register in the
-same process that invokes the CLI (or accept the warning, since filtering works either
-way).
+The registry is **in-memory and process-local** — it is not persisted and there is no plugin/entry-point loading. Registering in a standalone script does not make the value known to a separate `eq redteam run` process; to get the CLI benefit, register in the same process that invokes the CLI (or accept the warning, since filtering works either way).
 
 ## Adding a new framework
 

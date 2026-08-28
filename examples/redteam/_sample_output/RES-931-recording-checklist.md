@@ -1,8 +1,6 @@
 # RES-931 recording checklist (per-framework demo videos)
 
-Follow this to record one short screen video per external framework (Bauke's
-request). Each run is ~1-2 minutes: dynamic mode, 3 attacks, up to 2 turns each.
-The commands and targets are verified runnable; only the recording is manual.
+Follow this to record one short screen video per external framework (Bauke's request). Each run is ~1-2 minutes: dynamic mode, 3 attacks, up to 2 turns each. The commands and targets are verified runnable; only the recording is manual.
 
 ## One-time setup
 
@@ -31,16 +29,11 @@ uv run python examples/redteam/20_crewai_target.py        # CrewAI      -> CrewA
 3. The final report table: resistance %, vulnerable / attacks.
 4. For a vulnerable attack, the judge assessment line (the OWASP evaluator verdict).
 
-Expected shape (matches the committed live output in
-`RES-931-external-framework-runs.md`): LangGraph / OpenAI Agents / Pydantic AI
-each take one indirect-injection (goal hijack via tool output); CrewAI resists
-all three. Exact attacks vary run to run since the attacker LLM is generative.
+Expected shape (matches the committed live output in `RES-931-external-framework-runs.md`): LangGraph / OpenAI Agents / Pydantic AI each take one indirect-injection (goal hijack via tool output); CrewAI resists all three. Exact attacks vary run to run since the attacker LLM is generative.
 
 ## After recording
 
-The four recordings live at `docs/assets/redteam-<framework>.mp4` (LangGraph,
-OpenAI Agents, Pydantic AI, CrewAI) and are embedded in the 'Demo runs' section
-of `docs/guides/red-teaming.md`. Re-record and re-transcode any single one with:
+The four recordings live at `docs/assets/redteam-<framework>.mp4` (LangGraph, OpenAI Agents, Pydantic AI, CrewAI) and are embedded in the 'Demo runs' section of `docs/guides/red-teaming.md`. Re-record and re-transcode any single one with:
 
     ffmpeg -y -i input.mov -an -vf scale=1512:-2 -c:v libx264 -crf 30 \
       -preset veryslow -pix_fmt yuv420p -movflags +faststart \

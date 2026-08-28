@@ -96,8 +96,7 @@ def test_run_id_concurrent_tasks_are_isolated() -> None:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest tests/unit/test_thread_context.py -k run_id -v`
-Expected: FAIL — `ImportError: cannot import name 'evaluatorq_run_id'`.
+Run: `uv run pytest tests/unit/test_thread_context.py -k run_id -v` Expected: FAIL — `ImportError: cannot import name 'evaluatorq_run_id'`.
 
 - [ ] **Step 3: Implement in `src/evaluatorq/common/thread_context.py`**
 
@@ -175,8 +174,7 @@ Add `'evaluatorq_run_id'` to `__all__` (keep alphabetical, after `'evaluatorq_pi
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `uv run pytest tests/unit/test_thread_context.py -v`
-Expected: PASS (all, including pre-existing tests).
+Run: `uv run pytest tests/unit/test_thread_context.py -v` Expected: PASS (all, including pre-existing tests).
 
 - [ ] **Step 5: Commit**
 
@@ -232,8 +230,7 @@ def test_metadata_on_orq_when_bound(monkeypatch) -> None:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/unit/test_run_metadata_kwarg.py -v`
-Expected: FAIL — `ImportError: cannot import name 'run_metadata_kwarg'`.
+Run: `uv run pytest tests/unit/test_run_metadata_kwarg.py -v` Expected: FAIL — `ImportError: cannot import name 'run_metadata_kwarg'`.
 
 - [ ] **Step 3: Implement in `src/evaluatorq/common/llm_call.py`**
 
@@ -269,8 +266,7 @@ def _apply_pipeline_metadata(client: AsyncOpenAI, params: dict[str, Any]) -> Non
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `uv run pytest tests/unit/test_run_metadata_kwarg.py tests/unit/test_thread_context.py -v`
-Expected: PASS.
+Run: `uv run pytest tests/unit/test_run_metadata_kwarg.py tests/unit/test_thread_context.py -v` Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -386,8 +382,7 @@ NOTE for the implementer: `_stub_persona()` / `_stub_scenario()` and the exact `
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/simulation/test_run_metadata_propagation.py -v`
-Expected: FAIL — `KeyError: 'metadata'` (metadata not yet added at the create sites).
+Run: `uv run pytest tests/simulation/test_run_metadata_propagation.py -v` Expected: FAIL — `KeyError: 'metadata'` (metadata not yet added at the create sites).
 
 - [ ] **Step 3: Implement the four merges**
 
@@ -447,8 +442,7 @@ Merge into `extra` right after it is built (after line 133 `extra: dict[str, Any
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `uv run pytest tests/simulation/test_run_metadata_propagation.py -v`
-Expected: PASS. Then `uv run pytest -m 'not integration' -q` to confirm no regressions.
+Run: `uv run pytest tests/simulation/test_run_metadata_propagation.py -v` Expected: PASS. Then `uv run pytest -m 'not integration' -q` to confirm no regressions.
 
 - [ ] **Step 5: Commit**
 
@@ -491,8 +485,7 @@ The implementer copies the exact `red_team(...)` setup from `test_red_team_owns_
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/redteam/test_tracing_spans.py::test_root_span_carries_evaluatorq_run_id -v`
-Expected: FAIL — attribute absent.
+Run: `uv run pytest tests/redteam/test_tracing_spans.py::test_root_span_carries_evaluatorq_run_id -v` Expected: FAIL — attribute absent.
 
 - [ ] **Step 3: Implement in `src/evaluatorq/redteam/runner.py`**
 
@@ -536,8 +529,7 @@ to:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `uv run pytest tests/redteam/test_tracing_spans.py -v`
-Expected: PASS.
+Run: `uv run pytest tests/redteam/test_tracing_spans.py -v` Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -587,8 +579,7 @@ NOTE: `generate_personas` routes through `generate_structured` (Task 3(c)) which
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/simulation/test_run_metadata_propagation.py::test_generate_personas_binds_a_run_id -v`
-Expected: FAIL — no run_id bound (metadata absent), because no entrypoint binds `evaluatorq_run_id` yet.
+Run: `uv run pytest tests/simulation/test_run_metadata_propagation.py::test_generate_personas_binds_a_run_id -v` Expected: FAIL — no run_id bound (metadata absent), because no entrypoint binds `evaluatorq_run_id` yet.
 
 - [ ] **Step 3: Implement in `src/evaluatorq/simulation/api.py`**
 
@@ -633,9 +624,7 @@ For each wrap, indent the enclosed body one level; do not change any other logic
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `uv run pytest tests/simulation/test_run_metadata_propagation.py -v`
-Then: `uv run pytest -m 'not integration' -q`
-Expected: PASS.
+Run: `uv run pytest tests/simulation/test_run_metadata_propagation.py -v` Then: `uv run pytest -m 'not integration' -q` Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -650,8 +639,7 @@ git commit -m "feat(simulation): bind unique run_id + stamp root span at every e
 
 - [ ] **Step 1: Full unit suite**
 
-Run: `uv run pytest -m 'not integration' -q`
-Expected: PASS.
+Run: `uv run pytest -m 'not integration' -q` Expected: PASS.
 
 - [ ] **Step 2: Lint + format + types**
 
@@ -665,8 +653,7 @@ Expected: clean (basedpyright is lenient; fix any new errors introduced by these
 
 - [ ] **Step 3: Grep for the goal invariant**
 
-Run: `rtk proxy grep -rn "run_metadata_kwarg\|evaluatorq_run_id" src/evaluatorq`
-Expected: helper referenced at the 4 Class-B sites + `_apply_pipeline_metadata`; `evaluatorq_run_id` bound in redteam runner + sim api + defined in thread_context.
+Run: `rtk proxy grep -rn "run_metadata_kwarg\|evaluatorq_run_id" src/evaluatorq` Expected: helper referenced at the 4 Class-B sites + `_apply_pipeline_metadata`; `evaluatorq_run_id` bound in redteam runner + sim api + defined in thread_context.
 
 - [ ] **Step 4: Commit any lint/type fixups**
 

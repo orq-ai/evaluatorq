@@ -1,32 +1,20 @@
 # LLM as a Jury
 
-A single judge model is a single point of failure. It can be noisy from one
-call to the next, and it can be biased toward outputs from its own provider
-family. The jury (or panel of judges) replaces that one judge with several,
-runs them together, aggregates their verdicts into one decision, and reports
-how much they agreed.
+A single judge model is a single point of failure. It can be noisy from one call to the next, and it can be biased toward outputs from its own provider family. The jury (or panel of judges) replaces that one judge with several, runs them together, aggregates their verdicts into one decision, and reports how much they agreed.
 
-You can use a jury two ways: as a general evaluator in `evaluatorq()` through
-`llm_jury()`, or inside red teaming through `EvaluatorConfig`. Both share the
-same panel machinery.
+You can use a jury two ways: as a general evaluator in `evaluatorq()` through `llm_jury()`, or inside red teaming through `EvaluatorConfig`. Both share the same panel machinery.
 
 ## When to use it
 
-- The evaluation is high stakes and you want a verdict that does not rest on
-  one model's opinion.
-- You are judging outputs from the same provider as your usual judge and want
-  to avoid a judge grading its own family.
-- You want a quantitative signal for how much your judges actually agree, so
-  you know when a verdict is solid and when it is contested.
+- The evaluation is high stakes and you want a verdict that does not rest on one model's opinion.
+- You are judging outputs from the same provider as your usual judge and want to avoid a judge grading its own family.
+- You want a quantitative signal for how much your judges actually agree, so you know when a verdict is solid and when it is contested.
 
-A single judge is cheaper and faster. Reach for a jury when the cost of a
-wrong verdict outweighs the extra calls. A single-judge panel runs with no
-aggregation overhead, so a jury is purely additive.
+A single judge is cheaper and faster. Reach for a jury when the cost of a wrong verdict outweighs the extra calls. A single-judge panel runs with no aggregation overhead, so a jury is purely additive.
 
 ## Quick start
 
-`llm_jury()` builds an evaluator you drop into the `evaluators=[...]` list of
-`evaluatorq()`. Give it two or more `judges` and it becomes a jury:
+`llm_jury()` builds an evaluator you drop into the `evaluators=[...]` list of `evaluatorq()`. Give it two or more `judges` and it becomes a jury:
 
 ```python
 import asyncio
@@ -61,16 +49,13 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-`llm_jury(model="x")` is shorthand for `judges=["x"]` — a single judge, the
-classic LLM-as-a-judge. Pass `judges=[...]` with two or more models to turn it
-into a jury.
+`llm_jury(model="x")` is shorthand for `judges=["x"]` — a single judge, the classic LLM-as-a-judge. Pass `judges=[...]` with two or more models to turn it into a jury.
 
 --8<-- "docs/_snippets/panel-tip.md"
 
 ## Verdict modes
 
-`verdict_kind` (with `labels`) decides what each judge returns and how `passed`
-is set. It is not inferred from `labels` — pick the mode explicitly.
+`verdict_kind` (with `labels`) decides what each judge returns and how `passed` is set. It is not inferred from `labels` — pick the mode explicitly.
 
 | Mode | Configure it with | Judge returns | `passed` is |
 | --- | --- | --- | --- |
@@ -98,9 +83,7 @@ helpfulness = llm_jury(
 )
 ```
 
-`labels`/`passing_labels` are valid only for `categorical`; passing them with
-`numeric` raises `ValueError`. In labeled mode `passing_labels` must be a subset
-of `labels`; omit it and the verdict is still recorded but `passed` is `None`.
+`labels`/`passing_labels` are valid only for `categorical`; passing them with `numeric` raises `ValueError`. In labeled mode `passing_labels` must be a subset of `labels`; omit it and the verdict is still recorded but `passed` is `None`.
 
 ## Panel configuration
 
@@ -117,10 +100,7 @@ of `labels`; omit it and the verdict is still recorded but `passed` is `None`.
 
 ### Cyclic assignment (CyclicJudge)
 
-`assignment="cyclic"` gives each datapoint exactly one judge, rotating through
-the panel so every judge covers an equal share of the run. Judge bias still
-cancels in expectation across the dataset, but the run costs the same as a
-single-judge evaluation instead of `len(panel)` times as much.
+`assignment="cyclic"` gives each datapoint exactly one judge, rotating through the panel so every judge covers an equal share of the run. Judge bias still cancels in expectation across the dataset, but the run costs the same as a single-judge evaluation instead of `len(panel)` times as much.
 
 ```python
 jury = llm_jury(
@@ -131,36 +111,22 @@ jury = llm_jury(
 )
 ```
 
-Use it for run-level scores (a benchmark mean, a pass rate); keep the default
-`"all"` when an individual verdict has to stand on its own, since each per-item
-verdict under `"cyclic"` is one judge's opinion and `stats`/`raw_agreement` come
-back `None`.
+Use it for run-level scores (a benchmark mean, a pass rate); keep the default `"all"` when an individual verdict has to stand on its own, since each per-item verdict under `"cyclic"` is one judge's opinion and `stats`/`raw_agreement` come back `None`.
 
-See [Cyclic judge assignment](cyclic-judge.md) for how items map to judges,
-auditing the rotation via `raw_output["jury"]`, and the failure semantics.
+See [Cyclic judge assignment](cyclic-judge.md) for how items map to judges, auditing the rotation via `raw_output["jury"]`, and the failure semantics.
 
 ## How the verdict is decided
 
-1. **Each judge votes.** With `repetitions > 1` a judge is asked several times
-   and reduces its own passes to one vote first (plurality for categorical,
-   mean or median for numeric).
-2. **Failures pull in replacements.** For every configured judge that fails
-   mechanically, one model from `replacement_judges` stands in, up to the number
-   of failures.
-3. **The panel aggregates.** Categorical verdicts are decided by plurality vote;
-   numeric verdicts by mean or median.
-4. **Thresholds and ties apply.** If fewer than `min_successful_judges` return a
-   usable verdict, the result is **inconclusive**.
+1. **Each judge votes.** With `repetitions > 1` a judge is asked several times and reduces its own passes to one vote first (plurality for categorical, mean or median for numeric).
+2. **Failures pull in replacements.** For every configured judge that fails mechanically, one model from `replacement_judges` stands in, up to the number of failures.
+3. **The panel aggregates.** Categorical verdicts are decided by plurality vote; numeric verdicts by mean or median.
+4. **Thresholds and ties apply.** If fewer than `min_successful_judges` return a usable verdict, the result is **inconclusive**.
 
-A judge can also **abstain**: it returns cleanly but declines to choose. An
-abstention is not a failure and does not trigger a replacement, but it is
-excluded from the decisive tally.
+A judge can also **abstain**: it returns cleanly but declines to choose. An abstention is not a failure and does not trigger a replacement, but it is excluded from the decisive tally.
 
 ## Reading the output
 
-`llm_jury()` returns a standard evaluator, so each result carries the aggregated
-verdict in `value`, the pass/fail in `passed`, and a human-readable panel
-breakdown (who voted what, how close it was) appended to `explanation`:
+`llm_jury()` returns a standard evaluator, so each result carries the aggregated verdict in `value`, the pass/fail in `passed`, and a human-readable panel breakdown (who voted what, how close it was) appended to `explanation`:
 
 ```python
 results = await evaluatorq(..., evaluators=[correctness])
@@ -173,8 +139,7 @@ for r in results:
 
 ## In red teaming
 
-Red teaming reaches the same panel through `EvaluatorConfig`, where the verdict
-is the categorical RESISTANT/VULNERABLE case (`passed=True` means RESISTANT):
+Red teaming reaches the same panel through `EvaluatorConfig`, where the verdict is the categorical RESISTANT/VULNERABLE case (`passed=True` means RESISTANT):
 
 ```python
 from evaluatorq.redteam import EvaluatorConfig, LLMConfig, OpenAIModelTarget, red_team
@@ -199,25 +164,12 @@ report = await red_team(
 ```
 
 !!! note "`strict_panel` only fires on a same-family judge"
-    `strict_panel=True` raises `ValueError` when any judge shares the target's
-    provider family — same-family self-judging can bias the verdict toward the
-    target's own provider. The panel above is entirely cross-family against an
-    OpenAI target, so the guard passes silently (the healthy case). It would
-    raise only if you added an in-family judge such as `"openai/gpt-4o-mini"`.
+    `strict_panel=True` raises `ValueError` when any judge shares the target's provider family — same-family self-judging can bias the verdict toward the target's own provider. The panel above is entirely cross-family against an OpenAI target, so the guard passes silently (the healthy case). It would raise only if you added an in-family judge such as `"openai/gpt-4o-mini"`.
 
 !!! warning "`min_successful_judges` vs. `min_evaluation_coverage` — two different levels"
-    `min_successful_judges` above is a **per-attack** quorum: it decides whether
-    *this one* jury panel produced enough decisive votes to reach a verdict for
-    *this one* attack. `EvaluatorConfig` also has `min_evaluation_coverage`
-    (default `0.8`), which is a separate, **run-level** floor: the fraction of
-    *all* attacks in the run that must get any verdict at all. A `min_successful_judges`
-    miss on one attack is exactly what produces one of the unevaluated attacks
-    that `min_evaluation_coverage` counts against. Missing the run-level floor
-    makes `eq redteam run` exit `1` — see [Red Teaming › In CI](guides/red-teaming.md#in-ci).
+    `min_successful_judges` above is a **per-attack** quorum: it decides whether *this one* jury panel produced enough decisive votes to reach a verdict for *this one* attack. `EvaluatorConfig` also has `min_evaluation_coverage` (default `0.8`), which is a separate, **run-level** floor: the fraction of *all* attacks in the run that must get any verdict at all. A `min_successful_judges` miss on one attack is exactly what produces one of the unevaluated attacks that `min_evaluation_coverage` counts against. Missing the run-level floor makes `eq redteam run` exit `1` — see [Red Teaming › In CI](guides/red-teaming.md#in-ci).
 
-`EvaluatorConfig` adds `strict_panel` (turn panel-composition warnings into hard
-errors) and surfaces a per-attack `jury` breakdown plus a run-level reliability
-statistic:
+`EvaluatorConfig` adds `strict_panel` (turn panel-composition warnings into hard errors) and surfaces a per-attack `jury` breakdown plus a run-level reliability statistic:
 
 ```python
 for result in report.results:
@@ -235,40 +187,23 @@ if reliability:
 
 ## Reliability, in short
 
-For red-team runs, `raw_agreement` tells you how lopsided one vote was, and
-Krippendorff's alpha on the run tells you whether your judges agree more than
-they would by chance:
+For red-team runs, `raw_agreement` tells you how lopsided one vote was, and Krippendorff's alpha on the run tells you whether your judges agree more than they would by chance:
 
 - `1.0` is perfect agreement.
 - around `0` is chance level, so the panel is not adding signal.
-- below `0` is systematic disagreement, which usually means the judges are
-  reading the rubric differently and the prompt or panel needs another look.
+- below `0` is systematic disagreement, which usually means the judges are reading the rubric differently and the prompt or panel needs another look.
 
-It is `None` when undefined, for example a single-judge run or fewer than two
-multi-judge samples.
+It is `None` when undefined, for example a single-judge run or fewer than two multi-judge samples.
 
 ## Endpoint and retries
 
-`llm_jury()` and `PairwiseComparator` always send judge calls to the Orq
-router's `responses` endpoint (`api='responses'`) — the endpoint the router
-prices, so a jury verdict records cost the same way the call it judges does.
-There is no config knob to opt out; `run_judge` handles the cases that cannot
-use it on its own, falling back to Chat Completions for a client that does not
-route through the Orq router, a model the catalogue does not qualify for
-Responses, or a model that 400s on the endpoint.
+`llm_jury()` and `PairwiseComparator` always send judge calls to the Orq router's `responses` endpoint (`api='responses'`) — the endpoint the router prices, so a jury verdict records cost the same way the call it judges does. There is no config knob to opt out; `run_judge` handles the cases that cannot use it on its own, falling back to Chat Completions for a client that does not route through the Orq router, a model the catalogue does not qualify for Responses, or a model that 400s on the endpoint.
 
-Retries happen at the `run_judge` layer, not the SDK's: with a default budget
-of one retry (`LLMCallConfig.retry_count=1`, i.e. up to two requests per judge
-call), `run_judge` disarms the SDK-level retry budget (`max_retries=0`) on
-whichever client it is given — the one either helper builds for itself when no
-`client=` is passed in, or a client you pass in yourself — so the two retry
-layers never stack. There is no way to keep an injected client's own SDK
-retries active alongside `run_judge`'s.
+Retries happen at the `run_judge` layer, not the SDK's: with a default budget of one retry (`LLMCallConfig.retry_count=1`, i.e. up to two requests per judge call), `run_judge` disarms the SDK-level retry budget (`max_retries=0`) on whichever client it is given — the one either helper builds for itself when no `client=` is passed in, or a client you pass in yourself — so the two retry layers never stack. There is no way to keep an injected client's own SDK retries active alongside `run_judge`'s.
 
 ## Reasoning effort on a jury
 
-`llm_jury()`, `llm_jury_pairwise()` and `PairwiseComparator` take a
-`reasoning_effort=` argument that pins the effort on the *judge* model:
+`llm_jury()`, `llm_jury_pairwise()` and `PairwiseComparator` take a `reasoning_effort=` argument that pins the effort on the *judge* model:
 
 ```python
 from evaluatorq import llm_jury
@@ -281,21 +216,13 @@ jury = llm_jury(
 )
 ```
 
-Because these judges send to the `responses` endpoint, the effort renders as a
-`reasoning` block — unless `run_judge` falls back to Chat Completions for one of
-the reasons above, in which case it renders as a flat `reasoning_effort` field.
-Either way the provider is the authority on which values it accepts.
+Because these judges send to the `responses` endpoint, the effort renders as a `reasoning` block — unless `run_judge` falls back to Chat Completions for one of the reasons above, in which case it renders as a flat `reasoning_effort` field. Either way the provider is the authority on which values it accepts.
 
-This is a distinct knob from red teaming's `target_reasoning_effort` (the agent
-*under test*), from `LLMCallConfig.reasoning_effort` on red teaming's own
-`attacker=` / `evaluator=` roles, and from `EVALUATORQ_REASONING_EFFORT` (the
-simulator's user-simulator and judge). See
-[Tuning](tuning.md) for the full disambiguation.
+This is a distinct knob from red teaming's `target_reasoning_effort` (the agent *under test*), from `LLMCallConfig.reasoning_effort` on red teaming's own `attacker=` / `evaluator=` roles, and from `EVALUATORQ_REASONING_EFFORT` (the simulator's user-simulator and judge). See [Tuning](tuning.md) for the full disambiguation.
 
 ## Provider options
 
-`llm_jury()`, `llm_jury_pairwise()` and `PairwiseComparator` take both injection
-seams, and they are not interchangeable:
+`llm_jury()`, `llm_jury_pairwise()` and `PairwiseComparator` take both injection seams, and they are not interchangeable:
 
 ```python
 jury = llm_jury(
@@ -307,22 +234,14 @@ jury = llm_jury(
 )
 ```
 
-`extra_kwargs` sets arguments on the SDK call and **replaces** the key.
-`extra_body` adds fields to the request body and is **merged** per key, so
-router-owned body fields survive alongside yours.
+`extra_kwargs` sets arguments on the SDK call and **replaces** the key. `extra_body` adds fields to the request body and is **merged** per key, so router-owned body fields survive alongside yours.
 
 !!! warning "`extra_body` inside `extra_kwargs` is rejected"
-    `extra_body` is one of the structural fields the call site owns, so passing
-    it through `extra_kwargs` raises — and because a judge failure is caught and
-    turned into a verdict, the symptom is a judge that always fails rather than a
-    crash. Use the `extra_body=` parameter.
+    `extra_body` is one of the structural fields the call site owns, so passing it through `extra_kwargs` raises — and because a judge failure is caught and turned into a verdict, the symptom is a judge that always fails rather than a crash. Use the `extra_body=` parameter.
 
 ## Full example
 
-A complete red-teaming script covering repetitions, replacements, the
-`min_successful_judges` threshold, `strict_panel`, and reading the per-result
-and run-level output lives at
-[`examples/redteam/16_llm_as_a_jury.py`](https://github.com/orq-ai/evaluatorq/blob/main/examples/redteam/16_llm_as_a_jury.py).
+A complete red-teaming script covering repetitions, replacements, the `min_successful_judges` threshold, `strict_panel`, and reading the per-result and run-level output lives at [`examples/redteam/16_llm_as_a_jury.py`](https://github.com/orq-ai/evaluatorq/blob/main/examples/redteam/16_llm_as_a_jury.py).
 
 ## Where to next
 
