@@ -193,8 +193,7 @@ def _fake_tracing_sdk(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
     monkeypatch.setattr(tracing_setup, '_tracer', None)
     monkeypatch.setattr(tracing_setup, '_is_initialized', False)
     monkeypatch.setattr(tracing_setup, '_initialization_attempted', False)
-    # Opt out of the suite-wide export guard: this drives real setup with the
-    # exporter and provider faked out above.
+    # Opt out of the suite-wide export guard: exporter and provider are faked above.
     monkeypatch.delenv('ORQ_DISABLE_TRACING', raising=False)
     monkeypatch.setenv('OTEL_EXPORTER_OTLP_ENDPOINT', 'https://example.test')
     return processor_options

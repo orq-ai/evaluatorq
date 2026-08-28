@@ -217,10 +217,8 @@ async def init_tracing_if_needed() -> bool:  # noqa: RUF029
         )
 
         # Use BatchSpanProcessor to export spans asynchronously in batches.
-        # Queue/scheduling are env-tunable: in a long-lived worker process that
-        # runs many red-team/simulation runs without ever tearing the provider
-        # down, the default 2048-span queue can overflow and drop spans. Larger
-        # defaults + env overrides reduce that risk.
+        # Env-tunable because a long-lived process never tears the provider down,
+        # so one queue absorbs every run and the SDK's 2048 default overflows.
         max_queue_size = _env_int('ORQ_OTEL_MAX_QUEUE_SIZE', 4096)
         requested_batch_size = _env_int('ORQ_OTEL_MAX_BATCH_SIZE', 512)
         batch_size = min(requested_batch_size, max_queue_size)
