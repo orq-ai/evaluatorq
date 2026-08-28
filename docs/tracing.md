@@ -85,7 +85,8 @@ errors to stdout.
 - **Protocol**: HTTP/protobuf (`OTLPSpanExporter` from
   `opentelemetry-exporter-otlp-proto-http`)
 - **Export mode**: `BatchSpanProcessor` (asynchronous batching)
-- **Timeout**: 5 seconds per export request
+- **Timeout**: 5 seconds per export request (fixed; distinct from the tunable
+  end-of-run flush timeout below)
 - **Auth**: `Authorization: Bearer <ORQ_API_KEY>` is added automatically when
   the resolved endpoint's hostname ends in `.orq.ai` or is exactly `orq.ai`.
   For any other endpoint the header is not added; use `OTEL_EXPORTER_OTLP_HEADERS`
@@ -95,50 +96,63 @@ errors to stdout.
 
 ### Batching and flush
 
-The `BatchSpanProcessor` above buffers each finished span in an in-memory queue
-and drains it in batches from a background thread. Because the `TracerProvider`
-lives for the whole process, a long-lived host — the dashboard, or a worker that
-runs many red-team or simulation runs back to back — never tears the queue down
-between runs; the same queue absorbs every run's spans.
+Defaults are fine for one-off runs — read this if you run a long-lived host or a
+CI job that must not lose spans. The four `ORQ_OTEL_*` variables named below are
+listed with their defaults in
+[Configuration](configuration.md#environment-variables).
 
-Two failure modes follow, and both drop spans **silently** unless you tune the
-processor:
+Because the `TracerProvider` lives for the whole process, a long-lived host — the
+dashboard, or a worker that runs many red-team or simulation runs back to back —
+never tears the span queue down between runs; the same queue absorbs every run's
+spans. The knobs behave identically whether you export to Orq or to a third-party
+collector; only endpoint latency differs.
+
+Two failure modes follow. Each drops spans without failing the run, so span loss
+shows up in your logs rather than your exit code:
 
 - **Queue overflow.** If spans are produced faster than the exporter drains them —
-  a burst of parallel jobs (the default `datapoint_parallelism` is 10), or a
-  slow or unreachable OTLP endpoint — the queue fills and the SDK discards the
-  overflow. Nothing is raised and nothing is logged. There is no first-party
-  signal for this: to confirm it, compare the span count in Orq's trace UI against
-  what a run should produce (see [Span hierarchy](#span-hierarchy)) and raise
-  `ORQ_OTEL_MAX_QUEUE_SIZE` if they disagree.
-- **Exit before flush.** At the end of each run evaluatorq force-flushes the
-  processor — via the tracing session that wraps every `evaluatorq()`,
-  `red_team()` and `simulate()` call — and the SDK's `atexit` hook flushes again on
-  a clean shutdown. But a force-flush that exceeds its timeout, or a hard
-  `SIGKILL` (an OOM kill, a CI job cancelled mid-run), leaves whatever is still
-  buffered unexported. A flush that times out logs a `WARNING` rather than failing
-  the run: `OTEL span flush timed out after <ms>ms; some spans may not have been
-  exported.`
+  a burst of parallel jobs (the `datapoint_parallelism` argument), or a slow or
+  unreachable OTLP endpoint — the queue is full and the SDK evicts the *oldest*
+  buffered span to make room, so a trace comes back missing its early spans rather
+  than its last ones. The SDK logs a warning naming the full queue on the stdlib
+  `opentelemetry` logger (`Queue full, dropping Span.` on current releases,
+  worded differently on older ones); the message is deduplicated, so one
+  occurrence means loss started, not that exactly one span was lost. evaluatorq
+  does not route that logger through loguru, so if you configure logging yourself,
+  intercept stdlib logging or you will not see it. Raise
+  `ORQ_OTEL_MAX_QUEUE_SIZE` when it appears.
+- **Exit before flush.** Every `evaluatorq()`, `red_team()` and `simulate()` call
+  force-flushes the processor when it returns, including on failure, and the SDK's
+  `atexit` hook flushes again on a clean shutdown. But a force-flush that exceeds
+  its timeout, or a hard `SIGKILL` (an OOM kill, a CI job cancelled mid-run),
+  leaves whatever is still buffered unexported. A flush that times out logs
+  `OTEL span flush timed out after <ms>ms; some spans may not have been exported.`
+  and one that fails outright — unreachable endpoint, rejected auth — logs
+  `OTEL span flush failed (<error>); some spans may not have been exported.`
 
-Four environment variables tune this:
+The queue drains continuously, not at the end of a run: the processor exports up
+to `ORQ_OTEL_MAX_BATCH_SIZE` spans every `ORQ_OTEL_SCHEDULE_DELAY_MS`, which on
+the defaults sustains roughly 512 spans per 5 seconds. Back-to-back runs do not
+accumulate. Raising `ORQ_OTEL_MAX_QUEUE_SIZE` therefore buys *stall tolerance* —
+queue size divided by that sustained rate is how many seconds of exporter stall
+you survive — rather than extra capacity. When spans go missing and the endpoint
+is healthy, the lever is a lower `ORQ_OTEL_SCHEDULE_DELAY_MS`.
 
-| Variable | Default | Read | What it controls |
-|---|---|---|---|
-| `ORQ_OTEL_MAX_QUEUE_SIZE` | `4096` | at init | Maximum spans buffered before the processor drops the overflow. Raise it for a long-lived host that batches many runs. |
-| `ORQ_OTEL_MAX_BATCH_SIZE` | `512` | at init | Maximum spans per export request. Capped to the queue size, so a batch size larger than the queue is silently clamped down. |
-| `ORQ_OTEL_SCHEDULE_DELAY_MS` | `5000` | at init | Delay in milliseconds between scheduled batch exports. Lower it to export more eagerly (fewer spans sitting in the queue at any moment); raise it to send larger, less frequent batches. |
-| `ORQ_OTEL_FLUSH_TIMEOUT_MS` | `5000` | per run | Milliseconds the end-of-run force-flush blocks waiting for the exporter before giving up and logging the timeout warning. |
+`ORQ_OTEL_MAX_QUEUE_SIZE`, `ORQ_OTEL_MAX_BATCH_SIZE` and
+`ORQ_OTEL_SCHEDULE_DELAY_MS` are baked into the processor when tracing
+initializes and cannot change for the life of the process; a batch size larger
+than the queue size is clamped down to it with a `WARNING`.
+`ORQ_OTEL_FLUSH_TIMEOUT_MS` is read on every flush, so a long-lived host can raise
+it before a big run — it bounds the end-of-run flush only, while the per-request
+export timeout above is a fixed 5 seconds and is not tunable. Each value must be a
+positive integer: a set-but-invalid value (empty, non-numeric, zero or negative)
+is ignored with a `WARNING` and the default is used, so a typo never takes tracing
+down but never silently takes effect either. The SDK's own `OTEL_BSP_*` variables
+have no effect — evaluatorq passes these values to the processor explicitly, which
+takes precedence over the SDK's env-var defaults.
 
-The first three are baked into the processor when tracing initializes and cannot
-change for the life of the process; `ORQ_OTEL_FLUSH_TIMEOUT_MS` is read on every
-flush, so a long-lived host can raise it before a big run. Each value must be a
-positive integer — a set-but-invalid value (non-numeric, zero or negative) is
-ignored with a `WARNING` and the default is used, so a typo never takes tracing
-down, but it never silently takes effect either.
-
-A CI or batch run that must not lose spans typically drains the queue more
-eagerly and allows a longer final flush. These are read from the environment, so
-in a GitHub Action they go straight in the workflow's `env:` block:
+A CI run that must not lose spans drains the queue more eagerly and allows a
+longer final flush:
 
 ```bash
 export ORQ_API_KEY="your_orq_api_key"      # enables tracing
@@ -147,9 +161,19 @@ export ORQ_OTEL_SCHEDULE_DELAY_MS=1000     # export every second, not every five
 export ORQ_OTEL_FLUSH_TIMEOUT_MS=30000     # give the final flush up to 30s
 ```
 
-No code changes are needed: run the [minimal enable example](#minimal-enable-example)
-above with these variables set, and evaluatorq force-flushes the run's spans
-within `ORQ_OTEL_FLUSH_TIMEOUT_MS` when it returns.
+In a GitHub Action the same values go straight in the workflow's `env:` block:
+
+```yaml
+env:
+  ORQ_API_KEY: ${{ secrets.ORQ_API_KEY }}
+  ORQ_OTEL_MAX_QUEUE_SIZE: 16384
+  ORQ_OTEL_SCHEDULE_DELAY_MS: 1000
+  ORQ_OTEL_FLUSH_TIMEOUT_MS: 30000
+```
+
+The flush timeout is an upper bound on wall-clock added to the job: a run whose
+exporter has become unreachable waits the full 30 seconds before warning and
+moving on.
 
 ## Span hierarchy
 

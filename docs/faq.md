@@ -78,6 +78,15 @@ Cost and wall-clock scale with cases × turns × LLM calls. The levers are how m
 
 Runs auto-save locally (red-team runs to `.evaluatorq/runs/`; simulation runs to `.evaluatorq/sim-runs/`). Browse them in the multi-run FastHTML dashboard with `eq dashboard` (no path browses both stores; `eq dashboard .evaluatorq/sim-runs` scopes to simulation), or list runs with `eq redteam runs` / `eq sim runs`. See [Dashboard](dashboard.md).
 
+### Some spans are missing from my traces
+
+The span exporter batches in the background, so spans can be lost two ways, both of
+which log a warning rather than failing the run: the in-memory queue overflowed
+(spans produced faster than the exporter drained them), or the process exited before
+the final flush finished. Raise `ORQ_OTEL_MAX_QUEUE_SIZE` for the first and
+`ORQ_OTEL_FLUSH_TIMEOUT_MS` for the second. See
+[Tracing → Batching and flush](tracing.md#batching-and-flush).
+
 ### How do I run a plain evaluation?
 
 Decorate a function with `@job`, hand `evaluatorq()` your data and evaluators, and it runs the jobs in parallel and scores each row:
