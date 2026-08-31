@@ -79,4 +79,6 @@ Marked `N/A` in the matrix, never reported as a gap.
 
 **Tier 1 — needs prose.** Top-level `evaluatorq.__all__` entry points, every CLI command and subcommand, every env var. The generated API reference does **not** count: a docstring is not discovery.
 
+Tier-1 items are **not** matrix cells — there is no `env var` axis, and `surface` has exactly the three values above. Record a Tier-1 gap in the `docs-autofill` ledger as `tier 1: <kind> (<name>, …)` with no second axis, e.g. `tier 1: env var (ORQ_OTEL_MAX_QUEUE_SIZE, ORQ_OTEL_MAX_BATCH_SIZE)`. The ledger dedupe compares that cell as free text, so naming the items is what stops the same gap being re-derived next week; an invented axis pair never matches.
+
 **Tier 2 — API reference suffices.** Supporting types, contracts, backends, and subpackage `__all__` members. Flag only when there is no docstring at all.

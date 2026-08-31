@@ -131,8 +131,8 @@ async def annotate_current_span(  # noqa: RUF029
     Used by evaluator scorers: the evaluatorq framework already runs them inside
     the ``orq.evaluation`` evaluator span (via ``start_as_current_span``), which
     carries the verdict/score/explanation. Annotating that span directly avoids a
-    redundant ``orq.redteam.security_evaluation`` layer between it and the judge
-    ``chat`` span.
+    redundant ``orq.redteam.security_evaluation`` layer between it and the judge's
+    own LLM span (``responses`` by default, ``chat`` on fallback).
 
     Yields:
         The current span when tracing is enabled, None otherwise.

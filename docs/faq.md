@@ -72,11 +72,15 @@ Simulator/attacker/judge LLM calls go to OpenAI or the Orq router. Results uploa
 
 ### How much does a run cost, and how do I keep it cheap?
 
-Cost and wall-clock scale with cases × turns × LLM calls. The levers are how many cases you run (`max_dynamic_datapoints` / `max_static_datapoints` for red teaming, `num_personas` × `num_scenarios` for simulation), `max_turns`, and `datapoint_parallelism` (default 10 everywhere). To size against a provider concurrency limit, set `llm_parallelism=` (on `evaluatorq()`, `red_team()` or `simulate()`) rather than lowering `datapoint_parallelism` — it counts requests instead of tasks, so the number means the same thing however the fan-out nests. Red teaming's report tracks spend in `report.summary.token_usage_total`.
+Cost and wall-clock scale with cases × turns × LLM calls. The levers are how many cases you run (`max_dynamic_datapoints` / `max_static_datapoints` for red teaming, `num_personas` × `num_scenarios` for simulation), `max_turns`, and `datapoint_parallelism` (default 10 on `evaluatorq()`, `red_team()` and `simulate()`; 5 in the adaptive red-team pipeline). To size against a provider concurrency limit, set `llm_parallelism=` (on `evaluatorq()`, `red_team()` or `simulate()`) rather than lowering `datapoint_parallelism` — it counts requests instead of tasks, so the number means the same thing however the fan-out nests. Red teaming's report tracks spend in `report.summary.token_usage_total`.
 
 ### Where do results go, and how do I view a past run?
 
 Runs auto-save locally (red-team runs to `.evaluatorq/runs/`; simulation runs to `.evaluatorq/sim-runs/`). Browse them in the multi-run FastHTML dashboard with `eq dashboard` (no path browses both stores; `eq dashboard .evaluatorq/sim-runs` scopes to simulation), or list runs with `eq redteam runs` / `eq sim runs`. See [Dashboard](dashboard.md).
+
+### Some spans are missing from my traces
+
+The span exporter batches in the background, so spans can be lost two ways, neither of which fails the run. Either the in-memory queue overflowed — spans produced faster than the exporter drained them — or the process exited before the final flush finished. Raise `ORQ_OTEL_MAX_QUEUE_SIZE` for the first and `ORQ_OTEL_FLUSH_TIMEOUT_MS` for the second. Both log a warning; a hard `SIGKILL` drops whatever was still buffered without one. See [Tracing › Batching and flush](tracing.md#batching-and-flush).
 
 ### How do I run a plain evaluation?
 

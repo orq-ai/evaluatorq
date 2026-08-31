@@ -22,6 +22,10 @@ All configuration is via environment variables. No config file is required.
 | `OTEL_EXPORTER_OTLP_HEADERS` | No | — | Comma-separated `key=value` pairs added to every OTLP export request. Format: `key1=value1,key2=value2`. |
 | `OTEL_SERVICE_NAME` | No | `evaluatorq` | Service name recorded on every span's `service.name` resource attribute. |
 | `OTEL_SERVICE_VERSION` | No | `1.0.0` | Service version recorded on every span's `service.version` resource attribute. |
+| `ORQ_OTEL_MAX_QUEUE_SIZE` | No | `4096` | Maximum spans buffered by the `BatchSpanProcessor`. When it is full the SDK evicts the oldest buffered span and logs `Queue full, dropping Span.` on the stdlib `opentelemetry.sdk._shared_internal` logger. See [Tracing › Batching and flush](tracing.md#batching-and-flush). |
+| `ORQ_OTEL_MAX_BATCH_SIZE` | No | `512` | Maximum spans per OTLP export request. Reaching it wakes the exporter immediately. A value larger than the queue size is clamped to the queue size, with a warning. |
+| `ORQ_OTEL_SCHEDULE_DELAY_MS` | No | `5000` | Milliseconds a partial batch waits before it is exported. It does not throttle a full batch. |
+| `ORQ_OTEL_FLUSH_TIMEOUT_MS` | No | `5000` | Milliseconds the end-of-run force-flush waits before giving up and logging a warning. Read per run; enforced by evaluatorq rather than the SDK. Bounds the final flush only — the per-request export timeout is a fixed 5s. |
 | `EVALUATORQ_CAPTURE_MESSAGE_CONTENT` | No | `true` | Set to `false` or `0` to strip LLM message content (prompts and responses) from spans. Token counts, model name, and latency are still recorded. Useful when exporting to third-party backends or to avoid capturing PII. |
 | `EVALUATORQ_SPAN_MAX_TEXT_CHARS` | No | unset (no limit) | Maximum characters per span text attribute. Set a positive integer (e.g. `8192`) to truncate long strings. Unset or `0` / `-1` means capture all. |
 | `EVALUATORQ_LLM_TIMEOUT_S` | No | `60.0` | Per-LLM-call timeout in seconds. **Simulation only** — has no effect on red teaming or core evaluation. A fallback default: `LLMCallConfig.timeout_ms` on the agent's config wins when set. Read at call time, so setting it after import takes effect. Increase for slow self-hosted endpoints; for the *target's* timeout rather than the simulator's, pass `target_agent_timeout_ms` to `simulate()`. |
@@ -33,15 +37,9 @@ All configuration is via environment variables. No config file is required.
 
 ## Model catalogue overrides
 
-Prices, provider ids, Responses support and accepted reasoning-effort values come
-from Orq's `GET /v2/models`, fetched once per process. A model that catalogue does
-not list — a self-hosted deployment, or one newer than your workspace's catalogue —
-degrades silently in three ways: the call stays unpriced, `qualified_model()` sends
-it to Chat Completions instead of Responses, and its reasoning effort cannot be
-pre-validated.
+Prices, provider ids, Responses support and accepted reasoning-effort values come from Orq's `GET /v2/models`, fetched once per process. A model that catalogue does not list — a self-hosted deployment, or one newer than your workspace's catalogue — degrades silently in three ways: the call stays unpriced, `qualified_model()` sends it to Chat Completions instead of Responses, and its reasoning effort cannot be pre-validated.
 
-Register an entry to fix that. Registered entries take priority over the fetched
-catalogue, so this also corrects an entry that is wrong:
+Register an entry to fix that. Registered entries take priority over the fetched catalogue, so this also corrects an entry that is wrong:
 
 ```python
 from evaluatorq.common.model_catalogue import ModelInfo, get_model_info, register_model
@@ -62,12 +60,7 @@ info = await get_model_info('my-self-hosted-llama')
 
 Costs are USD **per 1000 tokens**, matching what `/v2/models` publishes.
 
-The id is stored unprefixed, so `'openai/gpt-x'` and `'gpt-x'` register and resolve
-the same entry — register either spelling and both lookups find it. Registering
-both replaces rather than duplicates: there is one model. `reasoning_efforts=None`
-means "unknown, cannot pre-validate"; an empty set means the same thing and is
-normalized to `None`, because a literally-empty accepted-values list would reject
-every effort including the defaults.
+The id is stored unprefixed, so `'openai/gpt-x'` and `'gpt-x'` register and resolve the same entry — register either spelling and both lookups find it. Registering both replaces rather than duplicates: there is one model. `reasoning_efforts=None` means "unknown, cannot pre-validate"; an empty set means the same thing and is normalized to `None`, because a literally-empty accepted-values list would reject every effort including the defaults.
 
 ## `.env` file
 

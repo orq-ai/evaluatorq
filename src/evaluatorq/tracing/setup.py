@@ -23,9 +23,12 @@ Provider lifecycle and batching:
   tracing to initialize again in that interpreter.
 - Tune the long-lived batch processor with ``ORQ_OTEL_MAX_QUEUE_SIZE`` (default 4096),
   ``ORQ_OTEL_SCHEDULE_DELAY_MS`` (default 5000), and ``ORQ_OTEL_MAX_BATCH_SIZE``
-  (default 512).
-- ``ORQ_OTEL_FLUSH_TIMEOUT_MS`` controls per-run force-flush (default 5000). A timeout
-  logs a warning because some spans may not have been exported.
+  (default 512, clamped to the queue size with a warning). These are passed to the
+  processor explicitly, so the SDK's own ``OTEL_BSP_*`` variables have no effect.
+- ``ORQ_OTEL_FLUSH_TIMEOUT_MS`` bounds the per-run force-flush (default 5000). The SDK
+  ignores the timeout it is handed, so ``flush_tracing`` enforces it with
+  ``asyncio.wait_for``; a timeout logs a warning because some spans may not have been
+  exported.
 - Exporter headers are bound at initialization: changing ``ORQ_API_KEY`` requires a
   process restart. A hard ``SIGKILL`` can lose spans still buffered by the batch exporter.
 """
@@ -51,11 +54,18 @@ _initialization_attempted = False
 def _env_int(name: str, default: int) -> int:
     """Read a positive int from the environment, falling back to *default*.
 
-    A set-but-invalid value (non-integer or non-positive) logs a WARNING so a
-    misconfigured tuning knob is actionable instead of silently ignored.
+    A set-but-invalid value (empty, non-integer or non-positive) logs a WARNING
+    so a misconfigured tuning knob is actionable instead of silently ignored.
+    An empty value counts as set-but-invalid: in a CI ``env:`` block an
+    unresolved ``${{ vars.X }}`` expands to the empty string, which would
+    otherwise fall back to the default with no signal.
     """
     raw = os.environ.get(name)
+    if raw is None:
+        return default
+    raw = raw.strip()
     if not raw:
+        logger.warning('{} is set but empty; using default {}.', name, default)
         return default
     try:
         value = int(raw)
@@ -207,17 +217,24 @@ async def init_tracing_if_needed() -> bool:  # noqa: RUF029
         )
 
         # Use BatchSpanProcessor to export spans asynchronously in batches.
-        # Queue/scheduling are env-tunable: in a long-lived process (e.g. the
-        # dashboard) that runs many red-team/simulation runs without ever tearing
-        # the provider down, the default 2048-span queue can overflow and silently
-        # drop spans. Larger defaults + env overrides reduce that risk.
+        # Env-tunable because a long-lived process never tears the provider down,
+        # so one queue absorbs every run and the SDK's 2048 default overflows.
         max_queue_size = _env_int('ORQ_OTEL_MAX_QUEUE_SIZE', 4096)
         requested_batch_size = _env_int('ORQ_OTEL_MAX_BATCH_SIZE', 512)
+        batch_size = min(requested_batch_size, max_queue_size)
+        if batch_size != requested_batch_size:
+            logger.warning(
+                'ORQ_OTEL_MAX_BATCH_SIZE ({}) exceeds ORQ_OTEL_MAX_QUEUE_SIZE ({}); '
+                'clamping the export batch size to {}.',
+                requested_batch_size,
+                max_queue_size,
+                batch_size,
+            )
         span_processor = BatchSpanProcessor(
             exporter,
             max_queue_size=max_queue_size,
             schedule_delay_millis=_env_int('ORQ_OTEL_SCHEDULE_DELAY_MS', 5000),
-            max_export_batch_size=min(requested_batch_size, max_queue_size),
+            max_export_batch_size=batch_size,
         )
 
         # Rely on the SDK default shutdown_on_exit=True for atexit teardown:
@@ -248,22 +265,38 @@ async def flush_tracing() -> None:
     Force flush all pending spans, blocking until export completes or times out.
 
     ``force_flush`` is a synchronous, blocking SDK call, so it runs on a worker
-    thread to avoid stalling the event loop. A ``False`` return means the flush
-    timed out with spans still unexported; a raised exception means the export
-    failed outright — both leave spans unexported and are surfaced as warnings
-    rather than silently dropped.
+    thread to avoid stalling the event loop.
+
+    ``ORQ_OTEL_FLUSH_TIMEOUT_MS`` is enforced here with ``asyncio.wait_for``, not
+    by the SDK: ``BatchProcessor.force_flush`` currently ignores its
+    ``timeout_millis`` argument and unconditionally returns ``True``
+    (https://github.com/open-telemetry/opentelemetry-python/issues/4568), so
+    passing the timeout down bounds nothing. Without the wrapper a run whose
+    collector has stopped responding waits for the export to finish, however long
+    that takes. The timeout only stops this coroutine *waiting*; the exporter
+    thread is a daemon and keeps draining behind it, so a late flush may still
+    land. The ``ok is False`` branch stays for an SDK that does honour the
+    argument.
+
+    A timeout leaves spans unexported and a raised exception means the export
+    failed outright — both are surfaced as warnings rather than silently dropped.
+    Exporter errors raised inside ``_export`` are caught and logged by the SDK,
+    so they reach neither branch.
     """
     if _sdk is None:
         return
     provider = _sdk  # TracerProvider
     timeout_ms = _env_int('ORQ_OTEL_FLUSH_TIMEOUT_MS', 5000)
+    timed_out = 'OTEL span flush timed out after {}ms; some spans may not have been exported.'
     try:
-        ok = await asyncio.to_thread(provider.force_flush, timeout_ms)
+        ok = await asyncio.wait_for(
+            asyncio.to_thread(provider.force_flush, timeout_ms),
+            timeout=timeout_ms / 1000,
+        )
         if ok is False:
-            logger.warning(
-                'OTEL span flush timed out after {}ms; some spans may not have been exported.',
-                timeout_ms,
-            )
+            logger.warning(timed_out, timeout_ms)
+    except asyncio.TimeoutError:
+        logger.warning(timed_out, timeout_ms)
     except Exception as e:
         logger.warning('OTEL span flush failed ({}); some spans may not have been exported.', e)
 
