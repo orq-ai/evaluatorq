@@ -184,9 +184,7 @@ def _mirror_gaps(config_fields: Iterable[str], agent_fields: Iterable[str]) -> t
     )
 
 
-# Checked at import time rather than trusted, the way the vulnerability registry checks
-# itself: a field added to `LLMCallConfig` and forgotten in the mirror vanishes from the
-# request without a word — that is what had happened to `extra_body`.
+# Checked at import time, like the vulnerability registry: a field forgotten here vanishes from the request in silence.
 _unmirrored, _unbacked = _mirror_gaps(LLMCallConfig.model_fields, {f.name for f in fields(AgentConfig)})
 if _unmirrored:
     raise RuntimeError(

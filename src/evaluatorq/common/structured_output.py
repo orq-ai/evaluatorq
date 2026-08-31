@@ -275,9 +275,7 @@ class _CallSettings(NamedTuple):
     timeout_s: float
 
 
-# What a call reads from a config when no explicit keyword beats it; `_fold_config`
-# takes the beaten fields back off before warning. `model` and `api` stay the call
-# site's authority, so a config cannot redirect a call to another endpoint.
+# What a call reads when no explicit keyword beats it; `model` and `api` stay the call site's authority.
 _CONSUMED_CONFIG_FIELDS = frozenset({
     'model',
     'client',
@@ -331,8 +329,7 @@ def _fold_config(
     from_config = (
         config.set_values('temperature', 'extra_kwargs', 'extra_body', 'reasoning_effort') if config is not None else {}
     )
-    # A field the caller also passed as an explicit keyword is beaten, not read:
-    # warning against the constant would call it consumed while it was dropped.
+    # A field an explicit keyword beat was dropped, not read, so it must not be warned against.
     beaten = {
         name
         for name, keyword in (

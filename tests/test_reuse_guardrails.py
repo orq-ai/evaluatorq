@@ -462,20 +462,14 @@ def test_new_hardcoded_class_detector_actually_fires() -> None:
 
 
 # --- an llm_config consumed in part, silently --------------------------------
-# `FirstMessageGenerator` dropped a caller's `llm_config.max_tokens` for as long
-# as it existed: it sizes its own budget and calls the Responses API itself, so
-# it never went through `generate_structured`, which is the thing that warns
-# about the fields it does not consume. That was found by hand. This is the
-# mechanical version.
+# `FirstMessageGenerator` dropped a caller's `max_tokens` for as long as it existed, because it never went through `generate_structured`.
 _SIM_GENERATORS = SRC / 'simulation' / 'generators'
 
-# Declaring the read set covers the whole scope; `generate_structured` warns only
-# about the config it is handed, so it covers only the reads inside its own call.
+# Declaring the read set covers the whole scope; `generate_structured` covers only the reads inside its own call.
 _SCOPE_ACCOUNTING_CALL = 'warn_unread_config_fields'
 _CALL_ACCOUNTING_CALL = 'generate_structured'
 
-# Accessors that turn a config into call parameters. Fields come from the model
-# itself so a new one is covered the day it is added.
+# Accessors that turn a config into call parameters; the field names come from the model itself.
 _CONFIG_ACCESSORS = frozenset({'set_values', 'timeout_s', 'request_params'})
 
 

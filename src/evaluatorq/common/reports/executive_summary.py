@@ -83,9 +83,7 @@ EXECUTIVE_SUMMARY_MAX_TOKENS = 400
 # up the report.
 EXECUTIVE_SUMMARY_TIMEOUT_S = 120.0
 
-# `retry_count` is the one field this call site does not read: retry is the SDK
-# client's here, and `api` is accounted for by `request_params`, which warns when
-# a config asking for the Responses endpoint reaches this chat-only call.
+# `retry_count` is the one field this call site does not read: retry is the SDK client's here.
 _READ_CONFIG_FIELDS = frozenset({
     'model',
     'client',
