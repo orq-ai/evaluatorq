@@ -75,6 +75,11 @@ async def main() -> None:
         ],
     )
 
+    # CommunicationStyle: formal, casual, terse, verbose.
+    # A Scenario also takes starting_emotion (neutral, frustrated, confused,
+    # happy, urgent) and a Persona takes emotional_arc (stable, escalating,
+    # de_escalating, volatile, manipulative, hostile).
+
     # One DataPoint per conversation. wrap_simulation_agent() reads
     # inputs["persona"] and inputs["scenario"] off each row.
     data = [
