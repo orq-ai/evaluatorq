@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from evaluatorq.deployment import _extract_content_from_response
+
+# `evaluatorq/__init__.py` re-exports the `deployment` function under the name of
+# its own module, so `patch("evaluatorq.deployment.<attr>")` resolves to the
+# function and fails. Grab the module out of sys.modules instead.
+deployment_module = sys.modules["evaluatorq.deployment"]
 
 
 def _completion_with_message(message: object) -> object:
@@ -95,9 +101,10 @@ class TestTraceContextPropagation:
 
         client, invoke = self._client_with_invoke()
         with (
-            patch("evaluatorq.deployment._get_or_create_client", return_value=client),
-            patch(
-                "evaluatorq.deployment.get_trace_context_headers",
+            patch.object(deployment_module, "_get_or_create_client", return_value=client),
+            patch.object(
+                deployment_module,
+                "get_trace_context_headers",
                 AsyncMock(return_value={"traceparent": "00-abc-def-01"}),
             ),
         ):
@@ -112,7 +119,7 @@ class TestTraceContextPropagation:
 
         monkeypatch.setenv("EVALUATORQ_PROPAGATE_TRACE_CONTEXT", "false")
         client, invoke = self._client_with_invoke()
-        with patch("evaluatorq.deployment._get_or_create_client", return_value=client):
+        with patch.object(deployment_module, "_get_or_create_client", return_value=client):
             await deployment("some-key")
 
         assert invoke.await_args is not None
