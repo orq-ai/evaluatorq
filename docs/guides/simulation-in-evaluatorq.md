@@ -49,20 +49,35 @@ async def support_agent(messages: list[Message]) -> str:
     return "Sorry about that. Could you share your order number so I can look it up?"
 
 
+CRITERIA_THRESHOLD = 0.8
+
+
 async def criteria_scorer(params) -> EvaluationResult:
-    """Score the fraction of the scenario's criteria the judge marked satisfied."""
+    """Score the fraction of the scenario's criteria the judge marked satisfied.
+
+    Sets `pass_` as well as `value`, so `check_pass_failures()` can gate a build
+    on it without anyone re-deriving the threshold at the call site.
+    """
     metadata = params["output"].get("metadata", {})
-    if metadata.get("terminated_by") in {"error", "timeout"}:
-        # The conversation never reached the judge, so there is no verdict to
-        # score. A number here — 0.0 included — would report a broken pipeline
-        # as a bad agent. The non-numeric value drops out of scores_from().
-        return EvaluationResult(value="unevaluated", explanation=f"run ended in {metadata['terminated_by']}")
+    terminated_by = metadata.get("terminated_by")
+    if terminated_by in {"error", "timeout"}:
+        # The conversation never reached the judge, so there is no verdict. The
+        # value stays non-numeric because a 0.0 here would read as "the agent
+        # scored zero" rather than "nothing was measured" — but pass_ is still
+        # False, because an unmeasured run must never look like a passing one.
+        return EvaluationResult(
+            value="unevaluated",
+            pass_=False,
+            explanation=f"no verdict: run ended in {terminated_by}",
+        )
     results = metadata.get("criteria_results") or {}
     if not results:
-        return EvaluationResult(value=0.0, explanation="no criteria were judged")
+        return EvaluationResult(value=0.0, pass_=False, explanation="no criteria were judged")
     passed = sum(1 for ok in results.values() if ok)
+    score = passed / len(results)
     return EvaluationResult(
-        value=passed / len(results),
+        value=score,
+        pass_=score >= CRITERIA_THRESHOLD,
         explanation=f"{passed}/{len(results)} criteria satisfied",
     )
 
@@ -114,6 +129,12 @@ async def main() -> None:
             metadata = job_result.output.get("metadata", {})
             print("metadata keys:", sorted(metadata))
             print("criteria:", metadata.get("criteria_results"))
+            # evaluatorq reports a 100% success rate for this run even when the
+            # conversation itself never happened: the job returned a result dict,
+            # so nothing errored from its point of view. Check terminated_by, or
+            # a dead target reads as a passing one.
+            if metadata.get("terminated_by") in {"error", "timeout"}:
+                raise SystemExit(f"simulation did not run: {metadata.get('reason')}")
 
 
 asyncio.run(main())
@@ -235,49 +256,22 @@ Three things change for a non-interactive run:
 
 If you are arriving from `simulate()`, note what does and does not carry over. `simulate()` takes `exit_on_failure`, which defaults to `True` and raises `SimulationDroppedError` when a datapoint is *dropped* — a job raised and no result was cached. That is an infrastructure gate, not a quality gate: scorer verdicts are reporting only there too, so an agent that answered every question badly still exits 0. Moving to `wrap_simulation_agent()` costs you that infrastructure gate, because the parameter belongs to `simulate()` and there is no equivalent on `evaluatorq()`.
 
-`evaluatorq()` does not fail the process for you either — it returns results and exits 0 whatever the scores are. So on this path the whole build verdict is yours to write, and it is a few lines:
+`evaluatorq()` does not fail the process for you either — it returns results and exits 0 whatever the scores are. So on this path the build verdict is yours to write, and it is one line:
 
 ```python
-from evaluatorq import EvaluationResult
+from evaluatorq.evaluatorq import check_pass_failures
 
-
-def gate(scores: list[float], threshold: float) -> int:
-    """Return the exit code for a run: 0 when the mean score clears the threshold."""
-    if not scores:
-        return 1
-    return 0 if sum(scores) / len(scores) >= threshold else 1
-
-
-def scores_from(results, evaluator: str | None = None) -> list[float]:
-    """Pull numeric evaluator scores out of an EvaluatorqResult.
-
-    Pass `evaluator` to gate on one evaluator by name rather than on the mean of
-    all of them. The name is `score.evaluator_name`, matching the `name` you gave
-    the evaluator in the `evaluatorq()` call.
-    """
-    values = []
-    for row in results:
-        for job_result in row.job_results or []:
-            for score in job_result.evaluator_scores or []:
-                if evaluator is not None and score.evaluator_name != evaluator:
-                    continue
-                result = score.score
-                value = result.value if isinstance(result, EvaluationResult) else result
-                if isinstance(value, (int, float)) and not isinstance(value, bool):
-                    values.append(float(value))
-    return values
-
-
-print("empty run ->", gate([], 0.8))
+# At the end of main(), after the evaluatorq() call has returned `results`:
+#     if check_pass_failures(results, treat_errors_as_failure=True):
+#         raise SystemExit(1)
+print("gate helper imported:", check_pass_failures.__name__)
 ```
 
-An empty score list returns 1 on purpose. A run where nothing was scored is a broken pipeline, and the one thing it must not do is look like a pass.
+Import it from `evaluatorq.evaluatorq`, not the top-level package — it is not re-exported.
 
-This threshold-on-mean-score gate suits an evaluator like `criteria_scorer` above, which returns partial credit rather than a bit. If your evaluators set `pass_` on their `EvaluationResult` instead, [`check_pass_failures`](../evaluation-reference.md#passfail-and-ci) covers the binary case in one call — import it as `from evaluatorq.evaluatorq import check_pass_failures`, which is the path that page uses, because it is not re-exported from the top-level package.
+`check_pass_failures` reads `pass_` off each evaluator score, which is why `criteria_scorer` above sets `pass_` alongside `value`. Keeping the threshold inside the scorer is the point: the score and the verdict on that score stay in one place, so a CI step cannot gate on a different bar than the one the evaluator reports against, and the scorer's three branches — a real verdict, no criteria judged, and no verdict at all — each state their own `pass_` rather than leaving a caller to infer one from a number.
 
-Pass it `treat_errors_as_failure=True` if you use it. Its default is `False`, and on that default an errored job contributes no evaluator scores and an errored evaluator leaves `pass_` unset, so a run where every judge call raised reports no failures and the build goes green. That is the same trap the empty-list case above returns 1 for.
-
-Then `raise SystemExit(gate(scores_from(results), 0.8))` at the end of your script, and the workflow step fails when the agent regresses.
+**Always pass `treat_errors_as_failure=True`.** The default is `False`, and on that default an errored job contributes no evaluator scores and an errored evaluator leaves `pass_` unset, so a run where every judge call raised reports no failures and the build goes green. A run that measured nothing is the one thing that must not look like a pass.
 
 ```yaml
 name: Support agent simulation
