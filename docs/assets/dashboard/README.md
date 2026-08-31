@@ -1,21 +1,12 @@
 # Dashboard screenshots
 
-Persistent copies of the `eq dashboard` screenshots produced for
-[DOC-653](https://linear.app/orqai/issue/DOC-653) (red teaming) and
-[DOC-655](https://linear.app/orqai/issue/DOC-655) (agent simulation). They were
-posted as Linear comments first; Linear's upload URLs are signed and expire, so
-the files live here instead. Docs pages and the README should reference these
-paths, not the Linear links.
+Persistent copies of the `eq dashboard` screenshots produced for [DOC-653](https://linear.app/orqai/issue/DOC-653) (red teaming) and [DOC-655](https://linear.app/orqai/issue/DOC-655) (agent simulation). They were posted as Linear comments first; Linear's upload URLs are signed and expire, so the files live here instead. Docs pages and the README should reference these paths, not the Linear links.
 
-Captured against the FastHTML dashboard at `main @ fcb525a6`, 1440×900, light
-theme, so the whole set reads consistently side by side.
+Captured against the FastHTML dashboard at `main @ fcb525a6`, 1440×900, light theme, so the whole set reads consistently side by side.
 
 ## Red teaming — `redteam-*.png`
 
-Source run: hybrid red team, 2 target agents (one deliberately vulnerable, one
-hardened), 40 attacks across 10 OWASP ASI/LLM categories, `gemini-2.5-flash`,
-LLM-as-judge scoring. 78% resistance, 9 vulnerabilities, 3 critical — real
-findings rather than an all-green wall.
+Source run: hybrid red team, 2 target agents (one deliberately vulnerable, one hardened), 40 attacks across 10 OWASP ASI/LLM categories, `gemini-2.5-flash`, LLM-as-judge scoring. 78% resistance, 9 vulnerabilities, 3 critical — real findings rather than an all-green wall.
 
 | File | Page |
 |---|---|
@@ -32,9 +23,7 @@ findings rather than an all-green wall.
 
 ## Agent simulation — `sim-*.png`
 
-Source run: `sim:refund-agent-fixed` — 10 personas × 5 scenarios = 50
-conversations against a refund agent, judged per turn. 74% goal completion, mean
-score 0.86, with one scenario column that clearly fails.
+Source run: `sim:refund-agent-fixed` — 10 personas × 5 scenarios = 50 conversations against a refund agent, judged per turn. 74% goal completion, mean score 0.86, with one scenario column that clearly fails.
 
 | File | Page |
 |---|---|
@@ -50,14 +39,7 @@ score 0.86, with one scenario column that clearly fails.
 
 ## Pending re-shoot
 
-Five shots do not show the thing their caption teaches. The decision is to
-re-shoot the set in one purpose-built capture session rather than keep
-documenting around it. Until then the four that exist are **unreferenced** —
-their `![...]` lines were removed from
-[`docs/dashboard.md`](../../dashboard.md); the prose stayed. Re-add each one in
-the same commit that replaces the file, not before. The prose caveats standing
-in for them are the only thing keeping the pages honest, so **do not delete
-them either**.
+Five shots do not show the thing their caption teaches. The decision is to re-shoot the set in one purpose-built capture session rather than keep documenting around it. Until then the four that exist are **unreferenced** — their `![...]` lines were removed from [`docs/dashboard.md`](../../dashboard.md); the prose stayed. Re-add each one in the same commit that replaces the file, not before. The prose caveats standing in for them are the only thing keeping the pages honest, so **do not delete them either**.
 
 | Shot | What's wrong | What the capture run needs |
 |---|---|---|
@@ -67,11 +49,6 @@ them either**.
 | `sim-07-turn-quality.png` | Judge ended most conversations after one turn, so the trend spans two points | Scenarios whose goals need several exchanges, and a higher `max_turns` |
 | `sim-09-compare.png` | Red "low overlap (0%)" banner — the two runs share no (persona, scenario) pairs | Two runs replayed from the same datapoints file, with **distinct run names** (the compare picker shows names only, no timestamps) |
 
-The screenshots that do show a report tab strip (`sim-03` … `sim-08`) are one
-tab short of the current dashboard, since Recommendations sits between
-Breakdown and Transcripts now. `sim-01`, `sim-02` and `sim-09` are outside a
-report and unaffected.
+The screenshots that do show a report tab strip (`sim-03` … `sim-08`) are one tab short of the current dashboard, since Recommendations sits between Breakdown and Transcripts now. `sim-01`, `sim-02` and `sim-09` are outside a report and unaffected.
 
-To re-shoot: run `eq dashboard` in a checkout with runs under
-`.evaluatorq/runs/` and `.evaluatorq/sim-runs/`, 1440×900, light theme, to
-match the existing set.
+To re-shoot: run `eq dashboard` in a checkout with runs under `.evaluatorq/runs/` and `.evaluatorq/sim-runs/`, 1440×900, light theme, to match the existing set.

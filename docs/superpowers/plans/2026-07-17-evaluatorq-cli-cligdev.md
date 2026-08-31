@@ -72,8 +72,7 @@ Change to (matches `docs/configuration.md`, which correctly states the library n
 
 - [ ] **Step 3: Verify nothing else leaks the role.**
 
-Run: `grep -rn ':command:' src/ docs/`
-Expected: no matches (the one occurrence is now gone).
+Run: `grep -rn ':command:' src/ docs/` Expected: no matches (the one occurrence is now gone).
 
 - [ ] **Step 4: Commit.**
 
@@ -111,8 +110,7 @@ def test_dash_h_shows_help_on_subcommand():
 
 - [ ] **Step 2: Run test to verify it fails.**
 
-Run: `uv run pytest tests/unit/test_cli_help_option.py -v`
-Expected: FAIL — `-h` is currently an unknown option, exit code 2.
+Run: `uv run pytest tests/unit/test_cli_help_option.py -v` Expected: FAIL — `-h` is currently an unknown option, exit code 2.
 
 - [ ] **Step 3: Create the shared constant.**
 
@@ -164,10 +162,7 @@ In `simulation/cli.py`, add the import and `context_settings=CONTEXT_SETTINGS` t
 
 - [ ] **Step 7: Run the test + a manual check.**
 
-Run: `uv run pytest tests/unit/test_cli_help_option.py -v`
-Expected: PASS
-Run: `uv run evaluatorq -h` and `uv run evaluatorq redteam run -h`
-Expected: both print help, exit 0.
+Run: `uv run pytest tests/unit/test_cli_help_option.py -v` Expected: PASS Run: `uv run evaluatorq -h` and `uv run evaluatorq redteam run -h` Expected: both print help, exit 0.
 
 - [ ] **Step 8: Commit.**
 
@@ -204,8 +199,7 @@ def test_bogus_mode_rejected_early():
 
 - [ ] **Step 2: Run test to verify it fails.**
 
-Run: `uv run pytest tests/redteam/test_cli_mode_enum.py -v`
-Expected: FAIL — `mode` is currently a free `str`, so `bogus` is accepted at parse time and fails later (not exit 2 at parse).
+Run: `uv run pytest tests/redteam/test_cli_mode_enum.py -v` Expected: FAIL — `mode` is currently a free `str`, so `bogus` is accepted at parse time and fails later (not exit 2 at parse).
 
 - [ ] **Step 3: Add `Pipeline` to the imports.**
 
@@ -230,8 +224,7 @@ The `red_team(mode=mode)` call at line ~429 needs no change — `Pipeline` is a 
 
 - [ ] **Step 5: Run the test to verify it passes.**
 
-Run: `uv run pytest tests/redteam/test_cli_mode_enum.py -v`
-Expected: PASS
+Run: `uv run pytest tests/redteam/test_cli_mode_enum.py -v` Expected: PASS
 
 - [ ] **Step 6: Commit.**
 
@@ -278,8 +271,7 @@ def test_yes_always_skips(monkeypatch):
 
 - [ ] **Step 2: Run test to verify it fails.**
 
-Run: `uv run pytest tests/unit/test_cli_tty.py -v`
-Expected: FAIL — module does not exist.
+Run: `uv run pytest tests/unit/test_cli_tty.py -v` Expected: FAIL — module does not exist.
 
 - [ ] **Step 3: Create the helper.**
 
@@ -315,22 +307,17 @@ from evaluatorq.common.cli_tty import should_skip_confirm
 
 - [ ] **Step 5: Use it at BOTH sim call sites.**
 
-`simulation/cli.py` has **two** identical inline occurrences (verified): line ~612
-(inside `simulate`) and line ~900 (inside `run`):
+`simulation/cli.py` has **two** identical inline occurrences (verified): line ~612 (inside `simulate`) and line ~900 (inside `run`):
 
 ```python
             skip_confirm=yes or not sys.stdin.isatty(),
 ```
 
-Replace **both** with `skip_confirm=should_skip_confirm(yes)` and add the import.
-(Migrating only one would leave the duplication this helper exists to remove.)
+Replace **both** with `skip_confirm=should_skip_confirm(yes)` and add the import. (Migrating only one would leave the duplication this helper exists to remove.)
 
 - [ ] **Step 6: Run tests to verify they pass.**
 
-Run: `uv run pytest tests/unit/test_cli_tty.py -v`
-Expected: PASS
-Run: `echo | uv run evaluatorq redteam run -t agent:x --save none`
-Expected: does NOT hang on the confirm prompt (fails/exits for other reasons, e.g. missing creds, but no blocking read).
+Run: `uv run pytest tests/unit/test_cli_tty.py -v` Expected: PASS Run: `echo | uv run evaluatorq redteam run -t agent:x --save none` Expected: does NOT hang on the confirm prompt (fails/exits for other reasons, e.g. missing creds, but no blocking read).
 
 - [ ] **Step 7: Commit.**
 
@@ -368,8 +355,7 @@ def test_examples_dims_comment_lines():
 
 - [ ] **Step 2: Run test to verify it fails.**
 
-Run: `uv run pytest tests/unit/test_cli_epilog.py -v`
-Expected: FAIL — module does not exist.
+Run: `uv run pytest tests/unit/test_cli_epilog.py -v` Expected: FAIL — module does not exist.
 
 - [ ] **Step 3: Create the shared builder (moved verbatim from sim).**
 
@@ -451,10 +437,7 @@ Add `epilog=_ROOT_EPILOG` to the root `app = typer.Typer(...)` and to the `@app.
 
 - [ ] **Step 7: Run tests + manual check.**
 
-Run: `uv run pytest tests/unit/test_cli_epilog.py -v`
-Expected: PASS
-Run: `uv run evaluatorq -h` and `uv run evaluatorq redteam run -h`
-Expected: both show an "Examples" section; root help shows the docs/issues links.
+Run: `uv run pytest tests/unit/test_cli_epilog.py -v` Expected: PASS Run: `uv run evaluatorq -h` and `uv run evaluatorq redteam run -h` Expected: both show an "Examples" section; root help shows the docs/issues links.
 
 - [ ] **Step 8: Commit.**
 
@@ -513,8 +496,7 @@ def test_runs_json_serialises_raw_fields(tmp_path):
 
 - [ ] **Step 2: Run test to verify it fails.**
 
-Run: `uv run pytest tests/redteam/test_cli_runs_json.py -v`
-Expected: FAIL — `--json` is an unknown option (exit 2).
+Run: `uv run pytest tests/redteam/test_cli_runs_json.py -v` Expected: FAIL — `--json` is an unknown option (exit 2).
 
 - [ ] **Step 3: Create the shared JSON helper.**
 
@@ -602,13 +584,7 @@ Leave the existing Rich-table code (lines ~681-758) as-is; the `--json` branch r
 
 - [ ] **Step 5: Add `--json` to sim `runs`.**
 
-Add the same `json_output` option and honor it in the two no-runs branches
-(`echo_json([])`, `raise typer.Exit(0)`). Insert the JSON branch as an **early
-return immediately after the `if not run_files:` guard (~line 1440), BEFORE the
-existing `rows = []` display loop** — this avoids re-parsing every file twice and
-avoids shadowing the display loop's own `malformed` counter (use `malformed_json`).
-Match redteam's exact exception tuple `(json.JSONDecodeError, OSError)` — do not
-use a bare `except Exception`:
+Add the same `json_output` option and honor it in the two no-runs branches (`echo_json([])`, `raise typer.Exit(0)`). Insert the JSON branch as an **early return immediately after the `if not run_files:` guard (~line 1440), BEFORE the existing `rows = []` display loop** — this avoids re-parsing every file twice and avoids shadowing the display loop's own `malformed` counter (use `malformed_json`). Match redteam's exact exception tuple `(json.JSONDecodeError, OSError)` — do not use a bare `except Exception`:
 
 ```python
     if json_output:
@@ -641,10 +617,7 @@ use a bare `except Exception`:
 
 - [ ] **Step 6: Run tests + pipe check.**
 
-Run: `uv run pytest tests/redteam/test_cli_runs_json.py -v`
-Expected: PASS
-Run: `uv run evaluatorq redteam runs --json | python -m json.tool`
-Expected: parses (empty array if no runs).
+Run: `uv run pytest tests/redteam/test_cli_runs_json.py -v` Expected: PASS Run: `uv run evaluatorq redteam runs --json | python -m json.tool` Expected: parses (empty array if no runs).
 
 - [ ] **Step 7: Commit.**
 
@@ -715,10 +688,7 @@ def test_debug_env_reraises(monkeypatch):
         run_guarded(boom)
 ```
 
-Also add an end-to-end test that exercises the real entrypoint (`main()` wires
-`run_guarded(app)`), so the feature has regression coverage beyond the isolated
-function. Register a throwaway command that raises, then drive it through `main()`
-with patched argv:
+Also add an end-to-end test that exercises the real entrypoint (`main()` wires `run_guarded(app)`), so the feature has regression coverage beyond the isolated function. Register a throwaway command that raises, then drive it through `main()` with patched argv:
 
 ```python
 def test_main_converts_unexpected_error(monkeypatch, capsys):
@@ -739,8 +709,7 @@ def test_main_converts_unexpected_error(monkeypatch, capsys):
 
 - [ ] **Step 2: Run test to verify it fails.**
 
-Run: `uv run pytest tests/unit/test_cli_errors.py -v`
-Expected: FAIL — module does not exist.
+Run: `uv run pytest tests/unit/test_cli_errors.py -v` Expected: FAIL — module does not exist.
 
 - [ ] **Step 3: Create the shared error module.**
 
@@ -817,10 +786,7 @@ def _handle_cli_error(exc: Exception) -> NoReturn:
 
 - [ ] **Step 6: Run tests + full suite.**
 
-Run: `uv run pytest tests/unit/test_cli_errors.py -v`
-Expected: PASS
-Run: `uv run pytest -m 'not integration' -q`
-Expected: green (confirms exit-code behavior of existing CLI tests is unchanged).
+Run: `uv run pytest tests/unit/test_cli_errors.py -v` Expected: PASS Run: `uv run pytest -m 'not integration' -q` Expected: green (confirms exit-code behavior of existing CLI tests is unchanged).
 
 - [ ] **Step 7: Commit.**
 
@@ -842,22 +808,11 @@ git commit -m "feat(cli): add global unexpected-error handler with EQ_DEBUG trac
 - Consumes: `run_guarded` (Task 7).
 - Produces: `evaluatorq.cli._register_subapps(app: typer.Typer) -> None`
 
-**Design note (decision B):** `openai`/`typer` are now **core** deps, so
-`import evaluatorq.redteam.cli` / `...simulation.cli` always succeeds on a normal
-install — the "missing extra" `ImportError` path the ticket imagined is
-unreachable. The only thing the old `except ImportError: pass` can catch today is a
-**genuinely broken install**, which it silently swallows (the subcommand vanishes
-with no hint). Per decision B we **drop the swallow entirely and import directly**,
-so a broken install surfaces (routed through `run_guarded` for a clean one-liner +
-`EQ_DEBUG` traceback) instead of hiding. This satisfies item 3 ("stop silently
-hiding subcommands") without a stub whose install hint would be misleading (it
-would fire only on broken installs, never on a real missing extra). The dead
-`_check_redteam_deps()` (it checks core deps) is removed as the spec directed.
+**Design note (decision B):** `openai`/`typer` are now **core** deps, so `import evaluatorq.redteam.cli` / `...simulation.cli` always succeeds on a normal install — the "missing extra" `ImportError` path the ticket imagined is unreachable. The only thing the old `except ImportError: pass` can catch today is a **genuinely broken install**, which it silently swallows (the subcommand vanishes with no hint). Per decision B we **drop the swallow entirely and import directly**, so a broken install surfaces (routed through `run_guarded` for a clean one-liner + `EQ_DEBUG` traceback) instead of hiding. This satisfies item 3 ("stop silently hiding subcommands") without a stub whose install hint would be misleading (it would fire only on broken installs, never on a real missing extra). The dead `_check_redteam_deps()` (it checks core deps) is removed as the spec directed.
 
 - [ ] **Step 1: Confirm imports succeed on a normal install.**
 
-Run: `uv run python -c "import evaluatorq.redteam.cli, evaluatorq.simulation.cli; print('ok')"`
-Expected: `ok` — proves the ImportError path is not exercised on a good install, so swallowing it only ever hides breakage.
+Run: `uv run python -c "import evaluatorq.redteam.cli, evaluatorq.simulation.cli; print('ok')"` Expected: `ok` — proves the ImportError path is not exercised on a good install, so swallowing it only ever hides breakage.
 
 - [ ] **Step 2: Write the failing test.**
 
@@ -880,8 +835,7 @@ def test_subapps_are_registered():
 
 - [ ] **Step 3: Run test to verify it fails.**
 
-Run: `uv run pytest tests/unit/test_cli_subapps.py -v`
-Expected: FAIL — `_register_subapps` does not exist yet.
+Run: `uv run pytest tests/unit/test_cli_subapps.py -v` Expected: FAIL — `_register_subapps` does not exist yet.
 
 - [ ] **Step 4: Replace the swallowing registration with a direct helper.**
 
@@ -915,19 +869,11 @@ def main() -> None:
 
 - [ ] **Step 5: Remove the dead dep check.**
 
-In `redteam/__init__.py`, delete the `_check_redteam_deps()` definition (lines
-~17-29) **and** its module-level call (`_check_redteam_deps()`, ~line 31). It only
-verifies `openai`/`typer`, which are core deps and always importable — so it can
-never fire, and removing it keeps `import evaluatorq.redteam` free of dead guards.
+In `redteam/__init__.py`, delete the `_check_redteam_deps()` definition (lines ~17-29) **and** its module-level call (`_check_redteam_deps()`, ~line 31). It only verifies `openai`/`typer`, which are core deps and always importable — so it can never fire, and removing it keeps `import evaluatorq.redteam` free of dead guards.
 
 - [ ] **Step 6: Run the test + happy-path check.**
 
-Run: `uv run pytest tests/unit/test_cli_subapps.py -v`
-Expected: PASS
-Run: `uv run evaluatorq --help`
-Expected: `redteam` and `sim` listed as normal commands.
-Run: `uv run pytest -m 'not integration' -q`
-Expected: green.
+Run: `uv run pytest tests/unit/test_cli_subapps.py -v` Expected: PASS Run: `uv run evaluatorq --help` Expected: `redteam` and `sim` listed as normal commands. Run: `uv run pytest -m 'not integration' -q` Expected: green.
 
 - [ ] **Step 7: Commit.**
 
@@ -944,18 +890,15 @@ git commit -m "fix(cli): surface broken sub-app imports instead of hiding them; 
 
 - [ ] **Step 1: Lint.**
 
-Run: `uv run ruff check src`
-Expected: no errors. Fix any (e.g. import ordering) and amend the relevant commit.
+Run: `uv run ruff check src` Expected: no errors. Fix any (e.g. import ordering) and amend the relevant commit.
 
 - [ ] **Step 2: Type check.**
 
-Run: `uv run basedpyright`
-Expected: no new errors introduced by these changes.
+Run: `uv run basedpyright` Expected: no new errors introduced by these changes.
 
 - [ ] **Step 3: Full unit suite.**
 
-Run: `uv run pytest -m 'not integration'`
-Expected: all green.
+Run: `uv run pytest -m 'not integration'` Expected: all green.
 
 - [ ] **Step 4: Ticket acceptance smoke checks.**
 
@@ -971,12 +914,7 @@ Expected: all behave per the ticket's verification list.
 
 - [ ] **Step 5: Confirm the "without extras" criterion is not applicable.**
 
-The ticket lists "without extras installed, `evaluatorq --help` still explains how
-to enable redteam/sim." With `openai`/`typer` now **core** deps, the sub-app
-imports always succeed, so `redteam`/`sim` are always listed and there is no
-"extras missing" state to explain. Record this in the PR/ticket as *resolved-moot
-by the core-deps change*, not silently dropped. (Item 3's real fix is: broken
-installs now surface instead of hiding — Task 8.)
+The ticket lists "without extras installed, `evaluatorq --help` still explains how to enable redteam/sim." With `openai`/`typer` now **core** deps, the sub-app imports always succeed, so `redteam`/`sim` are always listed and there is no "extras missing" state to explain. Record this in the PR/ticket as *resolved-moot by the core-deps change*, not silently dropped. (Item 3's real fix is: broken installs now surface instead of hiding — Task 8.)
 
 ---
 

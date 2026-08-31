@@ -1,27 +1,10 @@
-<p align="center">
-  <img src="docs/assets/evaluatorq-splash.svg" alt="evaluatorq — LLM evals, red teaming, agent simulation" width="100%">
-</p>
+<p align="center"> <img src="docs/assets/evaluatorq-splash.svg" alt="evaluatorq — LLM evals, red teaming, agent simulation" width="100%"> </p>
 
-<p align="center">
-  <a href="https://pypi.org/project/evaluatorq/"><img src="https://img.shields.io/pypi/v/evaluatorq.svg" alt="PyPI version"></a>
-  <a href="https://pypi.org/project/evaluatorq/"><img src="https://img.shields.io/pypi/pyversions/evaluatorq.svg" alt="Python versions"></a>
-  <a href="https://github.com/orq-ai/evaluatorq/actions/workflows/ci.yml"><img src="https://github.com/orq-ai/evaluatorq/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
-  <a href="https://htmlpreview.github.io/?https://github.com/orq-ai/evaluatorq/blob/python-coverage-comment-action-data/htmlcov/index.html"><img src="https://raw.githubusercontent.com/orq-ai/evaluatorq/python-coverage-comment-action-data/badge.svg" alt="Coverage"></a>
-  <a href="https://orq-ai.github.io/evaluatorq/"><img src="https://img.shields.io/badge/Docs-Live%20Site-0A7B83" alt="Docs"></a>
-  <a href="https://github.com/orq-ai/evaluatorq/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT"></a>
-</p>
+<p align="center"> <a href="https://pypi.org/project/evaluatorq/"><img src="https://img.shields.io/pypi/v/evaluatorq.svg" alt="PyPI version"></a> <a href="https://pypi.org/project/evaluatorq/"><img src="https://img.shields.io/pypi/pyversions/evaluatorq.svg" alt="Python versions"></a> <a href="https://github.com/orq-ai/evaluatorq/actions/workflows/ci.yml"><img src="https://github.com/orq-ai/evaluatorq/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a> <a href="https://htmlpreview.github.io/?https://github.com/orq-ai/evaluatorq/blob/python-coverage-comment-action-data/htmlcov/index.html"><img src="https://raw.githubusercontent.com/orq-ai/evaluatorq/python-coverage-comment-action-data/badge.svg" alt="Coverage"></a> <a href="https://orq-ai.github.io/evaluatorq/"><img src="https://img.shields.io/badge/Docs-Live%20Site-0A7B83" alt="Docs"></a> <a href="https://github.com/orq-ai/evaluatorq/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT"></a> </p>
 
-<p align="center">
-  <b>Find out how your AI agent breaks — before your users do.</b>
-</p>
+<p align="center"> <b>Find out how your AI agent breaks — before your users do.</b> </p>
 
-<p align="center">
-  <a href="https://orq-ai.github.io/evaluatorq/">Documentation</a> ·
-  <a href="https://orq-ai.github.io/evaluatorq/guides/getting-started/">Get Started</a> ·
-  <a href="https://orq-ai.github.io/evaluatorq/guides/red-teaming/">Red Teaming</a> ·
-  <a href="https://orq-ai.github.io/evaluatorq/guides/agent-simulation/">Agent Simulation</a> ·
-  <a href="https://orq-ai.github.io/evaluatorq/dashboard/">Dashboard</a>
-</p>
+<p align="center"> <a href="https://orq-ai.github.io/evaluatorq/">Documentation</a> · <a href="https://orq-ai.github.io/evaluatorq/guides/getting-started/">Get Started</a> · <a href="https://orq-ai.github.io/evaluatorq/guides/red-teaming/">Red Teaming</a> · <a href="https://orq-ai.github.io/evaluatorq/guides/agent-simulation/">Agent Simulation</a> · <a href="https://orq-ai.github.io/evaluatorq/dashboard/">Dashboard</a> </p>
 
 Shipping an agent means answering three questions no test suite answers: does it give good answers, can it be talked into doing something it shouldn't, and does it hold up over a real conversation with an impatient human? evaluatorq answers all three from Python. It scores your agent's outputs against your data, attacks it the way a bad actor would — jailbreaks, prompt injection, tool abuse, data exfiltration — and puts a simulated user in front of it for a few dozen turns. Then it hands you a report naming what broke and what to do about it.
 
@@ -103,10 +86,7 @@ Every job runs against every data point, so adding a variant adds a column. Swap
 
 This is the repo's [`examples/lib/basics/support_agent_eval.py`](examples/lib/basics/support_agent_eval.py), minus its `__main__` guard.
 
-→ [Getting Started](https://orq-ai.github.io/evaluatorq/guides/getting-started/) ·
-[Evaluation reference](https://orq-ai.github.io/evaluatorq/evaluation-reference/) ·
-[Structured scores](https://orq-ai.github.io/evaluatorq/structured-results/) ·
-[LLM as a jury](https://orq-ai.github.io/evaluatorq/llm-as-a-jury/)
+→ [Getting Started](https://orq-ai.github.io/evaluatorq/guides/getting-started/) · [Evaluation reference](https://orq-ai.github.io/evaluatorq/evaluation-reference/) · [Structured scores](https://orq-ai.github.io/evaluatorq/structured-results/) · [LLM as a jury](https://orq-ai.github.io/evaluatorq/llm-as-a-jury/)
 
 ## Red teaming
 
@@ -167,9 +147,7 @@ Attacks run concurrently, so wall clock tracks the slowest attack far more than 
 
 To price a run you have not made yet, the [cost calculator](https://orq-ai.github.io/evaluatorq/guides/red-teaming/#ballpark-the-cost) takes the three numbers that vary — setup calls, attacks, turns — and a price tier.
 
-→ [Red teaming guide](https://orq-ai.github.io/evaluatorq/guides/red-teaming/) ·
-[Intro notebook](examples/red_teaming_intro.ipynb) ·
-[Example scripts](examples/redteam/)
+→ [Red teaming guide](https://orq-ai.github.io/evaluatorq/guides/red-teaming/) · [Intro notebook](examples/red_teaming_intro.ipynb) · [Example scripts](examples/redteam/)
 
 ## Agent simulation
 
@@ -204,9 +182,7 @@ print(results[0].goal_achieved, results[0].goal_completion_score)
 
 Simulation owns its `exit_on_failure=True` gate for dropped rows, so it can drop straight into CI; evaluator score failures remain available in the returned results. The target can be an Orq agent or any local async callable, including agents built with the OpenAI Agents SDK, LangGraph, CrewAI or PydanticAI — [the examples](examples/agent_simulation/) cover each, with screen recordings.
 
-→ [Agent simulation guide](https://orq-ai.github.io/evaluatorq/guides/agent-simulation/) ·
-[Intro notebook](examples/agent_simulation_intro.ipynb) ·
-[Example scripts](examples/agent_simulation/)
+→ [Agent simulation guide](https://orq-ai.github.io/evaluatorq/guides/agent-simulation/) · [Intro notebook](examples/agent_simulation_intro.ipynb) · [Example scripts](examples/agent_simulation/)
 
 ## Dashboard
 
@@ -237,8 +213,7 @@ eq --help
 
 Everything is environment variables; none are required for local evaluation. `ORQ_API_KEY` unlocks Orq datasets, result upload and automatic tracing; `OPENAI_API_KEY` backs red teaming and simulation without Orq.
 
-→ [Configuration](https://orq-ai.github.io/evaluatorq/configuration/) ·
-[Tracing](https://orq-ai.github.io/evaluatorq/tracing/)
+→ [Configuration](https://orq-ai.github.io/evaluatorq/configuration/) · [Tracing](https://orq-ai.github.io/evaluatorq/tracing/)
 
 ## Development
 

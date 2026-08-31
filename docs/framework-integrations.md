@@ -1,9 +1,6 @@
 # Framework Integrations
 
-A job is just an async callable, so any agent framework works by calling it
-inside one. For LangChain and LangGraph there is a wrapper that also converts
-the result into OpenResponses format, so traces and reports read the same as a
-native run.
+A job is just an async callable, so any agent framework works by calling it inside one. For LangChain and LangGraph there is a wrapper that also converts the result into OpenResponses format, so traces and reports read the same as a native run.
 
 ## LangChain / LangGraph
 
@@ -55,11 +52,6 @@ Change the prompt key with `prompt_key` (e.g. `prompt_key="question"`).
 
 ## Other frameworks
 
-OpenAI Agents SDK, PydanticAI, and CrewAI agents are supported as red teaming
-and simulation targets through the same wrapping approach — see
-[Red Teaming](guides/red-teaming.md) and
-[Agent Simulation](guides/agent-simulation.md), plus the runnable scripts under
-[`examples/`](https://github.com/orq-ai/evaluatorq/tree/main/examples).
+OpenAI Agents SDK, PydanticAI, and CrewAI agents are supported as red teaming and simulation targets through the same wrapping approach — see [Red Teaming](guides/red-teaming.md) and [Agent Simulation](guides/agent-simulation.md), plus the runnable scripts under [`examples/`](https://github.com/orq-ai/evaluatorq/tree/main/examples).
 
-For anything else, write a plain async function that calls your agent and
-decorate it with `@job()`.
+For anything else, write a plain async function that calls your agent and decorate it with `@job()`.

@@ -78,10 +78,7 @@ Some vulnerabilities map to multiple frameworks (e.g. `supply_chain` → ASI04 +
 
 ## Data sources
 
-Where attack cases come from, and what you can do with each. **Replay** re-runs
-a fixed set of attacks for reproducible regression (`static` mode);
-**Seed / adapt new attacks** generates fresh, target-tailored attacks
-(`dynamic` mode). `hybrid` does both in one run.
+Where attack cases come from, and what you can do with each. **Replay** re-runs a fixed set of attacks for reproducible regression (`static` mode); **Seed / adapt new attacks** generates fresh, target-tailored attacks (`dynamic` mode). `hybrid` does both in one run.
 
 | Source | Replay (`static` regression) | Seed / adapt new (`dynamic`) |
 |--------|:----------------------------:|:----------------------------:|
@@ -94,14 +91,11 @@ a fixed set of attacks for reproducible regression (`static` mode);
 
 Legend: ✅ built-in · ⚠️ possible but manual · ❌ not supported yet.
 
-Static sources feed `mode="static"`/`"hybrid"` via the `dataset=` parameter
-(`--dataset` on the CLI). Dynamic generation is driven by the target's own
-capability context — no dataset needed.
+Static sources feed `mode="static"`/`"hybrid"` via the `dataset=` parameter (`--dataset` on the CLI). Dynamic generation is driven by the target's own capability context — no dataset needed.
 
 ### Replaying a previous run
 
-Every saved run records the exact datapoints it executed, so it can be re-run
-as-is:
+Every saved run records the exact datapoints it executed, so it can be re-run as-is:
 
 ```bash
 eq redteam run --target agent:my-agent-v2 --from-run latest
@@ -111,22 +105,9 @@ eq redteam run --target agent:my-agent-v2 --from-run latest
 report = await red_team(target='agent:my-agent-v2', previous_run='latest')
 ```
 
-`--from-run` accepts `latest`, the run name or file name `eq redteam runs`
-prints, a run id (or an unambiguous 8+ character prefix), or a path to a saved
-run JSON. The stored attacks are replayed verbatim: no strategy planning, no
-attack generation, no dataset load. The original pipeline mode, turn budget, and
-attacker instructions are restored too, since the datapoints alone don't pin
-those down — pass `--max-turns` / `attacker_instructions=` explicitly to
-override. That makes version-to-version regression on an identical case bank a
-single command; the target and the model configuration are what you vary.
+`--from-run` accepts `latest`, the run name or file name `eq redteam runs` prints, a run id (or an unambiguous 8+ character prefix), or a path to a saved run JSON. The stored attacks are replayed verbatim: no strategy planning, no attack generation, no dataset load. The original pipeline mode, turn budget, and attacker instructions are restored too, since the datapoints alone don't pin those down — pass `--max-turns` / `attacker_instructions=` explicitly to override. That makes version-to-version regression on an identical case bank a single command; the target and the model configuration are what you vary.
 
-Because it fixes the data, `previous_run` cannot be combined with `mode`,
-`dataset`, `categories`, `vulnerabilities`, `strategies`, `delivery_methods`,
-`max_per_category`, or the `max_*_datapoints` caps — passing one raises rather
-than silently ignoring it, by name rather than by value, so `mode='dynamic'`
-raises too. Runs saved before this shipped carry no datapoints and are rejected
-with an explanatory error, as are runs stamped with a replay format newer than the
-installed version understands.
+Because it fixes the data, `previous_run` cannot be combined with `mode`, `dataset`, `categories`, `vulnerabilities`, `strategies`, `delivery_methods`, `max_per_category`, or the `max_*_datapoints` caps — passing one raises rather than silently ignoring it, by name rather than by value, so `mode='dynamic'` raises too. Runs saved before this shipped carry no datapoints and are rejected with an explanatory error, as are runs stamped with a replay format newer than the installed version understands.
 
 ## `red_team()` parameters
 
@@ -221,12 +202,9 @@ uv run eq redteam run -t "agent:my-agent-key" -c LLM01 -c LLM07 --max-turns 2 -y
 uv run eq redteam run --help   # all options
 ```
 
-`uv run evaluatorq` is the same entry point under its long name. Avoid
-`uv tool install` here: it builds an isolated environment that exposes the CLI
-but leaves `evaluatorq` unimportable from your own scripts.
+`uv run evaluatorq` is the same entry point under its long name. Avoid `uv tool install` here: it builds an isolated environment that exposes the CLI but leaves `evaluatorq` unimportable from your own scripts.
 
-Prefer pip? `python -m pip install "evaluatorq[redteam]"` installs into the
-interpreter you just named, and `eq` lands on that environment's `PATH`.
+Prefer pip? `python -m pip install "evaluatorq[redteam]"` installs into the interpreter you just named, and `eq` lands on that environment's `PATH`.
 
 For the full flag reference (multi-target, report export, `eq redteam runs`, etc.), see [`examples/redteam/README.md`](../../../examples/redteam/README.md#cli-reference).
 

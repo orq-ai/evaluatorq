@@ -42,8 +42,7 @@ uv run python agent_build/run_redteam.py --variant both --max-per-category 20 --
 
 Reports are written to `agent_build/reports/report_<variant>.json`.
 
-To inspect runs interactively, browse the run store in the dashboard (it shows
-every run in the store):
+To inspect runs interactively, browse the run store in the dashboard (it shows every run in the store):
 
 ```bash
 uv run evaluatorq dashboard agent_build/.evaluatorq/runs
