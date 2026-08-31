@@ -19,7 +19,6 @@ Both drive the same `SimulationRunner` underneath, so the conversations themselv
 
 ```bash
 uv sync --all-extras --all-groups
-python -c "import os; assert os.environ.get('ORQ_API_KEY') or os.environ.get('OPENAI_API_KEY'), 'set ORQ_API_KEY or OPENAI_API_KEY'; print('credentials OK')"
 ```
 
 The user simulator and the judge are model calls, so one of those two keys has to be set. With `ORQ_API_KEY` set, the run also uploads an Experiment to your Orq workspace when it finishes — see [What gets uploaded](#what-gets-uploaded) before running this against a workspace you share with other people.
@@ -32,8 +31,14 @@ Save this as `sim_in_eval.py`. The target here is an ordinary async function, so
 import asyncio
 
 from evaluatorq import DataPoint, EvaluationResult, evaluatorq
-from evaluatorq.simulation import Message, wrap_simulation_agent
-from evaluatorq.simulation.types import CommunicationStyle, Criterion, Persona, Scenario
+from evaluatorq.simulation import (
+    CommunicationStyle,
+    Criterion,
+    Message,
+    Persona,
+    Scenario,
+    wrap_simulation_agent,
+)
 
 
 async def support_agent(messages: list[Message]) -> str:
@@ -46,7 +51,13 @@ async def support_agent(messages: list[Message]) -> str:
 
 async def criteria_scorer(params) -> EvaluationResult:
     """Score the fraction of the scenario's criteria the judge marked satisfied."""
-    results = params["output"].get("metadata", {}).get("criteria_results") or {}
+    metadata = params["output"].get("metadata", {})
+    if metadata.get("terminated_by") in {"error", "timeout"}:
+        # The conversation never reached the judge, so there is no verdict to
+        # score. A number here — 0.0 included — would report a broken pipeline
+        # as a bad agent. The non-numeric value drops out of scores_from().
+        return EvaluationResult(value="unevaluated", explanation=f"run ended in {metadata['terminated_by']}")
+    results = metadata.get("criteria_results") or {}
     if not results:
         return EvaluationResult(value=0.0, explanation="no criteria were judged")
     passed = sum(1 for ok in results.values() if ok)
@@ -116,18 +127,30 @@ metadata keys: ['criteria_results', 'framework', 'goal_achieved', 'goal_completi
 criteria: {'Agent asks for order details': True, 'Agent blames the customer': True}
 ```
 
-Those keys are the contract, and the next section is a reference for them. The values behind two of them — `turn_count` and `goal_achieved` — are not printed here on purpose: the user simulator and the judge are both model calls, so how many turns the conversation takes and whether the judge calls the goal met genuinely vary between runs of this same script. Assert against the shape of `metadata`, never against a particular turn count.
+The user simulator and the judge are model calls, so `turn_count` and `goal_achieved` vary between runs of this same script. Assert on the shape of `metadata`, never on a turn count.
+
+## The parameters
+
+| Parameter | Default | What it does |
+|---|---|---|
+| `name` | `"simulation"` | Names the job in the results table and in `job_result.name`. |
+| `target` | — | The agent under test, as a callable taking `list[Message]`. |
+| `agent_key` | — | An Orq deployment key, used instead of `target`. Exactly one of the two is required; if both are given, `target` wins. |
+| `max_turns` | `10` | Turn budget per conversation. Hitting it stops the run with `terminated_by: max_turns`. |
+| `model` | `openai/gpt-5.6-luna` | The model for the **user simulator and the judge** — not for the agent under test, which is whatever `target` or `agent_key` resolves to. |
+| `user_simulator` | built-in | A custom `BaseAgent` to play the user. |
+| `judge` | built-in | A custom `BaseAgent` to score the conversation. |
+
+`model` is the one worth reading twice: the simulated user and the judge are themselves model calls, and this is the only knob for them. Changing it does not touch the agent you are testing.
 
 ## `goal_achieved` and `criteria_results` are different questions
-
-`goal_achieved` and `criteria_results` answer different questions, and they can disagree in either direction. That surprises people, so it is worth being precise about which is which:
 
 - `criteria_results` is the judge's per-criterion audit: for each `Criterion` on the scenario, did the thing it names occur, and does that occurrence mean pass or fail for its type? A `must_not_happen` criterion is `True` when the bad thing did **not** occur.
 - `goal_achieved` is the judge's verdict on the scenario's `goal` as a whole — here, whether the customer actually got their refund.
 
 The common disagreement is every criterion passing while `goal_achieved` is `False`, and the usual cause is the turn budget: a conversation that hits `max_turns` before the agent finishes the job stops with `terminated_by: max_turns`, and the goal is unmet even though the agent did every individual thing you thought to write down. Raising `max_turns` is the fix when the agent was on track; it is not the fix when the agent was stuck.
 
-Score whichever one matches the question you are asking. Scoring both, as two separate evaluators, is usually what you want — a criteria score tells you which behaviour is missing, and the goal score tells you whether that mattered.
+Scoring both, as two separate evaluators, is usually what you want — criteria tell you which behaviour is missing, the goal score tells you whether it mattered.
 
 ## What the job returns
 
@@ -138,18 +161,24 @@ The job's output is an OpenResponses response dict. The transcript is in `input`
 | `framework` | `str` | Always `"simulation"`. |
 | `goal_achieved` | `bool` | Judge's verdict on the scenario goal. |
 | `goal_completion_score` | `float` | Graded version of the same verdict. |
-| `terminated_by` | `str` | Why the conversation stopped: `judge`, `max_turns`, `error`. |
+| `terminated_by` | `str` | Why the conversation stopped: `judge`, `max_turns`, `error`, `timeout`. |
 | `reason` | `str` | The termination reason in words. |
 | `turn_count` | `int` | Turns actually run. |
 | `rules_broken` | `list[str]` | Criteria the judge marked violated, **by id** (`criteria_0`, `criteria_1`). |
-| `criteria_results` | `dict[str, bool]` | Per-criterion pass/fail, **by description**. Present only when the scenario had criteria. |
+| `criteria_results` | `dict[str, bool]` | Per-criterion pass/fail, **by description**. Present only when the judge produced at least one criterion verdict. |
 | `turn_metrics` | `list[dict]` | Per-turn latency and token detail. Present only when metrics were collected. |
 
 Two of those keys are optional, so read them with a default rather than by subscript — a scenario with no criteria has no `criteria_results` at all, and an evaluator that assumes the key raises on the row instead of scoring it.
 
+`error` and `timeout` mean the conversation never reached the judge. Those runs are *unevaluated*, not failed, and scoring them as zero reports a broken pipeline as a bad agent — which is why `criteria_scorer` above checks `terminated_by` before it looks at anything else.
+
+!!! warning "The audit trail does not survive the conversion"
+
+    `SimulationResult` carries `criteria_verified` and a per-criterion `criteria_meta` recording which criteria the judge actually audited. `to_open_responses()` builds a fresh metadata dict and copies neither, so on this path a criterion that is `True` because the judge checked it and a criterion that is `True` because the judge never mentioned it are indistinguishable. If that distinction matters to your scoring, use `simulate()` and read the `SimulationResult` directly.
+
 !!! warning "`rules_broken` and `criteria_results` are keyed differently"
 
-    `rules_broken` holds criterion **ids** and `criteria_results` is keyed by criterion **description**. They do not join on a shared key, so a scorer that looks up a `rules_broken` entry in `criteria_results` finds nothing and silently scores every row as clean. Read one or the other, not both. Descriptions are also not unique: two criteria worded identically collapse into a single `criteria_results` entry, which is why the id-keyed form exists at all.
+    `rules_broken` normally holds criterion **ids** (`criteria_0`, `criteria_1`) and `criteria_results` is keyed by criterion **description**. When the judge's per-criterion audit did not arrive, `rules_broken` degrades to the judge's free-text strings instead, and on this path nothing tells you which form you got. They do not join on a shared key, so a scorer that looks up a `rules_broken` entry in `criteria_results` finds nothing and silently scores every row as clean. Read one or the other, not both. Descriptions are also not unique: two criteria worded identically collapse into a single `criteria_results` entry, which is why the id-keyed form exists at all.
 
 ## Against an Orq deployment
 
@@ -159,7 +188,6 @@ If the agent under test is deployed on Orq rather than living in your Python pro
 from evaluatorq.simulation import wrap_simulation_agent
 
 job = wrap_simulation_agent(name="support-sim", agent_key="my-support-agent", max_turns=3)
-print("target resolves to deployment:", job is not None)
 ```
 
 In the script above, that one line replaces the `target=support_agent` line; the `DataPoint` list, the evaluators, the `evaluatorq()` call and the `aclose()` all stay as they are. Passing both `target=` and `agent_key=` is not an error — `target=` wins, and `agent_key=` is ignored — so pass exactly the one you mean.
@@ -168,23 +196,7 @@ In the script above, that one line replaces the `target=support_agent` line; the
 
 The callable `wrap_simulation_agent()` returns owns a long-lived `SimulationRunner` and the HTTP connection pool underneath it. Nothing closes that for you when `evaluatorq()` returns, so a script that skips `aclose()` leaks the pool until the process exits — survivable in a one-shot script, not survivable in a long-lived worker that builds a job per request.
 
-```python
-import asyncio
-
-from evaluatorq.simulation import wrap_simulation_agent
-
-async def main() -> None:
-    job = wrap_simulation_agent(target=lambda messages: "hello", max_turns=1)
-    try:
-        pass  # await evaluatorq(...) goes here
-    finally:
-        await job.aclose()
-    print("runner closed")
-
-asyncio.run(main())
-```
-
-Put the `aclose()` in a `finally`, not after the `evaluatorq()` call. An exception raised mid-batch would otherwise skip it, which is exactly the run you least want leaking.
+Put the `aclose()` in a `finally`, as the complete run above does, not after the `evaluatorq()` call. An exception raised mid-batch would otherwise skip it, which is exactly the run you least want leaking.
 
 ## Accepted input shapes
 
@@ -197,24 +209,19 @@ Put the `aclose()` in a `finally`, not after the `evaluatorq()` call. An excepti
 | `datapoints` | A list of exactly one datapoint. More than one raises. |
 | `personas` + `scenarios` | Lists of exactly one each. More than one raises. |
 
-Nested objects are also accepted as JSON strings, because the Orq datasets API rejects nested objects in `inputs` — a dataset-backed row arrives with `persona` and `scenario` stringified, and the wrapper parses them back. The list forms exist for compatibility with datapoint files and cap at one element on purpose: one row is one conversation, so a row holding two personas is an ambiguity rather than a batch.
+The first matching shape in the order listed wins; a row carrying two of them silently uses the earlier one.
+
+`persona`, `scenario`, `datapoint` and `datapoints` are also accepted as JSON strings, because the Orq datasets API rejects nested objects in `inputs` — a dataset-backed row arrives with `persona` and `scenario` stringified, and the wrapper parses them back. The `personas` + `scenarios` form is **not** coerced: pass real lists there, or it raises `Expected 'personas' and 'scenarios' to be arrays`. The list forms exist for compatibility with datapoint files and cap at one element on purpose: one row is one conversation, so a row holding two personas is an ambiguity rather than a batch.
 
 Anything else raises `ValueError` naming the four shapes.
 
 ## Scoring is not the wrapper's job
 
-`wrap_simulation_agent()` used to take an `evaluators=` argument and no longer does. Passing it raises immediately rather than dropping your scoring on the floor:
-
-```python
-from evaluatorq.simulation import wrap_simulation_agent
-
-try:
-    wrap_simulation_agent(target=lambda messages: "hi", evaluators=[])
-except TypeError as exc:
-    print(exc)
-```
+`wrap_simulation_agent()` used to take an `evaluators=` argument and no longer does. Passing it raises `TypeError: wrap_simulation_agent() no longer accepts 'evaluators='` immediately, rather than dropping your scoring on the floor.
 
 Scoring belongs on the `evaluatorq()` call, as `evaluatorq(..., evaluators=[...])`. That is the whole reason to reach for this wrapper: the conversation becomes a normal evaluatorq output, and every evaluator you already have applies to it.
+
+The built-in simulation scorers are the exception. `goal_achieved_scorer`, `criteria_met_scorer` and their siblings take a `SimulationResult`, and the job hands `evaluatorq()` an OpenResponses dict — the `SimulationResult` does not survive the conversion. `criteria_scorer` in the run above is a hand-rolled stand-in for `criteria_met_scorer` working from the reduced metadata.
 
 Constructing the job with neither `target=` nor `agent_key=` raises `ValueError` for the same reason — the wrapper has nothing to talk to.
 
@@ -261,9 +268,7 @@ def scores_from(results, evaluator: str | None = None) -> list[float]:
     return values
 
 
-print("empty run  ->", gate([], 0.8))
-print("below bar  ->", gate([0.5, 0.5], 0.8))
-print("clears bar ->", gate([1.0, 0.8], 0.8))
+print("empty run ->", gate([], 0.8))
 ```
 
 An empty score list returns 1 on purpose. A run where nothing was scored is a broken pipeline, and the one thing it must not do is look like a pass.
@@ -286,7 +291,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - name: Install
-        run: uv add "evaluatorq[simulation]"
+        run: uv add "evaluatorq[simulation,otel]"
       - name: Simulate the support agent
         env:
           ORQ_API_KEY: ${{ secrets.ORQ_API_KEY }}
@@ -311,13 +316,13 @@ Which workspace that is depends on `ORQ_API_KEY` alone. `ORQ_WORKSPACE` does not
 
 !!! warning "On this path there is no flag that turns the upload off"
 
-    `evaluatorq()` has no `upload_results` parameter. Every run of the script above, with `ORQ_API_KEY` set, adds a row to a table your whole team can see, and there is no argument you can pass to stop it. Iterating on a persona twenty times means twenty Experiments in that workspace.
+    `evaluatorq()` exposes no public `upload_results` parameter. Every run of the script above, with `ORQ_API_KEY` set, adds a row to a table your whole team can see. Iterating on a persona twenty times means twenty Experiments in that workspace.
 
     `upload_results=False` belongs to `simulate()` and `generate_and_simulate()`, which are a different entry point — reaching for it here does nothing, because there is no such parameter to pass. Even on those calls it only suppresses the Experiment upload: it is not an offline mode, and it does not stop the model-catalogue pricing lookup, so a run with the flag set still reaches Orq.
 
     So on this path the only real control is which workspace the key belongs to. If you are iterating rather than publishing a result, point `ORQ_API_KEY` at a workspace you keep for that, and move to the shared one when the cases have settled. Deleting a stray Experiment is a manual job in the Orq UI; neither the SDK nor the CLI exposes a delete.
 
-Every conversation also emits OTel spans under `orq.job`, `orq.simulation.run` and `orq.simulation.turn`, so a run is inspectable turn by turn in the trace UI. Set `ORQ_DISABLE_TRACING=1` to turn that off.
+With the `otel` extra installed (`evaluatorq[simulation,otel]` — the `simulation` extra alone ships no OpenTelemetry), every conversation also emits spans under `orq.job`, `orq.simulation.run` and `orq.simulation.turn`, so a run is inspectable turn by turn in the trace UI. Set `ORQ_DISABLE_TRACING=1` to turn that off.
 
 ## Where to next
 

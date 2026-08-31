@@ -251,6 +251,7 @@ for result in results:
 ## Where to next
 
 - **[Structured Results](structured-results.md)** — multi-dimensional scores.
+- **[Simulation in an evaluatorq Run](guides/simulation-in-evaluatorq.md)** — a multi-turn conversation as a job, scored by your own evaluators.
 - **[Framework Integrations](framework-integrations.md)** — LangChain, LangGraph, OpenResponses.
 - **[Orq Deployment](orq-deployment.md)** — call Orq deployments from a job.
 - **[Configuration](configuration.md)** — environment variables.
