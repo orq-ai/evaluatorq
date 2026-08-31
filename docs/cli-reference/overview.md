@@ -11,12 +11,7 @@ eq         = "evaluatorq.cli:main"
 Subcommands are registered at startup. `eq redteam` requires the `redteam` extra; `eq sim` requires the `simulation` extra.
 
 !!! note "Primary UI — `eq dashboard`"
-    The recommended way to browse saved runs is the multi-run FastHTML dashboard,
-    `eq dashboard`. The canonical invocation scans a run directory — `eq dashboard`
-    browses both default stores (red team + simulation), and `eq dashboard
-    .evaluatorq/sim-runs` scopes to simulation. Passing a single JSON report file
-    is an optional direct deep-link. See [Dashboard](../dashboard.md) and
-    [Simulation](simulation.md).
+    The recommended way to browse saved runs is the multi-run FastHTML dashboard, `eq dashboard`. The canonical invocation scans a run directory — `eq dashboard` browses both default stores (red team + simulation), and `eq dashboard .evaluatorq/sim-runs` scopes to simulation. Passing a single JSON report file is an optional direct deep-link. See [Dashboard](../dashboard.md) and [Simulation](simulation.md).
 
 Two command groups have their own pages:
 
@@ -26,9 +21,7 @@ Two command groups have their own pages:
 ## Canonical flag names
 
 !!! note "Simulation I/O flags name the artifact they read or write"
-    Commands that read a datapoints file use `--input` / `-i` (`simulate`,
-    `export`, `upload-dataset`). Output flags are named for the artifact each
-    command writes:
+    Commands that read a datapoints file use `--input` / `-i` (`simulate`, `export`, `upload-dataset`). Output flags are named for the artifact each command writes:
 
     | Command | Output flag(s) | Writes |
     |---|---|---|
@@ -37,10 +30,7 @@ Two command groups have their own pages:
     | `sim run` | `--datapoints` / `-d`, `--results` / `-r` | generated inputs, and the results |
     | `sim export` | `--output` / `-o` | OpenResponses payload JSON |
 
-    The generic `--output` / `-o` was **removed** from `generate` / `simulate` /
-    `run` — it wrote a different artifact per command. `sim export` keeps it, as
-    it has a single output. On `sim simulate`, the input file is `--input` / `-i`
-    (there is no `--datapoints` input alias).
+    The generic `--output` / `-o` was **removed** from `generate` / `simulate` / `run` — it wrote a different artifact per command. `sim export` keeps it, as it has a single output. On `sim simulate`, the input file is `--input` / `-i` (there is no `--datapoints` input alias).
 
     Other historical migrations are:
 
@@ -61,8 +51,7 @@ Two command groups have their own pages:
     - CLI `redteam run --output-dir` — removed, use `--artifacts-dir` (no such option)
 
 !!! note "Simulation validation"
-    Use `eq sim validate --input PATH`. The older `eq sim validate-dataset PATH`
-    command remains as a compatibility alias (see [Simulation](simulation.md)).
+    Use `eq sim validate --input PATH`. The older `eq sim validate-dataset PATH` command remains as a compatibility alias (see [Simulation](simulation.md)).
 
 ## Top-level options
 

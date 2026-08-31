@@ -271,8 +271,9 @@ async def test_llm_span_name_with_provider_prefix():
         call_args = mock_tracer.start_as_current_span.call_args
         assert call_args[0][0] == "chat azure/gpt-5-mini"
         attrs = call_args[1]["attributes"]
-        assert attrs["gen_ai.system"] == "azure"
-        assert attrs["gen_ai.provider.name"] == "azure"
+        # semconv spells the Azure OpenAI provider out; the model prefix does not.
+        assert attrs["gen_ai.system"] == "azure.ai.openai"
+        assert attrs["gen_ai.provider.name"] == "azure.ai.openai"
 
 
 @pytest.mark.asyncio

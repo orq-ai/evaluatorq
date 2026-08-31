@@ -500,7 +500,13 @@ class MultiTurnOrchestrator:
         try:
             async with with_redteam_span(
                 'orq.redteam.tool_chain_decomposition',
-                {'orq.redteam.strategy_name': strategy.name},
+                {
+                    'orq.redteam.strategy_name': strategy.name,
+                    # Orq's ingest types an unmapped span from its name, and any
+                    # name containing "tool" becomes span.agent_tool_execution —
+                    # the Tool renderer, on a span that only plans one.
+                    'orq.span_type': 'span.generic',
+                },
             ):
                 planner = ToolChainingPlanner(
                     client=self.llm_client,

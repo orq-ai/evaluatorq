@@ -68,13 +68,9 @@ When `ORQ_API_KEY` is set, the run also prints an Experiment URL on `my.orq.ai`.
 
 ## External agent frameworks
 
-Agent Simulation is framework-agnostic: any agent that implements the unified
-`AgentTarget` protocol (`async respond(messages) -> AgentResponse`) runs through
-the same three-part loop (user simulator -> agent under test -> judge). Pass the
-target via `target=` to `simulate()` / `generate_and_simulate()`.
+Agent Simulation is framework-agnostic: any agent that implements the unified `AgentTarget` protocol (`async respond(messages) -> AgentResponse`) runs through the same three-part loop (user simulator -> agent under test -> judge). Pass the target via `target=` to `simulate()` / `generate_and_simulate()`.
 
-Examples 06-09 show the four supported frameworks. Each adapter handles that
-framework's quirks:
+Examples 06-09 show the four supported frameworks. Each adapter handles that framework's quirks:
 
 | Framework | Adapter | Quirks handled |
 |-----------|---------|----------------|
@@ -83,10 +79,7 @@ framework's quirks:
 | Pydantic AI | `PydanticAITarget` | Threads typed `message_history` internally; tool calls extracted from message parts; usage has no total (derived) |
 | CrewAI | `CrewAITarget` | Sync `kickoff` run off-thread; transcript flattened to one `{conversation}` input; final crew output is "the response" |
 
-**Demo recordings** — each runs its example end to end (user simulator → agent
-→ judge). Embedded players live in the
-[Agent Simulation guide](../../docs/guides/agent-simulation.md#external-framework-demos);
-the raw files:
+**Demo recordings** — each runs its example end to end (user simulator → agent → judge). Embedded players live in the [Agent Simulation guide](../../docs/guides/agent-simulation.md#external-framework-demos); the raw files:
 
 | Framework | Recording |
 |-----------|-----------|
@@ -106,9 +99,7 @@ from evaluatorq.simulation import simulate
 results = await simulate(target=LangGraphTarget(graph=graph), personas=[...], scenarios=[...])
 ```
 
-Custom framework not listed? Wrap any `fn(messages) -> str` with
-`CallableTarget` (`evaluatorq.integrations.callable_integration`), or pass a
-plain `target` callable.
+Custom framework not listed? Wrap any `fn(messages) -> str` with `CallableTarget` (`evaluatorq.integrations.callable_integration`), or pass a plain `target` callable.
 
 ## Environment
 

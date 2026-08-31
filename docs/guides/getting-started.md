@@ -1,7 +1,6 @@
 # Getting Started
 
-Your first evaluation in five minutes. No dataset, no deployment — just local
-data and a local scorer.
+Your first evaluation in five minutes. No dataset, no deployment — just local data and a local scorer.
 
 ## Install
 
@@ -9,23 +8,17 @@ data and a local scorer.
 uv add evaluatorq
 ```
 
-Prefer pip? Use `python -m pip install evaluatorq`, which installs into the
-interpreter you just named rather than whichever `pip` happens to be first on
-your `PATH`.
+Prefer pip? Use `python -m pip install evaluatorq`, which installs into the interpreter you just named rather than whichever `pip` happens to be first on your `PATH`.
 
 ## The mental model
 
 An evaluation has three parts:
 
 - **`DataPoint`** — one row of input plus its `expected_output`.
-- **`@job`** — an async function that turns a `DataPoint` into an output (your
-  model call, agent, or — here — a stand-in for one). Pass several and each
-  becomes a column in the results table.
-- **Evaluator** — a scorer that compares the output against the expectation and
-  returns pass/fail.
+- **`@job`** — an async function that turns a `DataPoint` into an output (your model call, agent, or — here — a stand-in for one). Pass several and each becomes a column in the results table.
+- **Evaluator** — a scorer that compares the output against the expectation and returns pass/fail.
 
-`evaluatorq(...)` runs every job over every datapoint in parallel and applies
-each evaluator to the results.
+`evaluatorq(...)` runs every job over every datapoint in parallel and applies each evaluator to the results.
 
 ```mermaid
 flowchart LR
@@ -40,8 +33,7 @@ flowchart LR
 
 ## A first evaluation
 
-Two versions of a support agent, scored on the same three questions. `agent-v1`
-answers from memory; `agent-v2` looks the answer up in the policy first.
+Two versions of a support agent, scored on the same three questions. `agent-v1` answers from memory; `agent-v2` looks the answer up in the policy first.
 
 ```python
 import asyncio
@@ -93,9 +85,7 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-This is the repository's
-[`examples/lib/basics/support_agent_eval.py`](https://github.com/orq-ai/evaluatorq/blob/main/examples/lib/basics/support_agent_eval.py) —
-the same script the README quick start uses.
+This is the repository's [`examples/lib/basics/support_agent_eval.py`](https://github.com/orq-ai/evaluatorq/blob/main/examples/lib/basics/support_agent_eval.py) — the same script the README quick start uses.
 
 Run it:
 
@@ -103,16 +93,9 @@ Run it:
 uv run support_agent_eval.py
 ```
 
-`string_contains_evaluator()` checks whether the job output contains the
-`expected_output`, so `agent-v1` scores 0.33 — it only knows about refunds —
-against `agent-v2`'s 1.00. Every job runs against every data point, so adding a
-third variant adds a column.
+`string_contains_evaluator()` checks whether the job output contains the `expected_output`, so `agent-v1` scores 0.33 — it only knows about refunds — against `agent-v2`'s 1.00. Every job runs against every data point, so adding a third variant adds a column.
 
-Because `agent-v1` fails two rows, its results contain `pass_=False`, but the
-library does not exit the process. For a CI gate, check `pass_` with
-`check_pass_failures(results)` and raise `SystemExit(1)` yourself. Swap the two
-function bodies for your own model or agent call and that same pass/fail signal
-can gate quality regressions in CI.
+Because `agent-v1` fails two rows, its results contain `pass_=False`, but the library does not exit the process. For a CI gate, check `pass_` with `check_pass_failures(results)` and raise `SystemExit(1)` yourself. Swap the two function bodies for your own model or agent call and that same pass/fail signal can gate quality regressions in CI.
 
 ## Where to next
 

@@ -44,7 +44,12 @@ def _get_orq_server_url() -> str:
 
 
 from evaluatorq.common.thread_context import pipeline_metadata_param, thread_body_param
-from evaluatorq.common.tracing import record_llm_response, set_span_attrs, truncate_for_span
+from evaluatorq.common.tracing import (
+    get_trace_context_headers,
+    record_llm_response,
+    set_span_attrs,
+    truncate_for_span,
+)
 from evaluatorq.contracts import AgentTarget, Message, content_to_text
 from evaluatorq.redteam.backends._errors import extract_provider_error_code, extract_status_code
 from evaluatorq.redteam.backends._retry import warn_ignored_target_retries
@@ -270,6 +275,13 @@ class ORQAgentTarget(AgentTarget):
                 input_messages=input_messages,
                 attributes={'orq.redteam.llm_purpose': 'target', 'orq.agent.key': self.agent_key},
             ) as llm_span:
+                # Propagate W3C trace context so the server-side agent trace nests
+                # under this span instead of starting a loose root trace. Captured
+                # inside the span so `traceparent` points at it; gated by
+                # EVALUATORQ_PROPAGATE_TRACE_CONTEXT.
+                trace_headers = await get_trace_context_headers()
+                if trace_headers:
+                    kwargs['http_headers'] = {**(kwargs.get('http_headers') or {}), **trace_headers}
                 resp = await asyncio.to_thread(self.orq_client.agents.responses.create, **kwargs)
                 record_llm_response(llm_span, resp, output_content=_extract_text(resp))
                 return resp

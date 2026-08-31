@@ -222,7 +222,10 @@ def span_collector():
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     tracer = provider.get_tracer('evaluatorq-simulation-test')
 
-    with patch('evaluatorq.simulation.tracing.get_tracer', return_value=tracer):
+    with (
+        patch('evaluatorq.simulation.tracing.get_tracer', return_value=tracer),
+        patch('evaluatorq.common.tracing.get_tracer', return_value=tracer),
+    ):
         yield exporter
 
     provider.shutdown()

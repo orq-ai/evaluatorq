@@ -1,9 +1,8 @@
 """OTel span helpers for the OpenResponses runtime.
 
-Provides with_llm_span for the Responses API call path, and
-record_openresponses_request/response helpers that record the full
-Responses API payload alongside the standard gen_ai.* attributes.
-Imports recording utilities from common/tracing.py; no simulation import.
+Provides with_llm_span for the Responses API call path (a thin wrapper over
+common/tracing.py's builder) and record_openresponses_request/response helpers
+that record the full Responses API payload alongside the gen_ai.* attributes.
 """
 
 from __future__ import annotations
@@ -19,29 +18,17 @@ from evaluatorq.common.tracing import (
     record_llm_response,
     truncate_for_span,
 )
-from evaluatorq.tracing.setup import get_tracer
+from evaluatorq.common.tracing import with_llm_span as _common_with_llm_span
+from evaluatorq.openresponses.otel_messages import items_to_input_messages, items_to_output_messages
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
     from opentelemetry.trace import Span
 
-_otel_import_warned = False
-
-_PROVIDER_ALIASES: dict[str, str] = {
-    'azure': 'azure.ai.openai',
-}
-
-
-def _derive_provider(model: str) -> str:
-    if '/' in model:
-        prefix = model.split('/', 1)[0]
-        return _PROVIDER_ALIASES.get(prefix, prefix)
-    return 'openai'
-
 
 @asynccontextmanager
-async def with_llm_span(  # noqa: RUF029
+async def with_llm_span(
     *,
     model: str,
     operation: str = 'chat',
@@ -52,55 +39,23 @@ async def with_llm_span(  # noqa: RUF029
 ) -> AsyncGenerator[Span | None, None]:
     """Execute a block within a GenAI LLM span (SpanKind.CLIENT).
 
-    Mirrors simulation.tracing.with_llm_span without the simulation dependency.
+    Delegates to ``evaluatorq.common.tracing.with_llm_span`` after mapping
+    ``purpose`` onto the neutral ``orq.llm.purpose`` key and the legacy
+    ``orq.simulation.llm_purpose`` kept for dashboard back-compat.
 
     Yields:
         The active span, or None when tracing is disabled.
     """
-    tracer = get_tracer()
-    if tracer is None:
-        yield None
-        return
-
-    try:
-        from opentelemetry.trace import SpanKind, Status, StatusCode
-    except ImportError as exc:
-        global _otel_import_warned
-        if not _otel_import_warned:
-            logger.warning('OpenTelemetry import failed; tracing disabled: %s', exc)
-            _otel_import_warned = True
-        yield None
-        return
-
-    resolved_provider = provider or _derive_provider(model)
-    span_name = f'{operation} {model}'
-
-    attrs: dict[str, Any] = {
-        'gen_ai.operation.name': operation,
-        'gen_ai.system': resolved_provider,
-        'gen_ai.provider.name': resolved_provider,
-        'gen_ai.request.model': model,
-    }
-    if temperature is not None:
-        attrs['gen_ai.request.temperature'] = temperature
-    if max_tokens is not None:
-        attrs['gen_ai.request.max_tokens'] = max_tokens
-    if purpose:
-        # Domain-neutral key (this builder serves both simulation and redteam
-        # Responses-API targets). The legacy `orq.simulation.llm_purpose` is
-        # emitted alongside for dashboard back-compat.
-        attrs['orq.llm.purpose'] = purpose
-        attrs['orq.simulation.llm_purpose'] = purpose
-
-    with tracer.start_as_current_span(span_name, kind=SpanKind.CLIENT, attributes=attrs) as span:
-        try:
-            yield span
-            span.set_status(Status(StatusCode.OK))
-        except BaseException as e:
-            span.set_status(Status(StatusCode.ERROR, str(e)))
-            span.record_exception(e)
-            span.set_attribute('error.type', type(e).__name__)
-            raise
+    attributes = {'orq.llm.purpose': purpose, 'orq.simulation.llm_purpose': purpose} if purpose else None
+    async with _common_with_llm_span(
+        model=model,
+        operation=operation,
+        provider=provider,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        attributes=attributes,
+    ) as span:
+        yield span
 
 
 def record_openresponses_request(span: Span | None, payload: dict[str, Any]) -> None:
@@ -122,9 +77,22 @@ def record_openresponses_request(span: Span | None, payload: dict[str, Any]) -> 
     if not capture_message_content():
         return
     input_items = payload.get('input') or []
-    serialized_input = truncate_for_span(json.dumps(input_items, ensure_ascii=False, default=str))
-    span.set_attribute('gen_ai.input.messages', serialized_input)
-    span.set_attribute('input', serialized_input)
+    # gen_ai.* gets the parts shape (see otel_messages): a reader that keys on
+    # `role` drops the role-less function_call / reasoning items otherwise.
+    serialized_messages = truncate_for_span(
+        json.dumps(items_to_input_messages(input_items), ensure_ascii=False, default=str)
+    )
+    span.set_attribute('gen_ai.input.messages', serialized_messages)
+    span.set_attribute('input', serialized_messages)
+    # Raw items, verbatim, under the key Orq's own gateway uses for them.
+    span.set_attribute(
+        'openresponses.input',
+        truncate_for_span(json.dumps(input_items, ensure_ascii=False, default=str)),
+    )
+    instructions = payload.get('instructions')
+    if instructions:
+        span.set_attribute('gen_ai.system_instructions', truncate_for_span(instructions))
+        span.set_attribute('openresponses.instructions', truncate_for_span(instructions))
     span.set_attribute(
         'orq.openresponses.request',
         truncate_for_span(json.dumps(payload, ensure_ascii=False, default=str)),
@@ -142,8 +110,9 @@ def record_openresponses_response(span: Span | None, response: Any) -> None:
         # once each. This is a best-effort diagnostic dump — silence the spam.
         payload = response.model_dump(mode='json', warnings=False) if hasattr(response, 'model_dump') else response
     except Exception as exc:
-        logger.debug(
-            'record_openresponses_response: model_dump failed ({}); falling back to repr',
+        logger.warning(
+            'record_openresponses_response: model_dump failed ({}); falling back to repr, so this span '
+            'gets no openresponses.output and no gen_ai.output.messages',
             exc,
         )
         # Wrap in a dict so json.dumps produces {"repr": "..."} rather than
@@ -154,3 +123,21 @@ def record_openresponses_response(span: Span | None, response: Any) -> None:
             'orq.openresponses.response',
             truncate_for_span(json.dumps(payload, ensure_ascii=False, default=str)),
         )
+        output_items = payload.get('output') if isinstance(payload, dict) else None
+        if output_items is not None:
+            span.set_attribute(
+                'openresponses.output',
+                truncate_for_span(json.dumps(output_items, ensure_ascii=False, default=str)),
+            )
+            # Overwrites the flat {role, content} pair record_llm_response just
+            # wrote: same messages, parts shape, tool calls intact.
+            finish_reason = str(payload.get('status') or '') if isinstance(payload, dict) else ''
+            serialized_output = truncate_for_span(
+                json.dumps(
+                    items_to_output_messages(output_items, finish_reason),
+                    ensure_ascii=False,
+                    default=str,
+                )
+            )
+            span.set_attribute('gen_ai.output.messages', serialized_output)
+            span.set_attribute('output', serialized_output)

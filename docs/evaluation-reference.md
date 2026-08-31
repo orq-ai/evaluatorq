@@ -1,8 +1,6 @@
 # Evaluation Reference
 
-Everything `evaluatorq()` accepts, and the patterns built on top of it. If you
-have not run an evaluation yet, start with
-[Getting Started](guides/getting-started.md).
+Everything `evaluatorq()` accepts, and the patterns built on top of it. If you have not run an evaluation yet, start with [Getting Started](guides/getting-started.md).
 
 ## `evaluatorq()`
 
@@ -36,8 +34,7 @@ async def evaluatorq(
 | `path` | `str` \| `None` | `None` | Path for organizing results on the Orq dashboard (e.g. `"Project/Category"`) |
 | `inference` | `bool` | `True` | Run the jobs; set `False` to score data that already has outputs |
 
-Parameters can also be passed positionally as an `EvaluatorParams` model or a
-plain dict — the three forms below are equivalent:
+Parameters can also be passed positionally as an `EvaluatorParams` model or a plain dict — the three forms below are equivalent:
 
 ```python
 await evaluatorq("my-eval", data=[...], jobs=[...], datapoint_parallelism=5)
@@ -51,8 +48,7 @@ Full type signatures live in the [API Reference](reference/evaluatorq.md).
 
 ### The `@job()` decorator
 
-`@job()` names a job. The name shows up in the results table, in traces, and —
-crucially — in error messages:
+`@job()` names a job. The name shows up in the results table, in traces, and — crucially — in error messages:
 
 ```python
 from evaluatorq import job
@@ -74,8 +70,7 @@ word_count_job = job("word-count", lambda data, row: len(data.inputs["text"].spl
 
 ### Multiple jobs per data point
 
-Every job runs against every data point, which is how you compare variants
-(two prompts, two models, preprocessing on and off) on identical inputs:
+Every job runs against every data point, which is how you compare variants (two prompts, two models, preprocessing on and off) on identical inputs:
 
 ```python
 await evaluatorq(
@@ -88,9 +83,7 @@ await evaluatorq(
 
 ## Data sources
 
-`data` accepts inline `DataPoint`s, an Orq dataset, or awaitables that resolve
-to `DataPoint`s — the last of which lets you stream rows in from a slow source
-without blocking the run:
+`data` accepts inline `DataPoint`s, an Orq dataset, or awaitables that resolve to `DataPoint`s — the last of which lets you stream rows in from a slow source without blocking the run:
 
 ```python
 async def get_data_point(i: int) -> DataPoint:
@@ -104,8 +97,7 @@ await evaluatorq(
 )
 ```
 
-For Orq-hosted datasets, pass `data=DatasetIdInput(dataset_id="...")`. That
-path requires `ORQ_API_KEY` — see [Configuration](configuration.md).
+For Orq-hosted datasets, pass `data=DatasetIdInput(dataset_id="...")`. That path requires `ORQ_API_KEY` — see [Configuration](configuration.md).
 
 ## Built-in evaluators
 
@@ -118,14 +110,11 @@ string_contains_evaluator(name="my-contains-check")  # custom name in the table
 exact_match_evaluator()                            # case-sensitive by default
 ```
 
-Both compare the job output against the data point's `expected_output`. For
-LLM-graded evaluators see [LLM as a Jury](llm-as-a-jury.md); for structured,
-multi-dimensional scores see [Structured Results](structured-results.md).
+Both compare the job output against the data point's `expected_output`. For LLM-graded evaluators see [LLM as a Jury](llm-as-a-jury.md); for structured, multi-dimensional scores see [Structured Results](structured-results.md).
 
 ## Custom evaluators
 
-An evaluator is a `{"name": ..., "scorer": ...}` pair whose scorer receives the
-data point and the job output and returns a score:
+An evaluator is a `{"name": ..., "scorer": ...}` pair whose scorer receives the data point and the job output and returns a score:
 
 ```python
 async def accuracy_scorer(params):
@@ -156,9 +145,7 @@ async def quality_scorer(params):
     }
 ```
 
-When any evaluator returns `pass_: False`, `evaluatorq()` returns the results;
-the library never exits the process. To make a script a CI gate, inspect the
-results and exit explicitly:
+When any evaluator returns `pass_: False`, `evaluatorq()` returns the results; the library never exits the process. To make a script a CI gate, inspect the results and exit explicitly:
 
 ```python
 from evaluatorq.evaluatorq import check_pass_failures
@@ -178,10 +165,7 @@ The results table gains a pass rate row — `Pass Rate | 75% (3/4)`.
 await evaluatorq("parallel-eval", data=[...], jobs=[...], datapoint_parallelism=10)
 ```
 
-`datapoint_parallelism` counts **tasks**, and the bounds nest: at most
-`datapoint_parallelism` datapoints run at once, and within each one a separate budget of the same size
-covers its jobs and then its evaluators. Ten datapoints each running ten
-evaluators is a hundred concurrent tasks, not ten.
+`datapoint_parallelism` counts **tasks**, and the bounds nest: at most `datapoint_parallelism` datapoints run at once, and within each one a separate budget of the same size covers its jobs and then its evaluators. Ten datapoints each running ten evaluators is a hundred concurrent tasks, not ten.
 
 ### Bounding LLM requests
 
@@ -191,14 +175,9 @@ Against a provider concurrency limit, size the request ceiling instead:
 await evaluatorq("bounded-eval", data=[...], jobs=[...], llm_parallelism=10)
 ```
 
-This counts requests, not tasks, so it holds however the fan-out nests. It is a
-concurrency bound rather than a rate limit — ten slots against 10s calls is
-about 60 requests/minute, but the same ten slots become 300/minute if the
-provider speeds up to 2s.
+This counts requests, not tasks, so it holds however the fan-out nests. It is a concurrency bound rather than a rate limit — ten slots against 10s calls is about 60 requests/minute, but the same ten slots become 300/minute if the provider speeds up to 2s.
 
-Requests evaluatorq issues itself (judges, juries, simulation agents, the
-red-team pipeline) take a slot automatically. A job that calls a provider SDK
-directly is invisible to the budget unless you wrap it:
+Requests evaluatorq issues itself (judges, juries, simulation agents, the red-team pipeline) take a slot automatically. A job that calls a provider SDK directly is invisible to the budget unless you wrap it:
 
 ```python
 from evaluatorq.common.llm_limit import llm_slot
@@ -209,11 +188,9 @@ async def my_job(data_point, row_index):
     return {"name": "my-job", "output": response.choices[0].message.content}
 ```
 
-Wrap only the request — holding a slot across parsing shrinks the budget
-without reducing load on the provider.
+Wrap only the request — holding a slot across parsing shrinks the budget without reducing load on the provider.
 
-`red_team()`, `simulate()`, `generate_and_simulate()` and `generate()` take the
-same argument, with the same meaning.
+`red_team()`, `simulate()`, `generate_and_simulate()` and `generate()` take the same argument, with the same meaning.
 
 ### Organizing results on Orq
 

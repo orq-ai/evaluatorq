@@ -157,3 +157,44 @@ async def test_respond_omits_thread_param_when_no_conversation():
 def test_send_prompt_shim_removed():
     """send_prompt back-compat shim was removed in RES-877 Task 9; respond is the sole method."""
     assert not hasattr(ORQAgentTarget, "send_prompt")
+
+
+@pytest.mark.asyncio
+async def test_respond_injects_trace_headers_into_sdk_call():
+    """The agents SDK call carries W3C trace context via http_headers so the
+    server-side agent trace nests under the target span."""
+    target = ORQAgentTarget(agent_key="a", orq_client=MagicMock())
+    captured: dict[str, Any] = {}
+
+    async def fake_to_thread(fn: Any, **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return _make_orq_response()
+
+    with (
+        patch("asyncio.to_thread", side_effect=fake_to_thread),
+        patch("evaluatorq.redteam.tracing.get_tracer", return_value=None),
+        patch(
+            "evaluatorq.redteam.backends.orq.get_trace_context_headers",
+            return_value={"traceparent": "00-abc-def-01"},
+        ),
+    ):
+        await target.respond([Message(role="user", content="hi")])
+
+    assert captured["http_headers"] == {"traceparent": "00-abc-def-01"}
+
+
+@pytest.mark.asyncio
+async def test_respond_omits_trace_headers_when_propagation_disabled(monkeypatch: Any):
+    """EVALUATORQ_PROPAGATE_TRACE_CONTEXT=false keeps traceparent off the wire."""
+    monkeypatch.setenv("EVALUATORQ_PROPAGATE_TRACE_CONTEXT", "false")
+    target = ORQAgentTarget(agent_key="a", orq_client=MagicMock())
+    captured: dict[str, Any] = {}
+
+    async def fake_to_thread(fn: Any, **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return _make_orq_response()
+
+    with patch("asyncio.to_thread", side_effect=fake_to_thread):
+        await target.respond([Message(role="user", content="hi")])
+
+    assert "http_headers" not in captured

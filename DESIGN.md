@@ -1,7 +1,6 @@
 # evaluatorq — Color Design Language
 
-How we use the Orq brand colors (teal + orange) in the docs and any UI.
-One rule above all: **teal carries the interface, orange punctuates it.**
+How we use the Orq brand colors (teal + orange) in the docs and any UI. One rule above all: **teal carries the interface, orange punctuates it.**
 
 ## Palette
 
@@ -47,8 +46,7 @@ Orange is a finger pointing at **one** thing. It is never decoration.
 
 ## The one-accent rule
 
-Per screen, ask: *what is the single most important action here?* That gets orange.
-Everything else stays teal or neutral. If you've used orange twice, one of them is wrong.
+Per screen, ask: *what is the single most important action here?* That gets orange. Everything else stays teal or neutral. If you've used orange twice, one of them is wrong.
 
 > Calm teal field, one orange spark. If everything is accented, nothing is.
 

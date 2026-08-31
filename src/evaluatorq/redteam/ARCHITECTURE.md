@@ -57,8 +57,7 @@ redteam/
 
 ## OpenResponses backend (RES-540)
 
-Target agents and deployments through the platform's `/responses` API in the
-OpenResponses request shape:
+Target agents and deployments through the platform's `/responses` API in the OpenResponses request shape:
 
 ```python
 from evaluatorq.redteam import red_team
@@ -77,18 +76,13 @@ Every attack the orchestrator runs is sent over the wire as:
  "input": [{"role": "user", "content": "<adversarial prompt>"}]}
 ```
 
-The backend reuses `evaluatorq.openresponses.target.OrqResponsesTarget`, so
-redteam and simulation share retry behavior, `previous_response_id` threading,
-output parsing, and token-usage extraction.
+The backend reuses `evaluatorq.openresponses.target.OrqResponsesTarget`, so redteam and simulation share retry behavior, `previous_response_id` threading, output parsing, and token-usage extraction.
 
-Trace spans use `gen_ai.*` attributes plus `orq.openresponses.request` /
-`orq.openresponses.response` so observability surfaces the exact payload that
-went over the wire.
+Trace spans use `gen_ai.*` attributes plus `orq.openresponses.request` / `orq.openresponses.response` so observability surfaces the exact payload that went over the wire. They also set `orq.span_type='span.responses'` and the unprefixed `openresponses.input` / `openresponses.output`, which is what makes Orq render them as a transcript rather than a raw JSON tree — see [docs/tracing.md](../../../docs/tracing.md).
 
 ### Dataset helpers
 
-For consumers that need to build OpenResponses payloads or load redteam static
-datasets authored in OpenResponses input shape:
+For consumers that need to build OpenResponses payloads or load redteam static datasets authored in OpenResponses input shape:
 
 ```python
 from evaluatorq.openresponses import (
@@ -106,8 +100,7 @@ from evaluatorq.openresponses import (
 
 ### Registry shortcut
 
-The backend is also registered for resolution via the standard registry, so it
-slots into the same machinery as the ORQ / OpenAI backends:
+The backend is also registered for resolution via the standard registry, so it slots into the same machinery as the ORQ / OpenAI backends:
 
 ```python
 from evaluatorq.redteam.backends.registry import resolve_backend

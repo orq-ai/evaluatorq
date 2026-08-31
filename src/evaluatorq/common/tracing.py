@@ -425,9 +425,38 @@ def record_llm_output(span: Span | None, output: str) -> None:
     span.set_attribute('output', serialized)
 
 
+def orq_span_type_for_operation(operation: str) -> str | None:
+    """Return the ``orq.span_type`` Orq ingest should store for this operation.
+
+    Orq's OTLP ingest maps ``gen_ai.operation.name`` to a span type through a
+    fixed table that knows ``chat`` but not ``responses``; an unmapped operation
+    falls through to span-name heuristics and lands on ``span.generic``, which
+    the trace UI renders as a raw JSON tree instead of a message transcript. A
+    client-supplied ``orq.span_type`` overrides that derivation, so Responses
+    calls claim ``span.responses`` explicitly. Returns ``None`` for operations
+    the ingest table already classifies correctly.
+
+    ``invoke`` (the Orq deployment legs) is unmapped for the same reason and
+    claims ``span.chat_completion``: its input and output are chat messages, and
+    that is the type whose renderer shows them as a transcript.
+    """
+    if operation == 'responses' or operation.endswith('.responses'):
+        return 'span.responses'
+    if operation == 'invoke':
+        return 'span.chat_completion'
+    return None
+
+
+_PROVIDER_ALIASES: dict[str, str] = {
+    # semconv spells the Azure OpenAI provider out; the model prefix does not.
+    'azure': 'azure.ai.openai',
+}
+
+
 def _derive_provider(model: str) -> str:
     if '/' in model:
-        return model.split('/', 1)[0]
+        prefix = model.split('/', 1)[0]
+        return _PROVIDER_ALIASES.get(prefix, prefix)
     return 'openai'
 
 
@@ -472,6 +501,9 @@ async def with_llm_span(  # noqa: RUF029
         'gen_ai.provider.name': resolved_provider,
         'gen_ai.request.model': model,
     }
+    span_type = orq_span_type_for_operation(operation)
+    if span_type is not None:
+        genai_attrs['orq.span_type'] = span_type
     if temperature is not None:
         genai_attrs['gen_ai.request.temperature'] = float(temperature)
     if max_tokens is not None:
@@ -578,12 +610,32 @@ def current_otel_context() -> Any | None:
     return otel_context.get_current()
 
 
+def propagate_trace_context() -> bool:
+    """Whether outgoing requests carry W3C trace context headers.
+
+    Controlled by the ``EVALUATORQ_PROPAGATE_TRACE_CONTEXT`` env var.
+
+    **Defaults to True** so a provider that runs its own tracing (the Orq
+    router, the agents endpoint) nests its server-side spans under the calling
+    span instead of starting a loose root trace. Set it to ``"false"`` / ``"0"``
+    when the receiving side should trace independently, or when a gateway
+    rejects an unexpected ``traceparent`` header.
+    """
+    flag = os.environ.get('EVALUATORQ_PROPAGATE_TRACE_CONTEXT')
+    if flag is None:
+        return True
+    return flag.lower() == 'true' or flag == '1'
+
+
 async def get_trace_context_headers() -> dict[str, str]:  # noqa: RUF029
     """Return W3C trace context headers for the current active span.
 
-    Empty dict when OTel is not available. Used to propagate trace context
-    into outgoing HTTP requests.
+    Empty dict when OTel is unavailable, or when
+    ``EVALUATORQ_PROPAGATE_TRACE_CONTEXT`` disables propagation. Used to
+    propagate trace context into outgoing HTTP requests.
     """
+    if not propagate_trace_context():
+        return {}
     try:
         from opentelemetry import context, propagate
     except ImportError:

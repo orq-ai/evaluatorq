@@ -1,13 +1,8 @@
 # Agent Simulation
 
-Multi-turn conversational testing for agents. A **user-simulator LLM** plays a
-persona pursuing a goal across a conversation; a **judge LLM** scores the result
-against your criteria. Runs through the `evaluatorq()` framework, so you get
-parallelism, OTel tracing, Orq experiment upload, and CI gating for free.
+Multi-turn conversational testing for agents. A **user-simulator LLM** plays a persona pursuing a goal across a conversation; a **judge LLM** scores the result against your criteria. Runs through the `evaluatorq()` framework, so you get parallelism, OTel tracing, Orq experiment upload, and CI gating for free.
 
-It is the non-adversarial counterpart to [red teaming](../redteam/README.md):
-red teaming asks *"does it break under attack?"*, simulation asks *"does it work
-for real users?"*.
+It is the non-adversarial counterpart to [red teaming](../redteam/README.md): red teaming asks *"does it break under attack?"*, simulation asks *"does it work for real users?"*.
 
 ## What it does
 
@@ -38,8 +33,7 @@ results = await simulate(
 )
 ```
 
-A runnable, narrated walkthrough lives in
-[`examples/agent_simulation_intro.ipynb`](../../../examples/agent_simulation_intro.ipynb).
+A runnable, narrated walkthrough lives in [`examples/agent_simulation_intro.ipynb`](../../../examples/agent_simulation_intro.ipynb).
 
 ## Targets
 
@@ -66,46 +60,28 @@ For `generate_and_simulate()`, pass `agent_description` for any local, deploymen
 
 ## LLM configuration
 
-`sim_model` (default `openai/gpt-5.6-luna`) drives the user-simulator, the judge,
-and — for `generate_and_simulate` — persona/scenario generation. Provider
-resolution mirrors red teaming: an injected `generation_client` →
-`ORQ_API_KEY` (Orq router) → `OPENAI_API_KEY` (with optional `OPENAI_BASE_URL`).
+`sim_model` (default `openai/gpt-5.6-luna`) drives the user-simulator, the judge, and — for `generate_and_simulate` — persona/scenario generation. Provider resolution mirrors red teaming: an injected `generation_client` → `ORQ_API_KEY` (Orq router) → `OPENAI_API_KEY` (with optional `OPENAI_BASE_URL`).
 
-The default `openai/gpt-5.6-luna` assumes the Orq router. If you target OpenAI
-directly (only `OPENAI_API_KEY` set), drop the prefix: `sim_model="gpt-5.6-luna"`.
+The default `openai/gpt-5.6-luna` assumes the Orq router. If you target OpenAI directly (only `OPENAI_API_KEY` set), drop the prefix: `sim_model="gpt-5.6-luna"`.
 
-Override the user-simulator or judge entirely by passing pre-built `BaseAgent`
-instances via `user_simulator=` / `judge=`.
+Override the user-simulator or judge entirely by passing pre-built `BaseAgent` instances via `user_simulator=` / `judge=`.
 
 ## Results & CI gating
 
-Each result carries `goal_achieved`, `goal_completion_score`, `turn_count`,
-`terminated_by`, `rules_broken`, `criteria_results`, and the full `messages`
-transcript.
+Each result carries `goal_achieved`, `goal_completion_score`, `turn_count`, `terminated_by`, `rules_broken`, `criteria_results`, and the full `messages` transcript.
 
-`exit_on_failure=True` (default) makes a run raise `SimulationDroppedError` when
-a datapoint is dropped — drop it straight into a CI step. Evaluator score
-failures are returned in the results for callers to inspect. Pass
-`exit_on_failure=False` for interactive runs where dropped rows should surface
-as warnings instead.
+`exit_on_failure=True` (default) makes a run raise `SimulationDroppedError` when a datapoint is dropped — drop it straight into a CI step. Evaluator score failures are returned in the results for callers to inspect. Pass `exit_on_failure=False` for interactive runs where dropped rows should surface as warnings instead.
 
 ## Datasets
 
-Set `dataset_id="..."` to pull simulation datapoints from a named Orq dataset
-instead of inline personas/scenarios. Each row's `inputs` must already match a
-simulation input shape (`datapoint`, or `persona` + `scenario`).
+Set `dataset_id="..."` to pull simulation datapoints from a named Orq dataset instead of inline personas/scenarios. Each row's `inputs` must already match a simulation input shape (`datapoint`, or `persona` + `scenario`).
 
 ## Experiments
 
 A prior Orq experiment run can seed simulations two ways (requires `ORQ_API_KEY`):
 
-- **Direct** — set `experiment_id="..."` (optionally `experiment_run_id="..."`;
-  latest run when omitted) to replay the run's rows as datapoints. Same
-  row-shape rules as `dataset_id`; experiments uploaded by a previous
-  simulation run round-trip as-is. CLI: `eq sim simulate --experiment-id`.
-- **Extension** — `extend_from_experiment()` feeds the run's personas and
-  scenarios to the standard generators as seeds and returns *new*
-  similar-but-not-duplicate datapoints.
+- **Direct** — set `experiment_id="..."` (optionally `experiment_run_id="..."`; latest run when omitted) to replay the run's rows as datapoints. Same row-shape rules as `dataset_id`; experiments uploaded by a previous simulation run round-trip as-is. CLI: `eq sim simulate --experiment-id`.
+- **Extension** — `extend_from_experiment()` feeds the run's personas and scenarios to the standard generators as seeds and returns *new* similar-but-not-duplicate datapoints.
 
 ```python
 from evaluatorq.simulation import extend_from_experiment, simulate
@@ -120,10 +96,7 @@ results = await simulate(evaluation_name="extended", datapoints=extra, target=..
 
 ## Data sources
 
-Where cases come from, and what you can do with each. **Replay** re-runs the
-exact same cases (reproducible compare across agent versions/evaluators);
-**Seed new cases** mines a source for archetypes that generate *fresh*
-personas/scenarios (extends the dataset).
+Where cases come from, and what you can do with each. **Replay** re-runs the exact same cases (reproducible compare across agent versions/evaluators); **Seed new cases** mines a source for archetypes that generate *fresh* personas/scenarios (extends the dataset).
 
 | Source | Replay (re-use exact cases) | Seed new cases (extend) |
 |--------|:---------------------------:|:-----------------------:|
@@ -136,13 +109,11 @@ personas/scenarios (extends the dataset).
 
 Legend: ✅ built-in · ⚠️ possible but manual · ❌ not supported yet.
 
-`previous_run`, `dataset_id`, `experiment_id`, `datapoints`, and
-`personas` + `scenarios` are mutually exclusive — pass exactly one source per run.
+`previous_run`, `dataset_id`, `experiment_id`, `datapoints`, and `personas` + `scenarios` are mutually exclusive — pass exactly one source per run.
 
 ### Replaying a previous run
 
-Saved runs record the cases they simulated, so a run can be repeated against a
-new agent version without regenerating anything:
+Saved runs record the cases they simulated, so a run can be repeated against a new agent version without regenerating anything:
 
 ```bash
 eq sim simulate --from-run latest --target agent:my-agent-v2
@@ -152,27 +123,14 @@ eq sim simulate --from-run latest --target agent:my-agent-v2
 results = await simulate(target='agent:my-agent-v2', previous_run='latest')
 ```
 
-`--from-run` accepts `latest`, the run name or file name `eq sim runs` prints, a
-run id (or an unambiguous 8+ character prefix), or a path to a saved run JSON,
-resolved against `.evaluatorq/sim-runs/`. The stored personas, scenarios, and
-first messages are re-used exactly — no persona/scenario generation, no
-first-message generation, no dataset fetch — and the run's turn cap is restored
-unless you pass `--max-turns`. What you vary between runs is the target and the
-evaluators. Runs saved before this shipped carry no datapoints and are rejected
-with an explanatory error, as are runs stamped with a replay format newer than
-the installed version understands.
+`--from-run` accepts `latest`, the run name or file name `eq sim runs` prints, a run id (or an unambiguous 8+ character prefix), or a path to a saved run JSON, resolved against `.evaluatorq/sim-runs/`. The stored personas, scenarios, and first messages are re-used exactly — no persona/scenario generation, no first-message generation, no dataset fetch — and the run's turn cap is restored unless you pass `--max-turns`. What you vary between runs is the target and the evaluators. Runs saved before this shipped carry no datapoints and are rejected with an explanatory error, as are runs stamped with a replay format newer than the installed version understands.
 
 ## Traces as input
 
-Production traces from Orq's observability product can seed simulations
-(requires `ORQ_API_KEY`). Two modes:
+Production traces from Orq's observability product can seed simulations (requires `ORQ_API_KEY`). Two modes:
 
-- **Direct** — one datapoint per fetched trace: an LLM infers the persona and
-  scenario from the transcript; the first message is the real user's opening
-  message, verbatim.
-- **Extension** — an LLM distills the fetched traffic into a distribution
-  profile (topic mix, tones, technical levels), then generates *new*
-  distribution-matched datapoints through the standard generators.
+- **Direct** — one datapoint per fetched trace: an LLM infers the persona and scenario from the transcript; the first message is the real user's opening message, verbatim.
+- **Extension** — an LLM distills the fetched traffic into a distribution profile (topic mix, tones, technical levels), then generates *new* distribution-matched datapoints through the standard generators.
 
 ```python
 from evaluatorq.simulation import (
@@ -194,17 +152,14 @@ eq sim simulate --input dp.jsonl --target agent:my-agent
 
 ## Tracing & PII
 
-Runs emit OTel spans under `Evaluatorq - Agent Simulation` (auto-visible in orq.ai when
-`ORQ_API_KEY` is set). Two shared env vars control message capture, identical to
-red teaming:
+Runs emit OTel spans under `Evaluatorq - Agent Simulation` (auto-visible in orq.ai when `ORQ_API_KEY` is set). Two shared env vars control message capture, identical to red teaming:
 
 - `EVALUATORQ_CAPTURE_MESSAGE_CONTENT` — set `false`/`0` to keep raw message text (incl. PII) off spans while still recording tokens/model/latency. Defaults `true`.
 - `EVALUATORQ_SPAN_MAX_TEXT_CHARS` — cap stored text per span attribute. Defaults to no truncation.
 
 ## CLI
 
-The same capability is exposed as `eq sim run` / `eq sim generate`. Install and
-usage:
+The same capability is exposed as `eq sim run` / `eq sim generate`. Install and usage:
 
 ```bash
 uv add "evaluatorq[simulation]"
@@ -212,12 +167,9 @@ uv run eq sim run --help
 uv run eq sim generate --help
 ```
 
-`uv run evaluatorq` is the same entry point under its long name. Avoid
-`uv tool install` here: it builds an isolated environment that exposes the CLI
-but leaves `evaluatorq` unimportable from your own scripts.
+`uv run evaluatorq` is the same entry point under its long name. Avoid `uv tool install` here: it builds an isolated environment that exposes the CLI but leaves `evaluatorq` unimportable from your own scripts.
 
-Prefer pip? `python -m pip install "evaluatorq[simulation]"` installs into the
-interpreter you just named, and `eq` lands on that environment's `PATH`.
+Prefer pip? `python -m pip install "evaluatorq[simulation]"` installs into the interpreter you just named, and `eq` lands on that environment's `PATH`.
 
 Examples:
 
@@ -227,6 +179,4 @@ eq sim generate --target refund-agent-fixed --datapoints dp.jsonl
 eq sim simulate --datapoints dp.jsonl --target deployment:refund-agent
 ```
 
-See [`examples/agent_simulation/README.md`](../../../examples/agent_simulation/README.md)
-for the full set of runnable scripts (orq deployment, tool-using agents,
-hardening loop, the `wrap_simulation_agent()` + `evaluatorq()` production pattern).
+See [`examples/agent_simulation/README.md`](../../../examples/agent_simulation/README.md) for the full set of runnable scripts (orq deployment, tool-using agents, hardening loop, the `wrap_simulation_agent()` + `evaluatorq()` production pattern).

@@ -1,10 +1,8 @@
 # evaluatorq
 
-Run LLM evaluations, red-team agents, and simulate multi-turn conversations
-in Python — against any agent, with the Orq AI platform as optional infrastructure.
+Run LLM evaluations, red-team agents, and simulate multi-turn conversations in Python — against any agent, with the Orq AI platform as optional infrastructure.
 
-[Get Started](guides/getting-started.md){ .md-button .md-button--primary }
-[View on GitHub](https://github.com/orq-ai/evaluatorq){ .md-button }
+[Get Started](guides/getting-started.md){ .md-button .md-button--primary } [View on GitHub](https://github.com/orq-ai/evaluatorq){ .md-button }
 
 ## Install
 
@@ -16,15 +14,10 @@ $ uv add evaluatorq
 Successfully installed evaluatorq
 ```
 
-`uv add` installs into the current project — run `uv init` first if you don't
-have one. Then run your code with `uv run my_eval.py` and the CLI with
-`uv run eq`, so the environment you installed into is the one that executes.
-Using pip instead, call it as `python -m pip install evaluatorq` to pin it to
-the same interpreter you run with.
+`uv add` installs into the current project — run `uv init` first if you don't have one. Then run your code with `uv run my_eval.py` and the CLI with `uv run eq`, so the environment you installed into is the one that executes. Using pip instead, call it as `python -m pip install evaluatorq` to pin it to the same interpreter you run with.
 
 !!! tip "Optional extras"
-    `uv add "evaluatorq[redteam]"` adds adversarial red teaming ·
-    `uv add "evaluatorq[simulation]"` adds multi-turn agent simulation.
+    `uv add "evaluatorq[redteam]"` adds adversarial red teaming · `uv add "evaluatorq[simulation]"` adds multi-turn agent simulation.
 
 ## What it does
 
@@ -68,10 +61,7 @@ the same interpreter you run with.
 
 </div>
 
-Works with LangGraph, OpenAI Agents SDK, PydanticAI, CrewAI, a plain async
-function, or an Orq deployment. The Orq platform is optional: it stores results
-and, when `ORQ_API_KEY` is set, routes the attacker and judge LLMs by default —
-but you can bring your own and run entirely on OpenAI.
+Works with LangGraph, OpenAI Agents SDK, PydanticAI, CrewAI, a plain async function, or an Orq deployment. The Orq platform is optional: it stores results and, when `ORQ_API_KEY` is set, routes the attacker and judge LLMs by default — but you can bring your own and run entirely on OpenAI.
 
 ## Quick start
 
@@ -141,8 +131,4 @@ Detailed Results:
 - **[API Reference](reference/evaluatorq.md)** — the full public API.
 - **[Roadmap](roadmap.md)** — what's planned next.
 
-<div style="display:none" markdown>
-For coding agents: this site publishes `/llms.txt` — a curated Markdown index —
-and `/llms-full.txt`, the full docs as one Markdown file. Start with the former
-and fall back to the latter.
-</div>
+<div style="display:none" markdown> For coding agents: this site publishes `/llms.txt` — a curated Markdown index — and `/llms-full.txt`, the full docs as one Markdown file. Start with the former and fall back to the latter. </div>

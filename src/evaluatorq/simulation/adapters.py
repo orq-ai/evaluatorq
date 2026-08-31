@@ -26,19 +26,37 @@ def from_orq_deployment(
 
     async def callback(messages: list[Message]) -> AgentResponse:
         from evaluatorq.common.thread_context import current_thread_id, pipeline_metadata
-        from evaluatorq.deployment import ThreadConfig, deployment
+        from evaluatorq.common.tracing import record_llm_response, record_token_usage, with_llm_span
+        from evaluatorq.deployment import MessageDict, ThreadConfig, deployment
 
         metadata: dict[str, object] | None = dict(pipeline_metadata()) or None
         tid = current_thread_id()
         thread: ThreadConfig | None = {'id': tid} if tid else None
 
-        resp = await deployment(
-            agent_key,
-            messages=[{'role': m.role, 'content': content_to_text(m.content)} for m in messages],
-            metadata=metadata,
-            thread=thread,
-        )
-        return AgentResponse(text=resp.content, usage=resp.usage)
+        payload: list[MessageDict] = [{'role': m.role, 'content': content_to_text(m.content)} for m in messages]
+        # Mirrors the red-team deployment leg (redteam/runtime/jobs.py): without a
+        # span here the deployment invocation is the only target call that leaves
+        # no LLM span under orq.simulation.target_call.
+        async with with_llm_span(
+            model=f'deployment:{agent_key}',
+            operation='invoke',
+            provider='orq',
+            input_messages=payload,
+            attributes={'orq.llm.purpose': 'target'},
+        ) as span:
+            resp = await deployment(
+                agent_key,
+                messages=payload,
+                metadata=metadata,
+                thread=thread,
+            )
+            record_llm_response(span, resp.raw, output_content=resp.content)
+            if resp.usage is not None:
+                # resp.raw is None on some deployment paths, so record_llm_response
+                # finds no usage there; resp.usage is already normalised. Guarded:
+                # an unconditional call writes 0/0/0, which reads as a free call.
+                record_token_usage(span, usage=resp.usage)
+            return AgentResponse(text=resp.content, usage=resp.usage)
 
     # Carry the key so the run-metadata label can render "deployment:<key>",
     # symmetric to how an AgentTarget exposes `agent_key`.

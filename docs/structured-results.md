@@ -1,9 +1,6 @@
 # Structured Results
 
-Some evaluators do not produce one number. A quality rubric has several axes, a
-safety check has a score per category, a sentiment breakdown is a distribution.
-`EvaluationResultCell` lets an evaluator return all of them from a single call
-instead of splitting one judgement across several evaluators.
+Some evaluators do not produce one number. A quality rubric has several axes, a safety check has a score per category, a sentiment breakdown is a distribution. `EvaluationResultCell` lets an evaluator return all of them from a single call instead of splitting one judgement across several evaluators.
 
 ```python
 class EvaluationResultCell(BaseModel):
@@ -63,8 +60,7 @@ async def sentiment_scorer(params):
 
 ## Safety scores with pass/fail
 
-Structured scores combine with the `pass_` flag, so a run can carry a
-per-category breakdown *and* gate CI on the worst category:
+Structured scores combine with the `pass_` flag, so a run can carry a per-category breakdown *and* gate CI on the worst category:
 
 ```python
 async def safety_scorer(params):
@@ -82,13 +78,10 @@ async def safety_scorer(params):
     )
 ```
 
-See [Evaluation Reference](evaluation-reference.md#passfail-and-ci) for how
-to inspect `pass_` and add an explicit process exit in a CI script.
+See [Evaluation Reference](evaluation-reference.md#passfail-and-ci) for how to inspect `pass_` and add an explicit process exit in a CI script.
 
 !!! note "Display vs. storage"
-    Structured results render as `[structured]` in the terminal table — the
-    breakdown does not fit a cell. The full value is preserved in what is sent
-    to the Orq platform and written to OpenTelemetry spans.
+    Structured results render as `[structured]` in the terminal table — the breakdown does not fit a cell. The full value is preserved in what is sent to the Orq platform and written to OpenTelemetry spans.
 
 ## Runnable examples
 

@@ -15,7 +15,12 @@ from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.common.retry import with_retry
 from evaluatorq.common.thread_context import build_static_thread_id, conversation_thread, thread_body_param
-from evaluatorq.common.tracing import record_llm_response, set_span_attrs, truncate_for_span
+from evaluatorq.common.tracing import (
+    get_trace_context_headers,
+    record_llm_response,
+    set_span_attrs,
+    truncate_for_span,
+)
 from evaluatorq.redteam.adaptive.orchestrator import _get_active_progress
 from evaluatorq.redteam.contracts import PIPELINE_CONFIG, LLMConfig, Message, TokenUsage
 from evaluatorq.redteam.exceptions import CredentialError
@@ -117,6 +122,13 @@ def create_deployment_job(
                     # metadata is applied explicitly.
                     apply_pipeline_metadata(invoke_kwargs)
                     invoke_kwargs.update(thread_body_param())
+                    # Propagate W3C trace context so the deployment's server-side
+                    # execution nests under this span. Captured inside the span so
+                    # `traceparent` points at it; gated by
+                    # EVALUATORQ_PROPAGATE_TRACE_CONTEXT.
+                    trace_headers = await get_trace_context_headers()
+                    if trace_headers:
+                        invoke_kwargs['http_headers'] = trace_headers
 
                     async def _invoke() -> Any:
                         return await asyncio.wait_for(

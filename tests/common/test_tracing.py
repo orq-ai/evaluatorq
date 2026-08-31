@@ -15,6 +15,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from loguru import logger
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
 
@@ -37,7 +38,10 @@ def span_collector():
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     tracer = provider.get_tracer('test')
-    with patch('evaluatorq.simulation.tracing.get_tracer', return_value=tracer):
+    with (
+        patch('evaluatorq.simulation.tracing.get_tracer', return_value=tracer),
+        patch('evaluatorq.common.tracing.get_tracer', return_value=tracer),
+    ):
         yield exporter, tracer
     provider.shutdown()
 
@@ -750,6 +754,34 @@ def test_record_openresponses_response_respects_capture_gate(monkeypatch: pytest
     assert 'orq.openresponses.response' not in set_attr_keys
 
 
+def test_record_openresponses_response_warns_when_model_dump_fails() -> None:
+    """The repr fallback carries no output items, so it warns and skips those attrs."""
+    from unittest.mock import MagicMock
+    from evaluatorq.openresponses.tracing import record_openresponses_response
+
+    class _Resp:
+        id = 'r'
+        model = 'm'
+        usage = None
+        output = []
+        status = 'completed'
+
+        def model_dump(self, *, mode: str = 'json', **_: Any) -> dict[str, Any]:
+            raise RuntimeError('boom')
+
+    span = MagicMock()
+    records: list[str] = []
+    handler_id = logger.add(lambda message: records.append(message.record['message']), level='WARNING')
+    try:
+        record_openresponses_response(span, _Resp())
+    finally:
+        logger.remove(handler_id)
+
+    set_attr_keys = {call.args[0] for call in span.set_attribute.call_args_list}
+    assert 'openresponses.output' not in set_attr_keys
+    assert any('falling back to repr' in record for record in records)
+
+
 # ---------------------------------------------------------------------------
 # cache_creation_input_tokens path through record_llm_response
 # ---------------------------------------------------------------------------
@@ -811,7 +843,7 @@ async def test_openresponses_llm_span_emits_neutral_and_legacy_purpose() -> None
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     tracer = provider.get_tracer('test')
     try:
-        with patch('evaluatorq.openresponses.tracing.get_tracer', return_value=tracer):
+        with patch('evaluatorq.common.tracing.get_tracer', return_value=tracer):
             async with with_llm_span(model='openai/gpt-4o', operation='responses', purpose='target'):
                 pass
         attrs = _attrs(_span(exporter))
@@ -852,3 +884,16 @@ def test_record_llm_response_survives_unusable_token_counts(bad: float) -> None:
     set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
     assert set_attrs['gen_ai.usage.input_tokens'] == 0
     assert set_attrs['gen_ai.usage.output_tokens'] == 2
+
+
+@pytest.mark.asyncio
+async def test_get_trace_context_headers_respects_propagation_toggle(monkeypatch):
+    """EVALUATORQ_PROPAGATE_TRACE_CONTEXT=false disables W3C header injection."""
+    from evaluatorq.common.tracing import get_trace_context_headers
+
+    monkeypatch.setenv('EVALUATORQ_PROPAGATE_TRACE_CONTEXT', 'false')
+    assert await get_trace_context_headers() == {}
+
+    monkeypatch.setenv('EVALUATORQ_PROPAGATE_TRACE_CONTEXT', 'true')
+    with patch('opentelemetry.propagate.inject', side_effect=lambda h, context=None: h.update({'traceparent': 'tp'})):
+        assert await get_trace_context_headers() == {'traceparent': 'tp'}
