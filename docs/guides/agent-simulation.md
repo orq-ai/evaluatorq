@@ -877,6 +877,7 @@ transcript. Sources live in `examples/agent_simulation/` (files `06`–`09`).
 
 ## Where to next
 
+- **[In an evaluatorq Run](simulation-in-evaluatorq.md)** — `wrap_simulation_agent()`, scoring a transcript with your own evaluators, and shipping the batch as an Experiment.
 - **[Examples › Agent Simulation](../examples/index.md)** — tool simulation, hardening loops, LangGraph / CrewAI / OpenAI Agents targets.
 - **[Red Teaming](red-teaming.md)** — adversarial, attack-driven testing.
 - **[Tuning](../tuning.md)** — target timeouts, per-simulation wall clock, reasoning effort, and provider options.

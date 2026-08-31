@@ -139,6 +139,7 @@ plugins:
           - framework-integrations.md: Evaluate LangChain and LangGraph agents.
           - guides/targets.md: The system under test — built-in target kinds and how to write your own AgentTarget.
           - guides/agent-simulation.md: Multi-turn, persona-driven conversation testing with an LLM judge.
+          - guides/simulation-in-evaluatorq.md: Run a simulation as an evaluatorq job with wrap_simulation_agent(), and score the transcript with your own evaluators.
           - guides/red-teaming.md: Adaptive OWASP-mapped adversarial security testing for agents.
           - custom-evaluators-and-frameworks.md: Define custom evaluators and frameworks.
           - llm-as-a-jury.md: Multi-judge panel (jury) evaluation.
@@ -264,6 +265,7 @@ nav:
       - Targets: guides/targets.md
       - Agent Simulation:
           - Overview: guides/agent-simulation.md
+          - In an evaluatorq Run: guides/simulation-in-evaluatorq.md
       - Dashboard: dashboard.md
       - Red Teaming:
           - Overview: guides/red-teaming.md
