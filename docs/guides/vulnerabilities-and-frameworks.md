@@ -60,15 +60,16 @@ framework_mappings={'OWASP-ASI': ['ASI04'], 'OWASP-LLM': ['LLM03']}
 
 `excessive_agency` is the clearest case: its domain is `agent`, and its primary category is `LLM06`, a code from the LLM Top 10. The two axes disagree, and that is fine — neither can be read off the other. Group by domain when you want to know who fixes something; group by category when you want a framework report.
 
-## Results carry every mapped code
+## Summaries carry every mapped code
 
-The top-line label on a result is the primary category, but the complete mapping is on the result too. Each per-vulnerability result has a `framework_categories` field, a `dict[str, list[str]]` of every framework the vulnerability maps into:
+The top-line label on a result is the primary category, but the complete mapping is available too, on the per-vulnerability summary. `report.summary.by_vulnerability` is a `dict[str, VulnerabilitySummary]` keyed by the vulnerability id string, and each `VulnerabilitySummary` has a `framework_categories` field, a `dict[str, list[str]]` of every framework the vulnerability maps into:
 
 ```python
-{'OWASP-ASI': ['ASI04'], 'OWASP-LLM': ['LLM03']}
+report.summary.by_vulnerability['supply_chain'].framework_categories
+# {'OWASP-ASI': ['ASI04'], 'OWASP-LLM': ['LLM03']}
 ```
 
-So a compliance view keyed on `LLM03` is buildable from a report — read `framework_categories` on the vulnerability results rather than the primary label.
+So a compliance view keyed on `LLM03` is buildable from a report — read `framework_categories` on the vulnerability summary rather than the primary label.
 
 ## Where to next
 
