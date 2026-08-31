@@ -142,7 +142,7 @@ The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios
         asyncio.run(main())
     ```
 
-`agent_description` drives generation; `num_personas × num_scenarios` is how many conversations run. The simulator and judge LLMs resolve their provider by precedence: if `ORQ_API_KEY` is set they route through the Orq AI Router; otherwise they fall back to OpenAI via `OPENAI_API_KEY` (an explicitly passed client always wins). See [Configuration](../configuration.md).
+`agent_description` drives generation; `num_personas × num_scenarios` is how many conversations run. The simulation-side LLMs resolve their provider by precedence: an explicitly passed `generation_client` wins, then `llm_config.client`, then `ORQ_API_KEY` (the Orq AI Router), then `OPENAI_API_KEY`. See [Configuration](../configuration.md).
 
 !!! note "CI and local runs"
     Dropped simulations raise by default; ordinary failed goals remain in the returned results. Set `exit_on_failure=False` for exploratory runs. When `ORQ_API_KEY` is available, results upload to Orq by default; pass `upload_results=False` to suppress the Experiment upload. That is not an offline mode — see [What gets uploaded](simulation-in-evaluatorq.md#what-gets-uploaded).

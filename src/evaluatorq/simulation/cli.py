@@ -595,7 +595,7 @@ def simulate(
         str,
         typer.Option(
             '--sim-model',
-            help=f'Model for the user-simulator and judge. {MODEL_OPTION_NOTE}',
+            help=f'Model for the user-simulator, the judge, the recommendations pass and the executive summary. {MODEL_OPTION_NOTE}',
         ),
     ] = DEFAULT_MODEL,
     max_turns: Annotated[
@@ -932,8 +932,8 @@ def run(
         typer.Option(
             '--sim-model',
             help=(
-                'Model for the user-simulator, the judge, and persona/scenario/'
-                f'first-message generation. {MODEL_OPTION_NOTE}'
+                'Model for the user-simulator, the judge, persona/scenario/first-message '
+                f'generation, the recommendations pass and the executive summary. {MODEL_OPTION_NOTE}'
             ),
         ),
     ] = DEFAULT_MODEL,

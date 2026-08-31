@@ -52,7 +52,7 @@ You need an LLM key wherever a simulator, attacker, or judge LLM runs — `OPENA
 
 ### Which models run the simulator / attacker / judge — can I change them?
 
-They default to an LLM routed via `OPENAI_API_KEY` or `ORQ_API_KEY`. Override per surface: red teaming takes `llm_config=LLMConfig(attacker=..., evaluator=...)`, and simulation takes `sim_model=` for the simulator and judge.
+They default to an LLM routed via `OPENAI_API_KEY` or `ORQ_API_KEY`. Override per surface: red teaming takes `llm_config=LLMConfig(attacker=..., evaluator=...)`, and simulation takes `llm_config=LLMCallConfig(...)` — one config for the user simulator, the judge, the generators, the recommendations pass and the executive summary — with `sim_model=` as the model-only shorthand.
 
 ```python
 from evaluatorq.redteam import LLMConfig, LLMCallConfig
