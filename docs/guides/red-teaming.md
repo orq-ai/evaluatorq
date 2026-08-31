@@ -223,6 +223,8 @@ The two tabs above are the two most common targets. For the full set — includi
 | `LLM08` | Vector and Embedding Weaknesses | generated | ✅ |
 | `LLM09` | Misinformation | 5 | ✅ |
 
+See [Vulnerabilities & Frameworks](vulnerabilities-and-frameworks.md) for how these 19 category codes map onto the 18 vulnerabilities behind them, and how a vulnerability mapped into more than one framework is labelled in reports.
+
 45 curated strategies in total, delivered through 16 delivery methods (`direct-request`, `tool-response`, `role-play`, `crescendo`, `many-shot`, `base64`, `leetspeak`, `multilingual`, `refusal-suppression`, and more). Add your own vulnerabilities, strategies and judges — see [Custom Evaluators & Frameworks](../custom-evaluators-and-frameworks.md).
 
 ## Inspect results in Python

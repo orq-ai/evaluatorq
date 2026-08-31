@@ -241,6 +241,9 @@ The registry is **in-memory and process-local** — it is not persisted and ther
 
 ## Adding a new framework
 
+!!! warning "Custom category codes fail at report time, after the run is billed"
+    `Framework` is a fixed enum today — it only accepts `ASI*` and `LLM*` prefixes. A custom framework whose category codes use a different prefix, like `RAI01` or `MAP-1.1` below, runs and scores every attack and then fails when the bundled report is assembled, so the run is fully executed and billed before the failure surfaces. Until that is lifted, either map your custom vulnerability onto an existing `ASI*` or `LLM*` code, or skip the bundled report and consume `report.results` programmatically — each result carries `framework_categories` with every mapped code. Tracked in RES-1479.
+
 Frameworks are a reporting/compliance layer on top of vulnerabilities. Adding a framework means:
 
 1. Mapping existing vulnerabilities to your framework's categories via `framework_mappings` in `VulnerabilityDef`
