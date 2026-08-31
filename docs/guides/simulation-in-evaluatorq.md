@@ -221,7 +221,9 @@ Three things change for a non-interactive run:
 - `EVALUATORQ_DIR` pointed at a scratch directory, so the run store does not persist between jobs and one workflow cannot resolve another's runs.
 - `ORQ_DISABLE_TRACING=1` if you do not want CI spans in your traces.
 
-`evaluatorq()` does not fail the process for you — it returns results and exits 0 whatever the scores are. Turning scores into a build verdict is your call, and it is a few lines:
+If you are arriving from `simulate()`, note what does and does not carry over. `simulate()` takes `exit_on_failure`, which defaults to `True` and raises `SimulationDroppedError` when a datapoint is *dropped* — a job raised and no result was cached. That is an infrastructure gate, not a quality gate: scorer verdicts are reporting only there too, so an agent that answered every question badly still exits 0. Moving to `wrap_simulation_agent()` costs you that infrastructure gate, because the parameter belongs to `simulate()` and there is no equivalent on `evaluatorq()`.
+
+`evaluatorq()` does not fail the process for you either — it returns results and exits 0 whatever the scores are. So on this path the whole build verdict is yours to write, and it is a few lines:
 
 ```python
 from evaluatorq import EvaluationResult

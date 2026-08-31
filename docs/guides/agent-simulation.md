@@ -157,6 +157,12 @@ client always wins). See [Configuration](../configuration.md).
     `ORQ_API_KEY` is available, results upload to Orq by default; pass
     `upload_results=False` for a local-only run.
 
+    `exit_on_failure` gates on dropped datapoints, not on scores, so it will not
+    fail a build for an agent that simply answered badly. For a gate on the
+    scores themselves — turning evaluator results into an exit code, with the
+    env vars and workflow step to go with it — see
+    [In an evaluatorq Run › In CI](simulation-in-evaluatorq.md#in-ci).
+
 ## Seed by archetype
 
 The middle ground between "just give me five" and specifying every trait: name
