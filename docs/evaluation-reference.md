@@ -6,6 +6,7 @@ have not run an evaluation yet, start with
 
 ## `evaluatorq()`
 
+<!-- check-examples: skip (signature display, not a module) -->
 ```python
 async def evaluatorq(
     name: str,

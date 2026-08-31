@@ -143,6 +143,7 @@ response is missing or blank fails loudly rather than being silently skipped.
 
 ### `deployment()`
 
+<!-- check-examples: skip (signature display, not a module) -->
 ```python
 async def deployment(
     key: str,

@@ -49,6 +49,7 @@ class Vulnerability(StrEnum):
 
 In `vulnerability_registry.py`, add an entry to `VULNERABILITY_DEFS`:
 
+<!-- check-examples: skip (registry entry, not a module) -->
 ```python
 Vulnerability.MY_CUSTOM_VULN: VulnerabilityDef(
     id=Vulnerability.MY_CUSTOM_VULN,
@@ -206,6 +207,7 @@ Create a strategy file (e.g., `frameworks/my_framework.py`) with a
 import time, so merge into the private `_strategy_registry` dict **before** it
 is wrapped — you cannot mutate the exported registries from outside the module:
 
+<!-- check-examples: skip (imports a module the reader creates) -->
 ```python
 from evaluatorq.redteam.frameworks.my_framework import MY_STRATEGIES
 
@@ -276,6 +278,7 @@ Frameworks are a reporting/compliance layer on top of vulnerabilities. Adding a 
 
 Update existing vulnerability definitions in `vulnerability_registry.py`:
 
+<!-- check-examples: skip (registry entry, not a module) -->
 ```python
 Vulnerability.PROMPT_INJECTION: VulnerabilityDef(
     id=Vulnerability.PROMPT_INJECTION,
@@ -293,6 +296,7 @@ The inverted indexes (`CATEGORY_TO_VULNERABILITY`, `FRAMEWORK_TO_VULNERABILITIES
 
 ## End-to-end example: adding a "bias detection" vulnerability
 
+<!-- check-examples: skip (three snippets from three files) -->
 ```python
 # 1. contracts.py — add enum
 class Vulnerability(StrEnum):
