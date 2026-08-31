@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -74,3 +75,45 @@ class TestExtractContentFromResponse:
             )
         )
         assert _extract_content_from_response(completion) == "one\ntwo"
+
+
+class TestTraceContextPropagation:
+    """`deployment()` sends W3C trace context so the deployment's server-side
+    execution nests under the calling span, unless the env toggle disables it."""
+
+    @staticmethod
+    def _client_with_invoke() -> tuple[MagicMock, AsyncMock]:
+
+        completion = _completion_with_message(SimpleNamespace(type="content", content="hi"))
+        invoke = AsyncMock(return_value=completion)
+        client = MagicMock(deployments=MagicMock(invoke_async=invoke))
+        return client, invoke
+
+    @pytest.mark.asyncio
+    async def test_trace_headers_forwarded_as_http_headers(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from evaluatorq.deployment import deployment
+
+        client, invoke = self._client_with_invoke()
+        with (
+            patch("evaluatorq.deployment._get_or_create_client", return_value=client),
+            patch(
+                "evaluatorq.deployment.get_trace_context_headers",
+                AsyncMock(return_value={"traceparent": "00-abc-def-01"}),
+            ),
+        ):
+            await deployment("some-key")
+
+        assert invoke.await_args is not None
+        assert invoke.await_args.kwargs["http_headers"] == {"traceparent": "00-abc-def-01"}
+
+    @pytest.mark.asyncio
+    async def test_no_headers_sent_when_propagation_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from evaluatorq.deployment import deployment
+
+        monkeypatch.setenv("EVALUATORQ_PROPAGATE_TRACE_CONTEXT", "false")
+        client, invoke = self._client_with_invoke()
+        with patch("evaluatorq.deployment._get_or_create_client", return_value=client):
+            await deployment("some-key")
+
+        assert invoke.await_args is not None
+        assert invoke.await_args.kwargs["http_headers"] is None

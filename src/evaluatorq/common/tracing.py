@@ -610,12 +610,32 @@ def current_otel_context() -> Any | None:
     return otel_context.get_current()
 
 
+def propagate_trace_context() -> bool:
+    """Whether outgoing requests carry W3C trace context headers.
+
+    Controlled by the ``EVALUATORQ_PROPAGATE_TRACE_CONTEXT`` env var.
+
+    **Defaults to True** so a provider that runs its own tracing (the Orq
+    router, the agents endpoint) nests its server-side spans under the calling
+    span instead of starting a loose root trace. Set it to ``"false"`` / ``"0"``
+    when the receiving side should trace independently, or when a gateway
+    rejects an unexpected ``traceparent`` header.
+    """
+    flag = os.environ.get('EVALUATORQ_PROPAGATE_TRACE_CONTEXT')
+    if flag is None:
+        return True
+    return flag.lower() == 'true' or flag == '1'
+
+
 async def get_trace_context_headers() -> dict[str, str]:  # noqa: RUF029
     """Return W3C trace context headers for the current active span.
 
-    Empty dict when OTel is not available. Used to propagate trace context
-    into outgoing HTTP requests.
+    Empty dict when OTel is unavailable, or when
+    ``EVALUATORQ_PROPAGATE_TRACE_CONTEXT`` disables propagation. Used to
+    propagate trace context into outgoing HTTP requests.
     """
+    if not propagate_trace_context():
+        return {}
     try:
         from opentelemetry import context, propagate
     except ImportError:

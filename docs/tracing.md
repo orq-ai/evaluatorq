@@ -461,6 +461,8 @@ inject(headers)          # writes `traceparent` (+ `tracestate`) for the active 
 # pass `headers` into your outgoing request, e.g. httpx.get(url, headers=headers)
 ```
 
+evaluatorq itself injects these headers on every call it makes to a provider — chat completions, Responses, the Orq agent target and the Orq deployment target — so a provider that runs its own tracing nests its server-side spans under the calling span instead of starting a loose root trace. Set **`EVALUATORQ_PROPAGATE_TRACE_CONTEXT`** to `false` or `0` to switch that off — outgoing requests then carry no `traceparent`, and the receiving side traces independently. The toggle covers evaluatorq's own calls; it does not affect your own `inject()` calls.
+
 `inject()` is a no-op when no span is active, so it is safe to call whenever OpenTelemetry is installed. (The `from opentelemetry.propagate import inject` import itself requires OTel; if you need code that also runs without it installed, use the internal helper below, which degrades to an empty dict.)
 
 !!! note "Internal convenience helper"

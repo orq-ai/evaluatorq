@@ -855,3 +855,16 @@ def test_record_llm_response_survives_unusable_token_counts(bad: float) -> None:
     set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
     assert set_attrs['gen_ai.usage.input_tokens'] == 0
     assert set_attrs['gen_ai.usage.output_tokens'] == 2
+
+
+@pytest.mark.asyncio
+async def test_get_trace_context_headers_respects_propagation_toggle(monkeypatch):
+    """EVALUATORQ_PROPAGATE_TRACE_CONTEXT=false disables W3C header injection."""
+    from evaluatorq.common.tracing import get_trace_context_headers
+
+    monkeypatch.setenv('EVALUATORQ_PROPAGATE_TRACE_CONTEXT', 'false')
+    assert await get_trace_context_headers() == {}
+
+    monkeypatch.setenv('EVALUATORQ_PROPAGATE_TRACE_CONTEXT', 'true')
+    with patch('opentelemetry.propagate.inject', side_effect=lambda h, context=None: h.update({'traceparent': 'tp'})):
+        assert await get_trace_context_headers() == {'traceparent': 'tp'}
