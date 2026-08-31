@@ -241,6 +241,9 @@ The registry is **in-memory and process-local** — it is not persisted and ther
 
 ## Adding a new framework
 
+!!! warning "Custom category codes fail at report time, after the run is billed"
+    `infer_framework` derives the framework from the category code's prefix, and today it only recognizes `ASI*` and `LLM*`. A custom framework whose category codes use a different prefix, like `RAI01` or `MAP-1.1` below, runs and scores every attack and then fails when the bundled report is assembled, so the run is fully executed and billed before the failure surfaces. Until that is lifted, map your custom vulnerability onto an existing `ASI*` or `LLM*` code. There is no post-run recovery once a run fails at report assembly: the results are not reachable, and the only way forward is to repeat the run with a mapped code. Tracked in RES-1479.
+
 Frameworks are a reporting/compliance layer on top of vulnerabilities. Adding a framework means:
 
 1. Mapping existing vulnerabilities to your framework's categories via `framework_mappings` in `VulnerabilityDef`
@@ -360,5 +363,6 @@ report = await red_team(
 ## Where to next
 
 - **[Red Teaming](guides/red-teaming.md)** — the red-team workflow these evaluators and frameworks plug into.
+- **[Vulnerabilities & Frameworks](guides/vulnerabilities-and-frameworks.md)** — what the vulnerability/framework mapping is and how to read it off a report.
 - **[LLM as a Jury](llm-as-a-jury.md)** — multi-judge panels for more reliable verdicts.
 - **[CLI Reference](cli-reference/redteam.md)** — run `eq redteam` from the terminal.
