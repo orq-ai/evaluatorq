@@ -12,7 +12,7 @@ from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry, default_map_error
 from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pipeline
 from evaluatorq.common.tracing import record_llm_input, record_llm_output, set_span_attrs
-from evaluatorq.contracts import ResponseTrace, TokenUsage, content_to_text, render_tool_call
+from evaluatorq.contracts import AgentTarget, ResponseTrace, TokenUsage, content_to_text, render_tool_call
 from evaluatorq.integrations.callable_integration import CallableTarget
 from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
 from evaluatorq.simulation.agents.user_simulator import (
@@ -46,7 +46,7 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
     from opentelemetry.trace import Span
 
-    from evaluatorq.contracts import AgentResponse, AgentTarget
+    from evaluatorq.contracts import AgentResponse
     from evaluatorq.integrations.callable_integration.target import AgentCallable
     from evaluatorq.simulation.agents.base import BaseAgent
     from evaluatorq.simulation.hooks import SimulationHooks
@@ -646,6 +646,24 @@ class SimulationRunner:
             )
         if judge is not None and not _implements(judge, _JUDGE_METHODS):
             raise TypeError('judge must implement evaluate(). Use JudgeAgent or a subclass.')
+
+        # An AgentTarget handed to `target=` used to be wrapped in CallableTarget,
+        # which raised TypeError ('not callable') on every turn; the retry helper
+        # swallowed it into a synthetic [ERROR: ...] response, so the run finished
+        # with no target span, no HTTP call and terminated_by=error. Route it.
+        if target is not None and isinstance(target, AgentTarget):
+            if target_agent is not None and target_agent is not target:
+                logger.warning(
+                    'Both target_agent and an AgentTarget target= were supplied; '
+                    'target_agent wins and the target= agent is ignored.'
+                )
+            else:
+                logger.warning(
+                    'An AgentTarget was passed as target=; routing it to target_agent. '
+                    'Pass it as target_agent= to silence this.'
+                )
+            target_agent = target_agent or target
+            target = None
 
         self._target_agent = target_agent
         self._target = target

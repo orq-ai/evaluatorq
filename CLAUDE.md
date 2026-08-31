@@ -221,6 +221,7 @@ These tests use fakes and do not require API credentials. The repository does no
 - `OPENAI_API_KEY` — for direct OpenAI backend or pipeline LLM calls
 - `ORQ_WORKSPACE` (or `ORQ_WORKSPACE_SLUG`) — workspace slug for dashboard→Orq trace deep-links; buttons hidden when unset
 - `ORQ_UI_BASE_URL` — optional Orq UI base for deep-links (defaults to `ORQ_BASE_URL` or `https://my.orq.ai`)
+- `EVALUATORQ_PROPAGATE_TRACE_CONTEXT` — `false`/`0` stops W3C `traceparent` injection on outgoing LLM/target calls (default on)
 - `EVALUATORQ_APPLY_MODEL` — model for the dashboard's apply-recommendations merge (default `openai/gpt-5.6-luna`, the shared `DEFAULT_PIPELINE_MODEL`)
 
 ### Code Style

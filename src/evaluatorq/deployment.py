@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from loguru import logger
 
 from evaluatorq.common.orq_client import resolve_orq_client
+from evaluatorq.common.tracing import get_trace_context_headers
 from evaluatorq.contracts import TokenUsage
 
 __all__ = [
@@ -135,6 +136,11 @@ async def deployment(
             tags=thread.get('tags'),
         )
 
+    # Propagate W3C trace context so the deployment's server-side execution nests
+    # under the calling span instead of starting a loose root trace. Empty (and so
+    # omitted) when no span is active or EVALUATORQ_PROPAGATE_TRACE_CONTEXT is off.
+    trace_headers = await get_trace_context_headers()
+
     # The SDK accepts list of message dicts directly
     # Cast to Any because the SDK's type hints are stricter than the actual runtime behavior
     completion = await client.deployments.invoke_async(
@@ -144,6 +150,7 @@ async def deployment(
         metadata=metadata,
         thread=sdk_thread,
         messages=cast('Any', messages),
+        http_headers=trace_headers or None,
     )
 
     # Extract content from the response

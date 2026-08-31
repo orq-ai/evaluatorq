@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from evaluatorq.deployment import _extract_content_from_response
+
+# `evaluatorq/__init__.py` re-exports the `deployment` function under the name of
+# its own module, so `patch("evaluatorq.deployment.<attr>")` resolves to the
+# function and fails. Grab the module out of sys.modules instead.
+deployment_module = sys.modules["evaluatorq.deployment"]
 
 
 def _completion_with_message(message: object) -> object:
@@ -74,3 +81,46 @@ class TestExtractContentFromResponse:
             )
         )
         assert _extract_content_from_response(completion) == "one\ntwo"
+
+
+class TestTraceContextPropagation:
+    """`deployment()` sends W3C trace context so the deployment's server-side
+    execution nests under the calling span, unless the env toggle disables it."""
+
+    @staticmethod
+    def _client_with_invoke() -> tuple[MagicMock, AsyncMock]:
+
+        completion = _completion_with_message(SimpleNamespace(type="content", content="hi"))
+        invoke = AsyncMock(return_value=completion)
+        client = MagicMock(deployments=MagicMock(invoke_async=invoke))
+        return client, invoke
+
+    @pytest.mark.asyncio
+    async def test_trace_headers_forwarded_as_http_headers(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from evaluatorq.deployment import deployment
+
+        client, invoke = self._client_with_invoke()
+        with (
+            patch.object(deployment_module, "_get_or_create_client", return_value=client),
+            patch.object(
+                deployment_module,
+                "get_trace_context_headers",
+                AsyncMock(return_value={"traceparent": "00-abc-def-01"}),
+            ),
+        ):
+            await deployment("some-key")
+
+        assert invoke.await_args is not None
+        assert invoke.await_args.kwargs["http_headers"] == {"traceparent": "00-abc-def-01"}
+
+    @pytest.mark.asyncio
+    async def test_no_headers_sent_when_propagation_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from evaluatorq.deployment import deployment
+
+        monkeypatch.setenv("EVALUATORQ_PROPAGATE_TRACE_CONTEXT", "false")
+        client, invoke = self._client_with_invoke()
+        with patch.object(deployment_module, "_get_or_create_client", return_value=client):
+            await deployment("some-key")
+
+        assert invoke.await_args is not None
+        assert invoke.await_args.kwargs["http_headers"] is None
