@@ -231,10 +231,10 @@
 | src/evaluatorq/table\_display.py                                         |      148 |       89 |     40% |31, 36-76, 100, 106, 147, 158, 175-209, 214-232, 242-280 |
 | src/evaluatorq/tracing/\_\_init\_\_.py                                   |        4 |        0 |    100% |           |
 | src/evaluatorq/tracing/context.py                                        |       34 |        2 |     94% |     50-51 |
-| src/evaluatorq/tracing/setup.py                                          |      136 |       39 |     71% |103-113, 134-137, 142, 171, 177-183, 191-201, 235-243, 292-293, 314 |
+| src/evaluatorq/tracing/setup.py                                          |      146 |       39 |     73% |113-123, 144-147, 152, 181, 187-193, 201-211, 252-260, 325-326, 347 |
 | src/evaluatorq/tracing/spans.py                                          |       84 |        1 |     99% |       130 |
 | src/evaluatorq/types.py                                                  |       86 |        2 |     98% |   32, 274 |
-| **TOTAL**                                                                | **27358** | **4196** | **85%** |           |
+| **TOTAL**                                                                | **27368** | **4196** | **85%** |           |
 
 
 ## Setup coverage badge
