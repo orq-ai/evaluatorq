@@ -110,8 +110,9 @@ def record_openresponses_response(span: Span | None, response: Any) -> None:
         # once each. This is a best-effort diagnostic dump — silence the spam.
         payload = response.model_dump(mode='json', warnings=False) if hasattr(response, 'model_dump') else response
     except Exception as exc:
-        logger.debug(
-            'record_openresponses_response: model_dump failed ({}); falling back to repr',
+        logger.warning(
+            'record_openresponses_response: model_dump failed ({}); falling back to repr, so this span '
+            'gets no openresponses.output and no gen_ai.output.messages',
             exc,
         )
         # Wrap in a dict so json.dumps produces {"repr": "..."} rather than

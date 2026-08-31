@@ -15,6 +15,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from loguru import logger
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
 
@@ -751,6 +752,34 @@ def test_record_openresponses_response_respects_capture_gate(monkeypatch: pytest
     record_openresponses_response(span, _Resp())
     set_attr_keys = {call.args[0] for call in span.set_attribute.call_args_list}
     assert 'orq.openresponses.response' not in set_attr_keys
+
+
+def test_record_openresponses_response_warns_when_model_dump_fails() -> None:
+    """The repr fallback carries no output items, so it warns and skips those attrs."""
+    from unittest.mock import MagicMock
+    from evaluatorq.openresponses.tracing import record_openresponses_response
+
+    class _Resp:
+        id = 'r'
+        model = 'm'
+        usage = None
+        output = []
+        status = 'completed'
+
+        def model_dump(self, *, mode: str = 'json', **_: Any) -> dict[str, Any]:
+            raise RuntimeError('boom')
+
+    span = MagicMock()
+    records: list[str] = []
+    handler_id = logger.add(lambda message: records.append(message.record['message']), level='WARNING')
+    try:
+        record_openresponses_response(span, _Resp())
+    finally:
+        logger.remove(handler_id)
+
+    set_attr_keys = {call.args[0] for call in span.set_attribute.call_args_list}
+    assert 'openresponses.output' not in set_attr_keys
+    assert any('falling back to repr' in record for record in records)
 
 
 # ---------------------------------------------------------------------------
