@@ -96,31 +96,33 @@ async def main() -> None:
     for row in results:
         for job_result in row.job_results or []:
             metadata = job_result.output.get("metadata", {})
-            print("turns:", metadata.get("turn_count"))
-            print("goal achieved:", metadata.get("goal_achieved"))
+            print("metadata keys:", sorted(metadata))
             print("criteria:", metadata.get("criteria_results"))
 
 
 asyncio.run(main())
 ```
 
-It prints the standard evaluatorq results table — one row, the `criteria` evaluator scoring `1.00` — and then the three lines the script asks for:
+It prints the standard evaluatorq results table, then the two lines the script asks for:
 
 ```console
 $ uv run python sim_in_eval.py
-turns: 3
-goal achieved: False
+metadata keys: ['criteria_results', 'framework', 'goal_achieved', 'goal_completion_score', 'reason', 'rules_broken', 'terminated_by', 'turn_count', 'turn_metrics']
 criteria: {'Agent asks for order details': True, 'Agent blames the customer': True}
 ```
 
+Those keys are the contract, and the next section is a reference for them. The values behind two of them — `turn_count` and `goal_achieved` — are not printed here on purpose: the user simulator and the judge are both model calls, so how many turns the conversation takes and whether the judge calls the goal met genuinely vary between runs of this same script. Assert against the shape of `metadata`, never against a particular turn count.
+
 ## `goal_achieved` and `criteria_results` are different questions
 
-The run above satisfied both criteria and still reported `goal_achieved: False`, which looks like a contradiction and is not one. They are answers to two different questions:
+`goal_achieved` and `criteria_results` answer different questions, and they can disagree in either direction. That surprises people, so it is worth being precise about which is which:
 
 - `criteria_results` is the judge's per-criterion audit: for each `Criterion` on the scenario, did the thing it names occur, and does that occurrence mean pass or fail for its type? A `must_not_happen` criterion is `True` when the bad thing did **not** occur.
-- `goal_achieved` is the judge's verdict on the scenario's `goal` as a whole — here, whether the customer actually got their refund inside the turn budget.
+- `goal_achieved` is the judge's verdict on the scenario's `goal` as a whole — here, whether the customer actually got their refund.
 
-An agent can tick every box you thought to write down and still not finish the job. Score whichever one matches what you are asking; scoring both, as separate evaluators, is usually what you want.
+The common disagreement is every criterion passing while `goal_achieved` is `False`, and the usual cause is the turn budget: a conversation that hits `max_turns` before the agent finishes the job stops with `terminated_by: max_turns`, and the goal is unmet even though the agent did every individual thing you thought to write down. Raising `max_turns` is the fix when the agent was on track; it is not the fix when the agent was stuck.
+
+Score whichever one matches the question you are asking. Scoring both, as two separate evaluators, is usually what you want — a criteria score tells you which behaviour is missing, and the goal score tells you whether that mattered.
 
 ## What the job returns
 
@@ -232,12 +234,19 @@ def gate(scores: list[float], threshold: float) -> int:
     return 0 if sum(scores) / len(scores) >= threshold else 1
 
 
-def scores_from(results) -> list[float]:
-    """Pull every numeric evaluator score out of an EvaluatorqResult."""
+def scores_from(results, evaluator: str | None = None) -> list[float]:
+    """Pull numeric evaluator scores out of an EvaluatorqResult.
+
+    Pass `evaluator` to gate on one evaluator by name rather than on the mean of
+    all of them. The name is `score.evaluator_name`, matching the `name` you gave
+    the evaluator in the `evaluatorq()` call.
+    """
     values = []
     for row in results:
         for job_result in row.job_results or []:
             for score in job_result.evaluator_scores or []:
+                if evaluator is not None and score.evaluator_name != evaluator:
+                    continue
                 result = score.score
                 value = result.value if isinstance(result, EvaluationResult) else result
                 if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -251,6 +260,10 @@ print("clears bar ->", gate([1.0, 0.8], 0.8))
 ```
 
 An empty score list returns 1 on purpose. A run where nothing was scored is a broken pipeline, and the one thing it must not do is look like a pass.
+
+This threshold-on-mean-score gate suits an evaluator like `criteria_scorer` above, which returns partial credit rather than a bit. If your evaluators set `pass_` on their `EvaluationResult` instead, [`check_pass_failures`](../evaluation-reference.md#passfail-and-ci) covers the binary case in one call — import it as `from evaluatorq.evaluatorq import check_pass_failures`, which is the path that page uses, because it is not re-exported from the top-level package.
+
+Pass it `treat_errors_as_failure=True` if you use it. Its default is `False`, and on that default an errored job contributes no evaluator scores and an errored evaluator leaves `pass_` unset, so a run where every judge call raised reports no failures and the build goes green. That is the same trap the empty-list case above returns 1 for.
 
 Then `raise SystemExit(gate(scores_from(results), 0.8))` at the end of your script, and the workflow step fails when the agent regresses.
 
@@ -272,7 +285,9 @@ INFO  Results sent to Orq: support-simulation (1 rows created)
 INFO  View your evaluation at: https://my.orq.ai/<workspace>/experiments/<experiment_id>?runId=<run_id>
 ```
 
-Which workspace that is depends on `ORQ_API_KEY` alone. `ORQ_WORKSPACE` does not route anything — it is a display setting the dashboard reads to build trace deep-links. If you are iterating on personas and do not want a row per attempt in a shared workspace, run against a key for a workspace you keep for that, or use `simulate()` with `upload_results=False` until the cases settle and only then wire them into `evaluatorq()`.
+Which workspace that is depends on `ORQ_API_KEY` alone. `ORQ_WORKSPACE` does not route anything — it is a display setting the dashboard reads to build trace deep-links.
+
+If you are iterating on personas and do not want a row per attempt in a shared workspace, the reliable answer is a key for a workspace you keep for that. The narrower answer is `simulate()` with `upload_results=False`, which suppresses the Experiment upload specifically — it is not an offline mode, and it does not stop the model-catalogue pricing lookup, so a run with that flag set still reaches Orq. There is no equivalent switch on the CLI: `eq sim run` and `eq sim simulate` upload whenever `ORQ_API_KEY` is set, so the Python path is the only one with the control.
 
 Every conversation also emits OTel spans under `orq.job`, `orq.simulation.run` and `orq.simulation.turn`, so a run is inspectable turn by turn in the trace UI. Set `ORQ_DISABLE_TRACING=1` to turn that off.
 
