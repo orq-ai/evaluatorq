@@ -270,12 +270,27 @@ Pass it `treat_errors_as_failure=True` if you use it. Its default is `False`, an
 Then `raise SystemExit(gate(scores_from(results), 0.8))` at the end of your script, and the workflow step fails when the agent regresses.
 
 ```yaml
-- name: Simulate the support agent
-  env:
-    ORQ_API_KEY: ${{ secrets.ORQ_API_KEY }}
-    EVALUATORQ_DIR: ${{ runner.temp }}/evaluatorq
-  run: uv run python sim_in_eval.py
+name: Support agent simulation
+
+on: pull_request
+
+jobs:
+  simulate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install
+        run: uv add "evaluatorq[simulation]"
+      - name: Simulate the support agent
+        env:
+          ORQ_API_KEY: ${{ secrets.ORQ_API_KEY }}
+          EVALUATORQ_DIR: ${{ runner.temp }}/evaluatorq
+          ORQ_DISABLE_TRACING: "1"
+        run: uv run python sim_in_eval.py
 ```
+
+`ORQ_API_KEY` decides which workspace every PR's run uploads into, so point the secret at a workspace you are willing to fill with one Experiment per pull request — see [What gets uploaded](#what-gets-uploaded).
 
 ## What gets uploaded
 
@@ -289,7 +304,13 @@ INFO  View your evaluation at: https://my.orq.ai/<workspace>/experiments/<experi
 
 Which workspace that is depends on `ORQ_API_KEY` alone. `ORQ_WORKSPACE` does not route anything — it is a display setting the dashboard reads to build trace deep-links.
 
-If you are iterating on personas and do not want a row per attempt in a shared workspace, the reliable answer is a key for a workspace you keep for that. The narrower answer is `simulate()` with `upload_results=False`, which suppresses the Experiment upload specifically — it is not an offline mode, and it does not stop the model-catalogue pricing lookup, so a run with that flag set still reaches Orq. There is no equivalent switch on the CLI: `eq sim run` and `eq sim simulate` upload whenever `ORQ_API_KEY` is set, so the Python path is the only one with the control.
+!!! warning "On this path there is no flag that turns the upload off"
+
+    `evaluatorq()` has no `upload_results` parameter. Every run of the script above, with `ORQ_API_KEY` set, adds a row to a table your whole team can see, and there is no argument you can pass to stop it. Iterating on a persona twenty times means twenty Experiments in that workspace.
+
+    `upload_results=False` belongs to `simulate()` and `generate_and_simulate()`, which are a different entry point — reaching for it here does nothing, because there is no such parameter to pass. Even on those calls it only suppresses the Experiment upload: it is not an offline mode, and it does not stop the model-catalogue pricing lookup, so a run with the flag set still reaches Orq.
+
+    So on this path the only real control is which workspace the key belongs to. If you are iterating rather than publishing a result, point `ORQ_API_KEY` at a workspace you keep for that, and move to the shared one when the cases have settled. Deleting a stray Experiment is a manual job in the Orq UI; neither the SDK nor the CLI exposes a delete.
 
 Every conversation also emits OTel spans under `orq.job`, `orq.simulation.run` and `orq.simulation.turn`, so a run is inspectable turn by turn in the trace UI. Set `ORQ_DISABLE_TRACING=1` to turn that off.
 
