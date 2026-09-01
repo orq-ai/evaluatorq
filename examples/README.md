@@ -26,8 +26,7 @@ examples/lib/
 │   └── langchain/                   # LangChain / LangGraph
 │       ├── langchain_integration_example.py   # Basic LangChain agent eval
 │       ├── langgraph_integration_example.py   # Basic LangGraph agent eval
-│       ├── langgraph_research_eval.py         # Research agent with dynamic instructions
-│       └── langgraph_dataset_eval.py          # Dataset-based LangGraph eval
+│       └── langgraph_research_eval.py         # Research agent with dynamic instructions
 ├── cli/                             # CLI integration examples
 │   ├── example_using_cli.py
 │   ├── example_using_cli_two.py
@@ -52,7 +51,6 @@ uv run examples/lib/structured/structured_rubric_eval.py
 
 # Integrations (requires OPENAI_API_KEY)
 ORQ_API_KEY=... OPENAI_API_KEY=... uv run examples/lib/integrations/langchain/langgraph_research_eval.py
-ORQ_API_KEY=... OPENAI_API_KEY=... DATASET_ID=... uv run examples/lib/integrations/langchain/langgraph_dataset_eval.py
 
 # CLI
 uv run examples/lib/cli/example_using_cli.py
