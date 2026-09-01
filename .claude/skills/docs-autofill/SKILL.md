@@ -73,7 +73,7 @@ Branch: `docs/autofill-<short-gap-slug>`.
 
 Scope: one page, or one section on an existing page. Not two. If the gap is genuinely too large for one page, write the page that covers the most common half and say in the PR body what you deliberately left out.
 
-**Read the `docs-writing` skill before you draft.** It holds the reader, the three page genres and their shapes, the voice, and the four things every page carries. This routine writes unattended, so a page drafted without it is a page nobody read for voice before it shipped.
+**Invoke the `docs-writing` skill and follow it — that skill does the writing, this step only scopes it.** Call it with the `Skill` tool (`skill: docs-writing`) before you draft a word; it holds the reader, the three page genres and their shapes, the voice, the four things every page carries, and the reviewer loop that gates a draft. Its instructions win over any writing habit you would otherwise fall back on. This routine writes unattended, so a page drafted without it is a page nobody read for voice before it shipped.
 
 Rules that are not negotiable:
 
