@@ -44,7 +44,7 @@ Every page, all three genres, no exceptions.
 
 ## Voice
 
-House voice is already on the page in `guides/targets.md`, `tuning.md` and `guides/getting-started.md`. Read one before drafting. What follows is what those pages do, stated as rules.
+House voice is already on the page in `guides/targets.md`, `tuning.md`, `index.md` and `guides/getting-started.md`. Read one before drafting. What follows is what those pages do, stated as rules.
 
 **Define, then qualify.** State the thing flatly, then add the caveat as its own sentence. Not one sentence carrying both.
 

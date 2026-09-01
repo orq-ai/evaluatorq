@@ -12,7 +12,7 @@ class EvaluationResultCell(BaseModel):
 
 `type` is free-form and uninterpreted — nothing in evaluatorq branches on it. It travels with the result so you can tell cells apart when you read them back.
 
-A sub-score is `str | int | float`, or a `dict` — and that dict's values may themselves be dicts of scalars. **Not `bool`, and not a list.** A list raises a validation error, and `True` is silently coerced to `1` — build a per-category pass map out of booleans and you get integers back with nothing to tell you why. Two more edges of the same kind: an `int` below the top level comes back as a `float` (`{"a": {"b": 2}}` reads back `{"a": {"b": 2.0}}`), and nesting a dict deeper than that raises.
+A sub-score is `str | int | float`, or a `dict` — and that dict's values may themselves be dicts of scalars. **Not `bool`, and not a list.** A list raises a validation error, and `True` is silently coerced to `1` — build a per-category pass map out of booleans and you get integers back with nothing to tell you why. Two more edges of the same kind: an `int` below the top level comes back as a `float` (`{"a": {"b": 2}}` reads back `{"a": {"b": 2.0}}`), and one dict layer beyond that raises — `{"a": {"b": {"c": 2}}}` is accepted, `{"a": {"b": {"c": {"d": 2}}}}` is not.
 
 ## A complete evaluation
 
