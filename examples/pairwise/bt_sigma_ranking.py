@@ -18,7 +18,7 @@ defaults). Needs ORQ_API_KEY.
 Usage:
 
 ```bash
-python examples/pairwise/bt_sigma_ranking.py [STRONG WEAK_1 WEAK_2]
+uv run python examples/pairwise/bt_sigma_ranking.py [STRONG WEAK_1 WEAK_2]
 ```
 """
 

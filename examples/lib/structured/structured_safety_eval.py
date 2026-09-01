@@ -5,7 +5,7 @@ Demonstrates returning structured EvaluationResultCell values
 with per-category safety severity scores and pass/fail tracking.
 
 Usage:
-    python examples/structured_safety_eval.py
+    uv run python examples/lib/structured/structured_safety_eval.py
 """
 
 import asyncio

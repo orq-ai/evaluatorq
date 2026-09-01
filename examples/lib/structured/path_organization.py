@@ -17,7 +17,7 @@ Prerequisites:
   - Set ORQ_API_KEY environment variable
 
 Usage:
-  ORQ_API_KEY=your-key python examples/path_organization.py
+  ORQ_API_KEY=your-key uv run python examples/lib/structured/path_organization.py
 """
 
 import asyncio

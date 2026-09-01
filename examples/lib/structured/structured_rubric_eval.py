@@ -5,7 +5,7 @@ Demonstrates returning structured EvaluationResultCell values with
 multiple sub-scores per evaluator.
 
 Usage:
-    python examples/structured_rubric_eval.py
+    uv run python examples/lib/structured/structured_rubric_eval.py
 """
 
 import asyncio

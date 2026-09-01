@@ -73,6 +73,8 @@ Branch: `docs/autofill-<short-gap-slug>`.
 
 Scope: one page, or one section on an existing page. Not two. If the gap is genuinely too large for one page, write the page that covers the most common half and say in the PR body what you deliberately left out.
 
+**Read the `docs-writing` skill before you draft.** It holds the reader, the three page genres and their shapes, the voice, and the four things every page carries. This routine writes unattended, so a page drafted without it is a page nobody read for voice before it shipped.
+
 Rules that are not negotiable:
 
 - **A new page goes in `mkdocs.yml` twice** — under `nav:` and under `plugins.llmstxt.sections`. The build fails on the mismatch, but fix it at write time rather than discovering it in step 5.
