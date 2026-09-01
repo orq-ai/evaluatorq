@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING
-
-from loguru import logger
 
 from evaluatorq.common.retry import without_client_retries
 from evaluatorq.redteam.backends._retry import warn_ignored_target_retries
@@ -51,9 +48,6 @@ def create_async_llm_client(
     retry-owning boundaries by cloning injected clients with ``max_retries=0``.
     """
     from evaluatorq.common.llm_client import MissingLLMCredentialsError, resolve_llm_client
-
-    if os.getenv('ROUTER_BASE_URL') and not os.getenv('ORQ_BASE_URL'):
-        logger.warning('ROUTER_BASE_URL is no longer supported; rename it to ORQ_BASE_URL')
 
     config_client = role_config.client if role_config is not None else None
     try:

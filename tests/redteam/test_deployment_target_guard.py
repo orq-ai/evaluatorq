@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from evaluatorq.redteam.contracts import Pipeline, SaveMode
-from evaluatorq.redteam.runner import _reject_deployment_targets, red_team
+from evaluatorq.redteam.contracts import SUPPORTED_TARGET_KINDS, Pipeline, SaveMode, TargetKind
+from evaluatorq.redteam.runner import _reject_unsupported_targets, red_team
 
 STATIC = f'mode="{Pipeline.STATIC.value}"'
 
@@ -64,7 +64,7 @@ async def test_refusal_precedes_the_credential_check(monkeypatch: pytest.MonkeyP
 async def test_static_pipeline_still_accepts_a_deployment() -> None:
     """The mode gate lives at the call site, so nothing else pins it.
 
-    Without this, hoisting the gate into ``_reject_deployment_targets`` would kill
+    Without this, hoisting the gate into ``_reject_unsupported_targets`` would kill
     the only supported way to red-team a deployment with every test still green.
     The static leg is replaced by a sentinel: reaching it is the assertion, and
     running it would need a live dataset and a live deployment.
@@ -80,18 +80,34 @@ async def test_static_pipeline_still_accepts_a_deployment() -> None:
 
 @pytest.mark.parametrize('mode', [Pipeline.DYNAMIC, Pipeline.HYBRID])
 def test_guard_allows_agent_targets(mode: Pipeline) -> None:
-    _reject_deployment_targets(['agent:my-agent'], mode)
+    _reject_unsupported_targets(['agent:my-agent'], mode)
 
 
 def test_guard_names_the_offending_target_among_several() -> None:
     with pytest.raises(ValueError, match='deployment:second'):
-        _reject_deployment_targets(['agent:first', 'deployment:second'], Pipeline.DYNAMIC)
+        _reject_unsupported_targets(['agent:first', 'deployment:second'], Pipeline.DYNAMIC)
 
 
 def test_remedy_names_a_parameter_red_team_actually_takes() -> None:
     """The message is the deliverable, so the keyword it quotes must exist."""
     with pytest.raises(ValueError) as exc:
-        _reject_deployment_targets(['deployment:x'], Pipeline.DYNAMIC)
+        _reject_unsupported_targets(['deployment:x'], Pipeline.DYNAMIC)
 
     assert 'mode=' in str(exc.value)
     assert 'mode' in inspect.signature(red_team).parameters
+
+
+def test_every_pipeline_declares_its_target_kinds() -> None:
+    """The table is the policy; a new pipeline must not default into anything."""
+    assert set(Pipeline) == set(SUPPORTED_TARGET_KINDS)
+    assert TargetKind.DEPLOYMENT in SUPPORTED_TARGET_KINDS[Pipeline.STATIC]
+    for adaptive in (Pipeline.DYNAMIC, Pipeline.HYBRID):
+        assert SUPPORTED_TARGET_KINDS[adaptive] == frozenset({TargetKind.AGENT})
+
+
+def test_refusal_names_the_pipeline_that_does_accept_the_kind() -> None:
+    """The remedy is read off the table, not hand-written next to it."""
+    with pytest.raises(ValueError) as exc:
+        _reject_unsupported_targets(['deployment:x'], Pipeline.HYBRID)
+
+    assert f'mode="{Pipeline.STATIC.value}"' in str(exc.value)

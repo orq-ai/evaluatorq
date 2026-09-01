@@ -283,6 +283,29 @@ class Pipeline(StrEnum):
     HYBRID = 'hybrid'
 
 
+# Which string target kinds each pipeline can drive end to end.
+#
+# Static replays one prompt per row, so it can invoke a deployment. The adaptive
+# pipelines hold a conversation, which needs an ``AgentTarget``, and none speaks
+# the deployments API yet (tracked as RES-1494) — hybrid included, because its
+# dynamic half has the same requirement as dynamic.
+#
+# This table is the single source of that policy: the runner refuses from it and
+# the error message reads from it, so a new pipeline cannot be added without
+# declaring what it accepts. ``DIRECT`` and ``OPENAI`` never appear because
+# ``parse_target`` rejects both before a kind reaches here — an ``AgentTarget``
+# object arrives as an object, not as a string.
+SUPPORTED_TARGET_KINDS: Mapping[Pipeline, frozenset[TargetKind]] = MappingProxyType({
+    Pipeline.STATIC: frozenset({TargetKind.AGENT, TargetKind.DEPLOYMENT}),
+    Pipeline.DYNAMIC: frozenset({TargetKind.AGENT}),
+    Pipeline.HYBRID: frozenset({TargetKind.AGENT}),
+})
+
+_missing_pipelines = set(Pipeline) - set(SUPPORTED_TARGET_KINDS)
+if _missing_pipelines:
+    raise RuntimeError(f'SUPPORTED_TARGET_KINDS must name every Pipeline member; missing: {_missing_pipelines}')
+
+
 class PipelineStage(StrEnum):
     """Pipeline stage identifiers used in hook callbacks."""
 
