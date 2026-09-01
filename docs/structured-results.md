@@ -12,7 +12,7 @@ class EvaluationResultCell(BaseModel):
 
 `type` is free-form and uninterpreted — nothing in evaluatorq branches on it. It travels with the result so you can tell cells apart when you read them back.
 
-A sub-score is `str | int | float`, or a `dict` nested one level deeper. **Not `bool`, and not a list.** A list raises a validation error, and `True` is silently coerced to `1` — build a per-category pass map out of booleans and you get integers back with nothing to tell you why. Two more edges of the same type: inside a nested dict an `int` comes back as a `float` (`{"a": {"b": 2}}` reads back `2.0`), and a third level of nesting raises.
+A sub-score is `str | int | float`, or a `dict` — and that dict's values may themselves be dicts of scalars. **Not `bool`, and not a list.** A list raises a validation error, and `True` is silently coerced to `1` — build a per-category pass map out of booleans and you get integers back with nothing to tell you why. Two more edges of the same kind: an `int` below the top level comes back as a `float` (`{"a": {"b": 2}}` reads back `{"a": {"b": 2.0}}`), and nesting a dict deeper than that raises.
 
 ## A complete evaluation
 
@@ -86,7 +86,7 @@ for result in results:
             print(evaluator_score.evaluator_name, cell.type, cell.value["relevance"])
 ```
 
-Both guards are load-bearing, not tidiness. `job_results` and `evaluator_scores` are optional, and a datapoint whose job raised has neither. The `isinstance` check is what keeps this loop alive once you add a second evaluator: a plain float scorer puts a `float` there, and a scorer that *raised* puts an empty string there with the exception on `evaluator_score.error` — both would crash the `cell.type` access.
+Both guards are load-bearing, not tidiness. A datapoint that failed *before* its jobs ran has `job_results=None`, and a job that raised has an empty `evaluator_scores` — the `or []` covers both. The `isinstance` check is what keeps this loop alive once you add a second evaluator: a plain float scorer puts a `float` there, and a scorer that *raised* puts an empty string there with the exception on `evaluator_score.error` — both would crash the `cell.type` access.
 
 ## Sentiment distribution
 
@@ -138,11 +138,11 @@ The keyword checks here keep the examples runnable offline. Real axes usually co
 
 ## What structured results do not do
 
-**Sub-scores are never aggregated.** The summary table renders a structured cell as the literal `[structured]` and stops there: no per-key mean, no per-key trend, no per-datapoint breakdown anywhere in the terminal output. Three float evaluators give you three averages; one cell with three keys gives you a placeholder. The `pass_` flag is the only aggregated signal a structured evaluator contributes, which is why the safety example sets it.
+**Sub-scores are never aggregated.** The summary table renders a structured cell as the literal `[structured]` and stops there: no per-key mean, no per-key trend, no per-datapoint breakdown anywhere in the terminal output. Three float evaluators give you three averages; one cell with three keys gives you a placeholder. The `pass_` flag is the only aggregated signal a structured evaluator contributes to a CI gate, which is why the safety example sets it — the summary table shows `[structured]` either way.
 
 The full value is preserved outside the terminal — in the results object above, and in the payload uploaded to the Orq platform when `ORQ_API_KEY` is set. With no key set, nothing is uploaded and nothing is said about it; the run is otherwise identical.
 
-**On OpenTelemetry spans the cell can disappear, and it is `evaluator_type` that decides.** An evaluator that does not set it — every evaluator on this page — gets exactly one span copy of the score, in the `orq.score` attribute, and Orq ingestion drops that attribute whole past 512 characters rather than truncating it. A rubric with ten keys and long names clears 512 easily, and nothing logs the loss. Declare the kind to get the second copy, which is written to blob storage and is not size-capped:
+**On OpenTelemetry spans the cell can disappear, and it is `evaluator_type` that decides.** An evaluator that does not set it — every evaluator on this page — gets exactly one span copy of the score, in the `orq.score` attribute, and Orq ingestion drops that attribute whole past 512 characters rather than truncating it. A rubric with ten keys and long names clears 512 easily, and nothing logs the loss. Declare the kind to get the second copy, which is routed to blob storage and so is not subject to that 512-character attribute cap:
 
 ```python
 rubric_evaluator: Evaluator = {
