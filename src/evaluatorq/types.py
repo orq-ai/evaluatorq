@@ -138,10 +138,16 @@ EvaluatorqResult = list[DataPointResult]
 
 
 class JobReturn(TypedDict):
-    """Job return structure"""
+    """Job return structure.
+
+    ``error`` is optional and reports a failure the job *handled* rather than raised —
+    ``None`` on success, the reason otherwise. A row carrying it counts as failed, and
+    keeps its output for diagnosis. A job that lets failures raise omits the key.
+    """
 
     name: str
     output: Output
+    error: NotRequired[str | None]
 
 
 Job = Callable[[DataPoint, int], Awaitable[dict[str, Any]]]

@@ -1,4 +1,5 @@
 import asyncio
+import json
 from collections.abc import Awaitable
 from inspect import isawaitable
 from typing import TYPE_CHECKING, cast
@@ -105,6 +106,35 @@ async def process_data_point(
         ]
 
 
+def _job_reported_error(raw: object) -> str | None:
+    """Flatten a job's top-level ``error`` value to the ``str`` ``JobResult`` holds.
+
+    A job may report a failure it handled rather than raised — a target that
+    answered with an HTTP error, a simulation that ended in ``terminated_by=error``.
+    ``JobResult.error`` is a ``str``, so a dict payload is reduced to its message
+    rather than stringified: ``str()`` on a dict renders a Python repr, which then
+    reaches the results table and any judge reading the field. A dict carrying none
+    of the known message keys is JSON-encoded for the same reason.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        return raw or None
+    if isinstance(raw, dict):
+        for key in ('message', 'error', 'detail'):
+            # Membership, not truthiness: a present-but-falsy message ('' or 0) is the
+            # payload's answer, and falling through to the next key would report a
+            # different field's text as the failure.
+            if key in raw:
+                value = raw[key]
+                return None if value is None else str(value) or None
+        logger.warning('job reported an error payload with no message key: {}', sorted(raw))
+        # json, not str(): repr on a dict is exactly what this function exists to keep
+        # out of the results table and out of any judge reading the field.
+        return json.dumps(raw, default=str)
+    return str(raw)
+
+
 async def process_job(
     job: Job,
     data_point: DataPoint,
@@ -158,6 +188,15 @@ async def process_job(
                     result = await job(data_point, row_index)
             job_name = cast('str', result['name'])
             output = cast('Output', result['output'])
+            # A job that reached its target and got a failure back reports it in a
+            # top-level 'error' key rather than raising, so its output survives for
+            # diagnosis. Honouring it here is the only thing separating such a run
+            # from a clean one: nothing raised, so without this the row counts as a
+            # success and the run reports a 100% pass rate over a dead target. Unlike
+            # the raise path, the row keeps its output and is still scored, so it can
+            # carry both an error and evaluator scores —
+            # check_pass_failures(treat_errors_as_failure=True) is what fails it.
+            error = _job_reported_error(result.get('error'))
 
             # Set job name on span after execution
             set_job_name_attribute(job_span, job_name)
@@ -218,7 +257,7 @@ async def process_job(
         return JobResult(
             job_name=job_name,
             output=output,
-            error=None,
+            error=error,
             evaluator_scores=evaluator_scores,
         )
 

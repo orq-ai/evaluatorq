@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from evaluatorq.simulation._datapoint_io import _extract_single_datapoint
 from evaluatorq.simulation.adapters import from_orq_deployment
 from evaluatorq.simulation.convert import to_open_responses
+from evaluatorq.simulation.evaluators.scorers import UNEVALUATED_TERMINATIONS
 from evaluatorq.simulation.types import (
     DEFAULT_MODEL,
     Message,
@@ -96,10 +97,16 @@ def wrap_simulation_agent(
     async def job_fn(data: DataPoint, _row: int) -> dict[str, Any]:
         sim_dp = _extract_single_datapoint(data)
         result = await runner.run(datapoint=sim_dp, max_turns=max_turns)
+        # Emitted unconditionally, None on success. A run the runner ended in error
+        # or timeout never reached the judge, so it has no verdict to score; without
+        # this key process_job sees a returned dict, counts the row as a success,
+        # and a conversation that never happened reports a 100% pass rate.
+        failed = result.terminated_by in UNEVALUATED_TERMINATIONS
         return {
             'name': name,
             # The runner's, not `model`: `llm_config.model` wins the resolution and is what ran.
             'output': to_open_responses(result, runner.model),
+            'error': result.reason if failed else None,
         }
 
     async def aclose() -> None:

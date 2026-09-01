@@ -74,3 +74,88 @@ async def test_process_data_point_fallback_carries_row_index_when_unresolvable()
     result = results[0]
     assert result.error is not None
     assert result.data_point.inputs == {'row_index': 7}
+
+
+@pytest.mark.asyncio
+async def test_process_job_honours_a_job_reported_error() -> None:
+    """A job that reports a failure it handled must not count as a successful row.
+
+    The failure is returned, not raised, so nothing else in the run can see it: this
+    is the branch that keeps a dead target from reporting a 100% pass rate.
+    """
+    from evaluatorq.evaluatorq import check_pass_failures
+    from evaluatorq.processings import process_job
+    from evaluatorq.types import DataPointResult
+
+    async def reporting_job(_data: DataPoint, _row: int) -> dict[str, Any]:
+        return {'name': 'sim', 'output': {'status': 'failed'}, 'error': {'message': '401 unauthorized'}}
+
+    result = await process_job(reporting_job, DataPoint(inputs={'text': 'hi'}), row_index=0)
+
+    assert result.error == '401 unauthorized'
+    # The output survives the error — it is the transcript you diagnose from.
+    assert result.output == {'status': 'failed'}
+    assert check_pass_failures(
+        [DataPointResult(data_point=DataPoint(inputs={'text': 'hi'}), job_results=[result])],
+        treat_errors_as_failure=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_process_job_leaves_error_unset_on_success() -> None:
+    """A job that omits the key, or sets it to None, still reports a clean row."""
+    from evaluatorq.processings import process_job
+
+    async def clean_job(_data: DataPoint, _row: int) -> dict[str, Any]:
+        return {'name': 'sim', 'output': 'fine', 'error': None}
+
+    async def silent_job(_data: DataPoint, _row: int) -> dict[str, Any]:
+        return {'name': 'sim', 'output': 'fine'}
+
+    for job in (clean_job, silent_job):
+        result = await process_job(job, DataPoint(inputs={'text': 'hi'}), row_index=0)
+        assert result.error is None
+
+
+def test_job_reported_error_flattens_every_payload_shape() -> None:
+    """The flattener must never hand a Python repr to the results table.
+
+    A present-but-falsy message is the payload's answer, not an absent one, and a dict
+    with no known message key is JSON — `str()` on it renders a repr that reaches
+    `collect_errors` and any judge reading `JobResult.error`.
+    """
+    from evaluatorq.processings import _job_reported_error
+
+    assert _job_reported_error({'message': 'boom', 'code': 401}) == 'boom'
+    # 'error'/'detail' must not win over a present-but-falsy 'message'.
+    assert _job_reported_error({'message': 0, 'error': 'other'}) == '0'
+    assert _job_reported_error({'message': '', 'detail': 'other'}) is None
+    assert _job_reported_error({'message': None, 'detail': 'other'}) is None
+    assert _job_reported_error({'detail': 'from detail'}) == 'from detail'
+    assert _job_reported_error({'weird': 'shape'}) == '{"weird": "shape"}'
+    unknown = _job_reported_error({'weird': object})
+    assert unknown is not None and unknown.startswith('{"weird": "<class')
+    assert _job_reported_error('boom') == 'boom'
+    assert _job_reported_error('') is None
+    assert _job_reported_error(None) is None
+    assert _job_reported_error(False) == 'False'
+
+
+@pytest.mark.asyncio
+async def test_process_job_scores_a_reported_error_row() -> None:
+    """A reported-error row keeps its output and is still scored, unlike the raise path."""
+    from evaluatorq.processings import process_job
+    from evaluatorq.types import EvaluationResult, Evaluator, ScorerParameter
+
+    async def reporting_job(_data: DataPoint, _row: int) -> dict[str, Any]:
+        return {'name': 'sim', 'output': 'dead', 'error': 'boom'}
+
+    async def scorer(_params: ScorerParameter) -> EvaluationResult:  # noqa: RUF029
+        return EvaluationResult(value=1)
+
+    evaluator: Evaluator = {'name': 'always', 'scorer': scorer}
+    result = await process_job(reporting_job, DataPoint(inputs={'text': 'hi'}), row_index=0, evaluators=[evaluator])
+
+    assert result.error == 'boom'
+    assert result.evaluator_scores is not None
+    assert len(result.evaluator_scores) == 1
