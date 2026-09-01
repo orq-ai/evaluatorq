@@ -21,7 +21,7 @@ flowchart LR
 - **static** — replays a fixed dataset of known attacks instead of generating them. Deterministic, cheap, good for CI. Runs Orq's public [`orq/redteam-vulnerabilities`](https://huggingface.co/datasets/orq/redteam-vulnerabilities) dataset by default; pass `dataset=` to run your own. The [static dataset cookbook](../examples/redteam/02_static_dataset.md) shows the reproducible version end to end.
 - **hybrid** — static seeds plus dynamic expansion; see the [hybrid mode cookbook](../examples/redteam/03_hybrid_mode.md) when you want both known attacks and generated coverage.
 
-An Orq deployment (`target="deployment:<key>"`) runs in static mode only. Dynamic and hybrid drive a multi-turn agent target, and no deployment target exists yet, so they refuse the combination with an error instead of attacking the wrong thing.
+An Orq deployment (`target="deployment:<key>"`) runs in static mode only, with the default dataset or your own. Dynamic and hybrid drive a multi-turn conversational target, and no deployment target exists yet, so they refuse the combination with an error instead of attacking the wrong thing.
 
 Replay is not a separate mode. It re-runs a previous run's exact attacks against the target you give it now, so a before/after comparison changes the agent while holding the attack set fixed. See [Replay a previous run](#replay-a-previous-run).
 

@@ -14,7 +14,7 @@ You only add variables when you want something more — a hosted model, a datase
     ORQ_API_KEY=your_orq_api_key_here
     ```
 
-    Gives you Orq datasets, deployments, the model catalogue, and tracing, which switches on by itself.
+    Gives you Orq datasets, deployments, the model catalogue, and tracing, which switches on by itself once the OpenTelemetry packages are installed (`uv add "evaluatorq[otel]"`; without them tracing is a silent no-op). See [Tracing](tracing.md).
 
 === "OpenAI directly"
 
@@ -31,7 +31,7 @@ You only add variables when you want something more — a hosted model, a datase
     OPENAI_BASE_URL=http://localhost:8000/v1
     ```
 
-    vLLM, OpenRouter, Azure, Ollama — anything that speaks the OpenAI API. Red teaming honours `OPENAI_BASE_URL`; simulation does not, so pass a pre-built client there instead.
+    vLLM, OpenRouter, Azure, Ollama — anything that speaks the OpenAI API. `OPENAI_BASE_URL` is honoured by red teaming's attacker and judge calls and by `OpenAIModelTarget`. It is **not** honoured by `OrqResponsesTarget` or by simulation, which build their client with the host pinned; pass a pre-built client to those instead.
 
 **2. Get it into the process.** Exporting the variables in your shell is enough, and needs nothing installed. evaluatorq never reads a `.env` file itself — if you keep one, load it yourself, and install `python-dotenv` first (`uv add python-dotenv`; it is not a dependency of evaluatorq):
 
@@ -53,7 +53,7 @@ Four decisions cover almost every real configuration. The rest of this page is r
 |---|---|---|---|
 | **Which backend runs my LLM calls?** | `ORQ_API_KEY` or `OPENAI_API_KEY` | — | Set one. `ORQ_API_KEY` unlocks datasets, deployments and tracing, and wins when both are set; `OPENAI_API_KEY` (plus `OPENAI_BASE_URL` for a non-OpenAI host) is the standalone route. |
 | **Where do run reports land?** | `EVALUATORQ_DIR` | `.evaluatorq` in the current directory | The run store that red teaming (`runs/`) and simulation (`sim-runs/`) write to, and that the [dashboard](dashboard.md) reads. |
-| **Do I want traces?** | `ORQ_DISABLE_TRACING` | off (traces enabled when `ORQ_API_KEY` **or** `OTEL_EXPORTER_OTLP_ENDPOINT` is set) | Set to `1` to send nothing. Point traces elsewhere with `OTEL_EXPORTER_OTLP_ENDPOINT`. See [Tracing](tracing.md). |
+| **Do I want traces?** | `ORQ_DISABLE_TRACING` | off (traces enabled when `ORQ_API_KEY` **or** `OTEL_EXPORTER_OTLP_ENDPOINT` is set, and the `otel` extra is installed) | Set to `1` to send nothing. Point traces elsewhere with `OTEL_EXPORTER_OTLP_ENDPOINT`. See [Tracing](tracing.md). |
 | **Do dashboard links open my Orq workspace?** | `ORQ_WORKSPACE` | unset | Your workspace slug. Unset hides the deep-link buttons — nothing else breaks. |
 
 Two more worth knowing before you need them: `EQ_DEBUG=1` turns a one-line CLI error into a full traceback, and `EVALUATORQ_CAPTURE_MESSAGE_CONTENT=false` keeps prompts and responses out of your spans.
@@ -64,7 +64,7 @@ Two more worth knowing before you need them: `EQ_DEBUG=1` turns a one-line CLI e
 
 | Variable | Required? | Default | What it does |
 |---|---|---|---|
-| `ORQ_API_KEY` | Required for Orq features | — | Authenticates against the Orq platform. Required to fetch datasets, upload results, and invoke deployments. Also auto-enables OpenTelemetry tracing (spans go to `<ORQ_BASE_URL>/v2/otel`, so `https://my.orq.ai/v2/otel` by default). |
+| `ORQ_API_KEY` | Required for Orq features | — | Authenticates against the Orq platform. Required to fetch datasets, upload results, and invoke deployments. Also auto-enables OpenTelemetry tracing when the `otel` extra is installed (spans go to `<ORQ_BASE_URL>/v2/otel`, so `https://my.orq.ai/v2/otel` by default). |
 | `ORQ_BASE_URL` | No | `https://my.orq.ai` | Overrides the Orq API base URL. Affects Orq SDK calls (dataset fetch, deployment invocation) and the derived OTLP tracing endpoint (`<ORQ_BASE_URL>/v2/otel`). Does **not** redirect OpenAI-compatible LLM calls — use `OPENAI_BASE_URL` for that. |
 | `OPENAI_API_KEY` | Red-team / sim only, if not using Orq | — | API key for the OpenAI (or compatible) backend. Used by the red teaming pipeline and agent simulation when `ORQ_API_KEY` is absent. Not required for core `evaluatorq()` evaluation. |
 | `OPENAI_BASE_URL` | No | OpenAI default | Redirect OpenAI-compatible calls to a different host (vLLM, OpenRouter, Azure, local). Honoured by the red teaming LLM client. **Not** honoured on the simulation path, which resolves its client with `honor_openai_base_url=False` — inject a pre-built client there instead. |

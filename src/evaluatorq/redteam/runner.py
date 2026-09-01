@@ -529,6 +529,9 @@ async def red_team(
     Args:
         target: Target identifier(s). A single string like ``"agent:<key>"``,
             an `AgentTarget` instance, or a list of either for multi-target runs.
+            ``"deployment:<key>"`` runs under ``mode="static"`` only: the adaptive
+            pipelines need a conversational target and none speaks the deployments
+            API yet, so they raise `ValueError` rather than attack the wrong thing.
         mode: Execution mode — ``"dynamic"``, ``"static"``, or ``"hybrid"``.
             Defaults to ``"dynamic"`` when omitted. ``None`` is the "not supplied"
             sentinel, which is what lets ``previous_run=`` reject an explicit
@@ -638,8 +641,10 @@ async def red_team(
         RedTeamReport with results and summary statistics.
 
     Raises:
-        ValueError: If mode is invalid, required arguments are missing, or
-            ``save='detail'`` is passed without ``artifacts_dir``.
+        ValueError: If mode is invalid, required arguments are missing,
+            ``save='detail'`` is passed without ``artifacts_dir``, or a
+            ``"deployment:<key>"`` target is combined with ``mode="dynamic"``
+            or ``mode="hybrid"``.
         CancelledError: If hooks.on_confirm returns False.
 
     Usage:
@@ -1603,14 +1608,20 @@ def _check_filter_results(
 def _deployment_pipeline_error(target: str, mode: Pipeline) -> ValueError:
     """Build the refusal for a ``deployment:`` target outside the static pipeline.
 
-    Only the static pipeline builds a deployment job (``create_deployment_job``);
-    the adaptive pipelines drive an ``AgentTarget``, and no such target speaks the
-    deployments API yet (RES-1494). Without this the key would reach
-    ``agents.retrieve`` and fail as a missing *agent*.
+    A deployment can only be driven end to end by the static pipeline. Hybrid
+    would build a deployment static leg (``_create_job_for_target`` returns
+    ``create_deployment_job`` for this kind), but its dynamic half needs an
+    ``AgentTarget``, and no such target speaks the deployments API yet
+    (tracked as RES-1494). Without this the key would reach ``agents.retrieve``
+    and fail as a missing *agent*.
+
+    The remedy names ``mode`` from the enum rather than as prose, so renaming
+    either surfaces here instead of in a string a user copies.
     """
     return ValueError(
         f'Target {target!r} is an Orq deployment, which the {mode.value} pipeline does not support: '
-        'adaptive attacks run against agents only. Run it with pipeline="static" and a dataset, '
+        'adaptive attacks need a conversational target (an agent:<key> or an AgentTarget). '
+        f'Run it with mode="{Pipeline.STATIC.value}" (CLI: --mode {Pipeline.STATIC.value}), '
         'or use simulate() for a conversational run.'
     )
 
