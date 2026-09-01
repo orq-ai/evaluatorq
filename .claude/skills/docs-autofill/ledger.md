@@ -8,3 +8,4 @@ Outcomes: `prepared` (work committed, PR not yet created) · `opened` · `blocke
 |---|---|---|---|
 | 2026-08-23 | `entry point (red_team()) × data source (replay)` | docs/autofill-redteam-replay | opened |
 | 2026-08-24 | `tier 1: env var (ORQ_OTEL_MAX_QUEUE_SIZE, ORQ_OTEL_MAX_BATCH_SIZE, ORQ_OTEL_SCHEDULE_DELAY_MS, ORQ_OTEL_FLUSH_TIMEOUT_MS)` | docs/autofill-otel-batching | opened |
+| 2026-08-31 | `entry point (wrap_simulation_agent()) × surface (Python API)` | docs/autofill-wrap-simulation-agent | opened |

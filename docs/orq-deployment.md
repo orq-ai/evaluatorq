@@ -126,6 +126,7 @@ data=ExperimentInput(experiment_id="<experiment_id>", run_id="<run_id>")
 
 ### `deployment()`
 
+<!-- check-examples: skip (signature display, not a module) -->
 ```python
 async def deployment(
     key: str,
