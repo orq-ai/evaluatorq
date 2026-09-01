@@ -29,7 +29,7 @@ If the thing under test already runs on Orq, you do not write a target class. Ho
 | You want to | Use |
 |---|---|
 | Red-team or simulate a hosted **agent** | `target="agent:<key>"` — the platform supplies tools, memory stores and knowledge bases to the attack planner |
-| Red-team or simulate a **deployment** (prompt + model) | `target="deployment:<key>"` |
+| Red-team or simulate a **deployment** (prompt + model) | `target="deployment:<key>"`. On the red-team side this needs `pipeline="static"` with a dataset; the default dynamic pipeline supports agents only ([RES-1493](https://linear.app/orqai/issue/RES-1493)) |
 | Call a deployment from an `evaluatorq()` **job** | `invoke()` or `deployment()` inside your `@job` — see [Evaluation Reference › Calling an Orq deployment from a job](../evaluation-reference.md#calling-an-orq-deployment-from-a-job) |
 | Pin the exact call parameters instead of discovering them | [`OrqResponsesTarget`](#orqresponsestarget) |
 
