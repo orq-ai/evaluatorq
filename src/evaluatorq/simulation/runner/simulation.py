@@ -12,7 +12,14 @@ from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry, default_map_error
 from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pipeline
 from evaluatorq.common.tracing import record_llm_input, record_llm_output, set_span_attrs
-from evaluatorq.contracts import AgentTarget, LLMCallConfig, ResponseTrace, TokenUsage, content_to_text, render_tool_call
+from evaluatorq.contracts import (
+    AgentTarget,
+    LLMCallConfig,
+    ResponseTrace,
+    TokenUsage,
+    content_to_text,
+    render_tool_call,
+)
 from evaluatorq.integrations.callable_integration import CallableTarget
 from evaluatorq.simulation.agents.judge import JudgeAgent
 from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgent
