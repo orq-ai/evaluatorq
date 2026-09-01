@@ -81,4 +81,6 @@ Marked `N/A` in the matrix, never reported as a gap.
 
 Tier-1 items are **not** matrix cells — there is no `env var` axis, and `surface` has exactly the three values above. Record a Tier-1 gap in the `docs-autofill` ledger as `tier 1: <kind> (<name>, …)` with no second axis, e.g. `tier 1: env var (ORQ_OTEL_MAX_QUEUE_SIZE, ORQ_OTEL_MAX_BATCH_SIZE)`. The ledger dedupe compares that cell as free text, so naming the items is what stops the same gap being re-derived next week; an invented axis pair never matches.
 
+**A symbol whose *output* is documented is not a Tier-1 gap.** A symbol-name grep does not know whether a reader reaches the concept by another name. `bt_sigma_aggregation` is the standing example: it is internal, called only from `build_report(aggregation='bt-sigma')`, and readers meet it as `report.bt_sigma`, documented at `pairwise-judging.md`. Before recording a Tier-1 gap for a symbol, check whether its result is already documented under the name users actually type; if it is, the gap is a false positive, not prose to write.
+
 **Tier 2 — API reference suffices.** Supporting types, contracts, backends, and subpackage `__all__` members. Flag only when there is no docstring at all.
