@@ -159,7 +159,7 @@ If one of your own checks reports that *everything* is broken — every anchor m
 
 **Still blocked after round 3:** open the PR anyway and surface it in the four places `docs-writing` names — the bare `[BLOCKED]` title tag, the `## Blocking, unresolved` body section with the session URL, and the DM to Bauke on Slack (`U09BR0B0Q7P`) rather than only the channel post. The persona's name and its verdict go in the body under persona verdicts, never in the title. The work is worth keeping; the judgement is not the routine's to make.
 
-Anything not applied goes in the PR body under **Not addressed**, with the reason.
+Anything not applied is a `Left out` row in the PR's review table (step 8), with the reason — never a finding that quietly disappears.
 
 ## Step 8 — PR
 
@@ -189,8 +189,8 @@ PR body, in this order:
 2. **What the page covers**, and what it deliberately does not.
 3. **Receipt** — the step 4 table, final round.
 4. **Persona verdicts** — one line each, persona → task → verdict, and how many rounds it took.
-5. **Open decisions** — the hate Decisions, unresolved, each with its Lean.
-6. **Not addressed** — findings skipped, with reasons.
+5. **Review** — the single table from `docs-writing`'s **Reporting the review in the PR**, covering every finding from every lens *and* every hate finding in the same table, each marked `Fixed` / `Left out` / `Open`. One table, not one per reviewer.
+6. **Open decisions** — the hate Decisions and anything the table marked `Open`, each with its Lean, in the plain-words form that section requires.
 7. Any missing reviewer, and whether `routine.json` changed.
 8. One line noting this was opened by the weekly docs-autofill routine.
 

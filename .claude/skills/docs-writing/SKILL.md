@@ -133,6 +133,31 @@ Then: **validate each finding yourself before fixing it.** A reviewer that misre
 
 Everything else — voice nits, a clunky sentence, a suggested extra example — is **non-blocking**: report it, do not fix it, do not re-run for it. Without that line the loop never ends, because there is always one more sentence to improve.
 
+#### Reporting the review in the PR
+
+The review is only useful to the human if they can read it in under a minute. One table, one line per finding, plain words — no lens jargon, no severity codes, no paragraphs. A finding whose line needs a second sentence gets a link to where the detail lives, not the detail.
+
+```markdown
+## Review
+
+| Finding | Raised by | What happened |
+|---|---|---|
+| The install command fails on a fresh machine without `uv init` first | reader | Fixed — added the caveat under the command |
+| Page never says what happens when the key is missing | conformance | Fixed — named the failure mode |
+| Wants a second example for the async path | cutter | Left out — one example is enough for this page |
+
+**Open decisions** — these need a human, they are not defects:
+
+- Should this page live under Guides or Reference? Currently Guides, because the reader arrives with a task. Lean: keep it.
+```
+
+Rules for the table:
+
+- **Say what a reader would notice, not what the reviewer called it.** "The command fails without `uv init`", not "install prerequisite unstated".
+- **`What happened` is one of three**: `Fixed — <what changed>`, `Left out — <why>`, or `Open — <what it needs>`. Nothing else.
+- **Every finding appears exactly once**, including the ones you dropped as invalid after checking them; say `Left out — checked, the page already says this` rather than deleting the row. A finding that vanishes looks like a finding nobody read.
+- **Open decisions go under the table as prose, with a Lean.** A decision is a choice only the human can make; a defect is not a decision.
+
 **Maximum three iterations.** A blocker surviving three rounds means the page has a design problem underneath it — a missing prerequisite, an undocumented feature it stands on — and a fourth round will not find it. Stop; the page is still worth keeping, and the judgement about it is not yours.
 
 **Ship it and make the blockers impossible to miss.** Open the PR, and surface what is unresolved in three places, because each one reaches a reader the others do not:
