@@ -160,7 +160,7 @@ The command writes a JSON report and exits non-zero if no attacks receive a verd
 
     async def main():
         target = OpenAIModelTarget(
-            model="gpt-4o-mini",
+            model="gpt-5.6-luna",
             system_prompt=(
                 "You are a customer support assistant for Acme Corp. "
                 "Help with orders, returns, and product questions. "
@@ -472,7 +472,7 @@ For a fast gate, run a small fixed set of attacks and assert a minimum resistanc
 
 ```python
 report = await red_team(
-    target=OpenAIModelTarget(model="gpt-4o-mini", system_prompt="..."),
+    target=OpenAIModelTarget(model="gpt-5.6-luna", system_prompt="..."),
     mode="static",                 # replay a fixed dataset — deterministic, cheap
     categories=["LLM01", "LLM07"],
     max_static_datapoints=10,
@@ -531,7 +531,7 @@ from langgraph.prebuilt import create_react_agent
 from evaluatorq.integrations.langgraph_integration import LangGraphTarget
 from evaluatorq.redteam import red_team
 
-graph = create_react_agent(model=ChatOpenAI(model="gpt-4o-mini"), tools=[...], prompt="...")
+graph = create_react_agent(model=ChatOpenAI(model="gpt-5.6-luna"), tools=[...], prompt="...")
 report = await red_team(
     target=LangGraphTarget(graph=graph),
     categories=["LLM01", "ASI01"],
@@ -597,7 +597,7 @@ Verified edge cases and framework-specific quirks to know before you rely on ext
 | **CrewAI is opaque** | A crew exposes only its final output — intermediate agent/tool steps are not surfaced, so **tool-misuse (ASI) attacks can't be scored**; use LLM-tier categories. The whole transcript is flattened into one `{conversation}` input per turn (no native turn memory), so very long conversations may approach task-description limits. | CrewAI |
 | **Token usage** | Best-effort. Frameworks that don't surface usage metadata report `usage=None` (never a false non-zero). | all |
 | **Tool arguments** | Non-JSON-object tool arguments are normalized before scoring; exotic argument shapes may be simplified. | LangGraph, OpenAI Agents |
-| **Routing / keys** | The examples point each framework's model at the Orq AI Router with `ORQ_API_KEY` (model id `openai/gpt-4o-mini`), so no OpenAI key is needed — the attacker and judge auto-route the same way. The client is constructed eagerly, so `ORQ_API_KEY` must be set even to *build* the target. | all |
+| **Routing / keys** | The examples point each framework's model at the Orq AI Router with `ORQ_API_KEY` (model id `openai/gpt-5.6-luna`), so no OpenAI key is needed — the attacker and judge auto-route the same way. The client is constructed eagerly, so `ORQ_API_KEY` must be set even to *build* the target. | all |
 
 ## Where to next
 

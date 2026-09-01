@@ -28,13 +28,14 @@ from collections.abc import (  # noqa: TC003 — used in real (non-TYPE_CHECKING
 from pathlib import Path  # noqa: TC003 — used in a real (non-TYPE_CHECKING) field annotation, see note below
 from typing import Any
 
+from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
 # NOTE: these two are used directly in field annotations below (not just for
 # static typing) — pydantic resolves annotations at class-creation time even
 # with `from __future__ import annotations`, so they must be real, importable
 # names in this module's namespace and can't live behind `TYPE_CHECKING`.
-from evaluatorq.contracts import AgentTarget, TokenUsage  # noqa: TC001
+from evaluatorq.contracts import AgentTarget, LLMCallConfig, TokenUsage
 from evaluatorq.simulation.evaluators.scorers import SimulationScoringConfig  # noqa: TC001
 from evaluatorq.simulation.hooks import SimulationHooks  # noqa: TC001
 from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig  # noqa: TC001
@@ -55,7 +56,7 @@ class SimulationConfig(BaseModel):
     ``_simulate_core`` and ``_simulate_via_evaluatorq``.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True, extra='forbid')
 
     # --- Run identity / target resolution inputs -------------------------
     evaluation_name: str = ''
@@ -76,12 +77,31 @@ class SimulationConfig(BaseModel):
     max_turns: int | None = None
     """None means "unset": resolved in ``_simulate_core`` to a replayed run's
     cap when replaying, else to ``DEFAULT_MAX_TURNS``."""
-    model: str = DEFAULT_MODEL
+    llm_config: LLMCallConfig = Field(default_factory=lambda: LLMCallConfig(model=DEFAULT_MODEL))
+    """Sampling/transport settings for every simulation-side LLM call — five roles:
+    the user simulator, the judge, the persona / scenario / first-message
+    generators, the recommendations pass and the executive summary. Never the
+    target under test — that is the thing being measured, and it is configured
+    where it is constructed.
+
+    Three fields are narrower than the rest. ``max_tokens`` is read by the two
+    agents and the executive summary; the generators and the recommendations
+    pass size their own budget from the item count, because a batched structured
+    call that truncates is unrecoverable. ``api`` and ``retry_count`` are read by
+    the two agents only — every other role is pinned to one endpoint and owns its
+    own retry. A role that ignores one of the three logs it rather than dropping
+    it silently."""
     evaluator_names: list[str] | None = None
     scoring: SimulationScoringConfig | None = None
     """Policy knobs for the ``turn_efficiency`` / ``conversation_quality`` scorers
     (cliffs, decay, floor, composite weights). ``None`` uses
     ``DEFAULT_SCORING_CONFIG`` — the shipped defaults."""
+
+    @property
+    def model(self) -> str:
+        """Resolved simulation model, derived from ``llm_config`` — no second field to keep in step."""
+        return self.llm_config.model
+
     datapoint_parallelism: int = 10
     target_agent_timeout_ms: int = Field(default=DEFAULT_TARGET_AGENT_TIMEOUT_MS, gt=0)
     """Per-call timeout for the target under test, threaded into
@@ -143,3 +163,55 @@ class SimulationConfig(BaseModel):
     """Generate the LLM narrative summary in-core (before save). Off by default;
     the public ``simulate``/``generate_and_simulate`` flip it on. The CLI keeps
     it off here and generates its own after the run (avoids double generation)."""
+
+
+def sim_llm_config(llm_config: LLMCallConfig | None) -> LLMCallConfig:
+    """The caller's simulation-side config, or the default one.
+
+    ``llm_config`` is the only place the simulation-side model is named, so an
+    omitted config means every field stays unset and the per-call-site defaults
+    keep applying — including `DEFAULT_MODEL`.
+    """
+    return llm_config if llm_config is not None else LLMCallConfig(model=DEFAULT_MODEL)
+
+
+def resolve_sim_llm_config(*, model: str, llm_config: LLMCallConfig | None, caller: str) -> LLMCallConfig:
+    """Fold a ``model`` shorthand and a full ``llm_config`` into one config.
+
+    For the constructors that still take a bare model string beside the config
+    (`SimulationRunner`, the generators, the trace helpers). The public
+    ``simulate`` / ``generate`` entry points no longer have that pair — they take
+    ``llm_config`` only and call `sim_llm_config`.
+
+    An explicitly set ``llm_config.model`` wins: a caller who set it said
+    everything they wanted to say about the simulation-side calls. A ``model``
+    that contradicts it is a mistake worth a warning rather than a silent loss.
+
+    Presence is read from ``model_fields_set``, never from the value:
+    ``LLMCallConfig.model`` has a non-``None`` default, so a value check would
+    flag ``LLMCallConfig(temperature=0.2)`` beside a ``model`` as a
+    contradiction and fall back to the default model.
+
+    The contradiction check only fires when ``model`` differs from
+    `DEFAULT_MODEL`, so passing `DEFAULT_MODEL` explicitly beside a different
+    ``llm_config.model`` is indistinguishable from not passing it at all and is
+    not warned about.
+
+    Args:
+        model: The bare model keyword as the constructor spells it.
+        llm_config: The full config, or ``None``.
+        caller: Class or function name, for the contradiction warning.
+    """
+    if llm_config is None:
+        return LLMCallConfig(model=model)
+    if 'model' not in llm_config.model_fields_set:
+        return llm_config.model_copy(update={'model': model})
+    if model != DEFAULT_MODEL and llm_config.model != model:
+        logger.warning(
+            '{}(): model={!r} contradicts llm_config.model={!r}; using llm_config.model. '
+            'Drop the model argument, or set the model on llm_config only.',
+            caller,
+            model,
+            llm_config.model,
+        )
+    return llm_config

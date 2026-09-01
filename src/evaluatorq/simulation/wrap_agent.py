@@ -19,7 +19,7 @@ from evaluatorq.simulation.types import (
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from evaluatorq.contracts import AgentResponse
+    from evaluatorq.contracts import AgentResponse, LLMCallConfig
     from evaluatorq.simulation.agents.base import BaseAgent
     from evaluatorq.types import DataPoint
 
@@ -33,6 +33,7 @@ def wrap_simulation_agent(
     agent_key: str | None = None,
     max_turns: int = 10,
     model: str | None = None,
+    llm_config: LLMCallConfig | None = None,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
     **deprecated_kwargs: Any,
@@ -43,6 +44,11 @@ def wrap_simulation_agent(
     - ``persona`` and ``scenario``, or
     - ``datapoint`` (full SimulationDatapoint object), or
     - ``datapoints`` / ``personas`` + ``scenarios`` each of length one
+
+    ``llm_config`` is the fuller surface behind ``model``: it configures every
+    simulation-side call (user simulator and judge), never the target under test.
+    ``model`` stays the shorthand for setting only the model; when both name one,
+    ``llm_config.model`` wins and the contradiction is logged.
 
     The returned callable owns a long-lived ``SimulationRunner`` (and its
     underlying HTTP client). Call ``await job_fn.aclose()`` after your
@@ -78,11 +84,10 @@ def wrap_simulation_agent(
     if not resolved_target:
         raise ValueError('wrap_simulation_agent requires either target or agent_key')
 
-    effective_model = model or DEFAULT_MODEL
-
     runner = SimulationRunner(
         target=resolved_target,
-        model=effective_model,
+        model=model or DEFAULT_MODEL,
+        llm_config=llm_config,
         max_turns=max_turns,
         user_simulator=user_simulator,
         judge=judge,
@@ -93,7 +98,8 @@ def wrap_simulation_agent(
         result = await runner.run(datapoint=sim_dp, max_turns=max_turns)
         return {
             'name': name,
-            'output': to_open_responses(result, effective_model),
+            # The runner's, not `model`: `llm_config.model` wins the resolution and is what ran.
+            'output': to_open_responses(result, runner.model),
         }
 
     async def aclose() -> None:

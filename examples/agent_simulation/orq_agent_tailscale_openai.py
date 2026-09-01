@@ -330,7 +330,7 @@ async def main() -> None:
             target=target,
             num_personas=num_personas,
             num_scenarios=num_scenarios,
-            sim_model=sim_model,
+            llm_config=LLMCallConfig(model=sim_model),
             generation_client=generation_client,
             max_turns=args.max_turns,
             datapoint_parallelism=args.parallelism,

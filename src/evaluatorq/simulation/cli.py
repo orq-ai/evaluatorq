@@ -16,7 +16,7 @@ Usage:
 ```bash
 evaluatorq sim generate --agent-description "..." --datapoints dp.jsonl
 evaluatorq sim simulate --input dp.jsonl --target my-agent
-evaluatorq sim run --agent-description "..." --openai-model gpt-4o-mini
+evaluatorq sim run --agent-description "..." --openai-model gpt-5.6-luna
 evaluatorq sim run --agent-description "..." --target my-agent --datapoints dp.jsonl
 evaluatorq sim export --input results.jsonl --output payload.json
 evaluatorq sim validate-dataset dp.jsonl
@@ -45,6 +45,7 @@ from evaluatorq.common.cli_help import CONTEXT_SETTINGS, MODEL_OPTION_NOTE
 from evaluatorq.common.cli_json import echo_json
 from evaluatorq.common.cli_tty import should_skip_confirm
 from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.dashboard.library import report_id
 from evaluatorq.simulation.types import DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run as _auto_save_run
@@ -452,7 +453,7 @@ _SIMULATE_EPILOG = _examples(
     '# run a frozen datapoints file against an orq agent',
     'eq sim simulate -i dp.jsonl --target agent:my-agent',
     '# against any OpenAI-compatible model',
-    'eq sim simulate -i dp.jsonl --openai-model gpt-4o-mini',
+    'eq sim simulate -i dp.jsonl --openai-model gpt-5.6-luna',
     '# from an orq dataset instead of a local file',
     'eq sim simulate --dataset-id ds_abc --target agent:my-agent',
     "# replay a previous orq experiment run's datapoints",
@@ -467,7 +468,7 @@ _RUN_EPILOG = _examples(
     '# --datapoints saves the generated inputs; --results saves the simulation output',
     'eq sim run --target agent:my-agent --datapoints dp.jsonl --results out.jsonl',
     '# a non-orq target',
-    'eq sim run --agent-description "refund bot" --openai-model gpt-4o-mini',
+    'eq sim run --agent-description "refund bot" --openai-model gpt-5.6-luna',
 )
 
 _GENERATE_EPILOG = _examples(
@@ -566,7 +567,7 @@ def simulate(
                 'the host), otherwise OPENAI_API_KEY (+ optional OPENAI_BASE_URL for '
                 'vLLM/OpenRouter/Azure-compatible/local endpoints). ORQ wins if both '
                 'keys are set; namespace the model accordingly '
-                "(e.g. 'openai/gpt-4o-mini' for the Orq router, 'gpt-4o-mini' for OpenAI)."
+                "(e.g. 'openai/gpt-5.6-luna' for the Orq router, 'gpt-5.6-luna' for OpenAI)."
             ),
         ),
     ] = None,
@@ -595,7 +596,7 @@ def simulate(
         str,
         typer.Option(
             '--sim-model',
-            help=f'Model for the user-simulator and judge. {MODEL_OPTION_NOTE}',
+            help=f'Model for the user-simulator, the judge, the recommendations pass and the executive summary. {MODEL_OPTION_NOTE}',
         ),
     ] = DEFAULT_MODEL,
     max_turns: Annotated[
@@ -848,7 +849,7 @@ async def _simulate_impl(
         experiment_run_id=experiment_run_id,
         previous_run=previous_run,
         target=target,
-        sim_model=sim_model,
+        llm_config=LLMCallConfig(model=sim_model),
         max_turns=max_turns,
         datapoint_parallelism=datapoint_parallelism,
         llm_parallelism=llm_parallelism,
@@ -902,7 +903,7 @@ def run(
                 'the host), otherwise OPENAI_API_KEY (+ optional OPENAI_BASE_URL for '
                 'vLLM/OpenRouter/Azure-compatible/local endpoints). ORQ wins if both '
                 'keys are set; namespace the model accordingly '
-                "(e.g. 'openai/gpt-4o-mini' for the Orq router, 'gpt-4o-mini' for OpenAI)."
+                "(e.g. 'openai/gpt-5.6-luna' for the Orq router, 'gpt-5.6-luna' for OpenAI)."
             ),
         ),
     ] = None,
@@ -932,8 +933,8 @@ def run(
         typer.Option(
             '--sim-model',
             help=(
-                'Model for the user-simulator, the judge, and persona/scenario/'
-                f'first-message generation. {MODEL_OPTION_NOTE}'
+                'Model for the user-simulator, the judge, persona/scenario/first-message '
+                f'generation, the recommendations pass and the executive summary. {MODEL_OPTION_NOTE}'
             ),
         ),
     ] = DEFAULT_MODEL,
@@ -1209,7 +1210,7 @@ async def _run_impl(
     return await _generate_and_simulate_run(
         agent_description=agent_description,
         target=target,
-        sim_model=sim_model,
+        llm_config=LLMCallConfig(model=sim_model),
         max_turns=max_turns,
         datapoint_parallelism=datapoint_parallelism,
         llm_parallelism=llm_parallelism,
@@ -1614,7 +1615,7 @@ async def _generate_impl(
         agent_description=agent_description,
         num_personas=num_personas,
         num_scenarios=num_scenarios,
-        sim_model=sim_model,
+        llm_config=LLMCallConfig(model=sim_model),
         hooks=hooks,
         persona_seeds=persona_seeds,
         scenario_seeds=scenario_seeds,

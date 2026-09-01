@@ -48,7 +48,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, Literal, NamedTuple, TypeVar, cast
 
 from openai import APIStatusError, AsyncOpenAI, LengthFinishReasonError, pydantic_function_tool
 from pydantic import BaseModel, ValidationError
@@ -62,6 +62,7 @@ from evaluatorq.common.tracing import with_llm_span
 from evaluatorq.contracts import (
     _RESERVED_COMPLETION_KEYS,
     _RESERVED_RESPONSES_KEYS,
+    LLMCallConfig,
     TokenUsage,
     check_reserved_keys,
 )
@@ -245,6 +246,164 @@ def _looks_like_schema_rejection(exc: APIStatusError) -> bool:
 # Per-request ceiling. A batched generation asking for tens of items is a slow
 # call by design, so this is well above LLMCallConfig's 90s default.
 _STRUCTURED_TIMEOUT_S = 300.0
+
+
+class Unset:
+    """Sentinel for "this keyword was not passed".
+
+    ``None`` cannot serve: it is a meaningful explicit value for every optional
+    sampling keyword here (``temperature=None`` means "omit the parameter", which
+    is what a reasoning-class model needs). Overloading it made
+    ``generate_structured``'s documented precedence — an explicit keyword beats
+    ``config`` — untrue for exactly the callers who most needed it.
+    """
+
+    def __repr__(self) -> str:
+        return '<unset>'
+
+
+UNSET = Unset()
+
+
+class _CallSettings(NamedTuple):
+    """The sampling knobs after the caller's keywords and ``config`` are folded."""
+
+    temperature: float | None
+    extra_kwargs: dict[str, Any] | None
+    extra_body: dict[str, Any] | None
+    reasoning_effort: str | None
+    timeout_s: float
+
+
+# What a call reads when no explicit keyword beats it; `model`, `client` and `api` stay the call site's authority.
+_CONSUMED_CONFIG_FIELDS = frozenset({
+    'temperature',
+    'extra_kwargs',
+    'extra_body',
+    'reasoning_effort',
+    'timeout_ms',
+})
+
+# Never warned about generically: every call site that takes a config also takes its own
+# `model` and `client` arguments, which always win. `warn_config_redirect` reports a
+# *different* model by name; `client` gets no such check, because the sanctioned
+# `without_client_retries` clone means an honoured injected client is not the same object.
+_CALL_SITE_ARGUMENTS = frozenset({'model', 'client'})
+
+# Warned once per (caller, ignored fields): these call sites run per datapoint, and the
+# same line 200 times is one nobody reads. Ceiling: process-global, so a second run in
+# one process stays silent — move the warning to the entry point if that ever matters.
+_WARNED_UNREAD: set[tuple[str, frozenset[str]]] = set()
+
+
+def warn_unread_config_fields(config: LLMCallConfig | None, read: frozenset[str], *, caller: str) -> None:
+    """Warn that ``caller`` will not read fields the caller set on ``config``.
+
+    A call site that sizes its own budget, picks its own endpoint or owns its
+    own retry loop takes those fields off the config. Dropping them without a
+    word makes a config that did nothing look like a config that worked, so
+    every such call site says which ones it ignored.
+
+    ``read`` is what the call site genuinely reads. `_CALL_SITE_ARGUMENTS` are
+    exempt without being claimed as read: they are beaten by a required keyword
+    at every call site, so warning about them generically would fire on every
+    run — the call site reports a divergent one by name instead.
+    """
+    if config is None:
+        return
+    ignored = config.model_fields_set - read - _CALL_SITE_ARGUMENTS
+    if not ignored:
+        return
+    key = (caller, frozenset(ignored))
+    if key in _WARNED_UNREAD:
+        return
+    _WARNED_UNREAD.add(key)
+    logger.warning(
+        '%s ignores llm_config %s — this call site owns those. It reads %s.',
+        caller,
+        ', '.join(sorted(ignored)),
+        ', '.join(sorted(read)) or 'no field on this config',
+    )
+
+
+def warn_config_redirect(config: LLMCallConfig | None, *, resolved_model: str, caller: str) -> None:
+    """Warn that ``caller`` runs on ``resolved_model``, not the one on ``config``.
+
+    ``model`` is a required keyword at every call site that takes a config, so it
+    always wins. Exempting it from `warn_unread_config_fields` without a word is
+    the silent drop that accounting exists to prevent; this is the word. Deduped
+    with the unread-field warning, since these call sites run per datapoint.
+    """
+    if config is None or 'model' not in config.model_fields_set or config.model == resolved_model:
+        return
+    key = (caller, frozenset({'model', resolved_model, config.model}))
+    if key in _WARNED_UNREAD:
+        return
+    _WARNED_UNREAD.add(key)
+    logger.warning(
+        '%s runs on model=%r; llm_config.model=%r does not redirect this call.',
+        caller,
+        resolved_model,
+        config.model,
+    )
+
+
+def _fold_config(
+    *,
+    config: LLMCallConfig | None,
+    model: str,
+    label: str,
+    temperature: float | Unset | None,
+    extra_kwargs: dict[str, Any] | Unset | None,
+    extra_body: dict[str, Any] | Unset | None,
+    reasoning_effort: str | Unset | None,
+    timeout_s: float | Unset,
+) -> _CallSettings:
+    """Explicit keyword beats ``config`` beats the call-site default.
+
+    A keyword still at ``UNSET`` is one the caller never passed; anything else
+    they meant, ``None`` included.
+
+    The unread-field warning subtracts the keywords the caller did pass from
+    `_CONSUMED_CONFIG_FIELDS`: a config field an explicit keyword beats was
+    dropped, so it belongs in the warning. ``timeout_s`` the keyword beats the
+    ``timeout_ms`` config field.
+
+    ``model`` and ``client`` are always beaten — they are required arguments —
+    so they are not in `_CONSUMED_CONFIG_FIELDS` at all, and a config carrying a
+    different ``model`` gets `warn_config_redirect` rather than the generic warning.
+    """
+    from_config = (
+        config.set_values('temperature', 'extra_kwargs', 'extra_body', 'reasoning_effort') if config is not None else {}
+    )
+    # A field an explicit keyword beat was dropped, not read, so it must not be warned against.
+    beaten = {
+        name
+        for name, keyword in (
+            ('temperature', temperature),
+            ('extra_kwargs', extra_kwargs),
+            ('extra_body', extra_body),
+            ('reasoning_effort', reasoning_effort),
+            ('timeout_ms', timeout_s),
+        )
+        if not isinstance(keyword, Unset)
+    }
+    caller = f'generate_structured({label})'
+    warn_config_redirect(config, resolved_model=model, caller=caller)
+    warn_unread_config_fields(config, _CONSUMED_CONFIG_FIELDS - beaten, caller=caller)
+    if isinstance(timeout_s, Unset):
+        resolved_timeout_s = config.timeout_s(_STRUCTURED_TIMEOUT_S) if config is not None else _STRUCTURED_TIMEOUT_S
+    else:
+        resolved_timeout_s = timeout_s
+    return _CallSettings(
+        temperature=from_config.get('temperature') if isinstance(temperature, Unset) else temperature,
+        extra_kwargs=from_config.get('extra_kwargs') if isinstance(extra_kwargs, Unset) else extra_kwargs,
+        extra_body=from_config.get('extra_body') if isinstance(extra_body, Unset) else extra_body,
+        reasoning_effort=(
+            from_config.get('reasoning_effort') if isinstance(reasoning_effort, Unset) else reasoning_effort
+        ),
+        timeout_s=resolved_timeout_s,
+    )
 
 
 def _truncated_output_error(
@@ -668,12 +827,13 @@ async def generate_structured(
     response_format: type[T],
     max_tokens: int,
     label: str,
-    temperature: float | None = None,
-    extra_kwargs: dict[str, Any] | None = None,
+    temperature: float | Unset | None = UNSET,
+    extra_kwargs: dict[str, Any] | Unset | None = UNSET,
     api: Literal['chat_completions', 'responses'] = 'chat_completions',
-    reasoning_effort: str | None = None,
-    timeout_s: float = _STRUCTURED_TIMEOUT_S,
-    extra_body: dict[str, Any] | None = None,
+    reasoning_effort: str | Unset | None = UNSET,
+    timeout_s: float | Unset = UNSET,
+    extra_body: dict[str, Any] | Unset | None = UNSET,
+    config: LLMCallConfig | None = None,
 ) -> StructuredResult[T]:
     """Generate structured output, degrading through the rungs in the module docstring.
 
@@ -704,7 +864,33 @@ async def generate_structured(
     A length-truncated response raises `StructuredGenerationError` (a
     ``RuntimeError``) rather than falling back: a same-budget retry would
     truncate again.
+
+    ``config`` supplies the sampling knobs a caller holds as one object rather
+    than as five keywords: ``temperature``, ``extra_kwargs``, ``extra_body``,
+    ``reasoning_effort`` and ``timeout_ms``. Only the fields the caller
+    explicitly set on it are read (``model_fields_set``), and an explicit
+    keyword here always wins — including ``temperature=None`` ("omit the
+    parameter") and ``timeout_s=_STRUCTURED_TIMEOUT_S`` (the default, passed on
+    purpose). That is why those keywords default to a private ``UNSET``
+    sentinel rather than to ``None``: both spellings are real values a caller
+    means, so neither can double as "said nothing".
+
+    ``config.model``, ``config.client`` and ``config.api`` are NOT read: this
+    function's own ``model`` / ``client`` / ``api`` arguments stay the single
+    authority, so a config cannot silently redirect a call to another model,
+    provider or endpoint. A config carrying a different ``model`` is logged
+    rather than obeyed; the caller resolves ``client`` before calling.
     """
+    temperature, extra_kwargs, extra_body, reasoning_effort, timeout_s = _fold_config(
+        config=config,
+        model=model,
+        label=label,
+        temperature=temperature,
+        extra_kwargs=extra_kwargs,
+        extra_body=extra_body,
+        reasoning_effort=reasoning_effort,
+        timeout_s=timeout_s,
+    )
     # Every rung is wrapped in `with_retry`, so the SDK's own budget is disarmed
     # once here; otherwise five outer attempts over an SDK doing two retries is
     # fifteen requests per rung. `without_client_retries` clones rather than

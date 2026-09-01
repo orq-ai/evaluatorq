@@ -11,6 +11,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from evaluatorq.contracts import LLMCallConfig
 from opentelemetry.sdk.trace import ReadableSpan
 
 from tests.simulation.conftest import CollectingExporter, new_collector
@@ -843,7 +844,6 @@ async def test_traceparent_injected_into_chat_completions_call(
     fake_client.chat.completions = MagicMock()
     fake_client.chat.completions.create = AsyncMock(side_effect=fake_create)
 
-    from evaluatorq.contracts import LLMCallConfig
     from evaluatorq.simulation.agents.base import BaseAgent
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.simulation.types import Message
@@ -1441,7 +1441,7 @@ async def test_batched_first_message_generation_uses_one_span(
         personas=personas,
         scenarios=scenarios,
         dataset_id=None,
-        model='test',
+        llm_config=LLMCallConfig(model='test'),
         generation_client=fake_client,
     )
 
@@ -1497,7 +1497,7 @@ async def test_first_message_generation_span_records_failures(
             personas=[persona],
             scenarios=[scenario],
             dataset_id=None,
-            model='test',
+            llm_config=LLMCallConfig(model='test'),
             generation_client=fake_client,
         )
 

@@ -40,6 +40,7 @@ Rules:
   sentence and stop. Do not manufacture problems."""
 
 if TYPE_CHECKING:
+    from evaluatorq.contracts import LLMCallConfig
     from evaluatorq.simulation.types import SimulationResult
 
 
@@ -80,6 +81,7 @@ async def populate_run_executive_summary(
     *,
     enabled: bool,
     model: str,
+    llm_config: LLMCallConfig | None = None,
     resolve_client: Any = None,
 ) -> None:
     """Populate ``run.executive_summary`` in place. Best-effort; never raises.
@@ -88,6 +90,14 @@ async def populate_run_executive_summary(
     a narrative is generated on every default-on path. Skips silently when
     disabled, when the run has no results, or when no LLM credentials are
     configured — a default-on run without creds still yields a valid report.
+
+    ``llm_config`` supplies the sampling knobs for this one call — the same
+    config the rest of the run's simulation-side calls use. Only the fields the
+    caller explicitly set on it are read, so an unset ``temperature`` still means
+    the request omits the parameter.
+
+    ``llm_config.client``, when set, is handed to the resolver as the client to
+    use rather than being consulted after the environment has already been asked.
 
     ``resolve_client`` overrides the credential resolver (the CLI passes its own
     module-level ``resolve_llm_client`` so its test monkeypatch seam still works);
@@ -105,19 +115,21 @@ async def populate_run_executive_summary(
 
     resolver = resolve_client or resolve_llm_client
     try:
-        resolved = resolver()
+        # Resolving the environment first would demand credentials this caller's own client never needed.
+        resolved = (
+            resolver(llm_config.client) if llm_config is not None and llm_config.client is not None else resolver()
+        )
     except MissingLLMCredentialsError:
         logger.warning('Skipping executive summary: no LLM credentials configured.')
         return
 
-    # Span reports the same constants generate_executive_summary sends — single
-    # source of truth, so the trace can never drift from the real request. No
-    # temperature attribute: the call does not send one, so the provider default
-    # applies and the span must not claim a value.
+    # Only these two have span attributes; the other fields reach the request unseen here.
+    span_values = llm_config.set_values('temperature', 'max_tokens') if llm_config is not None else {}
     async with with_llm_span(
         model=model,
         operation='chat',
-        max_tokens=EXECUTIVE_SUMMARY_MAX_TOKENS,
+        temperature=span_values.get('temperature'),
+        max_tokens=span_values.get('max_tokens', EXECUTIVE_SUMMARY_MAX_TOKENS),
         purpose='executive_summary',
     ):
         summary = await generate_executive_summary(
@@ -125,6 +137,7 @@ async def populate_run_executive_summary(
             llm_client=resolved.client,
             model=model,
             system_prompt=SIM_EXECUTIVE_SUMMARY_SYSTEM_PROMPT,
+            config=llm_config,
         )
         run.executive_summary = summary.text
         # Last usage-producing step in a run, so folding it in here in place is what

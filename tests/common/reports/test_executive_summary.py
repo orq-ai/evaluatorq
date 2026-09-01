@@ -10,6 +10,7 @@ from evaluatorq.common.reports.executive_summary import (
     generate_executive_summary,
     truncate_text,
 )
+from evaluatorq.contracts import LLMCallConfig
 
 
 class _StubMessage:
@@ -62,9 +63,7 @@ async def test_generate_returns_prose_and_passes_prompt():
         'Total attacks: 10',
         llm_client=cast(AsyncOpenAI, cast(object, client)),
         model='openai/gpt-4o-mini',
-        temperature=0.3,
-        extra_body={'foo': 'bar'},
-        extra_kwargs={'seed': 7},
+        config=LLMCallConfig(model='ignored', temperature=0.3, extra_body={'foo': 'bar'}, extra_kwargs={'seed': 7}),
     )
     assert out.text == 'Across 10 attacks, the agent resisted 80%.'
     call = client.chat.completions.calls[0]
@@ -105,7 +104,7 @@ async def test_extra_kwargs_temperature_reaches_the_call_instead_of_raising_type
     hand-built-dict shape splatted ``extra_kwargs`` next to an explicit
     ``temperature=`` keyword, which raised ``TypeError: got multiple values for
     keyword argument`` — swallowed by the blanket ``except Exception`` into a
-    silently ``None`` summary. `LLMCallConfig.completion_params` merges
+    silently ``None`` summary. `LLMCallConfig.request_params` merges
     ``extra_kwargs`` last, so the caller-supplied value must win instead.
     """
     client = _StubClient('Some summary.')
@@ -113,8 +112,7 @@ async def test_extra_kwargs_temperature_reaches_the_call_instead_of_raising_type
         'Total attacks: 10',
         llm_client=cast(AsyncOpenAI, cast(object, client)),
         model='openai/gpt-5.6-luna',
-        temperature=0.0,
-        extra_kwargs={'temperature': 1},
+        config=LLMCallConfig(model='ignored', temperature=0.0, extra_kwargs={'temperature': 1}),
     )
     assert out.text == 'Some summary.'
     call = client.chat.completions.calls[0]
@@ -133,8 +131,9 @@ async def test_extra_kwargs_extra_body_is_rejected_not_clobbered():
         'Total attacks: 10',
         llm_client=cast(AsyncOpenAI, cast(object, client)),
         model='m',
-        extra_body={'retry': {'count': 3}},
-        extra_kwargs={'extra_body': {'malicious': True}},
+        config=LLMCallConfig(
+            model='ignored', extra_body={'retry': {'count': 3}}, extra_kwargs={'extra_body': {'malicious': True}}
+        ),
     )
     # The ValueError from check_reserved_keys is caught by the module's own
     # best-effort `except Exception`, so the contract observable from the

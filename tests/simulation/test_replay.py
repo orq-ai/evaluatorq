@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from evaluatorq.common.replay import ReplayError
+from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.replay import load_simulation_replay
 from evaluatorq.simulation.types import (
     CommunicationStyle,
@@ -126,7 +127,7 @@ async def test_previous_run_short_circuits_other_sources(tmp_path: Path) -> None
         scenarios=None,
         dataset_id=None,
         previous_run='latest',
-        model='openai/gpt-5.4-mini',
+        llm_config=LLMCallConfig(model='openai/gpt-5.4-mini'),
         generation_client=None,
     )
     assert resolved == [dp]
@@ -144,7 +145,7 @@ async def test_previous_run_is_mutually_exclusive(tmp_path: Path) -> None:
             scenarios=None,
             dataset_id=None,
             previous_run='latest',
-            model='openai/gpt-5.4-mini',
+            llm_config=LLMCallConfig(model='openai/gpt-5.4-mini'),
             generation_client=None,
         )
 

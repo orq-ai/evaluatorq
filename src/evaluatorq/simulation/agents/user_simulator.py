@@ -39,11 +39,8 @@ class UserSimulatorAgentConfig(AgentConfig):
     system_prompt: str | None = None
 
     def __init__(self, system_prompt: str | None = None, **kwargs: Any) -> None:
-        # Default to the Responses API, as the judge does: it keeps every
-        # simulation LLM call on one endpoint, so a run's spans are all
-        # `responses ...` rather than a mix the trace UI types differently.
-        # Callers can still pass api='chat_completions'.
-        kwargs.setdefault('api', 'responses')
+        # Also named here: _config_from_agent_config always writes `api`, so the base default cannot apply.
+        kwargs.setdefault('api', BaseAgent.DEFAULT_API)
         super().__init__(**kwargs)
         self.system_prompt = system_prompt
 
@@ -58,10 +55,22 @@ class UserSimulatorAgent(BaseAgent):
     def __init__(
         self,
         config: UserSimulatorAgentConfig | AgentConfig | LLMCallConfig | None = None,
+        *,
+        system_prompt: str | None = None,
     ) -> None:
+        """``config`` may be a `LLMCallConfig` with ``system_prompt`` beside it.
+
+        That is the shape the runner uses: converting a `LLMCallConfig` into
+        `UserSimulatorAgentConfig` first only to have `BaseAgent` convert it
+        straight back loses an explicitly set ``temperature=None`` or
+        ``reasoning_effort=None``, because `AgentConfig` spells "unset" as
+        ``None`` and cannot tell the two apart (RES-1421). ``system_prompt`` on
+        a `UserSimulatorAgentConfig` still works and is used when the keyword is
+        omitted.
+        """
         super().__init__(config)
-        self._custom_system_prompt: str | None = None
-        if isinstance(config, UserSimulatorAgentConfig):
+        self._custom_system_prompt: str | None = system_prompt
+        if system_prompt is None and isinstance(config, UserSimulatorAgentConfig):
             self._custom_system_prompt = config.system_prompt
 
     @property

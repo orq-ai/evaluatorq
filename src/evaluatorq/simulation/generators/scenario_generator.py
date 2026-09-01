@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.structured_output import token_budget_for_items
+from evaluatorq.contracts import LLMCallConfig  # noqa: TC001
 from evaluatorq.simulation._usage import UsageTracking
 from evaluatorq.simulation.types import (
     DEFAULT_MODEL,
@@ -197,12 +198,22 @@ class ScenarioGenerator(UsageTracking):
         model: str = DEFAULT_MODEL,
         client: AsyncOpenAI | None = None,
         api_key: str | None = None,
+        config: LLMCallConfig | None = None,
     ) -> None:
-        self._model = model
+        """``config`` carries the sampling settings for this generator's own LLM
+        calls; ``model`` is the shorthand for setting just the model on it. When
+        both set the model, ``config.model`` wins and the contradiction is
+        logged — same rule, same warning, as the public entry points.
+        """
+        from evaluatorq.simulation._config import resolve_sim_llm_config
+
+        self._config = resolve_sim_llm_config(model=model, llm_config=config, caller=type(self).__name__)
+        self._model = self._config.model
         from evaluatorq.openresponses.client import build_simulation_client
 
+        # `build_simulation_client` owns the precedence, so the config's client must reach it rather than be checked after.
         self._client, self._client_owned = build_simulation_client(
-            client,
+            client or self._config.client,
             extra_api_key=api_key,
             max_retries=0,
         )
@@ -282,6 +293,7 @@ Return ONLY a JSON array, no other text."""
                     max_tokens=_scenario_token_budget(num_scenarios),
                     label='ScenarioGenerator.generate',
                     api='responses',
+                    config=self._config,
                 )
                 self._accumulate(result.usage)
                 parsed, raw = result.parsed, result.raw
@@ -361,6 +373,7 @@ Return ONLY a JSON array, no other text."""
                     max_tokens=_scenario_token_budget(num_scenarios),
                     label='ScenarioGenerator.generate_with_coverage',
                     api='responses',
+                    config=self._config,
                 )
                 self._accumulate(result.usage)
                 parsed, raw = result.parsed, result.raw
@@ -438,6 +451,7 @@ Return ONLY a JSON array, no other text."""
                     max_tokens=_scenario_token_budget(num_edge_cases),
                     label='ScenarioGenerator.generate_edge_cases',
                     api='responses',
+                    config=self._config,
                 )
                 self._accumulate(result.usage)
                 parsed, raw = result.parsed, result.raw
@@ -506,6 +520,7 @@ Return ONLY a JSON array, no other text."""
                     max_tokens=_scenario_token_budget(num_scenarios),
                     label='ScenarioGenerator.generate_boundary_scenarios',
                     api='responses',
+                    config=self._config,
                 )
                 self._accumulate(result.usage)
                 parsed, raw = result.parsed, result.raw
@@ -587,6 +602,7 @@ Return ONLY a JSON array, no other text."""
                     max_tokens=_scenario_token_budget(num_scenarios),
                     label='ScenarioGenerator.generate_security_scenarios',
                     api='responses',
+                    config=self._config,
                 )
                 self._accumulate(result.usage)
                 parsed, raw = result.parsed, result.raw

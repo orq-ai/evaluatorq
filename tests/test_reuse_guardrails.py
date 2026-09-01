@@ -459,3 +459,281 @@ def test_new_hardcoded_class_detector_actually_fires() -> None:
     assert _new_returns_hardcoded_class('class Backend:\n    def new(self):\n        return Backend()\n', 'x.py') == [
         'x.py:3'
     ]
+
+
+# --- an llm_config consumed in part, silently --------------------------------
+# `FirstMessageGenerator` dropped a caller's `max_tokens` for as long as it existed, because it never went through `generate_structured`.
+_SIM_GENERATORS = SRC / 'simulation' / 'generators'
+
+# Declaring the read set covers the whole scope; `generate_structured` covers only the reads inside its own call.
+_SCOPE_ACCOUNTING_CALL = 'warn_unread_config_fields'
+_CALL_ACCOUNTING_CALL = 'generate_structured'
+
+# Accessors that turn a config into call parameters; the field names come from the model itself.
+_CONFIG_ACCESSORS = frozenset({'set_values', 'timeout_s', 'request_params'})
+
+
+@cache
+def _call_setting_names() -> frozenset[str]:
+    """Every way of reading a *call setting* off an `LLMCallConfig`.
+
+    `model` and `client` are excluded: reading those is routing, not sampling,
+    and a generator that only routes (`DatapointGenerator`) hands the config on
+    to the generators that do the calling, which each account for it there.
+    """
+    from evaluatorq.contracts import LLMCallConfig
+
+    return (frozenset(LLMCallConfig.model_fields) | _CONFIG_ACCESSORS) - {'model', 'client'}
+
+
+def _scope_nodes(root: ast.AST) -> list[ast.AST]:
+    """Every node under ``root``, minus the bodies of the classes nested in it.
+
+    A nested class is its own scope, so excluding it here keeps the enclosing
+    walk from seeing — or clearing on — code it does not own.
+    """
+    nodes: list[ast.AST] = []
+    stack: list[ast.AST] = [root]
+    while stack:
+        node = stack.pop()
+        nodes.append(node)
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.ClassDef):
+                continue
+            stack.append(child)
+    return nodes
+
+
+def _resolved_config_names(nodes: list[ast.AST]) -> set[str]:
+    """Names bound to a ``resolve_sim_llm_config(...)`` result in ``nodes``.
+
+    Catches a config held under a name that does not contain ``config``.
+    """
+    names: set[str] = set()
+    for node in nodes:
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign):
+            targets, value = [node.target], node.value
+        else:
+            continue
+        if not isinstance(value, ast.Call) or _tail(_dotted(value.func)) != 'resolve_sim_llm_config':
+            continue
+        for target in targets:
+            if isinstance(target, ast.Name):
+                names.add(target.id)
+            elif isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name):
+                names.add(f'{target.value.id}.{target.attr}')
+    return names
+
+
+def _receives_resolved_config(call: ast.Call, receivers: set[str], *, positional: bool = False) -> bool:
+    """True when ``call`` is handed a resolved config rather than nothing.
+
+    Without it neither accounting call accounts for anything:
+    `generate_structured` warns through `_fold_config`, which no-ops when
+    ``config is None``, and `warn_unread_config_fields` returns early on the
+    same condition. ``positional`` also accepts the first positional argument,
+    which is how every real `warn_unread_config_fields` call passes the config.
+    """
+    candidates = [keyword.value for keyword in call.keywords if keyword.arg == 'config']
+    if positional and call.args:
+        candidates.append(call.args[0])
+    return any('config' in (name := _dotted(candidate)).lower() or name in receivers for candidate in candidates)
+
+
+def _scope_accounting_gap(nodes: list[ast.AST], settings: frozenset[str]) -> int | None:
+    """First unaccounted-for config read in one scope, or ``None``."""
+    calls = [node for node in nodes if isinstance(node, ast.Call)]
+    receivers = _resolved_config_names(nodes)
+    if any(
+        _tail(_dotted(call.func)) == _SCOPE_ACCOUNTING_CALL and _receives_resolved_config(call, receivers, positional=True)
+        for call in calls
+    ):
+        return None
+    excused = {
+        id(inner)
+        for call in calls
+        if _tail(_dotted(call.func)) == _CALL_ACCOUNTING_CALL and _receives_resolved_config(call, receivers)
+        for inner in ast.walk(call)
+    }
+    reads = sorted(
+        node.lineno
+        for node in nodes
+        if isinstance(node, ast.Attribute)
+        and id(node) not in excused
+        and node.attr in settings
+        and ('config' in (name := _dotted(node.value)).lower() or name in receivers)
+    )
+    return reads[0] if reads else None
+
+
+def _config_accounting_gap(source: str) -> int | None:
+    """First line where ``source`` reads a call setting off a resolved config
+    without accounting for the settings it ignores, or ``None``.
+
+    A file qualifies when `resolve_sim_llm_config` or `warn_unread_config_fields`
+    appears anywhere in it — the first covers the simulation constructors that
+    fold a model shorthand into a config, the second every other module that has
+    already declared it reads part of one. A config that arrives as a parameter
+    is seen either way. Accounting is then per
+    scope: each ``class`` is its own scope, module-level code outside every
+    class is one more, and a scope is clear when it calls
+    `warn_unread_config_fields` with the config. A
+    `generate_structured(config=...)` call clears only the reads inside it, so a
+    new method reading the config next to one that delegates is still a hit.
+
+    Two accepted gaps. Any receiver whose dotted name contains ``config``
+    counts as a read, so an unrelated ``self._span_config.temperature`` in a
+    generator module would be a false hit — that is the price of detecting
+    parameter-borne configs at all. And once a scope declares a read set, a
+    later read outside that set is not flagged: checking the declared set
+    against the attributes actually read needs cross-referencing the two, and
+    the failure it would catch is a *stale* warning rather than the silent drop
+    this guardrail exists for.
+    """
+    tree = ast.parse(source)
+    if not any(
+        isinstance(node, ast.Call) and _tail(_dotted(node.func)) in {'resolve_sim_llm_config', _SCOPE_ACCOUNTING_CALL}
+        for node in ast.walk(tree)
+    ):
+        return None
+    settings = _call_setting_names()
+    scopes: list[ast.AST] = [tree, *(node for node in ast.walk(tree) if isinstance(node, ast.ClassDef))]
+    hits = [line for scope in scopes if (line := _scope_accounting_gap(_scope_nodes(scope), settings)) is not None]
+    return min(hits) if hits else None
+
+
+def test_every_module_that_reads_a_config_accounts_for_the_rest_of_it() -> None:
+    """A module that reads part of an `llm_config` must say what it drops.
+
+    Scope is every module that folds a model shorthand into a config or already
+    calls `warn_unread_config_fields` — not "any function taking
+    `config: LLMCallConfig`", which sweeps in `BaseAgent` and `contracts` and
+    would need an allowlist to stay green, the failure mode this file exists to
+    avoid. Four hand-maintained frozensets of field names now exist across
+    `common/structured_output.py`, `common/reports/executive_summary.py`,
+    `redteam/runner.py` and `simulation/generators/`; the narrow scope this
+    guardrail started with watched only the last of them.
+    """
+    hits = [
+        f'{path.relative_to(SRC).as_posix()}:{line}'
+        for path in sorted(SRC.rglob('*.py'))
+        if (line := _config_accounting_gap(path.read_text(encoding='utf-8'))) is not None
+    ]
+    assert not hits, (
+        'Module reads part of an llm_config and drops the rest in silence: '
+        + ', '.join(hits)
+        + '. Call evaluatorq.common.structured_output.warn_unread_config_fields(config, '
+        '<fields you read>, caller=...) next to the resolve_sim_llm_config call — see '
+        '_READ_CONFIG_FIELDS in simulation/generators/first_message_generator.py — or '
+        'route the call through generate_structured, which warns on your behalf.'
+    )
+
+
+def test_config_accounting_detector_actually_fires() -> None:
+    """A guardrail nobody proved can fail is a guardrail that silently no-ops."""
+    violating = (
+        'class G:\n'
+        '    def __init__(self, config=None):\n'
+        '        self._config = resolve_sim_llm_config(sim_model=m, llm_config=config, caller="G")\n'
+        '    async def go(self):\n'
+        '        await self._client.responses.create(temperature=self._config.temperature)\n'
+    )
+    assert _config_accounting_gap(violating) == 5
+    # Cleared by warning itself, in the same class that read the config...
+    warned = violating.replace(
+        'self._config = resolve',
+        'warn_unread_config_fields(config, {"temperature"}, caller="G")\n        self._config = resolve',
+    )
+    assert _config_accounting_gap(warned) is None
+    # ...but a warn call outside that class accounts for nothing.
+    assert _config_accounting_gap(violating + '\nwarn_unread_config_fields(c, f, caller="other")\n') == 5
+    # ...and neither does one that is handed no config, or some other object.
+    for handed in ('None', 'self._settings'):
+        assert (
+            _config_accounting_gap(
+                violating.replace(
+                    'self._config = resolve',
+                    f'warn_unread_config_fields({handed}, frozenset(), caller="G")\n        self._config = resolve',
+                )
+            )
+            == 6
+        )
+    # ...or by letting generate_structured warn on its behalf, but only when the config reaches it.
+    delegating = violating.replace('self._client.responses.create', 'generate_structured')
+    assert _config_accounting_gap(delegating) == 5
+    assert _config_accounting_gap(delegating.replace('temperature=self', 'config=self._config, temperature=self')) is None
+    # A sibling method that delegates does not excuse a method that reads the config itself.
+    assert (
+        _config_accounting_gap(
+            violating.replace('temperature=self', 'config=self._config, temperature=self').replace(
+                'self._client.responses.create', 'generate_structured'
+            )
+            + '    async def also(self):\n'
+            '        await self._client.responses.create(max_output_tokens=self._config.max_tokens)\n'
+        )
+        == 7
+    )
+    # A config that arrives as a parameter is a read too, in a module function...
+    resolved_elsewhere = 'class Owner:\n    def __init__(self, c):\n        self._config = resolve_sim_llm_config(llm_config=c, caller="O")\n\n\n'
+    assert (
+        _config_accounting_gap(
+            resolved_elsewhere + 'async def generate_first_message(client, model, config):\n'
+            '    return await client.responses.create(temperature=config.temperature)\n'
+        )
+        == 7
+    )
+    # ...and in a class that takes one without resolving it itself.
+    assert (
+        _config_accounting_gap(
+            resolved_elsewhere + 'class Helper:\n'
+            '    def __init__(self, config):\n'
+            '        self._config = config\n'
+            '    async def go(self):\n'
+            '        return await self._client.responses.create(temperature=self._config.temperature)\n'
+        )
+        == 10
+    )
+    # A module that never resolves a config is out of scope.
+    assert _config_accounting_gap('x = self._config.temperature') is None
+    # Routing-only reads are not consumption: DatapointGenerator's shape.
+    assert (
+        _config_accounting_gap(
+            'self._config = resolve_sim_llm_config(sim_model=m, llm_config=config, caller="D")\n'
+            'self._model = self._config.model\n'
+            'sub = PersonaGenerator(client=self._config.client, config=self._config)\n'
+        )
+        is None
+    )
+    # Prose is not a read.
+    assert _config_accounting_gap('resolve_sim_llm_config()\n"""Mentions config.temperature."""') is None
+    # A cleared class does not clear its neighbours: the module-wide loophole.
+    cleared = 'class Fine:\n    def go(self):\n        return generate_structured()\n\n\n'
+    assert _config_accounting_gap(cleared + violating) == 10
+    # A config read through a name that never says "config" still counts.
+    assert _config_accounting_gap('cfg = resolve_sim_llm_config(sim_model=m, llm_config=c, caller="G")\nx = cfg.temperature\n') == 2
+    assert (
+        _config_accounting_gap(
+            'class G:\n'
+            '    def __init__(self):\n'
+            '        self._cfg: LLMCallConfig = resolve_sim_llm_config(sim_model=m, llm_config=c, caller="G")\n'
+            '    def go(self):\n'
+            '        return self._client.responses.create(**self._cfg.set_values("temperature"))\n'
+        )
+        == 5
+    )
+    # A module that never folds a model shorthand qualifies through its own accounting
+    # call, so a second scope beside the accounted one is still seen.
+    warn_only = (
+        'def documented(config):\n'
+        '    warn_unread_config_fields(config, {"temperature"}, caller="documented")\n'
+        '    return client.create(temperature=config.temperature)\n'
+        '\n'
+        '\n'
+        'class Later:\n'
+        '    def go(self, config):\n'
+        '        return client.create(max_output_tokens=config.max_tokens)\n'
+    )
+    assert _config_accounting_gap(warn_only) == 8
+    assert _config_accounting_gap(warn_only.replace('max_output_tokens=config.max_tokens', 'x=1')) is None

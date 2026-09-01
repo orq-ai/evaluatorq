@@ -29,6 +29,7 @@ from evaluatorq.common.recommendations import resolve_recommendations
 from evaluatorq.common.replay import REPLAY_VERSION, REPLAY_VERSION_KEY
 from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.common.run_store_dir import get_store_dir
+from evaluatorq.common.structured_output import warn_unread_config_fields
 from evaluatorq.common.target_call import call_target_with_retry, close_target, default_map_error
 from evaluatorq.common.thread_context import (
     _evaluatorq_run_scope,
@@ -37,7 +38,7 @@ from evaluatorq.common.thread_context import (
     evaluatorq_pipeline,
 )
 from evaluatorq.common.tracing import AttrMap, set_span_attrs, truncate_for_span
-from evaluatorq.contracts import AgentTarget, Message, TokenUsage
+from evaluatorq.contracts import AgentTarget, LLMCallConfig, Message, TokenUsage
 from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities, classify_agent_capabilities
 from evaluatorq.redteam.adaptive.orchestrator import ProgressDisplay, _get_active_progress
 from evaluatorq.redteam.adaptive.pipeline import (
@@ -99,6 +100,8 @@ from evaluatorq.send_results import send_results_to_orq
 from evaluatorq.tracing import tracing_session
 
 if TYPE_CHECKING:
+    from openai import AsyncOpenAI
+
     from evaluatorq.types import DataPointResult
 
 
@@ -1122,13 +1125,7 @@ async def red_team(
                             build_redteam_facts(report),
                             llm_client=es_client,
                             model=evaluator_model,
-                            temperature=config.evaluator.temperature,
-                            # No pipeline metadata here: generate_executive_summary tags the
-                            # call itself (guarded on the client routing through Orq). Passing
-                            # it via extra_body too would win the SDK's merge and silently
-                            # discard that tag — extra_body takes precedence over named kwargs.
-                            extra_body=config.retry_extra_body(es_client),
-                            extra_kwargs=config.evaluator.extra_kwargs,
+                            config=_executive_summary_config(config, model=evaluator_model, client=es_client),
                         )
                         report.executive_summary = executive_summary_result.text
                         post_processing_usages.append(executive_summary_result.usage)
@@ -1201,6 +1198,46 @@ async def red_team(
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
+
+# What the evaluator role contributes to the executive-summary call. Warned against the
+# object the user filled in, not the narrowed one: narrowing clears `model_fields_set`, so
+# the callee's own warning could never name a field this function dropped.
+_EXEC_SUMMARY_EVALUATOR_FIELDS = frozenset({
+    'model',
+    'client',
+    'judges',
+    'temperature',
+    'reasoning_effort',
+    'extra_kwargs',
+    'extra_body',
+    'max_tokens',
+    'timeout_ms',
+})
+
+
+def _executive_summary_config(config: LLMConfig, *, model: str, client: AsyncOpenAI | None) -> LLMCallConfig:
+    """The executive-summary call's config: the evaluator role's sampling knobs, and only those.
+
+    Built with `LLMCallConfig.set_values` rather than attribute reads, so a field
+    the caller never set stays unset instead of arriving as an explicit ``None``
+    the callee then sends. ``extra_body`` carries the router retry policy, gated
+    on ``client`` actually routing through Orq, with the caller's own keys layered
+    on top so a caller-supplied router flag wins; no pipeline metadata, which would
+    win the SDK merge and discard the tag the callee sets.
+
+    ``api`` and ``retry_count`` are dropped here — this call is a chat completion
+    on the report's own client — and named in the warning rather than dropped silently.
+    """
+    warn_unread_config_fields(config.evaluator, _EXEC_SUMMARY_EVALUATOR_FIELDS, caller='red_team executive summary')
+    forwarded = config.evaluator.set_values(
+        'temperature', 'reasoning_effort', 'extra_kwargs', 'max_tokens', 'timeout_ms'
+    )
+    return LLMCallConfig(
+        model=model,
+        extra_body={**config.retry_extra_body(client), **(config.evaluator.extra_body or {})},
+        **forwarded,
+    )
 
 
 def _safe_resolve_target_kind(at: Any) -> TargetKind:

@@ -78,7 +78,7 @@ class VercelAISdkTarget(AgentTarget):
             url: The HTTP endpoint URL serving the AI SDK agent.
             headers: Optional HTTP headers (e.g. for authentication).
             extra_body: Optional extra fields merged into the request body
-                alongside ``messages`` (e.g. ``{"model": "gpt-4o"}``).
+                alongside ``messages`` (e.g. ``{"model": "gpt-5.6-luna"}``).
             timeout: HTTP request timeout in seconds.
             agent_context: Optional `AgentContext` describing the
                 remote agent's tools, memory, system prompt, etc. The red

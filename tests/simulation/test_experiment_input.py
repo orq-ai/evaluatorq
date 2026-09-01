@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
+from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.api import _resolve_or_generate_datapoints
 from evaluatorq.simulation.cli import app
 from evaluatorq.simulation.experiments import (
@@ -137,7 +138,7 @@ async def test_resolver_uses_experiment(monkeypatch: pytest.MonkeyPatch) -> None
         dataset_id=None,
         experiment_id='ex_1',
         experiment_run_id=None,
-        model='m',
+        llm_config=LLMCallConfig(model='m'),
         generation_client=None,
     )
     assert len(out) == 2
@@ -154,7 +155,7 @@ async def test_resolver_experiment_mutually_exclusive() -> None:
             dataset_id='ds_1',
             experiment_id='ex_1',
             experiment_run_id=None,
-            model='m',
+            llm_config=LLMCallConfig(model='m'),
             generation_client=None,
         )
 
@@ -170,7 +171,7 @@ async def test_resolver_run_id_requires_experiment_id() -> None:
             dataset_id=None,
             experiment_id=None,
             experiment_run_id='run_9',
-            model='m',
+            llm_config=LLMCallConfig(model='m'),
             generation_client=None,
         )
 

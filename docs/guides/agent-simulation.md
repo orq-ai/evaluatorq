@@ -95,7 +95,7 @@ The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios
 
 === "OpenAI"
 
-    Pass `sim_model=` to route the simulator and judge through OpenAI directly.
+    Pass `llm_config=` to route the simulator and judge through OpenAI directly.
     Use `target=` for the agent under test.
 
     ```python
@@ -103,7 +103,7 @@ The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios
 
     from openai import AsyncOpenAI
 
-    from evaluatorq.contracts import Message
+    from evaluatorq.contracts import LLMCallConfig, Message
     from evaluatorq.simulation import generate_and_simulate
 
     client = AsyncOpenAI()
@@ -114,7 +114,7 @@ The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios
     async def openai_agent(messages: list[Message]) -> str:
         history = [{"role": "system", "content": SYSTEM}]
         history += [{"role": m.role, "content": m.content or ""} for m in messages]
-        resp = await client.chat.completions.create(model="gpt-4o-mini", messages=history)
+        resp = await client.chat.completions.create(model="gpt-5.6-luna", messages=history)
         return resp.choices[0].message.content or ""
 
 
@@ -128,7 +128,7 @@ The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios
             ),
             num_personas=3,
             num_scenarios=4,
-            sim_model="gpt-4o-mini",             # simulator + judge on OpenAI directly
+            llm_config=LLMCallConfig(model="gpt-5.6-luna"),  # simulator + judge on OpenAI directly
             max_turns=6,
             evaluator_names=["goal_achieved", "criteria_met"],
             upload_results=False,
@@ -142,7 +142,7 @@ The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios
         asyncio.run(main())
     ```
 
-`agent_description` drives generation; `num_personas × num_scenarios` is how many conversations run. The simulator and judge LLMs resolve their provider by precedence: if `ORQ_API_KEY` is set they route through the Orq AI Router; otherwise they fall back to OpenAI via `OPENAI_API_KEY` (an explicitly passed client always wins). See [Configuration](../configuration.md).
+`agent_description` drives generation; `num_personas × num_scenarios` is how many conversations run. The simulation-side LLMs resolve their provider by precedence: an explicitly passed `generation_client` wins, then `llm_config.client`, then `ORQ_API_KEY` (the Orq AI Router), then `OPENAI_API_KEY`. See [Configuration](../configuration.md).
 
 !!! note "CI and local runs"
     Dropped simulations raise by default; ordinary failed goals remain in the returned results. Set `exit_on_failure=False` for exploratory runs. When `ORQ_API_KEY` is available, results upload to Orq by default; pass `upload_results=False` to suppress the Experiment upload. That is not an offline mode — see [What gets uploaded](simulation-in-evaluatorq.md#what-gets-uploaded).
@@ -246,7 +246,7 @@ A persona requires its core traits — `name`, `patience`, `assertiveness`, `pol
 === "OpenAI"
 
     Use `target=` with any async function that maps the conversation to
-    your agent's reply. Pass `sim_model=` to run the simulator and judge on OpenAI
+    your agent's reply. Pass `llm_config=` to run the simulator and judge on OpenAI
     directly. Set `upload_results=False` for a local-only run.
 
     ```python
@@ -254,7 +254,7 @@ A persona requires its core traits — `name`, `patience`, `assertiveness`, `pol
 
     from openai import AsyncOpenAI
 
-    from evaluatorq.contracts import Message
+    from evaluatorq.contracts import LLMCallConfig, Message
     from evaluatorq.simulation import simulate
     from evaluatorq.simulation.types import CommunicationStyle, Criterion, Persona, Scenario
 
@@ -267,7 +267,7 @@ A persona requires its core traits — `name`, `patience`, `assertiveness`, `pol
         """Your agent under test — a raw OpenAI model."""
         history = [{"role": "system", "content": SYSTEM}]
         history += [{"role": m.role, "content": m.content or ""} for m in messages]
-        resp = await client.chat.completions.create(model="gpt-4o-mini", messages=history)
+        resp = await client.chat.completions.create(model="gpt-5.6-luna", messages=history)
         return resp.choices[0].message.content or ""
 
 
@@ -291,7 +291,7 @@ A persona requires its core traits — `name`, `patience`, `assertiveness`, `pol
             target=openai_agent,                 # your OpenAI agent
             personas=[persona],
             scenarios=[scenario],
-            sim_model="gpt-4o-mini",             # simulator + judge on OpenAI directly
+            llm_config=LLMCallConfig(model="gpt-5.6-luna"),  # simulator + judge on OpenAI directly
             max_turns=6,
             evaluator_names=["goal_achieved", "criteria_met"],
             upload_results=False,                # local-only run, no Orq experiment

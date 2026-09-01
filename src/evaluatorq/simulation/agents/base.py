@@ -9,8 +9,8 @@ from __future__ import annotations
 import logging
 import os
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from dataclasses import dataclass, fields
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from evaluatorq.common.llm_call import (
     execute_chat_completion,
@@ -43,6 +43,8 @@ from evaluatorq.simulation.tracing import span_message_text, with_llm_span
 from evaluatorq.simulation.types import DEFAULT_MODEL, Message
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
@@ -128,6 +130,19 @@ class LLMResult:
     refusal: str | None = None
 
 
+# A field missing here is dropped from the request, without a word, on the legacy `AgentConfig` path.
+_MIRRORED_FIELDS: tuple[str, ...] = (
+    'api',
+    'temperature',
+    'max_tokens',
+    'timeout_ms',
+    'extra_kwargs',
+    'extra_body',
+    'reasoning_effort',
+    'retry_count',
+)
+
+
 @dataclass
 class AgentConfig:
     """Configuration options for constructing an agent.
@@ -135,12 +150,12 @@ class AgentConfig:
     Deprecated: use `evaluatorq.contracts.LLMCallConfig` instead. `AgentConfig`
     is kept for backwards compatibility and will be removed in a future release.
 
-    ``temperature`` / ``max_tokens`` / ``timeout_ms`` / ``extra_kwargs`` /
-    ``reasoning_effort`` / ``retry_count`` default to ``None`` here (not
-    `LLMCallConfig`'s own defaults): ``None`` means "caller didn't touch this",
-    so `_config_from_agent_config` omits it from the constructed
-    `LLMCallConfig`, letting the per-call-site literal / env fallback apply —
-    exactly as if this legacy class had never been in the way.
+    Every field except ``model``, ``client``, ``api_key`` and ``api`` defaults
+    to ``None`` here (not `LLMCallConfig`'s own defaults): ``None`` means
+    "caller didn't touch this", so `_config_from_agent_config` omits it from
+    the constructed `LLMCallConfig`, letting the per-call-site literal / env
+    fallback apply — exactly as if this legacy class had never been in the
+    way.
     """
 
     model: str = DEFAULT_MODEL
@@ -151,8 +166,33 @@ class AgentConfig:
     max_tokens: int | None = None
     timeout_ms: int | None = None
     extra_kwargs: dict[str, Any] | None = None
+    extra_body: dict[str, Any] | None = None
     reasoning_effort: str | None = None
     retry_count: int | None = None
+
+
+def _mirror_gaps(config_fields: Iterable[str], agent_fields: Iterable[str]) -> tuple[set[str], set[str]]:
+    """What the hand-maintained `_MIRRORED_FIELDS` mirror is missing, in both directions.
+
+    Returns the `LLMCallConfig` fields nothing mirrors, and the mirrored names
+    `AgentConfig` has no attribute for. ``model`` and ``client`` are excluded
+    because `_config_from_agent_config` passes those outside the loop.
+    """
+    return (
+        set(config_fields) - set(_MIRRORED_FIELDS) - {'model', 'client'},
+        set(_MIRRORED_FIELDS) - set(agent_fields),
+    )
+
+
+# Checked at import time, like the vulnerability registry: a field forgotten here vanishes from the request in silence.
+_unmirrored, _unbacked = _mirror_gaps(LLMCallConfig.model_fields, {f.name for f in fields(AgentConfig)})
+if _unmirrored:
+    raise RuntimeError(
+        f'LLMCallConfig fields missing from _MIRRORED_FIELDS: {sorted(_unmirrored)}. Add each one there, and to '
+        'AgentConfig, or the legacy AgentConfig path drops it from the request in silence.'
+    )
+if _unbacked:
+    raise RuntimeError(f'_MIRRORED_FIELDS names fields AgentConfig does not have: {sorted(_unbacked)}.')
 
 
 def _config_from_agent_config(agent_cfg: AgentConfig) -> tuple[LLMCallConfig, str | None]:
@@ -164,20 +204,20 @@ def _config_from_agent_config(agent_cfg: AgentConfig) -> tuple[LLMCallConfig, st
     resolvers in `BaseAgent` (``_resolved_temperature`` etc.) — a field left at
     its `AgentConfig` default of ``None`` must NOT shadow the per-call-site
     literal / env fallback with `LLMCallConfig`'s own field default.
+
+    ``api`` is the one deliberate exception: it always lands in
+    ``model_fields_set`` so that the legacy path stays pinned to
+    ``chat_completions`` against `BaseAgent.DEFAULT_API`, regardless of
+    whether the caller touched it. ``model`` is unconditional too, since it
+    has a non-``None`` default on `AgentConfig` and is always meaningful.
     """
-    kwargs: dict[str, Any] = {'model': agent_cfg.model, 'client': agent_cfg.client, 'api': agent_cfg.api}
-    if agent_cfg.temperature is not None:
-        kwargs['temperature'] = agent_cfg.temperature
-    if agent_cfg.max_tokens is not None:
-        kwargs['max_tokens'] = agent_cfg.max_tokens
-    if agent_cfg.timeout_ms is not None:
-        kwargs['timeout_ms'] = agent_cfg.timeout_ms
-    if agent_cfg.extra_kwargs is not None:
-        kwargs['extra_kwargs'] = agent_cfg.extra_kwargs
-    if agent_cfg.reasoning_effort is not None:
-        kwargs['reasoning_effort'] = agent_cfg.reasoning_effort
-    if agent_cfg.retry_count is not None:
-        kwargs['retry_count'] = agent_cfg.retry_count
+    kwargs: dict[str, Any] = {'model': agent_cfg.model, 'api': agent_cfg.api}
+    if agent_cfg.client is not None:
+        kwargs['client'] = agent_cfg.client
+    for field in _MIRRORED_FIELDS:
+        value = getattr(agent_cfg, field)
+        if field != 'api' and value is not None:
+            kwargs[field] = value
     return LLMCallConfig(**kwargs), agent_cfg.api_key
 
 
@@ -192,6 +232,15 @@ class BaseAgent(UsageTracking, ABC):
     The agent will NOT close an injected client.
     """
 
+    # Not LLMCallConfig's own chat_completions default: the judge sends function
+    # tools and reasoning_effort together, which chat completions answers with a 400.
+    DEFAULT_API: ClassVar[Literal['chat_completions', 'responses']] = 'responses'
+
+    # Set by a subclass whose request shape only one endpoint accepts. It wins over a
+    # caller's `api`, because the shared config is chosen for the agent under test and
+    # the judge's 400 would surface as a failed run, not as a bad setting.
+    REQUIRED_API: ClassVar[Literal['chat_completions', 'responses'] | None] = None
+
     def __init__(self, config: LLMCallConfig | AgentConfig | None = None) -> None:
         # Normalise legacy AgentConfig into LLMCallConfig
         extra_api_key: str | None = None
@@ -199,6 +248,17 @@ class BaseAgent(UsageTracking, ABC):
             self.config, extra_api_key = _config_from_agent_config(config)
         else:
             self.config = config or LLMCallConfig(model=DEFAULT_MODEL)
+        if self.REQUIRED_API is not None:
+            if 'api' in self.config.model_fields_set and self.config.api != self.REQUIRED_API:
+                logger.warning(
+                    '%s runs on the %s endpoint; llm_config.api=%r does not apply to it.',
+                    type(self).__name__,
+                    self.REQUIRED_API,
+                    self.config.api,
+                )
+            self.config = self.config.model_copy(update={'api': self.REQUIRED_API})
+        elif 'api' not in self.config.model_fields_set:
+            self.config = self.config.model_copy(update={'api': self.DEFAULT_API})
 
         self._client_owned: bool
         self._client: AsyncOpenAI = self._build_client(extra_api_key)
@@ -343,9 +403,7 @@ class BaseAgent(UsageTracking, ABC):
         `respond_async` / `_call_llm` use), which beats the call-time-resolved
         env fallback (`_default_timeout_s`, EVALUATORQ_LLM_TIMEOUT_S).
         """
-        if 'timeout_ms' in self.config.model_fields_set:
-            return self.config.timeout_ms / 1000.0
-        return call_value if call_value is not None else _default_timeout_s()
+        return self.config.timeout_s(call_value if call_value is not None else _default_timeout_s())
 
     def _resolved_reasoning_effort(self) -> str | None:
         """Effective reasoning effort: an explicitly set ``self.config.reasoning_effort``

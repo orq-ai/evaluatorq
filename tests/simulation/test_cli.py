@@ -972,7 +972,7 @@ def test_simulate_forwards_flags(tmp_path: Path) -> None:
     assert kwargs["evaluation_name"] == "My Run"
 
 
-def test_simulate_impl_forwards_sim_model_to_simulate(tmp_path: Path, monkeypatch) -> None:
+def test_simulate_impl_forwards_the_sim_model_flag_as_an_llm_config(tmp_path: Path, monkeypatch) -> None:
     # Covers the _simulate_impl -> simulate leg (test_simulate_forwards_flags stops at _simulate_impl).
     dp_file = _make_datapoints_file(tmp_path)
     captured = {}
@@ -997,7 +997,7 @@ def test_simulate_impl_forwards_sim_model_to_simulate(tmp_path: Path, monkeypatc
         )
 
     assert result.exit_code == 0, result.output
-    assert captured["sim_model"] == "custom-model"
+    assert captured["llm_config"].model == "custom-model"
 
 
 def test_simulate_evaluator_absent_forwards_none(tmp_path: Path) -> None:
@@ -1823,7 +1823,7 @@ def test_generate_forwards_flags(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_run_forwards_sim_model(monkeypatch):
+def test_run_forwards_the_sim_model_flag_as_an_llm_config(monkeypatch):
     from typer.testing import CliRunner
 
     from evaluatorq.simulation import cli as sim_cli
@@ -1851,10 +1851,10 @@ def test_run_forwards_sim_model(monkeypatch):
         env={"OPENAI_API_KEY": "test-key"},
     )
     assert result.exit_code == 0, result.output
-    assert captured["sim_model"] == "gpt-5.4-mini"
+    assert captured["llm_config"].model == "gpt-5.4-mini"
 
 
-def test_generate_forwards_sim_model(monkeypatch):
+def test_generate_forwards_the_sim_model_flag_as_an_llm_config(monkeypatch):
     from typer.testing import CliRunner
 
     from evaluatorq.simulation import cli as sim_cli
@@ -1880,7 +1880,7 @@ def test_generate_forwards_sim_model(monkeypatch):
         env={"OPENAI_API_KEY": "test-key"},
     )
     assert result.exit_code == 0, result.output
-    assert captured["sim_model"] == "gpt-5.4-mini"
+    assert captured["llm_config"].model == "gpt-5.4-mini"
 
 
 def test_from_traces_summarizes_once_and_reuses_summary(monkeypatch, tmp_path: Path) -> None:

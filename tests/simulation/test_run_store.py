@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.utils.run_store import (
     SIM_RUNS_DIR_NAME,
     auto_save_run,
@@ -402,7 +403,7 @@ async def _run_simulate(*, runs_dir: Path, monkeypatch: pytest.MonkeyPatch, **kw
         await simulate(
             target=lambda _messages: "hi",
             datapoints=[_make_datapoint()],
-            sim_model="test",
+            llm_config=LLMCallConfig(model="test"),
             upload_results=False,
             **kwargs,
         )
@@ -435,7 +436,7 @@ async def test_simulate_experiment_url_populated_from_upload(
         out = await simulate(
             target=lambda _messages: "hi",
             datapoints=[_make_datapoint()],
-            sim_model="test",
+            llm_config=LLMCallConfig(model="test"),
             upload_results=False,
             save=True,
         )
@@ -486,7 +487,7 @@ async def test_simulate_save_true_openai_model_target_kind_is_openai_model(
         await simulate(
             target=target,
             datapoints=[_make_datapoint()],
-            sim_model="test",
+            llm_config=LLMCallConfig(model="test"),
             upload_results=False,
             save=True,
         )
@@ -520,7 +521,7 @@ async def test_simulate_save_true_vercel_target_kind_is_vercel(
         await simulate(
             target=target,
             datapoints=[_make_datapoint()],
-            sim_model="test",
+            llm_config=LLMCallConfig(model="test"),
             upload_results=False,
             save=True,
         )
@@ -584,7 +585,7 @@ async def test_simulate_save_failure_still_returns_results(
         out = await simulate(
             target=lambda _messages: "hi",
             datapoints=[_make_datapoint()],
-            sim_model="test",
+            llm_config=LLMCallConfig(model="test"),
             upload_results=False,
             save=True,
         )

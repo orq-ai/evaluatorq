@@ -224,11 +224,12 @@ async def test_responses_sends_nothing_extra_to_a_direct_openai_client() -> None
     assert 'cache_control' not in sent.get('extra_body', {})
 
 
-def _judge(client: MagicMock, api: str = 'chat_completions') -> JudgeAgent:
+def _judge(client: MagicMock) -> JudgeAgent:
+    """Always on Responses — `JudgeAgent.REQUIRED_API` pins it there whatever the
+    config says, because its request shape is one chat completions rejects."""
     return JudgeAgent(
         JudgeAgentConfig(
             model=_CACHED_MODEL,
-            api=api,
             client=client,
             goal=f'help the user. {_LONG}',
             criteria=[Criterion(description='greets the user', type='must_happen')],
@@ -240,15 +241,15 @@ def _judge(client: MagicMock, api: str = 'chat_completions') -> JudgeAgent:
 async def test_judge_puts_the_settled_note_in_the_message_it_sends() -> None:
     """The note only exists to reach the model — assert it on the wire, not by
     calling the renderer."""
-    client = _chat_client()
+    client = _responses_client()
     judge = _judge(client)
     judge.mark_settled({'criteria_0'})
 
     await judge.evaluate([Message(role='user', content='hello'), Message(role='assistant', content='hi')])
 
-    messages = _sent_messages(client)
-    assert 'ALREADY CONFIRMED' in messages[-1]['content']
-    assert 'criteria_0' in messages[-1]['content']
+    sent = str(client.responses.create.call_args.kwargs['input'][-1])
+    assert 'ALREADY CONFIRMED' in sent
+    assert 'criteria_0' in sent
     # Where the note must NOT appear is the system prompt, and the assertion that
     # actually pins that is byte-stability across turns — the static instruction
     # names the marker and the criteria listing names the id, so neither literal
@@ -259,11 +260,11 @@ async def test_judge_puts_the_settled_note_in_the_message_it_sends() -> None:
 async def test_judge_system_prompt_is_byte_stable_across_a_settled_criterion() -> None:
     """The property the cache actually depends on: nothing at token position 0
     changes between turns, whatever the judge learns."""
-    client = _chat_client()
+    client = _responses_client()
     judge = _judge(client)
 
     await judge.evaluate([Message(role='user', content='hello'), Message(role='assistant', content='hi')])
-    before = _sent_messages(client)[0]['content']
+    before = client.responses.create.call_args.kwargs['instructions']
     judge.mark_settled({'criteria_0'})
     await judge.evaluate(
         [
@@ -273,25 +274,7 @@ async def test_judge_system_prompt_is_byte_stable_across_a_settled_criterion() -
         ]
     )
 
-    assert _sent_messages(client)[0]['content'] == before
-
-
-@pytest.mark.asyncio
-async def test_judge_keeps_the_breakpoint_off_its_per_turn_instruction() -> None:
-    """The instruction is rebuilt every judgement, so marking it would write the
-    whole transcript per turn and read none of it back."""
-    client = _chat_client()
-    judge = _judge(client)
-
-    await judge.evaluate(
-        [Message(role='user', content=f'hello {_LONG}'), Message(role='assistant', content='hi')]
-    )
-
-    messages = _sent_messages(client)
-    assert isinstance(messages[-1]['content'], str)
-    assert messages[1]['content'] == [
-        {'type': 'text', 'text': f'hello {_LONG}', 'cache_control': _EPHEMERAL}
-    ]
+    assert client.responses.create.call_args.kwargs['instructions'] == before
 
 
 @pytest.mark.asyncio
@@ -300,7 +283,7 @@ async def test_judge_on_responses_also_keeps_the_breakpoint_off_the_instruction(
     `cache_control`, so the transcript caches and the rebuilt instruction stays
     outside the marked prefix."""
     client = _responses_client()
-    judge = _judge(client, api='responses')
+    judge = _judge(client)
 
     await judge.evaluate(
         [Message(role='user', content=f'hello {_LONG}'), Message(role='assistant', content='hi')]
@@ -314,7 +297,7 @@ async def test_judge_on_responses_also_keeps_the_breakpoint_off_the_instruction(
 @pytest.mark.asyncio
 async def test_judge_on_responses_marks_nothing_off_the_router() -> None:
     client = _responses_client('https://api.openai.com/v1')
-    judge = _judge(client, api='responses')
+    judge = _judge(client)
 
     await judge.evaluate(
         [Message(role='user', content=f'hello {_LONG}'), Message(role='assistant', content='hi')]

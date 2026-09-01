@@ -5,6 +5,7 @@ import pytest
 from evaluatorq.contracts import AgentContext
 from evaluatorq.simulation.api import generate, generate_and_simulate, simulate
 from evaluatorq.simulation.types import CommunicationStyle, Judgment, Persona, Scenario, SimulationDatapoint
+from evaluatorq.contracts import LLMCallConfig
 
 
 def _persona() -> Persona:
@@ -355,7 +356,7 @@ async def test_sim_model_propagates_to_config_model(monkeypatch):
         await generate_and_simulate(
             agent_description="test agent",
             target=lambda messages: "ok",
-            sim_model="distinct-model-xyz",
+            llm_config=LLMCallConfig(model="distinct-model-xyz"),
         )
 
     assert captured["model"] == "distinct-model-xyz"

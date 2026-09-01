@@ -70,7 +70,7 @@ class CallableTarget(AgentTarget):
     # Need OpenAI chat-completion dicts? Convert at the boundary yourself:
     async def openai_agent(messages: list[Message]) -> str:
         chat = [m.to_chat_completion() for m in messages]
-        return (await client.chat.completions.create(model="gpt-4o", messages=chat)).choices[0].message.content
+        return (await client.chat.completions.create(model="gpt-5.6-luna", messages=chat)).choices[0].message.content
 
     target = CallableTarget(openai_agent)
 

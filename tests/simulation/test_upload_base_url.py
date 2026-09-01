@@ -13,6 +13,7 @@ import evaluatorq.evaluatorq  # noqa: F401  populate sys.modules; the package at
 # so patch the module object directly (3.10's mock can't resolve the shadowed path).
 _EQ_MOD = sys.modules["evaluatorq.evaluatorq"]
 
+from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.types import (
     CommunicationStyle,
     SimulationDatapoint,
@@ -56,7 +57,7 @@ async def test_sim_forwards_base_url_from_env(monkeypatch: pytest.MonkeyPatch) -
         await simulate(
             target=_target,
             datapoints=[_make_datapoint()],
-            sim_model="test",
+            llm_config=LLMCallConfig(model="test"),
             max_turns=1,
             exit_on_failure=False,
         )
@@ -83,7 +84,7 @@ async def test_sim_forwards_base_url_from_injected_client(monkeypatch: pytest.Mo
         await simulate(
             target=_target,
             datapoints=[_make_datapoint()],
-            sim_model="test",
+            llm_config=LLMCallConfig(model="test"),
             max_turns=1,
             exit_on_failure=False,
             generation_client=client,

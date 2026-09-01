@@ -34,7 +34,7 @@ from evaluatorq.redteam import OpenAIModelTarget, red_team
 
 async def main() -> None:
     target = OpenAIModelTarget(
-        model="gpt-4o-mini",
+        model="gpt-5.6-luna",
         system_prompt="You are a support assistant for Acme Corp. Never reveal internal pricing.",
         max_tokens=2000,
         timeout_ms=120_000,
@@ -65,7 +65,7 @@ from evaluatorq.redteam import OrqResponsesTarget, red_team
 
 target = OrqResponsesTarget(
     LLMCallConfig(
-        model="openai/gpt-4o-mini",
+        model="openai/gpt-5.6-luna",
         temperature=0.2,
         max_tokens=4000,
         timeout_ms=120_000,
@@ -245,7 +245,7 @@ TOOL_SCHEMAS = [
 class SupportBotTarget(AgentTarget):
     """An OpenAI-backed support agent, exposed to evaluatorq as a target."""
 
-    def __init__(self, model: str = "gpt-4o-mini", *, client: AsyncOpenAI | None = None) -> None:
+    def __init__(self, model: str = "gpt-5.6-luna", *, client: AsyncOpenAI | None = None) -> None:
         super().__init__(memory_entity_id=None)
         self.model = model
         # max_retries=0: call_target_with_retry owns the retry budget for target

@@ -21,6 +21,8 @@ from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.recommendations import RecommendationConfigBase
 from evaluatorq.common.sanitize import xml_escape
 from evaluatorq.common.structured_output import (
+    UNSET,
+    Unset,
     generate_structured,
     log_structured_usage,
     sum_structured_usage,
@@ -38,7 +40,7 @@ from evaluatorq.simulation.types import SimulationRecommendation
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
-    from evaluatorq.contracts import TokenUsage
+    from evaluatorq.contracts import LLMCallConfig, TokenUsage
     from evaluatorq.simulation.types import SimulationResult
 
 
@@ -191,9 +193,10 @@ async def generate_recommendations(
     model: str,
     *,
     max_results: int | None = None,
-    temperature: float | None = None,
-    llm_kwargs: dict[str, Any] | None = None,
+    temperature: float | Unset | None = UNSET,
+    llm_kwargs: dict[str, Any] | Unset | None = UNSET,
     config: SimulationRecommendationConfig | None = None,
+    llm_config: LLMCallConfig | None = None,
 ) -> list[SimulationRecommendation]:
     """Generate remediation suggestions for results with remediable failures.
 
@@ -205,9 +208,15 @@ async def generate_recommendations(
             are analyzed (the LLM cost bound). Caller-supplied wins.
         temperature: Optional sampling temperature. Omitted from the request
             when ``None`` so reasoning models that reject non-default values
-            keep working.
+            keep working. Left unpassed, ``llm_config``'s value applies; passed,
+            it wins — which is why the default is `UNSET` and not ``None``.
         llm_kwargs: Optional extra kwargs forwarded to the chat completion call.
+            Same precedence as ``temperature``.
         config: Trigger thresholds and prompt/suggestion limits; defaults when omitted.
+        llm_config: Sampling and transport settings for the analysis calls
+            (`temperature`, `reasoning_effort`, `extra_body`, `timeout_ms`).
+            ``llm_config.model`` is not read — the ``model`` argument stays the
+            authority, as it is for every `generate_structured` caller.
 
     Returns:
         One ``SimulationRecommendation`` per analyzed result whose call
@@ -272,8 +281,9 @@ async def generate_recommendations(
                 temperature=temperature,
                 max_tokens=config.max_tokens,
                 label='recommendations',
-                extra_kwargs=dict(llm_kwargs or {}),
+                extra_kwargs=llm_kwargs if isinstance(llm_kwargs, Unset) else dict(llm_kwargs or {}),
                 api='responses',
+                config=llm_config,
             )
             usage = result_out.usage
             parsed = result_out.parsed

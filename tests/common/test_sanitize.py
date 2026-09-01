@@ -305,8 +305,8 @@ async def test_datapoint_system_prompt_always_rebuilt():
         )
 
         # We only need to verify what system_prompt the UserSimulatorAgent
-        # receives.  Patch its __init__ to capture the config.
-        captured_configs: list[object] = []
+        # receives.  Patch its __init__ to capture it.
+        captured_prompts: list[object] = []
         original_init = (
             __import__(
                 "evaluatorq.simulation.agents.user_simulator",
@@ -314,9 +314,9 @@ async def test_datapoint_system_prompt_always_rebuilt():
             ).UserSimulatorAgent.__init__
         )
 
-        def spy_init(self, config):
-            captured_configs.append(config)
-            return original_init(self, config)
+        def spy_init(self, config, **kwargs):
+            captured_prompts.append(kwargs.get("system_prompt"))
+            return original_init(self, config, **kwargs)
 
         with patch(
             "evaluatorq.simulation.runner.simulation.UserSimulatorAgent.__init__",
@@ -326,5 +326,5 @@ async def test_datapoint_system_prompt_always_rebuilt():
             # UserSimulatorAgent is constructed is fine.
             await runner.run(datapoint=dp)
 
-        assert len(captured_configs) == 1
-        assert captured_configs[0].system_prompt == expected_prompt  # pyright: ignore[reportAttributeAccessIssue]
+        assert len(captured_prompts) == 1
+        assert captured_prompts[0] == expected_prompt

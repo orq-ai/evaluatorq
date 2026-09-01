@@ -12,13 +12,17 @@ from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry, default_map_error
 from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pipeline
 from evaluatorq.common.tracing import record_llm_input, record_llm_output, set_span_attrs
-from evaluatorq.contracts import AgentTarget, ResponseTrace, TokenUsage, content_to_text, render_tool_call
-from evaluatorq.integrations.callable_integration import CallableTarget
-from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
-from evaluatorq.simulation.agents.user_simulator import (
-    UserSimulatorAgent,
-    UserSimulatorAgentConfig,
+from evaluatorq.contracts import (
+    AgentTarget,
+    LLMCallConfig,
+    ResponseTrace,
+    TokenUsage,
+    content_to_text,
+    render_tool_call,
 )
+from evaluatorq.integrations.callable_integration import CallableTarget
+from evaluatorq.simulation.agents.judge import JudgeAgent
+from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgent
 from evaluatorq.simulation.tracing import span_message_text, with_simulation_span
 from evaluatorq.simulation.types import (
     DEFAULT_MODEL,
@@ -626,6 +630,7 @@ class SimulationRunner:
         judge: BaseAgent | None = None,
         hooks: SimulationHooks | None = None,
         llm_client: AsyncOpenAI | None = None,
+        llm_config: LLMCallConfig | None = None,
     ) -> None:
         if not target_agent and not target:
             raise ValueError('Must provide either target_agent or target')
@@ -680,13 +685,33 @@ class SimulationRunner:
         self._target_agent_timeout_ms = target_agent_timeout_ms
         self._max_target_retries = max_target_retries
         self._max_tool_result_chars = max_tool_result_chars
-        self._model = model
+        # Never the target under test: that one is configured where it is constructed.
+        from evaluatorq.simulation._config import resolve_sim_llm_config
+
+        self._llm_config = resolve_sim_llm_config(model=model, llm_config=llm_config, caller='SimulationRunner')
+        self._model = self._llm_config.model
+        self.model = self._model
+        """Resolved user-simulator / judge model. NEVER the target's — see `_new_conversation_target`."""
         self._max_turns = max_turns
         self._shared_client: AsyncOpenAI | None = llm_client
         self._client_owned: bool = False
         # Injected agents (may be None; resolved lazily in run() when None)
         self._injected_user_simulator: BaseAgent | None = user_simulator
         self._injected_judge: BaseAgent | None = judge
+        # Warned once here, not per datapoint: an injected agent arrives built and llm_config cannot reach it.
+        injected = [name for name, agent in (('user_simulator', user_simulator), ('judge', judge)) if agent is not None]
+        # From the caller's own arguments, not the resolved config: `resolve_sim_llm_config`
+        # always sets `model`, so reading it back cannot tell a chosen model from the default.
+        carried = (llm_config.model_fields_set if llm_config is not None else set()) - {'client'}
+        if model != DEFAULT_MODEL:
+            carried = carried | {'model'}
+        if injected and carried:
+            logger.warning(
+                'llm_config sets %s but %s was injected already built, so those settings do not reach it. '
+                'Configure the injected agent where it is constructed.',
+                ', '.join(sorted(carried)),
+                ' and '.join(injected),
+            )
 
         from evaluatorq.common.async_utils import warn_if_sync_hooks
         from evaluatorq.simulation.hooks import DefaultHooks
@@ -711,11 +736,18 @@ class SimulationRunner:
         )
 
     def _get_shared_client(self) -> AsyncOpenAI:
-        """Return the generation client; ``with_retry`` owns retrying calls."""
+        """Return the generation client; ``with_retry`` owns retrying calls.
+
+        Precedence is `build_simulation_client`'s own: the constructor's
+        ``llm_client``, then ``llm_config.client``, then the environment. The
+        config's client is handed over rather than consulted after the fact —
+        resolving the environment first made a caller who supplied their own
+        client fail for want of credentials it was never going to use.
+        """
         if not self._shared_client:
             from evaluatorq.openresponses.client import build_simulation_client
 
-            self._shared_client, self._client_owned = build_simulation_client(max_retries=0)
+            self._shared_client, self._client_owned = build_simulation_client(self._llm_config.client, max_retries=0)
         return self._shared_client
 
     async def run(
@@ -861,11 +893,8 @@ class SimulationRunner:
             if client is None:
                 client = self._get_shared_client()
             user_simulator = UserSimulatorAgent(
-                UserSimulatorAgentConfig(
-                    model=self._model,
-                    client=client,
-                    system_prompt=system_prompt,
-                )
+                self._llm_config.model_copy(update={'client': client}),
+                system_prompt=system_prompt,
             )
 
         if self._injected_judge is not None:
@@ -891,13 +920,10 @@ class SimulationRunner:
             if client is None:
                 client = self._get_shared_client()
             judge = JudgeAgent(
-                JudgeAgentConfig(
-                    model=self._model,
-                    client=client,
-                    goal=scenario.goal if scenario else '',
-                    criteria=list(scenario.criteria) if scenario and scenario.criteria else [],
-                    ground_truth=scenario.ground_truth or '' if scenario else '',
-                )
+                self._llm_config.model_copy(update={'client': client}),
+                goal=scenario.goal if scenario else '',
+                criteria=list(scenario.criteria) if scenario and scenario.criteria else [],
+                ground_truth=scenario.ground_truth or '' if scenario else '',
             )
 
         # Lazily captured on the first turn that reports a model identity.

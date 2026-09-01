@@ -11,6 +11,7 @@ from itertools import starmap
 from typing import Any
 from weakref import WeakValueDictionary
 
+from evaluatorq.contracts import LLMCallConfig  # noqa: TC001
 from evaluatorq.simulation.generators.first_message_generator import (
     FirstMessageGenerator,
 )
@@ -44,8 +45,12 @@ class DatapointGenerator:
         model: str = DEFAULT_MODEL,
         rate_limit_delay: float = _DEFAULT_RATE_LIMIT_DELAY,
         max_concurrent_calls: int = _DEFAULT_MAX_CONCURRENT_CALLS,
+        config: LLMCallConfig | None = None,
     ) -> None:
-        self._model = model
+        from evaluatorq.simulation._config import resolve_sim_llm_config
+
+        self._config = resolve_sim_llm_config(model=model, llm_config=config, caller=type(self).__name__)
+        self._model = self._config.model
         self._rate_limit_delay = rate_limit_delay
         self._max_concurrent_calls = max_concurrent_calls
         # A semaphore binds to the loop that first waits on it, so keep one per loop.
@@ -53,10 +58,10 @@ class DatapointGenerator:
 
         from evaluatorq.openresponses.client import build_simulation_client
 
-        self._shared_client, self._client_owned = build_simulation_client(None, max_retries=0)
-        self._persona_generator = PersonaGenerator(model=model, client=self._shared_client)
-        self._scenario_generator = ScenarioGenerator(model=model, client=self._shared_client)
-        self._first_message_generator = FirstMessageGenerator(model=model, client=self._shared_client)
+        self._shared_client, self._client_owned = build_simulation_client(self._config.client, max_retries=0)
+        self._persona_generator = PersonaGenerator(client=self._shared_client, config=self._config)
+        self._scenario_generator = ScenarioGenerator(client=self._shared_client, config=self._config)
+        self._first_message_generator = FirstMessageGenerator(client=self._shared_client, config=self._config)
 
     async def close(self) -> None:
         """Close the shared HTTP client (only if this generator owns it)."""

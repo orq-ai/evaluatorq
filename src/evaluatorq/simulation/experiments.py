@@ -19,6 +19,7 @@ import os
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from evaluatorq.contracts import LLMCallConfig
     from evaluatorq.simulation.types import SimulationDatapoint
 
 
@@ -78,7 +79,7 @@ async def extend_from_experiment(
     run_id: str | None = None,
     num_personas: int = 3,
     num_scenarios: int = 5,
-    sim_model: str | None = None,
+    llm_config: LLMCallConfig | None = None,
     agent_description: str | None = None,
     api_key: str | None = None,
 ) -> list[SimulationDatapoint]:
@@ -95,17 +96,19 @@ async def extend_from_experiment(
         run_id: A specific run (manifest) ID. Latest run when omitted.
         num_personas: New personas to generate.
         num_scenarios: New scenarios to generate.
-        sim_model: Generation model; defaults to the simulation default.
+        llm_config: Model and sampling settings for the generators. Defaults to
+            the simulation default model with every other field unset.
         agent_description: Description of the agent under test for the
             generators. Derived from the seed scenarios' goals when omitted.
         api_key: Orq API key; falls back to ``ORQ_API_KEY``.
     """
+    from evaluatorq.simulation._config import sim_llm_config
     from evaluatorq.simulation.generators import DatapointGenerator
-    from evaluatorq.simulation.types import DEFAULT_MODEL
 
+    llm_config = sim_llm_config(llm_config)
     seeds = await datapoints_from_experiment(experiment_id, run_id=run_id, api_key=api_key)
 
-    generator = DatapointGenerator(model=sim_model or DEFAULT_MODEL)
+    generator = DatapointGenerator(config=llm_config)
     try:
         return await generator.generate_from_description(
             agent_description=agent_description or _describe_agent(seeds),
