@@ -13,7 +13,7 @@ Prerequisites:
   - Set ORQ_API_KEY environment variable
 
 Usage:
-  ORQ_API_KEY=your-key python examples/country_unit_test.py
+  ORQ_API_KEY=your-key python examples/lib/datasets/country_unit_test.py
 """
 
 import asyncio
