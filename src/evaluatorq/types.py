@@ -143,8 +143,9 @@ class JobReturn(TypedDict):
     ``error`` is optional and reports a failure the job *handled* rather than raised —
     ``None`` on success, the reason otherwise. A row whose ``error`` flattens to a
     non-empty string is counted in the summary table's ``Failed Jobs`` and fails
-    ``check_pass_failures(treat_errors_as_failure=True)``; it keeps its output and is
-    still scored, so it can carry both an error and passing evaluator scores. An
+    ``check_pass_failures(treat_errors_as_failure=True)``. It keeps its output for
+    diagnosis but its evaluators are **skipped** — scoring a transcript already known
+    to be dead buys nothing and costs an LLM judge call per row. An
     omitted key and an explicit ``None`` are indistinguishable to the consumer —
     emitting ``None`` on success is a producer convention, so that a job that forgot
     the key cannot be mistaken for one that reported a clean run. A job that lets its

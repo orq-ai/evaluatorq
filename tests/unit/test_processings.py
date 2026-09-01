@@ -157,20 +157,29 @@ def test_summary_table_counts_a_job_reported_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_job_scores_a_reported_error_row() -> None:
-    """A reported-error row keeps its output and is still scored, unlike the raise path."""
+async def test_process_job_skips_evaluators_on_a_reported_error_row() -> None:
+    """A reported-error row keeps its output but is not scored.
+
+    Scoring a transcript already known to be dead buys nothing and costs an LLM judge
+    call per row — the raise path has never scored one either.
+    """
     from evaluatorq.processings import process_job
     from evaluatorq.types import EvaluationResult, Evaluator, ScorerParameter
 
     async def reporting_job(_data: DataPoint, _row: int) -> dict[str, Any]:
         return {'name': 'sim', 'output': 'dead', 'error': 'boom'}
 
+    calls: list[str] = []
+
     async def scorer(_params: ScorerParameter) -> EvaluationResult:  # noqa: RUF029
+        calls.append('scored')
         return EvaluationResult(value=1)
 
     evaluator: Evaluator = {'name': 'always', 'scorer': scorer}
     result = await process_job(reporting_job, DataPoint(inputs={'text': 'hi'}), row_index=0, evaluators=[evaluator])
 
     assert result.error == 'boom'
-    assert result.evaluator_scores is not None
-    assert len(result.evaluator_scores) == 1
+    # The output survives for diagnosis even though nothing scored it.
+    assert result.output == 'dead'
+    assert result.evaluator_scores == []
+    assert calls == []

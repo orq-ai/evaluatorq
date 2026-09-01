@@ -181,9 +181,10 @@ async def process_job(
                     result = await job(data_point, row_index)
             job_name = cast('str', result['name'])
             output = cast('Output', result['output'])
-            # Returned, not raised: without this the row counts as a success. Unlike
-            # the raise path the output is kept and still scored, so the row can carry
-            # both an error and evaluator scores. See `JobReturn` for the contract.
+            # Returned, not raised: without this the row counts as a success. The
+            # output is kept — unlike the raise path, which has none — but evaluators
+            # are skipped either way: scoring a transcript we already know is dead
+            # buys nothing and costs an LLM judge call per row. See `JobReturn`.
             error = _job_reported_error(result.get('error'))
             if error is not None:
                 set_span_error(job_span, error)
@@ -224,7 +225,15 @@ async def process_job(
         # Process evaluators if any and job was successful
         evaluator_scores: list[EvaluatorScore] = []
 
-        if evaluators:
+        if evaluators and error is not None:
+            logger.warning(
+                'job {!r} reported an error, skipping {} evaluator(s) for row {}: {}',
+                job_name,
+                len(evaluators),
+                row_index,
+                error,
+            )
+        elif evaluators:
             # Update phase to evaluating
             if progress_service:
                 await safe_update_progress(

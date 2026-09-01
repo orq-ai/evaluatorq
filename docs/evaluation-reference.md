@@ -95,9 +95,9 @@ async def resilient_job(data: DataPoint, row: int) -> dict:
     return {"name": "my-agent", "output": answer, "error": None}
 ```
 
-Emit `error` on every path, `None` on success: an omitted key and a clean run are indistinguishable, so a job that forgets the key on one branch reports a dead target as a passing one. A row with a non-empty `error` is counted in the summary table's `Failed Jobs`, keeps its output, and is still scored — so it can carry both an error and a passing evaluator score. `check_pass_failures(results, treat_errors_as_failure=True)` is what turns it into a CI failure; the default (`False`) gates on evaluator `pass_` alone.
+Emit `error` on every path, `None` on success: an omitted key and a clean run are indistinguishable, so a job that forgets the key on one branch reports a dead target as a passing one. A row with a non-empty `error` is counted in the summary table's `Failed Jobs` and keeps its output for diagnosis, but its evaluators are **skipped** — scoring a transcript you already know is dead buys nothing and costs an LLM judge call per row. `check_pass_failures(results, treat_errors_as_failure=True)` is what turns it into a CI failure; the default (`False`) gates on evaluator `pass_` alone.
 
-This is the raw-dict job contract. `@job()` wraps a function's return value into `{"name", "output"}`, so an `error` key returned from a decorated function lands *inside* `output` and is not read as a row failure — a decorated job reports failures by raising.
+This is the raw-dict job contract. `@job()` wraps a function's return value into `{"name", "output"}`, so an `error` key returned from a decorated function lands *inside* `output`, where a judge reads it as the target's failure rather than the runner reading it as the row's. A decorated job reports a row failure by raising.
 
 ## Data sources
 

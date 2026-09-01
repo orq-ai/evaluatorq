@@ -6,6 +6,7 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 from langchain_core.tools import BaseTool
+from loguru import logger
 
 from .convert import convert_to_open_responses
 
@@ -131,10 +132,26 @@ def wrap_langchain_agent(
 
         # Invoke the LangChain agent off the event loop; prefer the native
         # async entry point when the agent exposes one.
-        if hasattr(agent, 'ainvoke'):
-            result = await agent.ainvoke({'messages': messages})
-        else:
-            result = await asyncio.to_thread(agent.invoke, {'messages': messages})
+        #
+        # The agent call is the one step here that talks to a live target, so its
+        # failure is reported through the top-level 'error' key rather than raised:
+        # a raise is per-row invisible to anything that reads JobResult.error only
+        # when the job caught nothing. Everything above this — a missing prompt, an
+        # unusable messages column — is a caller mistake and still raises.
+        try:
+            if hasattr(agent, 'ainvoke'):
+                result = await agent.ainvoke({'messages': messages})
+            else:
+                result = await asyncio.to_thread(agent.invoke, {'messages': messages})
+        except Exception as agent_error:  # noqa: BLE001 - a target's failure is reported, not raised
+            logger.warning('langchain agent invocation failed: {}: {}', type(agent_error).__name__, agent_error)
+            # No transcript to keep — the call never returned one. The row carries the
+            # reason and no output, which is what an evaluator scoring it will see.
+            return {
+                'name': name,
+                'output': None,
+                'error': f'{type(agent_error).__name__}: {agent_error}',
+            }
 
         # Extract messages from result
         result_messages: list[BaseMessage] = result.get('messages', [])
@@ -148,6 +165,10 @@ def wrap_langchain_agent(
         return {
             'name': name,
             'output': open_responses_output,
+            # Emitted unconditionally, None on success: a job that omits the key on a
+            # good row and sets it on a bad one is indistinguishable from one that
+            # never reports failures at all.
+            'error': None,
         }
 
     return job
