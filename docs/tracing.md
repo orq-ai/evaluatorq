@@ -472,4 +472,4 @@ evaluatorq itself injects these headers on every call it makes to a provider —
 
 - **[Configuration](configuration.md)** — API keys and environment variables.
 - **[CLI Reference](cli-reference/overview.md)** — run evaluations and red-team/sim from the terminal.
-- **[Orq Deployment](orq-deployment.md)** — trace invocations against an Orq-hosted deployment.
+- **[Targets › Orq-hosted](guides/targets.md#orq-hosted-agents-and-deployments)** — trace invocations against an Orq-hosted agent or deployment.
