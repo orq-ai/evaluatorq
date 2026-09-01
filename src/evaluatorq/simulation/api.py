@@ -350,14 +350,14 @@ async def simulate(
             (``upload_results=True``). Leave ``None`` for local-only runs.
         orq_results_path: Optional Orq folder path (e.g. ``"MyProject/MyFolder"``).
         exit_on_failure: When ``True`` (the default), exit non-zero if any
-            datapoint was *dropped* — a job raised with no result cached —
-            by raising ``SimulationDroppedError`` from ``simulate()`` itself
-            (the "CI gating for free" benefit). Scorer verdicts (``pass_``,
-            e.g. goal not achieved) are reporting only and never exit the
-            process: an underperforming but otherwise healthy run still
-            returns its results. Pass ``False`` for interactive / exploratory
-            runs where even dropped rows should surface as warnings + error
-            metadata instead.
+            datapoint failed to produce a conversation — *dropped* (a job raised
+            with no result cached) or ended in ``error``/``timeout`` — by raising
+            ``SimulationDroppedError`` from ``simulate()`` itself (the "CI gating
+            for free" benefit). Scorer verdicts (``pass_``, e.g. goal not
+            achieved) are reporting only and never exit the process: an
+            underperforming but otherwise healthy run still returns its results.
+            Pass ``False`` for interactive / exploratory runs where a dead row
+            should surface as a warning + error metadata instead.
         save: When ``True``, persist the completed run to the local run store
             (``.evaluatorq/sim-runs/`` unless ``report`` is set). Unlike the CLI
             (which auto-saves to ``.evaluatorq/sim-runs/`` by default), the SDK
@@ -2320,6 +2320,7 @@ async def _simulate_via_evaluatorq(
     from evaluatorq.common.tracing import set_span_attrs
     from evaluatorq.evaluatorq import evaluatorq
     from evaluatorq.simulation.evaluators import get_evaluator
+    from evaluatorq.simulation.evaluators.scorers import failure_reason
     from evaluatorq.types import DataPoint
 
     evaluation_name = config.evaluation_name
@@ -2427,11 +2428,22 @@ async def _simulate_via_evaluatorq(
 
     expected = len(eq_datapoints)
     missing = [i for i, eq in enumerate(eq_datapoints) if id(eq) not in result_cache]
-    if missing:
-        msg = (
-            f'{caller}(): {len(missing)} of {expected} simulation job(s) failed '
-            f'and produced no result (missing rows: {missing})'
-        )
+    # A run the runner ended in error or timeout produced a result, so it is not
+    # 'missing' — but its conversation never happened, which is the same failure to a
+    # caller that asked to exit on one. Without this a run that was 401 throughout
+    # returned normally, because every row was cached.
+    dead = [
+        i
+        for i, eq in enumerate(eq_datapoints)
+        if id(eq) in result_cache and failure_reason(result_cache[id(eq)]) is not None
+    ]
+    if missing or dead:
+        parts: list[str] = []
+        if missing:
+            parts.append(f'{len(missing)} produced no result (rows: {missing})')
+        if dead:
+            parts.append(f'{len(dead)} ended in error or timeout (rows: {dead})')
+        msg = f'{caller}(): {len(missing) + len(dead)} of {expected} simulation(s) failed — ' + '; '.join(parts)
         if exit_on_failure:
             raise SimulationDroppedError(msg, partial_results=results)
         logger.warning(msg)

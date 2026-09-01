@@ -653,6 +653,9 @@ async def test_on_run_complete_fires_when_a_datapoint_errors(datapoint_factory):
         max_turns=1,
         evaluator_names=['goal_achieved'],
         hooks=hooks,
+        # This test is about the terminal hook firing, not the exit gate: a dead
+        # target now raises under the default exit_on_failure=True.
+        exit_on_failure=False,
     )
     assert hooks.started is True
     assert hooks.completed_with is not None  # terminal fired
@@ -729,6 +732,54 @@ async def test_on_run_complete_gets_partial_results_when_a_row_is_dropped(datapo
     assert hooks.completed_with is not None  # terminal fired despite the drop
     assert len(hooks.completed_with) == 1  # the successful row, not []
     assert hooks.completed_with[0].goal_achieved is True
+
+
+@pytest.mark.asyncio
+async def test_exit_on_failure_raises_for_a_run_that_ended_in_error(datapoint_factory, monkeypatch):
+    """A row the runner ended in error is cached, so it was never 'dropped' — and a
+    run that was 401 throughout returned normally, which is what the caller asked to
+    exit on."""
+    from evaluatorq.simulation.api import SimulationDroppedError, simulate
+    from evaluatorq.simulation.runner.simulation import SimulationRunner, _error_result
+
+    async def fake_run(self, *, datapoint, max_turns, thread_id=None):
+        return _error_result('401 authentication_error')
+
+    monkeypatch.setattr(SimulationRunner, 'run', fake_run)
+
+    with pytest.raises(SimulationDroppedError, match='ended in error or timeout'):
+        await simulate(
+            datapoints=[datapoint_factory('dp-dead')],
+            target=_ok_target,
+            user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+            judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+            max_turns=1,
+            evaluator_names=['goal_achieved'],
+        )
+
+
+@pytest.mark.asyncio
+async def test_exit_on_failure_false_warns_instead_of_raising_for_an_error_run(datapoint_factory, monkeypatch):
+    """The opt-out still returns the partial results, with the row reported."""
+    from evaluatorq.simulation.api import simulate
+    from evaluatorq.simulation.runner.simulation import SimulationRunner, _error_result
+
+    async def fake_run(self, *, datapoint, max_turns, thread_id=None):
+        return _error_result('401 authentication_error')
+
+    monkeypatch.setattr(SimulationRunner, 'run', fake_run)
+
+    results = await simulate(
+        datapoints=[datapoint_factory('dp-dead')],
+        target=_ok_target,
+        user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+        judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+        max_turns=1,
+        evaluator_names=['goal_achieved'],
+        exit_on_failure=False,
+    )
+    assert len(results) == 1
+    assert results[0].terminated_by is TerminatedBy.error
 
 
 @pytest.mark.asyncio

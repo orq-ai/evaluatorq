@@ -145,9 +145,9 @@ The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios
 `agent_description` drives generation; `num_personas × num_scenarios` is how many conversations run. The simulation-side LLMs resolve their provider by precedence: an explicitly passed `generation_client` wins, then `llm_config.client`, then `ORQ_API_KEY` (the Orq AI Router), then `OPENAI_API_KEY`. See [Configuration](../configuration.md).
 
 !!! note "CI and local runs"
-    Dropped simulations raise by default; ordinary failed goals remain in the returned results. Set `exit_on_failure=False` for exploratory runs. When `ORQ_API_KEY` is available, results upload to Orq by default; pass `upload_results=False` to suppress the Experiment upload. That is not an offline mode — see [What gets uploaded](simulation-in-evaluatorq.md#what-gets-uploaded).
+    A simulation that produced no conversation — dropped, or ended in `error`/`timeout` — raises by default; ordinary failed goals remain in the returned results. Set `exit_on_failure=False` for exploratory runs. When `ORQ_API_KEY` is available, results upload to Orq by default; pass `upload_results=False` to suppress the Experiment upload. That is not an offline mode — see [What gets uploaded](simulation-in-evaluatorq.md#what-gets-uploaded).
 
-    `exit_on_failure` gates on dropped datapoints, not on scores, so it will not fail a build for an agent that simply answered badly. For a gate on the scores themselves — turning evaluator results into an exit code, with the env vars and workflow step to go with it — see [In an evaluatorq Run › In CI](simulation-in-evaluatorq.md#in-ci).
+    `exit_on_failure` gates on datapoints that never produced a conversation, not on scores, so it will not fail a build for an agent that simply answered badly. For a gate on the scores themselves — turning evaluator results into an exit code, with the env vars and workflow step to go with it — see [In an evaluatorq Run › In CI](simulation-in-evaluatorq.md#in-ci).
 
 ## Seed by archetype
 
