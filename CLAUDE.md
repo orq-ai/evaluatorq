@@ -251,14 +251,11 @@ Releases are **tag-driven**. The package version comes from the latest git tag v
 
 1. `docs-drift` skill, scoped to the diff — finds claims the change made untrue.
 2. `docs-coverage` skill — if the change opens a new usage path (a new mode, backend, surface, entry point), write the prose now rather than deferring it.
+3. `docs-writing` skill — **before drafting or rewriting any page under `docs/`.** It holds the reader, the three page genres, the voice, the four things every page carries, and the reviewer loop that gates a draft. The page-level mechanics live there too: fencing, the two `mkdocs.yml` entries a new page needs, and naming a current model in every example.
 
-The interaction surface those skills reason about — the axes, the tier rules, and the impossible-combination list — is [`.claude/skills/docs-coverage/axes.md`](.claude/skills/docs-coverage/axes.md). Read it when adding anything users choose between; **a new dimension means editing that file in the same PR**, or coverage checking silently stops seeing it.
+The interaction surface `docs-coverage` reasons about — the axes, the tier rules, and the impossible-combination list — is [`.claude/skills/docs-coverage/axes.md`](.claude/skills/docs-coverage/axes.md). Read it when adding anything users choose between; **a new dimension means editing that file in the same PR**, or coverage checking silently stops seeing it.
 
-Rules live in the skills, not here. Both are under `.claude/skills/`.
-
-**Docs examples name a current model.** A sample that says `gpt-4o-mini` dates the page the moment a reader sees it, and the reader copies it. The catalog is the source of truth for what is current: `orq models list --json` returns a `created` timestamp per entry, so `model_developer == 'openai' and model_type == 'chat'`, sorted by `created` descending, gives the latest OpenAI family in one command. As of 2026-08-28 that is **gpt-5.6** — `gpt-5.6-luna` (cheap, and the value of `DEFAULT_PIPELINE_MODEL`), `gpt-5.6-terra` (mid), `gpt-5.6-sol` (premium). Do not write `gpt-4o*`, `gpt-4.1*` or `gpt-5-*` into a new example; prefer `gpt-5.6-luna` unless the sample is specifically about a bigger model. Re-run the query rather than trusting this line — it is a date-stamped fact in a file that does not know today's date.
-
-**A new docs page goes in `mkdocs.yml` twice.** Once under `nav:`, once under `plugins.llmstxt.sections` — the llmstxt plugin silently drops any nav page it does not list from `llms.txt` and `llms-full.txt` without failing the build, so `docs/hooks.py` fails `--strict` on the mismatch instead. The check is one-directional (nav → sections) and accepts globs, which is why `reference/evaluatorq/*.md` covers the generated API pages with one entry.
+Rules live in the skills, not here. All of them are under `.claude/skills/`. The three rules below stay in this file because they bind outside a docs page — in a docstring, a commit message, a PR body — where no docs skill is loaded.
 
 **Never cut a sentence off.** Every sentence you write — in a docs page, a table cell, a docstring, a commit message, a PR title or body — ends. No trailing `…`, no `[...]`, no clause abandoned mid-thought because the line got long. Truncation belongs to *captured output* (a log excerpt, a receipt's first few lines), never to prose you authored. Too long is a signal to write less, not to chop the tail off. This binds humans, agents, and the docs-autofill routine equally.
 
