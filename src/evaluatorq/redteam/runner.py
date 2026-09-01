@@ -787,6 +787,8 @@ async def red_team(
     config = llm_config or LLMConfig()
 
     resolved_mode = Pipeline(mode)
+    if resolved_mode in (Pipeline.DYNAMIC, Pipeline.HYBRID):
+        _reject_deployment_targets(targets, resolved_mode)
 
     attack_model = config.attacker.model
     evaluator_model = config.evaluator.model or config.evaluator.judges[0]
@@ -1598,6 +1600,28 @@ def _check_filter_results(
         raise RedTeamError(msg)
 
 
+def _deployment_pipeline_error(target: str, mode: Pipeline) -> ValueError:
+    """Build the refusal for a ``deployment:`` target outside the static pipeline.
+
+    Only the static pipeline builds a deployment job (``create_deployment_job``);
+    the adaptive pipelines drive an ``AgentTarget``, and no such target speaks the
+    deployments API yet (RES-1494). Without this the key would reach
+    ``agents.retrieve`` and fail as a missing *agent*.
+    """
+    return ValueError(
+        f'Target {target!r} is an Orq deployment, which the {mode.value} pipeline does not support: '
+        'adaptive attacks run against agents only. Run it with pipeline="static" and a dataset, '
+        'or use simulate() for a conversational run.'
+    )
+
+
+def _reject_deployment_targets(targets: list[str], mode: Pipeline) -> None:
+    """Refuse ``deployment:`` targets before any client, credential or paid call."""
+    for target in targets:
+        if parse_target(target)[0] == TargetKind.DEPLOYMENT:
+            raise _deployment_pipeline_error(target, mode)
+
+
 async def _prepare_target(
     *,
     target: str,
@@ -1654,6 +1678,9 @@ async def _prepare_target(
     """
     target_kind, target_value = parse_target(target)
     safe_target = _make_safe_target(target_value)
+
+    if target_kind == TargetKind.DEPLOYMENT:
+        raise _deployment_pipeline_error(target, mode)
 
     if target_kind == TargetKind.AGENT:
         backend = make_agent_backend(target_config=target_config, pipeline_config=pipeline_config)
@@ -2008,6 +2035,10 @@ async def _run_dynamic_or_hybrid(
         replay_of: Name of the run being replayed, surfaced in the confirm
             prompt so a replay is not mistaken for a fresh run.
     """
+    # Before anything else: no client, no credential, no paid call for a target
+    # this pipeline cannot drive.
+    _reject_deployment_targets(targets, mode)
+
     from evaluatorq import evaluatorq
     from evaluatorq.redteam.reports.converters import (
         dynamic_evaluatorq_results_to_report,
