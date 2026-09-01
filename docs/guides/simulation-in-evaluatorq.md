@@ -223,14 +223,16 @@ Put the `aclose()` in a `finally`, as the complete run above does, not after the
 
 `wrap_simulation_agent()` reads one conversation per `DataPoint`, and accepts four spellings in `inputs`:
 
+The table is in the order the code checks them, which is not the order you are most likely to use them in:
+
 | `inputs` contains | Notes |
 |---|---|
-| `persona` + `scenario` | The usual form. Add `first_message` to fix the opening line instead of generating it. |
-| `datapoint` | A full `SimulationDatapoint`, which must carry `persona`, `scenario` and `first_message`. |
-| `datapoints` | A list of exactly one datapoint. More than one raises. |
+| `datapoint` | A full `SimulationDatapoint`. Every field is required: `id`, `persona`, `scenario`, `user_system_prompt` and `first_message`. The shape check only looks for the middle three, so a dict missing `id` or `user_system_prompt` gets past it and fails in validation instead. |
+| `datapoints` | A list of exactly one datapoint, each with the five fields above. More than one raises. |
+| `persona` + `scenario` | The usual form, and the one the complete run above uses. Add `first_message` to fix the opening line instead of generating it. |
 | `personas` + `scenarios` | Lists of exactly one each. More than one raises. |
 
-The first matching shape in the order listed wins; a row carrying two of them silently uses the earlier one.
+The first matching shape in the order listed wins; a row carrying both `datapoint` and `persona` + `scenario` silently uses the `datapoint`.
 
 `persona`, `scenario`, `datapoint` and `datapoints` are also accepted as JSON strings, because the Orq datasets API rejects nested objects in `inputs` — a dataset-backed row arrives with `persona` and `scenario` stringified, and the wrapper parses them back. The `personas` + `scenarios` form is **not** coerced: pass real lists there, or it raises `Expected 'personas' and 'scenarios' to be arrays`. The list forms exist for compatibility with datapoint files and cap at one element on purpose: one row is one conversation, so a row holding two personas is an ambiguity rather than a batch.
 
