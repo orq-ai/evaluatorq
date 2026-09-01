@@ -5,7 +5,7 @@ Demonstrates returning structured EvaluationResultCell values
 with sentiment distribution across categories.
 
 Usage:
-    python examples/lib/structured/structured_sentiment_eval.py
+    uv run python examples/lib/structured/structured_sentiment_eval.py
 """
 
 import asyncio
