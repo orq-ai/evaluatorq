@@ -91,18 +91,42 @@ House voice is already on the page in `guides/targets.md`, `tuning.md`, `index.m
 
 Four reviewers in parallel on every draft — three narrow sonnet lenses and one broad opus editor:
 
-- **reader** (sonnet) — roleplay the assumed reader. Attempt the task using only this page. Report the first place you got stuck and what you needed that was not there.
+- **reader** (sonnet) — roleplay the assumed reader. Attempt the task using only this page. Report the first place you got stuck and what you needed that was not there. Where more than one kind of reader lands on the page, run one agent per persona from **Reader personas** below instead of a single generic reader; the other three lenses stay one agent each.
 - **conformance** (sonnet) — the four non-negotiables, the genre template, the voice rules. Quote the offending line.
 - **cutter** (sonnet) — filler, reassurance, throat-clearing, paragraphs that delete without loss. Quote what to cut.
 - **`content-evaluator` agent** (opus) — the standing editor agent, unmodified. It reads for argument quality, audience fit and structural problems the three narrow lenses are not looking for. Take its Critical findings as candidate blockers and its rating as a signal, not a gate.
 
 Dispatch all four together. **No reviewer holds the barrier forever**: once the others are in, wait a little longer, then proceed without the missing one and name which lens was skipped wherever you report the result. A review someone knows is partial beats a loop that never ends.
 
+#### Reader personas
+
+The reader lens is the only one that can produce *the page is correct and I still could not do it*. Widen it when the page serves more than one kind of reader — one agent per row, each given a task **derived from what the page is for**, phrased as something a person wants to accomplish, never as "review this page".
+
+| Persona | Angle the task takes |
+|---|---|
+| First-timer | Never used evaluatorq. Task starts from zero, arriving at the docs root. |
+| Platform user | Works through Orq — a `deployment:` target, no local model code. |
+| Practitioner | Already uses the surface this page belongs to; wants this specific path against their own target. |
+| CI engineer | Needs it non-interactive in a GitHub Action — exit codes, env vars, no prompts. |
+
+Rules every persona agent is given:
+
+- You are a user, not a reviewer. You have the docs site and a terminal.
+- **Do not read the diff, the git log, or the raw markdown source.** Read the built site. This is on your honour — nothing enforces it, and a persona that peeks produces a report that looks fine and is worthless.
+- Start from `docs/index.md` and navigate. If you cannot find the page, that is the finding — say so and stop.
+- **Run the commands. Do not read them and assume.** Paste what actually happened.
+- Report: where you got stuck, what you had to guess, what sent you to the source, and what you expected the page to say that it did not.
+- End with one line: COMPLETED / COMPLETED WITH GUESSWORK / BLOCKED.
+
+Re-dispatch only the personas that did not end COMPLETED, with the same task.
+
+**Hand every reviewer artifacts, never your conclusions.** Give paths — the page, the receipt of what ran, the diff for the lenses allowed to see it — and let them read. Writing "all blocks pass" or "verified correct" into a reviewer prompt contaminates the one thing a reviewer is for. The same holds in reverse: a reviewer's claim you did not check is a claim, not a finding.
+
 Then: **validate each finding yourself before fixing it.** A reviewer that misread the page produces a finding that makes the page worse. Check the claim against the draft; drop the ones that do not hold.
 
 **Blocking** — fix these, then re-run the loop:
 
-- the reader could not complete the task
+- a reader lens ended anything other than COMPLETED. `COMPLETED WITH GUESSWORK` is a blocker: the guesswork *is* the gap, and a persona that guessed right this round is a reader who guesses wrong next round
 - a non-negotiable is missing
 - a code block does not run
 - a claim is false

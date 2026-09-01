@@ -127,7 +127,13 @@ uv run pytest -m 'not integration'
 
 ## Step 6 — review, in parallel
 
-Two tracks, dispatched together, sonnet for all of them. Both must return before revising. **No track holds the barrier forever**: once the others are in, wait a little longer, then proceed without the missing agent and name it in the PR body and in the Slack line. A partial review someone knows is partial beats a run that never ends.
+The reviewer loop is `docs-writing`'s, not this routine's. Run it as written there — the four lenses, the reader lens widened to all four personas from its **Reader personas** table, the artifacts-not-conclusions rule, validate-before-fixing, the blocking/non-blocking split. This step adds one track on top of it and one extra instruction to the lenses; everything it does not restate is governed there.
+
+Derive each persona's task from the gap being filled, one per persona — the point is to test whether the new page makes *its own* usage path achievable.
+
+Tell the lenses to check the receipt's `illustrative` exemptions against the page. That claim is the only part of step 4 nothing else verifies.
+
+Dispatch the track below together with those lenses; the same no-reviewer-holds-the-barrier rule covers all of them, and a missing one is named in the PR body **and** in the Slack line.
 
 ### Track A — adversarial critique
 
@@ -137,51 +143,21 @@ The `hate` skill lives in the `orq-ai/research` checkout, which `routine.json` m
 find .. "$HOME/.claude/skills" -path '*skills/hate/SKILL.md' -print -quit 2>/dev/null
 ```
 
-Not found → run track B alone, say so in the PR body, and **say so in the Slack message** — half the review pipeline vanishing must not be visible only to someone who opens the PR.
+Not found → run the `docs-writing` lenses alone, say so in the PR body, and **say so in the Slack message** — half the review pipeline vanishing must not be visible only to someone who opens the PR.
 
-Run it in `--apply --sonnet` mode. Two overrides for unattended use:
+Run it in `--apply --sonnet` mode. Three overrides for unattended use:
 
 - Its "ask, then STOP" branch does not apply; `--apply` is in force, so Recommendations get applied and Decisions stay open for the PR body.
 - Its Linear-comment step is replaced by the PR body. There is no ticket.
 - Its Context Resolution table has no pattern for "diff against main". Give it the diff explicitly: commit step 3's work as a single commit before dispatch, so its `git diff HEAD~1` fallback resolves to the whole page.
 
-Tell the critics to check the receipt's `illustrative` exemptions against the page. That claim is the only part of step 4 nothing else verifies.
-
-**Hand every reviewer artifacts, never your conclusions.** Give paths — the page, `.context/receipt.txt`, the diff — and let them read. Writing "all blocks exit=0" or "verified correct" into a critic prompt contaminates the one thing a critic is for; a reviewer that believed you has told you nothing, and if you were wrong you have spent the whole track confirming your own error. The same rule applies in reverse: a reviewer's claim you did not check is a claim, not a finding. Verify the sharp ones against source before acting or repeating them.
-
 If one of your own checks reports that *everything* is broken — every anchor missing, every link dead — suspect the check first. Confirm against the built artifact before you state it anywhere.
 
-### Track B — roleplaying users
+## Step 7 — iterate
 
-Four agents. Each gets a task **derived from the gap being filled** — the point is to test whether the new page makes *its own* usage path achievable. Write the four tasks yourself from the gap, one per persona, phrased as something a person wants to accomplish, never as "review this page".
+`docs-writing`'s iteration rules apply unchanged: apply the blockers, leave the non-blocking findings reported and unfixed, re-dispatch only the personas that did not end COMPLETED, and stop at three rounds. What this routine adds to a round: apply the hate Recommendations too, and re-run steps 4 and 5 before re-dispatching. The receipt in the PR is the one from the final round.
 
-| Persona | Angle the task should take |
-|---|---|
-| First-timer | Never used evaluatorq. Task starts from zero, arrives at the docs root. |
-| Platform user | Works through Orq — a `deployment:` target, no local model code. |
-| Practitioner | Already uses the surface the gap belongs to; wants this specific path against their own target. |
-| CI engineer | Needs it non-interactive in a GitHub Action — exit codes, env vars, no prompts. |
-
-Rules given to every persona agent:
-
-- You are a user, not a reviewer. You have the docs site and a terminal.
-- **Do not read the diff, the git log, or the raw markdown source.** Read the built site. This is on your honour — nothing enforces it, and a persona that peeks produces a report that looks fine and is worthless.
-- Start from `docs/index.md` and navigate. If you cannot find the page, that is the finding — say so and stop.
-- **Run the commands. Do not read them and assume.** Paste what actually happened.
-- Report: where you got stuck, what you had to guess, what sent you to the source, and what you expected the page to say that it did not.
-- End with one line: COMPLETED / COMPLETED WITH GUESSWORK / BLOCKED.
-
-Their finding class is the one the critics structurally cannot produce: *the page is correct and I still could not do it.*
-
-## Step 7 — iterate until every persona is COMPLETED, max 3 rounds
-
-A round is: apply the hate Recommendations and every persona finding that is a real navigability or completeness defect, re-run steps 4 and 5, then re-dispatch **only the personas that did not end COMPLETED**, with the same tasks.
-
-Stop when every persona ends **COMPLETED**. `COMPLETED WITH GUESSWORK` is not done — the guesswork *is* the gap, and a persona that guessed right this round is a reader who guesses wrong next round. Spend the round; there are only three. Hard cap of 3 rounds — a page that is still short of COMPLETED after three rewrites has a problem the routine cannot see. Stopping early on a looser reading and disclosing it in the PR is not the deal: the rounds are cheap and the disclosure lands on a human who cannot re-run the persona.
-
-**Still BLOCKED after round 3:** open the PR anyway, append the bare `[BLOCKED]` tag to the title — the persona's name and a `COMPLETED WITH GUESSWORK` verdict go in the body under persona verdicts, never in the title — and **DM Bauke on Slack** (`U09BR0B0Q7P`) rather than only posting to the channel. The work is worth keeping; the judgement is not the routine's to make.
-
-The receipt in the PR is the one from the final round.
+**Still blocked after round 3:** open the PR anyway and surface it in the four places `docs-writing` names — the bare `[BLOCKED]` title tag, the `## Blocking, unresolved` body section with the session URL, and the DM to Bauke on Slack (`U09BR0B0Q7P`) rather than only the channel post. The persona's name and its verdict go in the body under persona verdicts, never in the title. The work is worth keeping; the judgement is not the routine's to make.
 
 Anything not applied goes in the PR body under **Not addressed**, with the reason.
 
