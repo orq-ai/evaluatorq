@@ -19,6 +19,22 @@ from evaluatorq.simulation.types import CriteriaMeta, SimulationResult, Terminat
 # so the reported pass/fail cannot disagree with the score computed here.
 UNEVALUATED_TERMINATIONS = (TerminatedBy.error, TerminatedBy.timeout)
 
+
+def failure_reason(result: SimulationResult) -> str | None:
+    """The reason a run ended before the judge could audit it, or ``None`` if it did.
+
+    One derivation for every caller. `simulate()`'s job read `metadata['error']` first
+    while `wrap_simulation_agent`'s job read `reason` alone, so the same dead run
+    described itself two ways depending on the entry point. The fallback keeps the
+    string non-empty: a job's `error` key is a failure signal, and an empty one reads
+    downstream as a clean row.
+    """
+    if result.terminated_by not in UNEVALUATED_TERMINATIONS:
+        return None
+    metadata_error = result.metadata.get('error')
+    return str(metadata_error or result.reason or '') or f'simulation terminated by {result.terminated_by.value}'
+
+
 SimulationScorer = Callable[[SimulationResult], float]
 
 _WEIGHT_SUM_TOLERANCE = 1e-9

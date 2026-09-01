@@ -129,12 +129,11 @@ async def main() -> None:
             metadata = job_result.output.get("metadata", {})
             print("metadata keys:", sorted(metadata))
             print("criteria:", metadata.get("criteria_results"))
-            # evaluatorq reports a 100% success rate for this run even when the
-            # conversation itself never happened: the job returned a result dict,
-            # so nothing errored from its point of view. Check terminated_by, or
-            # a dead target reads as a passing one.
-            if metadata.get("terminated_by") in {"error", "timeout"}:
-                raise SystemExit(f"simulation did not run: {metadata.get('reason')}")
+            # A run the runner ended in error or timeout lands in job_result.error
+            # and in the table's "Failed Jobs"; this exits on it instead of reading
+            # a partial transcript as a result.
+            if job_result.error:
+                raise SystemExit(f"simulation did not run: {job_result.error}")
 
 
 asyncio.run(main())

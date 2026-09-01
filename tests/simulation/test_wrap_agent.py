@@ -216,3 +216,9 @@ class TestJobReportsTermination:
         out = await self._run(monkeypatch, terminated_by, "Goal achieved")
         assert "error" in out
         assert out["error"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_failure_with_no_message_still_reports_one(self, monkeypatch):
+        """An empty reason must not flatten to None downstream — that is a clean row again."""
+        out = await self._run(monkeypatch, TerminatedBy.error, "")
+        assert out["error"] == "simulation terminated by error"

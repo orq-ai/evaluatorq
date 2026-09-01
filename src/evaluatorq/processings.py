@@ -1,11 +1,11 @@
 import asyncio
-import json
 from collections.abc import Awaitable
 from inspect import isawaitable
 from typing import TYPE_CHECKING, cast
 
 from loguru import logger
 
+from .common.output_adapters import output_error_text
 from .job_helper import JobError
 from .progress import Phase, ProgressService, safe_update_progress
 from .types import (
@@ -106,33 +106,25 @@ async def process_data_point(
         ]
 
 
+_UNREADABLE_JOB_ERROR = 'job reported a failure with no readable message'
+
+
 def _job_reported_error(raw: object) -> str | None:
     """Flatten a job's top-level ``error`` value to the ``str`` ``JobResult`` holds.
 
-    A job may report a failure it handled rather than raised — a target that
-    answered with an HTTP error, a simulation that ended in ``terminated_by=error``.
-    ``JobResult.error`` is a ``str``, so a dict payload is reduced to its message
-    rather than stringified: ``str()`` on a dict renders a Python repr, which then
-    reaches the results table and any judge reading the field. A dict carrying none
-    of the known message keys is JSON-encoded for the same reason.
+    Presence is the failure signal, not the message's truthiness: a job that reported a
+    failure with nothing to say still fails its row, so a blank or unreadable payload
+    becomes a placeholder rather than ``None``. Flattening goes through
+    ``output_error_text`` — the repo's single reader of an error payload — so a
+    job-level and an output-level error cannot disagree on what the same payload means.
     """
     if raw is None:
         return None
-    if isinstance(raw, str):
-        return raw or None
-    if isinstance(raw, dict):
-        for key in ('message', 'error', 'detail'):
-            # Membership, not truthiness: a present-but-falsy message ('' or 0) is the
-            # payload's answer, and falling through to the next key would report a
-            # different field's text as the failure.
-            if key in raw:
-                value = raw[key]
-                return None if value is None else str(value) or None
-        logger.warning('job reported an error payload with no message key: {}', sorted(raw))
-        # json, not str(): repr on a dict is exactly what this function exists to keep
-        # out of the results table and out of any judge reading the field.
-        return json.dumps(raw, default=str)
-    return str(raw)
+    text = output_error_text({'error': raw})
+    if text:
+        return text
+    logger.warning('job reported an error with no readable message: {!r}', raw)
+    return _UNREADABLE_JOB_ERROR
 
 
 async def process_job(
@@ -160,6 +152,7 @@ async def process_job(
         JobResult containing job output and evaluator scores
     """
     # Import tracing utilities lazily to avoid import errors when OTEL is not installed
+    from .common.tracing import set_span_error
     from .tracing.spans import (
         JobSpanOptions,
         set_job_name_attribute,
@@ -188,15 +181,12 @@ async def process_job(
                     result = await job(data_point, row_index)
             job_name = cast('str', result['name'])
             output = cast('Output', result['output'])
-            # A job that reached its target and got a failure back reports it in a
-            # top-level 'error' key rather than raising, so its output survives for
-            # diagnosis. Honouring it here is the only thing separating such a run
-            # from a clean one: nothing raised, so without this the row counts as a
-            # success and the run reports a 100% pass rate over a dead target. Unlike
-            # the raise path, the row keeps its output and is still scored, so it can
-            # carry both an error and evaluator scores —
-            # check_pass_failures(treat_errors_as_failure=True) is what fails it.
+            # Returned, not raised: without this the row counts as a success. Unlike
+            # the raise path the output is kept and still scored, so the row can carry
+            # both an error and evaluator scores. See `JobReturn` for the contract.
             error = _job_reported_error(result.get('error'))
+            if error is not None:
+                set_span_error(job_span, error)
 
             # Set job name on span after execution
             set_job_name_attribute(job_span, job_name)
@@ -210,6 +200,7 @@ async def process_job(
             job_name = e.job_name
             error = str(e.original_error)
             set_job_name_attribute(job_span, job_name)
+            set_span_error(job_span, error)
 
             # Return early with error if job failed
             return JobResult(
@@ -220,6 +211,7 @@ async def process_job(
             )
         except Exception as e:
             error = str(e)
+            set_span_error(job_span, error)
 
             # Return early with error if job failed
             return JobResult(

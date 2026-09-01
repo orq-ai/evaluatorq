@@ -2088,7 +2088,7 @@ def _build_simulation_job_and_cache(
     """
     from evaluatorq.common.async_utils import await_maybe
     from evaluatorq.simulation.convert import to_open_responses
-    from evaluatorq.simulation.evaluators.scorers import UNEVALUATED_TERMINATIONS
+    from evaluatorq.simulation.evaluators.scorers import failure_reason
     from evaluatorq.simulation.hooks import DefaultHooks
     from evaluatorq.simulation.runner.simulation import SimulationRunner, _error_result
 
@@ -2155,14 +2155,11 @@ def _build_simulation_job_and_cache(
         )
         result.metadata['datapoint_id'] = sim_dp.id
         result_cache[id(data)] = result
-        reason: str | None = None
-        if result.terminated_by in UNEVALUATED_TERMINATIONS:
-            reason = result.metadata.get('error') or result.reason
+        reason = failure_reason(result)
+        if reason is not None:
             await await_maybe(resolved_hooks.on_datapoint_error(sim_dp, RuntimeError(reason)))
         await await_maybe(resolved_hooks.on_datapoint_complete(result))
-        # Emitted unconditionally, None on success. The built-in scorers already report
-        # such a row as pass=False, but 'Failed Jobs' counts JobResult.error, so without
-        # the key a run whose conversation never happened still reads as 0 failures.
+        # Emitted unconditionally: an omitted key is indistinguishable from a clean run.
         return {'name': job_name, 'output': to_open_responses(result, model), 'error': reason}
 
     return job_fn, result_cache, runner

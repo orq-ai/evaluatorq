@@ -88,7 +88,7 @@ async def test_process_job_honours_a_job_reported_error() -> None:
     from evaluatorq.types import DataPointResult
 
     async def reporting_job(_data: DataPoint, _row: int) -> dict[str, Any]:
-        return {'name': 'sim', 'output': {'status': 'failed'}, 'error': {'message': '401 unauthorized'}}
+        return {'name': 'sim', 'output': {'status': 'failed'}, 'error': '401 unauthorized'}
 
     result = await process_job(reporting_job, DataPoint(inputs={'text': 'hi'}), row_index=0)
 
@@ -117,28 +117,43 @@ async def test_process_job_leaves_error_unset_on_success() -> None:
         assert result.error is None
 
 
-def test_job_reported_error_flattens_every_payload_shape() -> None:
-    """The flattener must never hand a Python repr to the results table.
+def test_job_reported_error_never_loses_a_reported_failure() -> None:
+    """Presence is the failure signal — a blank payload must not flatten to a clean row.
 
-    A present-but-falsy message is the payload's answer, not an absent one, and a dict
-    with no known message key is JSON — `str()` on it renders a repr that reaches
-    `collect_errors` and any judge reading `JobResult.error`.
+    An empty message is exactly the case that put this PR here: nothing raised, so a
+    row whose ``error`` flattened to ``None`` counted as a success over a dead target.
+    Flattening delegates to ``output_error_text`` so a job-level and an output-level
+    error payload cannot disagree about what the same dict means.
     """
-    from evaluatorq.processings import _job_reported_error
+    from evaluatorq.processings import _UNREADABLE_JOB_ERROR, _job_reported_error
 
-    assert _job_reported_error({'message': 'boom', 'code': 401}) == 'boom'
-    # 'error'/'detail' must not win over a present-but-falsy 'message'.
-    assert _job_reported_error({'message': 0, 'error': 'other'}) == '0'
-    assert _job_reported_error({'message': '', 'detail': 'other'}) is None
-    assert _job_reported_error({'message': None, 'detail': 'other'}) is None
-    assert _job_reported_error({'detail': 'from detail'}) == 'from detail'
-    assert _job_reported_error({'weird': 'shape'}) == '{"weird": "shape"}'
-    unknown = _job_reported_error({'weird': object})
-    assert unknown is not None and unknown.startswith('{"weird": "<class')
     assert _job_reported_error('boom') == 'boom'
-    assert _job_reported_error('') is None
+    assert _job_reported_error({'message': 'boom', 'code': 401}) == 'boom'
+    # A present-but-falsy message is the payload's answer, and it still failed.
+    assert _job_reported_error({'message': 0}) == '0'
+    assert _job_reported_error({'message': ''}) == _UNREADABLE_JOB_ERROR
+    assert _job_reported_error('') == _UNREADABLE_JOB_ERROR
+    # Absent only when the key itself says so.
     assert _job_reported_error(None) is None
+    # A dict with no readable message keeps its content rather than being dropped.
+    unreadable = _job_reported_error({'weird': 'shape'})
+    assert unreadable is not None and 'shape' in unreadable
     assert _job_reported_error(False) == 'False'
+
+
+def test_summary_table_counts_a_job_reported_error() -> None:
+    """The user-visible claim: `Failed Jobs` and `Success Rate` move off 0 and 100%."""
+    from evaluatorq.table_display import create_summary_display
+    from evaluatorq.types import DataPointResult, JobResult
+
+    dead = DataPointResult(
+        data_point=DataPoint(inputs={'text': 'hi'}),
+        job_results=[JobResult(job_name='sim', output='dead', error='401 unauthorized', evaluator_scores=[])],
+    )
+    rows = {cells[0]: cells[1].plain for cells in zip(*(col._cells for col in create_summary_display([dead]).columns))}
+
+    assert rows['Failed Jobs'] == '1'
+    assert rows['Success Rate'] == '0%'
 
 
 @pytest.mark.asyncio

@@ -53,10 +53,10 @@ def check_pass_failures(results: EvaluatorqResult, *, treat_errors_as_failure: b
             (e.g. every judge call raised), also counts as a failure. Without this, an
             errored job has no evaluator scores and an errored evaluator leaves ``pass_``
             unset, so both would be invisible here, letting a run with no usable
-            responses or no usable scores exit successfully. A job that *raised* has no
-            evaluator scores; one that reported its own failure through a top-level
-            ``error`` key keeps its output and is still scored, so such a row can carry
-            both an error and a passing score — this flag is what makes it count.
+            responses or no usable scores exit successfully. A job that reported its own
+            failure through a top-level ``error`` key keeps its output and is still
+            scored, so such a row can carry both an error and a passing score — this
+            flag is what makes it count.
 
     Returns:
         True if any evaluator failed (pass_=False), False otherwise

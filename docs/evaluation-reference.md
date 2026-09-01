@@ -81,6 +81,24 @@ await evaluatorq(
 )
 ```
 
+### Reporting a failure the job handled
+
+A job that lets a failure raise needs nothing: `process_job` records it and the row counts as failed. A job that *catches* its failure to keep the rest of the batch alive — a target that answered `401`, a simulation the runner ended in `error` — must say so, because a returned dict looks like a clean run:
+
+```python
+async def resilient_job(data: DataPoint, row: int) -> dict:
+    try:
+        answer = await call_my_agent(data.inputs["text"])
+    except MyAgentError as exc:
+        # Keeps the partial output for diagnosis, and still fails the row.
+        return {"name": "my-agent", "output": None, "error": str(exc)}
+    return {"name": "my-agent", "output": answer, "error": None}
+```
+
+Emit `error` on every path, `None` on success: an omitted key and a clean run are indistinguishable, so a job that forgets the key on one branch reports a dead target as a passing one. A row with a non-empty `error` is counted in the summary table's `Failed Jobs`, keeps its output, and is still scored — so it can carry both an error and a passing evaluator score. `check_pass_failures(results, treat_errors_as_failure=True)` is what turns it into a CI failure; the default (`False`) gates on evaluator `pass_` alone.
+
+This is the raw-dict job contract. `@job()` wraps a function's return value into `{"name", "output"}`, so an `error` key returned from a decorated function lands *inside* `output` and is not read as a row failure — a decorated job reports failures by raising.
+
 ## Data sources
 
 `data` accepts inline `DataPoint`s, an Orq dataset, or awaitables that resolve to `DataPoint`s — the last of which lets you stream rows in from a slow source without blocking the run:
@@ -151,9 +169,11 @@ When any evaluator returns `pass_: False`, `evaluatorq()` returns the results; t
 from evaluatorq.evaluatorq import check_pass_failures
 
 results = await evaluatorq(...)
-if check_pass_failures(results):
+if check_pass_failures(results, treat_errors_as_failure=True):
     raise SystemExit(1)
 ```
+
+`treat_errors_as_failure=True` also gates on rows that errored — a job that raised, a job that reported its own failure, and an evaluator whose every call failed. It defaults to `False`, which gates on evaluator `pass_` alone, so a run whose target was dead throughout can pass a gate that leaves it off.
 
 The results table gains a pass rate row — `Pass Rate | 75% (3/4)`.
 
