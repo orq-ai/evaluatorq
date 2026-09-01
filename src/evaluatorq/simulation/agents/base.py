@@ -150,12 +150,12 @@ class AgentConfig:
     Deprecated: use `evaluatorq.contracts.LLMCallConfig` instead. `AgentConfig`
     is kept for backwards compatibility and will be removed in a future release.
 
-    ``temperature`` / ``max_tokens`` / ``timeout_ms`` / ``extra_kwargs`` /
-    ``reasoning_effort`` / ``retry_count`` default to ``None`` here (not
-    `LLMCallConfig`'s own defaults): ``None`` means "caller didn't touch this",
-    so `_config_from_agent_config` omits it from the constructed
-    `LLMCallConfig`, letting the per-call-site literal / env fallback apply —
-    exactly as if this legacy class had never been in the way.
+    Every field except ``model``, ``client``, ``api_key`` and ``api`` defaults
+    to ``None`` here (not `LLMCallConfig`'s own defaults): ``None`` means
+    "caller didn't touch this", so `_config_from_agent_config` omits it from
+    the constructed `LLMCallConfig`, letting the per-call-site literal / env
+    fallback apply — exactly as if this legacy class had never been in the
+    way.
     """
 
     model: str = DEFAULT_MODEL
@@ -236,6 +236,11 @@ class BaseAgent(UsageTracking, ABC):
     # tools and reasoning_effort together, which chat completions answers with a 400.
     DEFAULT_API: ClassVar[Literal['chat_completions', 'responses']] = 'responses'
 
+    # Set by a subclass whose request shape only one endpoint accepts. It wins over a
+    # caller's `api`, because the shared config is chosen for the agent under test and
+    # the judge's 400 would surface as a failed run, not as a bad setting.
+    REQUIRED_API: ClassVar[Literal['chat_completions', 'responses'] | None] = None
+
     def __init__(self, config: LLMCallConfig | AgentConfig | None = None) -> None:
         # Normalise legacy AgentConfig into LLMCallConfig
         extra_api_key: str | None = None
@@ -243,7 +248,16 @@ class BaseAgent(UsageTracking, ABC):
             self.config, extra_api_key = _config_from_agent_config(config)
         else:
             self.config = config or LLMCallConfig(model=DEFAULT_MODEL)
-        if 'api' not in self.config.model_fields_set:
+        if self.REQUIRED_API is not None:
+            if 'api' in self.config.model_fields_set and self.config.api != self.REQUIRED_API:
+                logger.warning(
+                    '%s runs on the %s endpoint; llm_config.api=%r does not apply to it.',
+                    type(self).__name__,
+                    self.REQUIRED_API,
+                    self.config.api,
+                )
+            self.config = self.config.model_copy(update={'api': self.REQUIRED_API})
+        elif 'api' not in self.config.model_fields_set:
             self.config = self.config.model_copy(update={'api': self.DEFAULT_API})
 
         self._client_owned: bool

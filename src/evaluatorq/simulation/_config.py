@@ -90,10 +90,7 @@ class SimulationConfig(BaseModel):
     call that truncates is unrecoverable. ``api`` and ``retry_count`` are read by
     the two agents only — every other role is pinned to one endpoint and owns its
     own retry. A role that ignores one of the three logs it rather than dropping
-    it silently.
-
-    This docstring is the source the other surfaces quote: `simulate`'s
-    ``llm_config`` argument docs and ``docs/tuning.md``."""
+    it silently."""
     evaluator_names: list[str] | None = None
     scoring: SimulationScoringConfig | None = None
     """Policy knobs for the ``turn_efficiency`` / ``conversation_quality`` scorers
@@ -102,12 +99,7 @@ class SimulationConfig(BaseModel):
 
     @property
     def model(self) -> str:
-        """Resolved simulation model, for readers that want only the name.
-
-        Derived rather than stored: it was a second field set beside
-        ``llm_config`` at each construction site, which is a rule a third site
-        can forget. There is nothing to keep in step now.
-        """
+        """Resolved simulation model, derived from ``llm_config`` — no second field to keep in step."""
         return self.llm_config.model
 
     datapoint_parallelism: int = 10
@@ -173,49 +165,53 @@ class SimulationConfig(BaseModel):
     it off here and generates its own after the run (avoids double generation)."""
 
 
-def resolve_sim_llm_config(
-    *, sim_model: str, llm_config: LLMCallConfig | None, caller: str = 'simulate'
-) -> LLMCallConfig:
-    """Fold the ``sim_model`` shorthand and the full ``llm_config`` into one config.
+def sim_llm_config(llm_config: LLMCallConfig | None) -> LLMCallConfig:
+    """The caller's simulation-side config, or the default one.
 
-    An explicitly set ``llm_config.model`` wins: it is the richer surface, and a
-    caller who set it said everything they wanted to say about the
-    simulation-side calls. A ``sim_model`` that contradicts it is a mistake
-    worth a warning rather than a silent loss — the two used to be resolved at
-    different layers, so whichever the reader looked at was the one they
-    believed.
+    ``llm_config`` is the only place the simulation-side model is named, so an
+    omitted config means every field stays unset and the per-call-site defaults
+    keep applying — including `DEFAULT_MODEL`.
+    """
+    return llm_config if llm_config is not None else LLMCallConfig(model=DEFAULT_MODEL)
+
+
+def resolve_sim_llm_config(*, model: str, llm_config: LLMCallConfig | None, caller: str) -> LLMCallConfig:
+    """Fold a ``model`` shorthand and a full ``llm_config`` into one config.
+
+    For the constructors that still take a bare model string beside the config
+    (`SimulationRunner`, the generators, the trace helpers). The public
+    ``simulate`` / ``generate`` entry points no longer have that pair — they take
+    ``llm_config`` only and call `sim_llm_config`.
+
+    An explicitly set ``llm_config.model`` wins: a caller who set it said
+    everything they wanted to say about the simulation-side calls. A ``model``
+    that contradicts it is a mistake worth a warning rather than a silent loss.
 
     Presence is read from ``model_fields_set``, never from the value:
-    ``LLMCallConfig.model`` has a non-``None`` default, so a value check calls
-    ``simulate(sim_model=..., llm_config=LLMCallConfig(temperature=0.2))`` a
-    contradiction and runs the default model — the exact composition the
-    docstrings recommend.
+    ``LLMCallConfig.model`` has a non-``None`` default, so a value check would
+    flag ``LLMCallConfig(temperature=0.2)`` beside a ``model`` as a
+    contradiction and fall back to the default model.
 
-    When ``llm_config`` is omitted the shorthand still works and produces a
-    config with only ``model`` set, so every other field stays unset and the
-    per-call-site defaults keep applying.
-
-    Every public simulation entry point that accepts both spellings calls this,
-    and then threads the returned config's ``.model`` onward rather than its own
-    ``sim_model``. ``generate_structured`` deliberately ignores ``config.model``,
-    so an entry point that skips this step honours the config's temperature and
-    silently runs on the default model.
+    The contradiction check only fires when ``model`` differs from
+    `DEFAULT_MODEL`, so passing `DEFAULT_MODEL` explicitly beside a different
+    ``llm_config.model`` is indistinguishable from not passing it at all and is
+    not warned about.
 
     Args:
-        sim_model: The shorthand model keyword as the public entry point spells it.
+        model: The bare model keyword as the constructor spells it.
         llm_config: The full config, or ``None``.
-        caller: Public function name, for the contradiction warning.
+        caller: Class or function name, for the contradiction warning.
     """
     if llm_config is None:
-        return LLMCallConfig(model=sim_model)
+        return LLMCallConfig(model=model)
     if 'model' not in llm_config.model_fields_set:
-        return llm_config.model_copy(update={'model': sim_model})
-    if sim_model != DEFAULT_MODEL and llm_config.model != sim_model:
+        return llm_config.model_copy(update={'model': model})
+    if model != DEFAULT_MODEL and llm_config.model != model:
         logger.warning(
-            '{}(): sim_model={!r} contradicts llm_config.model={!r}; using llm_config.model. '
-            'Drop sim_model, or set the model on llm_config only.',
+            '{}(): model={!r} contradicts llm_config.model={!r}; using llm_config.model. '
+            'Drop the model argument, or set the model on llm_config only.',
             caller,
-            sim_model,
+            model,
             llm_config.model,
         )
     return llm_config

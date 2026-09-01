@@ -17,6 +17,7 @@ import pytest
 
 from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.runner.simulation import SimulationRunner
+from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.types import (
     CommunicationStyle,
     Message,
@@ -203,7 +204,7 @@ class TestDeprecatedTargetCallback:
             await simulate(
                 target_callback=legacy_target,  # pyright: ignore[reportCallIssue]
                 datapoints=[dp],
-                sim_model="test",
+                llm_config=LLMCallConfig(model="test"),
                 max_turns=1,
             )
 
@@ -252,7 +253,7 @@ class TestSimulateAutoRoutesAgentTarget:
             await simulate(
                 target=agent_target,
                 datapoints=[dp],
-                sim_model="test",
+                llm_config=LLMCallConfig(model="test"),
                 max_turns=1,
                 executive_summary=False,
                 upload_results=False,

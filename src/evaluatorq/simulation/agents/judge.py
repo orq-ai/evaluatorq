@@ -10,7 +10,7 @@ import inspect
 import logging
 import math
 from itertools import starmap
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 from pydantic import (
     BaseModel,
@@ -649,6 +649,10 @@ class JudgeAgent(BaseAgent):
     Uses tool calling to make structured decisions about whether a conversation
     should continue or end.
     """
+
+    # Function tools plus reasoning_effort in one request, which chat completions answers
+    # with a 400 on models like gpt-5.4-mini. Not a preference the caller can hold.
+    REQUIRED_API: ClassVar[Literal['chat_completions', 'responses']] = 'responses'
 
     def __init__(
         self,

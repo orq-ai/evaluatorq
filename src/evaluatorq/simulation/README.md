@@ -60,11 +60,11 @@ For `generate_and_simulate()`, pass `agent_description` for any local, deploymen
 
 ## LLM configuration
 
-`llm_config` (an `LLMCallConfig`) configures every simulation-side LLM call: the user-simulator, the judge, the persona / scenario / first-message generators, the recommendations pass and the executive summary. It never reaches the target under test. `sim_model` (default `openai/gpt-5.6-luna`) is the shorthand for setting only the model; when both are given, `llm_config.model` wins and the contradiction is logged.
+`llm_config` (an `LLMCallConfig`) configures every simulation-side LLM call: the user-simulator, the judge, the persona / scenario / first-message generators, the recommendations pass and the executive summary. It never reaches the target under test. It is also the only place the simulation-side model is named — the `sim_model=` keyword it replaced is gone from every entry point, and an omitted config means `openai/gpt-5.6-luna` with every other field unset. The CLI's `--sim-model` flag builds exactly that config.
 
 Provider resolution mirrors red teaming: an injected `generation_client` → `llm_config.client` → `ORQ_API_KEY` (Orq router) → `OPENAI_API_KEY` (with optional `OPENAI_BASE_URL`).
 
-The default `openai/gpt-5.6-luna` assumes the Orq router. If you target OpenAI directly (only `OPENAI_API_KEY` set), drop the prefix: `sim_model="gpt-5.6-luna"`.
+The default `openai/gpt-5.6-luna` assumes the Orq router. If you target OpenAI directly (only `OPENAI_API_KEY` set), drop the prefix: `llm_config=LLMCallConfig(model="gpt-5.6-luna")`.
 
 Override the user-simulator or judge entirely by passing pre-built `BaseAgent` instances via `user_simulator=` / `judge=`. An injected agent arrives already built, so `llm_config` does not reach it — the runner warns once when you set both.
 

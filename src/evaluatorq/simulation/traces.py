@@ -322,7 +322,7 @@ async def summarize_conversations(
     from evaluatorq.openresponses.client import build_simulation_client
     from evaluatorq.simulation._config import resolve_sim_llm_config
 
-    llm_config = resolve_sim_llm_config(sim_model=model, llm_config=llm_config, caller='summarize_conversations')
+    llm_config = resolve_sim_llm_config(model=model, llm_config=llm_config, caller='summarize_conversations')
     model = llm_config.model
     config = config or TraceAnalysisConfig()
     llm_client, owned = build_simulation_client(client or llm_config.client, extra_api_key=api_key, max_retries=0)
@@ -672,7 +672,7 @@ async def datapoints_from_traces(
     from evaluatorq.simulation._config import resolve_sim_llm_config
     from evaluatorq.simulation.generators.first_message_generator import FirstMessageGenerator
 
-    llm_config = resolve_sim_llm_config(sim_model=model, llm_config=llm_config, caller='datapoints_from_traces')
+    llm_config = resolve_sim_llm_config(model=model, llm_config=llm_config, caller='datapoints_from_traces')
     model = llm_config.model
     config = config or TraceAnalysisConfig()
     llm_client, owned = build_simulation_client(client or llm_config.client, extra_api_key=api_key, max_retries=0)
@@ -844,7 +844,7 @@ async def extend_from_traces(
     from evaluatorq.simulation._config import resolve_sim_llm_config
     from evaluatorq.simulation.generators.datapoint_generator import DatapointGenerator
 
-    llm_config = resolve_sim_llm_config(sim_model=model, llm_config=llm_config, caller='extend_from_traces')
+    llm_config = resolve_sim_llm_config(model=model, llm_config=llm_config, caller='extend_from_traces')
     model = llm_config.model
 
     if not conversations:

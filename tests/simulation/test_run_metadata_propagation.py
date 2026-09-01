@@ -29,6 +29,7 @@ from opentelemetry.sdk.trace.export import (
 from evaluatorq.common.thread_context import evaluatorq_pipeline, evaluatorq_run_id, pipeline_metadata
 from evaluatorq.simulation.api import generate_personas, generate_scenarios
 from openai import AsyncOpenAI
+from evaluatorq.contracts import LLMCallConfig
 
 
 class _FakeCompletions:
@@ -262,7 +263,7 @@ async def test_simulate_stamps_run_id_on_root_span(
     results = await simulate(
         target=lambda messages: 'ok',
         datapoints=[],
-        sim_model='test',
+        llm_config=LLMCallConfig(model='test'),
         upload_results=False,
         executive_summary=False,
     )
@@ -310,7 +311,7 @@ async def test_recommendation_generation_stays_under_pipeline_root(
     await _simulate_run(
         target=lambda messages: 'ok',
         datapoints=[],
-        sim_model='test',
+        llm_config=LLMCallConfig(model='test'),
         upload_results=False,
         executive_summary=False,
         recommendations=SimulationRecommendationConfig(),

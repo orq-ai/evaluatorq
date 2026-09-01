@@ -79,7 +79,6 @@ async def extend_from_experiment(
     run_id: str | None = None,
     num_personas: int = 3,
     num_scenarios: int = 5,
-    sim_model: str | None = None,
     llm_config: LLMCallConfig | None = None,
     agent_description: str | None = None,
     api_key: str | None = None,
@@ -97,20 +96,16 @@ async def extend_from_experiment(
         run_id: A specific run (manifest) ID. Latest run when omitted.
         num_personas: New personas to generate.
         num_scenarios: New scenarios to generate.
-        sim_model: Generation model; defaults to the simulation default.
-        llm_config: Sampling settings for the generators. ``llm_config.model`` wins
-            over ``sim_model`` when both are given.
+        llm_config: Model and sampling settings for the generators. Defaults to
+            the simulation default model with every other field unset.
         agent_description: Description of the agent under test for the
             generators. Derived from the seed scenarios' goals when omitted.
         api_key: Orq API key; falls back to ``ORQ_API_KEY``.
     """
-    from evaluatorq.simulation._config import resolve_sim_llm_config
+    from evaluatorq.simulation._config import sim_llm_config
     from evaluatorq.simulation.generators import DatapointGenerator
-    from evaluatorq.simulation.types import DEFAULT_MODEL
 
-    llm_config = resolve_sim_llm_config(
-        sim_model=sim_model or DEFAULT_MODEL, llm_config=llm_config, caller='extend_from_experiment'
-    )
+    llm_config = sim_llm_config(llm_config)
     seeds = await datapoints_from_experiment(experiment_id, run_id=run_id, api_key=api_key)
 
     generator = DatapointGenerator(config=llm_config)

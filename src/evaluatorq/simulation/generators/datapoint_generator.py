@@ -49,7 +49,7 @@ class DatapointGenerator:
     ) -> None:
         from evaluatorq.simulation._config import resolve_sim_llm_config
 
-        self._config = resolve_sim_llm_config(sim_model=model, llm_config=config, caller=type(self).__name__)
+        self._config = resolve_sim_llm_config(model=model, llm_config=config, caller=type(self).__name__)
         self._model = self._config.model
         self._rate_limit_delay = rate_limit_delay
         self._max_concurrent_calls = max_concurrent_calls

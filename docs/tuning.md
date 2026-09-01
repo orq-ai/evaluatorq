@@ -58,7 +58,7 @@ No evaluatorq call site sends a temperature of its own any more. Set one when yo
 ```python
 from evaluatorq.contracts import LLMCallConfig
 
-cfg = LLMCallConfig(model="openai/gpt-4o-mini", temperature=0.2)
+cfg = LLMCallConfig(model="openai/gpt-5.6-luna", temperature=0.2)
 ```
 
 The same holds per call: a `temperature=None` argument means "leave it unset", never "send null".
@@ -74,23 +74,23 @@ from evaluatorq.simulation import simulate
 await simulate(
     target="agent:my-agent",
     datapoints=datapoints,
-    llm_config=LLMCallConfig(model="openai/gpt-4o-mini", temperature=0.2),
+    llm_config=LLMCallConfig(model="openai/gpt-5.6-luna", temperature=0.2),
 )
 ```
 
 One config drives every simulation-side call — five roles: the user simulator, the judge, the persona / scenario / first-message generators, the recommendations pass and the executive summary. It never touches the target under test — that is the thing being measured, and it is configured where it is constructed.
 
-`sim_model=` is the shorthand for setting only the model, and it still works. When both are given `llm_config.model` wins and the contradiction is logged, so a run cannot quietly use a model you did not pick.
+`llm_config` is the only place the simulation-side model is named. The `sim_model=` keyword it replaced is gone from every entry point — `LLMCallConfig(model=...)` says the same thing and can say more beside it. The CLI keeps its `--sim-model` flag, which builds exactly that config for you.
 
 Only the fields you set take effect. `LLMCallConfig(model="...")` alone leaves `temperature` unset, so the parameter stays out of the request and a reasoning-class model keeps working.
 
-The same `llm_config=` is on `summarize_conversations()`, `datapoints_from_traces()`, `extend_from_traces()` and `extend_from_experiment()` for the trace- and experiment-derived generation paths, with the same precedence: the config's model wins over the `model=` / `sim_model=` shorthand and the contradiction is logged.
+The same `llm_config=` is on `summarize_conversations()`, `datapoints_from_traces()`, `extend_from_traces()` and `extend_from_experiment()` for the trace- and experiment-derived generation paths, with the same precedence: those four still take a bare `model=` beside the config, the config's model wins over it, and the contradiction is logged.
 
 `llm_config.client` is honoured everywhere too: pass your own `AsyncOpenAI` and no credentials need to be in the environment at all. Precedence is the same on every path — an explicitly passed client argument, then the config's, then `ORQ_API_KEY` / `OPENAI_API_KEY`.
 
-Simulation's own calls default to the **Responses API**, even though `LLMCallConfig.api` itself defaults to `chat_completions`: the judge sends function tools and `reasoning_effort` together, which chat completions rejects with a 400 on models like `gpt-5.4-mini`, and one endpoint per run keeps the trace UI from typing the spans two different ways. Set `LLMCallConfig(api="chat_completions")` to opt out. The default lives on `BaseAgent.DEFAULT_API`, not in an environment variable — it is a per-call setting, so it is on the config.
+Simulation's own calls default to the **Responses API**, even though `LLMCallConfig.api` itself defaults to `chat_completions`: the judge sends function tools and `reasoning_effort` together, which chat completions rejects with a 400 on models like `gpt-5.4-mini`, and one endpoint per run keeps the trace UI from typing the spans two different ways. Set `LLMCallConfig(api="chat_completions")` to opt out for the user simulator, whose request is a plain completion either endpoint accepts. The judge is not covered by that opt-out: it pins itself to Responses via `JudgeAgent.REQUIRED_API` and logs that your `api` did not apply to it, because the setting is one knob for both roles and only one of them can honour it. The default lives on `BaseAgent.DEFAULT_API`, not in an environment variable — it is a per-call setting, so it is on the config.
 
-Three fields are narrower than the rest. `max_tokens` reaches the user simulator, the judge and the executive summary; the generators and the recommendations pass size their own budget from the item count instead. `api` and `retry_count` reach the two agents only — every other role is pinned to one endpoint and owns its own retry. Each is logged when ignored, so a value that did not apply says so rather than disappearing.
+Three fields are narrower than the rest. `max_tokens` reaches the user simulator, the judge and the executive summary; the generators and the recommendations pass size their own budget from the item count instead. `api` and `retry_count` reach the two agents only — every other role is pinned to one endpoint and owns its own retry, and the judge is pinned too. Each is logged when ignored, so a value that did not apply says so rather than disappearing.
 
 One config covers every simulation-side role, so a sampling setting reaches the judge and the simulated user alike. That is the trade for a single knob: lowering `temperature` to make scoring more repeatable also flattens the variation the simulated user exists to produce, and reasoning-class models reject `temperature` at any value. When you want to configure one role and not the others, build that agent yourself and pass it as `judge=` or `user_simulator=` — an injected agent carries its own settings, and `simulate()` warns that `llm_config` will not reach it.
 

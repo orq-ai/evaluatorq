@@ -28,10 +28,10 @@ from evaluatorq.simulation._config import (
     DEFAULT_MAX_TOOL_RESULT_CHARS,
     DEFAULT_TARGET_AGENT_TIMEOUT_MS,
     SimulationConfig,
-    resolve_sim_llm_config,
+    sim_llm_config,
 )
 from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig
-from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MAX_TURNS, DEFAULT_MODEL
+from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MAX_TURNS
 from evaluatorq.simulation.utils.run_store import auto_save_run, build_simulation_run, fetch_agent_info, write_report
 
 if TYPE_CHECKING:
@@ -204,7 +204,6 @@ async def simulate(
     memory_entity_id: str | None = None,
     previous_run: str | None = None,
     max_turns: int | None = None,
-    sim_model: str = DEFAULT_MODEL,
     llm_config: LLMCallConfig | None = None,
     evaluator_names: list[str] | None = None,
     scoring: SimulationScoringConfig | None = None,
@@ -246,18 +245,20 @@ async def simulate(
             history and returns the agent's response.
         user_simulator: Pre-constructed ``BaseAgent`` to drive the user side.
             When omitted a default ``UserSimulatorAgent`` is built from
-            ``sim_model``. ``sim_model`` drives the user-simulator, the judge,
-            and datapoint generators.
-        judge: Pre-constructed ``BaseAgent`` used to evaluate each turn.
+            ``llm_config``, which drives the user-simulator, the judge, and the
+            datapoint generators. An injected agent arrives already built,
+            so ``llm_config`` does not reach it — the runner warns once when
+            you set both.
+        judge: Pre-constructed ``BaseAgent`` used to evaluate each turn. Same
+            ``llm_config`` caveat as ``user_simulator`` above.
         llm_config: Full ``LLMCallConfig`` for every simulation-side LLM call —
             five roles: the user simulator, the judge, the persona / scenario /
             first-message generators, the recommendations pass and the executive
             summary. Never the target under test: that is the thing being
-            measured, and it is configured where it is constructed. Use this
-            instead of ``sim_model`` when you need more than the model name
-            (``temperature``, ``reasoning_effort``, ``timeout_ms``, ``extra_body``);
-            ``llm_config.model`` wins over ``sim_model`` and contradicting the two
-            logs a warning. Only the fields you set take effect, so an unset
+            measured, and it is configured where it is constructed. It is the
+            only place the simulation-side model is named
+            (``model``, ``temperature``, ``reasoning_effort``, ``timeout_ms``,
+            ``extra_body``). Only the fields you set take effect, so an unset
             ``temperature`` still means the parameter is omitted from the request.
             Three fields are narrower. ``max_tokens``: the two agents and the
             executive summary read it, while the generators and the
@@ -442,7 +443,6 @@ async def simulate(
         memory_entity_id=memory_entity_id,
         previous_run=previous_run,
         max_turns=max_turns,
-        sim_model=sim_model,
         llm_config=llm_config,
         evaluator_names=evaluator_names,
         scoring=scoring,
@@ -482,7 +482,6 @@ async def _simulate_run(
     memory_entity_id: str | None = None,
     previous_run: str | None = None,
     max_turns: int | None = None,
-    sim_model: str = DEFAULT_MODEL,
     llm_config: LLMCallConfig | None = None,
     evaluator_names: list[str] | None = None,
     scoring: SimulationScoringConfig | None = None,
@@ -524,7 +523,7 @@ async def _simulate_run(
     # brackets the whole run (bare simulate has only the SIMULATE stage — no
     # GENERATE phase). Minted before the span opens so it can be stamped as a
     # span attribute rather than set after the fact.
-    resolved_llm_config = resolve_sim_llm_config(sim_model=sim_model, llm_config=llm_config, caller='simulate')
+    resolved_llm_config = sim_llm_config(llm_config)
     run_id = uuid.uuid4().hex
 
     try:
@@ -626,7 +625,6 @@ async def generate_and_simulate(
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
     max_turns: int | None = None,
-    sim_model: str = DEFAULT_MODEL,
     llm_config: LLMCallConfig | None = None,
     evaluator_names: list[str] | None = None,
     scoring: SimulationScoringConfig | None = None,
@@ -662,13 +660,14 @@ async def generate_and_simulate(
     ``<key>``), for agents with a memory store attached. When omitted, a fresh
     per-target id is minted so memory-backed agents still work out of the box.
     Persona/scenario/first-message generation resolves its provider via
-    the shared factory: an injected ``generation_client`` → ``ORQ_API_KEY``
-    (Orq router) → ``OPENAI_API_KEY`` (with optional ``OPENAI_BASE_URL`` for an
-    OpenAI-compatible endpoint). No API key is needed when a client is injected.
-    ``sim_model`` drives persona/scenario/first-message generation, the
-    user-simulator, and the judge; pass ``llm_config`` instead to set anything
-    beyond the model name (temperature, reasoning effort, timeouts) on those same
-    calls — see `simulate` for the full semantics. ``upload_results`` defaults to ``True``; set
+    the shared factory: an injected ``generation_client`` → ``llm_config.client``
+    → ``ORQ_API_KEY`` (Orq router) → ``OPENAI_API_KEY`` (with optional
+    ``OPENAI_BASE_URL`` for an OpenAI-compatible endpoint). No API key is
+    needed when a client is injected.
+    ``llm_config`` drives persona/scenario/first-message generation, the
+    user-simulator, and the judge — the model name and anything beyond it
+    (temperature, reasoning effort, timeouts) on those same calls; see
+    `simulate` for the full semantics. ``upload_results`` defaults to ``True``; set
     it to ``False`` to skip uploading the final experiment. ``exit_on_failure``
     defaults to ``True``; see `simulate` for the full semantics of the
     CI-gate behaviour and how to opt out. ``hooks`` mirrors `simulate`;
@@ -773,7 +772,6 @@ async def generate_and_simulate(
         persona_seeds=persona_seeds,
         scenario_seeds=scenario_seeds,
         max_turns=max_turns,
-        sim_model=sim_model,
         llm_config=llm_config,
         evaluator_names=evaluator_names,
         scoring=scoring,
@@ -885,7 +883,6 @@ async def _generate_and_simulate_run(
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
     max_turns: int | None = None,
-    sim_model: str = DEFAULT_MODEL,
     llm_config: LLMCallConfig | None = None,
     evaluator_names: list[str] | None = None,
     scoring: SimulationScoringConfig | None = None,
@@ -929,9 +926,7 @@ async def _generate_and_simulate_run(
     # composed hooks thread through both the generate phase and _simulate_core, so
     # both stages are recorded. Minted before the span opens so it can be stamped
     # as a span attribute rather than set after the fact.
-    resolved_llm_config = resolve_sim_llm_config(
-        sim_model=sim_model, llm_config=llm_config, caller='generate_and_simulate'
-    )
+    resolved_llm_config = sim_llm_config(llm_config)
     run_id = uuid.uuid4().hex
 
     try:
@@ -1065,7 +1060,6 @@ async def generate(
     agent_description: str,
     num_personas: int = 5,
     num_scenarios: int = 5,
-    sim_model: str = DEFAULT_MODEL,
     llm_config: LLMCallConfig | None = None,
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
     generation_client: AsyncOpenAI | None = None,
@@ -1099,11 +1093,12 @@ async def generate(
     judge remain stochastic at simulate time, so scores still vary run to run.
 
     Provider resolution matches `generate_and_simulate`: an injected
-    ``generation_client`` → ``ORQ_API_KEY`` (Orq router) → ``OPENAI_API_KEY``
-    (with optional ``OPENAI_BASE_URL`` for an OpenAI-compatible endpoint).
-    ``sim_model`` drives persona/scenario/first-message generation; pass
-    ``llm_config`` instead to set temperature, reasoning effort or timeouts on
-    those calls — see `simulate` for the full semantics.
+    ``generation_client`` → ``llm_config.client`` → ``ORQ_API_KEY`` (Orq router)
+    → ``OPENAI_API_KEY`` (with optional ``OPENAI_BASE_URL`` for an
+    OpenAI-compatible endpoint).
+    ``llm_config`` drives persona/scenario/first-message generation — the model
+    name, temperature, reasoning effort and timeouts on those calls; see
+    `simulate` for the full semantics.
     """
     from evaluatorq.common.async_utils import await_maybe
     from evaluatorq.simulation.hooks import SimStage
@@ -1112,7 +1107,7 @@ async def generate(
 
     await init_tracing_if_needed()
 
-    resolved_llm_config = resolve_sim_llm_config(sim_model=sim_model, llm_config=llm_config, caller='generate')
+    resolved_llm_config = sim_llm_config(llm_config)
     # Minted before the span opens so it can be stamped as a span attribute.
     run_id = uuid.uuid4().hex
 
@@ -1177,7 +1172,6 @@ async def generate_personas(
     *,
     agent_description: str = '',
     context: str = '',
-    sim_model: str = DEFAULT_MODEL,
     llm_config: LLMCallConfig | None = None,
     generation_client: AsyncOpenAI | None = None,
 ) -> list[Persona]:
@@ -1186,12 +1180,11 @@ async def generate_personas(
     The intermediate tier between fully-auto generation
     (`generate_and_simulate`) and hand-built ``Persona`` objects: you name
     each archetype, the LLM fills every trait. Provider resolves via the shared
-    factory (``ORQ_API_KEY`` → ``OPENAI_API_KEY``) unless ``generation_client``
-    is injected.
+    factory: an injected ``generation_client`` → ``llm_config.client`` →
+    ``ORQ_API_KEY`` → ``OPENAI_API_KEY``.
 
-    ``llm_config`` is the fuller surface behind ``sim_model``: only the fields you set take effect,
-    so an unset ``temperature`` still omits the parameter from the request. When both name a model,
-    ``llm_config.model`` wins and the contradiction is logged.
+    ``llm_config`` carries the model and everything around it: only the fields you set take effect,
+    so an unset ``temperature`` still omits the parameter from the request.
     """
     from evaluatorq.simulation.exceptions import SimulationError
     from evaluatorq.simulation.generators import PersonaGenerator
@@ -1205,7 +1198,7 @@ async def generate_personas(
     # sim paths those already nest under the run's root span.
     gen = PersonaGenerator(
         client=generation_client,
-        config=resolve_sim_llm_config(sim_model=sim_model, llm_config=llm_config, caller='generate_personas'),
+        config=sim_llm_config(llm_config),
     )
     try:
         batches = await asyncio.gather(*[
@@ -1233,7 +1226,6 @@ async def generate_persona(
     *,
     agent_description: str = '',
     context: str = '',
-    sim_model: str = DEFAULT_MODEL,
     llm_config: LLMCallConfig | None = None,
     generation_client: AsyncOpenAI | None = None,
 ) -> Persona:
@@ -1241,15 +1233,13 @@ async def generate_persona(
 
     See `generate_personas` for the batch form and provider resolution.
 
-    ``llm_config`` is the fuller surface behind ``sim_model``: only the fields you set take effect,
-    so an unset ``temperature`` still omits the parameter from the request. When both name a model,
-    ``llm_config.model`` wins and the contradiction is logged.
+    ``llm_config`` carries the model and everything around it: only the fields you set take effect,
+    so an unset ``temperature`` still omits the parameter from the request.
     """
     personas = await generate_personas(
         [seed],
         agent_description=agent_description,
         context=context,
-        sim_model=sim_model,
         llm_config=llm_config,
         generation_client=generation_client,
     )
@@ -1261,7 +1251,6 @@ async def generate_scenarios(
     *,
     agent_description: str = '',
     context: str = '',
-    sim_model: str = DEFAULT_MODEL,
     llm_config: LLMCallConfig | None = None,
     generation_client: AsyncOpenAI | None = None,
 ) -> list[Scenario]:
@@ -1270,9 +1259,8 @@ async def generate_scenarios(
     The scenario counterpart to `generate_personas`: you name each
     situation, the LLM fills the goal, context, and success/failure criteria.
 
-    ``llm_config`` is the fuller surface behind ``sim_model``: only the fields you set take effect,
-    so an unset ``temperature`` still omits the parameter from the request. When both name a model,
-    ``llm_config.model`` wins and the contradiction is logged.
+    ``llm_config`` carries the model and everything around it: only the fields you set take effect,
+    so an unset ``temperature`` still omits the parameter from the request.
     """
     from evaluatorq.simulation.exceptions import SimulationError
     from evaluatorq.simulation.generators import ScenarioGenerator
@@ -1283,7 +1271,7 @@ async def generate_scenarios(
     # No run id bound here — see the note in generate_personas.
     gen = ScenarioGenerator(
         client=generation_client,
-        config=resolve_sim_llm_config(sim_model=sim_model, llm_config=llm_config, caller='generate_scenarios'),
+        config=sim_llm_config(llm_config),
     )
     try:
         batches = await asyncio.gather(*[
@@ -1311,7 +1299,6 @@ async def generate_scenario(
     *,
     agent_description: str = '',
     context: str = '',
-    sim_model: str = DEFAULT_MODEL,
     llm_config: LLMCallConfig | None = None,
     generation_client: AsyncOpenAI | None = None,
 ) -> Scenario:
@@ -1319,15 +1306,13 @@ async def generate_scenario(
 
     See `generate_scenarios` for the batch form and provider resolution.
 
-    ``llm_config`` is the fuller surface behind ``sim_model``: only the fields you set take effect,
-    so an unset ``temperature`` still omits the parameter from the request. When both name a model,
-    ``llm_config.model`` wins and the contradiction is logged.
+    ``llm_config`` carries the model and everything around it: only the fields you set take effect,
+    so an unset ``temperature`` still omits the parameter from the request.
     """
     scenarios = await generate_scenarios(
         [seed],
         agent_description=agent_description,
         context=context,
-        sim_model=sim_model,
         llm_config=llm_config,
         generation_client=generation_client,
     )

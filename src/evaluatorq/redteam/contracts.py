@@ -899,7 +899,7 @@ class LLMConfig(BaseModel):
     ```python
     config = LLMConfig(
         attacker=LLMCallConfig(model="anthropic/claude-3-5-sonnet", temperature=0.9),
-        evaluator=EvaluatorConfig(model="openai/gpt-4o-mini", temperature=0.0),
+        evaluator=EvaluatorConfig(model="openai/gpt-5.6-luna", temperature=0.0),
     )
     ```
     """

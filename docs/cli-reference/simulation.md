@@ -14,7 +14,7 @@ Three main verbs: `generate` (datapoints only), `simulate` (run against pre-buil
 Generate personas and scenarios, then run simulations.
 
 ```bash
-eq sim run --agent-description "..." --openai-model gpt-4o-mini
+eq sim run --agent-description "..." --openai-model gpt-5.6-luna
 eq sim run --target agent:<key>
 ```
 
@@ -31,7 +31,7 @@ Targets — provide **exactly one**:
 |---|---|---|
 | `--agent-description` | `str \| None` / `None` | Free-text description of the agent. May be omitted when `--target` is an Orq agent (fetched automatically). |
 | `--name` / `-n` | `str` / `sim` | Run name for the run-store entry. |
-| `--sim-model` | `str` / `openai/gpt-5.6-luna` | Model for user-simulator, judge, and generation. |
+| `--sim-model` | `str` / `openai/gpt-5.6-luna` | Model for the user-simulator, the judge, persona/scenario/first-message generation, the recommendations pass and the executive summary. |
 | `--max-turns` | `int` / `10` | Maximum conversation turns. |
 | `--datapoint-parallelism` | `int` / `10` | Concurrent simulations. `--parallelism` is a deprecated alias. |
 | `--llm-parallelism` | `int` / unset | Ceiling on in-flight LLM requests for the whole run. |
@@ -76,7 +76,7 @@ There is no `--target-reasoning-effort` here — it is a `eq sim run` flag only.
 | `--from-run` | `str \| None` | Replay a previous run from `.evaluatorq/sim-runs/`: pass its file name, run id, path, or `"latest"`. Re-runs the exact same personas, scenarios, and first messages; only the target/evaluators may differ. |
 | `--memory-entity` | `str \| None` / `None` | Memory `entity_id` sent with every `agent:<key>` (or bare `<key>`) target call, for agents with a memory store attached. Omit to mint a fresh id per conversation; pass one to reuse a specific (e.g. seeded) entity, shared across the run. |
 | `--name` / `-n` | `str` / `sim` | Run name for the run-store entry. |
-| `--sim-model` | `str` / `openai/gpt-5.6-luna` | Model for user-simulator and judge. |
+| `--sim-model` | `str` / `openai/gpt-5.6-luna` | Model for the user-simulator, the judge, the recommendations pass and the executive summary. |
 | `--max-turns` | `int` / `10` | Maximum conversation turns. Defaults to the replayed run's cap with `--from-run`. |
 | `--datapoint-parallelism` | `int` / `10` | Concurrent simulations. `--parallelism` is a deprecated alias. |
 | `--llm-parallelism` | `int` / unset | Ceiling on in-flight LLM requests for the whole run. |

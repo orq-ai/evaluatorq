@@ -681,8 +681,10 @@ class SimulationRunner:
         # Never the target under test: that one is configured where it is constructed.
         from evaluatorq.simulation._config import resolve_sim_llm_config
 
-        self._llm_config = resolve_sim_llm_config(sim_model=model, llm_config=llm_config, caller='SimulationRunner')
+        self._llm_config = resolve_sim_llm_config(model=model, llm_config=llm_config, caller='SimulationRunner')
         self._model = self._llm_config.model
+        self.model = self._model
+        """Resolved user-simulator / judge model. NEVER the target's — see `_new_conversation_target`."""
         self._max_turns = max_turns
         self._shared_client: AsyncOpenAI | None = llm_client
         self._client_owned: bool = False
@@ -691,7 +693,11 @@ class SimulationRunner:
         self._injected_judge: BaseAgent | None = judge
         # Warned once here, not per datapoint: an injected agent arrives built and llm_config cannot reach it.
         injected = [name for name, agent in (('user_simulator', user_simulator), ('judge', judge)) if agent is not None]
-        carried = self._llm_config.model_fields_set - {'model', 'client'}
+        # From the caller's own arguments, not the resolved config: `resolve_sim_llm_config`
+        # always sets `model`, so reading it back cannot tell a chosen model from the default.
+        carried = (llm_config.model_fields_set if llm_config is not None else set()) - {'client'}
+        if model != DEFAULT_MODEL:
+            carried = carried | {'model'}
         if injected and carried:
             logger.warning(
                 'llm_config sets %s but %s was injected already built, so those settings do not reach it. '

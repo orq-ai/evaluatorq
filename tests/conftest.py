@@ -187,3 +187,14 @@ def _propagate_loguru_to_stdlib():
         logger.remove(handler_id)
     except ValueError:
         pass  # cli.py calls logger.remove() globally; handler may already be gone
+
+
+@pytest.fixture(autouse=True)
+def _reset_unread_config_warnings():
+    """`warn_unread_config_fields` warns once per (caller, fields) per process, so without
+    this the second test to expect the same warning sees an empty caplog."""
+    from evaluatorq.common.structured_output import _WARNED_UNREAD
+
+    _WARNED_UNREAD.clear()
+    yield
+    _WARNED_UNREAD.clear()

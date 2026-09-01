@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from evaluatorq.redteam.contracts import EvaluatorConfig, LLMConfig
 from evaluatorq.redteam.runner import _executive_summary_config
 
@@ -41,3 +43,28 @@ def test_the_router_retry_policy_rides_along_only_for_an_orq_client() -> None:
     orq.base_url = 'https://my.orq.ai/v3/router'
     body = _executive_summary_config(LLMConfig(retry_count=4), model='m', client=orq).extra_body
     assert body['retry']['count'] == 4
+
+
+def test_the_fields_the_summary_reads_are_forwarded() -> None:
+    """`generate_executive_summary` reads `max_tokens` and `timeout_ms`. Narrowing the
+    evaluator config clears `model_fields_set`, so a field dropped here can never be
+    named by the callee's own warning — it has to survive the narrowing or be logged."""
+    config = LLMConfig(evaluator=EvaluatorConfig(max_tokens=2000, timeout_ms=300_000))
+    cfg = _executive_summary_config(config, model='m', client=None)
+    assert cfg.max_tokens == 2000
+    assert cfg.timeout_ms == 300_000
+
+
+def test_a_caller_key_wins_the_router_body_merge(caplog: pytest.LogCaptureFixture) -> None:
+    """The retry policy is this call site's default; a key the caller set on the evaluator
+    config wins it, and the fields the summary cannot read are named rather than dropped."""
+    orq = MagicMock()
+    orq.base_url = 'https://my.orq.ai/v3/router'
+    config = LLMConfig(
+        retry_count=4,
+        evaluator=EvaluatorConfig(extra_body={'my_router_flag': 1}, api='responses'),
+    )
+    with caplog.at_level('WARNING'):
+        cfg = _executive_summary_config(config, model='m', client=orq)
+    assert cfg.extra_body == {'retry': {'count': 4, 'on_codes': [429, 500, 502, 503, 504]}, 'my_router_flag': 1}
+    assert 'red_team executive summary ignores llm_config api' in caplog.text

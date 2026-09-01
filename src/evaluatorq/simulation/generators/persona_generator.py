@@ -106,7 +106,7 @@ class PersonaGenerator(UsageTracking):
         """
         from evaluatorq.simulation._config import resolve_sim_llm_config
 
-        self._config = resolve_sim_llm_config(sim_model=model, llm_config=config, caller=type(self).__name__)
+        self._config = resolve_sim_llm_config(model=model, llm_config=config, caller=type(self).__name__)
         self._model = self._config.model
         from evaluatorq.openresponses.client import build_simulation_client
 

@@ -275,16 +275,25 @@ class _CallSettings(NamedTuple):
     timeout_s: float
 
 
-# What a call reads when no explicit keyword beats it; `model` and `api` stay the call site's authority.
+# What a call reads when no explicit keyword beats it; `model`, `client` and `api` stay the call site's authority.
 _CONSUMED_CONFIG_FIELDS = frozenset({
-    'model',
-    'client',
     'temperature',
     'extra_kwargs',
     'extra_body',
     'reasoning_effort',
     'timeout_ms',
 })
+
+# Never warned about generically: every call site that takes a config also takes its own
+# `model` and `client` arguments, which always win. `warn_config_redirect` reports a
+# *different* model by name; `client` gets no such check, because the sanctioned
+# `without_client_retries` clone means an honoured injected client is not the same object.
+_CALL_SITE_ARGUMENTS = frozenset({'model', 'client'})
+
+# Warned once per (caller, ignored fields): these call sites run per datapoint, and the
+# same line 200 times is one nobody reads. Ceiling: process-global, so a second run in
+# one process stays silent — move the warning to the entry point if that ever matters.
+_WARNED_UNREAD: set[tuple[str, frozenset[str]]] = set()
 
 
 def warn_unread_config_fields(config: LLMCallConfig | None, read: frozenset[str], *, caller: str) -> None:
@@ -294,22 +303,56 @@ def warn_unread_config_fields(config: LLMCallConfig | None, read: frozenset[str]
     own retry loop takes those fields off the config. Dropping them without a
     word makes a config that did nothing look like a config that worked, so
     every such call site says which ones it ignored.
+
+    ``read`` is what the call site genuinely reads. `_CALL_SITE_ARGUMENTS` are
+    exempt without being claimed as read: they are beaten by a required keyword
+    at every call site, so warning about them generically would fire on every
+    run — the call site reports a divergent one by name instead.
     """
     if config is None:
         return
-    ignored = config.model_fields_set - read
-    if ignored:
-        logger.warning(
-            '%s ignores llm_config %s — this call site owns those. Only %s are read.',
-            caller,
-            ', '.join(sorted(ignored)),
-            ', '.join(sorted(read - {'model', 'client'})),
-        )
+    ignored = config.model_fields_set - read - _CALL_SITE_ARGUMENTS
+    if not ignored:
+        return
+    key = (caller, frozenset(ignored))
+    if key in _WARNED_UNREAD:
+        return
+    _WARNED_UNREAD.add(key)
+    logger.warning(
+        '%s ignores llm_config %s — this call site owns those. It reads %s.',
+        caller,
+        ', '.join(sorted(ignored)),
+        ', '.join(sorted(read)) or 'no field on this config',
+    )
+
+
+def warn_config_redirect(config: LLMCallConfig | None, *, resolved_model: str, caller: str) -> None:
+    """Warn that ``caller`` runs on ``resolved_model``, not the one on ``config``.
+
+    ``model`` is a required keyword at every call site that takes a config, so it
+    always wins. Exempting it from `warn_unread_config_fields` without a word is
+    the silent drop that accounting exists to prevent; this is the word. Deduped
+    with the unread-field warning, since these call sites run per datapoint.
+    """
+    if config is None or 'model' not in config.model_fields_set or config.model == resolved_model:
+        return
+    key = (caller, frozenset({'model', resolved_model, config.model}))
+    if key in _WARNED_UNREAD:
+        return
+    _WARNED_UNREAD.add(key)
+    logger.warning(
+        '%s runs on model=%r; llm_config.model=%r does not redirect this call.',
+        caller,
+        resolved_model,
+        config.model,
+    )
 
 
 def _fold_config(
     *,
     config: LLMCallConfig | None,
+    model: str,
+    label: str,
     temperature: float | Unset | None,
     extra_kwargs: dict[str, Any] | Unset | None,
     extra_body: dict[str, Any] | Unset | None,
@@ -321,10 +364,14 @@ def _fold_config(
     A keyword still at ``UNSET`` is one the caller never passed; anything else
     they meant, ``None`` included.
 
-    The unread-field warning is computed from the keywords still at ``UNSET``
-    rather than from `_CONSUMED_CONFIG_FIELDS`: a config field an explicit
-    keyword beats was dropped, so it belongs in the warning. ``timeout_s`` the
-    keyword beats the ``timeout_ms`` config field.
+    The unread-field warning subtracts the keywords the caller did pass from
+    `_CONSUMED_CONFIG_FIELDS`: a config field an explicit keyword beats was
+    dropped, so it belongs in the warning. ``timeout_s`` the keyword beats the
+    ``timeout_ms`` config field.
+
+    ``model`` and ``client`` are always beaten — they are required arguments —
+    so they are not in `_CONSUMED_CONFIG_FIELDS` at all, and a config carrying a
+    different ``model`` gets `warn_config_redirect` rather than the generic warning.
     """
     from_config = (
         config.set_values('temperature', 'extra_kwargs', 'extra_body', 'reasoning_effort') if config is not None else {}
@@ -341,7 +388,9 @@ def _fold_config(
         )
         if not isinstance(keyword, Unset)
     }
-    warn_unread_config_fields(config, _CONSUMED_CONFIG_FIELDS - beaten, caller='generate_structured')
+    caller = f'generate_structured({label})'
+    warn_config_redirect(config, resolved_model=model, caller=caller)
+    warn_unread_config_fields(config, _CONSUMED_CONFIG_FIELDS - beaten, caller=caller)
     if isinstance(timeout_s, Unset):
         resolved_timeout_s = config.timeout_s(_STRUCTURED_TIMEOUT_S) if config is not None else _STRUCTURED_TIMEOUT_S
     else:
@@ -826,12 +875,16 @@ async def generate_structured(
     sentinel rather than to ``None``: both spellings are real values a caller
     means, so neither can double as "said nothing".
 
-    ``config.model`` and ``config.api`` are NOT read: this function's own
-    ``model`` / ``api`` arguments stay the single authority, so a config cannot
-    silently redirect a call to another endpoint.
+    ``config.model``, ``config.client`` and ``config.api`` are NOT read: this
+    function's own ``model`` / ``client`` / ``api`` arguments stay the single
+    authority, so a config cannot silently redirect a call to another model,
+    provider or endpoint. A config carrying a different ``model`` is logged
+    rather than obeyed; the caller resolves ``client`` before calling.
     """
     temperature, extra_kwargs, extra_body, reasoning_effort, timeout_s = _fold_config(
         config=config,
+        model=model,
+        label=label,
         temperature=temperature,
         extra_kwargs=extra_kwargs,
         extra_body=extra_body,

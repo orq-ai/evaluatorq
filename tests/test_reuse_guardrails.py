@@ -572,8 +572,11 @@ def _config_accounting_gap(source: str) -> int | None:
     """First line where ``source`` reads a call setting off a resolved config
     without accounting for the settings it ignores, or ``None``.
 
-    A file qualifies when `resolve_sim_llm_config` appears anywhere in it, so a
-    config that arrives as a parameter is seen too. Accounting is then per
+    A file qualifies when `resolve_sim_llm_config` or `warn_unread_config_fields`
+    appears anywhere in it — the first covers the simulation constructors that
+    fold a model shorthand into a config, the second every other module that has
+    already declared it reads part of one. A config that arrives as a parameter
+    is seen either way. Accounting is then per
     scope: each ``class`` is its own scope, module-level code outside every
     class is one more, and a scope is clear when it calls
     `warn_unread_config_fields` with the config. A
@@ -591,7 +594,8 @@ def _config_accounting_gap(source: str) -> int | None:
     """
     tree = ast.parse(source)
     if not any(
-        isinstance(node, ast.Call) and _tail(_dotted(node.func)) == 'resolve_sim_llm_config' for node in ast.walk(tree)
+        isinstance(node, ast.Call) and _tail(_dotted(node.func)) in {'resolve_sim_llm_config', _SCOPE_ACCOUNTING_CALL}
+        for node in ast.walk(tree)
     ):
         return None
     settings = _call_setting_names()
@@ -600,21 +604,25 @@ def _config_accounting_gap(source: str) -> int | None:
     return min(hits) if hits else None
 
 
-def test_simulation_generators_account_for_the_config_they_are_given() -> None:
-    """A generator that reads part of an `llm_config` must say what it drops.
+def test_every_module_that_reads_a_config_accounts_for_the_rest_of_it() -> None:
+    """A module that reads part of an `llm_config` must say what it drops.
 
-    Scope is `simulation/generators/` on purpose. A general "any function taking
-    `config: LLMCallConfig`" walk sweeps in `BaseAgent`, `contracts` and
-    `structured_output` itself and would need an allowlist to stay green, which
-    is the failure mode this file exists to avoid.
+    Scope is every module that folds a model shorthand into a config or already
+    calls `warn_unread_config_fields` — not "any function taking
+    `config: LLMCallConfig`", which sweeps in `BaseAgent` and `contracts` and
+    would need an allowlist to stay green, the failure mode this file exists to
+    avoid. Four hand-maintained frozensets of field names now exist across
+    `common/structured_output.py`, `common/reports/executive_summary.py`,
+    `redteam/runner.py` and `simulation/generators/`; the narrow scope this
+    guardrail started with watched only the last of them.
     """
     hits = [
         f'{path.relative_to(SRC).as_posix()}:{line}'
-        for path in sorted(_SIM_GENERATORS.rglob('*.py'))
+        for path in sorted(SRC.rglob('*.py'))
         if (line := _config_accounting_gap(path.read_text(encoding='utf-8'))) is not None
     ]
     assert not hits, (
-        'Generator reads part of a resolved llm_config and drops the rest in silence: '
+        'Module reads part of an llm_config and drops the rest in silence: '
         + ', '.join(hits)
         + '. Call evaluatorq.common.structured_output.warn_unread_config_fields(config, '
         '<fields you read>, caller=...) next to the resolve_sim_llm_config call — see '
@@ -715,3 +723,17 @@ def test_config_accounting_detector_actually_fires() -> None:
         )
         == 5
     )
+    # A module that never folds a model shorthand qualifies through its own accounting
+    # call, so a second scope beside the accounted one is still seen.
+    warn_only = (
+        'def documented(config):\n'
+        '    warn_unread_config_fields(config, {"temperature"}, caller="documented")\n'
+        '    return client.create(temperature=config.temperature)\n'
+        '\n'
+        '\n'
+        'class Later:\n'
+        '    def go(self, config):\n'
+        '        return client.create(max_output_tokens=config.max_tokens)\n'
+    )
+    assert _config_accounting_gap(warn_only) == 8
+    assert _config_accounting_gap(warn_only.replace('max_output_tokens=config.max_tokens', 'x=1')) is None

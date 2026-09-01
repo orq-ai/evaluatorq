@@ -40,24 +40,24 @@ def _persona() -> Persona:
     )
 
 
-def test_sim_model_alone_sets_only_the_model() -> None:
-    resolved = resolve_sim_llm_config(sim_model='openai/gpt-4o-mini', llm_config=None)
-    assert resolved.model == 'openai/gpt-4o-mini'
+def test_the_model_argument_alone_sets_only_the_model() -> None:
+    resolved = resolve_sim_llm_config(model='openai/gpt-5.6-luna', llm_config=None, caller='SimulationRunner')
+    assert resolved.model == 'openai/gpt-5.6-luna'
     assert resolved.model_fields_set == {'model'}
 
 
-def test_llm_config_wins_over_sim_model(caplog: pytest.LogCaptureFixture) -> None:
+def test_llm_config_wins_over_the_model_argument(caplog: pytest.LogCaptureFixture) -> None:
     cfg = LLMCallConfig(model='openai/gpt-4o', temperature=0.3)
     with caplog.at_level('WARNING'):
-        resolved = resolve_sim_llm_config(sim_model='openai/gpt-4o-mini', llm_config=cfg)
+        resolved = resolve_sim_llm_config(model='openai/gpt-4o-mini', llm_config=cfg, caller='SimulationRunner')
     assert resolved is cfg
     assert 'contradicts' in caplog.text
 
 
-def test_no_warning_when_sim_model_is_untouched(caplog: pytest.LogCaptureFixture) -> None:
+def test_no_warning_when_the_model_argument_is_untouched(caplog: pytest.LogCaptureFixture) -> None:
     cfg = LLMCallConfig(model='openai/gpt-4o')
     with caplog.at_level('WARNING'):
-        assert resolve_sim_llm_config(sim_model=DEFAULT_MODEL, llm_config=cfg) is cfg
+        assert resolve_sim_llm_config(model=DEFAULT_MODEL, llm_config=cfg, caller='SimulationRunner') is cfg
     assert caplog.text == ''
 
 
@@ -99,7 +99,8 @@ def test_agents_default_to_the_responses_api_on_a_bare_call_config() -> None:
     cfg = LLMCallConfig(model='m', client=MagicMock())
     assert JudgeAgent(cfg).config.api == 'responses'
     assert UserSimulatorAgent(cfg).config.api == 'responses'
-    assert JudgeAgent(cfg.model_copy(update={'api': 'chat_completions'})).config.api == 'chat_completions'
+    # The user simulator sends a plain completion, so it honours either endpoint.
+    assert UserSimulatorAgent(cfg.model_copy(update={'api': 'chat_completions'})).config.api == 'chat_completions'
 
 
 def test_the_legacy_config_classes_default_to_the_same_endpoint() -> None:
@@ -344,28 +345,28 @@ def test_extend_from_experiment_hands_the_config_to_the_generator(monkeypatch: p
     assert seen.get('config') is cfg
 
 
-def test_sim_model_applies_when_the_config_leaves_the_model_unset(caplog: pytest.LogCaptureFixture) -> None:
-    """`sim_model=` for the model plus `llm_config=` for the sampling is the
-    composition the entry-point docstrings recommend, and it must not be read as
+def test_the_model_argument_applies_when_the_config_leaves_the_model_unset(caplog: pytest.LogCaptureFixture) -> None:
+    """`model=` for the model plus `llm_config=` for the sampling is a composition
+    the remaining constructors accept, and it must not be read as
     a contradiction: `LLMCallConfig.model` has a non-`None` default, so a value
     check calls it one and silently runs the default model."""
     with caplog.at_level('WARNING'):
         resolved = resolve_sim_llm_config(
-            sim_model='openai/gpt-4o-mini',
+            model='openai/gpt-4o-mini',
             llm_config=LLMCallConfig(temperature=0.2),
-            caller='simulate',
+            caller='SimulationRunner',
         )
     assert resolved.model == 'openai/gpt-4o-mini'
     assert resolved.temperature == 0.2
     assert 'contradicts' not in caplog.text
 
 
-def test_matching_sim_model_and_config_model_do_not_warn(caplog: pytest.LogCaptureFixture) -> None:
+def test_a_matching_model_argument_and_config_model_do_not_warn(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level('WARNING'):
         resolve_sim_llm_config(
-            sim_model='openai/gpt-4o',
+            model='openai/gpt-4o',
             llm_config=LLMCallConfig(model='openai/gpt-4o'),
-            caller='simulate',
+            caller='SimulationRunner',
         )
     assert 'contradicts' not in caplog.text
 
@@ -423,6 +424,8 @@ def test_config_timeout_reaches_generate_structured_in_seconds() -> None:
 
     settings = _fold_config(
         config=LLMCallConfig(model='m', timeout_ms=1500),
+        model='m',
+        label='test',
         temperature=UNSET,
         extra_kwargs=UNSET,
         extra_body=UNSET,
@@ -517,6 +520,8 @@ def test_a_config_field_beaten_by_an_explicit_keyword_is_reported_as_dropped(
     with caplog.at_level('WARNING'):
         settings = _fold_config(
             config=cfg,
+            model='m',
+            label='test',
             temperature=0.2,
             extra_kwargs=UNSET,
             extra_body=UNSET,
@@ -525,7 +530,7 @@ def test_a_config_field_beaten_by_an_explicit_keyword_is_reported_as_dropped(
         )
     assert settings.temperature == 0.2
     assert settings.timeout_s == 30.0
-    assert 'generate_structured ignores llm_config temperature, timeout_ms' in caplog.text
+    assert 'generate_structured(test) ignores llm_config temperature, timeout_ms' in caplog.text
     # The one field no keyword beat is still read, so it must not be named.
     assert settings.reasoning_effort == 'high'
     assert 'reasoning_effort' not in caplog.text.split('—')[0]
@@ -540,6 +545,8 @@ def test_a_config_field_no_keyword_beats_is_not_reported_as_dropped(
     with caplog.at_level('WARNING'):
         settings = _fold_config(
             config=LLMCallConfig(model='m', temperature=0.9),
+            model='m',
+            label='test',
             temperature=UNSET,
             extra_kwargs=UNSET,
             extra_body=UNSET,
@@ -561,3 +568,284 @@ def test_the_agent_config_mirror_is_checked_against_llm_call_config() -> None:
     agent_fields = {f.name for f in dataclass_fields(AgentConfig)}
     assert _mirror_gaps(LLMCallConfig.model_fields, agent_fields) == (set(), set())
     assert _mirror_gaps([*LLMCallConfig.model_fields, 'new_knob'], agent_fields)[0] == {'new_knob'}
+
+
+@pytest.mark.asyncio
+async def test_simulate_hands_its_config_to_the_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The whole surface hangs off this one hop. Dropping `llm_config=` from the
+    `SimulationConfig` built here leaves every simulation-side call on the default model
+    with no temperature, and nothing else in the suite notices."""
+    import evaluatorq.simulation.api as api
+
+    seen: dict[str, Any] = {}
+
+    async def fake_run(*, config: Any, **_kw: Any) -> list[Any]:
+        seen['config'] = config
+        return []
+
+    async def fake_datapoints(*_a: Any, **_kw: Any) -> list[Any]:
+        from evaluatorq.simulation.types import SimulationDatapoint
+
+        return [
+            SimulationDatapoint(
+                id='dp-1',
+                persona=_persona(),
+                scenario=Scenario(name='s', goal='g'),
+                user_system_prompt='p',
+                first_message='hi',
+            )
+        ]
+
+    monkeypatch.setattr(api, '_simulate_via_evaluatorq', fake_run)
+    monkeypatch.setattr(api, '_resolve_or_generate_datapoints', fake_datapoints)
+    cfg = LLMCallConfig(model='chosen/model', temperature=0.25, client=AsyncMock())
+    await api.simulate(
+        target=lambda _messages: 'hi',
+        personas=[_persona()],
+        scenarios=[Scenario(name='s', goal='g')],
+        llm_config=cfg,
+        max_turns=1,
+    )
+    assert seen['config'].llm_config is cfg
+    assert seen['config'].model == 'chosen/model'
+
+
+@pytest.mark.asyncio
+async def test_generate_and_simulate_hands_its_config_to_the_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same hop, the other entry point: it builds its own `SimulationConfig`."""
+    import evaluatorq.simulation.api as api
+
+    seen: dict[str, Any] = {}
+
+    async def fake_run(*, config: Any, **_kw: Any) -> list[Any]:
+        seen['config'] = config
+        return []
+
+    async def fake_inner(*_a: Any, **_kw: Any) -> tuple[Any, ...]:
+        from evaluatorq.simulation.types import SimulationDatapoint
+
+        datapoints = [
+            SimulationDatapoint(
+                id='dp-1',
+                persona=_persona(),
+                scenario=Scenario(name='s', goal='g'),
+                user_system_prompt='p',
+                first_message='hi',
+            )
+        ]
+        return datapoints, AsyncMock(), False, None
+
+    monkeypatch.setattr(api, '_simulate_via_evaluatorq', fake_run)
+    monkeypatch.setattr(api, '_generate_datapoints_inner', fake_inner)
+    cfg = LLMCallConfig(model='chosen/model', temperature=0.25, client=AsyncMock())
+    await api.generate_and_simulate(
+        target=lambda _messages: 'hi',
+        agent_description='an agent',
+        llm_config=cfg,
+        max_turns=1,
+    )
+    assert seen['config'].llm_config is cfg
+    assert seen['config'].model == 'chosen/model'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('entry', 'module'),
+    [('generate_personas', 'persona_generator'), ('generate_scenarios', 'scenario_generator')],
+)
+async def test_the_seeded_generators_run_on_the_config_model(
+    monkeypatch: pytest.MonkeyPatch, entry: str, module: str
+) -> None:
+    """The existing seeded-generation tests swallow `model` and `config` into `**_kw`, so
+    dropping `config=` from either constructor is invisible to them."""
+    import importlib
+
+    from evaluatorq.common.structured_output import StructuredResult
+
+    mod = importlib.import_module(f'evaluatorq.simulation.generators.{module}')
+    seen: dict[str, Any] = {}
+
+    async def fake(client: Any, **kwargs: Any) -> StructuredResult[Any]:
+        seen.update(kwargs)
+        raise RuntimeError('stop before parsing')
+
+    monkeypatch.setattr(mod, 'generate_structured', fake)
+    monkeypatch.setattr(
+        'evaluatorq.openresponses.client.build_simulation_client', lambda *_a, **_k: (MagicMock(), False)
+    )
+    from evaluatorq.simulation import api
+
+    cfg = LLMCallConfig(model='chosen/model', temperature=0.25, client=AsyncMock())
+    with pytest.raises(RuntimeError, match='stop before parsing'):
+        await getattr(api, entry)(['seed'], llm_config=cfg)
+    assert seen['model'] == 'chosen/model'
+    assert seen['config'] is cfg
+
+
+def test_the_simulation_config_refuses_the_removed_model_keyword() -> None:
+    """`model` is a derived property now. Without `extra='forbid'` a caller passing the old
+    spelling gets it swallowed and every call silently runs on the default."""
+    from pydantic import ValidationError
+
+    from evaluatorq.simulation._config import SimulationConfig
+
+    with pytest.raises(ValidationError):
+        SimulationConfig(model='chosen/model')  # pyright: ignore[reportCallIssue]
+
+
+def test_no_public_entry_point_still_takes_sim_model() -> None:
+    """One spelling of the model, not two. The pair could not report an explicitly
+    passed default as a contradiction, so `simulate(sim_model=DEFAULT_MODEL,
+    llm_config=LLMCallConfig(model='other'))` ran on `other` and warned about nothing."""
+    import inspect
+
+    from evaluatorq.simulation import api
+
+    named = [
+        name
+        for name in (
+            'simulate',
+            'generate_and_simulate',
+            'generate',
+            'generate_personas',
+            'generate_persona',
+            'generate_scenarios',
+            'generate_scenario',
+            '_simulate_run',
+            '_generate_and_simulate_run',
+        )
+        if 'sim_model' in inspect.signature(getattr(api, name)).parameters
+    ]
+    assert not named
+
+
+def test_the_datapoint_generator_hands_its_config_to_all_three_sub_generators() -> None:
+    """This is the single hop that carries the config for `extend_from_experiment` and
+    `datapoints_from_experiment`; the entry-point test replaces the class with a stub."""
+    from evaluatorq.simulation.generators import DatapointGenerator
+
+    cfg = LLMCallConfig(model='chosen/model', temperature=0.3, client=MagicMock())
+    gen = DatapointGenerator(config=cfg)
+    assert gen._persona_generator._config is cfg
+    assert gen._scenario_generator._config is cfg
+    assert gen._first_message_generator._config is cfg
+
+
+@pytest.mark.asyncio
+async def test_the_executive_summary_resolver_is_given_the_config_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Resolving the environment first demands credentials the caller's own client never
+    needed. Both existing tests pass a zero-argument resolver, so this arm never runs."""
+    import evaluatorq.common.reports.executive_summary as summary_mod
+    from evaluatorq.simulation.reports.executive_summary import populate_run_executive_summary
+
+    mine = MagicMock()
+    seen: dict[str, Any] = {}
+
+    def resolver(client: Any = None) -> Any:
+        seen['client'] = client
+        return MagicMock(client=client)
+
+    async def fake_summary(_facts: str, **kwargs: Any) -> Any:
+        seen['llm_client'] = kwargs['llm_client']
+        return summary_mod.ExecutiveSummary('text')
+
+    monkeypatch.setattr(summary_mod, 'generate_executive_summary', fake_summary)
+    run = MagicMock()
+    run.results = [MagicMock()]
+    await populate_run_executive_summary(
+        run,
+        enabled=True,
+        model='m',
+        llm_config=LLMCallConfig(model='m', client=mine),
+        resolve_client=resolver,
+    )
+    assert seen['client'] is mine
+    assert seen['llm_client'] is mine
+
+
+def test_the_legacy_config_classes_still_carry_their_prompt_data() -> None:
+    """The keyword arguments are the new shape; the config attributes are what every
+    existing caller still passes. An inverted precedence judges against an empty goal."""
+    from evaluatorq.simulation.agents.judge import JudgeAgentConfig
+    from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgentConfig
+
+    judge = JudgeAgent(JudgeAgentConfig(goal='from the config', client=MagicMock()))
+    assert judge._goal == 'from the config'
+    simulator = UserSimulatorAgent(UserSimulatorAgentConfig(system_prompt='from the config', client=MagicMock()))
+    assert simulator._custom_system_prompt == 'from the config'
+
+
+def test_a_config_model_that_contradicts_the_call_is_logged(caplog: pytest.LogCaptureFixture) -> None:
+    """`model` is a required keyword at these call sites, so it always beats the config.
+    Exempting it from the unread-field warning without saying so is the silent drop this
+    whole accounting exists to prevent."""
+    from evaluatorq.common.structured_output import warn_config_redirect
+
+    with caplog.at_level('WARNING'):
+        warn_config_redirect(LLMCallConfig(model='other/model'), resolved_model='chosen/model', caller='test')
+    assert "test runs on model='chosen/model'" in caplog.text
+    assert "llm_config.model='other/model' does not redirect" in caplog.text
+
+
+def test_a_config_model_that_matches_the_call_is_not_logged(caplog: pytest.LogCaptureFixture) -> None:
+    """Every in-tree call site passes the config's own model, so a warning here would fire
+    on every run and teach the reader to filter the one that matters."""
+    from evaluatorq.common.structured_output import warn_config_redirect
+
+    with caplog.at_level('WARNING'):
+        warn_config_redirect(LLMCallConfig(model='chosen/model'), resolved_model='chosen/model', caller='test')
+    assert 'does not redirect' not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_summary_config_model_that_contradicts_the_call_is_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from evaluatorq.common.reports.executive_summary import generate_executive_summary
+
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(side_effect=RuntimeError('no provider in a unit test'))
+    with caplog.at_level('WARNING'):
+        await generate_executive_summary(
+            'facts', llm_client=client, model='chosen/model', config=LLMCallConfig(model='other/model')
+        )
+    assert "generate_executive_summary runs on model='chosen/model'" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_the_wrapped_job_hands_its_config_to_the_runner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`wrap_simulation_agent` is the entry point for `evaluatorq(jobs=[...])`; without this
+    its caller has no way to configure the user simulator or judge short of building both."""
+    import evaluatorq.simulation.runner.simulation as runner_mod
+    from evaluatorq.simulation.wrap_agent import wrap_simulation_agent
+
+    seen: dict[str, Any] = {}
+
+    def fake_runner(**kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return MagicMock(model=kwargs['llm_config'].model, run=AsyncMock(return_value=MagicMock()))
+
+    monkeypatch.setattr(runner_mod, 'SimulationRunner', fake_runner)
+    monkeypatch.setattr('evaluatorq.simulation.wrap_agent.to_open_responses', lambda _result, model: {'model': model})
+    monkeypatch.setattr('evaluatorq.simulation.wrap_agent._extract_single_datapoint', lambda _data: MagicMock())
+    cfg = LLMCallConfig(model='chosen/model', temperature=0.4, client=MagicMock())
+    job = wrap_simulation_agent(target=lambda _messages: 'hi', llm_config=cfg)
+    assert seen['llm_config'] is cfg
+    # The reported model is the resolved one: recomputing it from `model=` alone reports the default.
+    assert (await job(MagicMock(), 0))['output'] == {'model': 'chosen/model'}
+
+
+def test_the_judge_keeps_its_own_endpoint_against_the_shared_config(caplog: pytest.LogCaptureFixture) -> None:
+    """`llm_config.api` is one knob for both agents, but the judge sends function tools
+    and reasoning_effort together and chat completions answers that with a 400 on some
+    models. It overrides, and says so — a silent override is a setting that looks applied."""
+    with caplog.at_level('WARNING'):
+        judge = JudgeAgent(LLMCallConfig(model='m', api='chat_completions', client=MagicMock()))
+    assert judge.config.api == 'responses'
+    assert "llm_config.api='chat_completions' does not apply to it" in caplog.text
+
+
+def test_the_judge_is_quiet_when_nothing_contradicts_its_endpoint(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level('WARNING'):
+        assert JudgeAgent(LLMCallConfig(model='m', client=MagicMock())).config.api == 'responses'
+    assert 'does not apply to it' not in caplog.text

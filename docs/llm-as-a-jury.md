@@ -145,7 +145,7 @@ Red teaming reaches the same panel through `EvaluatorConfig`, where the verdict 
 from evaluatorq.redteam import EvaluatorConfig, LLMConfig, OpenAIModelTarget, red_team
 
 report = await red_team(
-    target=OpenAIModelTarget(model="gpt-4o"),
+    target=OpenAIModelTarget(model="gpt-5.6-luna"),
     llm_config=LLMConfig(
         evaluator=EvaluatorConfig(
             judges=[
@@ -164,7 +164,7 @@ report = await red_team(
 ```
 
 !!! note "`strict_panel` only fires on a same-family judge"
-    `strict_panel=True` raises `ValueError` when any judge shares the target's provider family — same-family self-judging can bias the verdict toward the target's own provider. The panel above is entirely cross-family against an OpenAI target, so the guard passes silently (the healthy case). It would raise only if you added an in-family judge such as `"openai/gpt-4o-mini"`.
+    `strict_panel=True` raises `ValueError` when any judge shares the target's provider family — same-family self-judging can bias the verdict toward the target's own provider. The panel above is entirely cross-family against an OpenAI target, so the guard passes silently (the healthy case). It would raise only if you added an in-family judge such as `"openai/gpt-5.6-luna"`.
 
 !!! warning "`min_successful_judges` vs. `min_evaluation_coverage` — two different levels"
     `min_successful_judges` above is a **per-attack** quorum: it decides whether *this one* jury panel produced enough decisive votes to reach a verdict for *this one* attack. `EvaluatorConfig` also has `min_evaluation_coverage` (default `0.8`), which is a separate, **run-level** floor: the fraction of *all* attacks in the run that must get any verdict at all. A `min_successful_judges` miss on one attack is exactly what produces one of the unevaluated attacks that `min_evaluation_coverage` counts against. Missing the run-level floor makes `eq redteam run` exit `1` — see [Red Teaming › In CI](guides/red-teaming.md#in-ci).
