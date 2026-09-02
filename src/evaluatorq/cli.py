@@ -48,9 +48,9 @@ app = typer.Typer(
 
 def _version_callback(value: bool) -> None:  # noqa: FBT001
     if value:
-        from importlib.metadata import version
+        from evaluatorq import __version__
 
-        typer.echo(f'evaluatorq {version("evaluatorq")}')
+        typer.echo(f'evaluatorq {__version__}')
         raise typer.Exit
 
 
