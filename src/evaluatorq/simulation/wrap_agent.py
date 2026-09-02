@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from evaluatorq.simulation._datapoint_io import _extract_single_datapoint
 from evaluatorq.simulation.adapters import from_orq_deployment
 from evaluatorq.simulation.convert import to_open_responses
+from evaluatorq.simulation.evaluators.scorers import failure_reason
 from evaluatorq.simulation.types import (
     DEFAULT_MODEL,
     Message,
@@ -100,6 +101,8 @@ def wrap_simulation_agent(
             'name': name,
             # The runner's, not `model`: `llm_config.model` wins the resolution and is what ran.
             'output': to_open_responses(result, runner.model),
+            # Emitted unconditionally: an omitted key is indistinguishable from a clean run.
+            'error': failure_reason(result),
         }
 
     async def aclose() -> None:

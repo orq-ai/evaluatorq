@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, cast
 
 from loguru import logger
 
+from .common.output_adapters import output_error_text
 from .job_helper import JobError
 from .progress import Phase, ProgressService, safe_update_progress
 from .types import (
@@ -105,6 +106,27 @@ async def process_data_point(
         ]
 
 
+_UNREADABLE_JOB_ERROR = 'job reported a failure with no readable message'
+
+
+def _job_reported_error(raw: object) -> str | None:
+    """Flatten a job's top-level ``error`` value to the ``str`` ``JobResult`` holds.
+
+    Presence is the failure signal, not the message's truthiness: a job that reported a
+    failure with nothing to say still fails its row, so a blank or unreadable payload
+    becomes a placeholder rather than ``None``. Flattening goes through
+    ``output_error_text`` — the repo's single reader of an error payload — so a
+    job-level and an output-level error cannot disagree on what the same payload means.
+    """
+    if raw is None:
+        return None
+    text = output_error_text({'error': raw})
+    if text:
+        return text
+    logger.warning('job reported an error with no readable message: {!r}', raw)
+    return _UNREADABLE_JOB_ERROR
+
+
 async def process_job(
     job: Job,
     data_point: DataPoint,
@@ -130,6 +152,7 @@ async def process_job(
         JobResult containing job output and evaluator scores
     """
     # Import tracing utilities lazily to avoid import errors when OTEL is not installed
+    from .common.tracing import set_span_error
     from .tracing.spans import (
         JobSpanOptions,
         set_job_name_attribute,
@@ -158,6 +181,13 @@ async def process_job(
                     result = await job(data_point, row_index)
             job_name = cast('str', result['name'])
             output = cast('Output', result['output'])
+            # Returned, not raised: without this the row counts as a success. The
+            # output is kept — unlike the raise path, which has none — but evaluators
+            # are skipped either way: scoring a transcript we already know is dead
+            # buys nothing and costs an LLM judge call per row. See `JobReturn`.
+            error = _job_reported_error(result.get('error'))
+            if error is not None:
+                set_span_error(job_span, error)
 
             # Set job name on span after execution
             set_job_name_attribute(job_span, job_name)
@@ -171,6 +201,7 @@ async def process_job(
             job_name = e.job_name
             error = str(e.original_error)
             set_job_name_attribute(job_span, job_name)
+            set_span_error(job_span, error)
 
             # Return early with error if job failed
             return JobResult(
@@ -181,6 +212,7 @@ async def process_job(
             )
         except Exception as e:
             error = str(e)
+            set_span_error(job_span, error)
 
             # Return early with error if job failed
             return JobResult(
@@ -193,7 +225,15 @@ async def process_job(
         # Process evaluators if any and job was successful
         evaluator_scores: list[EvaluatorScore] = []
 
-        if evaluators:
+        if evaluators and error is not None:
+            logger.warning(
+                'job {!r} reported an error, skipping {} evaluator(s) for row {}: {}',
+                job_name,
+                len(evaluators),
+                row_index,
+                error,
+            )
+        elif evaluators:
             # Update phase to evaluating
             if progress_service:
                 await safe_update_progress(
@@ -218,7 +258,7 @@ async def process_job(
         return JobResult(
             job_name=job_name,
             output=output,
-            error=None,
+            error=error,
             evaluator_scores=evaluator_scores,
         )
 

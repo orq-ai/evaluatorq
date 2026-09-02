@@ -120,6 +120,9 @@ async def test_per_simulation_timeout_s_terminates_a_stalled_conversation(monkey
         judge=_StubJudge(),  # pyright: ignore[reportArgumentType]
         upload_results=False,
         executive_summary=False,
+        # The subject here is the wall clock, not the exit gate: a timed-out row
+        # raises under the default exit_on_failure=True.
+        exit_on_failure=False,
     )
     assert len(results) == 1
     assert results[0].terminated_by == TerminatedBy.timeout

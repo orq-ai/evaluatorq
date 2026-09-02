@@ -315,6 +315,40 @@ class TestWrapAgentPrefersAinvoke:
         agent.invoke.assert_not_called()
 
 
+class TestWrapAgentReportsAgentFailures:
+    @pytest.mark.asyncio
+    async def test_a_failing_agent_reports_the_error_instead_of_raising(self) -> None:
+        """A dead target must reach JobResult.error, which only reads a returned key."""
+        agent = MagicMock(spec=["invoke", "ainvoke", "nodes"])
+        agent.ainvoke = AsyncMock(side_effect=RuntimeError("401 authentication_error"))
+        agent.nodes = {}
+
+        job = wrap_langchain_agent(agent, name="t")
+        result = await job(DataPoint(inputs={"prompt": "hi"}), 0)
+
+        assert result["error"] == "RuntimeError: 401 authentication_error"
+        # The call never returned a transcript, so there is nothing to keep.
+        assert result["output"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_bad_datapoint_still_raises(self) -> None:
+        """A caller mistake is not a target failure and must not be swallowed."""
+        agent = _make_agent()
+        job = wrap_langchain_agent(agent, name="t")
+
+        with pytest.raises(ValueError, match="neither was provided"):
+            await job(DataPoint(inputs={}), 0)
+
+    @pytest.mark.asyncio
+    async def test_a_good_row_emits_the_key_as_none(self) -> None:
+        """Emitted, not omitted: a clean row and a job that never reports must differ."""
+        job = wrap_langchain_agent(_make_agent(), name="t")
+        result = await job(DataPoint(inputs={"prompt": "hi"}), 0)
+
+        assert "error" in result
+        assert result["error"] is None
+
+
 class TestWrapLangGraphAgentAlias:
     def test_alias_is_same_function(self) -> None:
         assert wrap_langgraph_agent is wrap_langchain_agent

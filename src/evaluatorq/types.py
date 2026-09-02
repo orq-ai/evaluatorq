@@ -138,14 +138,28 @@ EvaluatorqResult = list[DataPointResult]
 
 
 class JobReturn(TypedDict):
-    """Job return structure"""
+    """Job return structure.
+
+    ``error`` is optional and reports a failure the job *handled* rather than raised —
+    ``None`` on success, the reason otherwise. A row whose ``error`` flattens to a
+    non-empty string is counted in the summary table's ``Failed Jobs`` and fails
+    ``check_pass_failures(treat_errors_as_failure=True)``. It keeps its output for
+    diagnosis but its evaluators are **skipped** — scoring a transcript already known
+    to be dead buys nothing and costs an LLM judge call per row. An
+    omitted key and an explicit ``None`` are indistinguishable to the consumer —
+    emitting ``None`` on success is a producer convention, so that a job that forgot
+    the key cannot be mistaken for one that reported a clean run. A job that lets its
+    failures raise omits the key. Note that ``Job`` types this return as
+    ``dict[str, Any]``, so nothing type-checks a job against this shape.
+    """
 
     name: str
     output: Output
+    error: NotRequired[str | None]
 
 
 Job = Callable[[DataPoint, int], Awaitable[dict[str, Any]]]
-"""Job function type - returns a dict with 'name' and 'output' keys"""
+"""Job function type - returns a ``JobReturn``-shaped dict ('name', 'output', optional 'error')"""
 
 
 class ScorerParameter(TypedDict):

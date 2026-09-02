@@ -192,6 +192,8 @@ Do not add a directory tree, a file inventory, or anything else the filesystem a
 
 The reverse failure is quieter and worse: a job that returns **no** `error` key at all makes `output_error_text` return `None`, so the judge scores the literal `[ERROR: ...]` marker as a genuine agent reply and a dead target comes back RESISTANT. Both static legs now emit the key unconditionally (`None` on success). A new job that calls a target must do the same.
 
+**Two different `error` keys, one word.** The one above is *inside the output payload* of a target or LLM invocation, and it decides what a judge reads. `JobReturn['error']` is at the **top level of a job's return value**, and it decides whether the row counts as failed in `Failed Jobs` and under `check_pass_failures(treat_errors_as_failure=True)`. An invocation lives inside a job, so a job can carry both, one, or neither. The rule above is about the nested one; a job that swallows a failure to keep the batch alive — `simulate()`'s and `wrap_simulation_agent()`'s do — also emits the top-level one, `None` on success. `@job()` nests everything it is handed under `output`, so a decorated job reports failures by raising; that is the contract, not a gap.
+
 ### Adding New Features
 
 - New vulnerabilities: see `docs/custom-evaluators-and-frameworks.md`

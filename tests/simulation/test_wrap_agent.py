@@ -182,3 +182,43 @@ async def test_wrap_simulation_agent_rejects_removed_evaluators_kwarg():
             target=lambda _msgs: "ok",
             evaluators=["goal_achieved"],  # type: ignore[call-arg]
         )
+
+
+class TestJobReportsTermination:
+    """The job's top-level ``error`` key, which is what makes a dead run visible."""
+
+    async def _run(self, monkeypatch, terminated_by: TerminatedBy, reason: str):
+        result = _make_result("whatever")
+        result.terminated_by = terminated_by
+        result.reason = reason
+
+        async def fake_run(**_kwargs):
+            return result
+
+        from evaluatorq.simulation.runner import simulation as sim_runner_mod
+
+        monkeypatch.setattr(sim_runner_mod.SimulationRunner, "run", AsyncMock(side_effect=fake_run))
+        job = wrap_simulation_agent(target=lambda _messages: "unused")
+        return await job(
+            DataPoint(inputs={"persona": _FULL_PERSONA, "scenario": _FULL_SCENARIO}),
+            0,
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("terminated_by", [TerminatedBy.error, TerminatedBy.timeout])
+    async def test_reports_a_run_that_never_reached_the_judge(self, monkeypatch, terminated_by):
+        out = await self._run(monkeypatch, terminated_by, "401 authentication_error")
+        assert out["error"] == "401 authentication_error"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("terminated_by", [TerminatedBy.judge, TerminatedBy.max_turns])
+    async def test_key_is_present_and_none_on_a_run_that_did(self, monkeypatch, terminated_by):
+        out = await self._run(monkeypatch, terminated_by, "Goal achieved")
+        assert "error" in out
+        assert out["error"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_failure_with_no_message_still_reports_one(self, monkeypatch):
+        """An empty reason must not flatten to None downstream — that is a clean row again."""
+        out = await self._run(monkeypatch, TerminatedBy.error, "")
+        assert out["error"] == "simulation terminated by error"
