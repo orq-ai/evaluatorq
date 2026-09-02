@@ -1,5 +1,6 @@
 """EvaluatorQ Python - An evaluation framework for LLM applications."""
 
+import importlib.metadata
 import importlib.util
 import sys
 
@@ -23,6 +24,11 @@ def _require_core_deps() -> None:  # noqa: RUF067
 
 
 _require_core_deps()  # noqa: RUF067
+
+try:  # noqa: RUF067
+    __version__ = importlib.metadata.version('evaluatorq')
+except importlib.metadata.PackageNotFoundError:  # ponytail: source checkout, not installed
+    __version__ = '0.0.0.dev0'
 
 from .contracts import AgentResponse
 from .deployment import (
@@ -112,6 +118,7 @@ __all__ = [
     'Scorer',
     'ScorerParameter',
     'ThreadConfig',
+    '__version__',
     'bt_sigma_aggregation',
     'build_report',
     # Deployment helpers
