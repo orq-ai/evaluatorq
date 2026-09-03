@@ -98,6 +98,7 @@ async def resilient_job(data: DataPoint, row: int) -> dict:
 Emit `error` on every path, `None` on success: an omitted key and a clean run are indistinguishable, so a job that forgets the key on one branch reports a dead target as a passing one. A row with a non-empty `error` is counted in the summary table's `Failed Jobs` and keeps its output for diagnosis, but its evaluators are **skipped** — scoring a transcript you already know is dead buys nothing and costs an LLM judge call per row. `check_pass_failures(results, treat_errors_as_failure=True)` is what turns it into a CI failure; the default (`False`) gates on evaluator `pass_` alone.
 
 This is the raw-dict job contract. `@job()` wraps a function's return value into `{"name", "output"}`, so an `error` key returned from a decorated function lands *inside* `output`, where a judge reads it as the target's failure rather than the runner reading it as the row's. A decorated job reports a row failure by raising.
+
 ### Calling an Orq deployment from a job
 
 When the thing you are evaluating is an Orq deployment, call it from inside the job. `evaluatorq.deployment` wraps the Orq SDK in two async functions: `deployment()` returns a `DeploymentResponse` carrying both `content` (the extracted text) and `raw` (the untouched SDK response), and `invoke()` is the same call returning just the text. One `Orq` client is created lazily on first use and reused for the process.

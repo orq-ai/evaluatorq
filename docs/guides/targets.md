@@ -33,7 +33,7 @@ If the thing under test already runs on Orq, you do not write a target class. Ho
 | Call a deployment from an `evaluatorq()` **job** | `invoke()` or `deployment()` inside your `@job` — see [Evaluation Reference › Calling an Orq deployment from a job](../evaluation-reference.md#calling-an-orq-deployment-from-a-job) |
 | Pin the exact call parameters instead of discovering them | [`OrqResponsesTarget`](#orqresponsestarget) |
 
-Both string forms work identically in Python and on the CLI (`eq redteam run --target agent:my-key`).
+Both string forms are parsed the same way in Python and on the CLI (`eq redteam run --target agent:my-key`), and the `mode="static"` restriction on deployments applies to both — on the CLI it is `--mode static`.
 
 The first three need `ORQ_API_KEY` in the environment — evaluatorq never calls `load_dotenv()` for you, so see [Configuration](../configuration.md). `OrqResponsesTarget` is the exception: it defaults to `require_orq=False` and falls back to `OPENAI_API_KEY`, so it runs without an Orq account until you pass `require_orq=True` or a `model="agent/<key>"`.
 
