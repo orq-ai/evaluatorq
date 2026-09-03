@@ -89,12 +89,13 @@ helpfulness = llm_jury(
 
 | Argument | Default | What it does |
 | --- | --- | --- |
+| `preset` | `None` | Name of a ready-made panel from [Jury Presets](jury-presets.md), such as `"Balanced Trio"`. Seats the judges, the aggregation rule and a full-panel quorum. Mutually exclusive with `judges` and `model`. |
 | `judges` | — | Judge model IDs. Two or more makes it a jury. Mutually exclusive with `model`. |
 | `model` | — | Single-judge shorthand for `judges=[model]`. |
 | `repetitions` | `1` | How many times each judge is asked. The judge takes its own majority before the panel votes, which smooths per-call noise. |
 | `assignment` | `"all"` | How judges are allocated across datapoints. `"all"` runs every judge on every datapoint. `"cyclic"` runs exactly one judge per datapoint, rotating through the panel (see below). |
 | `replacement_judges` | `None` | Stand-in models called only when a configured judge fails mechanically. |
-| `min_successful_judges` | `1` | Minimum decisive judges required, otherwise the verdict is **inconclusive**. Must not exceed the panel size. |
+| `min_successful_judges` | `1` | Minimum decisive judges required, otherwise the verdict is **inconclusive**. Must not exceed the panel size. Defaults to a majority of the seats under a `preset` (two of three, three of five). |
 | `threshold` | `0.5` | Numeric mode: `passed` when `score >= threshold`. |
 | `structured_output` | `True` | Use the provider's structured-output API; falls back to a schema-injected `json_object` call for models that reject it. |
 
@@ -245,6 +246,7 @@ A complete red-teaming script covering repetitions, replacements, the `min_succe
 
 ## Where to next
 
+- **[Jury Presets](jury-presets.md)**: named panels with published costs, instead of picking judges yourself.
 - **[Pairwise Judging](pairwise-judging.md)** — compare two responses instead of scoring one.
 - **[Custom Evaluators & Frameworks](custom-evaluators-and-frameworks.md)** — define your own evaluators.
 - **[Red Teaming](guides/red-teaming.md)** — use a jury as the red-team verdict.

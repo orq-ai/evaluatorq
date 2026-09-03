@@ -44,6 +44,7 @@ from .evaluators import (
     string_contains_evaluator,
 )
 from .job_helper import job
+from .jury_presets import PRESETS, JuryPreset, get_preset
 from .llm_jury import PairwiseComparator, llm_jury, llm_jury_pairwise
 from .openresponses import ResponseResourceDict
 from .pairwise import (
@@ -83,6 +84,8 @@ from .types import (
 )
 
 __all__ = [
+    # Jury presets
+    'PRESETS',
     'AgentResponse',
     # Types
     'BTFit',
@@ -106,6 +109,7 @@ __all__ = [
     'JobReturn',
     'JudgeStats',
     'JudgedComparison',
+    'JuryPreset',
     'MessageDict',
     'Output',
     # Pairwise (preference) jury
@@ -127,6 +131,7 @@ __all__ = [
     'evaluatorq',
     'exact_match_evaluator',
     'fit_bt',
+    'get_preset',
     'invoke',
     # Helper functions
     'job',

@@ -764,6 +764,7 @@ _FAMILY_MARKERS: tuple[tuple[str, str], ...] = (
     ('qwen', 'alibaba'),
     ('glm', 'zhipu'),
     ('minimax', 'minimax'),
+    ('kimi', 'moonshot'),
 )
 _KNOWN_FAMILIES: frozenset[str] = frozenset(fam for _, fam in _FAMILY_MARKERS)
 
@@ -775,8 +776,6 @@ def provider_family(model_id: str) -> str:
     tokens = [t for t in re.split(r'[/\-_.: ]+', ident) if t]
     if not tokens:
         return 'unknown'
-    if tokens[0] in _KNOWN_FAMILIES:
-        return tokens[0]
     # Match a marker as a whole token, or as a prefix immediately followed by a
     # version DIGIT (gpt4o, o1, claude3). The digit guard is what stops the old
     # substring trap where a short marker bled into an unrelated word
@@ -786,6 +785,13 @@ def provider_family(model_id: str) -> str:
         for tok in tokens:
             if tok == marker or (tok.startswith(marker) and len(tok) > len(marker) and tok[len(marker)].isdigit()):
                 return family
+    # Only then fall back to the leading token, for a model this has no marker
+    # for at all (`openai/some-new-thing`). It runs second because the leading
+    # token is the HOST, which is not always the lineage: `google/zai-org/glm-5-maas`
+    # is Zhipu weights served by Google, and reading it as google put an
+    # Anthropic reserve on the wrong family too (`google/eu.claude-sonnet-5`).
+    if tokens[0] in _KNOWN_FAMILIES:
+        return tokens[0]
     return 'unknown'
 
 
