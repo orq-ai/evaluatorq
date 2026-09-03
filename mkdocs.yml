@@ -144,6 +144,7 @@ plugins:
           - guides/vulnerabilities-and-frameworks.md: How vulnerabilities relate to OWASP category codes, and why they are not the same count.
           - custom-evaluators-and-frameworks.md: Define custom evaluators and frameworks.
           - llm-as-a-jury.md: Multi-judge panel (jury) evaluation.
+          - jury-presets.md: Named judge panels with published costs, and how they stay current.
           - cyclic-judge.md: Round-robin (CyclicJudge) judge assignment at single-judge cost.
           - pairwise-judging.md: Pairwise comparison judging.
           - evaluator-template-variables.md: Reference for pointwise and pairwise jury template variables.
@@ -274,6 +275,7 @@ nav:
           - Custom Evaluators & Frameworks: custom-evaluators-and-frameworks.md
       - LLM as a Jury:
           - Overview: llm-as-a-jury.md
+          - Jury Presets: jury-presets.md
           - Cyclic Judge Assignment: cyclic-judge.md
           - Pairwise Judging: pairwise-judging.md
       - Evaluator Template Variables: evaluator-template-variables.md
