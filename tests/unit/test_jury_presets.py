@@ -1,8 +1,11 @@
 """Jury preset definitions and the `llm_jury(preset=...)` seam (RES-1171)."""
 
+from typing import Any
+
 import pytest
 
 from evaluatorq import llm_jury
+from evaluatorq.common.model_frontier import load_judge_pricing
 from evaluatorq.jury_presets import (
     DEFAULT_PRESET,
     DROPPED_PRESETS,
@@ -15,10 +18,9 @@ from evaluatorq.jury_presets import (
     get_preset,
     judge_family,
 )
-from evaluatorq.common.model_frontier import load_judge_pricing
 
 
-def _preset(**overrides: object) -> dict:
+def _preset(**overrides: Any) -> dict[str, Any]:
     base = {
         'name': 'Test Panel',
         'judges': ('openai/gpt-5.6-luna', 'anthropic/claude-opus-5', 'google/gemini-3.6-flash'),
@@ -274,7 +276,7 @@ class TestLLMJurySeam:
 def _applied(preset: str) -> tuple[list[str], object, int]:
     from evaluatorq.llm_jury import _apply_preset
 
-    return _apply_preset(
+    judges, aggregator, quorum = _apply_preset(
         preset,
         judges=None,
         model=None,
@@ -283,6 +285,8 @@ def _applied(preset: str) -> tuple[list[str], object, int]:
         verdict_kind='categorical',
         assignment='all',
     )
+    assert judges is not None, f'{preset} seated no panel'
+    return judges, aggregator, quorum
 
 
 class TestDocsTable:

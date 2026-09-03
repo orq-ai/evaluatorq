@@ -24,6 +24,7 @@ here with the preset file, so the two cannot describe different gardens.
 
 import json
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import pytest
 
@@ -50,7 +51,7 @@ MAX_SNAPSHOT_AGE = timedelta(days=60)
 
 
 @pytest.fixture(scope='module')
-def snapshot() -> dict:
+def snapshot() -> dict[str, Any]:
     return json.loads(SNAPSHOT_PATH.read_text())
 
 
@@ -120,7 +121,7 @@ its headline came from, and disagrees with itself about it.
 """
 
 
-def _contradicted(card: dict) -> str | None:
+def _contradicted(card: dict[str, Any]) -> str | None:
     """Why a card disagrees with itself about one rung, if it does."""
     rung = card.get('scored_effort') or card['reasoning_effort'] or 'none'
     published = card['effort_indices'].get(rung)
@@ -233,7 +234,8 @@ def test_every_seat_states_the_effort_it_is_ranked_at():
             continue
         effort = model.ceiling_effort
         assert effort is None or effort in model.ladder, f'{owner}: {router_id} is ranked at an unmeasured rung'
-        assert model.ceiling_index == pytest.approx(model.ladder.get(effort, model.intelligence_index)), (
+        rung = model.intelligence_index if effort is None else model.ladder[effort]
+        assert model.ceiling_index == pytest.approx(rung), (
             f'{owner}: {router_id} publishes a ceiling that is not the score at the rung it names'
         )
 
@@ -370,7 +372,7 @@ def test_every_judge_and_reserve_is_seatable(snapshot):
             assert seatable(model), f'{preset.name} recommends unseatable {router_id}'
 
 
-def _unreviewed_successors(snapshot: dict) -> dict[str, str]:
+def _unreviewed_successors(snapshot: dict[str, Any]) -> dict[str, str]:
     """Garden models newer than everything a preset seats from their own lineage.
 
     Compared against the newest seat per lineage rather than per judge: a panel
@@ -501,7 +503,7 @@ class TestFrontier:
         )
 
 
-def _first_listed(snapshot: dict) -> dict[str, datetime]:
+def _first_listed(snapshot: dict[str, Any]) -> dict[str, datetime]:
     """Earliest garden listing per model identity, across every host of it.
 
     A second host relisting the same weights carries its own `created` stamp,
