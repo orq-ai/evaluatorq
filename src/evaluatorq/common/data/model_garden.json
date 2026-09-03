@@ -1,0 +1,1693 @@
+{
+  "captured_at": "2026-08-25T07:18:32.765225+00:00",
+  "catalog_scope": "project",
+  "served_model_ids": [
+    "alibaba/qwen3-max-2026-01-23",
+    "alibaba/qwen3.5-27b",
+    "alibaba/qwen3.5-35b-a3b",
+    "alibaba/qwen3.5-flash",
+    "alibaba/qwen3.8-max",
+    "anthropic/claude-3-5-haiku-20241022",
+    "anthropic/claude-3-5-sonnet-20241022",
+    "anthropic/claude-fable-5",
+    "anthropic/claude-haiku-4-5-20251001",
+    "anthropic/claude-opus-4-6",
+    "anthropic/claude-opus-4-7",
+    "anthropic/claude-opus-4-8",
+    "anthropic/claude-opus-5",
+    "anthropic/claude-sonnet-4-6",
+    "anthropic/claude-sonnet-5",
+    "anyscale/meta-llama/Llama-3-70b-chat-hf",
+    "anyscale/meta-llama/Llama-3-8b-chat-hf",
+    "aws/anthropic.claude-3-5-sonnet-20241022-v2:0",
+    "aws/anthropic.claude-v1",
+    "aws/eu.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    "aws/eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "aws/eu.anthropic.claude-opus-4-5-20251101-v1:0",
+    "aws/eu.anthropic.claude-sonnet-4-20250514-v1:0",
+    "aws/meta.llama3-1-405b-instruct-v1:0",
+    "azure/eu.gpt-5.6-luna",
+    "azure/eu.gpt-5.6-terra",
+    "azure/global.gpt-5.6-luna",
+    "azure/global.gpt-5.6-terra",
+    "azure/gpt-35-turbo",
+    "azure/gpt-4",
+    "azure/gpt-4.1",
+    "azure/gpt-4o",
+    "azure/gpt-4o-mini",
+    "azure/gpt-5-chat",
+    "azure/gpt-5-mini",
+    "azure/gpt-5.4",
+    "azure/llama-3.1-405B-instruct",
+    "azure/llama-3.1-70B-instruct",
+    "baseten/glm-5.2-fast",
+    "baseten/kimi-k3",
+    "cerebras/deepseek-r1-distill-llama-70b",
+    "cerebras/gemma-4-31b",
+    "cerebras/gpt-oss-120b",
+    "cerebras/qwen-3-235b-a22b-instruct-2507",
+    "cerebras/qwen-3-235b-a22b-thinking-2507",
+    "cerebras/qwen-3-32b",
+    "cerebras/qwen-3-coder-480b",
+    "cerebras/zai-glm-4.7",
+    "cohere/command-light-nightly",
+    "cohere/command-nightly",
+    "cohere/embed-multilingual-v3.0",
+    "deepseek/deepseek-chat",
+    "deepseek/deepseek-reasoner",
+    "deepseek/deepseek-v4-flash",
+    "deepseek/deepseek-v4-pro",
+    "google-ai/gemini-2.5-flash",
+    "google-ai/gemini-2.5-flash-lite",
+    "google-ai/gemini-2.5-flash-preview-05-20",
+    "google-ai/gemini-2.5-pro",
+    "google-ai/gemini-2.5-pro-preview-06-05",
+    "google-ai/gemini-3-flash-preview",
+    "google-ai/gemini-3-pro-image",
+    "google-ai/gemini-3-pro-preview",
+    "google-ai/gemini-3.5-flash-lite",
+    "google-ai/gemini-3.6-flash",
+    "google-ai/gemini-3.7-flash",
+    "google-ai/gemma-4-26b-a4b-it",
+    "google-ai/gemma-4-31b-it",
+    "google/claude-3-5-sonnet-v2@20241022",
+    "google/claude-haiku-4-5",
+    "google/claude-opus-4-5@20251101",
+    "google/claude-sonnet-4-5@20250929",
+    "google/eu.claude-fable-5",
+    "google/eu.claude-opus-5",
+    "google/eu.claude-sonnet-5",
+    "google/eu.gemini-3.5-flash",
+    "google/eu.gemini-3.7-flash",
+    "google/gemini-2.5-flash",
+    "google/gemini-2.5-flash-lite",
+    "google/gemini-2.5-pro",
+    "google/gemini-2.5-pro-preview-06-05",
+    "google/gemini-3-flash-preview",
+    "google/gemini-3-pro-preview",
+    "google/gemini-3.1-flash-lite-preview",
+    "google/gemini-3.1-pro-preview",
+    "google/gemini-3.5-flash",
+    "google/gemini-3.5-flash-lite",
+    "google/gemini-3.6-flash",
+    "google/gemini-3.7-flash",
+    "google/global.claude-opus-5",
+    "google/global.claude-sonnet-5",
+    "google/us.claude-sonnet-5",
+    "google/zai-org/glm-4.7-maas",
+    "google/zai-org/glm-5-maas",
+    "google/zai-org/glm-5.1-maas",
+    "groq/llama-3.1-8b-instant",
+    "groq/llama-3.3-70b-versatile",
+    "groq/meta-llama/llama-guard-4-12b",
+    "groq/moonshotai/kimi-k2-instruct",
+    "groq/moonshotai/kimi-k2-instruct-0905",
+    "groq/openai/gpt-oss-120b",
+    "groq/openai/gpt-oss-20b",
+    "groq/qwen-qwq-32b",
+    "groq/qwen/qwen3.6-27b",
+    "groq/qwen3-32b",
+    "inceptron/zai-org/GLM-5.1-FP8",
+    "minimax/MiniMax-M2.7",
+    "minimax/MiniMax-M2.7-highspeed",
+    "mistral/magistral-medium-2509",
+    "mistral/magistral-medium-latest",
+    "mistral/mistral-embed",
+    "mistral/mistral-embed-2312",
+    "mistral/mistral-large-2411",
+    "mistral/mistral-large-latest",
+    "mistral/mistral-medium-2604",
+    "mistral/mistral-medium-latest",
+    "mistral/mistral-ocr-4-0",
+    "mistral/mistral-small-2603",
+    "mistral/mistral-small-latest",
+    "moonshotai/kimi-k2-thinking",
+    "moonshotai/kimi-k2.5",
+    "moonshotai/kimi-k2.6",
+    "nebius/moonshotai/Kimi-K3",
+    "nvidia/meta/muse-glimmer-30b",
+    "nvidia/minimaxai/minimax-m3",
+    "nvidia/nvidia/nemotron-3.5-content-safety",
+    "nvidia/thinkingmachines/inkling",
+    "nvidia/z-ai/glm-5.2",
+    "openai/eu.gpt-3.5-turbo",
+    "openai/eu.gpt-4.1",
+    "openai/eu.gpt-5.6-luna",
+    "openai/eu.gpt-5.6-sol",
+    "openai/eu.gpt-5.6-terra",
+    "openai/gpt-3.5-turbo-0301",
+    "openai/gpt-3.5-turbo-0613",
+    "openai/gpt-3.5-turbo-16k-0613",
+    "openai/gpt-4.1",
+    "openai/gpt-4.1-mini",
+    "openai/gpt-4.1-nano",
+    "openai/gpt-4o",
+    "openai/gpt-4o-mini",
+    "openai/gpt-5",
+    "openai/gpt-5-chat-latest",
+    "openai/gpt-5-mini",
+    "openai/gpt-5.1",
+    "openai/gpt-5.1-chat-latest",
+    "openai/gpt-5.4",
+    "openai/gpt-5.4-mini",
+    "openai/gpt-5.4-nano",
+    "openai/gpt-5.6-luna",
+    "openai/gpt-5.6-sol",
+    "openai/gpt-5.6-terra",
+    "openai/gpt-live-transcribe",
+    "openai/gpt-transcribe",
+    "openai/o1-mini",
+    "openai/o3-2025-04-16",
+    "openai/o3-mini",
+    "openai/omni-moderation-latest",
+    "openai/text-embedding-3-large",
+    "openai/text-embedding-3-small",
+    "orq-research@openailike/cohere/north-mini-code:free",
+    "orq-research@openailike/graded-judge-9b",
+    "orq-research@openailike/minimaxai/minimax-m3",
+    "orq-research@openailike/nvidia/nemotron-3-ultra-550b-a55b",
+    "orq-research@orq/autorouter-anthropic-balanced",
+    "orq-research@orq/autorouter-anthropic-cost",
+    "orq-research@orq/autorouter-anthropic-quality",
+    "orq-research@orq/autorouter-google-balanced",
+    "orq-research@orq/autorouter-google-cost",
+    "orq-research@orq/autorouter-google-quality",
+    "orq-research@orq/autorouter-openai-balanced",
+    "orq-research@orq/autorouter-openai-cost",
+    "orq-research@orq/autorouter-openai-quality",
+    "orq-research@orq/fastned-autorouter",
+    "orq-research@orq/test-groq-oss",
+    "perplexity/sonar-deep-research",
+    "perplexity/sonar-pro",
+    "reson8/prerecorded",
+    "scaleway/glm-5.2",
+    "scaleway/mistral-medium-3.5-128b",
+    "scaleway/qwen3.6-35b-a3b",
+    "tensorix/deepseek/deepseek-chat-v3.1",
+    "tensorix/moonshotai/kimi-k3",
+    "tensorix/qwen/qwen3-coder-30b-a3b-instruct",
+    "togetherai/deepseek-ai/DeepSeek-R1",
+    "togetherai/deepseek-ai/DeepSeek-V3.1",
+    "togetherai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    "togetherai/meta-llama/Llama-Guard-4-12B",
+    "wafer/Kimi-K3",
+    "wafer/MiniMax-M3",
+    "wafer/kimi-k3-fast",
+    "xai/grok-4-1-fast",
+    "xai/grok-4.5",
+    "zai/glm-4.5-air",
+    "zai/glm-4.6",
+    "zai/glm-5.1",
+    "zai/glm-5.2"
+  ],
+  "model_created_at": {
+    "alibaba/qwen3-max-2026-01-23": 0,
+    "alibaba/qwen3.5-27b": 1777507200000,
+    "alibaba/qwen3.5-35b-a3b": 1777507200000,
+    "alibaba/qwen3.5-flash": 1774483200000,
+    "alibaba/qwen3.8-max": 1785715200000,
+    "anthropic/claude-3-5-haiku-20241022": 0,
+    "anthropic/claude-3-5-sonnet-20241022": 0,
+    "anthropic/claude-fable-5": 1780963200000,
+    "anthropic/claude-haiku-4-5-20251001": 1760486400000,
+    "anthropic/claude-opus-4-6": 1770249600000,
+    "anthropic/claude-opus-4-7": 1776297600000,
+    "anthropic/claude-opus-4-8": 1779926400000,
+    "anthropic/claude-opus-5": 1784851200000,
+    "anthropic/claude-sonnet-4-6": 1771286400000,
+    "anthropic/claude-sonnet-5": 1782777600000,
+    "anyscale/meta-llama/Llama-3-70b-chat-hf": 0,
+    "anyscale/meta-llama/Llama-3-8b-chat-hf": 0,
+    "aws/anthropic.claude-3-5-sonnet-20241022-v2:0": 0,
+    "aws/anthropic.claude-v1": 0,
+    "aws/eu.anthropic.claude-3-7-sonnet-20250219-v1:0": 0,
+    "aws/eu.anthropic.claude-haiku-4-5-20251001-v1:0": 1771286400000,
+    "aws/eu.anthropic.claude-opus-4-5-20251101-v1:0": 1771286400000,
+    "aws/eu.anthropic.claude-sonnet-4-20250514-v1:0": 1771286400000,
+    "aws/meta.llama3-1-405b-instruct-v1:0": 1773705600000,
+    "azure/eu.gpt-5.6-luna": 1783555200000,
+    "azure/eu.gpt-5.6-terra": 1783555200000,
+    "azure/global.gpt-5.6-luna": 1783555200000,
+    "azure/global.gpt-5.6-terra": 1783555200000,
+    "azure/gpt-35-turbo": 0,
+    "azure/gpt-4": 0,
+    "azure/gpt-4.1": 1744588800000,
+    "azure/gpt-4o": 1718496000000,
+    "azure/gpt-4o-mini": 0,
+    "azure/gpt-5-chat": 0,
+    "azure/gpt-5-mini": 1754524800000,
+    "azure/gpt-5.4": 1772928000000,
+    "azure/llama-3.1-405B-instruct": 0,
+    "azure/llama-3.1-70B-instruct": 0,
+    "baseten/glm-5.2-fast": 1784764800000,
+    "baseten/kimi-k3": 1785024000000,
+    "cerebras/deepseek-r1-distill-llama-70b": 0,
+    "cerebras/gemma-4-31b": 1783987200000,
+    "cerebras/gpt-oss-120b": 1735948800000,
+    "cerebras/qwen-3-235b-a22b-instruct-2507": 0,
+    "cerebras/qwen-3-235b-a22b-thinking-2507": 0,
+    "cerebras/qwen-3-32b": 0,
+    "cerebras/qwen-3-coder-480b": 0,
+    "cerebras/zai-glm-4.7": 0,
+    "cohere/command-light-nightly": 0,
+    "cohere/command-nightly": 0,
+    "cohere/embed-multilingual-v3.0": 1718496000000,
+    "deepseek/deepseek-chat": 0,
+    "deepseek/deepseek-reasoner": 0,
+    "deepseek/deepseek-v4-flash": 1777161600000,
+    "deepseek/deepseek-v4-pro": 1786492800000,
+    "google-ai/gemini-2.5-flash": 1750118400000,
+    "google-ai/gemini-2.5-flash-lite": 1750118400000,
+    "google-ai/gemini-2.5-flash-preview-05-20": 0,
+    "google-ai/gemini-2.5-pro": 1750118400000,
+    "google-ai/gemini-2.5-pro-preview-06-05": 0,
+    "google-ai/gemini-3-flash-preview": 1765929600000,
+    "google-ai/gemini-3-pro-image": 1783987200000,
+    "google-ai/gemini-3-pro-preview": 0,
+    "google-ai/gemini-3.5-flash-lite": 1784592000000,
+    "google-ai/gemini-3.6-flash": 1784592000000,
+    "google-ai/gemini-3.7-flash": 1786579200000,
+    "google-ai/gemma-4-26b-a4b-it": 1777507200000,
+    "google-ai/gemma-4-31b-it": 1777507200000,
+    "google/claude-3-5-sonnet-v2@20241022": 0,
+    "google/claude-haiku-4-5": 1760486400000,
+    "google/claude-opus-4-5@20251101": 1763942400000,
+    "google/claude-sonnet-4-5@20250929": 1759104000000,
+    "google/eu.claude-fable-5": 1780963200000,
+    "google/eu.claude-opus-5": 1784851200000,
+    "google/eu.claude-sonnet-5": 1782777600000,
+    "google/eu.gemini-3.5-flash": 1779148800000,
+    "google/eu.gemini-3.7-flash": 1786579200000,
+    "google/gemini-2.5-flash": 1750118400000,
+    "google/gemini-2.5-flash-lite": 1750118400000,
+    "google/gemini-2.5-pro": 1750118400000,
+    "google/gemini-2.5-pro-preview-06-05": 0,
+    "google/gemini-3-flash-preview": 1765929600000,
+    "google/gemini-3-pro-preview": 0,
+    "google/gemini-3.1-flash-lite-preview": 0,
+    "google/gemini-3.1-pro-preview": 1771545600000,
+    "google/gemini-3.5-flash": 1779148800000,
+    "google/gemini-3.5-flash-lite": 1784592000000,
+    "google/gemini-3.6-flash": 1784592000000,
+    "google/gemini-3.7-flash": 1786579200000,
+    "google/global.claude-opus-5": 1784851200000,
+    "google/global.claude-sonnet-5": 1782777600000,
+    "google/us.claude-sonnet-5": 1782777600000,
+    "google/zai-org/glm-4.7-maas": 0,
+    "google/zai-org/glm-5-maas": 0,
+    "google/zai-org/glm-5.1-maas": 0,
+    "groq/llama-3.1-8b-instant": 0,
+    "groq/llama-3.3-70b-versatile": 0,
+    "groq/meta-llama/llama-guard-4-12b": 0,
+    "groq/moonshotai/kimi-k2-instruct": 0,
+    "groq/moonshotai/kimi-k2-instruct-0905": 0,
+    "groq/openai/gpt-oss-120b": 1754352000000,
+    "groq/openai/gpt-oss-20b": 1754352000000,
+    "groq/qwen-qwq-32b": 0,
+    "groq/qwen/qwen3.6-27b": 1783900800000,
+    "groq/qwen3-32b": 0,
+    "inceptron/zai-org/GLM-5.1-FP8": 0,
+    "minimax/MiniMax-M2.7": 1773878400000,
+    "minimax/MiniMax-M2.7-highspeed": 1773878400000,
+    "mistral/magistral-medium-2509": 0,
+    "mistral/magistral-medium-latest": 0,
+    "mistral/mistral-embed": 1702252800000,
+    "mistral/mistral-embed-2312": 1702252800000,
+    "mistral/mistral-large-2411": 0,
+    "mistral/mistral-large-latest": 1764633600000,
+    "mistral/mistral-medium-2604": 1777334400000,
+    "mistral/mistral-medium-latest": 1777334400000,
+    "mistral/mistral-ocr-4-0": 1784851200000,
+    "mistral/mistral-small-2603": 1775001600000,
+    "mistral/mistral-small-latest": 1775001600000,
+    "moonshotai/kimi-k2-thinking": 0,
+    "moonshotai/kimi-k2.5": 0,
+    "moonshotai/kimi-k2.6": 1776643200000,
+    "nebius/moonshotai/Kimi-K3": 1785110400000,
+    "nvidia/meta/muse-glimmer-30b": 1786579200000,
+    "nvidia/minimaxai/minimax-m3": 1786579200000,
+    "nvidia/nvidia/nemotron-3.5-content-safety": 1786579200000,
+    "nvidia/thinkingmachines/inkling": 1786579200000,
+    "nvidia/z-ai/glm-5.2": 1786579200000,
+    "openai/eu.gpt-3.5-turbo": 0,
+    "openai/eu.gpt-4.1": 1744588800000,
+    "openai/eu.gpt-5.6-luna": 1783555200000,
+    "openai/eu.gpt-5.6-sol": 1783555200000,
+    "openai/eu.gpt-5.6-terra": 1783555200000,
+    "openai/gpt-3.5-turbo-0301": 0,
+    "openai/gpt-3.5-turbo-0613": 0,
+    "openai/gpt-3.5-turbo-16k-0613": 0,
+    "openai/gpt-4.1": 1744588800000,
+    "openai/gpt-4.1-mini": 1744588800000,
+    "openai/gpt-4.1-nano": 0,
+    "openai/gpt-4o": 1715472000000,
+    "openai/gpt-4o-mini": 1721260800000,
+    "openai/gpt-5": 1754524800000,
+    "openai/gpt-5-chat-latest": 0,
+    "openai/gpt-5-mini": 1754524800000,
+    "openai/gpt-5.1": 1762992000000,
+    "openai/gpt-5.1-chat-latest": 0,
+    "openai/gpt-5.4": 1772668800000,
+    "openai/gpt-5.4-mini": 1773705600000,
+    "openai/gpt-5.4-nano": 1773705600000,
+    "openai/gpt-5.6-luna": 1783555200000,
+    "openai/gpt-5.6-sol": 1783555200000,
+    "openai/gpt-5.6-terra": 1783555200000,
+    "openai/gpt-live-transcribe": 1785196800000,
+    "openai/gpt-transcribe": 1785196800000,
+    "openai/o1-mini": 0,
+    "openai/o3-2025-04-16": 0,
+    "openai/o3-mini": 0,
+    "openai/omni-moderation-latest": 1710892800000,
+    "openai/text-embedding-3-large": 1718496000000,
+    "openai/text-embedding-3-small": 1718496000000,
+    "orq-research@openailike/cohere/north-mini-code:free": 0,
+    "orq-research@openailike/graded-judge-9b": 0,
+    "orq-research@openailike/minimaxai/minimax-m3": 0,
+    "orq-research@openailike/nvidia/nemotron-3-ultra-550b-a55b": 0,
+    "orq-research@orq/autorouter-anthropic-balanced": 0,
+    "orq-research@orq/autorouter-anthropic-cost": 0,
+    "orq-research@orq/autorouter-anthropic-quality": 0,
+    "orq-research@orq/autorouter-google-balanced": 0,
+    "orq-research@orq/autorouter-google-cost": 0,
+    "orq-research@orq/autorouter-google-quality": 0,
+    "orq-research@orq/autorouter-openai-balanced": 0,
+    "orq-research@orq/autorouter-openai-cost": 0,
+    "orq-research@orq/autorouter-openai-quality": 0,
+    "orq-research@orq/fastned-autorouter": 0,
+    "orq-research@orq/test-groq-oss": 0,
+    "perplexity/sonar-deep-research": 1728950400000,
+    "perplexity/sonar-pro": 1728950400000,
+    "reson8/prerecorded": 1783555200000,
+    "scaleway/glm-5.2": 1784764800000,
+    "scaleway/mistral-medium-3.5-128b": 1784764800000,
+    "scaleway/qwen3.6-35b-a3b": 1783900800000,
+    "tensorix/deepseek/deepseek-chat-v3.1": 1774828800000,
+    "tensorix/moonshotai/kimi-k3": 1785196800000,
+    "tensorix/qwen/qwen3-coder-30b-a3b-instruct": 1774828800000,
+    "togetherai/deepseek-ai/DeepSeek-R1": 0,
+    "togetherai/deepseek-ai/DeepSeek-V3.1": 0,
+    "togetherai/meta-llama/Llama-3.3-70B-Instruct-Turbo": 1725926400000,
+    "togetherai/meta-llama/Llama-Guard-4-12B": 1725926400000,
+    "wafer/Kimi-K3": 1785628800000,
+    "wafer/MiniMax-M3": 1785628800000,
+    "wafer/kimi-k3-fast": 1785628800000,
+    "xai/grok-4-1-fast": 1772668800000,
+    "xai/grok-4.5": 1784160000000,
+    "zai/glm-4.5-air": 1766448000000,
+    "zai/glm-4.6": 1735689600000,
+    "zai/glm-5.1": 1776988800000,
+    "zai/glm-5.2": 1781568000000
+  },
+  "preset_judge_pricing": {
+    "anthropic/claude-haiku-4-5-20251001": {
+      "input_rate": 1.0,
+      "output_rate": 5.0
+    },
+    "anthropic/claude-opus-5": {
+      "input_rate": 5.0,
+      "output_rate": 25.0
+    },
+    "aws/eu.anthropic.claude-haiku-4-5-20251001-v1:0": {
+      "input_rate": 1.1,
+      "output_rate": 5.5
+    },
+    "azure/eu.gpt-5.6-luna": {
+      "input_rate": 0.2,
+      "output_rate": 1.2
+    },
+    "baseten/kimi-k3": {
+      "input_rate": 3.0,
+      "output_rate": 15.0
+    },
+    "deepseek/deepseek-v4-flash": {
+      "input_rate": 0.14,
+      "output_rate": 0.28
+    },
+    "deepseek/deepseek-v4-pro": {
+      "input_rate": 0.435,
+      "output_rate": 0.87
+    },
+    "google/eu.claude-sonnet-5": {
+      "input_rate": 2.2,
+      "output_rate": 11.0
+    },
+    "google/eu.gemini-3.5-flash": {
+      "input_rate": 1.5,
+      "output_rate": 9.0
+    },
+    "google/gemini-3.5-flash-lite": {
+      "input_rate": 0.3,
+      "output_rate": 2.5
+    },
+    "google/gemini-3.6-flash": {
+      "input_rate": 1.5,
+      "output_rate": 7.5
+    },
+    "minimax/MiniMax-M2.7": {
+      "input_rate": 0.3,
+      "output_rate": 1.2
+    },
+    "moonshotai/kimi-k2.6": {
+      "input_rate": 0.95,
+      "output_rate": 4.0
+    },
+    "openai/gpt-5-mini": {
+      "input_rate": 0.25,
+      "output_rate": 2.0
+    },
+    "openai/gpt-5.4-nano": {
+      "input_rate": 0.2,
+      "output_rate": 1.25
+    },
+    "openai/gpt-5.6-luna": {
+      "input_rate": 0.2,
+      "output_rate": 1.2
+    },
+    "openai/gpt-5.6-sol": {
+      "input_rate": 4.0,
+      "output_rate": 20.0
+    },
+    "openai/gpt-5.6-terra": {
+      "input_rate": 2.0,
+      "output_rate": 12.0
+    },
+    "xai/grok-4-1-fast": {
+      "input_rate": 0.2,
+      "output_rate": 0.5
+    },
+    "zai/glm-5.2": {
+      "input_rate": 1.4,
+      "output_rate": 4.4
+    }
+  },
+  "scored_models": {
+    "alibaba/qwen3.5-27b": {
+      "intelligence_index": 33.8,
+      "price": 0.825,
+      "region": "us",
+      "provider": "alibaba",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "reasoning": 33.8,
+        "none": 29.3
+      },
+      "scored_effort": "reasoning",
+      "enabled": true
+    },
+    "alibaba/qwen3.5-35b-a3b": {
+      "intelligence_index": 29.3,
+      "price": 0.6875,
+      "region": "us",
+      "provider": "alibaba",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "reasoning": 29.3,
+        "none": 24
+      },
+      "scored_effort": "reasoning",
+      "enabled": true
+    },
+    "anthropic/claude-fable-5": {
+      "intelligence_index": 59.9,
+      "price": 20,
+      "region": "rest",
+      "provider": "anthropic",
+      "reasoning_effort": "high",
+      "effort_indices": {
+        "high": 59.9
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "anthropic/claude-haiku-4-5-20251001": {
+      "intelligence_index": 23.7,
+      "price": 2,
+      "region": "rest",
+      "provider": "anthropic",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 23.7,
+        "reasoning": 29.6
+      },
+      "scored_effort": "none",
+      "enabled": true
+    },
+    "anthropic/claude-opus-4-6": {
+      "intelligence_index": 37.8,
+      "price": 10,
+      "region": "rest",
+      "provider": "anthropic",
+      "reasoning_effort": "high",
+      "effort_indices": {
+        "high": 37.8,
+        "max": 43.7
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "anthropic/claude-opus-4-7": {
+      "intelligence_index": 53.5,
+      "price": 10,
+      "region": "rest",
+      "provider": "anthropic",
+      "reasoning_effort": "high",
+      "effort_indices": {
+        "high": 53.5,
+        "none": 42.7
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "anthropic/claude-opus-4-8": {
+      "intelligence_index": 55.7,
+      "price": 10,
+      "region": "rest",
+      "provider": "anthropic",
+      "reasoning_effort": "high",
+      "effort_indices": {
+        "high": 55.7
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "anthropic/claude-opus-5": {
+      "intelligence_index": 60.7,
+      "price": 10,
+      "region": "rest",
+      "provider": "anthropic",
+      "reasoning_effort": "high",
+      "effort_indices": {
+        "high": 60.7
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "anthropic/claude-sonnet-4-6": {
+      "intelligence_index": 35.9,
+      "price": 6,
+      "region": "rest",
+      "provider": "anthropic",
+      "reasoning_effort": "high",
+      "effort_indices": {
+        "high": 35.9,
+        "low": 34.3,
+        "max": 47.2
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "anthropic/claude-sonnet-5": {
+      "intelligence_index": 53.4,
+      "price": 4,
+      "region": "rest",
+      "provider": "anthropic",
+      "reasoning_effort": "high",
+      "effort_indices": {
+        "high": 53.4,
+        "none": 41.7
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "aws/eu.anthropic.claude-haiku-4-5-20251001-v1:0": {
+      "intelligence_index": 23.7,
+      "price": 2.2,
+      "region": "europe",
+      "provider": "aws",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 23.7,
+        "reasoning": 29.6
+      },
+      "scored_effort": "none",
+      "enabled": true
+    },
+    "aws/eu.anthropic.claude-opus-4-5-20251101-v1:0": {
+      "intelligence_index": 34.7,
+      "price": 11,
+      "region": "europe",
+      "provider": "aws",
+      "reasoning_effort": "high",
+      "effort_indices": {
+        "none": 34.7,
+        "reasoning": 40.8
+      },
+      "scored_effort": "none",
+      "enabled": true
+    },
+    "aws/eu.anthropic.claude-sonnet-4-20250514-v1:0": {
+      "intelligence_index": 25.5,
+      "price": 6,
+      "region": "europe",
+      "provider": "aws",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 25.5,
+        "reasoning": 28.9
+      },
+      "scored_effort": "none",
+      "enabled": true
+    },
+    "azure/eu.gpt-5.6-luna": {
+      "intelligence_index": 38.1,
+      "price": 0.45,
+      "region": "europe",
+      "provider": "azure",
+      "reasoning_effort": "medium",
+      "effort_indices": {
+        "max": 51.2,
+        "high": 46.1,
+        "low": 33.3,
+        "medium": 38.1,
+        "none": 26.6,
+        "xhigh": 49.1
+      },
+      "scored_effort": "medium",
+      "enabled": true
+    },
+    "azure/eu.gpt-5.6-terra": {
+      "intelligence_index": 45.6,
+      "price": 4.5,
+      "region": "europe",
+      "provider": "azure",
+      "reasoning_effort": "medium",
+      "effort_indices": {
+        "max": 55,
+        "high": 49,
+        "low": 40.5,
+        "medium": 45.6,
+        "none": 34,
+        "xhigh": 51.6
+      },
+      "scored_effort": "medium",
+      "enabled": true
+    },
+    "azure/global.gpt-5.6-luna": {
+      "intelligence_index": 38.1,
+      "price": 0.45,
+      "region": "global",
+      "provider": "azure",
+      "reasoning_effort": "medium",
+      "effort_indices": {
+        "none": 26.6,
+        "xhigh": 49.1,
+        "max": 51.2,
+        "high": 46.1,
+        "low": 33.3,
+        "medium": 38.1
+      },
+      "scored_effort": "medium",
+      "enabled": true
+    },
+    "azure/global.gpt-5.6-terra": {
+      "intelligence_index": 45.6,
+      "price": 4.5,
+      "region": "global",
+      "provider": "azure",
+      "reasoning_effort": "medium",
+      "effort_indices": {
+        "max": 55,
+        "high": 49,
+        "low": 40.5,
+        "medium": 45.6,
+        "none": 34,
+        "xhigh": 51.6
+      },
+      "scored_effort": "medium",
+      "enabled": true
+    },
+    "azure/gpt-4.1": {
+      "intelligence_index": 19.4,
+      "price": 3.5,
+      "region": "europe",
+      "provider": "azure",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 19.4
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "azure/gpt-4o": {
+      "intelligence_index": 11.2,
+      "price": 4.375,
+      "region": "europe",
+      "provider": "azure",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 11.2
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "azure/gpt-5-mini": {
+      "intelligence_index": 30.9,
+      "price": 0.6875,
+      "region": "europe",
+      "provider": "azure",
+      "reasoning_effort": "medium",
+      "effort_indices": {
+        "high": 25.3,
+        "medium": 30.9,
+        "minimal": 14.3
+      },
+      "scored_effort": "medium",
+      "enabled": true
+    },
+    "azure/gpt-5.4": {
+      "intelligence_index": 27.7,
+      "price": 5.625,
+      "region": "europe",
+      "provider": "azure",
+      "reasoning_effort": "none",
+      "effort_indices": {
+        "low": 39.1,
+        "none": 27.7,
+        "xhigh": 51.4
+      },
+      "scored_effort": "none",
+      "enabled": true
+    },
+    "baseten/glm-5.2-fast": {
+      "intelligence_index": 51.1,
+      "price": 3.225,
+      "region": "rest",
+      "provider": "baseten",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "max": 51.1,
+        "none": 34.1
+      },
+      "scored_effort": "max",
+      "enabled": true
+    },
+    "baseten/kimi-k3": {
+      "intelligence_index": 57.1,
+      "price": 6,
+      "region": "rest",
+      "provider": "baseten",
+      "reasoning_effort": "max",
+      "effort_indices": {
+        "max": 57.1
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "cerebras/gemma-4-31b": {
+      "intelligence_index": 21.8,
+      "price": 1.115,
+      "region": "us",
+      "provider": "cerebras",
+      "reasoning_effort": "none",
+      "effort_indices": {
+        "reasoning": 29.4,
+        "none": 21.8
+      },
+      "scored_effort": "none",
+      "enabled": true
+    },
+    "cerebras/gpt-oss-120b": {
+      "intelligence_index": 23.8,
+      "price": 0.45,
+      "region": "us",
+      "provider": "cerebras",
+      "reasoning_effort": "medium",
+      "effort_indices": {
+        "high": 23.8,
+        "low": 14.9
+      },
+      "scored_effort": "high",
+      "enabled": true
+    },
+    "deepseek/deepseek-v4-flash": {
+      "intelligence_index": 37.5,
+      "price": 0.175,
+      "region": "rest",
+      "provider": "deepseek",
+      "reasoning_effort": "high",
+      "effort_indices": {
+        "none": 28.7,
+        "high": 37.5
+      },
+      "scored_effort": "high",
+      "enabled": true
+    },
+    "deepseek/deepseek-v4-pro": {
+      "intelligence_index": 43.1,
+      "price": 0.54375,
+      "region": "rest",
+      "provider": "deepseek",
+      "reasoning_effort": "high",
+      "effort_indices": {
+        "high": 43.1,
+        "none": 31.2
+      },
+      "scored_effort": "high",
+      "enabled": true
+    },
+    "google-ai/gemini-2.5-flash": {
+      "intelligence_index": 14.1,
+      "price": 0.85,
+      "region": "rest",
+      "provider": "google-ai",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 14.1,
+        "reasoning": 20.1
+      },
+      "scored_effort": "none",
+      "enabled": true
+    },
+    "google-ai/gemini-2.5-flash-lite": {
+      "intelligence_index": 6.9,
+      "price": 0.175,
+      "region": "rest",
+      "provider": "google-ai",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 6.9,
+        "reasoning": 11.4
+      },
+      "scored_effort": "none",
+      "enabled": true
+    },
+    "google-ai/gemini-2.5-pro": {
+      "intelligence_index": 25.8,
+      "price": 3.4375,
+      "region": "rest",
+      "provider": "google-ai",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 25.8
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "google-ai/gemini-3-flash-preview": {
+      "intelligence_index": 27.4,
+      "price": 1.125,
+      "region": "rest",
+      "provider": "google-ai",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 27.4,
+        "reasoning": 37.8
+      },
+      "scored_effort": "none",
+      "enabled": true
+    },
+    "google-ai/gemini-3.5-flash-lite": {
+      "intelligence_index": 36.5,
+      "price": 0.85,
+      "region": "rest",
+      "provider": "google-ai",
+      "reasoning_effort": "minimal",
+      "effort_indices": {
+        "minimal": 36.5
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "google-ai/gemini-3.6-flash": {
+      "intelligence_index": 50.1,
+      "price": 3,
+      "region": "rest",
+      "provider": "google-ai",
+      "reasoning_effort": "medium",
+      "effort_indices": {
+        "high": 50.1
+      },
+      "scored_effort": "high",
+      "enabled": true
+    },
+    "google/claude-haiku-4-5": {
+      "intelligence_index": 23.7,
+      "price": 2.2,
+      "region": "europe",
+      "provider": "google",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 23.7,
+        "reasoning": 29.6
+      },
+      "scored_effort": "none",
+      "enabled": true
+    },
+    "google/claude-opus-4-5@20251101": {
+      "intelligence_index": 34.7,
+      "price": 11,
+      "region": "europe",
+      "provider": "google",
+      "reasoning_effort": "high",
+      "effort_indices": {
+        "none": 34.7,
+        "reasoning": 40.8
+      },
+      "scored_effort": "none",
+      "enabled": true
+    },
+    "google/claude-sonnet-4-5@20250929": {
+      "intelligence_index": 29.3,
+      "price": 6.6,
+      "region": "europe",
+      "provider": "google",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 29.3,
+        "reasoning": 36.4
+      },
+      "scored_effort": "none",
+      "enabled": true
+    },
+    "google/eu.claude-fable-5": {
+      "intelligence_index": 59.9,
+      "price": 22,
+      "region": "europe",
+      "provider": "google",
+      "reasoning_effort": "high",
+      "effort_indices": {
+        "high": 59.9
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "google/eu.claude-opus-5": {
+      "intelligence_index": 60.7,
+      "price": 11,
+      "region": "europe",
+      "provider": "google",
+      "reasoning_effort": "high",
+      "effort_indices": {
+        "high": 60.7
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "google/eu.claude-sonnet-5": {
+      "intelligence_index": 53.4,
+      "price": 4.4,
+      "region": "europe",
+      "provider": "google",
+      "reasoning_effort": "high",
+      "effort_indices": {
+        "high": 53.4,
+        "none": 41.7
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "google/eu.gemini-3.5-flash": {
+      "intelligence_index": 45.4,
+      "price": 3.375,
+      "region": "europe",
+      "provider": "google",
+      "reasoning_effort": "medium",
+      "effort_indices": {
+        "high": 50.2,
+        "medium": 45.4,
+        "minimal": 34.9
+      },
+      "scored_effort": "medium",
+      "enabled": true
+    },
+    "google/gemini-2.5-flash": {
+      "intelligence_index": 14.1,
+      "price": 0.85,
+      "region": "europe",
+      "provider": "google",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 14.1,
+        "reasoning": 20.1
+      },
+      "scored_effort": "none",
+      "enabled": true
+    },
+    "google/gemini-2.5-flash-lite": {
+      "intelligence_index": 6.9,
+      "price": 0.175,
+      "region": "europe",
+      "provider": "google",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "reasoning": 11.4,
+        "none": 6.9
+      },
+      "scored_effort": "none",
+      "enabled": true
+    },
+    "google/gemini-2.5-pro": {
+      "intelligence_index": 25.8,
+      "price": 3.4375,
+      "region": "europe",
+      "provider": "google",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 25.8
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "google/gemini-3-flash-preview": {
+      "intelligence_index": 27.4,
+      "price": 1.125,
+      "region": "rest",
+      "provider": "google",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 27.4,
+        "reasoning": 37.8
+      },
+      "scored_effort": "none",
+      "enabled": true
+    },
+    "google/gemini-3.1-pro-preview": {
+      "intelligence_index": 46.5,
+      "price": 4.5,
+      "region": "rest",
+      "provider": "google",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 46.5
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "google/gemini-3.5-flash": {
+      "intelligence_index": 45.4,
+      "price": 3.375,
+      "region": "rest",
+      "provider": "google",
+      "reasoning_effort": "medium",
+      "effort_indices": {
+        "high": 50.2,
+        "medium": 45.4,
+        "minimal": 34.9
+      },
+      "scored_effort": "medium",
+      "enabled": true
+    },
+    "google/gemini-3.5-flash-lite": {
+      "intelligence_index": 36.5,
+      "price": 0.85,
+      "region": "rest",
+      "provider": "google",
+      "reasoning_effort": "minimal",
+      "effort_indices": {
+        "minimal": 36.5
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "google/gemini-3.6-flash": {
+      "intelligence_index": 50.1,
+      "price": 3,
+      "region": "rest",
+      "provider": "google",
+      "reasoning_effort": "medium",
+      "effort_indices": {
+        "high": 50.1
+      },
+      "scored_effort": "high",
+      "enabled": true
+    },
+    "google/global.claude-opus-5": {
+      "intelligence_index": 60.7,
+      "price": 10,
+      "region": "global",
+      "provider": "google",
+      "reasoning_effort": "high",
+      "effort_indices": {
+        "high": 60.7
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "google/global.claude-sonnet-5": {
+      "intelligence_index": 53.4,
+      "price": 4,
+      "region": "global",
+      "provider": "google",
+      "reasoning_effort": "high",
+      "effort_indices": {
+        "high": 53.4,
+        "none": 41.7
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "google/us.claude-sonnet-5": {
+      "intelligence_index": 53.4,
+      "price": 4.4,
+      "region": "us",
+      "provider": "google",
+      "reasoning_effort": "high",
+      "effort_indices": {
+        "high": 53.4,
+        "none": 41.7
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "groq/openai/gpt-oss-120b": {
+      "intelligence_index": 23.8,
+      "price": 0.2625,
+      "region": "us",
+      "provider": "groq",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "high": 23.8,
+        "low": 14.9
+      },
+      "scored_effort": "high",
+      "enabled": true
+    },
+    "groq/openai/gpt-oss-20b": {
+      "intelligence_index": 14.9,
+      "price": 0.13125,
+      "region": "us",
+      "provider": "groq",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "low": 14.3,
+        "high": 14.9
+      },
+      "scored_effort": "high",
+      "enabled": true
+    },
+    "groq/qwen/qwen3.6-27b": {
+      "intelligence_index": 37.1,
+      "price": 1.2,
+      "region": "us",
+      "provider": "groq",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "reasoning": 37.1,
+        "none": 30.5
+      },
+      "scored_effort": "reasoning",
+      "enabled": true
+    },
+    "minimax/MiniMax-M2.7": {
+      "intelligence_index": 38.1,
+      "price": 0.525,
+      "region": "rest",
+      "provider": "minimax",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 38.1
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "mistral/mistral-medium-2604": {
+      "intelligence_index": 29.9,
+      "price": 3,
+      "region": "europe",
+      "provider": "mistral",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 29.9
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "mistral/mistral-medium-latest": {
+      "intelligence_index": 29.9,
+      "price": 3,
+      "region": "europe",
+      "provider": "mistral",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 29.9
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "moonshotai/kimi-k2.6": {
+      "intelligence_index": 44.2,
+      "price": 1.7125,
+      "region": "rest",
+      "provider": "moonshotai",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 34.6
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "nebius/moonshotai/Kimi-K3": {
+      "intelligence_index": 57.1,
+      "price": 6,
+      "region": "europe",
+      "provider": "nebius",
+      "reasoning_effort": "max",
+      "effort_indices": {
+        "max": 57.1
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "openai/eu.gpt-5.6-luna": {
+      "intelligence_index": 38.1,
+      "price": 0.495,
+      "region": "europe",
+      "provider": "openai",
+      "reasoning_effort": "medium",
+      "effort_indices": {
+        "xhigh": 49.1,
+        "max": 51.2,
+        "high": 46.1,
+        "low": 33.3,
+        "medium": 38.1,
+        "none": 26.6
+      },
+      "scored_effort": "medium",
+      "enabled": true
+    },
+    "openai/eu.gpt-5.6-sol": {
+      "intelligence_index": 53.6,
+      "price": 8.8,
+      "region": "europe",
+      "provider": "openai",
+      "reasoning_effort": "medium",
+      "effort_indices": {
+        "medium": 53.6,
+        "none": 41.2,
+        "xhigh": 57.7,
+        "max": 58.9,
+        "high": 55.9,
+        "low": 49.4
+      },
+      "scored_effort": "medium",
+      "enabled": true
+    },
+    "openai/eu.gpt-5.6-terra": {
+      "intelligence_index": 45.6,
+      "price": 4.95,
+      "region": "europe",
+      "provider": "openai",
+      "reasoning_effort": "medium",
+      "effort_indices": {
+        "xhigh": 51.6,
+        "max": 55,
+        "high": 49,
+        "low": 40.5,
+        "medium": 45.6,
+        "none": 34
+      },
+      "scored_effort": "medium",
+      "enabled": true
+    },
+    "openai/gpt-4.1": {
+      "intelligence_index": 19.4,
+      "price": 3.5,
+      "region": "us",
+      "provider": "openai",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 19.4
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "openai/gpt-4.1-mini": {
+      "intelligence_index": 14.8,
+      "price": 0.7,
+      "region": "us",
+      "provider": "openai",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 14.8
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "openai/gpt-4o": {
+      "intelligence_index": 11.2,
+      "price": 4.375,
+      "region": "us",
+      "provider": "openai",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 11.2
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "openai/gpt-4o-mini": {
+      "intelligence_index": 6.9,
+      "price": 0.2625,
+      "region": "us",
+      "provider": "openai",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 6.9
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "openai/gpt-5": {
+      "intelligence_index": 33.7,
+      "price": 3.4375,
+      "region": "us",
+      "provider": "openai",
+      "reasoning_effort": "medium",
+      "effort_indices": {
+        "minimal": 17.2,
+        "high": 34.7,
+        "low": 31.2,
+        "medium": 33.7
+      },
+      "scored_effort": "medium",
+      "enabled": true
+    },
+    "openai/gpt-5-mini": {
+      "intelligence_index": 30.9,
+      "price": 0.6875,
+      "region": "us",
+      "provider": "openai",
+      "reasoning_effort": "medium",
+      "effort_indices": {
+        "high": 25.3,
+        "medium": 30.9,
+        "minimal": 14.3
+      },
+      "scored_effort": "medium",
+      "enabled": true
+    },
+    "openai/gpt-5.1": {
+      "intelligence_index": 20.4,
+      "price": 3.4375,
+      "region": "us",
+      "provider": "openai",
+      "reasoning_effort": "none",
+      "effort_indices": {
+        "high": 36.9,
+        "none": 20.4
+      },
+      "scored_effort": "none",
+      "enabled": true
+    },
+    "openai/gpt-5.4": {
+      "intelligence_index": 27.7,
+      "price": 5.625,
+      "region": "us",
+      "provider": "openai",
+      "reasoning_effort": "none",
+      "effort_indices": {
+        "xhigh": 51.4,
+        "low": 39.1,
+        "none": 27.7
+      },
+      "scored_effort": "none",
+      "enabled": true
+    },
+    "openai/gpt-5.4-mini": {
+      "intelligence_index": 29.8,
+      "price": 1.6875,
+      "region": "us",
+      "provider": "openai",
+      "reasoning_effort": "none",
+      "effort_indices": {
+        "medium": 29.8
+      },
+      "scored_effort": "medium",
+      "enabled": true
+    },
+    "openai/gpt-5.4-nano": {
+      "intelligence_index": 30.2,
+      "price": 0.4625,
+      "region": "us",
+      "provider": "openai",
+      "reasoning_effort": "none",
+      "effort_indices": {
+        "medium": 30.2
+      },
+      "scored_effort": "medium",
+      "enabled": true
+    },
+    "openai/gpt-5.6-luna": {
+      "intelligence_index": 38.1,
+      "price": 0.45,
+      "region": "us",
+      "provider": "openai",
+      "reasoning_effort": "medium",
+      "effort_indices": {
+        "max": 51.2,
+        "high": 46.1,
+        "low": 33.3,
+        "medium": 38.1,
+        "none": 26.6,
+        "xhigh": 49.1
+      },
+      "scored_effort": "medium",
+      "enabled": true
+    },
+    "openai/gpt-5.6-sol": {
+      "intelligence_index": 53.6,
+      "price": 8,
+      "region": "us",
+      "provider": "openai",
+      "reasoning_effort": "medium",
+      "effort_indices": {
+        "xhigh": 57.7,
+        "max": 58.9,
+        "high": 55.9,
+        "low": 49.4,
+        "medium": 53.6,
+        "none": 41.2
+      },
+      "scored_effort": "medium",
+      "enabled": true
+    },
+    "openai/gpt-5.6-terra": {
+      "intelligence_index": 45.6,
+      "price": 4.5,
+      "region": "us",
+      "provider": "openai",
+      "reasoning_effort": "medium",
+      "effort_indices": {
+        "low": 40.5,
+        "medium": 45.6,
+        "none": 34,
+        "xhigh": 51.6,
+        "max": 55,
+        "high": 49
+      },
+      "scored_effort": "medium",
+      "enabled": true
+    },
+    "perplexity/sonar-pro": {
+      "intelligence_index": 9.3,
+      "price": 6,
+      "region": "us",
+      "provider": "perplexity",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 9.3
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "scaleway/glm-5.2": {
+      "intelligence_index": 51.1,
+      "price": 2.725,
+      "region": "europe",
+      "provider": "scaleway",
+      "reasoning_effort": "max",
+      "effort_indices": {
+        "max": 51.1,
+        "none": 34.1
+      },
+      "scored_effort": "max",
+      "enabled": true
+    },
+    "scaleway/mistral-medium-3.5-128b": {
+      "intelligence_index": 29.9,
+      "price": 3,
+      "region": "europe",
+      "provider": "scaleway",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 29.9
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "scaleway/qwen3.6-35b-a3b": {
+      "intelligence_index": 31.6,
+      "price": 0.5625,
+      "region": "europe",
+      "provider": "scaleway",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "reasoning": 31.6,
+        "none": 24.2
+      },
+      "scored_effort": "reasoning",
+      "enabled": true
+    },
+    "tensorix/deepseek/deepseek-chat-v3.1": {
+      "intelligence_index": 14.2,
+      "price": 0.35,
+      "region": "europe",
+      "provider": "tensorix",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 14.2
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "tensorix/moonshotai/kimi-k3": {
+      "intelligence_index": 57.1,
+      "price": 6,
+      "region": "europe",
+      "provider": "tensorix",
+      "reasoning_effort": "max",
+      "effort_indices": {
+        "max": 57.1
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "tensorix/qwen/qwen3-coder-30b-a3b-instruct": {
+      "intelligence_index": 13.6,
+      "price": 0.1075,
+      "region": "europe",
+      "provider": "tensorix",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 13.6
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "togetherai/meta-llama/Llama-3.3-70B-Instruct-Turbo": {
+      "intelligence_index": 9.4,
+      "price": 1.04,
+      "region": "rest",
+      "provider": "togetherai",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 9.4
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "wafer/Kimi-K3": {
+      "intelligence_index": 57.1,
+      "price": 6,
+      "region": "rest",
+      "provider": "wafer",
+      "reasoning_effort": "none",
+      "effort_indices": {
+        "none": 57.1
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "wafer/MiniMax-M3": {
+      "intelligence_index": 44.4,
+      "price": 0.5775,
+      "region": "rest",
+      "provider": "wafer",
+      "reasoning_effort": "none",
+      "effort_indices": {
+        "none": 44.4
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "wafer/kimi-k3-fast": {
+      "intelligence_index": 57.1,
+      "price": 9,
+      "region": "rest",
+      "provider": "wafer",
+      "reasoning_effort": "none",
+      "effort_indices": {
+        "none": 57.1
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "xai/grok-4-1-fast": {
+      "intelligence_index": 16.9,
+      "price": 0.275,
+      "region": "us",
+      "provider": "xai",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 16.9,
+        "reasoning": 30.6
+      },
+      "scored_effort": "none",
+      "enabled": true
+    },
+    "xai/grok-4.5": {
+      "intelligence_index": 53.8,
+      "price": 3,
+      "region": "us",
+      "provider": "xai",
+      "reasoning_effort": "high",
+      "effort_indices": {
+        "high": 53.8
+      },
+      "scored_effort": "high",
+      "enabled": true
+    },
+    "zai/glm-4.5-air": {
+      "intelligence_index": 16.5,
+      "price": 0.425,
+      "region": "rest",
+      "provider": "zai",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 16.5
+      },
+      "scored_effort": null,
+      "enabled": true
+    },
+    "zai/glm-4.6": {
+      "intelligence_index": 23,
+      "price": 1,
+      "region": "rest",
+      "provider": "zai",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 23,
+        "reasoning": 28.7
+      },
+      "scored_effort": "none",
+      "enabled": true
+    },
+    "zai/glm-5.1": {
+      "intelligence_index": 40.2,
+      "price": 2.15,
+      "region": "rest",
+      "provider": "zai",
+      "reasoning_effort": null,
+      "effort_indices": {
+        "none": 35.4,
+        "reasoning": 40.2
+      },
+      "scored_effort": "reasoning",
+      "enabled": true
+    },
+    "zai/glm-5.2": {
+      "intelligence_index": 51.1,
+      "price": 2.15,
+      "region": "rest",
+      "provider": "zai",
+      "reasoning_effort": "max",
+      "effort_indices": {
+        "none": 34.1,
+        "max": 51.1
+      },
+      "scored_effort": "max",
+      "enabled": true
+    }
+  }
+}
