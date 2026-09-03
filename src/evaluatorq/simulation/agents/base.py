@@ -60,7 +60,7 @@ def _default_timeout_s() -> float:
     tailscale box under parallel load) can exceed the default; raise via
     EVALUATORQ_LLM_TIMEOUT_S, or per-agent via ``LLMCallConfig.timeout_ms``.
     """
-    return env_float('EVALUATORQ_LLM_TIMEOUT_S', 60.0)
+    return env_float('EVALUATORQ_LLM_TIMEOUT_S', 60.0, min_value=1.0)
 
 
 def _default_max_tokens() -> int:
@@ -71,7 +71,7 @@ def _default_max_tokens() -> int:
     as "no text and no tool calls". Raise via EVALUATORQ_LLM_MAX_TOKENS, or
     per-agent via ``LLMCallConfig.max_tokens``.
     """
-    return env_int('EVALUATORQ_LLM_MAX_TOKENS', DEFAULT_TARGET_MAX_TOKENS)
+    return env_int('EVALUATORQ_LLM_MAX_TOKENS', DEFAULT_TARGET_MAX_TOKENS, min_value=1)
 
 
 def _default_reasoning_effort() -> str | None:
