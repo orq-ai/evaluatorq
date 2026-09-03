@@ -16,13 +16,14 @@ The Orq platform is optional — it stores results and routes LLMs when `ORQ_API
 
 ### What do I install?
 
-Pick the extra for what you're doing:
+`uv add "evaluatorq"` covers evaluation, red teaming and simulation. Add an extra when you need what surrounds them — attack datasets, charts, the run browser:
 
 ```bash
-uv add "evaluatorq"               # core evaluations
-uv add "evaluatorq[simulation]"   # agent simulation
-uv add "evaluatorq[redteam]"      # red teaming
+uv add "evaluatorq[redteam]"      # static/hybrid red team datasets
+uv add "evaluatorq[dashboard]"    # eq dashboard
 ```
+
+[Installation](installation.md) has the full table.
 
 `uv add` installs into the current project — run `uv init` first if you don't have one. Run your scripts with `uv run my_eval.py` and the CLI with `uv run eq`, so the environment you installed into is the one that executes.
 

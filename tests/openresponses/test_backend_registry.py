@@ -61,7 +61,7 @@ class TestResolveBackendOpenResponses:
 
     def test_pipeline_retry_settings_do_not_stack_on_target_path(self):
         client = MagicMock()
-        with patch("evaluatorq.redteam.backends.registry.logger.warning") as warning:
+        with patch("evaluatorq.redteam.backends._retry.logger.warning") as warning:
             backend = resolve_backend(
                 "openresponses",
                 llm_client=client,
@@ -84,7 +84,7 @@ class TestResolveBackendOpenResponses:
 
     def test_default_pipeline_retry_settings_do_not_warn(self):
         client = MagicMock()
-        with patch("evaluatorq.redteam.backends.registry.logger.warning") as warning:
+        with patch("evaluatorq.redteam.backends._retry.logger.warning") as warning:
             resolve_backend("openresponses", llm_client=client, pipeline_config=LLMConfig())
 
         warning.assert_not_called()

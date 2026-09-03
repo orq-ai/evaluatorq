@@ -91,23 +91,72 @@ House voice is already on the page in `guides/targets.md`, `tuning.md`, `index.m
 
 Four reviewers in parallel on every draft — three narrow sonnet lenses and one broad opus editor:
 
-- **reader** (sonnet) — roleplay the assumed reader. Attempt the task using only this page. Report the first place you got stuck and what you needed that was not there.
+- **reader** (sonnet) — roleplay the assumed reader. Attempt the task using only this page. Report the first place you got stuck and what you needed that was not there. Where more than one kind of reader lands on the page, run one agent per persona from **Reader personas** below instead of a single generic reader; the other three lenses stay one agent each.
 - **conformance** (sonnet) — the four non-negotiables, the genre template, the voice rules. Quote the offending line.
 - **cutter** (sonnet) — filler, reassurance, throat-clearing, paragraphs that delete without loss. Quote what to cut.
 - **`content-evaluator` agent** (opus) — the standing editor agent, unmodified. It reads for argument quality, audience fit and structural problems the three narrow lenses are not looking for. Take its Critical findings as candidate blockers and its rating as a signal, not a gate.
 
 Dispatch all four together. **No reviewer holds the barrier forever**: once the others are in, wait a little longer, then proceed without the missing one and name which lens was skipped wherever you report the result. A review someone knows is partial beats a loop that never ends.
 
+#### Reader personas
+
+The reader lens is the only one that can produce *the page is correct and I still could not do it*. Widen it when the page serves more than one kind of reader — one agent per row, each given a task **derived from what the page is for**, phrased as something a person wants to accomplish, never as "review this page".
+
+| Persona | Angle the task takes |
+|---|---|
+| First-timer | Never used evaluatorq. Task starts from zero, arriving at the docs root. |
+| Platform user | Works through Orq — a `deployment:` target, no local model code. |
+| Practitioner | Already uses the surface this page belongs to; wants this specific path against their own target. |
+| CI engineer | Needs it non-interactive in a GitHub Action — exit codes, env vars, no prompts. |
+
+Rules every persona agent is given:
+
+- You are a user, not a reviewer. You have the docs site and a terminal.
+- **Do not read the diff, the git log, or the raw markdown source.** Read the built site. This is on your honour — nothing enforces it, and a persona that peeks produces a report that looks fine and is worthless.
+- Start from `docs/index.md` and navigate. If you cannot find the page, that is the finding — say so and stop.
+- **Run the commands. Do not read them and assume.** Paste what actually happened.
+- Report: where you got stuck, what you had to guess, what sent you to the source, and what you expected the page to say that it did not.
+- End with one line: COMPLETED / COMPLETED WITH GUESSWORK / BLOCKED.
+
+Re-dispatch only the personas that did not end COMPLETED, with the same task.
+
+**Hand every reviewer artifacts, never your conclusions.** Give paths — the page, the receipt of what ran, the diff for the lenses allowed to see it — and let them read. Writing "all blocks pass" or "verified correct" into a reviewer prompt contaminates the one thing a reviewer is for. The same holds in reverse: a reviewer's claim you did not check is a claim, not a finding.
+
 Then: **validate each finding yourself before fixing it.** A reviewer that misread the page produces a finding that makes the page worse. Check the claim against the draft; drop the ones that do not hold.
 
 **Blocking** — fix these, then re-run the loop:
 
-- the reader could not complete the task
+- a reader lens ended anything other than COMPLETED. `COMPLETED WITH GUESSWORK` is a blocker: the guesswork *is* the gap, and a persona that guessed right this round is a reader who guesses wrong next round
 - a non-negotiable is missing
 - a code block does not run
 - a claim is false
 
 Everything else — voice nits, a clunky sentence, a suggested extra example — is **non-blocking**: report it, do not fix it, do not re-run for it. Without that line the loop never ends, because there is always one more sentence to improve.
+
+#### Reporting the review in the PR
+
+The review is only useful to the human if they can read it in under a minute. One table, one line per finding, plain words — no lens jargon, no severity codes, no paragraphs. A finding whose line needs a second sentence gets a link to where the detail lives, not the detail.
+
+```markdown
+## Review
+
+| Finding | Raised by | What happened |
+|---|---|---|
+| The install command fails on a fresh machine without `uv init` first | reader | Fixed — added the caveat under the command |
+| Page never says what happens when the key is missing | conformance | Fixed — named the failure mode |
+| Wants a second example for the async path | cutter | Left out — one example is enough for this page |
+
+**Open decisions** — these need a human, they are not defects:
+
+- Should this page live under Guides or Reference? Currently Guides, because the reader arrives with a task. Lean: keep it.
+```
+
+Rules for the table:
+
+- **Say what a reader would notice, not what the reviewer called it.** "The command fails without `uv init`", not "install prerequisite unstated".
+- **`What happened` is one of three**: `Fixed — <what changed>`, `Left out — <why>`, or `Open — <what it needs>`. Nothing else.
+- **Every finding appears exactly once**, including the ones you dropped as invalid after checking them; say `Left out — checked, the page already says this` rather than deleting the row. A finding that vanishes looks like a finding nobody read.
+- **Open decisions go under the table as prose, with a Lean.** A decision is a choice only the human can make; a defect is not a decision.
 
 **Maximum three iterations.** A blocker surviving three rounds means the page has a design problem underneath it — a missing prerequisite, an undocumented feature it stands on — and a fourth round will not find it. Stop; the page is still worth keeping, and the judgement about it is not yours.
 

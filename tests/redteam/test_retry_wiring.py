@@ -214,7 +214,7 @@ def test_openai_backend_warns_when_target_retry_settings_are_ignored() -> None:
     """OpenAI target retries belong to call_target_with_retry, so ignored settings must be visible."""
     from evaluatorq.redteam.backends.registry import _create_openai_backend
 
-    with patch('evaluatorq.redteam.backends.registry.logger.warning') as warning:
+    with patch('evaluatorq.redteam.backends._retry.logger.warning') as warning:
         _create_openai_backend(llm_client=MagicMock(), pipeline_config=LLMConfig(retry_count=2))
 
     warning.assert_called_once()
@@ -226,7 +226,7 @@ def test_openai_backend_warns_when_target_retry_settings_are_ignored() -> None:
 def test_openresponses_backend_uses_the_same_ignored_retry_warning() -> None:
     from evaluatorq.redteam.backends.registry import _create_openresponses_backend
 
-    with patch('evaluatorq.redteam.backends.registry.logger.warning') as warning:
+    with patch('evaluatorq.redteam.backends._retry.logger.warning') as warning:
         _create_openresponses_backend(pipeline_config=LLMConfig(retry_count=2))
 
     warning.assert_called_once()
@@ -238,7 +238,7 @@ def test_openresponses_backend_uses_the_same_ignored_retry_warning() -> None:
 def test_openai_backend_does_not_warn_for_default_pipeline_retry_settings() -> None:
     from evaluatorq.redteam.backends.registry import _create_openai_backend
 
-    with patch('evaluatorq.redteam.backends.registry.logger.warning') as warning:
+    with patch('evaluatorq.redteam.backends._retry.logger.warning') as warning:
         _create_openai_backend(llm_client=MagicMock(), pipeline_config=LLMConfig())
 
     warning.assert_not_called()
@@ -248,7 +248,7 @@ def test_openai_backend_warns_when_direct_retry_settings_are_ignored() -> None:
     """Direct factory callers must not lose the warning for ignored retry kwargs."""
     from evaluatorq.redteam.backends.registry import _create_openai_backend
 
-    with patch('evaluatorq.redteam.backends.registry.logger.warning') as warning:
+    with patch('evaluatorq.redteam.backends._retry.logger.warning') as warning:
         _create_openai_backend(llm_client=MagicMock(), retry_count=2, retry_on_codes=[429, 503])
 
     warning.assert_called_once()

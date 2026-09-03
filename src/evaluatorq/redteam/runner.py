@@ -62,6 +62,7 @@ from evaluatorq.redteam.backends.base import (
 from evaluatorq.redteam.backends.registry import create_async_llm_client, make_agent_backend, resolve_backend
 from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
+    SUPPORTED_TARGET_KINDS,
     AgentContext,
     DeliveryMethod,
     LLMConfig,
@@ -529,6 +530,9 @@ async def red_team(
     Args:
         target: Target identifier(s). A single string like ``"agent:<key>"``,
             an `AgentTarget` instance, or a list of either for multi-target runs.
+            ``"deployment:<key>"`` runs under ``mode="static"`` only: the adaptive
+            pipelines need a conversational target and none speaks the deployments
+            API yet, so they raise `ValueError` rather than attack the wrong thing.
         mode: Execution mode — ``"dynamic"``, ``"static"``, or ``"hybrid"``.
             Defaults to ``"dynamic"`` when omitted. ``None`` is the "not supplied"
             sentinel, which is what lets ``previous_run=`` reject an explicit
@@ -638,8 +642,10 @@ async def red_team(
         RedTeamReport with results and summary statistics.
 
     Raises:
-        ValueError: If mode is invalid, required arguments are missing, or
-            ``save='detail'`` is passed without ``artifacts_dir``.
+        ValueError: If mode is invalid, required arguments are missing,
+            ``save='detail'`` is passed without ``artifacts_dir``, or a
+            ``"deployment:<key>"`` target is combined with ``mode="dynamic"``
+            or ``mode="hybrid"``.
         CancelledError: If hooks.on_confirm returns False.
 
     Usage:
@@ -787,6 +793,7 @@ async def red_team(
     config = llm_config or LLMConfig()
 
     resolved_mode = Pipeline(mode)
+    _reject_unsupported_targets(targets, resolved_mode)
 
     attack_model = config.attacker.model
     evaluator_model = config.evaluator.model or config.evaluator.judges[0]
@@ -1598,6 +1605,36 @@ def _check_filter_results(
         raise RedTeamError(msg)
 
 
+def _reject_unsupported_targets(targets: list[str], mode: Pipeline) -> None:
+    """Refuse target kinds this pipeline cannot drive, before any client or paid call.
+
+    Policy lives in ``SUPPORTED_TARGET_KINDS``, never here: this function reads
+    the table, and the remedy it prints is the list of pipelines the table says
+    accept the kind. Renaming ``mode`` or adding a pipeline therefore surfaces at
+    the table rather than in a string a user copies out of an error.
+
+    This is the only enforcement point. ``_prepare_target`` raises on a
+    non-``AGENT`` kind as an exhaustiveness check, not as a second copy of the
+    policy — reaching it means this guard was bypassed.
+    """
+    for target in targets:
+        kind = parse_target(target)[0]
+        if kind in SUPPORTED_TARGET_KINDS[mode]:
+            continue
+        elsewhere = [p.value for p in Pipeline if kind in SUPPORTED_TARGET_KINDS[p]]
+        remedy = (
+            f'Run it with mode="{elsewhere[0]}" (CLI: --mode {elsewhere[0]}), or use simulate() '
+            'for a conversational run.'
+            if elsewhere
+            else 'No pipeline drives this target kind; pass an AgentTarget object instead.'
+        )
+        raise ValueError(
+            f'Target {target!r} is an Orq {kind.value}, which the {mode.value} pipeline does not '
+            f'support: adaptive attacks need a conversational target (an agent:<key> or an '
+            f'AgentTarget). {remedy}'
+        )
+
+
 async def _prepare_target(
     *,
     target: str,
@@ -1655,12 +1692,12 @@ async def _prepare_target(
     target_kind, target_value = parse_target(target)
     safe_target = _make_safe_target(target_value)
 
-    if target_kind == TargetKind.AGENT:
-        backend = make_agent_backend(target_config=target_config, pipeline_config=pipeline_config)
-    else:
-        backend = resolve_backend(
-            'orq', llm_client=llm_client, target_config=target_config, pipeline_config=pipeline_config
-        )
+    # Exhaustiveness, not policy: `_reject_unsupported_targets` already refused every
+    # kind this pipeline cannot drive, and `parse_target` yields only AGENT or DEPLOYMENT.
+    # Reaching this raise means a caller skipped the guard.
+    if target_kind is not TargetKind.AGENT:
+        raise ValueError(f'{mode.value} pipeline cannot prepare a {target_kind.value} target ({target!r}).')
+    backend = make_agent_backend(target_config=target_config, pipeline_config=pipeline_config)
 
     # Context retrieval (skip if already fetched for the confirm step)
     if prefetched_agent_context is not None:
@@ -3178,14 +3215,25 @@ async def _run_static(
             'orq', llm_client=llm_client, target_config=target_config, pipeline_config=pipeline_config
         )
         for t in targets:
-            _kind, value = parse_target(t)
+            kind, value = parse_target(t)
+            if kind is not TargetKind.AGENT:
+                # Only the agents API answers a context query. Asking it about a
+                # deployment key 404s and lands in the except below, which reads as
+                # a transient failure; skipping says what is actually true. Costs
+                # the target model, so the RES-739 family-bias guard falls back to
+                # the raw target string for this run.
+                logger.warning(
+                    f'No agent context for {value!r}: context is only retrievable for agent targets, '
+                    f'not for {kind.value} ones — proceeding without it'
+                )
+                continue
             try:
                 ctx = await static_backend.resolve_context(value)
                 agent_contexts[value] = ctx
-            except Exception:
-                logger.warning(f'Could not retrieve agent context for {value!r} — proceeding without it')
-    except Exception:
-        logger.warning('Could not resolve backend for agent context retrieval — proceeding without context')
+            except Exception as exc:
+                logger.warning(f'Could not retrieve agent context for {value!r}: {exc} — proceeding without it')
+    except Exception as exc:
+        logger.warning(f'Could not resolve backend for agent context retrieval: {exc} — proceeding without context')
 
     # Pull agent context from AgentTarget objects that expose it.
     for at in resolved_agent_targets:

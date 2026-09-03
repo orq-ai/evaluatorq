@@ -1,6 +1,6 @@
 # Targets: the system under test
 
-A **target** is the thing evaluatorq attacks or converses with. `red_team()` and `simulate()` both take one, and everything else — attack generation, judging, reports — is identical whichever kind you pick.
+A **target** is the thing evaluatorq attacks or converses with. `red_team()` and `simulate()` both take one, and everything else — attack generation, judging, reports — is identical whichever kind you pick. `evaluatorq()` has no target: an evaluation calls whatever your `@job` calls.
 
 There are two ways to name a target:
 
@@ -21,6 +21,21 @@ The CLI only accepts the string form — an object target is constructed in Pyth
 | Your own `AgentTarget` subclass | Anything else — an HTTP endpoint, a local pipeline, a bespoke tool loop | Whatever your `get_agent_context()` returns |
 
 Context discovery matters more than it looks. Attack strategies are selected and written against the target's declared tools, memory and system prompt: a target that reports no tools never gets a tool-misuse attack, because those strategies are gated on `requires_tools=True`. See [Writing your own target](#writing-your-own-target) below.
+
+## Orq-hosted: agents and deployments
+
+If the thing under test already runs on Orq, you do not write a target class. How you name it depends on which entry point you are using:
+
+| You want to | Use |
+|---|---|
+| Red-team or simulate a hosted **agent** | `target="agent:<key>"` — the platform supplies tools, memory stores and knowledge bases to the attack planner |
+| Red-team or simulate a **deployment** (prompt + model) | `target="deployment:<key>"`. Red-team runs need `mode="static"`; the adaptive pipelines need a conversational target and refuse a deployment with an error |
+| Call a deployment from an `evaluatorq()` **job** | `invoke()` or `deployment()` inside your `@job` — see [Evaluation Reference › Calling an Orq deployment from a job](../evaluation-reference.md#calling-an-orq-deployment-from-a-job) |
+| Pin the exact call parameters instead of discovering them | [`OrqResponsesTarget`](#orqresponsestarget) |
+
+Both string forms are parsed the same way in Python and on the CLI (`eq redteam run --target agent:my-key`), and the `mode="static"` restriction on deployments applies to both — on the CLI it is `--mode static`.
+
+The first three need `ORQ_API_KEY` in the environment — evaluatorq never calls `load_dotenv()` for you, so see [Configuration](../configuration.md). `OrqResponsesTarget` is the exception: it defaults to `require_orq=False` and falls back to `OPENAI_API_KEY`, so it runs without an Orq account until you pass `require_orq=True` or a `model="agent/<key>"`.
 
 ## The quick path: `OpenAIModelTarget`
 
@@ -79,7 +94,7 @@ target = OrqResponsesTarget(
 
 async def main():
     report = await red_team(target=target, mode="dynamic", categories=["LLM01"])
-    print(report.summary.pass_rate)
+    print(report.summary.resistance_rate)
 
 
 asyncio.run(main())

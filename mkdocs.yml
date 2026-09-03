@@ -149,10 +149,11 @@ plugins:
           - evaluator-template-variables.md: Reference for pointwise and pairwise jury template variables.
           - dashboard.md: Browse red team and simulation reports in a local web dashboard.
         Setup:
+          - installation.md: Installing evaluatorq and its extras.
+          - components.md: The four components and which one answers your question.
           - configuration.md: Configuration and environment variables.
           - tuning.md: Timeouts, retries, reasoning effort, and provider options.
           - tracing.md: OpenTelemetry tracing.
-          - orq-deployment.md: Running against Orq deployments.
         API reference:
           # NOTE: the plugin markdownifies rendered HTML, which flattens mkdocstrings'
           # param-type column. The API index/links are still useful to an agent; the
@@ -179,6 +180,7 @@ plugins:
       redirect_maps:
         guides/agent-simulation-openai.md: guides/agent-simulation.md
         guides/red-teaming-openai.md: guides/red-teaming.md
+        orq-deployment.md: guides/targets.md
   - git-revision-date-localized:
       enable_creation_date: true
       type: timeago
@@ -254,10 +256,11 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Setup:
+      - Installation: installation.md
+      - Components: components.md
       - Configuration: configuration.md
       - Tuning: tuning.md
       - Tracing: tracing.md
-      - Orq Deployment: orq-deployment.md
   - Guides:
       - Get Started: guides/getting-started.md
       - Evaluation Reference: evaluation-reference.md

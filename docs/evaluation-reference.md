@@ -99,6 +99,38 @@ Emit `error` on every path, `None` on success: an omitted key and a clean run ar
 
 This is the raw-dict job contract. `@job()` wraps a function's return value into `{"name", "output"}`, so an `error` key returned from a decorated function lands *inside* `output`, where a judge reads it as the target's failure rather than the runner reading it as the row's. A decorated job reports a row failure by raising.
 
+### Calling an Orq deployment from a job
+
+When the thing you are evaluating is an Orq deployment, call it from inside the job. `evaluatorq.deployment` wraps the Orq SDK in two async functions: `deployment()` returns a `DeploymentResponse` carrying both `content` (the extracted text) and `raw` (the untouched SDK response), and `invoke()` is the same call returning just the text. One `Orq` client is created lazily on first use and reused for the process.
+
+This needs `ORQ_API_KEY`. A missing key raises `ValueError` at the first call, naming the variable.
+
+```python
+from evaluatorq import DataPoint, job
+from evaluatorq.deployment import invoke
+
+
+@job("orq-deployment-job")
+async def my_job(data: DataPoint, _row: int) -> str:
+    return await invoke("my-deployment", inputs=data.inputs)
+```
+
+`inputs` fills the deployment's template variables, so a summarizer whose prompt references `{{text}}` takes `inputs={"text": "Long article..."}`.
+
+For a chat-style deployment, pass `messages` — and reach for `deployment()` when you want the raw response as well:
+
+```python
+from evaluatorq.deployment import deployment
+
+response = await deployment("chatbot", messages=[{"role": "user", "content": "Hello!"}])
+print(response.content)  # extracted text
+print(response.raw)      # full SDK response object
+```
+
+`thread={"id": "conversation-123"}` groups several calls into one conversation on the platform. `context` (routing attributes) and `metadata` are also accepted — see [`deployment()` in the API reference](reference/evaluatorq.md) for the full signature.
+
+To red-team or simulate that same deployment rather than evaluate it, name it as a target instead: [Targets › Orq-hosted](guides/targets.md#orq-hosted-agents-and-deployments).
+
 ## Data sources
 
 `data` accepts inline `DataPoint`s, an Orq dataset, or awaitables that resolve to `DataPoint`s — the last of which lets you stream rows in from a slow source without blocking the run:
@@ -115,7 +147,51 @@ await evaluatorq(
 )
 ```
 
-For Orq-hosted datasets, pass `data=DatasetIdInput(dataset_id="...")`. That path requires `ORQ_API_KEY` — see [Configuration](configuration.md).
+For Orq-hosted datasets, pass `data=DatasetIdInput(dataset_id="...")`. That path requires `ORQ_API_KEY` — see [Configuration](configuration.md). To score responses a past Orq experiment already produced, rather than generating new ones, pass `ExperimentInput` — see [Replaying a past experiment](#replaying-a-past-experiment).
+
+## Replaying a past experiment
+
+Sometimes you want to score responses that an Orq experiment already produced instead of generating fresh ones — to try new evaluators against a past run, or to re-grade without paying for another round of generation. That is what **no-inference mode** does: pass `inference=False` and evaluators run against the recorded response in each row rather than calling any job.
+
+The response source is chosen by the `data` argument to `evaluatorq()`:
+
+| `data` value | What it loads |
+|---|---|
+| `list[DataPoint]` | In-memory datapoints. |
+| `DatasetIdInput(dataset_id=...)` | Rows from an Orq dataset (you supply or generate the responses). |
+| `ExperimentInput(experiment_id=..., run_id=...)` | The recorded responses from a past experiment run. Requires `inference=False`. |
+
+`ExperimentInput` sits alongside `DatasetIdInput` in the `data` union — it is not a dataset, it is a completed experiment run whose outputs get replayed.
+
+### Finding the IDs
+
+Both IDs are read off the Orq UI:
+
+- **`experiment_id`** — the ID in the experiment URL, `/experiments/<experiment_id>`. The REST API calls experiments "spreadsheets", so the same ID appears in `/v2/spreadsheets/<id>` routes.
+- **`run_id`** — optional. Every execution of an experiment creates a new run (a "manifest" in the API). Open a run from the experiment's run history to read its ID from the URL. Omit it to replay the latest run.
+
+### Example
+
+```python
+from evaluatorq import ExperimentInput, evaluatorq
+
+
+async def run():
+    await evaluatorq(
+        "replay-past-experiment",
+        data=ExperimentInput(experiment_id="<experiment_id>"),  # latest run
+        evaluators=[my_evaluator],
+        inference=False,
+    )
+```
+
+Pin a specific run with `run_id`:
+
+```python
+data=ExperimentInput(experiment_id="<experiment_id>", run_id="<run_id>")
+```
+
+`ORQ_API_KEY` must be set — the recorded rows are fetched from the Orq API. When `inference=False`, `jobs` is optional and ignored. Any row whose recorded response is missing or blank fails loudly rather than being silently skipped.
 
 ## Built-in evaluators
 
@@ -251,5 +327,5 @@ for result in results:
 - **[Structured Results](structured-results.md)** — multi-dimensional scores.
 - **[Simulation in an evaluatorq Run](guides/simulation-in-evaluatorq.md)** — a multi-turn conversation as a job, scored by your own evaluators.
 - **[Framework Integrations](framework-integrations.md)** — LangChain, LangGraph, OpenResponses.
-- **[Orq Deployment](orq-deployment.md)** — call Orq deployments from a job.
+- **[Targets](guides/targets.md)** — red-team or simulate the same deployment instead of evaluating it.
 - **[Configuration](configuration.md)** — environment variables.

@@ -250,7 +250,7 @@ def run(
         typer.Option(
             '--target',
             '-t',
-            help='Target identifier(s), e.g. "agent:<key>" or "deployment:<key>". For OpenAI models use OpenAIModelTarget in the Python API. Repeatable.',
+            help='Target identifier(s), e.g. "agent:<key>" or "deployment:<key>" (deployments need --mode static). For OpenAI models use OpenAIModelTarget in the Python API. Repeatable.',
         ),
     ],
     name: Annotated[

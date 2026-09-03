@@ -17,7 +17,7 @@ Successfully installed evaluatorq
 `uv add` installs into the current project — run `uv init` first if you don't have one. Then run your code with `uv run my_eval.py` and the CLI with `uv run eq`, so the environment you installed into is the one that executes. Using pip instead, call it as `python -m pip install evaluatorq` to pin it to the same interpreter you run with.
 
 !!! tip "Optional extras"
-    `uv add "evaluatorq[redteam]"` adds adversarial red teaming · `uv add "evaluatorq[simulation]"` adds multi-turn agent simulation.
+    Red teaming and simulation run from this base install. The extras add what surrounds them — `uv add "evaluatorq[redteam]"` for attack datasets, `uv add "evaluatorq[dashboard]"` for the run browser. See [Installation](installation.md).
 
 ## What it does
 
