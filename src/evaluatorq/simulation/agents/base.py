@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, fields
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
+from evaluatorq.common.env_config import env_float, env_int
 from evaluatorq.common.llm_call import (
     execute_chat_completion,
     execute_response,
@@ -50,26 +51,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _env_float(name: str, default: float) -> float:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    try:
-        return float(raw)
-    except ValueError:
-        raise ValueError(f'Environment variable {name}={raw!r} must be a number') from None
-
-
-def _env_int(name: str, default: int) -> int:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        raise ValueError(f'Environment variable {name}={raw!r} must be an integer') from None
-
-
 # The three functions below resolve at CALL TIME, and are the process-global
 # fallback only: an explicitly set `LLMCallConfig` field always wins.
 
@@ -79,7 +60,7 @@ def _default_timeout_s() -> float:
     tailscale box under parallel load) can exceed the default; raise via
     EVALUATORQ_LLM_TIMEOUT_S, or per-agent via ``LLMCallConfig.timeout_ms``.
     """
-    return _env_float('EVALUATORQ_LLM_TIMEOUT_S', 60.0)
+    return env_float('EVALUATORQ_LLM_TIMEOUT_S', 60.0)
 
 
 def _default_max_tokens() -> int:
@@ -90,7 +71,7 @@ def _default_max_tokens() -> int:
     as "no text and no tool calls". Raise via EVALUATORQ_LLM_MAX_TOKENS, or
     per-agent via ``LLMCallConfig.max_tokens``.
     """
-    return _env_int('EVALUATORQ_LLM_MAX_TOKENS', DEFAULT_TARGET_MAX_TOKENS)
+    return env_int('EVALUATORQ_LLM_MAX_TOKENS', DEFAULT_TARGET_MAX_TOKENS)
 
 
 def _default_reasoning_effort() -> str | None:
