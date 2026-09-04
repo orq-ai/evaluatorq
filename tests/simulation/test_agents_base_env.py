@@ -1,38 +1,41 @@
-"""Tests for the env-var parsing helpers in agents/base.
+"""Tests for how agents/base resolves its numeric env overrides.
 
-A misconfigured numeric env var should fail with a message naming the offending
-variable, not a bare ``ValueError`` from ``int()``/``float()``.
+These now route through the shared ``common.env_config`` contract: unset falls back to the default,
+a valid value is used, and a MISCONFIGURED value warns and falls back to the default instead of
+raising. That non-fatal fallback is a deliberate behavior change from the old private readers, which
+raised a ``ValueError`` on a bad ``EVALUATORQ_LLM_TIMEOUT_S`` / ``EVALUATORQ_LLM_MAX_TOKENS``.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from evaluatorq.simulation.agents.base import _env_float, _env_int
+from evaluatorq.contracts import DEFAULT_TARGET_MAX_TOKENS
+from evaluatorq.simulation.agents.base import _default_max_tokens, _default_timeout_s
 
 
-def test_env_int_returns_default_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("EVALUATORQ_TEST_INT", raising=False)
-    assert _env_int("EVALUATORQ_TEST_INT", 8192) == 8192
+def test_max_tokens_unset_uses_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("EVALUATORQ_LLM_MAX_TOKENS", raising=False)
+    assert _default_max_tokens() == DEFAULT_TARGET_MAX_TOKENS
 
 
-def test_env_int_parses_valid(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("EVALUATORQ_TEST_INT", "4096")
-    assert _env_int("EVALUATORQ_TEST_INT", 8192) == 4096
+def test_max_tokens_parses_valid(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EVALUATORQ_LLM_MAX_TOKENS", "4096")
+    assert _default_max_tokens() == 4096
 
 
-def test_env_int_raises_named_error_on_garbage(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("EVALUATORQ_TEST_INT", "abc")
-    with pytest.raises(ValueError, match="EVALUATORQ_TEST_INT"):
-        _env_int("EVALUATORQ_TEST_INT", 8192)
+def test_max_tokens_garbage_warns_and_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EVALUATORQ_LLM_MAX_TOKENS", "abc")
+    assert _default_max_tokens() == DEFAULT_TARGET_MAX_TOKENS  # no longer raises
 
 
-def test_env_float_returns_default_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("EVALUATORQ_TEST_FLOAT", raising=False)
-    assert _env_float("EVALUATORQ_TEST_FLOAT", 60.0) == 60.0
+def test_timeout_unset_and_valid(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("EVALUATORQ_LLM_TIMEOUT_S", raising=False)
+    assert _default_timeout_s() == 60.0
+    monkeypatch.setenv("EVALUATORQ_LLM_TIMEOUT_S", "30.5")
+    assert _default_timeout_s() == 30.5
 
 
-def test_env_float_raises_named_error_on_garbage(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("EVALUATORQ_TEST_FLOAT", "60s")
-    with pytest.raises(ValueError, match="EVALUATORQ_TEST_FLOAT"):
-        _env_float("EVALUATORQ_TEST_FLOAT", 60.0)
+def test_timeout_garbage_warns_and_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EVALUATORQ_LLM_TIMEOUT_S", "60s")
+    assert _default_timeout_s() == 60.0  # no longer raises

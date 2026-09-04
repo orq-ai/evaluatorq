@@ -41,6 +41,8 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from evaluatorq.common.env_config import env_bool, env_int
+
 if TYPE_CHECKING:
     from opentelemetry.trace import Tracer
 
@@ -51,37 +53,9 @@ _is_initialized = False
 _initialization_attempted = False
 
 
-def _env_int(name: str, default: int) -> int:
-    """Read a positive int from the environment, falling back to *default*.
-
-    A set-but-invalid value (empty, non-integer or non-positive) logs a WARNING
-    so a misconfigured tuning knob is actionable instead of silently ignored.
-    An empty value counts as set-but-invalid: in a CI ``env:`` block an
-    unresolved ``${{ vars.X }}`` expands to the empty string, which would
-    otherwise fall back to the default with no signal.
-    """
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    raw = raw.strip()
-    if not raw:
-        logger.warning('{} is set but empty; using default {}.', name, default)
-        return default
-    try:
-        value = int(raw)
-    except ValueError:
-        logger.warning('{} is not an integer ({!r}); using default {}.', name, raw, default)
-        return default
-    if value <= 0:
-        logger.warning('{} must be positive (got {}); using default {}.', name, value, default)
-        return default
-    return value
-
-
 def _is_tracing_explicitly_disabled() -> bool:
     """Check if tracing is explicitly disabled via ORQ_DISABLE_TRACING."""
-    disable_value = os.environ.get('ORQ_DISABLE_TRACING', '')
-    return disable_value in ('1', 'true')
+    return env_bool('ORQ_DISABLE_TRACING', default=False)
 
 
 def is_tracing_enabled() -> bool:
@@ -219,8 +193,8 @@ async def init_tracing_if_needed() -> bool:  # noqa: RUF029
         # Use BatchSpanProcessor to export spans asynchronously in batches.
         # Env-tunable because a long-lived process never tears the provider down,
         # so one queue absorbs every run and the SDK's 2048 default overflows.
-        max_queue_size = _env_int('ORQ_OTEL_MAX_QUEUE_SIZE', 4096)
-        requested_batch_size = _env_int('ORQ_OTEL_MAX_BATCH_SIZE', 512)
+        max_queue_size = env_int('ORQ_OTEL_MAX_QUEUE_SIZE', 4096, min_value=1)
+        requested_batch_size = env_int('ORQ_OTEL_MAX_BATCH_SIZE', 512, min_value=1)
         batch_size = min(requested_batch_size, max_queue_size)
         if batch_size != requested_batch_size:
             logger.warning(
@@ -233,7 +207,7 @@ async def init_tracing_if_needed() -> bool:  # noqa: RUF029
         span_processor = BatchSpanProcessor(
             exporter,
             max_queue_size=max_queue_size,
-            schedule_delay_millis=_env_int('ORQ_OTEL_SCHEDULE_DELAY_MS', 5000),
+            schedule_delay_millis=env_int('ORQ_OTEL_SCHEDULE_DELAY_MS', 5000, min_value=1),
             max_export_batch_size=batch_size,
         )
 
@@ -286,7 +260,7 @@ async def flush_tracing() -> None:
     if _sdk is None:
         return
     provider = _sdk  # TracerProvider
-    timeout_ms = _env_int('ORQ_OTEL_FLUSH_TIMEOUT_MS', 5000)
+    timeout_ms = env_int('ORQ_OTEL_FLUSH_TIMEOUT_MS', 5000, min_value=1)
     timed_out = 'OTEL span flush timed out after {}ms; some spans may not have been exported.'
     try:
         ok = await asyncio.wait_for(
