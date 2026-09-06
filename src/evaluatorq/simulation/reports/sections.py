@@ -417,6 +417,11 @@ def _build_evaluator_scores_section(results: list[SimulationResult]) -> ReportSe
     ran ten times and died eight. ``dropped`` carries that missing count, and an
     evaluator whose every run failed still gets a row — with ``None`` statistics
     rather than a fabricated ``0.00``.
+
+    ``dropped`` counts each result once per evaluator name in
+    ``evaluator_errors``, symmetric with how ``evaluator_scores`` holds one
+    value per result. ``first_error`` keeps the first reason seen, so the row's
+    caption names the failure that started the streak.
     """
     by_evaluator: dict[str, list[float]] = defaultdict(list)
     dropped: Counter[str] = Counter()

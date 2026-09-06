@@ -2540,6 +2540,11 @@ async def _notify_evaluator_complete(
     ``EvaluatorScore``, so a consumer reads the explanation off ``score.score``
     and the failure off ``score.error`` instead of a bare float that a dead
     evaluator could never produce.
+
+    Each ``(SimulationResult, EvaluatorScore)`` occurrence produces one event,
+    even when multiple scores share an evaluator name. Thus two ``JobResult``
+    objects carrying the same evaluator name produce two events; the previous
+    dict-driven loop produced one.
     """
     from evaluatorq.common.async_utils import await_maybe
 
@@ -2596,9 +2601,24 @@ def _stamp_evaluator_scores(
                     errors_dict = sim_result.metadata.setdefault('evaluator_errors', {})
                     if isinstance(errors_dict, dict):
                         errors_dict[score.evaluator_name] = reason
+                    else:
+                        logger.warning(
+                            'Datapoint %r has evaluator_errors with unexpected type %s; '
+                            'cannot record evaluator %s failure',
+                            sim_result.metadata.get('datapoint_id', '<unknown>'),
+                            type(errors_dict).__name__,
+                            score.evaluator_name,
+                        )
                     continue
                 scores_dict = sim_result.metadata.setdefault('evaluator_scores', {})
                 if isinstance(scores_dict, dict):
                     scores_dict[score.evaluator_name] = value
+                else:
+                    logger.warning(
+                        'Datapoint %r has evaluator_scores with unexpected type %s; cannot record evaluator %s score',
+                        sim_result.metadata.get('datapoint_id', '<unknown>'),
+                        type(scores_dict).__name__,
+                        score.evaluator_name,
+                    )
         if evaluation_name:
             sim_result.metadata['evaluation_name'] = evaluation_name

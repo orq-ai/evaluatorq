@@ -504,9 +504,10 @@ def _render_evaluators(sections: list[ReportSection]) -> None:
             {
                 'Evaluator': r['evaluator'],
                 'Runs': r['runs'],
+                'Dropped': r.get('dropped', 0),
+                'Reason': r.get('first_error'),
                 # None means every run of this evaluator failed; leave the cell
                 # empty rather than rounding a score that was never produced.
-                'Dropped': r.get('dropped', 0),
                 'Mean': None if r['mean_score'] is None else round(r['mean_score'], 2),
                 'Min': None if r['min_score'] is None else round(r['min_score'], 2),
                 'Max': None if r['max_score'] is None else round(r['max_score'], 2),

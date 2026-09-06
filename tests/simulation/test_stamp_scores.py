@@ -131,6 +131,23 @@ def test_records_errored_evaluator_and_still_notifies_the_hook(caplog):
     assert hooks.seen == [('goal_achieved', '', 'judge died'), ('healthy_score', 0.5, None)]
 
 
+def test_warns_when_evaluator_errors_metadata_is_not_a_dict(caplog):
+    dp = DataPoint(inputs={'datapoint': {}})
+    sim = _sim_result()
+    sim.metadata['datapoint_id'] = 'dp-1'
+    sim.metadata['evaluator_errors'] = ['already broken']
+    eq_results = _eq_results(
+        dp,
+        [EvaluatorScore(evaluator_name='goal_achieved', score=EvaluationResult(value=''), error='judge died')],
+    )
+
+    with caplog.at_level('WARNING', logger='evaluatorq.simulation.api'):
+        _stamp_evaluator_scores(eq_results, {id(dp): sim}, 'my-run')
+
+    assert sim.metadata['evaluator_errors'] == ['already broken']
+    assert "Datapoint 'dp-1' has evaluator_errors with unexpected type list" in caplog.text
+
+
 def test_records_non_numeric_evaluator_score_without_error(caplog):
     dp = DataPoint(inputs={'datapoint': {}})
     sim = _sim_result()
