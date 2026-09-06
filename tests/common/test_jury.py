@@ -479,7 +479,8 @@ def test_attach_jury_raw_output_warns_when_an_error_payload_has_no_jury_to_ride(
     """The degraded branch announces itself: a dropped payload is a lost cause, not a no-op."""
     handler_id = logger.add(caplog.handler, format='{message}', level='WARNING')
     try:
-        assert attach_jury_raw_output({'value': True}, None, error_payload={'message': 'x'}) == {'value': True}
+        original: dict[str, object] = {'value': True}
+        assert attach_jury_raw_output(original, None, error_payload={'message': 'x'}) is original
     finally:
         logger.remove(handler_id)
     assert 'dropping the judge error payload' in caplog.text
