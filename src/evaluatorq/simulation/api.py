@@ -55,7 +55,7 @@ if TYPE_CHECKING:
         SimulationResult,
         SimulationRun,
     )
-    from evaluatorq.types import DataPoint, DataPointResult, Evaluator
+    from evaluatorq.types import DataPoint, DataPointResult, Evaluator, EvaluatorScore
 
     EmitDatapoints = Callable[[list[SimulationDatapoint]], None]
 
@@ -1127,8 +1127,9 @@ async def generate(
             ):
                 # Bracket generation with the same GENERATE stage hooks the
                 # generate_and_simulate path uses, so the standalone command
-                # isn't silent. Empty on_stage_end meta: the CLI prints its own
-                # "✓ Generated N datapoint(s)" line, so the count isn't doubled.
+                # isn't silent. The on_stage_end meta carries only the in-flight
+                # exception: the CLI prints its own "✓ Generated N datapoint(s)"
+                # line, so the count isn't doubled.
                 gen_hooks, _ = _compose_sim_hooks(
                     hooks,
                     save=False,
@@ -1151,7 +1152,11 @@ async def generate(
                         edge_case_percentage=edge_case_percentage,
                     )
                 finally:
-                    await await_maybe(gen_hooks.on_stage_end(SimStage.GENERATE, {}))
+                    # Thread the in-flight exception into the stage-end meta, as
+                    # generate_and_simulate does: without it a generation that
+                    # raised closes the stage exactly like one that succeeded.
+                    # None on the success path.
+                    await await_maybe(gen_hooks.on_stage_end(SimStage.GENERATE, {'error': sys.exc_info()[1]}))
                 # generate() has no further use for the client (unlike
                 # _generate_and_simulate_run, which keeps it open for the
                 # simulate stage), so close it here once generation is done.
@@ -1598,6 +1603,9 @@ async def _simulate_core(
         # Filled by evaluatorq() with the uploaded experiment's URL (if any) so we
         # can persist it on the SimulationRun and surface it in terminal/dashboard.
         experiment_url_out: list[str] = []
+        # One entry per evaluator score, errored ones included — the payload
+        # on_evaluator_complete is fired from once results are assembled.
+        evaluator_events: list[tuple[SimulationResult, EvaluatorScore]] = []
         await await_maybe(resolved_hooks.on_run_start(run_meta))
         try:
             results = await _simulate_via_evaluatorq(
@@ -1610,13 +1618,14 @@ async def _simulate_core(
                 hooks=resolved_hooks,
                 run_id=run_id,
                 experiment_url_out=experiment_url_out,
+                evaluator_events_out=evaluator_events,
             )
             # Fire on_evaluator_complete here — AFTER results is assigned and
             # OUTSIDE evaluatorq's per-scorer try/except — so an unguarded hook
             # raise propagates (per the contract) while on_run_complete in the
-            # finally still receives the real results, not []. Scores were stamped
-            # onto each result's metadata by _stamp_evaluator_scores.
-            await _notify_evaluator_complete(results, resolved_hooks)
+            # finally still receives the real results, not []. The events were
+            # collected by _stamp_evaluator_scores alongside the metadata stamp.
+            await _notify_evaluator_complete(evaluator_events, resolved_hooks)
         except SimulationDroppedError as dropped:
             # exit_on_failure aborted the run, but the rows that succeeded are real
             # results — hand them to on_run_complete (via the finally) instead of [].
@@ -2309,11 +2318,16 @@ async def _simulate_via_evaluatorq(
     hooks: SimulationHooks,
     run_id: str | None = None,
     experiment_url_out: list[str] | None = None,
+    evaluator_events_out: list[tuple[SimulationResult, EvaluatorScore]] | None = None,
 ) -> list[SimulationResult]:
     """Wrap simulation Datapoints as evaluatorq DataPoints and run.
 
     ``experiment_url_out``, when provided, is populated with the uploaded Orq
     experiment's URL (empty when the upload is skipped or fails).
+
+    ``evaluator_events_out``, when provided, is populated with one
+    ``(SimulationResult, EvaluatorScore)`` per evaluator score — including the
+    ones that errored — for the caller to fire ``on_evaluator_complete`` from.
     """
     from datetime import datetime, timezone
 
@@ -2419,7 +2433,7 @@ async def _simulate_via_evaluatorq(
     # and callers inspecting SimulationResult.metadata still find evaluator_scores.
     # on_evaluator_complete is fired by the caller (_simulate_core) from these
     # stamped scores, after results is assembled.
-    _stamp_evaluator_scores(eq_results, result_cache, evaluation_name)
+    _stamp_evaluator_scores(eq_results, result_cache, evaluation_name, events_out=evaluator_events_out)
 
     # Build the results from the successful rows BEFORE the missing-rows check,
     # so a SimulationDroppedError can still carry the partial results through to
@@ -2459,21 +2473,28 @@ async def _simulate_via_evaluatorq(
     return results
 
 
-async def _notify_evaluator_complete(results: list[SimulationResult], hooks: SimulationHooks) -> None:
-    """Send stamped evaluator scores through the real completion-hook seam."""
+async def _notify_evaluator_complete(
+    events: list[tuple[SimulationResult, EvaluatorScore]], hooks: SimulationHooks
+) -> None:
+    """Send every evaluator outcome through the real completion-hook seam.
+
+    Fires for failed and non-numeric scores too: the hook receives the whole
+    ``EvaluatorScore``, so a consumer reads the explanation off ``score.score``
+    and the failure off ``score.error`` instead of a bare float that a dead
+    evaluator could never produce.
+    """
     from evaluatorq.common.async_utils import await_maybe
 
-    for result in results:
-        datapoint_id = result.metadata.get('datapoint_id', '')
-        evaluator_scores = result.metadata.get('evaluator_scores') or {}
-        for evaluator_name, score in evaluator_scores.items():
-            await await_maybe(hooks.on_evaluator_complete(datapoint_id, evaluator_name, score, result))
+    for sim_result, score in events:
+        datapoint_id = sim_result.metadata.get('datapoint_id', '')
+        await await_maybe(hooks.on_evaluator_complete(datapoint_id, score.evaluator_name, score, sim_result))
 
 
 def _stamp_evaluator_scores(
     eq_results: list[DataPointResult],
     result_cache: dict[int, SimulationResult],
     evaluation_name: str,
+    events_out: list[tuple[SimulationResult, EvaluatorScore]] | None = None,
 ) -> None:
     """Walk the evaluatorq result and stamp each evaluator score onto the
     matching SimulationResult.metadata["evaluator_scores"].
@@ -2482,9 +2503,18 @@ def _stamp_evaluator_scores(
     DataPoint instance the job cached against. Error rows carry a placeholder
     DataPoint whose id won't match, so they're skipped.
 
-    ``on_evaluator_complete`` is NOT fired here — the caller (_simulate_core)
-    fires it from the stamped scores after ``results`` is assembled, so an
-    unguarded hook raise still leaves the real results for ``on_run_complete``.
+    ``metadata['evaluator_scores']`` stays numeric-only so its readers (the run
+    store, the report sections, the dashboard) keep working on floats. An
+    evaluator that errored or returned a non-numeric value is recorded next to
+    it in ``metadata['evaluator_errors']`` — evaluator name → the reason the
+    score was unusable — so the report can count a dead evaluator instead of
+    silently shrinking the denominator it averages over.
+
+    ``events_out``, when provided, collects ``(SimulationResult, EvaluatorScore)``
+    for EVERY score seen, usable or not, in evaluatorq order. The caller
+    (_simulate_core) fires ``on_evaluator_complete`` from it after ``results``
+    is assembled, so an unguarded hook raise still leaves the real results for
+    ``on_run_complete``.
     """
     for dp_result in eq_results:
         sim_result = result_cache.get(id(dp_result.data_point))
@@ -2492,19 +2522,25 @@ def _stamp_evaluator_scores(
             continue
         for job_result in dp_result.job_results:
             for score in job_result.evaluator_scores or []:
-                if (
-                    score.error is not None
-                    or isinstance(score.score.value, bool)
-                    or not isinstance(score.score.value, (int, float))
-                ):
+                if events_out is not None:
+                    events_out.append((sim_result, score))
+                value = score.score.value
+                numeric = isinstance(value, (int, float)) and not isinstance(value, bool)
+                reason = (
+                    score.error if score.error is not None else (None if numeric else f'non-numeric value {value!r}')
+                )
+                if reason is not None:
                     logger.warning(
-                        'Skipping evaluator %s score: %s',
+                        'Evaluator %s produced no usable score (%s); recorded under evaluator_errors',
                         score.evaluator_name,
-                        score.error or f'non-numeric value {score.score.value!r}',
+                        reason,
                     )
+                    errors_dict = sim_result.metadata.setdefault('evaluator_errors', {})
+                    if isinstance(errors_dict, dict):
+                        errors_dict[score.evaluator_name] = reason
                     continue
                 scores_dict = sim_result.metadata.setdefault('evaluator_scores', {})
                 if isinstance(scores_dict, dict):
-                    scores_dict[score.evaluator_name] = score.score.value
+                    scores_dict[score.evaluator_name] = value
         if evaluation_name:
             sim_result.metadata['evaluation_name'] = evaluation_name

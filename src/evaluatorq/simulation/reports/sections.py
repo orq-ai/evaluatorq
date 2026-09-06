@@ -11,7 +11,7 @@ Section kinds:
     - ``scenario_breakdown``    per-scenario success rates and judge stats
     - ``judge_verdicts``        terminated-by reasons, rules broken, top reasons
     - ``turn_metrics``          turn-count distribution + average per-turn scores
-    - ``evaluator_scores``      mean per-evaluator scores when present
+    - ``evaluator_scores``      mean per-evaluator scores, plus dropped/errored counts
     - ``token_usage``           prompt/completion/total + per-conversation summary
     - ``individual_results``    one entry per ``SimulationResult`` (transcript)
     - ``errors``                count by error type for error-terminated runs
@@ -60,6 +60,14 @@ def _evaluator_scores(result: SimulationResult) -> dict[str, float]:
     if not isinstance(raw, dict):
         return {}
     return {str(k): float(v) for k, v in raw.items() if isinstance(v, int | float)}
+
+
+def _evaluator_errors(result: SimulationResult) -> dict[str, str]:
+    """Evaluator name → why its score was unusable, as stamped by ``_stamp_evaluator_scores``."""
+    raw = result.metadata.get('evaluator_errors')
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): str(v) for k, v in raw.items()}
 
 
 def _error_message(result: SimulationResult) -> str | None:
@@ -402,23 +410,37 @@ def _build_turn_metrics_section(results: list[SimulationResult]) -> ReportSectio
 
 
 def _build_evaluator_scores_section(results: list[SimulationResult]) -> ReportSection | None:
+    """Per-evaluator score statistics, with the scores that never arrived counted.
+
+    ``runs`` counts only the numeric scores the statistics are computed over, so
+    on its own it cannot distinguish an evaluator that ran twice from one that
+    ran ten times and died eight. ``dropped`` carries that missing count, and an
+    evaluator whose every run failed still gets a row — with ``None`` statistics
+    rather than a fabricated ``0.00``.
+    """
     by_evaluator: dict[str, list[float]] = defaultdict(list)
+    dropped: Counter[str] = Counter()
+    reasons: dict[str, str] = {}
     for r in results:
         for name, score in _evaluator_scores(r).items():
             by_evaluator[name].append(score)
-    if not by_evaluator:
+        for name, reason in _evaluator_errors(r).items():
+            dropped[name] += 1
+            reasons.setdefault(name, reason)
+    if not by_evaluator and not dropped:
         return None
-    rows = [
-        {
+    rows: list[dict[str, Any]] = []
+    for name in sorted(set(by_evaluator) | set(dropped)):
+        values = by_evaluator.get(name) or []
+        rows.append({
             'evaluator': name,
             'runs': len(values),
-            'mean_score': sum(values) / len(values),
-            'min_score': min(values),
-            'max_score': max(values),
-        }
-        for name, values in by_evaluator.items()
-    ]
-    rows.sort(key=operator.itemgetter('evaluator'))
+            'dropped': dropped.get(name, 0),
+            'mean_score': (sum(values) / len(values)) if values else None,
+            'min_score': min(values) if values else None,
+            'max_score': max(values) if values else None,
+            'first_error': reasons.get(name),
+        })
     return ReportSection(
         kind='evaluator_scores',
         title='Evaluator Scores',

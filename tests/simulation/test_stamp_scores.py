@@ -2,7 +2,9 @@
 
 The scorer no longer mutates SimulationResult.metadata mid-run; scores are
 stamped once from the final evaluatorq result. These tests lock in that the
-mirror still lands the same data, keyed by DataPoint identity.
+mirror still lands the same data, keyed by DataPoint identity, and that an
+evaluator that errored or returned a non-numeric value is *recorded* under
+``metadata['evaluator_errors']`` rather than dropped on the floor.
 """
 
 from __future__ import annotations
@@ -83,104 +85,94 @@ def test_skips_rows_with_no_cached_result():
     _stamp_evaluator_scores(eq_results, {}, '')
 
 
-def test_skips_errored_evaluator_score_and_does_not_notify_callback(caplog):
-    dp = DataPoint(inputs={'datapoint': {}})
-    sim = _sim_result()
-    cache = {id(dp): sim}
-    eq_results = [
+def _eq_results(dp: DataPoint, scores: list[EvaluatorScore]) -> list[DataPointResult]:
+    return [
         DataPointResult(
             data_point=dp,
-            job_results=[
-                JobResult(
-                    job_name='simulation',
-                    output=None,
-                    evaluator_scores=[
-                        EvaluatorScore(
-                            evaluator_name='goal_achieved',
-                            score=EvaluationResult(value=''),
-                            error='judge died',
-                        ),
-                        EvaluatorScore(
-                            evaluator_name='healthy_score',
-                            score=EvaluationResult(value=0.5),
-                        ),
-                    ],
-                )
-            ],
+            job_results=[JobResult(job_name='simulation', output=None, evaluator_scores=scores)],
         )
     ]
 
+
+def test_records_errored_evaluator_and_still_notifies_the_hook(caplog):
+    """An evaluator that died is recorded under evaluator_errors, kept out of the
+    numeric evaluator_scores, and still reaches on_evaluator_complete."""
+    dp = DataPoint(inputs={'datapoint': {}})
+    sim = _sim_result()
+    cache = {id(dp): sim}
+    eq_results = _eq_results(
+        dp,
+        [
+            EvaluatorScore(evaluator_name='goal_achieved', score=EvaluationResult(value=''), error='judge died'),
+            EvaluatorScore(evaluator_name='healthy_score', score=EvaluationResult(value=0.5)),
+        ],
+    )
+
+    events: list[tuple[SimulationResult, EvaluatorScore]] = []
     with caplog.at_level('WARNING', logger='evaluatorq.simulation.api'):
-        _stamp_evaluator_scores(eq_results, cache, 'my-run')
+        _stamp_evaluator_scores(eq_results, cache, 'my-run', events_out=events)
+
+    assert sim.metadata['evaluator_scores'] == {'healthy_score': 0.5}
+    assert sim.metadata['evaluator_errors'] == {'goal_achieved': 'judge died'}
+    assert 'Evaluator goal_achieved produced no usable score (judge died)' in caplog.text
 
     class RecordingHooks(DefaultHooks):
         def __init__(self) -> None:
-            self.callback_scores: list[tuple[str, float]] = []
+            self.seen: list[tuple[str, object, str | None]] = []
 
-        async def on_evaluator_complete(self, datapoint_id, name, score, result) -> None:
-            self.callback_scores.append((name, score))
+        async def on_evaluator_complete(self, datapoint_id, name, result, sim_result) -> None:
+            self.seen.append((name, result.score.value, result.error))
 
     hooks = RecordingHooks()
-    asyncio.run(_notify_evaluator_complete([sim], hooks))
+    asyncio.run(_notify_evaluator_complete(events, hooks))
 
-    assert hooks.callback_scores == [('healthy_score', 0.5)]
-    assert 'goal_achieved' not in sim.metadata.get('evaluator_scores', {})
-    assert 'Skipping evaluator goal_achieved score: judge died' in caplog.text
+    # The failed evaluator reaches the hook too — that is the whole point of
+    # handing it the EvaluatorScore instead of a bare float it cannot produce.
+    assert hooks.seen == [('goal_achieved', '', 'judge died'), ('healthy_score', 0.5, None)]
 
 
-def test_skips_non_numeric_evaluator_score_without_error(caplog):
+def test_records_non_numeric_evaluator_score_without_error(caplog):
     dp = DataPoint(inputs={'datapoint': {}})
     sim = _sim_result()
     cache = {id(dp): sim}
-    eq_results = [
-        DataPointResult(
-            data_point=dp,
-            job_results=[
-                JobResult(
-                    job_name='simulation',
-                    output=None,
-                    evaluator_scores=[
-                        EvaluatorScore(
-                            evaluator_name='criteria_met',
-                            score=EvaluationResult(value='not numeric'),
-                        )
-                    ],
-                )
-            ],
-        )
-    ]
+    eq_results = _eq_results(
+        dp, [EvaluatorScore(evaluator_name='criteria_met', score=EvaluationResult(value='not numeric'))]
+    )
 
     with caplog.at_level('WARNING', logger='evaluatorq.simulation.api'):
         _stamp_evaluator_scores(eq_results, cache, 'my-run')
 
     assert 'evaluator_scores' not in sim.metadata
-    assert "Skipping evaluator criteria_met score: non-numeric value 'not numeric'" in caplog.text
+    assert sim.metadata['evaluator_errors'] == {'criteria_met': "non-numeric value 'not numeric'"}
+    assert "Evaluator criteria_met produced no usable score (non-numeric value 'not numeric')" in caplog.text
 
 
-def test_skips_bool_evaluator_score_as_non_numeric(caplog):
+def test_records_bool_evaluator_score_as_non_numeric(caplog):
     dp = DataPoint(inputs={'datapoint': {}})
     sim = _sim_result()
     cache = {id(dp): sim}
-    eq_results = [
-        DataPointResult(
-            data_point=dp,
-            job_results=[
-                JobResult(
-                    job_name='simulation',
-                    output=None,
-                    evaluator_scores=[
-                        EvaluatorScore(
-                            evaluator_name='goal_achieved',
-                            score=EvaluationResult(value=True),
-                        )
-                    ],
-                )
-            ],
-        )
-    ]
+    eq_results = _eq_results(dp, [EvaluatorScore(evaluator_name='goal_achieved', score=EvaluationResult(value=True))])
 
     with caplog.at_level('WARNING', logger='evaluatorq.simulation.api'):
         _stamp_evaluator_scores(eq_results, cache, 'my-run')
 
     assert 'evaluator_scores' not in sim.metadata
-    assert 'Skipping evaluator goal_achieved score: non-numeric value True' in caplog.text
+    assert sim.metadata['evaluator_errors'] == {'goal_achieved': 'non-numeric value True'}
+    assert 'Evaluator goal_achieved produced no usable score (non-numeric value True)' in caplog.text
+
+
+def test_events_out_collects_every_score_in_order():
+    dp = DataPoint(inputs={'datapoint': {}})
+    sim = _sim_result()
+    eq_results = _eq_results(
+        dp,
+        [
+            EvaluatorScore(evaluator_name='a', score=EvaluationResult(value=1.0)),
+            EvaluatorScore(evaluator_name='b', score=EvaluationResult(value=''), error='boom'),
+        ],
+    )
+    events: list[tuple[SimulationResult, EvaluatorScore]] = []
+
+    _stamp_evaluator_scores(eq_results, {id(dp): sim}, '', events_out=events)
+
+    assert [(s is sim, score.evaluator_name) for s, score in events] == [(True, 'a'), (True, 'b')]

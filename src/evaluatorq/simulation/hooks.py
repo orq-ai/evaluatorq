@@ -39,6 +39,7 @@ if TYPE_CHECKING:
         SimulationResult,
         TurnMetrics,
     )
+    from evaluatorq.types import EvaluatorScore
 
 
 class SimStage(str, Enum):
@@ -112,6 +113,14 @@ class SimulationHooks(Protocol):
     per-datapoint hooks (``on_datapoint_complete``/``_error``,
     ``on_evaluator_complete``) are also unguarded.
 
+    ``on_evaluator_complete`` fires once per evaluator score, failed ones
+    included, and receives the whole ``EvaluatorScore``: ``result.score.value``
+    and ``result.score.explanation`` for the verdict, ``result.error`` for the
+    reason an evaluator produced nothing usable. It used to take a bare
+    ``score: float``, which a dead evaluator could not produce, so those events
+    never fired at all. Because the hook is unguarded, an implementation must
+    tolerate a non-numeric ``value`` rather than assume a float.
+
     ``on_confirm`` is the single pre-run gate (reuses the ``SimulationRunMeta``
     payload). It fires before the runner/target exist; returning ``False``
     aborts the run via ``SimulationCancelledError``. ``on_run_start`` fires only
@@ -137,7 +146,7 @@ class SimulationHooks(Protocol):
     def on_turn_complete(self, datapoint_id: str, metrics: TurnMetrics) -> MaybeAsync[None]: ...
     def on_datapoint_complete(self, result: SimulationResult) -> MaybeAsync[None]: ...
     def on_evaluator_complete(
-        self, datapoint_id: str, name: str, score: float, result: SimulationResult
+        self, datapoint_id: str, name: str, result: EvaluatorScore, sim_result: SimulationResult
     ) -> MaybeAsync[None]: ...
     def on_datapoint_error(self, datapoint: SimulationDatapoint, exception: BaseException) -> MaybeAsync[None]: ...
     def on_run_complete(self, results: list[SimulationResult]) -> MaybeAsync[None]: ...
@@ -172,6 +181,10 @@ class DefaultHooks:
         logger.info(f'[simulation] Stage start: {_stage_label(stage)}')
 
     async def on_stage_end(self, stage: SimStage | str, meta: dict[str, Any]) -> None:
+        error = meta.get('error')
+        if error is not None:
+            logger.warning(f'[simulation] Stage failed: {_stage_label(stage)} — {type(error).__name__}: {error}')
+            return
         logger.info(f'[simulation] Stage end: {_stage_label(stage)}')
 
     async def on_generate_inputs_ready(self, num_personas: int, num_scenarios: int) -> None:
@@ -189,8 +202,13 @@ class DefaultHooks:
             f'[simulation] SimulationDatapoint complete: {dp_id} terminated_by={result.terminated_by} goal={result.goal_achieved}'
         )
 
-    async def on_evaluator_complete(self, datapoint_id: str, name: str, score: float, result: SimulationResult) -> None:
-        logger.debug(f'[simulation] {datapoint_id} evaluator {name!r} -> {score}')
+    async def on_evaluator_complete(
+        self, datapoint_id: str, name: str, result: EvaluatorScore, sim_result: SimulationResult
+    ) -> None:
+        if result.error is not None:
+            logger.warning(f'[simulation] {datapoint_id} evaluator {name!r} failed: {result.error}')
+            return
+        logger.debug(f'[simulation] {datapoint_id} evaluator {name!r} -> {result.score.value!r}')
 
     async def on_datapoint_error(self, datapoint: SimulationDatapoint, exception: BaseException) -> None:
         logger.warning(
@@ -299,9 +317,20 @@ class RichHooks:
             self._gen_status.update('[cyan]Writing first messages…')
 
     async def on_stage_end(self, stage: SimStage | str, meta: dict[str, Any]) -> None:
+        from rich.markup import escape
+
         if stage == SimStage.GENERATE and self._gen_status is not None:
             self._gen_status.stop()
             self._gen_status = None
+        error = meta.get('error')
+        if error is not None:
+            # Without this a failed stage simply vanishes from the terminal: the
+            # rule printed by on_stage_start is never followed by anything.
+            self._console.print(
+                f'  [red]✗ {escape(_stage_label(stage))} failed: '
+                f'{escape(type(error).__name__)}: {escape(str(error))}[/red]'
+            )
+            return
         if stage == SimStage.GENERATE and 'num_datapoints' in meta:
             self._console.print(f'[dim] {meta["num_datapoints"]} datapoints generated[/dim]')
 
@@ -390,7 +419,9 @@ class RichHooks:
         if self._overall_task_id is not None:
             self._progress.update(self._overall_task_id, completed=self._completed)
 
-    async def on_evaluator_complete(self, datapoint_id: str, name: str, score: float, result: SimulationResult) -> None:
+    async def on_evaluator_complete(
+        self, datapoint_id: str, name: str, result: EvaluatorScore, sim_result: SimulationResult
+    ) -> None:
         # No per-event render.
         return
 
@@ -483,8 +514,10 @@ class CompositeSimulationHooks:
     async def on_datapoint_complete(self, result: SimulationResult) -> None:
         await fan_out(self._hooks, 'on_datapoint_complete', result)
 
-    async def on_evaluator_complete(self, datapoint_id: str, name: str, score: float, result: SimulationResult) -> None:
-        await fan_out(self._hooks, 'on_evaluator_complete', datapoint_id, name, score, result)
+    async def on_evaluator_complete(
+        self, datapoint_id: str, name: str, result: EvaluatorScore, sim_result: SimulationResult
+    ) -> None:
+        await fan_out(self._hooks, 'on_evaluator_complete', datapoint_id, name, result, sim_result)
 
     async def on_datapoint_error(self, datapoint: SimulationDatapoint, exception: BaseException) -> None:
         await fan_out(self._hooks, 'on_datapoint_error', datapoint, exception)
@@ -531,7 +564,9 @@ class ManifestStageHooks:
     async def on_datapoint_complete(self, result: SimulationResult) -> None:
         return None
 
-    async def on_evaluator_complete(self, datapoint_id: str, name: str, score: float, result: SimulationResult) -> None:
+    async def on_evaluator_complete(
+        self, datapoint_id: str, name: str, result: EvaluatorScore, sim_result: SimulationResult
+    ) -> None:
         return None
 
     async def on_datapoint_error(self, datapoint: SimulationDatapoint, exception: BaseException) -> None:

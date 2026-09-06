@@ -253,6 +253,23 @@ def test_export_markdown_includes_header_and_summary():
     assert '50%' in md
 
 
+def test_dead_evaluator_is_visible_in_markdown_and_html():
+    """An evaluator whose every run errored renders as a dropped count and a dash,
+    never as a 0.00 mean."""
+    result = _make_result()
+    result.metadata['evaluator_scores'] = {'goal_achieved': 1.0}
+    result.metadata['evaluator_errors'] = {'criteria_met': 'judge died'}
+
+    md = export_markdown([result], target='demo-agent')
+    assert '| Evaluator | Runs | Dropped | Mean | Min | Max |' in md
+    assert '| criteria_met | 0 | 1 | — | — | — |' in md
+    assert '`criteria_met`: 1 score(s) dropped — judge died' in md
+
+    html = export_html([result], target='demo-agent')
+    assert '<th>Dropped</th>' in html
+    assert 'judge died' in html
+
+
 def test_export_markdown_handles_empty_results():
     md = export_markdown([], target='nothing')
     assert 'Agent Simulation Report' in md

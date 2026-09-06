@@ -510,14 +510,22 @@ def _render_evaluator_scores_html(section: ReportSection) -> str:
         lower = _score_is_lower_better(raw)
         arrow = '▼' if lower else '▲'
         hint = 'lower is better' if lower else 'higher is better'
+        dropped = r.get('dropped', 0)
+        dropped_cell = str(dropped)
+        if dropped and r.get('first_error'):
+            dropped_cell = f'<span title="{_esc(str(r["first_error"]))}">{dropped}</span>'
+        # None statistics mean every run of this evaluator failed — render a dash
+        # rather than a chip, so a dead evaluator cannot read as a 0.00 score.
+        mean = r['mean_score']
         table_rows.append([
             f'{_esc(_pretty_evaluator(raw))} <span class="dir" title="{_esc(raw)} · {hint}">{arrow}</span>',
             str(r['runs']),
-            _score_chip(r['mean_score'], lower_is_better=lower),
-            f'{r["min_score"]:.2f}',
-            f'{r["max_score"]:.2f}',
+            dropped_cell,
+            '—' if mean is None else _score_chip(mean, lower_is_better=lower),
+            '—' if r['min_score'] is None else f'{r["min_score"]:.2f}',
+            '—' if r['max_score'] is None else f'{r["max_score"]:.2f}',
         ])
-    table = _html_table(['Evaluator', 'Runs', 'Mean', 'Min', 'Max'], table_rows)
+    table = _html_table(['Evaluator', 'Runs', 'Dropped', 'Mean', 'Min', 'Max'], table_rows)
     legend = (
         '<p class="score-legend">'
         '<span class="dir">▲</span> higher is better &nbsp;·&nbsp; '
