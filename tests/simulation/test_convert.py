@@ -1,5 +1,6 @@
 """Tests for SimulationResult → OpenResponses conversion."""
 
+import json
 from typing import Any
 
 import pytest
@@ -16,6 +17,7 @@ from evaluatorq.openresponses.convert_models import (
 )
 from evaluatorq.simulation.convert import to_open_responses
 from evaluatorq.simulation.types import (
+    CriteriaMeta,
     Message,
     SimulationResult,
     TerminatedBy,
@@ -101,7 +103,24 @@ class TestToOpenResponses:
         assert response["usage"]["total_tokens"] == 150
 
     def test_metadata(self):
-        result = _make_result(criteria_results={"a": True})
+        result = _make_result(
+            criteria_results={"a": True},
+            criteria_verified=True,
+            metadata={
+                "criteria_meta": [
+                    {
+                        "id": "a",
+                        "description": "greets the user",
+                        "type": "must_happen",
+                        "passed": True,
+                        "audited": True,
+                    }
+                ],
+                "criteria_errors": ["criteria_meta entry is invalid: 'nope'"],
+                "scorer_errors": {"criteria_met": "RuntimeError('boom')"},
+                "datapoint_id": "dp-1",
+            },
+        )
         response = to_open_responses(result)
 
         meta = response["metadata"]
@@ -109,6 +128,73 @@ class TestToOpenResponses:
         assert meta["goal_achieved"] is True
         assert meta["goal_completion_score"] == 1.0
         assert meta["criteria_results"] == {"a": True}
+        assert meta["criteria_verified"] is True
+        assert meta["criteria_meta"] == [
+            {
+                "id": "a",
+                "description": "greets the user",
+                "type": "must_happen",
+                "passed": True,
+                "audited": True,
+            }
+        ]
+        assert meta["criteria_errors"] == ["criteria_meta entry is invalid: 'nope'"]
+        assert meta["scorer_errors"] == {"criteria_met": "RuntimeError('boom')"}
+        assert meta["datapoint_id"] == "dp-1"
+
+    def test_metadata_carries_unverified_flag(self):
+        """The lossy dict never ships without its warning label: criteria_verified=False
+        means criteria_results is unaudited and must read as unknown, not met."""
+        result = _make_result(criteria_results={"a": True}, criteria_verified=False)
+        response = to_open_responses(result)
+
+        meta = response["metadata"]
+        assert meta["criteria_results"] == {"a": True}
+        assert meta["criteria_verified"] is False
+
+    def test_metadata_keys_present_when_empty(self):
+        """An omitted key reads as a clean run, so every key is emitted with None."""
+        result = _make_result()
+        meta = to_open_responses(result)["metadata"]
+
+        for key in (
+            "criteria_verified",
+            "criteria_meta",
+            "criteria_errors",
+            "scorer_errors",
+            "datapoint_id",
+        ):
+            assert key in meta, f"{key} must be published even when the run has none"
+            assert meta[key] is None
+
+    def test_metadata_serialises_pydantic_values(self):
+        """metadata is free-form; a pydantic value in it must land as JSON."""
+        result = _make_result(
+            metadata={
+                "criteria_meta": [
+                    CriteriaMeta(
+                        id="a",
+                        description="greets the user",
+                        type="must_happen",
+                        passed=False,
+                        audited=False,
+                    )
+                ]
+            }
+        )
+        meta = to_open_responses(result)["metadata"]
+
+        assert meta["criteria_meta"] == [
+            {
+                "id": "a",
+                "description": "greets the user",
+                "type": "must_happen",
+                "passed": False,
+                "audited": False,
+                "evidence": None,
+            }
+        ]
+        json.dumps(meta)
 
     def test_model_parameter(self):
         result = _make_result()

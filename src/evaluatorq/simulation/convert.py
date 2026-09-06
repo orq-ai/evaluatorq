@@ -6,6 +6,8 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from pydantic import BaseModel
+
 from evaluatorq.contracts import content_to_text
 from evaluatorq.openresponses.convert_models import (
     FunctionCall,
@@ -37,6 +39,22 @@ def _generate_item_id(prefix: str) -> str:
     return f'{prefix}_{uuid.uuid4().hex[:24]}'
 
 
+def _json_safe(value: Any) -> Any:
+    """Serialise pydantic values inside a metadata blob so the payload stays JSON-safe.
+
+    ``SimulationResult.metadata`` is a free-form dict: most producers already store
+    plain JSON there, but a caller can hand it a pydantic model. Non-model values
+    pass through untouched, so ``None`` stays ``None``.
+    """
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode='json')
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    return value
+
+
 def to_open_responses(
     result: SimulationResult,
     model: str = 'simulation',
@@ -51,6 +69,10 @@ def to_open_responses(
     - token_usage                     -> Usage
     - terminated_by                   -> status
     - goal_achieved, rules_broken, criteria_results, turn_metrics -> metadata
+
+    ``criteria_results`` never travels alone: ``criteria_verified``,
+    ``criteria_meta``, ``criteria_errors``, ``scorer_errors`` and ``datapoint_id``
+    are always present in the metadata block, ``None`` when the run has none.
     """
     now = int(time.time())
 
@@ -136,6 +158,15 @@ def to_open_responses(
         'reason': result.reason,
         'turn_count': result.turn_count,
         'rules_broken': result.rules_broken,
+        # criteria_results is the lossy dict; criteria_verified is its warning label
+        # ("False means the whole block is unaudited: treat criteria_results as unknown,
+        # not met"), and criteria_meta is the only place per-criterion `audited` survives.
+        # All three are emitted unconditionally — a missing key reads as a clean run.
+        'criteria_verified': result.criteria_verified,
+        'criteria_meta': _json_safe(result.metadata.get('criteria_meta')),
+        'criteria_errors': _json_safe(result.metadata.get('criteria_errors')),
+        'scorer_errors': _json_safe(result.metadata.get('scorer_errors')),
+        'datapoint_id': _json_safe(result.metadata.get('datapoint_id')),
     }
     if result.criteria_results:
         metadata['criteria_results'] = result.criteria_results
