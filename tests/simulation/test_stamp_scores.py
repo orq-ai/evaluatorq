@@ -156,12 +156,14 @@ def test_records_non_numeric_evaluator_score_without_error(caplog):
         dp, [EvaluatorScore(evaluator_name='criteria_met', score=EvaluationResult(value='not numeric'))]
     )
 
+    events = []
     with caplog.at_level('WARNING', logger='evaluatorq.simulation.api'):
-        _stamp_evaluator_scores(eq_results, cache, 'my-run')
+        _stamp_evaluator_scores(eq_results, cache, 'my-run', events_out=events)
 
     assert 'evaluator_scores' not in sim.metadata
     assert sim.metadata['evaluator_errors'] == {'criteria_met': "non-numeric value 'not numeric'"}
     assert "Evaluator criteria_met produced no usable score (non-numeric value 'not numeric')" in caplog.text
+    assert events[0][1].error == "non-numeric value 'not numeric'"
 
 
 def test_records_bool_evaluator_score_as_non_numeric(caplog):

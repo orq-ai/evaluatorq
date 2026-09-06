@@ -697,6 +697,34 @@ async def test_on_run_complete_fires_when_scoring_raises(datapoint_factory):
 
 
 @pytest.mark.asyncio
+async def test_on_stage_end_fires_when_on_run_complete_raises(datapoint_factory):
+    class _CompleteBoom(_RunLevelRecorder):
+        def __init__(self) -> None:
+            super().__init__()
+            self.stage_end_error = None
+
+        def on_run_complete(self, results) -> None:
+            raise RuntimeError('run complete blew up')
+
+        def on_stage_end(self, stage, meta) -> None:
+            self.stage_end_error = meta['error']
+
+    hooks = _CompleteBoom()
+    with pytest.raises(RuntimeError, match='run complete blew up'):
+        await simulate(
+            datapoints=[datapoint_factory('dp-1')],
+            target=_ok_target,
+            user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+            judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+            max_turns=1,
+            evaluator_names=['goal_achieved'],
+            hooks=hooks,
+        )
+    assert isinstance(hooks.stage_end_error, RuntimeError)
+    assert str(hooks.stage_end_error) == 'run complete blew up'
+
+
+@pytest.mark.asyncio
 async def test_on_run_complete_gets_partial_results_when_a_row_is_dropped(datapoint_factory, monkeypatch):
     """exit_on_failure aborts via SimulationDroppedError when a row produces no
     result, but the rows that *did* succeed must still reach on_run_complete —
@@ -726,7 +754,15 @@ async def test_on_run_complete_gets_partial_results_when_a_row_is_dropped(datapo
 
     monkeypatch.setattr(SimulationRunner, 'run', fake_run)
 
-    hooks = _RunLevelRecorder()
+    class _EvaluatorRecorder(_RunLevelRecorder):
+        def __init__(self) -> None:
+            super().__init__()
+            self.evaluator_events = []
+
+        def on_evaluator_complete(self, datapoint_id, name, score, result) -> None:
+            self.evaluator_events.append(datapoint_id)
+
+    hooks = _EvaluatorRecorder()
     with pytest.raises(SimulationDroppedError):
         await simulate(
             datapoints=[datapoint_factory('dp-good'), datapoint_factory('dp-bad')],
@@ -740,6 +776,7 @@ async def test_on_run_complete_gets_partial_results_when_a_row_is_dropped(datapo
     assert hooks.completed_with is not None  # terminal fired despite the drop
     assert len(hooks.completed_with) == 1  # the successful row, not []
     assert hooks.completed_with[0].goal_achieved is True
+    assert hooks.evaluator_events == ['dp-good']
 
 
 @pytest.mark.asyncio

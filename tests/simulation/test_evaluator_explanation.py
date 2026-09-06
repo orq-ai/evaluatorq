@@ -231,6 +231,8 @@ async def test_criteria_met_raw_output_reports_invalid_entries() -> None:
     assert score.raw_output is not None
     assert len(score.raw_output['criteria']) == 1
     assert score.raw_output['invalid'] == [repr({'nonsense': True})]
+    assert score.raw_output['criteria_verified'] is False
+    assert score.raw_output['unverified_reason'] == 'criteria_meta_invalid=1'
 
 
 @pytest.mark.asyncio
