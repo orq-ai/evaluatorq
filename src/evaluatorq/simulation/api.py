@@ -1630,19 +1630,36 @@ async def _simulate_core(
             # exit_on_failure aborted the run, but the rows that succeeded are real
             # results — hand them to on_run_complete (via the finally) instead of [].
             results = dropped.partial_results
+            # The drop is raised after evaluator scores have been stamped, so the
+            # buffered callbacks still belong to this run and must be delivered
+            # before the drop propagates.
+            await _notify_evaluator_complete(evaluator_events, resolved_hooks)
             raise
         finally:
             # Truthful stage status (§4.4): on_stage_end always fires (RichHooks
             # render pairing) but reports the in-flight exception via
             # sys.exc_info()[1] — None on the success path (stage → 'completed'),
             # the live exception on failure (stage → 'error' in the manifest).
-            await await_maybe(resolved_hooks.on_run_complete(results))
-            await await_maybe(
-                resolved_hooks.on_stage_end(
-                    SimStage.SIMULATE,
-                    {'num_results': len(results), 'error': sys.exc_info()[1]},
+            stage_error = sys.exc_info()[1]
+            run_complete_error: BaseException | None = None
+            try:
+                await await_maybe(resolved_hooks.on_run_complete(results))
+            except BaseException as error:  # noqa: BLE001 - lifecycle hooks must pair even on cancellation
+                run_complete_error = error
+                stage_error = error
+            try:
+                await await_maybe(
+                    resolved_hooks.on_stage_end(
+                        SimStage.SIMULATE,
+                        {'num_results': len(results), 'error': stage_error},
+                    )
                 )
-            )
+            except BaseException:
+                if run_complete_error is None:
+                    raise
+                logger.exception('on_stage_end hook raised while preserving on_run_complete failure')
+            if run_complete_error is not None:
+                raise run_complete_error.with_traceback(run_complete_error.__traceback__)
 
         # Always build the run on the success path (an aborted run re-raised
         # above) so every caller — SDK and CLI alike — gets the full
@@ -2352,9 +2369,12 @@ def _sim_evaluation_raw_output(name: str, result: SimulationResult, value: objec
                 return None
 
         reason = unverified_reason(result)
+        if invalid:
+            invalid_reason = f'criteria_meta_invalid={len(invalid)}'
+            reason = f'{reason}; {invalid_reason}' if reason is not None else invalid_reason
         if 'criteria_results' in raw and reason is None:
             reason = 'criteria_meta missing (lossy dict)'
-        raw['criteria_verified'] = reason is None
+        raw['criteria_verified'] = not invalid and reason is None
         raw['unverified_reason'] = reason
         return raw
     if name == 'conversation_quality':
@@ -2563,7 +2583,7 @@ def _stamp_evaluator_scores(
     events_out: list[tuple[SimulationResult, EvaluatorScore]] | None = None,
 ) -> None:
     """Walk the evaluatorq result and stamp each evaluator score onto the
-    matching SimulationResult.metadata["evaluator_scores"].
+    matching SimulationResult.
 
     Matches by ``id(data_point)`` — on success evaluatorq returns the same
     DataPoint instance the job cached against. Error rows carry a placeholder
@@ -2575,6 +2595,10 @@ def _stamp_evaluator_scores(
     it in ``metadata['evaluator_errors']`` — evaluator name → the reason the
     score was unusable — so the report can count a dead evaluator instead of
     silently shrinking the denominator it averages over.
+
+    Structured evaluator output is retained in ``evaluator_details`` under the
+    evaluator name, while the numeric score remains in metadata for existing
+    report and dashboard readers.
 
     ``events_out``, when provided, collects ``(SimulationResult, EvaluatorScore)``
     for EVERY score seen, usable or not, in evaluatorq order. The caller
@@ -2588,13 +2612,17 @@ def _stamp_evaluator_scores(
             continue
         for job_result in dp_result.job_results:
             for score in job_result.evaluator_scores or []:
-                if events_out is not None:
-                    events_out.append((sim_result, score))
                 value = score.score.value
                 numeric = isinstance(value, (int, float)) and not isinstance(value, bool)
                 reason = (
                     score.error if score.error is not None else (None if numeric else f'non-numeric value {value!r}')
                 )
+                if reason is not None and score.error is None:
+                    score.error = reason
+                if score.score.raw_output is not None:
+                    sim_result.evaluator_details[score.evaluator_name] = score.score.raw_output
+                if events_out is not None:
+                    events_out.append((sim_result, score))
                 if reason is not None:
                     logger.warning(
                         'Evaluator %s produced no usable score (%s); recorded under evaluator_errors',

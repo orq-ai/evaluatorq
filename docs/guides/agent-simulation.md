@@ -394,9 +394,9 @@ The weights must sum to `1.0` — `SimulationScoringConfig` rejects any other su
 - `turn_efficiency` = `0.9` (4 turns: past the `<= 2` cliff, inside the `<= 4` one)
 - `conversation_quality` = `1.0 × 0.4 + 0.5 × 0.3 + 0.9 × 0.3 = 0.4 + 0.15 + 0.27 = 0.82`
 
-Read `score.breakdown` when you call `conversation_quality_scorer()` directly; it contains `components` with `goal_achieved=1.0`, `criteria_met=0.5`, and `turn_efficiency=0.9`, plus `weights` with `0.4`, `0.3`, and `0.3`. `raw_output` on the returned `EvaluationResult` exposes the same structure in JSON form.
+Read `score.breakdown` when you call `conversation_quality_scorer()` directly; it contains `components` with `goal_achieved=1.0`, `criteria_met=0.5`, and `turn_efficiency=0.9`, plus `weights` with `0.4`, `0.3`, and `0.3`. `raw_output` on the returned `EvaluationResult` exposes the same structure in JSON form, and a completed simulation exposes it as `result.evaluator_details['conversation_quality']`.
 
-The `criteria_met` evaluator's `raw_output` carries either per-criterion `CriteriaMeta` records under `criteria` with an `audited` label, optionally alongside `invalid`, or the lossy `criteria_results` dictionary when no metadata is available. Both shapes carry the run-level `criteria_verified` and `unverified_reason` fields; `unverified_reason` is `None` for a verified record set and names the missing audit for an unverified one. Those structured fields are local to the returned `EvaluationResult` and local result dumps; evaluatorq strips `raw_output` before the Orq experiment upload, and it is not attached to the evaluator span. The span and upload still carry the score, explanation, and pass flag.
+The `criteria_met` evaluator's `raw_output` carries either per-criterion `CriteriaMeta` records under `criteria` with an `audited` label, optionally alongside `invalid`, or the lossy `criteria_results` dictionary when no metadata is available. Both shapes carry the run-level `criteria_verified` and `unverified_reason` fields; `unverified_reason` is `None` for a verified record set and names the missing audit for an unverified one. A completed simulation also exposes this payload as `result.evaluator_details['criteria_met']`. Those structured fields are local to the returned `EvaluationResult`, the returned `SimulationResult`, and local result dumps; evaluatorq strips `raw_output` before the Orq experiment upload, and it is not attached to the evaluator span. The span and upload still carry the score, explanation, and pass flag.
 
 ### Changing the policy
 
@@ -448,7 +448,7 @@ class AuditHooks(DefaultHooks):
         print(f"{datapoint_id} {name}: {score.score.value!r}")
 ```
 
-`on_stage_end(stage, meta)` reports stage failures through `meta['error']`. The value is the live exception object, not a preformatted string; test `error is not None` and use `type(error).__name__` and `str(error)` when logging it. This applies to `generate()` as well as the other generation and simulation entry points. `DefaultHooks` logs a `WARNING`, and `RichHooks` prints a failed-stage line when the key is set.
+`on_stage_end(stage, meta)` reports stage failures through `meta['error']`. The value is the live exception object, not a preformatted string; test `error is not None` and use `type(error).__name__` and `str(error)` when logging it. This applies to `generate()`, `generate_and_simulate()`, and `simulate()`. The standalone persona and scenario generation helpers do not accept hooks or emit stage events. `DefaultHooks` logs a `WARNING`, and `RichHooks` prints a failed-stage line when the key is set.
 
 ## From existing traces and data
 
