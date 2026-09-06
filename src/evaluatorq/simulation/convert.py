@@ -6,6 +6,7 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
 from pydantic_core import to_jsonable_python
 
 from evaluatorq.contracts import content_to_text
@@ -39,14 +40,23 @@ def _generate_item_id(prefix: str) -> str:
     return f'{prefix}_{uuid.uuid4().hex[:24]}'
 
 
-def _jsonable(value: Any) -> Any:
+def _jsonable(value: Any, key: str) -> Any:
     """Serialise a free-form ``SimulationResult.metadata`` value for the trace payload.
 
-    ``serialize_unknown=True`` renders a type pydantic cannot serialise as its repr
-    instead of raising: a single exotic value in metadata must not take down the
-    conversion of an otherwise complete run.
+    A type pydantic cannot serialise degrades to its ``repr()`` rather than raising —
+    one exotic value must not take down the conversion of an otherwise complete run —
+    and the fallback logs a warning naming the key and the type, so the degradation is
+    not silent.
     """
-    return to_jsonable_python(value, serialize_unknown=True)
+
+    def _unserialisable(unknown: object) -> str:
+        logger.warning(
+            f'simulation metadata key {key!r} holds a {type(unknown).__name__} that cannot be '
+            f'serialised to JSON; publishing its repr() instead'
+        )
+        return repr(unknown)
+
+    return to_jsonable_python(value, fallback=_unserialisable)
 
 
 def to_open_responses(
@@ -169,10 +179,10 @@ def to_open_responses(
         # not met"), and criteria_meta is the only place per-criterion `audited` survives.
         # All three are emitted unconditionally — a missing key reads as a clean run.
         'criteria_verified': result.criteria_verified,
-        'criteria_meta': _jsonable(result.metadata.get('criteria_meta')),
-        'criteria_errors': _jsonable(result.metadata.get('criteria_errors')),
-        'scorer_errors': _jsonable(result.metadata.get('scorer_errors')),
-        'datapoint_id': _jsonable(result.metadata.get('datapoint_id')),
+        'criteria_meta': _jsonable(result.metadata.get('criteria_meta'), 'criteria_meta'),
+        'criteria_errors': _jsonable(result.metadata.get('criteria_errors'), 'criteria_errors'),
+        'scorer_errors': _jsonable(result.metadata.get('scorer_errors'), 'scorer_errors'),
+        'datapoint_id': _jsonable(result.metadata.get('datapoint_id'), 'datapoint_id'),
     }
     # `is not None`, not truthiness: {} is a scenario with zero criteria, not an absent block.
     if result.criteria_results is not None:

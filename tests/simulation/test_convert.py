@@ -196,6 +196,25 @@ class TestToOpenResponses:
         ]
         json.dumps(meta)
 
+    def test_unserialisable_metadata_value_degrades_with_a_warning(self):
+        """A type pydantic cannot serialise must not abort the conversion, and the
+        degradation announces itself instead of silently becoming a repr string."""
+        from loguru import logger
+
+        result = _make_result(metadata={"scorer_errors": {"boom": object()}})
+
+        messages: list[str] = []
+        sink_id = logger.add(lambda m: messages.append(str(m)), level="WARNING")
+        try:
+            meta = to_open_responses(result)["metadata"]
+        finally:
+            logger.remove(sink_id)
+
+        assert isinstance(meta["scorer_errors"]["boom"], str)
+        assert meta["scorer_errors"]["boom"].startswith("<object object at")
+        json.dumps(meta)
+        assert any("scorer_errors" in m and "object" in m for m in messages), messages
+
     def test_model_parameter(self):
         result = _make_result()
         response = to_open_responses(result, model="gpt-4o")
