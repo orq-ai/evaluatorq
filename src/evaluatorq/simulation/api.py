@@ -2325,11 +2325,11 @@ def _sim_evaluation_raw_output(name: str, result: SimulationResult, value: objec
     local — `evaluatorq.send_results` strips ``raw_output`` at the upload boundary, and the evaluator
     span carries only value, explanation and pass.
 
-    ``criteria_met`` returns its per-criterion `CriteriaMeta` records — dumped in JSON mode, and only
-    for the branches where `_sim_evaluation_details` actually lists them. The two branches it calls
-    unknown (a run terminated before the judge audited anything, and one whose criteria were never
-    verified) return ``None`` here too: their stored records describe verdicts the judge never
-    reached, and publishing them beside ``pass=False`` would invite the reader to trust them.
+    ``criteria_met`` returns its per-criterion `CriteriaMeta` records — dumped in JSON mode — with an
+    ``audited`` label. Verified records are marked ``True``; records from an errored, timed-out or
+    unverified run are marked ``False`` with the reason. When only the lossy `criteria_results` dict
+    exists, that dict is published with its own unaudited reason. A scenario with no criteria at all
+    still returns ``None``.
 
     ``conversation_quality`` returns the component scores and weights carried on
     `ConversationQualityScore`. A user-supplied scorer registered under that name returns a plain
@@ -2342,17 +2342,35 @@ def _sim_evaluation_raw_output(name: str, result: SimulationResult, value: objec
     from evaluatorq.simulation.types import parse_criteria_meta
 
     if name == 'criteria_met':
-        # Mirrors `_sim_evaluation_details`' branch order — keep the two in step.
-        if result.terminated_by in UNEVALUATED_TERMINATIONS or result.criteria_verified is False:
-            return None
         # `parse_criteria_meta`, not `read_criteria_meta`: the latter logs and records the invalid
         # entries, which `_sim_evaluation_details` has already done for this same result.
         entries, invalid = parse_criteria_meta(result.metadata.get('criteria_meta'))
-        if not entries and not invalid:
-            return None
         raw: dict[str, Any] = {'criteria': [entry.model_dump(mode='json') for entry in entries]}
         if invalid:
             raw['invalid'] = [repr(entry) for entry in invalid]
+
+        # Keep the records visible even when the scorer had to mark the run unknown. The
+        # `audited` label is the warning: these are persisted records, not an endorsed verdict.
+        if result.terminated_by in UNEVALUATED_TERMINATIONS:
+            raw['audited'] = False
+            raw['unaudited_reason'] = f'terminated_by={result.terminated_by.value}'
+            return raw
+        if result.criteria_verified is False:
+            raw['audited'] = False
+            raw['unaudited_reason'] = 'criteria_verified=False'
+            return raw
+
+        if not entries and not invalid:
+            criteria_results = result.criteria_results or {}
+            if criteria_results:
+                return {
+                    'criteria_results': dict(criteria_results),
+                    'audited': False,
+                    'unaudited_reason': 'criteria_meta missing (lossy dict)',
+                }
+            return None
+
+        raw['audited'] = True
         return raw
     if name == 'conversation_quality':
         if not isinstance(value, ConversationQualityScore):

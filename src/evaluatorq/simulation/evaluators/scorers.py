@@ -314,6 +314,9 @@ class ConversationQualityScore(float):
         super().__init__()
         self.breakdown: dict[str, dict[str, float]] = breakdown
 
+    def __getnewargs__(self) -> tuple[float, dict[str, dict[str, float]]]:  # pyright: ignore[reportIncompatibleMethodOverride]
+        return (float(self), self.breakdown)
+
 
 def conversation_quality_scorer(
     result: SimulationResult, config: SimulationScoringConfig | None = None

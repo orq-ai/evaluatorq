@@ -203,6 +203,7 @@ async def test_criteria_met_raw_output_validates_back_into_criteria_meta() -> No
 
     assert score.raw_output is not None
     records = score.raw_output['criteria']
+    assert score.raw_output['audited'] is True
     # JSON-safe on the wire, and lossless: it round-trips back into the model it came from.
     assert json.loads(json.dumps(records)) == records
     parsed = [CriteriaMeta.model_validate(record) for record in records]
@@ -233,21 +234,32 @@ async def test_criteria_met_raw_output_reports_invalid_entries() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    'overrides',
-    [
-        pytest.param({'terminated_by': TerminatedBy.error}, id='errored-run'),
-        pytest.param({'criteria_verified': False}, id='unverified-run'),
-    ],
+    'terminated_by',
+    [TerminatedBy.error, TerminatedBy.timeout],
 )
-async def test_criteria_met_publishes_no_records_for_an_unaudited_run(overrides: dict[str, Any]) -> None:
-    """Those records describe verdicts the judge never reached — publishing them beside pass=False would invite trust."""
+async def test_criteria_met_publishes_records_for_a_terminated_run(terminated_by: TerminatedBy) -> None:
     result = _result_with_criteria()
-    for key, value in overrides.items():
-        setattr(result, key, value)
+    result.terminated_by = terminated_by
     score = await _score('criteria_met', result)
 
     assert score.pass_ is False
-    assert score.raw_output is None
+    assert score.raw_output is not None
+    assert [record['id'] for record in score.raw_output['criteria']] == ['criteria_0', 'criteria_1']
+    assert score.raw_output['audited'] is False
+    assert score.raw_output['unaudited_reason'] == f'terminated_by={terminated_by.value}'
+
+
+@pytest.mark.asyncio
+async def test_criteria_met_publishes_records_for_an_unverified_run() -> None:
+    result = _result_with_criteria()
+    result.criteria_verified = False
+    score = await _score('criteria_met', result)
+
+    assert score.pass_ is False
+    assert score.raw_output is not None
+    assert [record['id'] for record in score.raw_output['criteria']] == ['criteria_0', 'criteria_1']
+    assert score.raw_output['audited'] is False
+    assert score.raw_output['unaudited_reason'] == 'criteria_verified=False'
 
 
 @pytest.mark.asyncio
@@ -256,6 +268,21 @@ async def test_criteria_met_raw_output_is_none_when_there_are_no_criteria() -> N
 
     assert score.explanation == 'No criteria defined for this scenario.'
     assert score.raw_output is None
+
+
+@pytest.mark.asyncio
+async def test_criteria_met_raw_output_preserves_lossy_results_when_metadata_is_missing() -> None:
+    criteria_results = {'greeted user': True, 'did not leak PII': False}
+    score = await _score(
+        'criteria_met',
+        _make_result(goal_achieved=False, criteria_results=criteria_results),
+    )
+
+    assert score.raw_output == {
+        'criteria_results': criteria_results,
+        'audited': False,
+        'unaudited_reason': 'criteria_meta missing (lossy dict)',
+    }
 
 
 @pytest.mark.asyncio

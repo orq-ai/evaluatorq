@@ -1,5 +1,7 @@
 """Tests for simulation evaluators."""
 
+import copy
+import pickle
 from typing import Any
 
 import pytest
@@ -157,6 +159,13 @@ class TestConversationQualityScorer:
         assert score == 1.0
         assert score + 1.0 == 2.0
         assert sorted([score, 0.5]) == [0.5, score]
+
+    def test_copy_and_pickle_preserve_the_breakdown(self):
+        result = _make_result(goal_achieved=True, turn_count=4, criteria_results={'a': True, 'b': False})
+        score = conversation_quality_scorer(result)
+
+        assert copy.deepcopy(score).breakdown == score.breakdown
+        assert pickle.loads(pickle.dumps(score)).breakdown == score.breakdown
 
 
 class TestEvaluatorRegistry:
