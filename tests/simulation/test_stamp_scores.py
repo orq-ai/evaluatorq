@@ -120,8 +120,8 @@ def test_records_errored_evaluator_and_still_notifies_the_hook(caplog):
         def __init__(self) -> None:
             self.seen: list[tuple[str, object, str | None]] = []
 
-        async def on_evaluator_complete(self, datapoint_id, name, result, sim_result) -> None:
-            self.seen.append((name, result.score.value, result.error))
+        async def on_evaluator_complete(self, datapoint_id, name, score, result) -> None:
+            self.seen.append((name, score.score.value, score.error))
 
     hooks = RecordingHooks()
     asyncio.run(_notify_evaluator_complete(events, hooks))

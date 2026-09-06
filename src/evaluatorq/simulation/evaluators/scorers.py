@@ -21,6 +21,19 @@ from evaluatorq.simulation.types import CriteriaMeta, SimulationResult, Terminat
 UNEVALUATED_TERMINATIONS = (TerminatedBy.error, TerminatedBy.timeout)
 
 
+def unverified_reason(result: SimulationResult) -> str | None:
+    """Return why the criteria audit is unavailable, or ``None`` when verified.
+
+    The criteria scorer, evaluator-detail prose, and evaluator raw output must branch
+    on this helper rather than re-testing ``terminated_by`` and ``criteria_verified``.
+    """
+    if result.terminated_by in UNEVALUATED_TERMINATIONS:
+        return f'terminated_by={result.terminated_by.value}'
+    if result.criteria_verified is False:
+        return 'criteria_verified=False'
+    return None
+
+
 def failure_reason(result: SimulationResult) -> str | None:
     """The reason a run ended before the judge could audit it, or ``None`` if it did.
 
@@ -220,21 +233,21 @@ def criteria_met_scorer(result: SimulationResult) -> float:
     A malformed ``criteria_meta`` entry is an error: it is logged, recorded on
     the result for downstream reports, and scores 0.0 rather than being dropped.
     """
-    if result.terminated_by in UNEVALUATED_TERMINATIONS:
-        logger.warning(
-            'criteria_met: run terminated by {} before any criteria audit; scoring 0.0 (unknown, not met).',
-            result.terminated_by.value,
-        )
+    reason = unverified_reason(result)
+    if reason is not None:
+        if reason.startswith('terminated_by='):
+            logger.warning(
+                'criteria_met: run terminated by {} before any criteria audit; scoring 0.0 (unknown, not met).',
+                reason.split('=', 1)[1],
+            )
+        else:
+            logger.warning(
+                'criteria_met: judge returned no per-criterion occurrence audit, so these verdicts cannot '
+                'fail a must_happen criterion; scoring 0.0 (unverified, not met).'
+            )
         return 0.0
 
     # `None` is a run saved before the flag existed — leave those scored as they were.
-    if result.criteria_verified is False:
-        logger.warning(
-            'criteria_met: judge returned no per-criterion occurrence audit, so these verdicts cannot '
-            'fail a must_happen criterion; scoring 0.0 (unverified, not met).'
-        )
-        return 0.0
-
     raw_meta = result.metadata.get('criteria_meta')
     if raw_meta is not None:
         entries, invalid = read_criteria_meta(result)

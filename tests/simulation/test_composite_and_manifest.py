@@ -357,7 +357,7 @@ async def test_simulate_phase_failure_marks_simulate_stage_error(datapoint_facto
     from evaluatorq.simulation.utils.run_store import get_sim_runs_dir
 
     class ScoringBoom(DefaultHooks):
-        async def on_evaluator_complete(self, datapoint_id, name, result, sim_result) -> None:
+        async def on_evaluator_complete(self, datapoint_id, name, score, result) -> None:
             raise RuntimeError('scoring blew up')
 
     with pytest.raises(RuntimeError, match='scoring blew up'):

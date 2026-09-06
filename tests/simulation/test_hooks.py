@@ -421,8 +421,8 @@ class RunLevelRecorder(DefaultHooks):
     def on_run_start(self, meta):
         self.run_started.append(meta['num_datapoints'])
 
-    def on_evaluator_complete(self, datapoint_id, name, result, sim_result):
-        self.evaluator_events.append((datapoint_id, name, result.score.value))
+    def on_evaluator_complete(self, datapoint_id, name, score, result):
+        self.evaluator_events.append((datapoint_id, name, score.score.value))
 
     def on_run_complete(self, results):
         self.run_completed += 1
@@ -677,7 +677,7 @@ async def test_on_run_complete_fires_when_scoring_raises(datapoint_factory):
     must propagate out of simulate()."""
 
     class _ScoringBoom(_RunLevelRecorder):
-        def on_evaluator_complete(self, datapoint_id, name, result, sim_result) -> None:
+        def on_evaluator_complete(self, datapoint_id, name, score, result) -> None:
             raise RuntimeError('scoring blew up')
 
     hooks = _ScoringBoom()
@@ -981,8 +981,8 @@ async def test_simulate_fires_run_level_hooks_async(datapoint_factory):
         async def on_run_start(self, meta):
             self.run_started.append(meta['num_datapoints'])
 
-        async def on_evaluator_complete(self, datapoint_id, name, result, sim_result):
-            self.evaluator_events.append((datapoint_id, name, result.score.value))
+        async def on_evaluator_complete(self, datapoint_id, name, score, result):
+            self.evaluator_events.append((datapoint_id, name, score.score.value))
 
         async def on_run_complete(self, results):
             self.run_completed += 1

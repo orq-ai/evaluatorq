@@ -203,7 +203,8 @@ async def test_criteria_met_raw_output_validates_back_into_criteria_meta() -> No
 
     assert score.raw_output is not None
     records = score.raw_output['criteria']
-    assert score.raw_output['audited'] is True
+    assert score.raw_output['criteria_verified'] is True
+    assert score.raw_output['unverified_reason'] is None
     # JSON-safe on the wire, and lossless: it round-trips back into the model it came from.
     assert json.loads(json.dumps(records)) == records
     parsed = [CriteriaMeta.model_validate(record) for record in records]
@@ -245,8 +246,8 @@ async def test_criteria_met_publishes_records_for_a_terminated_run(terminated_by
     assert score.pass_ is False
     assert score.raw_output is not None
     assert [record['id'] for record in score.raw_output['criteria']] == ['criteria_0', 'criteria_1']
-    assert score.raw_output['audited'] is False
-    assert score.raw_output['unaudited_reason'] == f'terminated_by={terminated_by.value}'
+    assert score.raw_output['criteria_verified'] is False
+    assert score.raw_output['unverified_reason'] == f'terminated_by={terminated_by.value}'
 
 
 @pytest.mark.asyncio
@@ -258,8 +259,8 @@ async def test_criteria_met_publishes_records_for_an_unverified_run() -> None:
     assert score.pass_ is False
     assert score.raw_output is not None
     assert [record['id'] for record in score.raw_output['criteria']] == ['criteria_0', 'criteria_1']
-    assert score.raw_output['audited'] is False
-    assert score.raw_output['unaudited_reason'] == 'criteria_verified=False'
+    assert score.raw_output['criteria_verified'] is False
+    assert score.raw_output['unverified_reason'] == 'criteria_verified=False'
 
 
 @pytest.mark.asyncio
@@ -280,8 +281,23 @@ async def test_criteria_met_raw_output_preserves_lossy_results_when_metadata_is_
 
     assert score.raw_output == {
         'criteria_results': criteria_results,
-        'audited': False,
-        'unaudited_reason': 'criteria_meta missing (lossy dict)',
+        'criteria_verified': False,
+        'unverified_reason': 'criteria_meta missing (lossy dict)',
+    }
+
+
+@pytest.mark.asyncio
+async def test_criteria_met_raw_output_keeps_lossy_results_on_an_unverified_run() -> None:
+    criteria_results = {'greeted user': True}
+    score = await _score(
+        'criteria_met',
+        _make_result(criteria_verified=False, criteria_results=criteria_results),
+    )
+
+    assert score.raw_output == {
+        'criteria_results': criteria_results,
+        'criteria_verified': False,
+        'unverified_reason': 'criteria_verified=False',
     }
 
 

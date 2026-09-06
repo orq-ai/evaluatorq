@@ -186,11 +186,11 @@ The job's output is an OpenResponses response dict. The transcript is in `input`
 | `turn_count` | `int` | Turns actually run. |
 | `rules_broken` | `list[str]` | Criteria the judge marked violated, **by id** (`criteria_0`, `criteria_1`). |
 | `criteria_results` | `dict[str, bool]` | Per-criterion pass/fail, **by description**. Present only when the judge produced at least one criterion verdict. |
-| `criteria_verified` | `bool | None` | Whether the criteria result has a per-criterion judge audit. Always present; `None` means the result predates this field. |
-| `criteria_meta` | `list[dict] | None` | Per-criterion audit records, including `id`, `type`, `passed`, `audited`, and `evidence`. Always present; `None` means no records were available. |
-| `criteria_errors` | `list | None` | Malformed criteria metadata recorded during scoring. Always present; it is `None` on this job path because conversion happens before scoring. |
-| `scorer_errors` | `dict | None` | Scorer failures recorded after conversion. Always present; it is `None` on this job path because conversion happens before scoring. |
-| `datapoint_id` | `str | None` | The simulation datapoint identifier. Always present when the result has one. |
+| `criteria_verified` | `bool \| None` | Whether the criteria result has a per-criterion judge audit. Always present; `None` means the result predates this field. |
+| `criteria_meta` | `list[dict] \| None` | Per-criterion audit records, including `id`, `type`, `passed`, `audited`, and `evidence`. Always present; `None` means no records were available. |
+| `criteria_errors` | `list \| None` | Malformed criteria metadata recorded during scoring. Always present; it is `None` on this job path because conversion happens before scoring. |
+| `scorer_errors` | `dict \| None` | Scorer failures recorded after conversion. Always present; it is `None` on this job path because conversion happens before scoring. |
+| `datapoint_id` | `str \| None` | The simulation datapoint identifier. Always present; `None` when the result carries no datapoint id. |
 | `turn_metrics` | `list[dict]` | Per-turn latency and token detail. Present only when metrics were collected. |
 
 `criteria_results` and `turn_metrics` are optional, so read them with a default rather than by subscript. The audit and error keys listed as always present are different: their `None` value carries meaning, so preserve it instead of treating it as an empty collection.

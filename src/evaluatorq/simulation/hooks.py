@@ -114,9 +114,9 @@ class SimulationHooks(Protocol):
     ``on_evaluator_complete``) are also unguarded.
 
     ``on_evaluator_complete`` fires once per evaluator score, failed ones
-    included, and receives the whole ``EvaluatorScore``: ``result.score.value``
-    and ``result.score.explanation`` for the verdict, ``result.error`` for the
-    reason an evaluator produced nothing usable. It used to take a bare
+    included, and receives the whole ``EvaluatorScore`` as ``score``:
+    ``score.score.value`` and ``score.score.explanation`` for the verdict,
+    ``score.error`` for the reason an evaluator produced nothing usable. It used to take a bare
     ``score: float``, which a dead evaluator could not produce, so those events
     never fired at all. Because the hook is unguarded, an implementation must
     tolerate a non-numeric ``value`` rather than assume a float.
@@ -146,7 +146,7 @@ class SimulationHooks(Protocol):
     def on_turn_complete(self, datapoint_id: str, metrics: TurnMetrics) -> MaybeAsync[None]: ...
     def on_datapoint_complete(self, result: SimulationResult) -> MaybeAsync[None]: ...
     def on_evaluator_complete(
-        self, datapoint_id: str, name: str, result: EvaluatorScore, sim_result: SimulationResult
+        self, datapoint_id: str, name: str, score: EvaluatorScore, result: SimulationResult
     ) -> MaybeAsync[None]: ...
     def on_datapoint_error(self, datapoint: SimulationDatapoint, exception: BaseException) -> MaybeAsync[None]: ...
     def on_run_complete(self, results: list[SimulationResult]) -> MaybeAsync[None]: ...
@@ -203,12 +203,12 @@ class DefaultHooks:
         )
 
     async def on_evaluator_complete(
-        self, datapoint_id: str, name: str, result: EvaluatorScore, sim_result: SimulationResult
+        self, datapoint_id: str, name: str, score: EvaluatorScore, result: SimulationResult
     ) -> None:
-        if result.error is not None:
-            logger.warning(f'[simulation] {datapoint_id} evaluator {name!r} failed: {result.error}')
+        if score.error is not None:
+            logger.warning(f'[simulation] {datapoint_id} evaluator {name!r} failed: {score.error}')
             return
-        logger.debug(f'[simulation] {datapoint_id} evaluator {name!r} -> {result.score.value!r}')
+        logger.debug(f'[simulation] {datapoint_id} evaluator {name!r} -> {score.score.value!r}')
 
     async def on_datapoint_error(self, datapoint: SimulationDatapoint, exception: BaseException) -> None:
         logger.warning(
@@ -420,7 +420,7 @@ class RichHooks:
             self._progress.update(self._overall_task_id, completed=self._completed)
 
     async def on_evaluator_complete(
-        self, datapoint_id: str, name: str, result: EvaluatorScore, sim_result: SimulationResult
+        self, datapoint_id: str, name: str, score: EvaluatorScore, result: SimulationResult
     ) -> None:
         # No per-event render.
         return
@@ -515,9 +515,9 @@ class CompositeSimulationHooks:
         await fan_out(self._hooks, 'on_datapoint_complete', result)
 
     async def on_evaluator_complete(
-        self, datapoint_id: str, name: str, result: EvaluatorScore, sim_result: SimulationResult
+        self, datapoint_id: str, name: str, score: EvaluatorScore, result: SimulationResult
     ) -> None:
-        await fan_out(self._hooks, 'on_evaluator_complete', datapoint_id, name, result, sim_result)
+        await fan_out(self._hooks, 'on_evaluator_complete', datapoint_id, name, score, result)
 
     async def on_datapoint_error(self, datapoint: SimulationDatapoint, exception: BaseException) -> None:
         await fan_out(self._hooks, 'on_datapoint_error', datapoint, exception)
@@ -565,7 +565,7 @@ class ManifestStageHooks:
         return None
 
     async def on_evaluator_complete(
-        self, datapoint_id: str, name: str, result: EvaluatorScore, sim_result: SimulationResult
+        self, datapoint_id: str, name: str, score: EvaluatorScore, result: SimulationResult
     ) -> None:
         return None
 

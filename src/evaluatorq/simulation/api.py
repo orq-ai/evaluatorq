@@ -2188,7 +2188,7 @@ def _adapt_simulation_scorer(
     Note: ``on_evaluator_complete`` is NOT fired here. evaluatorq's
     ``process_evaluator`` wraps this scorer in a try/except, so a hook raising
     inside it would be swallowed (recorded as a scorer error) rather than
-    propagating. The hook is fired from `_stamp_evaluator_scores`, which
+    propagating. The hook is fired from `_simulate_core`, which
     runs outside evaluatorq's guard, preserving the unguarded-propagation
     contract.
     """
@@ -2251,25 +2251,22 @@ def _sim_evaluation_details(name: str, result: SimulationResult) -> tuple[str | 
     ``PASS`` and does not count towards ``pass_`` — the same rule the scorer and
     the report tallies apply.
     """
-    from evaluatorq.simulation.evaluators.scorers import UNEVALUATED_TERMINATIONS
+    from evaluatorq.simulation.evaluators.scorers import unverified_reason
 
     if name == 'goal_achieved':
         return (result.reason or None), result.goal_achieved
     if name == 'criteria_met':
-        # The two states `criteria_met_scorer` scores 0.0 must not report `pass=True`
-        # here: this flag lands on the evaluator span and the uploaded Orq
-        # experiment, so a run the scorer called unknown would show up green there
-        # (RES-1308). Both branches mirror the scorer's own order and reasons — keep
-        # them in step.
-        if result.terminated_by in UNEVALUATED_TERMINATIONS:
-            return (
-                (
-                    f'Run terminated by {result.terminated_by.value} before the judge could audit any '
-                    'criterion; outcome unknown, not met.'
-                ),
-                False,
-            )
-        if result.criteria_verified is False:
+        reason = unverified_reason(result)
+        if reason is not None:
+            if reason.startswith('terminated_by='):
+                termination = reason.split('=', 1)[1]
+                return (
+                    (
+                        f'Run terminated by {termination} before the judge could audit any '
+                        'criterion; outcome unknown, not met.'
+                    ),
+                    False,
+                )
             return (
                 (
                     'Judge returned no per-criterion occurrence audit, so these verdicts cannot fail a '
@@ -2326,55 +2323,43 @@ def _sim_evaluation_raw_output(name: str, result: SimulationResult, value: objec
     span carries only value, explanation and pass.
 
     ``criteria_met`` returns its per-criterion `CriteriaMeta` records — dumped in JSON mode — with an
-    ``audited`` label. Verified records are marked ``True``; records from an errored, timed-out or
-    unverified run are marked ``False`` with the reason. When only the lossy `criteria_results` dict
-    exists, that dict is published with its own unaudited reason. A scenario with no criteria at all
+    ``audited`` label. The run-level ``criteria_verified`` and ``unverified_reason`` fields explain
+    whether the whole record set has a trustworthy audit. When only the lossy `criteria_results` dict
+    exists, that dict is published with its own unverified reason. A scenario with no criteria at all
     still returns ``None``.
 
     ``conversation_quality`` returns the component scores and weights carried on
     `ConversationQualityScore`. A user-supplied scorer registered under that name returns a plain
-    ``float`` with nothing to report, so it degrades to ``None``.
+    ``float`` with nothing to report, so it degrades to ``None`` and logs at debug level.
     """
-    from evaluatorq.simulation.evaluators.scorers import (
-        UNEVALUATED_TERMINATIONS,
-        ConversationQualityScore,
-    )
+    from evaluatorq.simulation.evaluators.scorers import ConversationQualityScore, unverified_reason
     from evaluatorq.simulation.types import parse_criteria_meta
 
     if name == 'criteria_met':
         # `parse_criteria_meta`, not `read_criteria_meta`: the latter logs and records the invalid
         # entries, which `_sim_evaluation_details` has already done for this same result.
         entries, invalid = parse_criteria_meta(result.metadata.get('criteria_meta'))
-        raw: dict[str, Any] = {'criteria': [entry.model_dump(mode='json') for entry in entries]}
-        if invalid:
-            raw['invalid'] = [repr(entry) for entry in invalid]
-
-        # Keep the records visible even when the scorer had to mark the run unknown. The
-        # `audited` label is the warning: these are persisted records, not an endorsed verdict.
-        if result.terminated_by in UNEVALUATED_TERMINATIONS:
-            raw['audited'] = False
-            raw['unaudited_reason'] = f'terminated_by={result.terminated_by.value}'
-            return raw
-        if result.criteria_verified is False:
-            raw['audited'] = False
-            raw['unaudited_reason'] = 'criteria_verified=False'
-            return raw
-
-        if not entries and not invalid:
+        raw: dict[str, Any]
+        if entries or invalid:
+            raw = {'criteria': [entry.model_dump(mode='json') for entry in entries]}
+            if invalid:
+                raw['invalid'] = [repr(entry) for entry in invalid]
+        else:
             criteria_results = result.criteria_results or {}
             if criteria_results:
-                return {
-                    'criteria_results': dict(criteria_results),
-                    'audited': False,
-                    'unaudited_reason': 'criteria_meta missing (lossy dict)',
-                }
-            return None
+                raw = {'criteria_results': dict(criteria_results)}
+            else:
+                return None
 
-        raw['audited'] = True
+        reason = unverified_reason(result)
+        if 'criteria_results' in raw and reason is None:
+            reason = 'criteria_meta missing (lossy dict)'
+        raw['criteria_verified'] = reason is None
+        raw['unverified_reason'] = reason
         return raw
     if name == 'conversation_quality':
         if not isinstance(value, ConversationQualityScore):
-            logger.warning(
+            logger.debug(
                 'evaluator %r returned a plain float with no component breakdown; reporting no raw_output',
                 name,
             )
@@ -2566,9 +2551,9 @@ async def _notify_evaluator_complete(
     """
     from evaluatorq.common.async_utils import await_maybe
 
-    for sim_result, score in events:
-        datapoint_id = sim_result.metadata.get('datapoint_id', '')
-        await await_maybe(hooks.on_evaluator_complete(datapoint_id, score.evaluator_name, score, sim_result))
+    for result, score in events:
+        datapoint_id = result.metadata.get('datapoint_id', '')
+        await await_maybe(hooks.on_evaluator_complete(datapoint_id, score.evaluator_name, score, result))
 
 
 def _stamp_evaluator_scores(
