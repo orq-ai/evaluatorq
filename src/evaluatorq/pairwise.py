@@ -93,6 +93,9 @@ class RepetitionObservation(BaseModel):
     verdict: Literal['A', 'B', 'tie'] | None = Field(
         default=None, description='Canonicalized verdict; None = abstained or failed pass'
     )
+    explanation: str | None = Field(
+        default=None, description="This pass's own reasoning; None when it produced no text"
+    )
 
 
 class PairwiseVote(BaseModel):
@@ -836,8 +839,8 @@ async def run_pairwise(
                 if jv is None:
                     continue
                 failures += jv.repetitions_failed
-                for i, raw in enumerate(jv.repetitions):
-                    value = raw if not swapped else _unswap(raw)
+                for i, rep in enumerate(jv.repetitions):
+                    value = rep.value if not swapped else _unswap(rep.value)
                     if value is None:
                         verdict: Literal['A', 'B', 'tie'] | None = None  # genuine abstention: a valid no-decision pass
                     elif str(value) in _PAIRWISE_VALUES:
@@ -860,7 +863,10 @@ async def run_pairwise(
                         failures += 1
                     out.append(
                         RepetitionObservation(
-                            ordering=cast("Literal['ab', 'ba']", ordering), repetition=i, verdict=verdict
+                            ordering=cast("Literal['ab', 'ba']", ordering),
+                            repetition=i,
+                            verdict=verdict,
+                            explanation=rep.explanation,
                         )
                     )
             return out, failures

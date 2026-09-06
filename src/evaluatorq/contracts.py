@@ -11,7 +11,7 @@ from datetime import datetime  # noqa: TC003 — runtime-required by pydantic ma
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, TypeAlias
 
 from loguru import logger
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_serializer, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 from typing_extensions import TypedDict
 
 from evaluatorq.openresponses.convert_models import (
@@ -940,6 +940,25 @@ JURY_RAW_OUTPUT_KEY = 'jury'
 EVAL_ERROR_RAW_OUTPUT_KEY = 'evaluation_error'
 
 
+class JuryRepetition(BaseModel):
+    """One raw pass of one judge, before that judge's passes collapse into a vote.
+
+    ``value`` is ``None`` for a pass that produced no usable verdict — a genuine
+    abstention, an error, or an off-contract value; ``JuryVote.repetitions_failed``
+    says how many of those were failures rather than clean abstentions.
+    ``explanation`` is that pass's own reasoning, ``None`` when it produced no text.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    value: bool | float | str | None = Field(
+        default=None, description='Verdict for this pass; None = abstained or failed'
+    )
+    explanation: str | None = Field(
+        default=None, description="This pass's own reasoning; None when it produced no text"
+    )
+
+
 class JuryVote(BaseModel):
     """A single judge's aggregate vote within a jury.
 
@@ -957,10 +976,26 @@ class JuryVote(BaseModel):
     value: bool | float | str | None = Field(default=None, description='Judge verdict')
     explanation: str = Field(default='', description='Explanation from a representative pass')
     error: str | None = Field(default=None, description='Failure reason when success is False')
-    repetitions: list[bool | float | str | None] = Field(
+    repetitions: list[JuryRepetition] = Field(
         default_factory=list,
-        description='Raw per-repetition verdicts in call order; None includes abstain/error passes',
+        description="Raw per-repetition passes in call order, each carrying that pass's own verdict and reasoning. "
+        'Empty on a vote built without per-repetition capture.',
     )
+
+    @field_validator('repetitions', mode='before')
+    @classmethod
+    def _accept_bare_repetition_verdicts(cls, v: Any) -> Any:
+        """Read a pre-`JuryRepetition` record, where repetitions were bare verdicts.
+
+        Runs saved before the reasoning was captured hold `["yes", null]` where this
+        field now holds objects. Coercing here rather than rejecting keeps an archived
+        report loadable — `_extract_jury` discards a jury that fails validation, so a
+        strict field would silently drop the whole panel from every old run's report.
+        """
+        if isinstance(v, list):
+            return [{'value': item} if not isinstance(item, (dict, JuryRepetition)) else item for item in v]
+        return v
+
     repetitions_failed: int = Field(
         default=0,
         ge=0,
@@ -1763,6 +1798,7 @@ __all__ = [
     'AgentTarget',
     'ContentPart',
     'FunctionCall',
+    'JuryRepetition',
     'JuryResult',
     'JuryStats',
     'JuryVote',

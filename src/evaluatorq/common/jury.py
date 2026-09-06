@@ -19,7 +19,7 @@ from evaluatorq.common.tracing import (
     truncate_for_span,
     with_span,
 )
-from evaluatorq.contracts import JuryResult, JuryStats, JuryVote, StrEnum, TokenUsage
+from evaluatorq.contracts import JuryRepetition, JuryResult, JuryStats, JuryVote, StrEnum, TokenUsage
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
@@ -234,14 +234,17 @@ def append_jury_summary(explanation: str | None, jury: JuryResult | None) -> str
     base = explanation or ''
     if jury is None:
         return base
-    rate = f'{jury.raw_agreement:.0%}' if jury.raw_agreement is not None else 'n/a'
-    flags: list[str] = []
+    parts = [f'{jury.judges_succeeded}/{jury.judges_configured} judges']
+    # Omitted rather than rendered 'n/a' when there is nothing to report: a single
+    # cyclic vote and a numeric panel both have no cross-judge agreement, and a
+    # placeholder in a fixed slot reads as a measurement that came back empty.
+    if jury.raw_agreement is not None:
+        parts.append(f'raw agreement {jury.raw_agreement:.0%}')
     if jury.tie:
-        flags.append('TIE (tie-break applied)')
+        parts.append('TIE (tie-break applied)')
     if jury.inconclusive:
-        flags.append('INCONCLUSIVE')
-    suffix = f', {", ".join(flags)}' if flags else ''
-    summary = f'[jury: {jury.judges_succeeded}/{jury.judges_configured} judges, raw agreement {rate}{suffix}]'
+        parts.append('INCONCLUSIVE')
+    summary = f'[jury: {", ".join(parts)}]'
     return f'{base} {summary}' if base else summary
 
 
@@ -390,7 +393,9 @@ async def _compute_judge_vote(
     usages = [p.token_usage for p in predictions if p.token_usage is not None]
     decisive = [p for p in predictions if p.decisive]
     abstained = bool(predictions) and not decisive and any(p.abstained for p in predictions)
-    repetitions_raw = [p.value if p.decisive else None for p in predictions]
+    repetitions_raw = [
+        JuryRepetition(value=p.value if p.decisive else None, explanation=p.explanation or None) for p in predictions
+    ]
     # A pass has failed if it is neither decisive nor a CLEAN abstention: an error, or a
     # mechanically-unusable value=None / abstained=False pass. Counting only p.error let the
     # second case pass as a free abstention and keep consistency at 1.0 (RES-1251 review, item 6).
