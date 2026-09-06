@@ -2583,7 +2583,7 @@ def _stamp_evaluator_scores(
     events_out: list[tuple[SimulationResult, EvaluatorScore]] | None = None,
 ) -> None:
     """Walk the evaluatorq result and stamp each evaluator score onto the
-    matching SimulationResult.metadata["evaluator_scores"].
+    matching SimulationResult.
 
     Matches by ``id(data_point)`` — on success evaluatorq returns the same
     DataPoint instance the job cached against. Error rows carry a placeholder
@@ -2595,6 +2595,10 @@ def _stamp_evaluator_scores(
     it in ``metadata['evaluator_errors']`` — evaluator name → the reason the
     score was unusable — so the report can count a dead evaluator instead of
     silently shrinking the denominator it averages over.
+
+    Structured evaluator output is retained in ``evaluator_details`` under the
+    evaluator name, while the numeric score remains in metadata for existing
+    report and dashboard readers.
 
     ``events_out``, when provided, collects ``(SimulationResult, EvaluatorScore)``
     for EVERY score seen, usable or not, in evaluatorq order. The caller
@@ -2615,6 +2619,8 @@ def _stamp_evaluator_scores(
                 )
                 if reason is not None and score.error is None:
                     score.error = reason
+                if score.score.raw_output is not None:
+                    sim_result.evaluator_details[score.evaluator_name] = score.score.raw_output
                 if events_out is not None:
                     events_out.append((sim_result, score))
                 if reason is not None:
