@@ -212,6 +212,22 @@ class TestToOpenResponses:
         response = to_open_responses(result)
         assert response["usage"] is None
 
+    def test_token_usage_known_survives_when_false(self):
+        """Partial usage must read as unknown, not as a zero-cost run, so the flag
+        ships beside `usage` on every conversion."""
+        result = _make_result(token_usage_known=False)
+        response = to_open_responses(result)
+        assert response["usage"] is not None
+        assert response["token_usage_known"] is False
+
+    def test_token_usage_known_defaults_true(self):
+        assert to_open_responses(_make_result())["token_usage_known"] is True
+
+    def test_criteria_results_emitted_when_empty_dict(self):
+        """{} is a scenario with zero criteria, not an absent criteria block."""
+        meta = to_open_responses(_make_result(criteria_results={}))["metadata"]
+        assert meta["criteria_results"] == {}
+
     def test_status_mapping_timeout(self):
         result = _make_result(terminated_by=TerminatedBy.timeout)
         response = to_open_responses(result)

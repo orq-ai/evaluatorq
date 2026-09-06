@@ -6,7 +6,7 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel
+from pydantic_core import to_jsonable_python
 
 from evaluatorq.contracts import content_to_text
 from evaluatorq.openresponses.convert_models import (
@@ -39,20 +39,14 @@ def _generate_item_id(prefix: str) -> str:
     return f'{prefix}_{uuid.uuid4().hex[:24]}'
 
 
-def _json_safe(value: Any) -> Any:
-    """Serialise pydantic values inside a metadata blob so the payload stays JSON-safe.
+def _jsonable(value: Any) -> Any:
+    """Serialise a free-form ``SimulationResult.metadata`` value for the trace payload.
 
-    ``SimulationResult.metadata`` is a free-form dict: most producers already store
-    plain JSON there, but a caller can hand it a pydantic model. Non-model values
-    pass through untouched, so ``None`` stays ``None``.
+    ``serialize_unknown=True`` renders a type pydantic cannot serialise as its repr
+    instead of raising: a single exotic value in metadata must not take down the
+    conversion of an otherwise complete run.
     """
-    if isinstance(value, BaseModel):
-        return value.model_dump(mode='json')
-    if isinstance(value, list):
-        return [_json_safe(item) for item in value]
-    if isinstance(value, dict):
-        return {key: _json_safe(item) for key, item in value.items()}
-    return value
+    return to_jsonable_python(value, serialize_unknown=True)
 
 
 def to_open_responses(
@@ -73,6 +67,18 @@ def to_open_responses(
     ``criteria_results`` never travels alone: ``criteria_verified``,
     ``criteria_meta``, ``criteria_errors``, ``scorer_errors`` and ``datapoint_id``
     are always present in the metadata block, ``None`` when the run has none.
+
+    ``criteria_errors`` and ``scorer_errors`` report the state of ``result.metadata``
+    **at conversion time**, which is not the same as the end of the run. On the
+    evaluatorq job path (``simulation/api.py``) the conversion happens inside the job,
+    before the scorers run, and both keys are written during scoring — so on that path
+    they are always ``None`` and a ``null`` there means "not yet known", not "no errors".
+    Only the persisted-results export path (``eq sim`` report generation) converts after
+    scoring and can show them populated.
+
+    ``token_usage_known`` sits beside ``usage`` for the same reason ``criteria_verified``
+    sits beside ``criteria_results``: ``False`` means the usage numbers are partial and
+    must be read as unknown, never as a cheap run.
     """
     now = int(time.time())
 
@@ -163,12 +169,13 @@ def to_open_responses(
         # not met"), and criteria_meta is the only place per-criterion `audited` survives.
         # All three are emitted unconditionally — a missing key reads as a clean run.
         'criteria_verified': result.criteria_verified,
-        'criteria_meta': _json_safe(result.metadata.get('criteria_meta')),
-        'criteria_errors': _json_safe(result.metadata.get('criteria_errors')),
-        'scorer_errors': _json_safe(result.metadata.get('scorer_errors')),
-        'datapoint_id': _json_safe(result.metadata.get('datapoint_id')),
+        'criteria_meta': _jsonable(result.metadata.get('criteria_meta')),
+        'criteria_errors': _jsonable(result.metadata.get('criteria_errors')),
+        'scorer_errors': _jsonable(result.metadata.get('scorer_errors')),
+        'datapoint_id': _jsonable(result.metadata.get('datapoint_id')),
     }
-    if result.criteria_results:
+    # `is not None`, not truthiness: {} is a scenario with zero criteria, not an absent block.
+    if result.criteria_results is not None:
         metadata['criteria_results'] = result.criteria_results
     if result.turn_metrics:
         metadata['turn_metrics'] = [tm.model_dump(mode='json') for tm in result.turn_metrics]
@@ -199,6 +206,7 @@ def to_open_responses(
         'reasoning': None,
         'user': None,
         'usage': usage_data,
+        'token_usage_known': result.token_usage_known,
         'max_output_tokens': None,
         'max_tool_calls': None,
         'store': False,
