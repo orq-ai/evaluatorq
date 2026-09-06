@@ -163,7 +163,7 @@ Simulation reports expose a conversation transcript panel: select any conversati
 
 ### Pairwise comparison view
 
-Pairwise runs render three sections: the consensus win rate for each side, a per-judge table (win rates, tie rate, position bias), and the comparison list.
+Pairwise runs render three sections: the consensus win rate for each side, a per-judge table (win rates, tie rate, position bias, and consistency when measurable), and the comparison list.
 
 ![A pairwise run: consensus win rates per side, the per-judge table, and the comparison list.](assets/dashboard-pairwise.png){ .dashboard-shot }
 

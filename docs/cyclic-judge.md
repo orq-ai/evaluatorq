@@ -55,7 +55,7 @@ Calling a scorer directly, outside `evaluatorq()`, provides no row index. Those 
 
 ## Auditing the rotation
 
-Every result carries the full jury record — per-judge votes, model IDs, verdicts — under `raw_output["jury"]` (see [Reading the output](llm-as-a-jury.md#reading-the-output)). Under `assignment="cyclic"` it is the only record of which judge scored which item, so it is what you reach for to check the rotation actually balanced, or to find a judge that has gone off the rails.
+Every judged result carries the full jury record — per-judge votes, model IDs, verdicts — under `raw_output["jury"]` (see [Reading the output](llm-as-a-jury.md#reading-the-output)). A datapoint whose target errored was never judged and keeps `raw_output=None`. Under `assignment="cyclic"`, the jury record is the only record of which judge scored each judged item, so it is what you reach for to check the rotation actually balanced, or to find a judge that has gone off the rails.
 
 ```python
 from collections import Counter

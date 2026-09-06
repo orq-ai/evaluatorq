@@ -118,10 +118,20 @@ for judge in report.per_judge:
     judge.b_rate         # share of its decisive picks that went to B
     judge.position_bias  # flips over pairs where a flip was possible
     judge.tie_rate       # ties over all comparisons the judge saw
+    judge.consistency    # shrunk self-consistency from repeated passes, or None
+    judge.consistency_raw  # unshrunk self-consistency, or None
 ```
 
 !!! note "Watch `inconclusive_rate` alongside the win rates"
     The win rates are computed over decided comparisons only, so a run that was mostly noise can still show a high `a_win_rate`. Read it together with `inconclusive_rate`: a healthy result is a high win rate **and** a low inconclusive rate. `mean_agreement` ignores comparisons with a single decisive vote, since one lone voter always "agrees" with itself and would otherwise flatter a degraded panel.
+
+## Judge consistency
+
+`JudgeStats.consistency` and `JudgeStats.consistency_raw` measure whether a judge gives the same answer on repeated passes of the same ordering. They are computed from the recorded observations and are populated under both `aggregation="plurality"` and `aggregation="bt-sigma"`; consistency does not require a Bradley-Terry fit.
+
+`consistency` is the shrunk value used as a reliability weight by repetition-aware BT-sigma, while `consistency_raw` is the unshrunk self-agreement value. A judge's field is `None` when that judge has no measurable repeated decisive passes, such as a single-pass run or repeats that all abstained or failed. This means `None` is an absence of evidence, not a score of zero.
+
+When any judge has consistency data, the HTML report adds `Consistency (shrunk)` and `Consistency (raw)` columns under either aggregation. Judges without data show `n/a`. If no judge has measurable consistency, the report keeps the judge table and adds a caption explaining whether the run used one pass or repeated passes that produced no measurable group.
 
 ## Reliability-weighted aggregation (BT-sigma)
 
@@ -151,7 +161,7 @@ Notes worth knowing:
 
 ### Repetition-aware reliability
 
-Run each comparison more than once (`repetitions=2` or more) and the reliability weights change source. Instead of the global two-item fit, they come from how often each judge **agrees with itself** on repeated passes of the same prompt.
+Run each comparison more than once (`repetitions=2` or more) and repetition-aware BT-sigma can use the consistency values described above as its reliability weights. Instead of the global two-item fit, those weights come from how often each judge **agrees with itself** on repeated passes of the same prompt.
 
 Two things must be true, and if either is missing the run falls back to the two-item fit and says so in `fit_warnings`:
 
@@ -166,7 +176,7 @@ Every pass is kept on `PairwiseVote.observations`, normalized so a swapped-order
 - Position bias is not mistaken for inconsistency, since each ordering is its own group.
 - Extra repeats sharpen a judge's score but never add weight: each judge still casts one weighted vote per comparison.
 
-**Two numbers, and which to read.** `bt_sigma.repetition_consistency` is the reliability **weight**. It is pulled toward the panel average (so one lucky 2-pass agreement cannot take over the run) and lowered when passes fail, so even a perfectly steady judge reads a little under 1.0 unless the whole panel is steady. `bt_sigma.repetition_consistency_raw` (and the `Consistency (raw)` report column) is the **plain** self-agreement, with no adjustment: 1.0 means the judge always agreed with itself. Read the raw number to compare judges inside one run; do not compare the weight across two runs with different panels, where the same judge can move without changing. `p_a_beats_b` is still the pooled run-level headline. A judge with no repeats gets the median of the measured weights and is named in `fit_warnings`. Runs saved before this feature existed still load and behave as before.
+**Two numbers, and which to read.** `bt_sigma.repetition_consistency` is the reliability **weight**. It is pulled toward the panel average (so one lucky 2-pass agreement cannot take over the run) and lowered when passes fail, so even a perfectly steady judge reads a little under 1.0 unless the whole panel is steady. `bt_sigma.repetition_consistency_raw` is the **plain** self-agreement, with no adjustment: 1.0 means the judge always agreed with itself. The same two values are available as `JudgeStats.consistency` and `JudgeStats.consistency_raw` under the report's plurality and BT-sigma aggregations. Read the raw number to compare judges inside one run; do not compare the weight across two runs with different panels, where the same judge can move without changing. `p_a_beats_b` is still the pooled run-level headline. A judge with no repeats gets the median of the measured weights and is named in `fit_warnings`. Runs saved before this feature existed still load and behave as before.
 
 **What consistency is not.** It is self-agreement under fixed conditions, not task difficulty, not judge quality (a judge can be steadily wrong), and not accuracy against a ground truth. A clean abstention does not count against a judge: `['A', <abstention>, 'A']` scores 1.0 in both numbers. A pass that errored or came back off-contract is a failure, not a free abstention, and is counted in `repetition_failures`. The judge still agreed with itself on the passes it finished, so the **raw** number for `['A', None, 'A']` stays **1.0**; only the **weight** drops, to **2/3**, because a flaky judge is less dependable even when it agrees with itself. The two `None`s look identical in the vote list; only `repetition_failures` tells a clean abstention from a broken pass.
 
@@ -204,7 +214,7 @@ run.save()  # -> .evaluatorq/pairwise-runs/<timestamp>_prompt-v2-vs-prompt-v3.js
 
 A run also records `swap`. Position bias is only meaningful when both orderings ran, so a run saved with `swap=False` shows that column as unavailable rather than as a flattering `0.00`.
 
-The dashboard renders the run as three sections: the consensus win rates for each side, a per-judge table (win rates, tie rate, position bias), and the comparison list, where each row expands to show the two responses side by side with every judge's vote and rationale.
+The dashboard renders the run as three sections: the consensus win rates for each side, a per-judge table (win rates, tie rate, position bias, and consistency when measurable), and the comparison list, where each row expands to show the two responses side by side with every judge's vote and rationale.
 
 ## The lower-level core
 
