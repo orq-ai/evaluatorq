@@ -157,12 +157,14 @@ class JudgeStats(BaseModel):
     consistency: float | None = Field(
         default=None,
         description='SHRUNK within-datapoint repetition consistency in [0, 1] (RES-1251): judge reliability '
-        'measured from repeated passes of the same prompt and shrunk toward the panel mean. Under '
-        "aggregation='bt-sigma' this is the quantity the winner weights came from, surfaced next to sigma "
-        'rather than leaving the reader to infer reliability from a pooled sigma that did not decide anything; '
-        'it is a diagnostic of the recorded repeats, so it is filled under plurality too. Because it is shrunk, '
-        'a self-consistent judge reads below 1.0 unless the whole panel is; see consistency_raw for the '
-        'un-shrunk value. None when the run had no usable repeats for this judge.',
+        'measured from repeated passes of the same prompt and shrunk toward the panel mean. On a bt-sigma run '
+        'where repetition weighting was actually applied, this is the quantity the winner weights came from, '
+        'surfaced next to sigma rather than leaving the reader to infer reliability from a pooled sigma that '
+        'did not decide anything; bt_sigma.fit_warnings names the runs where the weighting was skipped, and '
+        'there this number is published without having decided anything. It is a diagnostic of the recorded '
+        'repeats and needs no fit, so it is filled under plurality too. Because it is shrunk, a self-consistent '
+        'judge reads below 1.0 unless the whole panel is; see consistency_raw for the un-shrunk value. None '
+        'when the run had no usable repeats for this judge.',
     )
     consistency_raw: float | None = Field(
         default=None,
@@ -391,6 +393,23 @@ def repetition_consistency_raw(comparisons: Sequence[PairwiseComparison]) -> dic
     return {judge: raw for judge, (raw, _disc, _n) in _repetition_stats(comparisons).items()}
 
 
+def has_repeated_ordering(comparisons: Sequence[PairwiseComparison]) -> bool:
+    """Whether any judge ran an ordering more than once, i.e. whether repeats were attempted.
+
+    This is the "did the user pay for repeats" question, and it is deliberately NOT "are there
+    observations": R=1 records one pass per ordering, so observations alone are true on the default
+    path (RES-1251 review, item 15). Distinct from having consistency EVIDENCE - a repeated ordering
+    whose extra passes all failed or abstained yields no measurable group - which is why both the
+    ``fit_warnings`` here and the report's empty state need this predicate as well as the
+    consistency dict: it separates "no repeats ran" from "repeats ran and measured nothing".
+    """
+    return any(
+        any(count >= 2 for count in Counter(o.ordering for o in v.observations).values())
+        for c in comparisons
+        for v in c.votes
+    )
+
+
 # Floor for consistency-derived weights: a judge that never agreed with itself
 # still casts a (heavily discounted) vote rather than being erased outright.
 _MIN_CONSISTENCY_WEIGHT = 0.05
@@ -481,14 +500,7 @@ def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAg
     # A run can carry a genuine repeat yet produce no consistency evidence: if no single ordering
     # held >= 2 DECISIVE passes (e.g. ab=[A, None], ba=[A, None] at R=2), rep_consistency is empty
     # and we silently fall back to the pooled fit. Warn there, since the user paid for repeats.
-    # Gate on an actual repeat - some ordering with >= 2 passes - NOT merely on observations
-    # existing: R=1 captures one pass per ordering and must not trip this (RES-1251 review, item 15).
-    had_repeated_ordering = any(
-        any(count >= 2 for count in Counter(o.ordering for o in v.observations).values())
-        for c in comparisons
-        for v in c.votes
-    )
-    if not rep_consistency and had_repeated_ordering:
+    if not rep_consistency and has_repeated_ordering(comparisons):
         fit_warnings.append(
             'repetition weighting skipped: repeated passes exist but no single ordering held >= 2 decisive '
             'passes to measure consistency; using the pooled two-item fit'

@@ -7,10 +7,10 @@ objects holding plain data, which ``export_html`` dispatches on. Same split as
 
 from __future__ import annotations
 
-from collections import Counter
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.contracts import ReportSection
+from evaluatorq.pairwise import has_repeated_ordering
 
 if TYPE_CHECKING:
     from evaluatorq.pairwise import PairwiseVote
@@ -166,12 +166,9 @@ def _build_judges_section(run: PairwiseRun) -> ReportSection:
             'observed_consistency': any(stat.consistency is not None for stat in report.per_judge),
             # Whether repeats were even attempted, so the renderer can tell "this run ran a
             # single pass" apart from "repeats ran but never produced a measurable group".
-            'repeated': any(
-                count >= 2
-                for e in run.entries
-                for v in e.comparison.votes
-                for count in Counter(o.ordering for o in v.observations).values()
-            ),
+            # Shared with the fit_warnings that make the same distinction: two copies of the
+            # predicate would drift, and the caption would then call a repeated run single-pass.
+            'repeated': has_repeated_ordering(run.comparisons()),
             'rows': rows,
         },
     )
