@@ -127,15 +127,36 @@ def _bias_cell(row: dict[str, Any], *, observed_swap: bool) -> str:
     )
 
 
+def _consistency_cell(value: float | None) -> str:
+    """One consistency number, or ``n/a`` naming why this judge has none.
+
+    Only reached when some other judge in the run does have a value, so the reason is always
+    about this judge rather than about the run — the run-level case is the caption instead.
+    """
+    if value is None:
+        reason = (
+            'This judge never completed two decisive passes of the same ordering, '
+            'so its self-agreement could not be measured'
+        )
+        return f'<span class="pw-muted" title="{_esc(reason)}">n/a</span>'
+    return _num(value)
+
+
 def _render_judges_html(section: ReportSection) -> str:
     d = section.data
     observed = bool(d.get('observed_swap'))
+    # Sigma comes out of the BT fit and only exists on a bt-sigma run. Consistency is read off the
+    # recorded repeat passes under either aggregation, so it gets its own gate (RES-1251).
+    show_sigma = bool(d.get('bt_sigma'))
+    show_consistency = bool(d.get('observed_consistency'))
     headers = ['Judge', f'{d["label_a"]} rate', f'{d["label_b"]} rate', 'Tie rate', 'Position bias']
-    if d.get('bt_sigma'):
+    if show_sigma:
+        headers.append('Sigma')
+    if show_consistency:
         # "Consistency (shrunk)" is the reliability weight (shrunk toward the panel mean);
         # "Consistency (raw)" is the un-shrunk self-agreement, published beside it so a
         # reader is not misled into reading the shrunk number as raw self-agreement (RES-1251).
-        headers.extend(('Sigma', 'Consistency (shrunk)', 'Consistency (raw)'))
+        headers.extend(('Consistency (shrunk)', 'Consistency (raw)'))
     rows: list[list[str]] = []
     for r in d.get('rows', []):
         row = [
@@ -145,8 +166,10 @@ def _render_judges_html(section: ReportSection) -> str:
             _rate(r.get('tie_rate')),
             _bias_cell(r, observed_swap=observed),
         ]
-        if d.get('bt_sigma'):
-            row.extend((_num(r.get('sigma')), _num(r.get('consistency')), _num(r.get('consistency_raw'))))
+        if show_sigma:
+            row.append(_num(r.get('sigma')))
+        if show_consistency:
+            row.extend((_consistency_cell(r.get('consistency')), _consistency_cell(r.get('consistency_raw'))))
         rows.append(row)
     if not rows:
         return ''
@@ -162,6 +185,16 @@ def _render_judges_html(section: ReportSection) -> str:
         )
     else:
         note = '<p class="pw-caption">This run used a single ordering, so position bias was not measured.</p>'
+    # Same empty state for the consistency columns: when nothing was measurable they cannot render
+    # an n/a cell, so the section says why instead of dropping them without a word.
+    if not show_consistency:
+        note += (
+            '<p class="pw-caption">Repeated passes ran but no judge completed two decisive passes of the '
+            'same ordering, so judge self-consistency could not be measured for this run.</p>'
+            if d.get('repeated')
+            else '<p class="pw-caption">This run used a single pass per ordering, so judge self-consistency '
+            'was not measured.</p>'
+        )
     return f'<section id="{section.kind}"><h2>{_esc(section.title)}</h2>{_html_table(headers, rows)}{note}</section>'
 
 

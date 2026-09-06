@@ -187,6 +187,37 @@ def test_judge_stats_surface_repetition_consistency() -> None:
     assert by_model['coin'].consistency is not None and by_model['coin'].consistency < 0.1
 
 
+def test_plurality_report_also_surfaces_repetition_consistency() -> None:
+    # Consistency is read off the recorded observations and needs no BT fit, so the DEFAULT
+    # plurality report must carry it too. Gating it on bt-sigma made a plurality run report
+    # "no usable repeats" - the documented meaning of None - for a run that had them.
+    report = build_report(_run_with_repeats())
+    assert report.bt_sigma is None
+    by_model = {j.model: j for j in report.per_judge}
+    assert all(stats.sigma is None for stats in report.per_judge)
+    assert by_model['steady'].consistency is not None and by_model['steady'].consistency > 0.9
+    assert by_model['steady'].consistency_raw == 1.0
+    assert by_model['coin'].consistency is not None and by_model['coin'].consistency < 0.1
+    assert by_model['coin'].consistency_raw == 0.0
+
+
+def test_consistency_survives_a_degraded_bt_sigma_path() -> None:
+    # Position-biased votes reconcile to nothing, so bt_sigma_aggregation returns its
+    # "no decisive votes" block with an empty repetition_consistency. The judge's repeats were
+    # still collected, so build_report must publish them from the comparisons rather than from
+    # the BT block that dropped them.
+    rows = [
+        _comparison([_vote('j', None, [_obs('ab', 0, 'A'), _obs('ab', 1, 'A')])]),
+        _comparison([_vote('j', None, [_obs('ab', 0, 'B'), _obs('ab', 1, 'B')])]),
+    ]
+    block = bt_sigma_aggregation(rows)
+    assert block.repetition_consistency == {}
+    report = build_report(rows, aggregation='bt-sigma')
+    (stats,) = report.per_judge
+    assert stats.consistency is not None
+    assert stats.consistency_raw == 1.0
+
+
 def test_repetition_count_does_not_multiply_panel_weight() -> None:
     """A judge with 5 repetitions per row must not outvote two judges with 2:
     each judge still casts exactly one weighted vote per datapoint."""
@@ -470,6 +501,118 @@ def test_html_judges_table_shows_shrunk_and_raw_consistency(tmp_path) -> None:
     shrunk_cell = cells[headers.index('Consistency (shrunk)')]
     assert '1.00' in raw_cell  # raw self-agreement is under the raw header
     assert '1.00' not in shrunk_cell  # the shrunk weight (< 1.0) is under the shrunk header
+
+
+def test_html_judges_table_shows_consistency_on_a_plurality_run(tmp_path) -> None:
+    # Populating the data is not enough: the renderer gated all three columns on bt_sigma, so a
+    # plurality run with repeats rendered no consistency at all. Sigma stays gated, the two
+    # consistency columns follow the data.
+    import re
+
+    from evaluatorq.pairwise_reports.export_html import _render_judges_html
+    from evaluatorq.pairwise_reports.sections import build_report_sections
+    from evaluatorq.pairwise_run import new_run
+
+    run = new_run(run_name='reps-plurality', judges=['steady', 'coin'])
+    for i, row in enumerate(_run_with_repeats()):
+        run.add(row, question=f'q-{i}', response_a=f'a-{i}', response_b=f'b-{i}')
+    run.save(tmp_path / 'run.json')
+
+    judges = build_report_sections(run)[1]
+    assert judges.data['bt_sigma'] is False
+    assert judges.data['observed_consistency'] is True
+
+    html = _render_judges_html(judges)
+    headers = re.findall(r'<th[^>]*>(.*?)</th>', html, re.S)
+    assert 'Sigma' not in headers
+    assert headers.index('Consistency (raw)') == headers.index('Consistency (shrunk)') + 1
+    steady_row = next(r for r in re.findall(r'<tr>(.*?)</tr>', html, re.S) if 'steady' in r)
+    cells = re.findall(r'<td[^>]*>(.*?)</td>', steady_row, re.S)
+    assert '1.00' in cells[headers.index('Consistency (raw)')]
+    assert '1.00' not in cells[headers.index('Consistency (shrunk)')]
+
+
+def test_html_judges_table_explains_a_run_without_measurable_consistency(tmp_path) -> None:
+    # A section that silently loses two columns is indistinguishable from a bug, so a run with
+    # no repeats says why instead (the same empty state the position-bias column already renders).
+    from evaluatorq.pairwise_reports.export_html import _render_judges_html
+    from evaluatorq.pairwise_reports.sections import build_report_sections
+    from evaluatorq.pairwise_run import new_run
+
+    run = new_run(run_name='no-reps', judges=['a', 'b'])
+    for i in range(3):
+        run.add(
+            _comparison([_vote('a', 'A'), _vote('b', 'B')]),
+            question=f'q-{i}',
+            response_a=f'a-{i}',
+            response_b=f'b-{i}',
+        )
+    run.save(tmp_path / 'run.json')
+
+    judges = build_report_sections(run)[1]
+    assert judges.data['observed_consistency'] is False
+    assert judges.data['repeated'] is False
+
+    html = _render_judges_html(judges)
+    assert 'Consistency (shrunk)' not in html
+    assert 'single pass per ordering, so judge self-consistency was not measured' in html
+
+
+def test_html_judges_table_reports_repeats_that_measured_nothing(tmp_path) -> None:
+    # Repeats ran but no ordering held two decisive passes: the columns are still unrenderable,
+    # and blaming "a single pass" would be false, so the caption names what actually happened.
+    from evaluatorq.pairwise_reports.export_html import _render_judges_html
+    from evaluatorq.pairwise_reports.sections import build_report_sections
+    from evaluatorq.pairwise_run import new_run
+
+    run = new_run(run_name='reps-no-evidence', judges=['a'])
+    for i in range(3):
+        run.add(
+            _comparison([_vote('a', 'A', [_obs('ab', 0, 'A'), _obs('ab', 1, None)])]),
+            question=f'q-{i}',
+            response_a=f'a-{i}',
+            response_b=f'b-{i}',
+        )
+    run.save(tmp_path / 'run.json')
+
+    judges = build_report_sections(run)[1]
+    assert judges.data['observed_consistency'] is False
+    assert judges.data['repeated'] is True
+
+    html = _render_judges_html(judges)
+    assert 'Consistency (shrunk)' not in html
+    assert 'no judge completed two decisive passes of the same ordering' in html
+
+
+def test_html_judges_table_marks_a_judge_without_repeats_as_na(tmp_path) -> None:
+    # One judge has repeats and one does not: the column renders, and the judge without evidence
+    # gets an explicit n/a rather than a blank that reads as a measured zero.
+    import re
+
+    from evaluatorq.pairwise_reports.export_html import _render_judges_html
+    from evaluatorq.pairwise_reports.sections import build_report_sections
+    from evaluatorq.pairwise_run import new_run
+
+    run = new_run(run_name='mixed-reps', judges=['measured', 'legacy'])
+    for i in range(3):
+        run.add(
+            _comparison([
+                _vote('measured', 'A', [_obs('ab', 0, 'A'), _obs('ab', 1, 'A')]),
+                _vote('legacy', 'A'),
+            ]),
+            question=f'q-{i}',
+            response_a=f'a-{i}',
+            response_b=f'b-{i}',
+        )
+    run.save(tmp_path / 'run.json')
+
+    judges = build_report_sections(run)[1]
+    html = _render_judges_html(judges)
+    headers = re.findall(r'<th[^>]*>(.*?)</th>', html, re.S)
+    legacy_row = next(r for r in re.findall(r'<tr>(.*?)</tr>', html, re.S) if 'legacy' in r)
+    cells = re.findall(r'<td[^>]*>(.*?)</td>', legacy_row, re.S)
+    assert 'n/a' in cells[headers.index('Consistency (raw)')]
+    assert 'n/a' in cells[headers.index('Consistency (shrunk)')]
 
 
 def test_repetition_consistency_raw_is_published_alongside_shrunk() -> None:

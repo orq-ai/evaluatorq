@@ -10,13 +10,16 @@ from __future__ import annotations
 import asyncio
 import importlib
 from collections import Counter
+from collections.abc import Mapping, Sequence
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from evaluatorq.common.judge import EvaluatorResponsePayload, JudgeOutcome
+from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY, JURY_RAW_OUTPUT_KEY, JuryResult
 from evaluatorq.llm_jury import llm_jury, llm_jury_pairwise
 from evaluatorq.pairwise import build_report
+from evaluatorq.redteam.reports.converters import _extract_evaluation_error
 from evaluatorq.types import DataPoint
 
 llm_jury_mod = importlib.import_module("evaluatorq.llm_jury")
@@ -31,6 +34,33 @@ def _fake_run_judge(calls: list[str], value: str = "yes"):
         await asyncio.sleep(0)
         return JudgeOutcome(
             payload=EvaluatorResponsePayload(value=value, explanation="ok"),
+            token_usage=None,
+            raw_content="{}",
+        )
+
+    return fake
+
+
+def _fake_run_judge_scripted(script: Mapping[str, Sequence[tuple[str, str] | None]]):
+    """Judge fake driven by a per-model script of (verdict, explanation) passes.
+
+    A `None` entry is a pass that raised. Unlike `_fake_run_judge`, judges can disagree
+    with each other and with themselves, which is what distinguishes a record that
+    preserves per-judge and per-repetition detail from one that copies the consensus.
+    """
+    cursors: dict[str, int] = {}
+
+    async def fake(**kwargs):
+        model = kwargs["model"]
+        i = cursors.get(model, 0)
+        cursors[model] = i + 1
+        await asyncio.sleep(0)
+        entry = script[model][i]
+        if entry is None:
+            raise RuntimeError("boom")
+        value, explanation = entry
+        return JudgeOutcome(
+            payload=EvaluatorResponsePayload(value=value, explanation=explanation),
             token_usage=None,
             raw_content="{}",
         )
@@ -211,7 +241,9 @@ async def test_cyclic_item_reports_no_agreement_stats():
         result = await ev["scorer"]({"data": _datapoint(), "output": "x"})
     assert not isinstance(result, dict)
     assert result.explanation is not None
-    assert "raw agreement n/a" in result.explanation
+    # No agreement to report means the clause is absent, not rendered as a placeholder.
+    assert "raw agreement" not in result.explanation
+    assert "[jury: 1/1 judges]" in result.explanation
 
     # assignment='all' keeps reporting the real cross-judge rate.
     ev_all = llm_jury(
@@ -349,12 +381,161 @@ async def test_result_carries_jury_record_for_audit():
 
 
 @pytest.mark.asyncio
-async def test_all_assignment_result_has_no_jury_record():
-    """The jury record is cyclic-only: under 'all' the panel itself is the
-    record, and raw_output stays None so external callers using it as a
-    signal keep the pre-cyclic behavior."""
-    ev = llm_jury(name="x", criteria="c", judges=["m1", "m2", "m3"], client=MagicMock())
-    with patch.object(llm_jury_mod, "run_judge", side_effect=_fake_run_judge([])):
+async def test_all_assignment_records_every_judge_verdict_and_reasoning():
+    """Under 'all' the record holds one vote per panel member, with that judge's own
+    verdict and reasoning, so a dissenter is identifiable without re-running the panel.
+
+    The judges deliberately disagree: an all-'yes' panel cannot tell a record that
+    preserves per-judge verdicts from one that copies the consensus onto every vote.
+    """
+    ev = llm_jury(
+        name="x",
+        criteria="c",
+        judges=["m1", "m2", "m3"],
+        labels=["yes", "no"],
+        passing_labels=["yes"],
+        client=MagicMock(),
+    )
+    script = {
+        "m1": [("yes", "m1 says yes")],
+        "m2": [("yes", "m2 says yes")],
+        "m3": [("no", "m3 dissents")],
+    }
+    with patch.object(llm_jury_mod, "run_judge", side_effect=_fake_run_judge_scripted(script)):
         result = await ev["scorer"]({"data": _datapoint(), "output": "x"})
     assert not isinstance(result, dict)
+    assert result.raw_output is not None
+    jury = JuryResult.model_validate(result.raw_output["jury"])
+    assert [(v.model, v.value, v.explanation) for v in jury.votes] == [
+        ("m1", "yes", "m1 says yes"),
+        ("m2", "yes", "m2 says yes"),
+        ("m3", "no", "m3 dissents"),
+    ]
+    # 2 of 3 in the largest bloc — the dissent survives into the aggregate too.
+    assert jury.raw_agreement == pytest.approx(2 / 3)
+
+
+@pytest.mark.asyncio
+async def test_jury_record_keeps_per_repetition_verdicts_and_reasoning():
+    """Each vote carries one `JuryRepetition` per pass, holding that pass's own verdict
+    and reasoning together, so a judge that flip-flopped across its own repetitions is
+    fully reconstructible from the result."""
+    ev = llm_jury(
+        name="x",
+        criteria="c",
+        judges=["m1", "m2"],
+        labels=["yes", "no"],
+        passing_labels=["yes"],
+        repetitions=3,
+        client=MagicMock(),
+    )
+    script = {
+        "m1": [("yes", "pass 1"), ("no", "pass 2 changed my mind"), ("yes", "pass 3")],
+        "m2": [("yes", "m2 pass 1"), ("yes", "m2 pass 2"), ("yes", "m2 pass 3")],
+    }
+    with patch.object(llm_jury_mod, "run_judge", side_effect=_fake_run_judge_scripted(script)):
+        result = await ev["scorer"]({"data": _datapoint(), "output": "x"})
+    assert not isinstance(result, dict)
+    assert result.raw_output is not None
+    jury = JuryResult.model_validate(result.raw_output["jury"])
+    m1 = jury.votes[0]
+    assert [(r.value, r.explanation) for r in m1.repetitions] == [
+        ("yes", "pass 1"),
+        ("no", "pass 2 changed my mind"),
+        ("yes", "pass 3"),
+    ]
+    # The collapsed vote keeps ONE representative explanation; the dissenting pass's
+    # reasoning is only recoverable from the repetitions.
+    assert m1.value == "yes"
+    assert m1.explanation in {"pass 1", "pass 3"}
+    assert [r.explanation for r in jury.votes[1].repetitions] == ["m2 pass 1", "m2 pass 2", "m2 pass 3"]
+
+
+@pytest.mark.asyncio
+async def test_failed_and_abstained_repetitions_keep_aligned_reasoning():
+    """A pass that errored keeps its slot with a null verdict and null reasoning, so
+    the surviving passes stay at their real repetition index."""
+    ev = llm_jury(
+        name="x",
+        criteria="c",
+        judges=["m1"],
+        labels=["yes", "no"],
+        passing_labels=["yes"],
+        repetitions=3,
+        replacement_judges=["m9"],
+        client=MagicMock(),
+    )
+    script = {
+        "m1": [("yes", "first pass"), None, ("yes", "third pass")],
+    }
+    with patch.object(llm_jury_mod, "run_judge", side_effect=_fake_run_judge_scripted(script)):
+        result = await ev["scorer"]({"data": _datapoint(), "output": "x"})
+    assert not isinstance(result, dict)
+    assert result.raw_output is not None
+    jury = JuryResult.model_validate(result.raw_output["jury"])
+    vote = jury.votes[0]
+    assert [(r.value, r.explanation) for r in vote.repetitions] == [
+        ("yes", "first pass"),
+        (None, None),
+        ("yes", "third pass"),
+    ]
+    assert vote.repetitions_failed == 1
+
+
+@pytest.mark.asyncio
+async def test_errored_target_carries_no_jury_record():
+    """No panel ran, so there is nothing to record: the result stays inconclusive with
+    raw_output None rather than a synthetic empty jury that would read as 'judges ran
+    and agreed on nothing'."""
+    ev = llm_jury(name="x", criteria="c", judges=["m1", "m2"], client=MagicMock())
+    calls: list[str] = []
+    with patch.object(llm_jury_mod, "run_judge", side_effect=_fake_run_judge(calls)):
+        result = await ev["scorer"]({
+            "data": _datapoint(),
+            "output": {"error": "target exploded"},
+        })
+    assert not isinstance(result, dict)
     assert result.raw_output is None
+    assert result.value == "inconclusive"
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_inconclusive_result_names_the_judge_failure():
+    """An inconclusive verdict carries a machine-readable cause, not just a sentence.
+
+    The red-team bridge has always written EVAL_ERROR_RAW_OUTPUT_KEY on a failed panel;
+    llm_jury dropped it, so the same outage was invisible to the error rollup depending on
+    which surface ran the judges.
+    """
+    ev = llm_jury(
+        name="x",
+        criteria="c",
+        judges=["m1", "m2"],
+        assignment="cyclic",
+        labels=["yes", "no"],
+        passing_labels=["yes"],
+        client=MagicMock(),
+    )
+    calls: list[str] = []
+    with patch.object(llm_jury_mod, "run_judge", side_effect=_fake_run_judge_failing(calls, "m1")):
+        result = await ev["scorer"]({"data": _datapoint(), "output": "x"})
+    assert not isinstance(result, dict)
+    assert result.value == "inconclusive"
+    assert result.raw_output is not None
+    payload = result.raw_output[EVAL_ERROR_RAW_OUTPUT_KEY]
+    assert "boom" in payload["message"]
+    assert payload["error_type"] == "jury_no_verdict"
+    assert payload["stage"] == "evaluation"
+    assert payload["details"]["judge_errors"] == ["boom"]
+    # Shape check, not decoration: the report converter lifts this payload by validating
+    # it as a RunError, and silently discards it when validation fails.
+    assert _extract_evaluation_error(result.raw_output) is not None
+    # The jury record still rides alongside the cause — one writer puts both there.
+    assert JURY_RAW_OUTPUT_KEY in result.raw_output
+    # And a conclusive verdict carries no cause to explain.
+    with patch.object(llm_jury_mod, "run_judge", side_effect=_fake_run_judge(calls)):
+        ok = await ev["scorer"]({"data": _datapoint(), "output": "x"})
+    assert not isinstance(ok, dict)
+    assert ok.raw_output is not None
+    assert EVAL_ERROR_RAW_OUTPUT_KEY not in ok.raw_output

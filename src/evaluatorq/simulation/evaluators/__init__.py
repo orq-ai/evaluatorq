@@ -9,6 +9,7 @@ from __future__ import annotations
 from evaluatorq.simulation.evaluators.scorers import (
     DEFAULT_SCORING_CONFIG,
     SIMULATION_EVALUATORS,
+    ConversationQualityScore,
     SimulationScorer,
     SimulationScoringConfig,
     conversation_quality_scorer,
@@ -22,6 +23,7 @@ from evaluatorq.simulation.evaluators.scorers import (
 __all__ = [
     'DEFAULT_SCORING_CONFIG',
     'SIMULATION_EVALUATORS',
+    'ConversationQualityScore',
     'SimulationScorer',
     'SimulationScoringConfig',
     'conversation_quality_scorer',

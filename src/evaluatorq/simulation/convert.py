@@ -6,6 +6,9 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
+from pydantic_core import to_jsonable_python
+
 from evaluatorq.contracts import content_to_text
 from evaluatorq.openresponses.convert_models import (
     FunctionCall,
@@ -37,6 +40,25 @@ def _generate_item_id(prefix: str) -> str:
     return f'{prefix}_{uuid.uuid4().hex[:24]}'
 
 
+def _jsonable(value: Any, key: str) -> Any:
+    """Serialise a free-form ``SimulationResult.metadata`` value for the trace payload.
+
+    A type pydantic cannot serialise degrades to its ``repr()`` rather than raising —
+    one exotic value must not take down the conversion of an otherwise complete run —
+    and the fallback logs a warning naming the key and the type, so the degradation is
+    not silent.
+    """
+
+    def _unserialisable(unknown: object) -> str:
+        logger.warning(
+            f'simulation metadata key {key!r} holds a {type(unknown).__name__} that cannot be '
+            f'serialised to JSON; publishing its repr() instead'
+        )
+        return repr(unknown)
+
+    return to_jsonable_python(value, fallback=_unserialisable)
+
+
 def to_open_responses(
     result: SimulationResult,
     model: str = 'simulation',
@@ -51,6 +73,22 @@ def to_open_responses(
     - token_usage                     -> Usage
     - terminated_by                   -> status
     - goal_achieved, rules_broken, criteria_results, turn_metrics -> metadata
+
+    ``criteria_results`` never travels alone: ``criteria_verified``,
+    ``criteria_meta``, ``criteria_errors``, ``scorer_errors`` and ``datapoint_id``
+    are always present in the metadata block, ``None`` when the run has none.
+
+    ``criteria_errors`` and ``scorer_errors`` report the state of ``result.metadata``
+    **at conversion time**, which is not the same as the end of the run. On the
+    evaluatorq job path (``simulation/api.py``) the conversion happens inside the job,
+    before the scorers run, and both keys are written during scoring — so on that path
+    they are always ``None`` and a ``null`` there means "not yet known", not "no errors".
+    Only the persisted-results export path (``eq sim`` report generation) converts after
+    scoring and can show them populated.
+
+    ``token_usage_known`` sits beside ``usage`` for the same reason ``criteria_verified``
+    sits beside ``criteria_results``: ``False`` means the usage numbers are partial and
+    must be read as unknown, never as a cheap run.
     """
     now = int(time.time())
 
@@ -136,8 +174,18 @@ def to_open_responses(
         'reason': result.reason,
         'turn_count': result.turn_count,
         'rules_broken': result.rules_broken,
+        # criteria_results is the lossy dict; criteria_verified is its warning label
+        # ("False means the whole block is unaudited: treat criteria_results as unknown,
+        # not met"), and criteria_meta is the only place per-criterion `audited` survives.
+        # All three are emitted unconditionally — a missing key reads as a clean run.
+        'criteria_verified': result.criteria_verified,
+        'criteria_meta': _jsonable(result.metadata.get('criteria_meta'), 'criteria_meta'),
+        'criteria_errors': _jsonable(result.metadata.get('criteria_errors'), 'criteria_errors'),
+        'scorer_errors': _jsonable(result.metadata.get('scorer_errors'), 'scorer_errors'),
+        'datapoint_id': _jsonable(result.metadata.get('datapoint_id'), 'datapoint_id'),
     }
-    if result.criteria_results:
+    # `is not None`, not truthiness: {} is a scenario with zero criteria, not an absent block.
+    if result.criteria_results is not None:
         metadata['criteria_results'] = result.criteria_results
     if result.turn_metrics:
         metadata['turn_metrics'] = [tm.model_dump(mode='json') for tm in result.turn_metrics]
@@ -168,6 +216,7 @@ def to_open_responses(
         'reasoning': None,
         'user': None,
         'usage': usage_data,
+        'token_usage_known': result.token_usage_known,
         'max_output_tokens': None,
         'max_tool_calls': None,
         'store': False,

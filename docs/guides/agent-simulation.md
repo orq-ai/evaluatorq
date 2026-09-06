@@ -387,12 +387,16 @@ One number per conversation, weighted across the other three scorers:
 
 The weights must sum to `1.0` — `SimulationScoringConfig` rejects any other sum at construction, so the composite stays on the same 0–1 scale as its parts and remains comparable across runs.
 
-**Worked example.** A refund conversation runs 4 turns, the judge marks the goal achieved, and 1 of the scenario's 2 criteria is met:
+**Worked example.** A refund conversation runs 4 turns, the judge marks the goal achieved, and 1 of the scenario's 2 criteria is met. The `conversation_quality` scorer returns `0.82` as a `ConversationQualityScore`; its `.breakdown` carries the component scores and weights that produced that number.
 
 - `goal_achieved` = `1.0`
 - `criteria_met` = `1/2` = `0.5`
 - `turn_efficiency` = `0.9` (4 turns: past the `<= 2` cliff, inside the `<= 4` one)
-- `conversation_quality` = `1.0 × 0.4 + 0.5 × 0.3 + 0.9 × 0.3` = `0.4 + 0.15 + 0.27` = **`0.82`**
+- `conversation_quality` = `1.0 × 0.4 + 0.5 × 0.3 + 0.9 × 0.3 = 0.4 + 0.15 + 0.27 = 0.82`
+
+Read `score.breakdown` when you call `conversation_quality_scorer()` directly; it contains `components` with `goal_achieved=1.0`, `criteria_met=0.5`, and `turn_efficiency=0.9`, plus `weights` with `0.4`, `0.3`, and `0.3`. `raw_output` on the returned `EvaluationResult` exposes the same structure in JSON form.
+
+The `criteria_met` evaluator's `raw_output` carries either per-criterion `CriteriaMeta` records under `criteria` with an `audited` label, optionally alongside `invalid`, or the lossy `criteria_results` dictionary when no metadata is available. Both shapes carry the run-level `criteria_verified` and `unverified_reason` fields; `unverified_reason` is `None` for a verified record set and names the missing audit for an unverified one. Those structured fields are local to the returned `EvaluationResult` and local result dumps; evaluatorq strips `raw_output` before the Orq experiment upload, and it is not attached to the evaluator span. The span and upload still carry the score, explanation, and pass flag.
 
 ### Changing the policy
 
@@ -418,6 +422,33 @@ results = await simulate(
 
 - cliffs that are not ordered — turn thresholds must strictly increase and scores must not increase with them, so a longer conversation can never score higher than a shorter one;
 - weights that do not sum to `1.0`.
+
+## Hooks receive failed evaluator outcomes
+
+Pass a `SimulationHooks` implementation through `hooks=` when you need lifecycle events. The `on_evaluator_complete` contract changed: the old callback received `(datapoint_id, name, score: float, result)`, while the new callback receives `(datapoint_id, name, score: EvaluatorScore, result: SimulationResult)`. Update a custom hook to read the numeric verdict from `score.score.value`, the explanation from `score.score.explanation`, and evaluator failures from `score.error`.
+
+The callback fires once for every evaluator score, including failed or non-numeric scores. `metadata['evaluator_scores']` remains numeric-only; unusable outcomes are recorded in `metadata['evaluator_errors']` and appear in reports as a `Dropped` count. A hook must therefore tolerate `score.score.value` being non-numeric and must not assume that every event has a usable float.
+
+```python
+from evaluatorq import EvaluatorScore
+from evaluatorq.simulation import DefaultHooks, SimulationResult
+
+
+class AuditHooks(DefaultHooks):
+    async def on_evaluator_complete(
+        self,
+        datapoint_id: str,
+        name: str,
+        score: EvaluatorScore,
+        result: SimulationResult,
+    ) -> None:
+        if score.error is not None:
+            print(f"{datapoint_id} {name} dropped: {score.error}")
+            return
+        print(f"{datapoint_id} {name}: {score.score.value!r}")
+```
+
+`on_stage_end(stage, meta)` reports stage failures through `meta['error']`. The value is the live exception object, not a preformatted string; test `error is not None` and use `type(error).__name__` and `str(error)` when logging it. This applies to `generate()` as well as the other generation and simulation entry points. `DefaultHooks` logs a `WARNING`, and `RichHooks` prints a failed-stage line when the key is set.
 
 ## From existing traces and data
 

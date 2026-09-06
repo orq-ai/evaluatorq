@@ -231,7 +231,12 @@ class TestJury:
         assert client.chat.completions.create.await_count == 3
         assert result.jury is not None
         assert len(result.jury.votes) == 1
-        assert result.jury.votes[0].repetitions == [True, True, False]
+        assert [r.value for r in result.jury.votes[0].repetitions] == [True, True, False]
+        assert [r.explanation for r in result.jury.votes[0].repetitions] == [
+            'judge says True',
+            'judge says True',
+            'judge says False',
+        ]
 
     @pytest.mark.asyncio
     async def test_per_judge_repetition_tie_abstains(self):

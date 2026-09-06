@@ -1,15 +1,23 @@
 from __future__ import annotations
 
 import pytest
+from loguru import logger
 
 from evaluatorq.common.jury import (
     NumericAggName,
     Prediction,
     VerdictKind,
+    attach_jury_raw_output,
     run_jury,
     validate_aggregator,
 )
-from evaluatorq.contracts import TokenUsage
+from evaluatorq.contracts import (
+    EVAL_ERROR_RAW_OUTPUT_KEY,
+    JURY_RAW_OUTPUT_KEY,
+    JuryResult,
+    JuryVote,
+    TokenUsage,
+)
 
 
 @pytest.mark.asyncio
@@ -407,3 +415,72 @@ async def test_repetition_collapse_min() -> None:
         judge_fn=judge, panel=['a'], repetitions=3, verdict_kind=VerdictKind.NUMERIC, aggregator='min'
     )
     assert result.verdict == pytest.approx(0.2)
+
+
+# ---------------------------------------------------------------------------
+# attach_jury_raw_output — the single writer of the two lifted raw_output keys
+# ---------------------------------------------------------------------------
+
+
+def _jury(*, error: str | None = None) -> JuryResult:
+    vote = JuryVote(model='m1', success=error is None, value=None if error else True, error=error)
+    return JuryResult(
+        judges_configured=1,
+        judges_succeeded=0 if error else 1,
+        judges_failed=1 if error else 0,
+        inconclusive=bool(error),
+        votes=[vote],
+    )
+
+
+@pytest.mark.parametrize('raw_output', [None, {}, {'value': True}])
+def test_attach_jury_raw_output_returns_input_unchanged_without_a_jury(raw_output: dict[str, object] | None) -> None:
+    """No jury means nothing to write, so the caller's raw_output is handed straight back.
+
+    ``None`` staying ``None`` is the load-bearing case: consumers of a serialized report
+    distinguish ``null`` from ``{}``, so materializing an empty dict here would claim the
+    evaluator produced a raw output it never produced.
+    """
+    assert attach_jury_raw_output(raw_output, None) is raw_output
+
+
+def test_attach_jury_raw_output_merges_into_prior_dict_preserving_caller_keys() -> None:
+    jury = _jury()
+    merged = attach_jury_raw_output({'value': True, 'explanation': 'because'}, jury)
+    assert merged is not None
+    assert merged['value'] is True
+    assert merged['explanation'] == 'because'
+    assert JuryResult.model_validate(merged[JURY_RAW_OUTPUT_KEY]) == jury
+
+
+def test_attach_jury_raw_output_does_not_mutate_the_caller_dict() -> None:
+    original: dict[str, object] = {'value': True}
+    merged = attach_jury_raw_output(original, _jury())
+    assert original == {'value': True}
+    assert merged is not original
+
+
+def test_attach_jury_raw_output_omits_the_error_key_when_no_payload_is_supplied() -> None:
+    merged = attach_jury_raw_output(None, _jury())
+    assert merged is not None
+    assert EVAL_ERROR_RAW_OUTPUT_KEY not in merged
+
+
+def test_attach_jury_raw_output_writes_the_supplied_error_payload() -> None:
+    payload = {'message': 'blocked', 'error_type': 'content_filter'}
+    merged = attach_jury_raw_output(None, _jury(error='blocked'), error_payload=payload)
+    assert merged is not None
+    assert merged[EVAL_ERROR_RAW_OUTPUT_KEY] == payload
+
+
+def test_attach_jury_raw_output_warns_when_an_error_payload_has_no_jury_to_ride(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The degraded branch announces itself: a dropped payload is a lost cause, not a no-op."""
+    handler_id = logger.add(caplog.handler, format='{message}', level='WARNING')
+    try:
+        original: dict[str, object] = {'value': True}
+        assert attach_jury_raw_output(original, None, error_payload={'message': 'x'}) is original
+    finally:
+        logger.remove(handler_id)
+    assert 'dropping the judge error payload' in caplog.text

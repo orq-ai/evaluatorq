@@ -13,11 +13,18 @@ from pydantic import ValidationError
 
 from evaluatorq import DataPoint, EvaluationResult
 from evaluatorq.common.judge import JudgeError, JudgeOutcome, build_eval_replacements, judge_error_payload, run_judge
-from evaluatorq.common.jury import Prediction, VerdictKind, _panel_composition_messages, append_jury_summary, run_jury
+from evaluatorq.common.jury import (
+    Prediction,
+    VerdictKind,
+    _panel_composition_messages,
+    append_jury_summary,
+    attach_jury_raw_output,
+    run_jury,
+)
 from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.common.output_adapters import output_error_text, output_to_messages
 from evaluatorq.common.tracing import set_span_attrs
-from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY, JURY_RAW_OUTPUT_KEY, TokenUsage
+from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY, TokenUsage
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
@@ -353,14 +360,14 @@ def create_owasp_evaluator(
             explanation = append_jury_summary(deliberation.explanation, deliberation.jury)
             set_span_attrs(evaluation_span, {'orq.redteam.passed': span_pass_state(passed), 'output': explanation})
             set_jury_span_attrs(evaluation_span, deliberation.jury)
-            raw_output: dict[str, Any] = {
-                'value': passed,
-                'explanation': deliberation.explanation,
-                JURY_RAW_OUTPUT_KEY: deliberation.jury.model_dump(mode='json'),
-            }
             # No verdict means the judges failed; record it or the outage is invisible.
-            if passed is None and last_error is not None:
-                raw_output[EVAL_ERROR_RAW_OUTPUT_KEY] = judge_error_payload(last_error, category)
+            raw_output = attach_jury_raw_output(
+                {'value': passed, 'explanation': deliberation.explanation},
+                deliberation.jury,
+                error_payload=judge_error_payload(last_error, category)
+                if passed is None and last_error is not None
+                else None,
+            )
             return EvaluationResult.model_validate({
                 'value': passed if passed is not None else 'inconclusive',
                 'explanation': explanation,

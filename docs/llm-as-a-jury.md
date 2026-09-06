@@ -137,6 +137,29 @@ for r in results:
             print(score.score.explanation)  # includes the per-judge jury summary
 ```
 
+The appended summary is one line (`[jury: 3/3 judges, raw agreement 100%]`) — it does not name the individual judges or say what each of them decided. That detail rides on `raw_output["jury"]`, which every **judged** result carries: the serialized `JuryResult` with one entry per judge (model ID, verdict, explanation, abstain/failure state) plus panel stats and raw agreement. When `repetitions > 1`, each vote also carries that judge's raw per-repetition verdicts *and* the reasoning behind each one.
+
+The payload is the JSON form of `JuryResult`, so validate it back into the typed model rather than indexing raw keys — that is what the red-team report layer does with the same payload (`redteam/reports/converters.py`):
+
+```python
+from evaluatorq.contracts import JURY_RAW_OUTPUT_KEY, JuryResult
+
+jury = JuryResult.model_validate(score.score.raw_output[JURY_RAW_OUTPUT_KEY])
+for vote in jury.votes:
+    print(vote.model, vote.value, vote.explanation)
+    for rep in vote.repetitions:
+        print("   ", rep.value, rep.explanation)
+print(jury.raw_agreement, jury.stats)
+```
+
+Each entry in `vote.repetitions` is a `JuryRepetition` with a `value` (`None` where the pass abstained or failed) and an `explanation` (`None` where the pass produced no text). Reports saved before the field existed stored bare verdicts; they still load, with `explanation` set to `None`.
+
+A datapoint whose **target** errored is never judged: it returns `inconclusive` with `raw_output` still `None`, because no panel ran. Reach for `.get(JURY_RAW_OUTPUT_KEY)` if your code walks every result rather than only the judged ones.
+
+When the panel *did* run but reached no verdict, the result is `inconclusive` and `raw_output` carries a second key, `EVAL_ERROR_RAW_OUTPUT_KEY` (`"evaluation_error"`), naming why: the last judge error, the full list of judge errors, and how many judges failed. It is written only when a judge actually recorded a failure — a panel where every judge abstained cleanly, or where too few of them agreed, produced a non-verdict rather than an outage and gets no error payload. A single shared writer keeps this key beside `"jury"`; in a direct `llm_jury()` result, the payload stays in `raw_output` for your code to read, while the red-team report converter additionally promotes it to `result.evaluation_error` for the run's error rollup.
+
+The record is kept in local result dumps and is deliberately stripped from the Orq platform upload — judge internals stay on your machine (see `evaluatorq.send_results`).
+
 ## In red teaming
 
 Red teaming reaches the same panel through `EvaluatorConfig`, where the verdict is the categorical RESISTANT/VULNERABLE case (`passed=True` means RESISTANT):

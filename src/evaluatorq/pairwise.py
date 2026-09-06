@@ -93,6 +93,9 @@ class RepetitionObservation(BaseModel):
     verdict: Literal['A', 'B', 'tie'] | None = Field(
         default=None, description='Canonicalized verdict; None = abstained or failed pass'
     )
+    explanation: str | None = Field(
+        default=None, description="This pass's own reasoning; None when it produced no text"
+    )
 
 
 class PairwiseVote(BaseModel):
@@ -153,11 +156,15 @@ class JudgeStats(BaseModel):
     )
     consistency: float | None = Field(
         default=None,
-        description='SHRUNK within-datapoint repetition consistency in [0, 1] (RES-1251): the reliability the '
-        'winner weights actually came from, shrunk toward the panel mean, so surface it next to sigma rather '
-        'than leaving the reader to infer reliability from a pooled sigma that did not decide anything. Because '
-        'it is shrunk, a self-consistent judge reads below 1.0 unless the whole panel is; see consistency_raw '
-        'for the un-shrunk value. None when the run had no usable repeats for this judge.',
+        description='SHRUNK within-datapoint repetition consistency in [0, 1] (RES-1251): judge reliability '
+        'measured from repeated passes of the same prompt and shrunk toward the panel mean. On a bt-sigma run '
+        'where repetition weighting was actually applied, this is the quantity the winner weights came from, '
+        'surfaced next to sigma rather than leaving the reader to infer reliability from a pooled sigma that '
+        'did not decide anything; bt_sigma.fit_warnings names the runs where the weighting was skipped, and '
+        'there this number is published without having decided anything. It is a diagnostic of the recorded '
+        'repeats and needs no fit, so it is filled under plurality too. Because it is shrunk, a self-consistent '
+        'judge reads below 1.0 unless the whole panel is; see consistency_raw for the un-shrunk value. None '
+        'when the run had no usable repeats for this judge.',
     )
     consistency_raw: float | None = Field(
         default=None,
@@ -386,6 +393,23 @@ def repetition_consistency_raw(comparisons: Sequence[PairwiseComparison]) -> dic
     return {judge: raw for judge, (raw, _disc, _n) in _repetition_stats(comparisons).items()}
 
 
+def has_repeated_ordering(comparisons: Sequence[PairwiseComparison]) -> bool:
+    """Whether any judge ran an ordering more than once, i.e. whether repeats were attempted.
+
+    This is the "did the user pay for repeats" question, and it is deliberately NOT "are there
+    observations": R=1 records one pass per ordering, so observations alone are true on the default
+    path (RES-1251 review, item 15). Distinct from having consistency EVIDENCE - a repeated ordering
+    whose extra passes all failed or abstained yields no measurable group - which is why both the
+    ``fit_warnings`` here and the report's empty state need this predicate as well as the
+    consistency dict: it separates "no repeats ran" from "repeats ran and measured nothing".
+    """
+    return any(
+        any(count >= 2 for count in Counter(o.ordering for o in v.observations).values())
+        for c in comparisons
+        for v in c.votes
+    )
+
+
 # Floor for consistency-derived weights: a judge that never agreed with itself
 # still casts a (heavily discounted) vote rather than being erased outright.
 _MIN_CONSISTENCY_WEIGHT = 0.05
@@ -476,14 +500,7 @@ def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAg
     # A run can carry a genuine repeat yet produce no consistency evidence: if no single ordering
     # held >= 2 DECISIVE passes (e.g. ab=[A, None], ba=[A, None] at R=2), rep_consistency is empty
     # and we silently fall back to the pooled fit. Warn there, since the user paid for repeats.
-    # Gate on an actual repeat - some ordering with >= 2 passes - NOT merely on observations
-    # existing: R=1 captures one pass per ordering and must not trip this (RES-1251 review, item 15).
-    had_repeated_ordering = any(
-        any(count >= 2 for count in Counter(o.ordering for o in v.observations).values())
-        for c in comparisons
-        for v in c.votes
-    )
-    if not rep_consistency and had_repeated_ordering:
+    if not rep_consistency and has_repeated_ordering(comparisons):
         fit_warnings.append(
             'repetition weighting skipped: repeated passes exist but no single ordering held >= 2 decisive '
             'passes to measure consistency; using the pooled two-item fit'
@@ -617,7 +634,11 @@ def build_report(comparisons: Sequence[PairwiseComparison], *, aggregation: str 
     consensus. ``aggregation='bt-sigma'`` additionally fits hard BT-sigma over
     the run and attaches the reliability-weighted rollup (``report.bt_sigma``)
     plus each judge's discriminator (``JudgeStats.sigma``); the headline
-    plurality rates are unchanged so the two aggregations stay comparable."""
+    plurality rates are unchanged so the two aggregations stay comparable.
+
+    ``JudgeStats.consistency`` / ``consistency_raw`` are filled under BOTH aggregations: they are
+    read straight off the recorded repetition observations and need no Bradley-Terry fit, so gating
+    them on ``bt-sigma`` would report "no usable repeats" for a plurality run that has them."""
     total = len(comparisons)
     winners = Counter(c.winner for c in comparisons)
     decisive = winners['A'] + winners['B']
@@ -626,6 +647,12 @@ def build_report(comparisons: Sequence[PairwiseComparison], *, aggregation: str 
     for comparison in comparisons:
         for vote in comparison.votes:
             per_judge.setdefault(vote.model, []).append(vote)
+
+    # Repetition consistency is read off the recorded observations, so it is available under every
+    # aggregation. Computed here rather than taken from the BT block, which leaves it empty on its
+    # degraded paths (uniform-plurality fallback, no decisive votes) even when the repeats are there.
+    rep_consistency = repetition_consistency(comparisons)
+    rep_consistency_raw = repetition_consistency_raw(comparisons)
 
     judge_stats = [
         JudgeStats(
@@ -636,6 +663,8 @@ def build_report(comparisons: Sequence[PairwiseComparison], *, aggregation: str 
             # ordering never had the chance to flip and would dilute the rate.
             position_bias=_rate(sum(v.flipped for v in votes), sum(v.completed for v in votes)) or 0.0,
             tie_rate=sum(v.vote == 'tie' for v in votes) / len(votes),
+            consistency=rep_consistency.get(model),
+            consistency_raw=rep_consistency_raw.get(model),
         )
         for model, votes in per_judge.items()
     ]
@@ -653,9 +682,8 @@ def build_report(comparisons: Sequence[PairwiseComparison], *, aggregation: str 
     if aggregation == 'bt-sigma':
         bt_block = bt_sigma_aggregation(comparisons)
         for stats in judge_stats:
+            # Only sigma is gated: it is a product of the fit and does not exist without one.
             stats.sigma = bt_block.judge_sigmas.get(stats.model)
-            stats.consistency = bt_block.repetition_consistency.get(stats.model)
-            stats.consistency_raw = bt_block.repetition_consistency_raw.get(stats.model)
     elif aggregation != 'plurality':
         msg = f"unknown aggregation {aggregation!r}; expected 'plurality' or 'bt-sigma'"
         raise ValueError(msg)
@@ -836,8 +864,8 @@ async def run_pairwise(
                 if jv is None:
                     continue
                 failures += jv.repetitions_failed
-                for i, raw in enumerate(jv.repetitions):
-                    value = raw if not swapped else _unswap(raw)
+                for i, rep in enumerate(jv.repetitions):
+                    value = rep.value if not swapped else _unswap(rep.value)
                     if value is None:
                         verdict: Literal['A', 'B', 'tie'] | None = None  # genuine abstention: a valid no-decision pass
                     elif str(value) in _PAIRWISE_VALUES:
@@ -860,7 +888,10 @@ async def run_pairwise(
                         failures += 1
                     out.append(
                         RepetitionObservation(
-                            ordering=cast("Literal['ab', 'ba']", ordering), repetition=i, verdict=verdict
+                            ordering=cast("Literal['ab', 'ba']", ordering),
+                            repetition=i,
+                            verdict=verdict,
+                            explanation=rep.explanation,
                         )
                     )
             return out, failures

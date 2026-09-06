@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.contracts import ReportSection
+from evaluatorq.pairwise import has_repeated_ordering
 
 if TYPE_CHECKING:
     from evaluatorq.pairwise import PairwiseVote
@@ -134,10 +135,12 @@ def _build_judges_section(run: PairwiseRun) -> ReportSection:
             # what the votes have already settled.
             'position_bias': stat.position_bias if measured[stat.model] else None,
             'sigma': stat.sigma,
-            # The reliability the winner weights actually came from on a
-            # repetition run (shrunk toward the panel mean); shown next to sigma
-            # so the reader is not left inferring reliability from a pooled sigma
-            # that decided nothing. ``consistency_raw`` is the un-shrunk value.
+            # Judge reliability measured from repeated passes (shrunk toward the
+            # panel mean); on a bt-sigma run this is what the winner weights came
+            # from, so it is shown next to sigma rather than leaving the reader to
+            # infer reliability from a pooled sigma that decided nothing. It needs
+            # no fit, so it is carried under plurality too. ``consistency_raw`` is
+            # the un-shrunk value.
             'consistency': stat.consistency,
             'consistency_raw': stat.consistency_raw,
             'biased': measured[stat.model] and stat.position_bias >= POSITION_BIAS_WARN,
@@ -158,6 +161,14 @@ def _build_judges_section(run: PairwiseRun) -> ReportSection:
             'swap': run.swap,
             'observed_swap': any(measured.values()),
             'bt_sigma': report.bt_sigma is not None,
+            # Consistency needs no BT fit, so it gets its own flag instead of riding on
+            # ``bt_sigma``: a plurality run with repeats has the numbers and must show them.
+            'observed_consistency': any(stat.consistency is not None for stat in report.per_judge),
+            # Whether repeats were even attempted, so the renderer can tell "this run ran a
+            # single pass" apart from "repeats ran but never produced a measurable group".
+            # Shared with the fit_warnings that make the same distinction: two copies of the
+            # predicate would drift, and the caption would then call a repeated run single-pass.
+            'repeated': has_repeated_ordering(run.comparisons()),
             'rows': rows,
         },
     )

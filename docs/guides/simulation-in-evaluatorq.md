@@ -186,15 +186,20 @@ The job's output is an OpenResponses response dict. The transcript is in `input`
 | `turn_count` | `int` | Turns actually run. |
 | `rules_broken` | `list[str]` | Criteria the judge marked violated, **by id** (`criteria_0`, `criteria_1`). |
 | `criteria_results` | `dict[str, bool]` | Per-criterion pass/fail, **by description**. Present only when the judge produced at least one criterion verdict. |
+| `criteria_verified` | `bool \| None` | Whether the criteria result has a per-criterion judge audit. Always present; `None` means the result predates this field. |
+| `criteria_meta` | `list[dict] \| None` | Per-criterion audit records, including `id`, `type`, `passed`, `audited`, and `evidence`. Always present; `None` means no records were available. |
+| `criteria_errors` | `list \| None` | Malformed criteria metadata recorded during scoring. Always present; it is `None` on this job path because conversion happens before scoring. |
+| `scorer_errors` | `dict \| None` | Scorer failures recorded after conversion. Always present; it is `None` on this job path because conversion happens before scoring. |
+| `datapoint_id` | `str \| None` | The simulation datapoint identifier. Always present; `None` when the result carries no datapoint id. |
 | `turn_metrics` | `list[dict]` | Per-turn latency and token detail. Present only when metrics were collected. |
 
-Two of those keys are optional, so read them with a default rather than by subscript — a scenario with no criteria has no `criteria_results` at all, and an evaluator that assumes the key raises on the row instead of scoring it.
+`criteria_results` and `turn_metrics` are optional, so read them with a default rather than by subscript. The audit and error keys listed as always present are different: their `None` value carries meaning, so preserve it instead of treating it as an empty collection.
 
 `error` and `timeout` mean the conversation never reached the judge. Those runs are *unevaluated*, not failed, and scoring them as zero reports a broken pipeline as a bad agent — which is why `criteria_scorer` above checks `terminated_by` before it looks at anything else.
 
-!!! warning "The audit trail does not survive the conversion"
+!!! note "The conversion preserves audit and usage state"
 
-    `SimulationResult` carries `criteria_verified` and a per-criterion `criteria_meta` recording which criteria the judge actually audited. `to_open_responses()` builds a fresh metadata dict and copies neither, so on this path a criterion that is `True` because the judge checked it and a criterion that is `True` because the judge never mentioned it are indistinguishable. If that distinction matters to your scoring, use `simulate()` and read the `SimulationResult` directly.
+    `to_open_responses()` always includes `criteria_verified`, `criteria_meta`, `criteria_errors`, `scorer_errors`, and `datapoint_id` in `metadata`, plus `token_usage_known` beside the top-level `usage`. On the evaluatorq job path, conversion happens before scoring, so `criteria_errors` and `scorer_errors` are `null`; that means those errors were not known yet, not that scoring found none. A metadata value that cannot be serialized is published as its `repr()` and logged with a warning.
 
 !!! warning "`rules_broken` and `criteria_results` are keyed differently"
 

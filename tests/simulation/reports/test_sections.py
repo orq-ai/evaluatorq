@@ -56,6 +56,7 @@ def _make_result(
     turn_count: int = 1,
     tokens: tuple[int, int, int] = (10, 5, 15),
     evaluator_scores: dict[str, float] | None = None,
+    evaluator_errors: dict[str, str] | None = None,
     error: str | None = None,
     persona_traits: dict[str, object] | None = None,
     scenario_goal: str | None = None,
@@ -70,6 +71,8 @@ def _make_result(
     }
     if evaluator_scores is not None:
         metadata['evaluator_scores'] = evaluator_scores
+    if evaluator_errors is not None:
+        metadata['evaluator_errors'] = evaluator_errors
     if error is not None:
         metadata['error'] = error
     if persona_traits is not None:
@@ -277,6 +280,44 @@ def test_evaluator_scores_section_present_when_scores_attached():
     assert rows['criteria_met']['mean_score'] == 0.65
     assert rows['goal_achieved']['min_score'] == 0.0
     assert rows['goal_achieved']['max_score'] == 1.0
+
+
+def test_evaluator_scores_section_counts_dropped_scores():
+    """A crashed evaluator shrank the denominator in silence before; now the row
+    carries how many of its runs produced no score."""
+    results = [
+        _make_result(evaluator_scores={'goal_achieved': 1.0}),
+        _make_result(evaluator_scores={'goal_achieved': 0.0}, evaluator_errors={'criteria_met': 'judge died'}),
+        _make_result(evaluator_errors={'criteria_met': 'judge died'}),
+    ]
+    sections = build_report_sections(results)
+    rows = {r['evaluator']: r for r in next(s for s in sections if s.kind == 'evaluator_scores').data['rows']}
+
+    assert rows['goal_achieved']['runs'] == 2
+    assert rows['goal_achieved']['dropped'] == 0
+    # criteria_met never produced a usable score: it is still visible, with no
+    # fabricated 0.00 mean standing in for the scores that never arrived.
+    assert rows['criteria_met']['runs'] == 0
+    assert rows['criteria_met']['dropped'] == 2
+    assert rows['criteria_met']['mean_score'] is None
+    assert rows['criteria_met']['first_error'] == 'judge died'
+
+
+def test_evaluator_scores_section_present_when_only_errors_recorded():
+    """An evaluator that failed on every run must not make the section vanish."""
+    sections = build_report_sections([_make_result(evaluator_errors={'criteria_met': 'boom'})])
+    section = next(s for s in sections if s.kind == 'evaluator_scores')
+    assert section.data['rows'] == [
+        {
+            'evaluator': 'criteria_met',
+            'runs': 0,
+            'dropped': 1,
+            'mean_score': None,
+            'min_score': None,
+            'max_score': None,
+            'first_error': 'boom',
+        }
+    ]
 
 
 def test_errors_section_present_when_failures_present():

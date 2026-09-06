@@ -30,6 +30,7 @@ from evaluatorq.simulation.types import (
     TurnMetrics,
 )
 from evaluatorq.tracing import TracingContext
+from evaluatorq.types import EvaluationResult, EvaluatorScore
 
 
 @asynccontextmanager
@@ -71,6 +72,11 @@ def _meta() -> SimulationRunMeta:
         evaluator_names=['goal_achieved'],
         target='callback',
     )
+
+
+def _score(value: object, *, error: str | None = None) -> EvaluatorScore:
+    """One evaluatorq evaluator outcome, as `on_evaluator_complete` now receives it."""
+    return EvaluatorScore(evaluator_name='goal_achieved', score=EvaluationResult(value=value), error=error)  # pyright: ignore[reportArgumentType]
 
 
 def _result() -> SimulationResult:
@@ -179,7 +185,9 @@ def test_default_hooks_all_methods_silent(datapoint_factory):
     assert asyncio.run(hooks.on_datapoint_start(dp)) is None
     assert asyncio.run(hooks.on_turn_complete('dp1', _turn_metrics())) is None
     assert asyncio.run(hooks.on_datapoint_complete(_result())) is None
-    assert asyncio.run(hooks.on_evaluator_complete('dp1', 'goal_achieved', 1.0, _result())) is None
+    assert asyncio.run(hooks.on_evaluator_complete('dp1', 'goal_achieved', _score(1.0), _result())) is None
+    # An errored evaluator must not make the unguarded default implementation raise.
+    assert asyncio.run(hooks.on_evaluator_complete('dp1', 'goal_achieved', _score('', error='judge died'), _result())) is None
     assert asyncio.run(hooks.on_datapoint_error(dp, RuntimeError('boom'))) is None
     assert asyncio.run(hooks.on_run_complete([_result()])) is None
 
@@ -403,7 +411,7 @@ class RunLevelRecorder(DefaultHooks):
     def __init__(self) -> None:
         self.confirmed: list[int] = []
         self.run_started: list[int] = []
-        self.evaluator_events: list[tuple[str, str, float]] = []
+        self.evaluator_events: list[tuple[str, str, object]] = []
         self.run_completed = 0
 
     def on_confirm(self, meta):
@@ -414,7 +422,7 @@ class RunLevelRecorder(DefaultHooks):
         self.run_started.append(meta['num_datapoints'])
 
     def on_evaluator_complete(self, datapoint_id, name, score, result):
-        self.evaluator_events.append((datapoint_id, name, score))
+        self.evaluator_events.append((datapoint_id, name, score.score.value))
 
     def on_run_complete(self, results):
         self.run_completed += 1
@@ -963,7 +971,7 @@ async def test_simulate_fires_run_level_hooks_async(datapoint_factory):
         def __init__(self) -> None:
             self.confirmed: list[int] = []
             self.run_started: list[int] = []
-            self.evaluator_events: list[tuple[str, str, float]] = []
+            self.evaluator_events: list[tuple[str, str, object]] = []
             self.run_completed = 0
 
         async def on_confirm(self, meta):
@@ -974,7 +982,7 @@ async def test_simulate_fires_run_level_hooks_async(datapoint_factory):
             self.run_started.append(meta['num_datapoints'])
 
         async def on_evaluator_complete(self, datapoint_id, name, score, result):
-            self.evaluator_events.append((datapoint_id, name, score))
+            self.evaluator_events.append((datapoint_id, name, score.score.value))
 
         async def on_run_complete(self, results):
             self.run_completed += 1
@@ -1121,6 +1129,36 @@ def test_rich_stage_start_renders_rule():
     h = RichHooks(console=__import__('rich.console', fromlist=['Console']).Console(file=buf, width=80, force_terminal=False))
     asyncio.run(h.on_stage_start(SimStage.SIMULATE, {}))
     assert 'Running Simulations' in buf.getvalue()
+
+
+def test_default_hooks_stage_end_warns_on_error(caplog):
+    """A stage that ended because it blew up must not be logged like one that
+    finished — DefaultHooks logs at WARNING and names the error."""
+    with caplog.at_level('WARNING'):
+        asyncio.run(DefaultHooks().on_stage_end(SimStage.GENERATE, {'error': RuntimeError('generation blew up')}))
+    assert 'Stage failed: Generating Datapoints' in caplog.text
+    assert 'RuntimeError: generation blew up' in caplog.text
+    assert 'Stage end' not in caplog.text
+
+
+def test_default_hooks_stage_end_stays_info_without_error(caplog):
+    with caplog.at_level('INFO'):
+        asyncio.run(DefaultHooks().on_stage_end(SimStage.GENERATE, {'error': None}))
+    assert 'Stage end: Generating Datapoints' in caplog.text
+    assert 'Stage failed' not in caplog.text
+
+
+def test_rich_stage_end_prints_failed_line_on_error():
+    """Before this, a failed stage vanished from the terminal: the rule printed by
+    on_stage_start was never followed by anything."""
+    buf = io.StringIO()
+    from rich.console import Console
+
+    h = RichHooks(console=Console(file=buf, width=100, force_terminal=False))
+    asyncio.run(h.on_stage_end(SimStage.GENERATE, {'error': RuntimeError('generation blew up'), 'num_datapoints': 0}))
+    out = buf.getvalue()
+    assert 'Generating Datapoints failed' in out
+    assert 'RuntimeError: generation blew up' in out
 
 
 def test_rich_stage_end_generate_prints_count():
@@ -1367,6 +1405,63 @@ async def test_generate_fires_generate_stage_hooks(monkeypatch):
 
     assert result == ['dp']
     assert events == [('start', str(SimStage.GENERATE)), ('end', str(SimStage.GENERATE))]
+
+
+def _patch_generate_environment(monkeypatch, inner):
+    """Point generate() at *inner* with tracing and span creation stubbed out."""
+    from evaluatorq.simulation import api
+
+    @asynccontextmanager
+    async def _fake_span(*_args, **_kwargs):
+        yield None
+
+    monkeypatch.setattr(api, '_generate_datapoints_inner', inner)
+    monkeypatch.setattr('evaluatorq.simulation.tracing.with_simulation_span', _fake_span)
+    monkeypatch.setattr('evaluatorq.tracing.tracing_session', _noop_tracing_session)
+
+
+@pytest.mark.asyncio
+async def test_generate_stage_end_carries_the_live_exception(monkeypatch):
+    """generate() closed a failed GENERATE stage exactly like a successful one.
+    It must thread the in-flight exception, as generate_and_simulate does."""
+    from evaluatorq.simulation import api
+
+    metas: list[dict[str, Any]] = []
+
+    class StageRecorder(DefaultHooks):
+        async def on_stage_end(self, stage, meta):
+            metas.append(meta)
+
+    async def _boom(**_kwargs):
+        raise RuntimeError('generation blew up')
+
+    _patch_generate_environment(monkeypatch, _boom)
+
+    with pytest.raises(RuntimeError, match='generation blew up'):
+        await api.generate(agent_description='x', hooks=StageRecorder())
+
+    assert len(metas) == 1
+    assert isinstance(metas[0]['error'], RuntimeError)
+    assert str(metas[0]['error']) == 'generation blew up'
+
+
+@pytest.mark.asyncio
+async def test_generate_stage_end_error_is_none_on_success(monkeypatch):
+    from evaluatorq.simulation import api
+
+    metas: list[dict[str, Any]] = []
+
+    class StageRecorder(DefaultHooks):
+        async def on_stage_end(self, stage, meta):
+            metas.append(meta)
+
+    async def _ok(**_kwargs):
+        return ['dp'], object(), False, None
+
+    _patch_generate_environment(monkeypatch, _ok)
+
+    assert await api.generate(agent_description='x', hooks=StageRecorder()) == ['dp']
+    assert metas == [{'error': None}]
 
 
 @pytest.mark.asyncio

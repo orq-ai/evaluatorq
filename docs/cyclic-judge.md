@@ -55,9 +55,7 @@ Calling a scorer directly, outside `evaluatorq()`, provides no row index. Those 
 
 ## Auditing the rotation
 
-Under `assignment="cyclic"`, every result carries the full jury record — per-judge votes, model IDs, verdicts — under `raw_output["jury"]`. It is the only record of which judge scored which item, so it is what you reach for to check the rotation actually balanced, or to find a judge that has gone off the rails.
-
-This is cyclic-only. Under `"all"` the panel itself is the record, so the payload would be redundant: `raw_output` stays `None` and results keep the shape they had before cyclic existed.
+Every judged result carries the full jury record — per-judge votes, model IDs, verdicts — under `raw_output["jury"]` (see [Reading the output](llm-as-a-jury.md#reading-the-output)). A datapoint whose target errored was never judged and keeps `raw_output=None`. Under `assignment="cyclic"`, the jury record is the only record of which judge scored each judged item, so it is what you reach for to check the rotation actually balanced, or to find a judge that has gone off the rails.
 
 ```python
 from collections import Counter
@@ -78,7 +76,7 @@ For pairwise runs, `build_report` already rolls per-judge rates up for you into 
 
 ## What changes per item
 
-- **`stats` and `raw_agreement` are `None`.** One vote has no cross-judge agreement to report, and emitting `1.0` / `std=0.0` would be indistinguishable from a genuinely unanimous panel. Summaries render `raw agreement n/a`.
+- **`stats` and `raw_agreement` are `None`.** One vote has no cross-judge agreement to report, and emitting `1.0` / `std=0.0` would be indistinguishable from a genuinely unanimous panel. Summaries omit the agreement clause entirely rather than printing a placeholder for it.
 - **`repetitions` still applies to the assigned judge.** `repetitions=3` means three calls to *one* judge, smoothing that judge's own call noise — never three judges. It multiplies the cost accordingly.
 - **Rotation runs over the deduplicated panel.** `judges=["a", "a", "b"]` gives `a` two votes per item under `"all"`, but an equal share under `"cyclic"`. Listing a judge twice to up-weight it only works under `"all"`.
 

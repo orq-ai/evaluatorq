@@ -16,6 +16,7 @@ from evaluatorq.common.jury import (
     TieBreak,
     VerdictKind,
     append_jury_summary,
+    attach_jury_raw_output,
     run_jury,
     validate_aggregator,
 )
@@ -26,7 +27,7 @@ from evaluatorq.common.output_adapters import (
     output_to_messages,
     output_to_text,
 )
-from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL, JURY_RAW_OUTPUT_KEY, LLMCallConfig
+from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL, JuryResult, LLMCallConfig
 from evaluatorq.pairwise import PairwiseComparison, run_pairwise
 from evaluatorq.types import DataPoint, EvaluationResult, Evaluator, Output, ScorerParameter
 
@@ -207,6 +208,31 @@ async def _run_single_judge(
     return _outcome_to_prediction(outcome=outcome)
 
 
+def _jury_error_payload(jury: JuryResult) -> dict[str, Any] | None:
+    """Build the machine-readable cause for a panel that came back without a verdict.
+
+    Same shape as `evaluatorq.common.judge.judge_error_payload` — the report converters
+    validate both as one `RunError` — but assembled from the bare `JuryVote.error` strings
+    a plain jury run produces, since no `JudgeOutcome` reaches this module. Returns ``None``
+    when no vote recorded a failure: every judge abstaining cleanly, or too few of them
+    agreeing, is a non-verdict rather than an outage and must not be reported as one.
+    """
+    errors = [vote.error for vote in jury.votes if vote.error]
+    if not errors:
+        return None
+    return {
+        'message': f'Jury reached no verdict; last judge error: {errors[-1]}',
+        'error_type': 'jury_no_verdict',
+        'stage': 'evaluation',
+        'code': 'jury_no_verdict',
+        'details': {
+            'judges_configured': jury.judges_configured,
+            'judges_failed': jury.judges_failed,
+            'judge_errors': errors,
+        },
+    }
+
+
 def _to_evaluation_result(
     deliberation: JuryDeliberation,
     *,
@@ -214,9 +240,16 @@ def _to_evaluation_result(
     passing_labels: list[str] | None,
     threshold: float,
     score_range: tuple[float, float],
-    include_jury_record: bool = False,
 ) -> EvaluationResult:
     """Map a `JuryDeliberation` to an `EvaluationResult`.
+
+    Every result built here carries the serialized `JuryResult` on ``raw_output``
+    under ``JURY_RAW_OUTPUT_KEY``. Callers that short-circuit before the panel runs
+    (an errored target) never reach this function and so carry no record — there is
+    no synthetic empty jury, because "no judge ran" and "judges ran and agreed on
+    nothing" are different facts. A result with no verdict additionally carries
+    ``EVAL_ERROR_RAW_OUTPUT_KEY`` naming why, whenever a judge recorded an error — so an
+    inconclusive verdict reaches the error rollup with a cause instead of only a sentence.
 
     Passing logic:
 
@@ -252,15 +285,11 @@ def _to_evaluation_result(
         'pass': passed,
         'token_usage': deliberation.token_usage,
     }
-    if include_jury_record:
-        # Same convention as the redteam bridge: the full JuryResult rides on
-        # raw_output under JURY_RAW_OUTPUT_KEY, so per-judge votes (which judge
-        # scored this item, what it said) stay auditable. Set for CYCLIC
-        # assignment only: there it is the sole record of the item->judge
-        # mapping, while under 'all' the panel itself is the record and the
-        # payload would be pure redundancy (and a behavior change for callers
-        # treating raw_output is None as a signal).
-        result['raw_output'] = {JURY_RAW_OUTPUT_KEY: deliberation.jury.model_dump(mode='json')}
+    result['raw_output'] = attach_jury_raw_output(
+        None,
+        deliberation.jury,
+        error_payload=_jury_error_payload(deliberation.jury) if verdict is None else None,
+    )
     return EvaluationResult.model_validate(result)
 
 
@@ -431,6 +460,14 @@ def llm_jury(
         share balance is guaranteed there. Shuffle the dataset first if its
         order is meaningful. Requires ``min_successful_judges=1``; a failed
         item degrades to inconclusive unless ``replacement_judges`` is set.
+    - Every **judged** result carries the full ``JuryResult`` on
+      ``EvaluationResult.raw_output`` under the ``"jury"`` key: per-judge votes
+      with each judge's model ID, verdict, explanation, and raw per-repetition
+      verdicts and reasoning, plus panel stats and raw agreement. ``explanation``
+      only gets a one-line summary, so this is the only place the per-judge detail
+      survives. A datapoint whose target errored is never judged and returns
+      ``inconclusive`` with ``raw_output=None`` — no panel ran, so there is no
+      record to carry.
 
     Examples
     --------
@@ -605,7 +642,6 @@ def llm_jury(
             passing_labels=passing_labels,
             threshold=threshold,
             score_range=score_range,
-            include_jury_record=assignment == 'cyclic',
         )
 
     return {'name': name, 'scorer': scorer}

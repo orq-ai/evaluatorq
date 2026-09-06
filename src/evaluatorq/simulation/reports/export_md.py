@@ -205,21 +205,35 @@ def _render_evaluator_scores_section(section: ReportSection) -> str:
     rows = section.data.get('rows', [])
     if not rows:
         return ''
+
+    # A statistic is None when every run of that evaluator failed; printing a
+    # dash keeps a dead evaluator visible instead of showing it as a 0.00 score.
+    def _num(value: float | None) -> str:
+        return '—' if value is None else f'{value:.2f}'
+
     table_rows = [
         [
             r['evaluator'],
             str(r['runs']),
-            f'{r["mean_score"]:.2f}',
-            f'{r["min_score"]:.2f}',
-            f'{r["max_score"]:.2f}',
+            str(r.get('dropped', 0)),
+            _num(r['mean_score']),
+            _num(r['min_score']),
+            _num(r['max_score']),
         ]
         for r in rows
     ]
     table = _md_table(
-        ['Evaluator', 'Runs', 'Mean', 'Min', 'Max'],
+        ['Evaluator', 'Runs', 'Dropped', 'Mean', 'Min', 'Max'],
         table_rows,
-        right_align={1, 2, 3, 4},
+        right_align={1, 2, 3, 4, 5},
     )
+    notes = [
+        f'- `{r["evaluator"]}`: {r["dropped"]} score(s) dropped — {r["first_error"]}'
+        for r in rows
+        if r.get('dropped') and r.get('first_error')
+    ]
+    if notes:
+        return f'## {section.title}\n\n{table}\n\n**Dropped scores:**\n\n' + '\n'.join(notes) + '\n'
     return f'## {section.title}\n\n{table}'
 
 
