@@ -448,7 +448,7 @@ class AuditHooks(DefaultHooks):
         print(f"{datapoint_id} {name}: {score.score.value!r}")
 ```
 
-`on_stage_end(stage, meta)` reports stage failures through `meta['error']`. The value is the live exception object, not a preformatted string; test `error is not None` and use `type(error).__name__` and `str(error)` when logging it. This applies to `generate()` as well as the other generation and simulation entry points. `DefaultHooks` logs a `WARNING`, and `RichHooks` prints a failed-stage line when the key is set.
+`on_stage_end(stage, meta)` reports stage failures through `meta['error']`. The value is the live exception object, not a preformatted string; test `error is not None` and use `type(error).__name__` and `str(error)` when logging it. This applies to `generate()`, `generate_and_simulate()`, and `simulate()`. The standalone persona and scenario generation helpers do not accept hooks or emit stage events. `DefaultHooks` logs a `WARNING`, and `RichHooks` prints a failed-stage line when the key is set.
 
 ## From existing traces and data
 
