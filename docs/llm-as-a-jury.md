@@ -156,6 +156,8 @@ Each entry in `vote.repetitions` is a `JuryRepetition` with a `value` (`None` wh
 
 A datapoint whose **target** errored is never judged: it returns `inconclusive` with `raw_output` still `None`, because no panel ran. Reach for `.get(JURY_RAW_OUTPUT_KEY)` if your code walks every result rather than only the judged ones.
 
+When the panel *did* run but reached no verdict, the result is `inconclusive` and `raw_output` carries a second key, `EVAL_ERROR_RAW_OUTPUT_KEY` (`"evaluation_error"`), naming why: the last judge error, the full list of judge errors, and how many judges failed. It is written only when a judge actually recorded a failure — a panel where every judge abstained cleanly, or where too few of them agreed, produced a non-verdict rather than an outage and gets no error payload. The red-team report layer lifts the same key onto `result.evaluation_error` so a blocked judge shows up in the run's error rollup.
+
 The record is kept in local result dumps and is deliberately stripped from the Orq platform upload — judge internals stay on your machine (see `evaluatorq.send_results`).
 
 ## In red teaming

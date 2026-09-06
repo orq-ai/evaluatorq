@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, Job, job
-from evaluatorq.common.jury import append_jury_summary
+from evaluatorq.common.jury import append_jury_summary, attach_jury_raw_output
 from evaluatorq.common.target_call import call_target_with_retry, close_target
 from evaluatorq.common.thread_context import build_thread_id, conversation_thread
 from evaluatorq.common.tracing import set_span_attrs, truncate_for_span
@@ -37,7 +37,6 @@ from evaluatorq.redteam.adaptive.strategy_planner import (
 from evaluatorq.redteam.backends.registry import create_async_llm_client, resolve_backend
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
-    JURY_RAW_OUTPUT_KEY,
     PIPELINE_CONFIG,
     AttackOutput,
     AttackStrategy,
@@ -712,13 +711,10 @@ def create_dynamic_evaluator(
         # rather than as a typed field; the red-team converters lift it back onto
         # UnifiedEvaluationResult.jury so per-judge votes + agreement reach the report
         # (RES-739 DoD), not just the OTel span + inline explanation text.
-        # Only materialize a dict when there is jury data to inject; otherwise
-        # pass raw_output through untouched so a pre-existing ``None`` stays
-        # ``null`` in serialized reports (consumers distinguish null from {}).
-        scored_raw_output: dict[str, Any] | None = eval_result.raw_output
-        if eval_result.jury is not None:
-            scored_raw_output = dict(eval_result.raw_output or {})
-            scored_raw_output[JURY_RAW_OUTPUT_KEY] = eval_result.jury.model_dump(mode='json')
+        # attach_jury_raw_output passes a jury-less raw_output through untouched, so a
+        # pre-existing ``None`` stays ``null`` in serialized reports (consumers
+        # distinguish null from {}).
+        scored_raw_output = attach_jury_raw_output(eval_result.raw_output, eval_result.jury)
         return EvaluationResult.model_validate({
             'value': result_value,
             'explanation': _append_jury_summary(eval_result.explanation, eval_result.jury),

@@ -7,7 +7,7 @@ import re
 import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from loguru import logger
 from pydantic import BaseModel
@@ -19,7 +19,16 @@ from evaluatorq.common.tracing import (
     truncate_for_span,
     with_span,
 )
-from evaluatorq.contracts import JuryRepetition, JuryResult, JuryStats, JuryVote, StrEnum, TokenUsage
+from evaluatorq.contracts import (
+    EVAL_ERROR_RAW_OUTPUT_KEY,
+    JURY_RAW_OUTPUT_KEY,
+    JuryRepetition,
+    JuryResult,
+    JuryStats,
+    JuryVote,
+    StrEnum,
+    TokenUsage,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
@@ -246,6 +255,41 @@ def append_jury_summary(explanation: str | None, jury: JuryResult | None) -> str
         parts.append('INCONCLUSIVE')
     summary = f'[jury: {", ".join(parts)}]'
     return f'{base} {summary}' if base else summary
+
+
+def attach_jury_raw_output(
+    raw_output: dict[str, Any] | None,
+    jury: JuryResult | None,
+    *,
+    error_payload: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Stash a serialized jury — and, when supplied, the judge's own failure — on an evaluator's ``raw_output``.
+
+    The single writer for every scorer that carries a `JuryResult` through
+    `EvaluationResult.raw_output` so the report converters can lift it back onto a typed
+    field: `evaluatorq.llm_jury`, the adaptive pipeline's dynamic scorer, and the OWASP
+    static bridge. All three hand-built this payload and had already diverged over
+    whether the error key was written at all.
+
+    ``raw_output`` is returned unchanged when ``jury`` is ``None``, ``None`` included: a
+    pre-existing ``None`` must stay ``null`` in serialized reports because consumers
+    distinguish "no raw output" from "an empty one". Otherwise the caller's own keys are
+    preserved and only the two lifted keys are written.
+
+    ``error_payload`` is built by the caller instead of derived here because the two
+    callers that have one build it from different material — `common.judge.judge_error_payload`
+    needs a `JudgeOutcome`, which the plain jury path never has (its votes carry a bare
+    error string). Pass ``None`` whenever the panel reached a verdict.
+    """
+    if jury is None:
+        if error_payload is not None:
+            logger.warning('attach_jury_raw_output: no jury to attach, dropping the judge error payload with it')
+        return raw_output
+    merged = dict(raw_output or {})
+    merged[JURY_RAW_OUTPUT_KEY] = jury.model_dump(mode='json')
+    if error_payload is not None:
+        merged[EVAL_ERROR_RAW_OUTPUT_KEY] = error_payload
+    return merged
 
 
 def as_semaphore(max_concurrency: int | asyncio.Semaphore | None) -> asyncio.Semaphore | None:

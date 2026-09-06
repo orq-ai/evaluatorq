@@ -16,9 +16,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from evaluatorq.common.judge import EvaluatorResponsePayload, JudgeOutcome
-from evaluatorq.contracts import JuryResult
+from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY, JURY_RAW_OUTPUT_KEY, JuryResult
 from evaluatorq.llm_jury import llm_jury, llm_jury_pairwise
 from evaluatorq.pairwise import build_report
+from evaluatorq.redteam.reports.converters import _extract_evaluation_error
 from evaluatorq.types import DataPoint
 
 llm_jury_mod = importlib.import_module("evaluatorq.llm_jury")
@@ -497,3 +498,44 @@ async def test_errored_target_carries_no_jury_record():
     assert result.raw_output is None
     assert result.value == "inconclusive"
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_inconclusive_result_names_the_judge_failure():
+    """An inconclusive verdict carries a machine-readable cause, not just a sentence.
+
+    The red-team bridge has always written EVAL_ERROR_RAW_OUTPUT_KEY on a failed panel;
+    llm_jury dropped it, so the same outage was invisible to the error rollup depending on
+    which surface ran the judges.
+    """
+    ev = llm_jury(
+        name="x",
+        criteria="c",
+        judges=["m1", "m2"],
+        assignment="cyclic",
+        labels=["yes", "no"],
+        passing_labels=["yes"],
+        client=MagicMock(),
+    )
+    calls: list[str] = []
+    with patch.object(llm_jury_mod, "run_judge", side_effect=_fake_run_judge_failing(calls, "m1")):
+        result = await ev["scorer"]({"data": _datapoint(), "output": "x"})
+    assert not isinstance(result, dict)
+    assert result.value == "inconclusive"
+    assert result.raw_output is not None
+    payload = result.raw_output[EVAL_ERROR_RAW_OUTPUT_KEY]
+    assert "boom" in payload["message"]
+    assert payload["error_type"] == "jury_no_verdict"
+    assert payload["stage"] == "evaluation"
+    assert payload["details"]["judge_errors"] == ["boom"]
+    # Shape check, not decoration: the report converter lifts this payload by validating
+    # it as a RunError, and silently discards it when validation fails.
+    assert _extract_evaluation_error(result.raw_output) is not None
+    # The jury record still rides alongside the cause — one writer puts both there.
+    assert JURY_RAW_OUTPUT_KEY in result.raw_output
+    # And a conclusive verdict carries no cause to explain.
+    with patch.object(llm_jury_mod, "run_judge", side_effect=_fake_run_judge(calls)):
+        ok = await ev["scorer"]({"data": _datapoint(), "output": "x"})
+    assert not isinstance(ok, dict)
+    assert ok.raw_output is not None
+    assert EVAL_ERROR_RAW_OUTPUT_KEY not in ok.raw_output
