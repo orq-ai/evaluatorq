@@ -2215,11 +2215,18 @@ def _adapt_simulation_scorer(
             logger.exception('scorer %r raised on DataPoint id=%s', name, id(data))
             sim_result.metadata.setdefault('scorer_errors', {})[name] = repr(e)
             raise
-        # Carry the judge's reasoning through as explanation + pass_ so it lands on
-        # the evaluator trace span and the uploaded experiment. `value` is left
-        # untouched — experiment averages depend on the exact numeric score.
+        # Carry the judge's reasoning through as explanation + pass_ so it lands on the
+        # evaluator trace span and the uploaded experiment, and the structure behind the
+        # score as raw_output for anything reading the live EvaluationResult. `value` is
+        # left untouched — experiment averages depend on the exact numeric score.
         explanation, pass_ = _sim_evaluation_details(name, sim_result)
-        return EvaluationResult.model_validate({'value': value, 'explanation': explanation, 'pass': pass_})
+        raw_output = _sim_evaluation_raw_output(name, sim_result, value)
+        return EvaluationResult.model_validate({
+            'value': value,
+            'explanation': explanation,
+            'pass': pass_,
+            'raw_output': raw_output,
+        })
 
     # evaluator_type marks these as code scorers so the tracing layer emits the
     # gen_ai.evaluation.* evaluator-span attributes (opt-in; see set_evaluation_attributes).
@@ -2231,8 +2238,10 @@ def _sim_evaluation_details(name: str, result: SimulationResult) -> tuple[str | 
     """Derive (explanation, pass_) for a built-in sim evaluator from the judge's reasoning.
 
     Only the default evaluators (``goal_achieved`` / ``criteria_met``) carry a
-    reasoning surface today; others return ``(None, None)`` so their span/experiment
-    detail is unchanged.
+    reasoning surface today; others return ``(None, None)`` because they have no judge
+    reasoning to quote, so their span/experiment detail is unchanged. That is about *prose*
+    only: `_sim_evaluation_raw_output` attaches structured detail separately, so
+    ``conversation_quality`` does report its component breakdown on the ``EvaluationResult``.
 
     ``criteria_met``'s ``pass_`` tracks `criteria_met_scorer`: the two states it
     scores 0.0 (an errored/timed-out run, and one whose criteria were never
@@ -2305,6 +2314,55 @@ def _sim_evaluation_details(name: str, result: SimulationResult) -> tuple[str | 
             return '\n'.join(lines), all(criteria_results.values())
         return 'No criteria defined for this scenario.', True
     return None, None
+
+
+def _sim_evaluation_raw_output(name: str, result: SimulationResult, value: object) -> dict[str, Any] | None:
+    """Structured detail for a built-in sim evaluator, or ``None`` when it has none.
+
+    This is the machine-readable half of what `_sim_evaluation_details` renders as prose: it lands on
+    ``EvaluationResult.raw_output``, so anything reading the live score object gets JSON rather than a
+    joined string it would have to re-parse. Like the red-team path's use of the same field, it stays
+    local — `evaluatorq.send_results` strips ``raw_output`` at the upload boundary, and the evaluator
+    span carries only value, explanation and pass.
+
+    ``criteria_met`` returns its per-criterion `CriteriaMeta` records — dumped in JSON mode, and only
+    for the branches where `_sim_evaluation_details` actually lists them. The two branches it calls
+    unknown (a run terminated before the judge audited anything, and one whose criteria were never
+    verified) return ``None`` here too: their stored records describe verdicts the judge never
+    reached, and publishing them beside ``pass=False`` would invite the reader to trust them.
+
+    ``conversation_quality`` returns the component scores and weights carried on
+    `ConversationQualityScore`. A user-supplied scorer registered under that name returns a plain
+    ``float`` with nothing to report, so it degrades to ``None``.
+    """
+    from evaluatorq.simulation.evaluators.scorers import (
+        UNEVALUATED_TERMINATIONS,
+        ConversationQualityScore,
+    )
+    from evaluatorq.simulation.types import parse_criteria_meta
+
+    if name == 'criteria_met':
+        # Mirrors `_sim_evaluation_details`' branch order — keep the two in step.
+        if result.terminated_by in UNEVALUATED_TERMINATIONS or result.criteria_verified is False:
+            return None
+        # `parse_criteria_meta`, not `read_criteria_meta`: the latter logs and records the invalid
+        # entries, which `_sim_evaluation_details` has already done for this same result.
+        entries, invalid = parse_criteria_meta(result.metadata.get('criteria_meta'))
+        if not entries and not invalid:
+            return None
+        raw: dict[str, Any] = {'criteria': [entry.model_dump(mode='json') for entry in entries]}
+        if invalid:
+            raw['invalid'] = [repr(entry) for entry in invalid]
+        return raw
+    if name == 'conversation_quality':
+        if not isinstance(value, ConversationQualityScore):
+            logger.warning(
+                'evaluator %r returned a plain float with no component breakdown; reporting no raw_output',
+                name,
+            )
+            return None
+        return {key: dict(part) for key, part in value.breakdown.items()}
+    return None
 
 
 async def _simulate_via_evaluatorq(

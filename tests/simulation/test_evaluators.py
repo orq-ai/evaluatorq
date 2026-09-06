@@ -117,6 +117,47 @@ class TestConversationQualityScorer:
         )
         assert conversation_quality_scorer(result) == 0.0
 
+    def test_breakdown_recombines_to_the_reported_score(self):
+        result = _make_result(goal_achieved=True, turn_count=4, criteria_results={"a": True, "b": False})
+        score = conversation_quality_scorer(result)
+        breakdown = score.breakdown
+
+        assert breakdown["components"] == {
+            "goal_achieved": goal_achieved_scorer(result),
+            "criteria_met": criteria_met_scorer(result),
+            "turn_efficiency": turn_efficiency_scorer(result),
+        }
+        recombined = sum(
+            component * breakdown["weights"][name] for name, component in breakdown["components"].items()
+        )
+        assert round(recombined * 100) / 100 == score
+        assert float(score) == 0.82
+
+    def test_breakdown_carries_the_callers_weights(self):
+        goal_only = SimulationScoringConfig(
+            goal_achieved_weight=1.0, criteria_met_weight=0.0, turn_efficiency_weight=0.0
+        )
+        result = _make_result(goal_achieved=True, turn_count=4, criteria_results={"a": True, "b": False})
+        score = conversation_quality_scorer(result, goal_only)
+
+        assert score.breakdown["weights"] == {
+            "goal_achieved": 1.0,
+            "criteria_met": 0.0,
+            "turn_efficiency": 0.0,
+        }
+        # The components are still all three, so a reader can see what the weights discarded.
+        assert score.breakdown["components"]["criteria_met"] == 0.5
+
+    def test_the_score_is_still_a_plain_float_to_every_caller(self):
+        """`SimulationScorer` is `Callable[..., float]`; the breakdown must not change that."""
+        result = _make_result(goal_achieved=True, turn_count=2, criteria_results={"a": True})
+        score = conversation_quality_scorer(result)
+
+        assert isinstance(score, float)
+        assert score == 1.0
+        assert score + 1.0 == 2.0
+        assert sorted([score, 0.5]) == [0.5, score]
+
 
 class TestEvaluatorRegistry:
     def test_get_evaluator(self):

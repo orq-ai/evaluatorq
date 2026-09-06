@@ -11,6 +11,7 @@ from functools import partial
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from typing_extensions import Self
 
 from evaluatorq.simulation.types import CriteriaMeta, SimulationResult, TerminatedBy, parse_criteria_meta
 
@@ -294,12 +295,37 @@ def turn_efficiency_scorer(result: SimulationResult, config: SimulationScoringCo
     return round(max(config.turn_efficiency_floor, decayed), 4)
 
 
-def conversation_quality_scorer(result: SimulationResult, config: SimulationScoringConfig | None = None) -> float:
+class ConversationQualityScore(float):
+    """The ``conversation_quality`` composite, carrying the components it was built from.
+
+    It *is* a ``float``: ``SimulationScorer`` stays ``Callable[[SimulationResult], float]``, and every
+    caller that averages, compares or reports the score keeps working unchanged. The extra
+    ``breakdown`` attribute lets `simulation.api._sim_evaluation_raw_output` hand the component scores
+    and weights through as the evaluator's ``raw_output``, so a reader of ``0.82`` can see which part
+    dragged it down instead of only the total. Read it directly when calling the scorer yourself.
+    """
+
+    # float is immutable, so the value is set in __new__ and the breakdown in __init__; both
+    # take the full signature because Python passes the same arguments to each.
+    def __new__(cls, value: float, breakdown: dict[str, dict[str, float]]) -> Self:  # noqa: ARG004
+        return super().__new__(cls, value)
+
+    def __init__(self, value: float, breakdown: dict[str, dict[str, float]]) -> None:
+        super().__init__()
+        self.breakdown: dict[str, dict[str, float]] = breakdown
+
+
+def conversation_quality_scorer(
+    result: SimulationResult, config: SimulationScoringConfig | None = None
+) -> ConversationQualityScore:
     """Weighted composite of the other three scorers, 0..1, rounded to 2 decimals.
 
     Defaults: ``goal_achieved`` 0.4, ``criteria_met`` 0.3, ``turn_efficiency`` 0.3. The
     weights are validated to sum to 1.0 at config construction, so the composite stays on
     the same 0..1 scale as its parts and is comparable across runs.
+
+    The return value is a ``float`` (a `ConversationQualityScore`) whose ``breakdown`` holds the three
+    component scores and the weights applied to them, so the composite can be taken apart downstream.
     """
     config = config or DEFAULT_SCORING_CONFIG
     goal_score = goal_achieved_scorer(result)
@@ -311,7 +337,19 @@ def conversation_quality_scorer(result: SimulationResult, config: SimulationScor
         + criteria_score * config.criteria_met_weight
         + efficiency_score * config.turn_efficiency_weight
     )
-    return round(score * 100) / 100
+    breakdown = {
+        'components': {
+            'goal_achieved': goal_score,
+            'criteria_met': criteria_score,
+            'turn_efficiency': efficiency_score,
+        },
+        'weights': {
+            'goal_achieved': config.goal_achieved_weight,
+            'criteria_met': config.criteria_met_weight,
+            'turn_efficiency': config.turn_efficiency_weight,
+        },
+    }
+    return ConversationQualityScore(round(score * 100) / 100, breakdown)
 
 
 # ---------------------------------------------------------------------------
