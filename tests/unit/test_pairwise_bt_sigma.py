@@ -54,6 +54,10 @@ def test_default_report_is_unchanged() -> None:
     report = build_report(_heterogeneous_run())
     assert report.bt_sigma is None
     assert all(stats.sigma is None for stats in report.per_judge)
+    # This run records no repetition observations, so None here is the honest "no usable repeats"
+    # and not the old bt-sigma gate. Repetition runs assert the populated case in
+    # tests/unit/test_pairwise_repetitions.py.
+    assert all(stats.consistency is None and stats.consistency_raw is None for stats in report.per_judge)
 
 
 def test_unknown_aggregation_raises() -> None:
