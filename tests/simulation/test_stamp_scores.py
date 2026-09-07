@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.api import _notify_evaluator_complete, _stamp_evaluator_scores
 from evaluatorq.simulation.hooks import DefaultHooks
@@ -103,6 +105,21 @@ def test_stamps_evaluator_details_onto_matching_result():
         'criteria_verified': True,
     }
     assert score.score.raw_output == raw_output
+
+
+def test_rejects_duplicate_evaluator_scores_for_result():
+    dp = DataPoint(inputs={'datapoint': {}})
+    sim = _sim_result()
+    eq_results = _eq_results(
+        dp,
+        [
+            EvaluatorScore(evaluator_name='criteria_met', score=EvaluationResult(value=1.0)),
+            EvaluatorScore(evaluator_name='criteria_met', score=EvaluationResult(value=0.0)),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="duplicate evaluator name.*'criteria_met'"):
+        _stamp_evaluator_scores(eq_results, {id(dp): sim}, '')
 
 
 def test_skips_rows_with_no_cached_result():

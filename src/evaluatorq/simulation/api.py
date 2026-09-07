@@ -2621,18 +2621,27 @@ def _stamp_evaluator_scores(
     in place for non-numeric values so the same ``EvaluatorScore`` delivered to
     hooks carries the derived failure reason.
 
+    Evaluator names are unique in the public configuration and are checked again
+    here so malformed upstream results cannot silently overwrite a name-keyed
+    score or detail.
+
     ``events_out``, when provided, collects ``(SimulationResult, EvaluatorScore)``
     for EVERY score seen, usable or not, in evaluatorq order. The caller
     (_simulate_core) fires ``on_evaluator_complete`` from it after ``results``
     is assembled, so an unguarded hook raise still leaves the real results for
     ``on_run_complete``.
     """
+    seen_names_by_result: dict[int, set[str]] = {}
     for dp_result in eq_results:
         sim_result = result_cache.get(id(dp_result.data_point))
         if sim_result is None or not dp_result.job_results:
             continue
+        seen_names = seen_names_by_result.setdefault(id(sim_result), set())
         for job_result in dp_result.job_results:
             for score in job_result.evaluator_scores or []:
+                if score.evaluator_name in seen_names:
+                    raise ValueError(f'duplicate evaluator name for simulation result: {score.evaluator_name!r}')
+                seen_names.add(score.evaluator_name)
                 value = score.score.value
                 numeric = isinstance(value, (int, float)) and not isinstance(value, bool)
                 reason = (
