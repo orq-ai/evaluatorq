@@ -155,6 +155,16 @@ If you write your own Responses-based target, call `evaluatorq.openresponses.inp
 
 Reach for it when the thing under test is already a function — an HTTP call, a local pipeline, a framework with no wrapper of its own — and you are testing what the agent *says*. Do not reach for it when the run needs to exercise tools: a callable declares none by default, and the strategy families gated on tools never fire. That case wants [your own target](#writing-your-own-target), or a `CallableTarget` with an explicit `agent_context=` (below).
 
+The wrapped function costs nothing to call, but the run around it does. The example below needs the red-team extra and a key — without the extra it raises `ImportError` on `huggingface-hub` when it fetches the default attack dataset, and without a key it raises `CredentialError` before the first attack:
+
+```bash
+uv add "evaluatorq[redteam]"
+export ORQ_API_KEY=...          # or OPENAI_API_KEY
+```
+
+!!! warning "A red-team run uploads an Experiment"
+    With `ORQ_API_KEY` set, `red_team()` sends its results to your Orq workspace and prints the dashboard URL. There is no `upload_results=False` on `red_team()` the way there is on `simulate()`, so the only way to keep a run off a shared workspace is to point the key elsewhere. See [What gets uploaded](simulation-in-evaluatorq.md#what-gets-uploaded) for the simulation equivalent.
+
 ```python
 import asyncio
 
@@ -189,7 +199,7 @@ The function may be sync or async. A sync one is run on a worker thread, so it n
 
 It receives the **full transcript** as `list[Message]` — one message on the opening turn, every prior turn afterwards — so a stateless function still sees context.
 
-Return a `str` and the wrapper boxes it into an `AgentResponse`; return an `AgentResponse` and it passes through untouched.
+Return a `str` and the wrapper boxes it into an `AgentResponse`; return an `AgentResponse` and it passes through untouched. Return anything else and it is `str()`-coerced without a warning, which is the same trap as the next paragraph's: the judge scores a Python repr as the agent's words. Convert to text yourself rather than letting that happen.
 
 `Message.content` is `str | list[ContentPart]`, not always a string. Call `content_to_text` on it as above — `str()` renders a Python repr that the judge then scores as the agent's words.
 

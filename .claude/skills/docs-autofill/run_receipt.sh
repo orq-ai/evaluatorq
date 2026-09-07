@@ -49,6 +49,7 @@ trap 'rm -rf "$WORK" "$EVALUATORQ_DIR"' EXIT
   echo "EVALUATORQ_DIR=$EVALUATORQ_DIR (fresh)"
   if [ -n "$BASE" ]; then
     echo "scope: blocks this branch ADDED vs $BASE (pre-existing blocks on the page were not run)"
+    echo "page read from: HEAD (not the working tree — the diff's line numbers describe the committed page)"
   else
     echo "scope: every block on the page"
   fi
@@ -71,10 +72,23 @@ import sys
 
 page, work = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 base = sys.argv[3] if len(sys.argv) > 3 else ''
-lines = page.read_text().splitlines()
 
-# With a base ref, keep only blocks whose lines this branch added. Hunk headers
-# from a zero-context diff give those line numbers directly.
+# With a base ref the line numbers come from `git diff base...HEAD`, which
+# describes the COMMITTED page. Reading the working tree here would put the two
+# in different coordinate spaces: any uncommitted edit above a section shifts
+# every offset below it, and the extractor then selects pre-existing blocks at
+# their shifted positions while still reporting the added-block count. Read the
+# committed page instead, so both sides agree even on a dirty tree — which is
+# the normal state when parallel sessions share a checkout.
+if base:
+    lines = subprocess.run(
+        ['git', 'show', f'HEAD:{page}'], capture_output=True, text=True, check=True
+    ).stdout.splitlines()
+else:
+    lines = page.read_text().splitlines()
+
+# Keep only blocks whose lines this branch added. Hunk headers from a
+# zero-context diff give those line numbers directly.
 added: set[int] = set()
 if base:
     diff = subprocess.run(
@@ -146,10 +160,25 @@ while IFS=$'\t' read -r idx lang start_line; do
       code=$?
       ;;
     bash | sh | shell)
+      # An environment-setup block is recorded, never executed. Two reasons, both
+      # about not corrupting the thing the receipt is measuring: `uv add` mutates
+      # pyproject.toml (and cannot even resolve inside this package's own
+      # checkout, where the requirement is the project), and a placeholder
+      # `export ORQ_API_KEY=...` would overwrite the real key with the literal
+      # "..." for every later block in the shared shell. These lines are
+      # instructions for the reader's own project, not claims about this repo.
+      if ! grep -qvE '^\s*(#|$|uv (add|pip install)\b|pip install\b|export [A-Z_0-9]+=(\.\.\.|<[^>]*>|"?your[^"]*"?)\s*(#.*)?$)' "$body"; then
+        printf 'command: —\nexit: — illustrative (environment setup for the reader'"'"'s project; not executed against this repo)\n\n' >>"$RECEIPT"
+        continue
+      fi
+      # `set -e` so a failing command fails the block: without it `rc=$?` sees
+      # only the last line, and a block whose real work errored still reports 0
+      # as long as it ends in something harmless like an export.
       # The epilogue goes in a file, on its own line: appending it to the body
       # inline lets a trailing comment in the block swallow it, which silently
       # drops every export the next block expects.
       {
+        printf 'set -e\n'
         cat "$body"
         printf '\nrc=$?\nexport -p >%q\nexit $rc\n' "$STATE"
       } >"$WORK/$idx.run.sh"
