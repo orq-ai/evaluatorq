@@ -83,20 +83,26 @@ def test_stamps_evaluator_details_onto_matching_result():
         'criteria': [{'id': 'criteria_0', 'passed': True, 'audited': True}],
         'criteria_verified': True,
     }
+    score = EvaluatorScore(
+        evaluator_name='criteria_met',
+        score=EvaluationResult(value=1.0, raw_output=raw_output),
+    )
     eq_results = _eq_results(
         dp,
-        [
-            EvaluatorScore(
-                evaluator_name='criteria_met',
-                score=EvaluationResult(value=1.0, raw_output=raw_output),
-            )
-        ],
+        [score],
     )
 
     _stamp_evaluator_scores(eq_results, {id(dp): sim}, '')
 
     assert sim.evaluator_details == {'criteria_met': raw_output}
     assert sim.model_dump(mode='json')['evaluator_details'] == {'criteria_met': raw_output}
+
+    sim.evaluator_details['criteria_met']['criteria'][0]['passed'] = False
+    assert raw_output == {
+        'criteria': [{'id': 'criteria_0', 'passed': True, 'audited': True}],
+        'criteria_verified': True,
+    }
+    assert score.score.raw_output == raw_output
 
 
 def test_skips_rows_with_no_cached_result():

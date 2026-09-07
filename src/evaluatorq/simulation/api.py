@@ -15,6 +15,7 @@ import logging
 import os
 import sys
 import uuid
+from copy import deepcopy
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -2384,7 +2385,7 @@ def _sim_evaluation_raw_output(name: str, result: SimulationResult, value: objec
             result.criteria_verified = False
         if 'criteria_results' in raw and reason is None:
             reason = 'criteria_meta missing (lossy dict)'
-        raw['criteria_verified'] = not invalid and reason is None
+        raw['criteria_verified'] = reason is None
         raw['unverified_reason'] = reason
         return raw
     if name == 'conversation_quality':
@@ -2610,6 +2611,12 @@ def _stamp_evaluator_scores(
     evaluator name, while the numeric score remains in metadata for existing
     report and dashboard readers.
 
+    The returned detail is a deep copy of ``score.score.raw_output`` so later
+    evaluatorq bookkeeping can update the score without mutating the result
+    already handed to lifecycle hooks or the caller. ``score.error`` is filled
+    in place for non-numeric values so the same ``EvaluatorScore`` delivered to
+    hooks carries the derived failure reason.
+
     ``events_out``, when provided, collects ``(SimulationResult, EvaluatorScore)``
     for EVERY score seen, usable or not, in evaluatorq order. The caller
     (_simulate_core) fires ``on_evaluator_complete`` from it after ``results``
@@ -2630,7 +2637,7 @@ def _stamp_evaluator_scores(
                 if reason is not None and score.error is None:
                     score.error = reason
                 if score.score.raw_output is not None:
-                    sim_result.evaluator_details[score.evaluator_name] = score.score.raw_output
+                    sim_result.evaluator_details[score.evaluator_name] = deepcopy(score.score.raw_output)
                 if events_out is not None:
                     events_out.append((sim_result, score))
                 if reason is not None:
