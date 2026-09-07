@@ -1633,7 +1633,13 @@ async def _simulate_core(
             # The drop is raised after evaluator scores have been stamped, so the
             # buffered callbacks still belong to this run and must be delivered
             # before the drop propagates.
-            await _notify_evaluator_complete(evaluator_events, resolved_hooks)
+            try:
+                await _notify_evaluator_complete(evaluator_events, resolved_hooks)
+            except BaseException:
+                # The drop is the primary run failure. An observer hook is
+                # unguarded on the success path, but must not hide the reason a
+                # fail-fast run was dropped.
+                logger.exception('on_evaluator_complete hook failed while preserving SimulationDroppedError')
             raise
         finally:
             # Truthful stage status (§4.4): on_stage_end always fires (RichHooks
@@ -1641,12 +1647,15 @@ async def _simulate_core(
             # sys.exc_info()[1] — None on the success path (stage → 'completed'),
             # the live exception on failure (stage → 'error' in the manifest).
             stage_error = sys.exc_info()[1]
-            run_complete_error: BaseException | None = None
+            primary_error = stage_error
             try:
                 await await_maybe(resolved_hooks.on_run_complete(results))
-            except BaseException as error:  # noqa: BLE001 - lifecycle hooks must pair even on cancellation
-                run_complete_error = error
-                stage_error = error
+            except BaseException as error:
+                if primary_error is None:
+                    primary_error = error
+                    stage_error = error
+                else:
+                    logger.exception('on_run_complete hook raised while preserving the primary run failure')
             try:
                 await await_maybe(
                     resolved_hooks.on_stage_end(
@@ -1655,11 +1664,11 @@ async def _simulate_core(
                     )
                 )
             except BaseException:
-                if run_complete_error is None:
+                if primary_error is None:
                     raise
-                logger.exception('on_stage_end hook raised while preserving on_run_complete failure')
-            if run_complete_error is not None:
-                raise run_complete_error.with_traceback(run_complete_error.__traceback__)
+                logger.exception('on_stage_end hook raised while preserving the primary run failure')
+            if primary_error is not None:
+                raise primary_error.with_traceback(primary_error.__traceback__)
 
         # Always build the run on the success path (an aborted run re-raised
         # above) so every caller — SDK and CLI alike — gets the full
@@ -2372,6 +2381,7 @@ def _sim_evaluation_raw_output(name: str, result: SimulationResult, value: objec
         if invalid:
             invalid_reason = f'criteria_meta_invalid={len(invalid)}'
             reason = f'{reason}; {invalid_reason}' if reason is not None else invalid_reason
+            result.criteria_verified = False
         if 'criteria_results' in raw and reason is None:
             reason = 'criteria_meta missing (lossy dict)'
         raw['criteria_verified'] = not invalid and reason is None
