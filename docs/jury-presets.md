@@ -60,7 +60,7 @@ get_preset("Strong Jury").seated_efforts()
 # {'anthropic/claude-opus-5': 'high', 'openai/gpt-5.6-sol': 'max', 'google/gemini-3.6-flash': 'high'}
 ```
 
-`llm_jury()` takes one `reasoning_effort` for the whole panel, so a preset whose seats disagree cannot express itself through it. Per-judge call settings are a schema change and a separate ticket. Until then a panel run at the provider defaults is being run at an operating point it was not costed at, which is why the published figures are a floor rather than an estimate.
+Those are the rungs the cards were scored at rather than values to send. A card that only distinguishes thinking from not thinking is scored at `reasoning` or `none`, and no provider accepts either as a `reasoning_effort`, so read the mapping as a report of where a panel was ranked and priced. `llm_jury()` takes one `reasoning_effort` for the whole panel, so a preset whose seats disagree cannot express itself through it. Per-judge call settings are a schema change and a separate ticket. Until then a panel run at the provider defaults is being run at an operating point it was not costed at, which is why the published figures are a floor rather than an estimate.
 
 Three more limits worth knowing before you quote a number:
 

@@ -5,6 +5,7 @@ from typing import Any, cast
 import pytest
 
 from evaluatorq import llm_jury
+from evaluatorq.llm_jury import _apply_preset
 from evaluatorq.jury_presets import (
     DROPPED_PRESETS,
     ESTIMATED_COMPLETION_TOKENS,
@@ -332,19 +333,30 @@ class TestDocsTable:
     """
 
     @staticmethod
-    def _rows() -> dict[str, tuple[tuple[str, ...], float]]:
+    def _rows() -> dict[str, tuple[tuple[str, ...], str, float, tuple[str, ...]]]:
+        """Every column of the table, because a column nobody reads is a column that rots.
+
+        This used to capture the judges and the cost and discard the rest, which
+        is how three reseated reserves went unchecked.
+        """
         import re
         from pathlib import Path
 
         page = Path(__file__).resolve().parents[2] / 'docs' / 'jury-presets.md'
-        rows: dict[str, tuple[tuple[str, ...], float]] = {}
+        rows: dict[str, tuple[tuple[str, ...], str, float, tuple[str, ...]]] = {}
         for line in page.read_text().splitlines():
             match = re.match(
-                r'^\| \*\*(?P<name>[^*]+)\*\*[^|]*\|(?P<judges>[^|]+)\|[^|]+\|\s*(?P<cost>[\d.]+)\s*\|', line
+                r'^\| \*\*(?P<name>[^*]+)\*\*[^|]*\|(?P<judges>[^|]+)\|(?P<aggregation>[^|]+)\|'
+                r'\s*(?P<cost>[\d.]+)\s*\|(?P<reserve>[^|]*)\|',
+                line,
             )
             if match:
-                judges = tuple(re.findall(r'`([^`]+)`', match['judges']))
-                rows[match['name'].strip()] = (judges, float(match['cost']))
+                rows[match['name'].strip()] = (
+                    tuple(re.findall(r'`([^`]+)`', match['judges'])),
+                    match['aggregation'].strip(),
+                    float(match['cost']),
+                    tuple(re.findall(r'`([^`]+)`', match['reserve'])),
+                )
         return rows
 
     def test_the_table_lists_every_preset_and_only_those(self):
@@ -352,12 +364,33 @@ class TestDocsTable:
 
     @pytest.mark.parametrize('preset', PRESETS.values(), ids=lambda p: p.name)
     def test_the_table_names_the_judges_that_are_seated(self, preset):
-        judges, _ = self._rows()[preset.name]
+        judges, _, _, _ = self._rows()[preset.name]
 
         assert judges == preset.judges
 
     @pytest.mark.parametrize('preset', PRESETS.values(), ids=lambda p: p.name)
     def test_the_table_publishes_the_cost_the_code_computes(self, preset):
-        _, cost = self._rows()[preset.name]
+        _, _, cost, _ = self._rows()[preset.name]
 
         assert cost == preset.cost_per_1k()
+
+    @pytest.mark.parametrize('preset', PRESETS.values(), ids=lambda p: p.name)
+    def test_the_table_names_the_reserves_the_preset_holds(self, preset):
+        _, _, _, reserve = self._rows()[preset.name]
+
+        assert reserve == preset.reserve_judges
+
+    @pytest.mark.parametrize('preset', PRESETS.values(), ids=lambda p: p.name)
+    def test_the_table_states_the_aggregation_a_preset_applies(self, preset):
+        _, aggregation, _, _ = self._rows()[preset.name]
+        _, applied, _ = _apply_preset(
+            preset.name,
+            judges=None,
+            model=None,
+            aggregator=None,
+            min_successful_judges=None,
+            verdict_kind='categorical',
+            assignment='all',
+        )
+
+        assert aggregation == applied

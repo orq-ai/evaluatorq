@@ -176,6 +176,13 @@ class JuryPreset(BaseModel):
         `llm_jury` takes one `reasoning_effort` for the whole panel, so a preset
         whose seats disagree cannot express itself through it yet; per-judge call
         settings are a schema change and its own ticket (RES-1347).
+
+        These are the rungs the cards were scored at, not values to send: a card
+        that only distinguishes thinking from not thinking is scored at
+        `reasoning` or `none`, which the EU Region haiku seat reads back as
+        `reasoning` and no provider accepts as a `reasoning_effort`. Sending one
+        is a 400 on the value, which the retry path used to read as the model
+        refusing the parameter.
         """
         return {judge: (r.seated_effort if (r := judge_rates(judge)) else None) for judge in self.judges}
 
@@ -229,19 +236,23 @@ BALANCED_TRIO = JuryPreset(
         # named what the frontier checks structurally cannot see: Anthropic has
         # shipped no small model since October 2025, so no in-family upgrade
         # was ever going to be found and the seat aged 314 days in silence. It
-        # was also the weakest buy in the library, 23.7 at a $2.00 blend beside
-        # luna on this same panel at 38.1 for $0.45. The only argument for
+        # was also the weakest buy in the library: at the rungs each card is
+        # ranked on, 29.6 at a $2.00 blend beside luna on this same panel at
+        # 51.2 for $0.45. The only argument for
         # keeping it was an Anthropic vote, and this panel is sold on three
         # families rather than three brands, which deepseek satisfies at 43.1
         # for $0.544 while taking the panel from $6.11 to $4.64.
         'deepseek/deepseek-v4-pro',
         # Held by gpt-5.4-mini until the general-purpose luna card landed
-        # (2026-08): same OpenAI lineage, 8.3 index points stronger at a
-        # quarter of the price.
+        # (2026-08): same OpenAI lineage, 21.4 index points stronger at their
+        # ceilings (51.2 against 29.8) at a quarter of the price.
         'openai/gpt-5.6-luna',
-        # Reseated from gemini-3.5-flash on the 2026-08-25 re-capture: the
-        # successor is stronger at its default effort (50.1 against 45.4) and
-        # cheaper ($3.00 against $3.375 blended).
+        # Reseated from gemini-3.5-flash on the 2026-08-25 re-capture, and a
+        # trade rather than an upgrade: at their ceilings the successor is a
+        # tenth of a point behind (50.1 against 50.2), so neither dominates the
+        # other. It is seated for the price, $3.00 against $3.375 blended, and
+        # for reaching that index at one rung where its predecessor needs its
+        # top one.
         'google/gemini-3.6-flash',
     ),
     # Same lineage as the seat it backs, on purpose: a retirement is usually a
@@ -260,13 +271,14 @@ STRONG_JURY = JuryPreset(
         # wrong operating point: the 51.4 this seat was defended with is
         # gpt-5.4's xhigh score, while its default effort is `none`, where it
         # scores 27.7 against the same price. The 2026-08-25 re-capture carries
-        # per-effort indices, and at matched effort sol is the strongest OpenAI
-        # model in the garden (53.6). This jury is bought for judgment quality,
+        # per-effort indices, and at their ceilings sol is the strongest OpenAI
+        # model in the garden, 58.9 against that same 51.4. This jury is bought
+        # for judgment quality,
         # so it pays the $8.00 blend.
         'openai/gpt-5.6-sol',
         # Reseated from gemini-3.1-pro-preview by the in-family frontier check,
-        # then from gemini-3.5-flash on the re-capture: stronger at default
-        # effort and cheaper.
+        # then from gemini-3.5-flash on the re-capture, on the same reading as
+        # Balanced Trio: level at the ceiling, cheaper per call.
         'google/gemini-3.6-flash',
     ),
     reserve_judges=('deepseek/deepseek-v4-pro',),
