@@ -18,6 +18,7 @@ The CLI only accepts the string form — an object target is constructed in Pyth
 | `OpenAIModelTarget` | You want to test a raw model behind a system prompt, over chat completions | Minimal — the model id |
 | `OrqResponsesTarget` | You want the Responses API through the Orq router, with full per-call config | Self-described: model, instructions, the tools you passed |
 | `LangGraphTarget`, `OpenAIAgentTarget`, `PydanticAITarget`, `CrewAITarget` | Your agent is built in that framework | Whatever the wrapper can extract |
+| `CallableTarget` | Your agent is already a Python function | The function's name, or an `AgentContext` you pass |
 | Your own `AgentTarget` subclass | Anything else — an HTTP endpoint, a local pipeline, a bespoke tool loop | Whatever your `get_agent_context()` returns |
 
 Context discovery matters more than it looks. Attack strategies are selected and written against the target's declared tools, memory and system prompt: a target that reports no tools never gets a tool-misuse attack, because those strategies are gated on `requires_tools=True`. See [Writing your own target](#writing-your-own-target) below.
@@ -148,9 +149,145 @@ Each `respond(messages)` sends the **full transcript**. Nothing is stored on the
 
 If you write your own Responses-based target, call `evaluatorq.openresponses.input_items.messages_to_responses_input` rather than reproducing this.
 
+## The escape hatch: `CallableTarget`
+
+`CallableTarget` wraps a plain Python function as an `AgentTarget`. You write a function that takes the conversation and returns the reply; the wrapper supplies the rest of the interface.
+
+Reach for it when the thing under test is already a function — an HTTP call, a local pipeline, a framework with no wrapper of its own — and you are testing what the agent *says*. Do not reach for it when a **dynamic or hybrid** run needs to exercise tools: a callable declares none by default, and those two pipelines never fire the strategy families gated on tools. That case wants [your own target](#writing-your-own-target), or a `CallableTarget` with an explicit `agent_context=` (below).
+
+The wrapped function costs nothing to call, but the run around it does. The example below needs the red-team extra and a key — without the extra it raises `ImportError` on `huggingface-hub` when it fetches the default attack dataset, and without a key it raises `CredentialError` before the first attack:
+
+```bash
+uv add "evaluatorq[redteam]"
+export ORQ_API_KEY=...          # or OPENAI_API_KEY
+```
+
+!!! warning "A red-team run uploads an Experiment"
+    With `ORQ_API_KEY` set, `red_team()` sends its results to your Orq workspace and prints the dashboard URL. There is no `upload_results=False` on `red_team()` the way there is on `simulate()`, so the only way to keep a run off a shared workspace is to point the key elsewhere. See [What gets uploaded](simulation-in-evaluatorq.md#what-gets-uploaded) for the simulation equivalent.
+
+```python
+import asyncio
+
+from evaluatorq.contracts import Message, content_to_text
+from evaluatorq.integrations.callable_integration import CallableTarget
+from evaluatorq.redteam import red_team
+
+
+async def support_agent(messages: list[Message]) -> str:
+    """Your agent. Anything that turns a conversation into a reply goes here."""
+    latest = content_to_text(messages[-1].content)
+    if "refund" in latest.lower():
+        return "I can look up an order, but refunds need the order id first."
+    return "I am the Lumen Goods support assistant. How can I help?"
+
+
+async def main() -> None:
+    report = await red_team(
+        target=CallableTarget(support_agent),
+        mode="static",
+        vulnerabilities=["prompt_injection"],
+        max_static_datapoints=1,
+    )
+    rate = report.summary.resistance_rate
+    print(f"Resistance: {rate:.0%}" if rate is not None else "Resistance: no verdict")
+
+
+asyncio.run(main())
+```
+
+The function may be sync or async. A sync one is run on a worker thread, so it never blocks the event loop.
+
+It receives the **full transcript** as `list[Message]` — one message on the opening turn, every prior turn afterwards — so a stateless function still sees context.
+
+Return a `str` and the wrapper boxes it into an `AgentResponse`; return an `AgentResponse` and it passes through untouched.
+
+**A `None` return becomes the empty string.** The agent then looks like it answered nothing, and the judge scores a silence your function never gave. Nothing warns.
+
+Any other object is `str()`-coerced instead, which is the next paragraph's trap in a different costume: the judge scores a Python repr as the agent's words. Return a string yourself rather than relying on either.
+
+`Message.content` is `str | list[ContentPart]`, not always a string. Call `content_to_text` on it as above — `str()` renders a Python repr that the judge then scores as the agent's words.
+
+It is also importable from `evaluatorq.simulation`. It is **not** exported from `evaluatorq.redteam`, unlike `OpenAIModelTarget` and `OrqResponsesTarget` above, so a red-team script still imports it from the integrations path.
+
+### `red_team()` needs the wrapper, `simulate()` does not
+
+`simulate()` accepts a bare function and wraps it for you. `red_team()` refuses one, before it spends anything:
+
+```python
+import asyncio
+
+from evaluatorq.contracts import Message
+from evaluatorq.redteam import red_team
+
+
+async def support_agent(messages: list[Message]) -> str:
+    return "I am the Lumen Goods support assistant."
+
+
+try:
+    asyncio.run(red_team(target=support_agent))
+except TypeError as exc:
+    print(exc)
+    # Invalid target type: function. Expected str or AgentTarget.
+```
+
+The error is immediate and loud, which is the good case — it raises on the way in rather than mid-run.
+
+Wrap the function once and the same object goes to either entry point: `simulate(target=CallableTarget(support_agent), ...)` takes it unchanged. Build the personas, scenarios and criteria around it exactly as in [Agent Simulation](agent-simulation.md) — swapping `target=` is the only difference from the examples there, so wrapping the function yourself is what buys you one target object for both surfaces.
+
+### What the attacker sees
+
+Given no `agent_context=`, `get_agent_context()` reports the function's `__name__` and the description `opaque callable target` — no tools, no memory stores, no instructions.
+
+**In dynamic and hybrid mode that is a silent failure mode.** Those pipelines pick strategies against the declared context, so a strategy marked `requires_tools=True` is **skipped, not failed** when the target reports no tools. A run can then return a high resistance rate that means *those attacks were never attempted*. Compare `report.summary.total_attacks` and `report.summary.evaluated_attacks` against what you expected to run, rather than reading the rate alone.
+
+Static mode does not filter this way at all. It replays dataset rows, which carry no strategy name, so declaring tools changes nothing about which attacks run — the same static run against the same dataset executes the same attacks whether the context declares tools or not. The example above is a static run for exactly that reason: it is the mode where a bare callable and a fully-declared one behave identically.
+
+Declare what the function can actually do and the planner writes against it:
+
+```python
+import asyncio
+
+from evaluatorq.contracts import AgentContext, Message, ToolInfo
+from evaluatorq.integrations.callable_integration import CallableTarget
+
+
+async def support_agent(messages: list[Message]) -> str:
+    return "I can look up an order, but refunds need the order id first."
+
+
+target = CallableTarget(
+    support_agent,
+    agent_context=AgentContext(
+        key="lumen-support-bot",
+        display_name="Lumen Support Bot",
+        description="Handles order lookups and refunds.",
+        instructions="Enforce ownership and the 30-day refund window.",
+        tools=[
+            ToolInfo(
+                name="issue_refund",
+                description="Issue a refund for an order id.",
+                parameters={"type": "object", "properties": {"order_id": {"type": "string"}}},
+                action_type="function",
+            )
+        ],
+    ),
+)
+
+print(asyncio.run(target.get_agent_context()).has_tools)
+# True — tool-gated strategies now apply
+```
+
+### The other two constructor options
+
+- **`reset_fn`** — a zero-argument callback invoked on `new()`. `red_team()` and `simulate()` call `new()` once per concurrent job, and a callable that closes over module-level state would otherwise carry one attack's leftovers into the next. The wrapper cannot see inside your function, so clearing that state is yours to do. It is also the only cleanup hook you get: `CallableTarget` inherits the no-op `cleanup_memory`, so a run that mints memory entity ids logs a warning that adversarial data may persist and deletes nothing.
+- **`usage_fn`** — `(messages, response_text) -> TokenUsage | None`, for plumbing token counts out of a function that only returns a string. An exception raised inside it is logged and yields `usage=None` rather than failing the run. It must be **synchronous**, and that one is not forgiving: an `async def usage_fn` is never awaited, so the coroutine object reaches `AgentResponse` and the call dies with a pydantic `ValidationError` instead of degrading. On a page where every other function is `async def`, this is the easy mistake to make.
+
 ## Writing your own target
 
 Subclass `AgentTarget` from `evaluatorq.contracts`. That is the whole extension point for `red_team()` and `simulate()` — you do not need, and cannot usefully register, a `Backend`.
+
+Prefer [`CallableTarget`](#the-escape-hatch-callabletarget) when your agent is already a function and a name plus an `AgentContext` is all the context you need. Write a subclass when you want `map_error`, `cleanup_memory`, `close()`, or a context that is computed rather than fixed.
 
 !!! info "`Backend` is internal"
     `evaluatorq.redteam.backends.base.Backend` mints targets for arbitrary keys, resolves context for any key, and owns memory cleanup. `red_team()` resolves it by a fixed name (`orq` / `openresponses`) for string targets only; an object target is wrapped in `BareTargetBackend` automatically. Subclassing `Backend` therefore gets you nothing a target does not, and there is no supported way to route `red_team()` through a custom one. Implement `AgentTarget`.
