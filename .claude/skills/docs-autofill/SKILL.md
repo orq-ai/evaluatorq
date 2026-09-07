@@ -107,6 +107,8 @@ Receipt table: command, exit code, first ~5 lines of output. Paste it into the P
 
 A block that cannot be executed *by nature* — a directory tree, a config excerpt, a truncated API response — is exempt. Mark it `— illustrative (<what it is>)` in the receipt; never drop the row. The exemption is a claim the critics in step 6 are told to check, so do not use it to retire a block that merely failed.
 
+There is a second exempt class, and it is narrow on purpose: **an environment-setup block, whose commands configure the reader's own project rather than assert anything about this repo.** `uv add`, `pip install`, and a placeholder `export SOME_KEY=...` qualify. These are exempt because executing them is *wrong*, not because it is hard: `uv add` mutates `pyproject.toml` (and cannot resolve at all inside this package's own checkout, where the requirement is the project itself), and a placeholder `export ORQ_API_KEY=...` would overwrite the real key with the literal `...` for every later block in the shared shell. The runner decides this by pattern, never by an author's say-so, and the receipt row names the class. The rule against retiring a block that merely failed binds here exactly as above — a block that does real work and happens to fail is not setup.
+
 ## Step 5 — validate
 
 ```bash

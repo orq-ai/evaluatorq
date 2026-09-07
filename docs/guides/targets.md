@@ -199,7 +199,7 @@ The function may be sync or async. A sync one is run on a worker thread, so it n
 
 It receives the **full transcript** as `list[Message]` — one message on the opening turn, every prior turn afterwards — so a stateless function still sees context.
 
-Return a `str` and the wrapper boxes it into an `AgentResponse`; return an `AgentResponse` and it passes through untouched. Return anything else and it is `str()`-coerced without a warning, which is the same trap as the next paragraph's: the judge scores a Python repr as the agent's words. Convert to text yourself rather than letting that happen.
+Return a `str` and the wrapper boxes it into an `AgentResponse`; return an `AgentResponse` and it passes through untouched. Anything else is converted without a warning, and the two ways that goes wrong are worth telling apart. A `None` becomes the empty string, so the agent looks like it answered nothing and the judge scores a silence it never gave. Any other object is `str()`-coerced, which is the next paragraph's trap: the judge scores a Python repr as the agent's words. Return a string yourself rather than relying on either.
 
 `Message.content` is `str | list[ContentPart]`, not always a string. Call `content_to_text` on it as above — `str()` renders a Python repr that the judge then scores as the agent's words.
 
