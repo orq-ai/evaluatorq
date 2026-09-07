@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 
+from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation import _datapoint_io
 from evaluatorq.simulation._datapoint_io import _as_obj, _extract_single_datapoint
+from evaluatorq.simulation.types import SimulationResult, TerminatedBy
 from evaluatorq.simulation.utils import dataset_export
 from evaluatorq.types import DataPoint
 
@@ -82,3 +84,23 @@ def test_extract_accepts_json_string_datapoints_list() -> None:
 def test_extract_accepts_json_string_element_in_datapoints() -> None:
     dp = _extract_single_datapoint(DataPoint(inputs={"datapoints": [json.dumps(_DP)]}))
     assert dp.persona.name == "Priya"
+
+
+def test_results_to_jsonl_preserves_evaluator_details() -> None:
+    datapoint = _extract_single_datapoint(DataPoint(inputs={"datapoint": json.dumps(_DP)}))
+    result = SimulationResult(
+        messages=[],
+        terminated_by=TerminatedBy.max_turns,
+        reason='',
+        goal_achieved=True,
+        goal_completion_score=1.0,
+        rules_broken=[],
+        turn_count=1,
+        token_usage=TokenUsage(),
+        turn_metrics=[],
+        evaluator_details={'criteria_met': {'criteria_verified': True}},
+    )
+
+    exported = dataset_export.results_to_jsonl([{'datapoint': datapoint, 'result': result}])
+
+    assert json.loads(exported)['evaluator_details'] == {'criteria_met': {'criteria_verified': True}}

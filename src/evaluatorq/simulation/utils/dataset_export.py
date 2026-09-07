@@ -209,6 +209,7 @@ def results_to_jsonl(
                 'token_usage': result.token_usage.model_dump(mode='json'),
                 'turn_metrics': [tm.model_dump(mode='json') for tm in result.turn_metrics],
                 'metadata': result.metadata,
+                'evaluator_details': result.evaluator_details,
             })
         )
     return '\n'.join(lines)
