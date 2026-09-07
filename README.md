@@ -4,7 +4,7 @@
 
 | Name                                                                     |    Stmts |     Miss |   Cover |   Missing |
 |------------------------------------------------------------------------- | -------: | -------: | ------: | --------: |
-| src/evaluatorq/\_\_init\_\_.py                                           |       24 |        2 |     92% |     30-31 |
+| src/evaluatorq/\_\_init\_\_.py                                           |       25 |        2 |     92% |     30-31 |
 | src/evaluatorq/\_\_main\_\_.py                                           |        3 |        3 |      0% |       1-4 |
 | src/evaluatorq/cli.py                                                    |       50 |        2 |     96% |  120, 181 |
 | src/evaluatorq/common/\_\_init\_\_.py                                    |        0 |        0 |    100% |           |
@@ -21,12 +21,12 @@
 | src/evaluatorq/common/fields.py                                          |        6 |        0 |    100% |           |
 | src/evaluatorq/common/hook\_compose.py                                   |       16 |        0 |    100% |           |
 | src/evaluatorq/common/judge.py                                           |      216 |        5 |     98% |230-231, 325, 339, 701 |
-| src/evaluatorq/common/jury.py                                            |      309 |        8 |     97% |124, 141, 154-155, 238, 491, 826, 875 |
-| src/evaluatorq/common/llm\_call.py                                       |      168 |        2 |     99% |  381, 393 |
+| src/evaluatorq/common/jury.py                                            |      309 |        8 |     97% |124, 141, 154-155, 238, 491, 827, 888 |
+| src/evaluatorq/common/llm\_call.py                                       |      171 |        2 |     99% |  398, 410 |
 | src/evaluatorq/common/llm\_client.py                                     |       48 |        0 |    100% |           |
 | src/evaluatorq/common/llm\_limit.py                                      |       31 |        0 |    100% |           |
 | src/evaluatorq/common/messages.py                                        |       16 |        0 |    100% |           |
-| src/evaluatorq/common/model\_catalogue.py                                |      150 |        5 |     97% |223, 226, 282, 289, 320 |
+| src/evaluatorq/common/model\_catalogue.py                                |      151 |        3 |     98% |223, 226, 324 |
 | src/evaluatorq/common/orq\_client.py                                     |       14 |        1 |     93% |        45 |
 | src/evaluatorq/common/output\_adapters.py                                |       99 |        7 |     93% |37-39, 114, 123-125 |
 | src/evaluatorq/common/parallelism.py                                     |       10 |        0 |    100% |           |
@@ -101,7 +101,8 @@
 | src/evaluatorq/integrations/vercel\_ai\_sdk\_integration/\_\_init\_\_.py |        2 |        0 |    100% |           |
 | src/evaluatorq/integrations/vercel\_ai\_sdk\_integration/target.py       |      121 |        8 |     93% |234, 263, 266, 271-272, 276-277, 333 |
 | src/evaluatorq/job\_helper.py                                            |       25 |        2 |     92% |    82, 99 |
-| src/evaluatorq/llm\_jury.py                                              |      213 |        4 |     98% |146, 313, 776, 885 |
+| src/evaluatorq/jury\_presets.py                                          |       91 |        9 |     90% |80, 116-122, 187 |
+| src/evaluatorq/llm\_jury.py                                              |      228 |        4 |     98% |147, 314, 856, 965 |
 | src/evaluatorq/openresponses/\_\_init\_\_.py                             |       10 |        1 |     90% |        81 |
 | src/evaluatorq/openresponses/client.py                                   |        9 |        0 |    100% |           |
 | src/evaluatorq/openresponses/convert\_models.py                          |      121 |        3 |     98% |   168-175 |
@@ -235,7 +236,7 @@
 | src/evaluatorq/tracing/setup.py                                          |      146 |       39 |     73% |113-123, 144-147, 152, 181, 187-193, 201-211, 252-260, 325-326, 347 |
 | src/evaluatorq/tracing/spans.py                                          |       84 |        1 |     99% |       130 |
 | src/evaluatorq/types.py                                                  |       86 |        2 |     98% |   32, 288 |
-| **TOTAL**                                                                | **27773** | **4167** | **85%** |           |
+| **TOTAL**                                                                | **27884** | **4174** | **85%** |           |
 
 
 ## Setup coverage badge
