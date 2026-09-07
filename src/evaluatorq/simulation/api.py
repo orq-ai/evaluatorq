@@ -1608,6 +1608,7 @@ async def _simulate_core(
         # on_evaluator_complete is fired from once results are assembled.
         evaluator_events: list[tuple[SimulationResult, EvaluatorScore]] = []
         await await_maybe(resolved_hooks.on_run_start(run_meta))
+        primary_error: BaseException | None = None
         try:
             results = await _simulate_via_evaluatorq(
                 config=config,
@@ -1630,6 +1631,7 @@ async def _simulate_core(
         except SimulationDroppedError as dropped:
             # exit_on_failure aborted the run, but the rows that succeeded are real
             # results — hand them to on_run_complete (via the finally) instead of [].
+            primary_error = dropped
             results = dropped.partial_results
             # The drop is raised after evaluator scores have been stamped, so the
             # buffered callbacks still belong to this run and must be delivered
@@ -1642,13 +1644,17 @@ async def _simulate_core(
                 # fail-fast run was dropped.
                 logger.exception('on_evaluator_complete hook failed while preserving SimulationDroppedError')
             raise
+        except BaseException as error:
+            primary_error = error
+            raise
         finally:
             # Truthful stage status (§4.4): on_stage_end always fires (RichHooks
-            # render pairing) but reports the in-flight exception via
-            # sys.exc_info()[1] — None on the success path (stage → 'completed'),
-            # the live exception on failure (stage → 'error' in the manifest).
-            stage_error = sys.exc_info()[1]
-            primary_error = stage_error
+            # render pairing) but reports the captured in-flight exception — None
+            # on the success path (stage → 'completed'), the live exception on
+            # failure (stage → 'error' in the manifest). Do not use sys.exc_info()
+            # here: a successful simulate() called from another except block can
+            # otherwise inherit the caller's unrelated exception.
+            stage_error = primary_error
             try:
                 await await_maybe(resolved_hooks.on_run_complete(results))
             except BaseException as error:
@@ -2378,13 +2384,11 @@ def _sim_evaluation_raw_output(name: str, result: SimulationResult, value: objec
             else:
                 return None
 
-        reason = unverified_reason(result)
-        if invalid:
-            invalid_reason = f'criteria_meta_invalid={len(invalid)}'
-            reason = f'{reason}; {invalid_reason}' if reason is not None else invalid_reason
-            result.criteria_verified = False
+        reason = f'criteria_meta_invalid={len(invalid)}' if invalid else unverified_reason(result)
         if 'criteria_results' in raw and reason is None:
             reason = 'criteria_meta missing (lossy dict)'
+        if reason is not None:
+            result.criteria_verified = False
         raw['criteria_verified'] = reason is None
         raw['unverified_reason'] = reason
         return raw

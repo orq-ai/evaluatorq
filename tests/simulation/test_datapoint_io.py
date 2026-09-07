@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation import _datapoint_io
@@ -104,3 +105,23 @@ def test_results_to_jsonl_preserves_evaluator_details() -> None:
     exported = dataset_export.results_to_jsonl([{'datapoint': datapoint, 'result': result}])
 
     assert json.loads(exported)['evaluator_details'] == {'criteria_met': {'criteria_verified': True}}
+
+
+def test_results_to_jsonl_stringifies_non_json_evaluator_detail() -> None:
+    datapoint = _extract_single_datapoint(DataPoint(inputs={'datapoint': json.dumps(_DP)}))
+    result = SimulationResult(
+        messages=[],
+        terminated_by=TerminatedBy.max_turns,
+        reason='',
+        goal_achieved=True,
+        goal_completion_score=1.0,
+        rules_broken=[],
+        turn_count=1,
+        token_usage=TokenUsage(),
+        turn_metrics=[],
+        evaluator_details={'custom': {'opaque': datetime(2026, 9, 7, 12, 0, 0)}},
+    )
+
+    exported = dataset_export.results_to_jsonl([{'datapoint': datapoint, 'result': result}])
+
+    assert json.loads(exported)['evaluator_details'] == {'custom': {'opaque': '2026-09-07 12:00:00'}}

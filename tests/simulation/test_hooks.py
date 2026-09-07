@@ -724,6 +724,25 @@ async def test_on_stage_end_fires_when_on_run_complete_raises(datapoint_factory)
 
 
 @pytest.mark.asyncio
+async def test_successful_simulation_does_not_inherit_caller_exception(datapoint_factory):
+    async def run_inside_except():
+        try:
+            raise ValueError('caller failure')
+        except ValueError:
+            return await simulate(
+                datapoints=[datapoint_factory('dp-1')],
+                target=_ok_target,
+                user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+                judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+                max_turns=1,
+                evaluator_names=['goal_achieved'],
+            )
+
+    results = await run_inside_except()
+    assert len(results) == 1
+
+
+@pytest.mark.asyncio
 async def test_stage_end_failure_does_not_replace_simulation_failure(datapoint_factory, monkeypatch):
     import evaluatorq.simulation.api as simulation_api
 

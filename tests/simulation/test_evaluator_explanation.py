@@ -235,6 +235,10 @@ async def test_criteria_met_raw_output_reports_invalid_entries() -> None:
     assert score.raw_output['unverified_reason'] == 'criteria_meta_invalid=1'
     assert result.criteria_verified is False
 
+    second_score = await _score('criteria_met', result)
+    assert second_score.raw_output is not None
+    assert second_score.raw_output['unverified_reason'] == 'criteria_meta_invalid=1'
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
@@ -251,6 +255,7 @@ async def test_criteria_met_publishes_records_for_a_terminated_run(terminated_by
     assert [record['id'] for record in score.raw_output['criteria']] == ['criteria_0', 'criteria_1']
     assert score.raw_output['criteria_verified'] is False
     assert score.raw_output['unverified_reason'] == f'terminated_by={terminated_by.value}'
+    assert result.criteria_verified is False
 
 
 @pytest.mark.asyncio
