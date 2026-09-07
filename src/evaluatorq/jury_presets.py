@@ -31,7 +31,6 @@ Router IDs are the literal strings the orq model garden returns from
 import math
 import re
 
-from loguru import logger
 from pydantic import BaseModel, Field, model_validator
 
 from evaluatorq.common.jury import AggregatorName, provider_family
@@ -170,9 +169,10 @@ class JuryPreset(BaseModel):
     def duplicated_lineages(self) -> dict[str, tuple[str, ...]]:
         """Lineages seated more than once, whose errors correlate.
 
-        Not an error. A panel may deliberately repeat a lineage on cost grounds,
-        as Cheap Aggregate does with two OpenAI judges, but the diversity claim
-        weakens and the reviewer should see it rather than count IDs by hand.
+        Not an error. A panel may repeat a lineage deliberately, as
+        Single-Provider Trio does with three OpenAI judges, but the diversity
+        claim weakens and the reviewer should see it rather than count IDs by
+        hand.
         """
         seated: dict[str, list[str]] = {}
         for judge in self.judges:
@@ -397,90 +397,6 @@ ESTIMATED_PROMPT_TOKENS = 1500
 ESTIMATED_COMPLETION_TOKENS = 150
 
 
-# How each provider counts reasoning tokens, keyed by the provider half of the
-# router ID.
-#
-# 'inside'     reasoning is part of `completion_tokens`; adding it double-bills.
-# 'alongside'  reasoning is reported separately; ignoring it under-bills, by an
-#              order of magnitude on a model that thinks and answers briefly.
-#
-# Read off the probe artifacts rather than assumed. Subtracting reasoning from
-# the completion total leaves 36 to 82 tokens for every provider here except
-# xai, which is the length of the one-sentence verdict the rubric asks for, so
-# the visible answer is all that remains and the reasoning was inside. xai
-# returns a mean 34 completion tokens beside 297 reasoning: the completion
-# total is the verdict alone.
-#
-# Only providers a probe has actually measured belong here. Seven entries were
-# written from the shape of the others, covering providers that have never
-# returned a reasoning token in any run, and a guessed 'inside' is not a
-# harmless default: it drops a seated judge's reasoning spend in silence, which
-# is the exact failure keying on the provider was meant to end. They are gone,
-# and a test refuses to let an unmeasured entry back in. An unregistered
-# provider falls back and logs, which is a state you can see.
-REASONING_ACCOUNTING: dict[str, str] = {
-    'alibaba': 'inside',
-    'anthropic': 'inside',
-    'azure': 'inside',
-    'baseten': 'inside',
-    'deepseek': 'inside',
-    'google': 'inside',
-    'groq': 'inside',
-    'moonshotai': 'inside',
-    'openai': 'inside',
-    'xai': 'alongside',
-    'zai': 'inside',
-}
-
-
-def billable_completion(usage: dict[str, int], model: str) -> int:
-    """Output tokens the provider bills, which is not always `completion_tokens`.
-
-    Providers disagree about whether reasoning tokens are counted inside the
-    completion total or reported alongside it. qwen3.5-35b-a3b returns 618
-    completion with 581 reasoning, so reasoning is inside; grok-4-1-fast
-    returns 34 completion with 301 reasoning, so it is not. Costing on
-    `completion_tokens` alone bills the second kind for its visible answer only
-    and understates it by an order of magnitude, which is exactly the
-    comparison a reseat decision turns on.
-
-    This used to decide by size, adding reasoning whenever it exceeded the
-    completion total. That reads the right answer off the wrong thing: it is
-    true of grok because grok answers in one sentence, and a provider that
-    reports alongside while writing a longer answer than it thinks satisfies
-    `reasoning <= completion` and has its reasoning dropped in silence. The
-    accounting is a property of the provider, so key on the provider and keep
-    the size relation as a check that the register still matches what arrives.
-
-    Lives here rather than in the probe script because the probe and the
-    artifact test both recost the same runs, and two implementations of this
-    rule would silently disagree about what a panel costs.
-    """
-    completion = usage.get('completion_tokens', 0)
-    reasoning = usage.get('reasoning_tokens') or 0
-    if not reasoning:
-        return completion
-
-    accounting = REASONING_ACCOUNTING.get(model.split('/')[0])
-    if accounting is None:
-        # Unregistered provider: fall back to the old reading rather than fail
-        # a live probe, and say so. A test refuses to let a seat stay here.
-        logger.warning(
-            f'{model}: provider is not in REASONING_ACCOUNTING, costing it by '
-            f'the size of its reasoning count. Read the artifact and register it.'
-        )
-        return completion + reasoning if reasoning > completion else completion
-
-    if accounting == 'inside' and reasoning > completion:
-        raise ValueError(
-            f'{model} reports {reasoning} reasoning tokens inside {completion} '
-            f'completion tokens, which cannot be. REASONING_ACCOUNTING says its '
-            f'provider counts reasoning inside the completion total; if that has '
-            f'changed, change the register.'
-        )
-    return completion + reasoning if accounting == 'alongside' else completion
-
-
 # Days a seat may sit in the garden before it has to be argued for again.
 # Generations have been turning over in roughly eight weeks, so a seat past
 # this has watched two or three rounds of its own band ship without moving.
@@ -502,9 +418,9 @@ AGED_SEATS: dict[str, str] = {
         'one model since, grok-4.5, which is stronger at a 53.8 ceiling '
         'against 30.6 and eleven times the price at $3.00, on the one panel '
         'whose whole promise is volume. The alternative is not a newer xai '
-        'model but no xai model, which would take the panel from five '
-        'lineages to four and put two OpenAI-shaped judges in a five-judge '
-        'majority. Retire this entry the day xai ships a small model.'
+        'model but no xai model, which would take the panel from five judges '
+        'to four and leave an even panel with no majority to settle a split. '
+        'Retire this entry the day xai ships a small model.'
     ),
     'claude-haiku-4-5-20251001': (
         'Listed 2025-10 and the oldest seat in the library, held now only where '
@@ -569,8 +485,8 @@ DROPPED_PRESETS: dict[str, str] = {
         'the measured cost writing 556 to 567 tokens every time, and MiniMax '
         'M2.7 held 32% ranging 345 to 1,780 across repeats of one prompt. '
         '(Those two shares were first written as 58.7 and 39.6, recosted '
-        'before `billable_completion` keyed on the provider.) A '
-        'budget preset that is neither cheapest on paper nor close to its paper '
+        'once xai reasoning tokens were counted as billed alongside the '
+        'completion total rather than inside it.) A budget preset that is neither cheapest on paper nor close to its paper '
         'in practice has no seat to hold: budget traffic goes to Cheap '
         'Aggregate, vendor independence to Open-Weight / Portable.'
     ),

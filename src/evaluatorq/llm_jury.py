@@ -444,8 +444,9 @@ def llm_jury(
     It fills in three things and contradicts none: the judges (so ``judges``/
     ``model`` alongside it is an error, not an override), ``aggregator``
     (``"majority"``, or the preset's numeric rule) and ``min_successful_judges``
-    (the full panel — a preset's cost and agreement story are about all its
-    judges voting). Pass either of the last two explicitly to overrule it.
+    (a majority of the seats, two of three or three of five, which is the count
+    the aggregation rule needs to be decisive). Pass either of the last two
+    explicitly to overrule it.
 
     Presets are pointwise panels, so ``assignment="cyclic"`` is rejected: a
     rotation runs one judge per item and there is no panel left to agree.

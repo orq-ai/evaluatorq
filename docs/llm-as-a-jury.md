@@ -89,7 +89,7 @@ helpfulness = llm_jury(
 
 | Argument | Default | What it does |
 | --- | --- | --- |
-| `preset` | `None` | Name of a ready-made panel from [Jury Presets](jury-presets.md), such as `"Balanced Trio"`. Seats the judges, the aggregation rule and a full-panel quorum. Mutually exclusive with `judges` and `model`. |
+| `preset` | `None` | Name of a ready-made panel from [Jury Presets](jury-presets.md), such as `"Balanced Trio"`. Seats the judges, the aggregation rule and a majority quorum (two of three, three of five). Mutually exclusive with `judges` and `model`. |
 | `judges` | — | Judge model IDs. Two or more makes it a jury. Mutually exclusive with `model`. |
 | `model` | — | Single-judge shorthand for `judges=[model]`. |
 | `repetitions` | `1` | How many times each judge is asked. The judge takes its own majority before the panel votes, which smooths per-call noise. |

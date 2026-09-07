@@ -1,6 +1,6 @@
 # Jury Presets
 
-A jury is only as good as its panel, and assembling one by hand means picking judges, checking they do not share a training lineage, keeping an odd number of them, and re-checking all of it every time a provider ships something new. A preset is that decision made once and kept current: `preset="Balanced Trio"` seats three judges from three families, sets the aggregation rule, and requires the whole panel to vote.
+A jury is only as good as its panel, and assembling one by hand means picking judges, checking they do not share a training lineage, keeping an odd number of them, and re-checking all of it every time a provider ships something new. A preset is that decision made once and kept current: `preset="Balanced Trio"` seats three judges from three families, sets the aggregation rule, and requires a majority of them to return a verdict.
 
 ```python
 from evaluatorq import evaluatorq, llm_jury
@@ -46,6 +46,10 @@ Naming a preset seats its judges, so passing `judges=` or `model=` alongside it 
 - `aggregator` becomes `"majority"`, a strict majority of the decisive votes. On the five-seat panel that is exactly three of five.
 - `min_successful_judges` becomes a majority of the seats, the same count the aggregation rule needs to be decisive: two of three, three of five. Not one, because a preset publishes a cost and an agreement story about a panel and a lone surviving judge would keep the name while changing what it means. Not the whole panel either, or a single unreachable judge would void items the rest of the panel agreed on.
 
+A run that does not reach that quorum is not a silent pass. `JuryResult` reports the panel it actually got: `judges_configured` against `judges_succeeded` shows a short panel, `tie` is set when the decisive votes split evenly and a caller tie policy broke them, and `inconclusive` is set when too few judges answered to conclude at all, with `stats` and `raw_agreement` left as `None`. A preset does not add verdict states of its own; it seats the panel and the jury runner reports what came back.
+
+Each preset also names `reserve_judges`, the model that takes a seat when its occupant is retired. That is a maintenance record the freshness tests read, not a runtime failover: a panel whose judge errors on the day does not silently pull in a different lineage and change what the published cost and agreement figures describe.
+
 Presets are pointwise panels, one call per judge per item, so `assignment="cyclic"` is rejected: a rotation scores each item with a single judge and leaves no panel to agree. Pairwise comparison is not part of any preset either; use `llm_jury_pairwise()` with an explicit judge list.
 
 ## What a preset does not carry
@@ -61,9 +65,11 @@ get_preset("Strong Jury").seated_efforts()
 
 `llm_jury()` takes one `reasoning_effort` for the whole panel, so a preset whose seats disagree cannot express itself through it. Per-judge call settings are a schema change and a separate ticket. Until then a panel run at the provider defaults is being run at an operating point it was not costed at, which is why the published figures are a floor rather than an estimate.
 
-Two more limits worth knowing before you quote a number:
+Four more limits worth knowing before you quote a number:
 
+- One seat in Cheap Aggregate does not currently vote. `minimax/MiniMax-M2.7` returns prose instead of a structured verdict through the router, so that panel concludes on the four judges that answer and bills for four rather than the five its figure assumes. The seat itself is fine: the model complies when the schema reaches it as instructions, and the fallback that would do so only triggers when a provider rejects the request outright. Until that is fixed, read Cheap Aggregate as a four-seat panel.
 - Agreement between these panels and human raters is inherited from the literature, not measured on orq data. There is no human-agreement baseline behind any of these presets.
+- Some seats are costed at a cheaper rung than the one they are seated at, which `JuryPreset.priced_below_seated_effort()` lists. The captured blend for those judges is the price at the rung the probe measured, so the published $/1k understates them until someone re-probes the panel at its seated effort. Disclosed rather than corrected, because correcting it is a re-probe of every panel and not an arithmetic fix.
 - Measured spend runs above the table when a judge reasons without being asked to. Gemini has been observed spending several hundred unrequested reasoning tokens on a one-sentence verdict, and a probe put Balanced Trio 25% over its own figure.
 
 ## How a preset stays current
