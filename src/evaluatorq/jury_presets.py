@@ -359,10 +359,6 @@ ESTIMATED_PROMPT_TOKENS = 1500
 ESTIMATED_COMPLETION_TOKENS = 150
 
 
-# Presets that shipped in a draft and were then retired, with the reason on
-# record. A shape that disappears silently leaves its users guessing, so removal
-# costs a written line here and `get_preset` hands it back by name.
-
 # Presets derived and costed, but not seated in PRESETS because a seat cannot
 # do the job today. Distinct from DROPPED_PRESETS: nothing here was judged a bad
 # panel, and each entry names the one thing that has to be true for it to ship.
@@ -386,12 +382,15 @@ WITHHELD_PRESETS: dict[str, str] = {
     ),
 }
 
+# Presets that shipped in a draft and were then retired, with the reason on
+# record. A shape that disappears silently leaves its users guessing, so removal
+# costs a written line here and `get_preset` hands it back by name.
 DROPPED_PRESETS: dict[str, str] = {
     'Value Trio': (
         'Retired 2026-08-24. Sold as the budget panel, but the blend repricing '
         'left Cheap Aggregate cheaper on the table ($2.73 vs $2.86 per 1k) with '
         'five judges to its three, and the 2026-08-18 probe measured Value Trio '
-        '83% over its own table when a probe measured it (2026-08-18). '
+        '83% over its own table. '
         'The overage was prose length, not reasoning: neither of the two '
         'expensive judges reports a reasoning token. glm-5-maas held 63% of '
         'the measured cost writing 556 to 567 tokens every time, and MiniMax '
