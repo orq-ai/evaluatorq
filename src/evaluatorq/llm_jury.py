@@ -361,13 +361,16 @@ def _apply_preset(
     default the caller can still overrule, because aggregation and quorum are
     properties of how you want to read the panel, not of the panel itself.
 
-    Quorum defaults to a majority of the seats, which is the same count the
-    panel's own aggregation rule needs to be decisive: 2 of 3, 3 of 5. Not one,
-    because a preset publishes a cost and an agreement story for a panel and a
-    single surviving judge would keep the name while changing what it means. Not
-    the full panel either, which is what this defaulted to until a live run
-    showed the cost: one seat failing to return made Cheap Aggregate answer
-    `inconclusive` on every item while four judges agreed.
+    Quorum defaults to a majority of the seats. It is a floor on how many judges
+    have to answer at all, not the threshold the aggregation rule applies: the
+    ``majority`` aggregator takes more than half of the votes that arrived, so
+    on a trio that answers 1-1 it still returns no verdict even though the
+    quorum of 2 was met. Not one, because a preset publishes a cost and an
+    agreement story for a panel and a single surviving judge would keep the name
+    while changing what it means. Not the full panel either, which is what this
+    defaulted to until a live run showed the cost: one seat failing to return
+    made a five-judge panel answer `inconclusive` on every item while the other
+    four agreed.
     """
     if preset is None:
         return judges, aggregator, 1 if min_successful_judges is None else min_successful_judges
@@ -444,9 +447,9 @@ def llm_jury(
     It fills in three things and contradicts none: the judges (so ``judges``/
     ``model`` alongside it is an error, not an override), ``aggregator``
     (``"majority"``, or the preset's numeric rule) and ``min_successful_judges``
-    (a majority of the seats, two of three or three of five, which is the count
-    the aggregation rule needs to be decisive). Pass either of the last two
-    explicitly to overrule it.
+    (a majority of the seats, two of three or three of five, which is a floor on
+    how many judges must answer rather than the threshold the aggregator then
+    applies). Pass either of the last two explicitly to overrule it.
 
     Presets are pointwise panels, so ``assignment="cyclic"`` is rejected: a
     rotation runs one judge per item and there is no panel left to agree.

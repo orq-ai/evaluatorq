@@ -1,30 +1,33 @@
 """Jury preset definitions and the `llm_jury(preset=...)` seam (RES-1171)."""
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from evaluatorq import llm_jury
-from evaluatorq.common.model_frontier import load_judge_pricing
 from evaluatorq.jury_presets import (
-    DEFAULT_PRESET,
     DROPPED_PRESETS,
     ESTIMATED_COMPLETION_TOKENS,
     ESTIMATED_PROMPT_TOKENS,
     PRESETS,
-    Aggregation,
+    WITHHELD_PRESETS,
+    JudgeRates,
     JuryPreset,
     all_router_ids,
     get_preset,
     judge_family,
+    judge_rates,
 )
+
+
+def _rate_table() -> dict[str, JudgeRates]:
+    return {rid: r for rid in all_router_ids() if (r := judge_rates(rid)) is not None}
 
 
 def _preset(**overrides: Any) -> dict[str, Any]:
     base = {
         'name': 'Test Panel',
         'judges': ('openai/gpt-5.6-luna', 'anthropic/claude-opus-5', 'google/gemini-3.6-flash'),
-        'aggregation': Aggregation.MAJORITY,
         'reserve_judges': ('deepseek/deepseek-v4-pro',),
         'use_when': 'testing',
         'estimated_cost_per_1k': 1.0,
@@ -54,11 +57,6 @@ class TestPanelInvariants:
         with pytest.raises(ValueError, match='reserves share a lineage'):
             JuryPreset(**_preset(reserve_judges=('deepseek/deepseek-v4-pro', 'deepseek/deepseek-v4-flash')))
 
-    def test_three_of_five_aggregation_requires_five_judges(self):
-        """The aggregation mode encodes a panel size, so it cannot outlive one."""
-        with pytest.raises(ValueError, match='3-of-5 majority needs 5 judges'):
-            JuryPreset(**_preset(aggregation=Aggregation.MAJORITY_3_OF_5))
-
     def test_odd_panel_with_a_distinct_reserve_is_accepted(self):
         preset = JuryPreset(**_preset())
 
@@ -73,8 +71,13 @@ class TestShippedPresets:
     def test_panel_has_no_duplicate_judges(self, preset):
         assert len(set(preset.judges)) == len(preset.judges)
 
-    def test_default_preset_is_published(self):
-        assert DEFAULT_PRESET.name in PRESETS
+    def test_the_registry_cannot_be_edited_in_place(self):
+        """PRESETS is process-wide, so a stray write would reseat every later caller."""
+        with pytest.raises(TypeError):
+            cast('dict[str, JuryPreset]', cast('object', PRESETS))['Balanced Trio'] = PRESETS['Strong Jury']
+
+    def test_a_name_is_matched_after_trimming(self):
+        assert get_preset('  Balanced Trio ') is PRESETS['Balanced Trio']
 
     def test_router_ids_cover_judges_and_reserves(self):
         ids = all_router_ids()
@@ -92,6 +95,20 @@ class TestShippedPresets:
         with pytest.raises(ValueError, match='was retired'):
             get_preset('Value Trio')
 
+    def test_a_withheld_preset_says_what_is_holding_it(self):
+        """Derived and costed but not seated is a third state, and it is not 'unknown'."""
+        with pytest.raises(ValueError, match='is not shipped yet'):
+            get_preset('Cheap Aggregate')
+
+        assert 'Cheap Aggregate' not in PRESETS
+        for name, reason in WITHHELD_PRESETS.items():
+            assert name not in DROPPED_PRESETS
+            assert len(reason) > 80, f'{name}: a withholding needs its condition written out'
+
+    def test_a_seat_no_preset_holds_is_not_priced(self):
+        """The rate table follows the seats; a row for a model nothing seats is stale."""
+        assert set(_rate_table()) == all_router_ids()
+
 
 class TestPublishedCost:
     """The $/1k in the table is recomputed from the captured rates, never trusted."""
@@ -103,35 +120,37 @@ class TestPublishedCost:
     @pytest.mark.parametrize('router_id', sorted(all_router_ids()))
     def test_every_preset_router_id_is_priced(self, router_id):
         """A preset must never ship a judge that silently costs zero."""
-        rates = load_judge_pricing().get(router_id)
+        rates = judge_rates(router_id)
 
         assert rates is not None
-        assert rates['input_rate'] > 0
-        assert rates['output_rate'] > 0
+        assert rates.input_rate > 0
+        assert rates.output_rate > 0
 
     def test_a_repriced_judge_moves_the_published_figure(self, monkeypatch):
         """The point of recomputing: a price change cannot leave the table standing."""
-        pricing = dict(load_judge_pricing())
         preset = PRESETS['Balanced Trio']
-        doubled = dict(pricing[preset.judges[0]])
-        doubled['input_rate'] *= 2
-        monkeypatch.setattr(
-            'evaluatorq.jury_presets.load_judge_pricing',
-            lambda: pricing | {preset.judges[0]: doubled},
-        )
+        seat = preset.judges[0]
+        table = _rate_table()
+        doubled = table[seat].model_copy(update={'input_rate': table[seat].input_rate * 2})
+        monkeypatch.setattr('evaluatorq.jury_presets.judge_rates', (table | {seat: doubled}).get)
 
         assert preset.cost_per_1k() != preset.estimated_cost_per_1k
 
     def test_an_unpriced_judge_raises_rather_than_costing_nothing(self, monkeypatch):
         preset = PRESETS['Balanced Trio']
-        monkeypatch.setattr('evaluatorq.jury_presets.load_judge_pricing', dict)
+        monkeypatch.setattr('evaluatorq.jury_presets.judge_rates', lambda _router_id: None)
 
         with pytest.raises(KeyError, match='no captured pricing'):
             preset.cost_per_1k()
 
-    def test_the_estimate_is_stated_in_tokens_the_docs_publish(self):
-        """The figures mean nothing without the item they are per."""
-        assert (ESTIMATED_PROMPT_TOKENS, ESTIMATED_COMPLETION_TOKENS) == (1500, 150)
+    def test_the_published_tokens_are_the_ones_the_figures_were_costed_at(self):
+        """The figures mean nothing without the item they are per, so tie the two together."""
+        seat = judge_rates('openai/gpt-5.6-luna')
+        assert seat is not None
+        alone = JuryPreset(**_preset(judges=(('openai/gpt-5.6-luna',) * 1), estimated_cost_per_1k=0.0))
+        expected = (seat.input_rate * ESTIMATED_PROMPT_TOKENS + seat.output_rate * ESTIMATED_COMPLETION_TOKENS) / 1_000
+
+        assert alone.cost_per_1k() == pytest.approx(expected, abs=0.005)
 
 
 class TestFamilyExclusion:
@@ -172,7 +191,6 @@ class TestFamilyExclusion:
         for name in (
             'Balanced Trio',
             'Strong Jury',
-            'Cheap Aggregate',
             'Open-Weight / Portable',
             'EU Region',
         ):
@@ -223,16 +241,18 @@ class TestLLMJurySeam:
         with pytest.raises(ValueError, match='cannot run with'):
             llm_jury(name='x', criteria='c', preset='Balanced Trio', assignment='cyclic')
 
-    def test_quorum_defaults_to_a_majority_of_the_panel(self):
-        """The count the panel's own aggregation needs, not every seat.
+    @pytest.mark.parametrize('name', sorted(PRESETS))
+    def test_quorum_defaults_to_a_majority_of_the_seats(self, name):
+        """A floor on how many judges must answer, not the aggregation threshold.
 
-        Requiring all five made one unreachable judge void an item that the
-        other four agreed on, which a live run hit on the first try.
+        Requiring every seat made one unreachable judge void an item the rest of
+        the panel agreed on, which a live run hit on the first try. A majority
+        is the smallest count that cannot be carried by a minority of the panel.
         """
-        judges, aggregator, quorum = _applied('Cheap Aggregate')
+        judges, aggregator, quorum = _applied(name)
 
-        assert len(judges) == 5
-        assert quorum == 3
+        assert quorum == len(judges) // 2 + 1
+        assert quorum > len(judges) / 2
         assert aggregator == 'majority'
 
     def test_a_trio_still_needs_two_judges(self):
@@ -245,7 +265,7 @@ class TestLLMJurySeam:
         from evaluatorq.llm_jury import _apply_preset
 
         _, _, quorum = _apply_preset(
-            'Cheap Aggregate',
+            'Balanced Trio',
             judges=None,
             model=None,
             aggregator=None,

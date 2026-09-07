@@ -2,22 +2,26 @@
 
 The single source for what a named jury preset means: which judges, which
 aggregation mode, and which reserve judges replace them when one is retired,
-deprecated or repriced. `llm_jury(preset=...)` builds a panel from here, the
-cost tests recompute every published figure from the committed garden snapshot,
-and the freshness tests refuse a seat that has quietly gone stale, so a preset
-cannot drift between the docs and the code.
+deprecated or repriced. `llm_jury(preset=...)` builds a panel from here, and a
+test recomputes every published figure from `common/data/jury_judge_rates.json`,
+so the table in the docs cannot drift away from what the code seats.
 
-Seats are derived, not hand-listed: each one is the best buy within its own
-lineage on the two axes `common.model_frontier` reads off the model garden. The
-lineage itself is the point, so seats are judged in-family rather than globally
-- judged globally, 19 of 24 look dominated, and acting on that would collapse
-every panel onto the cheapest vendor and recreate the correlated errors the
-panel exists to cancel.
+Seats are derived rather than hand-listed. The derivation itself is not here:
+it reads a capture of the whole model garden, ranks each lineage on an
+intelligence index and a blended price, and is rerun and reviewed in the
+research repo that owns the capture. What ships to callers is its output, the
+panels and the rates they were costed at. Seats are compared in-family, because
+the lineage diversity is the point: judged against the whole garden most seats
+look dominated, and acting on that would collapse every panel onto whichever
+vendor is cheapest this month and recreate the correlated errors a panel exists
+to cancel.
 
-Anything the arithmetic cannot settle is written down rather than passing in
-silence: `AGED_SEATS`, `REVIEWED_SUCCESSORS`, `DROPPED_PRESETS` here, and
-`NEVER_SEAT`, `UNROUTABLE`, `NON_MONOTONE_LADDERS` in `common.model_frontier`.
-An entry that stops being true fails a test.
+A preset that is not in `PRESETS` still owes an explanation, so `WITHHELD_PRESETS`
+and `DROPPED_PRESETS` carry one and `get_preset` hands it back by name instead of
+a bare "unknown preset". The registers behind the seating itself, which record a
+successor deliberately passed over or a seat knowingly held past its age limit,
+live with the derivation in the research repo where they can be checked against
+the garden.
 
 Reserves are a reviewed change to this file, not a grade-time substitution. A
 panel that contains the generator warns and proceeds (`_panel_composition_messages`
@@ -28,27 +32,52 @@ Router IDs are the literal strings the orq model garden returns from
 `GET /v2/models`; they are what the router and `common.model_catalogue` expect.
 """
 
-import math
+import json
 import re
+from decimal import ROUND_HALF_UP, Decimal
+from functools import lru_cache
+from pathlib import Path
+from types import MappingProxyType
+from typing import Any, cast
 
 from pydantic import BaseModel, Field, model_validator
 
 from evaluatorq.common.jury import AggregatorName, provider_family
-from evaluatorq.common.model_frontier import load_judge_pricing, seated_effort
-from evaluatorq.contracts import StrEnum  # 3.10 compat shim; `enum.StrEnum` is 3.11+
+
+_RATES_PATH = Path(__file__).parent / 'common' / 'data' / 'jury_judge_rates.json'
 
 
-class Aggregation(StrEnum):
-    """How a panel turns per-judge verdicts into one.
+class JudgeRates(BaseModel):
+    """What a seated judge bills and the rung it was ranked at, per 1M tokens."""
 
-    Both map to evaluatorq's `majority` aggregator, which is a strict >50% of the
-    decisive votes: on a five-seat panel that is exactly three of five. The two
-    members are kept apart because the second one also encodes a panel size, and
-    the validator refuses to let it outlive one.
+    model_config = {'frozen': True}
+
+    input_rate: float
+    output_rate: float
+    seated_effort: str | None
+    priced_at_ceiling: bool
+
+
+@lru_cache(maxsize=1)
+def _load_rates() -> MappingProxyType[str, JudgeRates]:
+    """The committed rate table, read once and handed out read-only.
+
+    Frozen on purpose. This is cached process-wide, so a caller who mutated the
+    returned mapping would silently reprice every published preset for the life
+    of the process.
     """
+    raw = cast('dict[str, Any]', json.loads(_RATES_PATH.read_text()))
+    return MappingProxyType({rid: JudgeRates(**fields) for rid, fields in raw['judges'].items()})
 
-    MAJORITY = 'majority'
-    MAJORITY_3_OF_5 = 'majority_3_of_5'
+
+def judge_rates(router_id: str) -> JudgeRates | None:
+    """The captured rates for a seated judge, or None for a model no preset seats."""
+    return _load_rates().get(router_id)
+
+
+def captured_at() -> str:
+    """When the rates were captured, for anyone deciding whether to trust the table."""
+    return cast('str', json.loads(_RATES_PATH.read_text())['captured_at'])
 
 
 # Host, region and serving-variant noise that makes one model look like several.
@@ -116,7 +145,6 @@ class JuryPreset(BaseModel):
 
     name: str
     judges: tuple[str, ...]
-    aggregation: Aggregation
     reserve_judges: tuple[str, ...]
     numeric_aggregation: AggregatorName = 'mean_std'
     use_when: str
@@ -133,9 +161,6 @@ class JuryPreset(BaseModel):
             raise ValueError(f'{self.name}: panel has a duplicate judge')
         if set(self.reserve_judges) & set(self.judges):
             raise ValueError(f'{self.name}: a reserve judge is already on the panel')
-        if self.aggregation is Aggregation.MAJORITY_3_OF_5 and len(self.judges) != 5:
-            raise ValueError(f'{self.name}: 3-of-5 majority needs 5 judges, not {len(self.judges)}')
-
         if len(set(judge_family(r) for r in self.reserve_judges)) != len(self.reserve_judges):
             raise ValueError(f'{self.name}: reserves share a lineage with each other')
         return self
@@ -152,7 +177,7 @@ class JuryPreset(BaseModel):
         whose seats disagree cannot express itself through it yet; per-judge call
         settings are a schema change and its own ticket (RES-1347).
         """
-        return {judge: seated_effort(judge) for judge in self.judges}
+        return {judge: (r.seated_effort if (r := judge_rates(judge)) else None) for judge in self.judges}
 
     def priced_below_seated_effort(self) -> tuple[str, ...]:
         """Judges whose captured price is the blend at a cheaper rung than the seated one.
@@ -161,10 +186,7 @@ class JuryPreset(BaseModel):
         effort they are seated at. Disclosed rather than corrected: correcting it
         is a re-probe of every panel, not an arithmetic fix.
         """
-        from evaluatorq.common.model_frontier import load_garden
-
-        garden = load_garden()
-        return tuple(j for j in self.judges if (m := garden.get(j)) and not m.priced_at_ceiling)
+        return tuple(j for j in self.judges if (r := judge_rates(j)) and not r.priced_at_ceiling)
 
     def duplicated_lineages(self) -> dict[str, tuple[str, ...]]:
         """Lineages seated more than once, whose errors correlate.
@@ -186,20 +208,18 @@ class JuryPreset(BaseModel):
         has to come from. A test asserts the two agree, so a repricing in the
         snapshot fails CI rather than quietly making a published table wrong.
         """
-        pricing = load_judge_pricing()
-        components = []
+        total = Decimal(0)
         for judge in self.judges:
-            rates = pricing.get(judge)
+            rates = judge_rates(judge)
             if rates is None:
-                raise KeyError(f'{self.name}: no captured pricing for {judge!r}; re-run the garden capture')
-            components.extend((
-                ESTIMATED_PROMPT_TOKENS / 1_000_000 * rates['input_rate'],
-                ESTIMATED_COMPLETION_TOKENS / 1_000_000 * rates['output_rate'],
-            ))
-        # fsum, and one rounding at the end: rounding each judge and accumulating
-        # puts EU Region at 6.56 against a true 6.555, so the published table and
-        # the code would disagree over floating-point noise rather than a price.
-        return round(math.fsum(components) * 1000, 2)
+                raise KeyError(f'{self.name}: no captured pricing for {judge!r}; re-run the rate capture')
+            total += Decimal(str(rates.input_rate)) * Decimal(ESTIMATED_PROMPT_TOKENS)
+            total += Decimal(str(rates.output_rate)) * Decimal(ESTIMATED_COMPLETION_TOKENS)
+        # Decimal, and one rounding at the end. Two published figures land exactly
+        # on a half-cent (Strong Jury 23.625, EU Region 6.555), so binary floats
+        # and banker's rounding would decide them by representation rather than by
+        # a price, and a recapture that moved nothing could flip the table.
+        return float((total / Decimal(1_000)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
 
 
 BALANCED_TRIO = JuryPreset(
@@ -224,7 +244,6 @@ BALANCED_TRIO = JuryPreset(
         # cheaper ($3.00 against $3.375 blended).
         'google/gemini-3.6-flash',
     ),
-    aggregation=Aggregation.MAJORITY,
     # Same lineage as the seat it backs, on purpose: a retirement is usually a
     # version bump, and flash keeps the panel at three families where a
     # fourth-vendor reserve would quietly reshape it.
@@ -250,60 +269,9 @@ STRONG_JURY = JuryPreset(
         # effort and cheaper.
         'google/gemini-3.6-flash',
     ),
-    aggregation=Aggregation.MAJORITY,
     reserve_judges=('deepseek/deepseek-v4-pro',),
     use_when='Customer-facing benchmarks, preference data, anything that compounds.',
-    estimated_cost_per_1k=23.62,
-)
-
-CHEAP_AGGREGATE = JuryPreset(
-    name='Cheap Aggregate',
-    judges=(
-        # Held by gpt-5.4-nano until the general-purpose luna card landed
-        # (2026-08): dominated on both axes (38.1 vs 30.2 at a lower blend).
-        'openai/gpt-5.6-luna',
-        # gemini-3.1-flash-lite-preview is listed by the garden but Vertex
-        # answers 404 for it (probe 2026-08-18) — the RES-1285 reachability
-        # trap. gemini-3-flash-preview took the seat, and the 2026-08-25
-        # re-capture replaced it with the released flash-lite, which is both
-        # stronger and cheaper and drops the last preview dependency.
-        'google/gemini-3.5-flash-lite',
-        # Held this seat as gpt-oss-20b until the family entered NEVER_SEAT
-        # (PR #330 review, 2026-08-24). Qwen keeps the panel cheap where the
-        # in-house reserves cannot ($0.69 blended against Kimi's $1.71), and
-        # takes it from four lineages to five.
-        # Held by alibaba/qwen3.5-35b-a3b until a probe measured what the
-        # index and price could not see (probe-candidates-20260825T102031Z,
-        # three repeats of one rubric): a mean 1,249 reasoning tokens to return
-        # a one-sentence verdict, ranging 581 to 2,523, which costs $2.96 per
-        # 1k for this seat alone, more than the whole five-judge panel's
-        # published figure at the time ($2.56). It returned the same verdict on
-        # every repeat while the panel spread across 1, 2 and 3, so the spend
-        # bought no agreement either. grok-4-1-fast gives that verdict in 347
-        # billable tokens for $0.47 per 1k.
-        #
-        # This seat was defended as the weakest on the panel, 16.9 against
-        # qwen's 29.3, on the argument that a 3-of-5 majority is built to
-        # absorb one. Both halves of that were wrong. 16.9 is grok's
-        # non-reasoning score against qwen's reasoning score, which is not a
-        # comparison, and grok is not the weakest seat: at their ceilings it
-        # reaches 30.6 against qwen's 29.3, and the probe shows it reasoning by
-        # default (269 to 313 tokens), so the ceiling is where it operates. The
-        # seat is cheaper and stronger; only the argument for it was wrong.
-        'xai/grok-4-1-fast',
-        'deepseek/deepseek-v4-flash',
-        'minimax/MiniMax-M2.7',
-    ),
-    aggregation=Aggregation.MAJORITY_3_OF_5,
-    # glm-5-maas was the first reserve until Google delisted it from the
-    # garden (2026-08-25 price audit), and kimi-k2.6 carried the role alone
-    # until its card was found scoring its own `none` rung twice (2026-09-03).
-    # glm-5.2 is the strongest reserve on a lineage the panel does not already
-    # seat, at $2.15 against the panel's $2.56 for all five, which is what a
-    # reserve is for: it stands in once, it does not run every night.
-    reserve_judges=('zai/glm-5.2',),
-    use_when='High volume regression eval, nightly reruns, HITL triage feeders.',
-    estimated_cost_per_1k=2.56,
+    estimated_cost_per_1k=23.63,
 )
 
 OPEN_WEIGHT_PORTABLE = JuryPreset(
@@ -325,7 +293,6 @@ OPEN_WEIGHT_PORTABLE = JuryPreset(
         'baseten/kimi-k3',
         'zai/glm-5.2',
     ),
-    aggregation=Aggregation.MAJORITY,
     reserve_judges=('minimax/MiniMax-M2.7',),
     use_when='No dependence on a closed frontier vendor; migration path to self-hosting.',
     estimated_cost_per_1k=10.29,
@@ -340,12 +307,11 @@ EU_REGION = JuryPreset(
         # endpoint bills 0.22/1.32 against Azure's 0.20/1.20.
         'azure/eu.gpt-5.6-luna',
     ),
-    aggregation=Aggregation.MAJORITY,
     reserve_judges=('google/eu.claude-sonnet-5',),
     use_when=(
         'Data residency: every judge serves from an EU region. Anthropic, Google and OpenAI, which is what the EU catalog can field at the current generation: the DeepSeek seat carrying Balanced Trio has no EU endpoint newer than v3.1, so this is not that panel relocated.'
     ),
-    estimated_cost_per_1k=6.55,
+    estimated_cost_per_1k=6.56,
 )
 
 SINGLE_PROVIDER_TRIO = JuryPreset(
@@ -362,7 +328,6 @@ SINGLE_PROVIDER_TRIO = JuryPreset(
         # blended) and dominates both minis outright.
         'openai/gpt-5.6-luna',
     ),
-    aggregation=Aggregation.MAJORITY,
     # gpt-5-mini held the reserve until ranking moved to card ceilings
     # (2026-09-03): its card reads minimal 14.3, medium 30.9, high 25.3, so
     # more effort scores lower and there is no rung to rank it at. It is in
@@ -377,19 +342,16 @@ SINGLE_PROVIDER_TRIO = JuryPreset(
     estimated_cost_per_1k=14.28,
 )
 
-PRESETS: dict[str, JuryPreset] = {
+PRESETS: MappingProxyType[str, JuryPreset] = MappingProxyType({
     preset.name: preset
     for preset in (
         BALANCED_TRIO,
         STRONG_JURY,
-        CHEAP_AGGREGATE,
         OPEN_WEIGHT_PORTABLE,
         EU_REGION,
         SINGLE_PROVIDER_TRIO,
     )
-}
-
-DEFAULT_PRESET = BALANCED_TRIO
+})
 
 # Estimate behind every published cost. Measured usage runs above this when a
 # judge reasons without being asked (RES-996), so treat it as a floor.
@@ -397,96 +359,44 @@ ESTIMATED_PROMPT_TOKENS = 1500
 ESTIMATED_COMPLETION_TOKENS = 150
 
 
-# Days a seat may sit in the garden before it has to be argued for again.
-# Generations have been turning over in roughly eight weeks, so a seat past
-# this has watched two or three rounds of its own band ship without moving.
-MAX_SEAT_AGE_DAYS = 180
-
-# Seats knowingly held past MAX_SEAT_AGE_DAYS, keyed by model identity.
-#
-# The other registers all answer "something newer exists, why not it?".  This
-# one answers the question nothing else asks: a lineage can simply stop
-# shipping, and then no in-family upgrade is ever found, no successor is ever
-# flagged, and a seat quietly ages out while every freshness test passes.
-#
-# Age here is time since first listing in the garden, taken across every host
-# of the same weights, so a second host relisting a model does not reset it.
-AGED_SEATS: dict[str, str] = {
-    'grok-4-1-fast': (
-        'Listed 2026-03 and 182 days old on 2026-09-03, holding the cheap '
-        'thinking seat on Cheap Aggregate at a $0.275 blend. xai has shipped '
-        'one model since, grok-4.5, which is stronger at a 53.8 ceiling '
-        'against 30.6 and eleven times the price at $3.00, on the one panel '
-        'whose whole promise is volume. The alternative is not a newer xai '
-        'model but no xai model, which would take the panel from five judges '
-        'to four and leave an even panel with no majority to settle a split. '
-        'Retire this entry the day xai ships a small model.'
-    ),
-    'claude-haiku-4-5-20251001': (
-        'Listed 2025-10 and the oldest seat in the library, held now only where '
-        'a constraint holds it: the bottom seat of the Anthropic Only pool and '
-        'the cheap seat of EU Region. Anthropic has shipped no small model '
-        'since, so the in-family check finds nothing and the alternative in '
-        'both places is not a newer Anthropic model but no Anthropic model, '
-        'which is the one thing those two presets promise. It lost its third '
-        'seat, on Balanced Trio, when this register was added: nothing was '
-        'constraining it there and it was the weakest buy in the library, 23.7 '
-        'at a $2.00 blend beside luna on the same panel at 38.1 for $0.45. '
-        'Retire this entry the day Anthropic ships a small model.'
-    ),
-}
-
-
-# Successors already looked at and deliberately not seated. A model reaching the
-# garden is not a reason to put it in front of customers, but it is a reason to
-# say why not: this dict is that record, and the freshness test fails on any
-# successor missing from it. Seat the model or write the line; silence is the
-# one thing that is not allowed.
-REVIEWED_SUCCESSORS: dict[str, str] = {
-    'grok-4.5': (
-        'Newer than the grok-4-1-fast seat Cheap Aggregate now holds, and '
-        'stronger (a 53.8 ceiling against 30.6), but at a $3.00 blend against $0.275 it '
-        'is eleven times the price of the seat it would take, in the one panel '
-        'whose whole purpose is volume. It already holds the middle seat of the '
-        'Balanced Pareto Trio router pool, which is where that price buys '
-        'something. Revisit if a jury preset ever wants an xai seat on quality.'
-    ),
-    'gemini-3.7-flash': (
-        'Garden lists it EU-only (google/eu.gemini-3.7-flash) with no pricing '
-        'entry, so it cannot be costed. Revisit for EU Region once priced.'
-    ),
-    'kimi-k3-fast': 'Latency variant of the seated baseten/kimi-k3, a serving variant rather than a generation.',
-    'glm-5.2-fast': 'Baseten serving variant of the seated zai/glm-5.2, not a new generation.',
-    'minimax-m3': (
-        'Unseatable, not merely unseated: wafer/MiniMax-M3 is listed and priced '
-        'but 404s on a completion call, so it carries an UNROUTABLE entry and '
-        'held a pool seat on nothing but a catalog listing until a probe caught '
-        'it. Would stay off the juries regardless, since Cheap Aggregate seats '
-        'M2.7 for the MiniMax vote and the probe measured that lineage spending '
-        '308 to 1,780 reasoning tokens across repeats of one prompt: a second '
-        'MiniMax seat buys correlated cost variance, not a voice.'
-    ),
-    'gpt-transcribe': 'Speech-to-text, not a text judge. Wrong model type for any panel.',
-    'gpt-live-transcribe': 'Realtime speech-to-text. Same reasoning as gpt-transcribe.',
-}
-
-
 # Presets that shipped in a draft and were then retired, with the reason on
-# record. Mirrors DROPPED_POOLS in router_pools: a shape that disappears
-# silently leaves its users guessing, so removal costs a written line here.
+# record. A shape that disappears silently leaves its users guessing, so removal
+# costs a written line here and `get_preset` hands it back by name.
+
+# Presets derived and costed, but not seated in PRESETS because a seat cannot
+# do the job today. Distinct from DROPPED_PRESETS: nothing here was judged a bad
+# panel, and each entry names the one thing that has to be true for it to ship.
+WITHHELD_PRESETS: dict[str, str] = {
+    'Cheap Aggregate': (
+        'Held back 2026-09-07, not retired. Five small judges across five '
+        'lineages concluding on three of five at $2.56 per 1k, and the panel '
+        'the volume story is built on. One seat does not vote: '
+        '`minimax/MiniMax-M2.7` answers a `json_schema` response format with '
+        'prose, and the fallback that would resend the schema as instructions '
+        'sits behind `except BadRequestError`, so it never fires on a 200 that '
+        'simply has the wrong shape. The model itself complies when the schema '
+        'reaches it as instructions. That leaves four voting seats, an even '
+        'panel, which is the one shape `_panel_is_well_formed` exists to '
+        'reject, passing only because the validator counts declared seats and '
+        'not voting ones. Seating the named reserve is not a fix either: '
+        'zai/glm-5.2 costs $2.76 per 1k for that seat alone and takes the panel '
+        'to $4.69, past Balanced Trio, which is the whole reason the panel '
+        'exists gone. Ships the day the judge path falls back on an '
+        'unparseable 200 as well as on a rejected request.'
+    ),
+}
+
 DROPPED_PRESETS: dict[str, str] = {
     'Value Trio': (
         'Retired 2026-08-24. Sold as the budget panel, but the blend repricing '
         'left Cheap Aggregate cheaper on the table ($2.73 vs $2.86 per 1k) with '
         'five judges to its three, and the 2026-08-18 probe measured Value Trio '
-        '83% over its own table (probes/archive/probe-value-trio-20260818T084331Z). '
+        '83% over its own table when a probe measured it (2026-08-18). '
         'The overage was prose length, not reasoning: neither of the two '
         'expensive judges reports a reasoning token. glm-5-maas held 63% of '
         'the measured cost writing 556 to 567 tokens every time, and MiniMax '
         'M2.7 held 32% ranging 345 to 1,780 across repeats of one prompt. '
-        '(Those two shares were first written as 58.7 and 39.6, recosted '
-        'once xai reasoning tokens were counted as billed alongside the '
-        'completion total rather than inside it.) A budget preset that is neither cheapest on paper nor close to its paper '
+        'A budget preset that is neither cheapest on paper nor close to its paper '
         'in practice has no seat to hold: budget traffic goes to Cheap '
         'Aggregate, vendor independence to Open-Weight / Portable.'
     ),
@@ -502,10 +412,14 @@ def all_router_ids() -> set[str]:
 
 def get_preset(name: str) -> JuryPreset:
     """Look a preset up by name, listing the alternatives when there is no match."""
+    name = name.strip()
     try:
         return PRESETS[name]
     except KeyError:
         dropped = DROPPED_PRESETS.get(name)
         if dropped:
             raise ValueError(f'jury preset {name!r} was retired: {dropped}') from None
+        withheld = WITHHELD_PRESETS.get(name)
+        if withheld:
+            raise ValueError(f'jury preset {name!r} is not shipped yet: {withheld}') from None
         raise ValueError(f'unknown jury preset {name!r}; available: {sorted(PRESETS)}') from None

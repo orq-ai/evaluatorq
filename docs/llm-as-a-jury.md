@@ -95,7 +95,7 @@ helpfulness = llm_jury(
 | `repetitions` | `1` | How many times each judge is asked. The judge takes its own majority before the panel votes, which smooths per-call noise. |
 | `assignment` | `"all"` | How judges are allocated across datapoints. `"all"` runs every judge on every datapoint. `"cyclic"` runs exactly one judge per datapoint, rotating through the panel (see below). |
 | `replacement_judges` | `None` | Stand-in models called only when a configured judge fails mechanically. |
-| `min_successful_judges` | `1` | Minimum decisive judges required, otherwise the verdict is **inconclusive**. Must not exceed the panel size. Defaults to a majority of the seats under a `preset` (two of three, three of five). |
+| `min_successful_judges` | `None` | Minimum decisive judges required, otherwise the verdict is **inconclusive**. Must not exceed the panel size. `None` means 1 for a hand-listed panel, and a majority of the seats under a `preset` (two of three, three of five). It is a floor on how many judges must answer, not the threshold the aggregator applies. |
 | `threshold` | `0.5` | Numeric mode: `passed` when `score >= threshold`. |
 | `structured_output` | `True` | Use the provider's structured-output API; falls back to a schema-injected `json_object` call for models that reject it. |
 

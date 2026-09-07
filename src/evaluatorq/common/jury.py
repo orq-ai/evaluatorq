@@ -830,8 +830,15 @@ def provider_family(model_id: str) -> str:
     # substring trap where a short marker bled into an unrelated word
     # (palmyra->palm, command->...): 'palmyra'.startswith('palm') is True but the
     # next char 'y' is alphabetic, so it no longer maps to google.
-    for marker, family in _FAMILY_MARKERS:
-        for tok in tokens:
+    # Tokens are the outer loop, so the EARLIEST marker in the id wins rather
+    # than the earliest entry in the table. Scanning markers first reads
+    # `deepseek/deepseek-r1-distill-llama-70b` as meta, because ('llama', 'meta')
+    # is listed above ('deepseek', 'deepseek'), while its qwen-distilled sibling
+    # comes back deepseek purely from table order. A distill is named for its
+    # base model after its own lineage, so the first lineage token is the right
+    # one and the table stops being order-sensitive.
+    for tok in tokens:
+        for marker, family in _FAMILY_MARKERS:
             if tok == marker or (tok.startswith(marker) and len(tok) > len(marker) and tok[len(marker)].isdigit()):
                 return family
     # Only then fall back to the leading token, for a model this has no marker
