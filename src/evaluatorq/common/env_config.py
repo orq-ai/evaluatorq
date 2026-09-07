@@ -83,9 +83,11 @@ def env_bool(name: str, *, default: bool) -> bool:
     Truthy: 1/true/yes/on. Falsy: 0/false/no/off (case-insensitive).
     """
     raw = os.environ.get(name)
-    if raw is None or raw == '':
+    if raw is None:
         return default
     value = raw.strip().lower()
+    if not value:  # empty/whitespace reads as "not set" for a bool, unlike the numeric readers
+        return default
     if value in _TRUE:
         return True
     if value in _FALSE:

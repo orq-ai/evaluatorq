@@ -107,3 +107,10 @@ def test_env_bool_unrecognised_warns_and_defaults(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv('X_BOOL', 'maybe')
     assert env_bool('X_BOOL', default=True) is True  # unrecognised -> warn + default, never raises
     assert any('not a boolean' in m for m in warns)
+
+
+def test_env_bool_empty_and_whitespace_are_silent_defaults(monkeypatch: pytest.MonkeyPatch, warns: list[str]) -> None:
+    for raw in ('', '   '):
+        monkeypatch.setenv('X_BOOL', raw)
+        assert env_bool('X_BOOL', default=True) is True  # a bool has no "empty means misconfigured" case
+    assert warns == []

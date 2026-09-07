@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, NamedTuple
 import httpx
 from loguru import logger
 
+from evaluatorq.common.env_config import env_float
 from evaluatorq.common.llm_client import orq_base_url, resolve_results_base_url
 
 if TYPE_CHECKING:
@@ -119,7 +120,7 @@ _fetch_failures: dict[str, int] = {}
 _MAX_FETCH_FAILURES = 3
 # Env var rather than a parameter: `_load_catalogue` is called from pricing paths
 # with no config object to thread.
-_CATALOGUE_TIMEOUT_S = float(os.environ.get('EVALUATORQ_CATALOGUE_TIMEOUT_S', '30'))
+_CATALOGUE_TIMEOUT_S = env_float('EVALUATORQ_CATALOGUE_TIMEOUT_S', 30.0, min_value=0.1)
 
 
 def _catalogue_lock() -> asyncio.Lock:

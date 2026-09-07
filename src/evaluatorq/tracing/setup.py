@@ -6,7 +6,7 @@ Tracing is automatically enabled when:
 2. ORQ_API_KEY is set (traces sent to Orq platform automatically)
 
 Tracing can be explicitly disabled by setting:
-- ORQ_DISABLE_TRACING=1 or ORQ_DISABLE_TRACING=true
+- ORQ_DISABLE_TRACING=1, true, yes or on (case-insensitive; 0/false/no/off keep it enabled)
 
 When ORQ_API_KEY is provided:
 - Uses ORQ_BASE_URL with /v2/otel path appended for the OTEL endpoint
