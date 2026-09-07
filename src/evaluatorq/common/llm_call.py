@@ -113,10 +113,27 @@ def _strip_known_rejected_reasoning(model: str, params: dict[str, Any]) -> None:
         _announce_strip('chat_completions', model, key, 'reasoning_effort')
 
 
+# What a provider says when it does not take the parameter at all, as opposed to
+# not taking the value it was handed.
+_UNSUPPORTED_PARAMETER_MARKERS = ('unsupported', 'not supported', 'unrecognized', 'unknown parameter')
+
+
 def _is_reasoning_effort_rejection(params: dict[str, Any], exc: BadRequestError) -> bool:
-    """True if `exc` is the reasoning_effort-unsupported 400 for this call."""
+    """True if `exc` is the reasoning_effort-unsupported 400 for this call.
+
+    A rejected value is not an unsupported parameter, and only the second one is
+    a fact about the model worth remembering. Any 400 mentioning reasoning used
+    to satisfy this, so `reasoning_effort='reasoning'` (a rung some cards are
+    scored at, which no provider accepts as an argument) came back as "invalid
+    value", was read as the model refusing the parameter, and memoized it in
+    `_REASONING_EFFORT_REJECTORS` for the rest of the process: one wasted retry,
+    then every later call to that model silently at the provider default while
+    the caller believes it is running where it configured.
+    """
     err_body = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
-    return 'reasoning_effort' in params and 'reasoning' in err_body
+    if 'reasoning_effort' not in params or 'reasoning' not in err_body:
+        return False
+    return any(marker in err_body for marker in _UNSUPPORTED_PARAMETER_MARKERS)
 
 
 def strip_known_rejected_responses_reasoning(model: str, params: dict[str, Any]) -> None:

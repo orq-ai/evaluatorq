@@ -813,6 +813,7 @@ _FAMILY_MARKERS: tuple[tuple[str, str], ...] = (
     ('qwen', 'alibaba'),
     ('glm', 'zhipu'),
     ('minimax', 'minimax'),
+    ('kimi', 'moonshot'),
 )
 _KNOWN_FAMILIES: frozenset[str] = frozenset(fam for _, fam in _FAMILY_MARKERS)
 
@@ -824,17 +825,29 @@ def provider_family(model_id: str) -> str:
     tokens = [t for t in re.split(r'[/\-_.: ]+', ident) if t]
     if not tokens:
         return 'unknown'
-    if tokens[0] in _KNOWN_FAMILIES:
-        return tokens[0]
     # Match a marker as a whole token, or as a prefix immediately followed by a
     # version DIGIT (gpt4o, o1, claude3). The digit guard is what stops the old
     # substring trap where a short marker bled into an unrelated word
     # (palmyra->palm, command->...): 'palmyra'.startswith('palm') is True but the
     # next char 'y' is alphabetic, so it no longer maps to google.
-    for marker, family in _FAMILY_MARKERS:
-        for tok in tokens:
+    # Tokens are the outer loop, so the EARLIEST marker in the id wins rather
+    # than the earliest entry in the table. Scanning markers first reads
+    # `deepseek/deepseek-r1-distill-llama-70b` as meta, because ('llama', 'meta')
+    # is listed above ('deepseek', 'deepseek'), while its qwen-distilled sibling
+    # comes back deepseek purely from table order. A distill is named for its
+    # base model after its own lineage, so the first lineage token is the right
+    # one and the table stops being order-sensitive.
+    for tok in tokens:
+        for marker, family in _FAMILY_MARKERS:
             if tok == marker or (tok.startswith(marker) and len(tok) > len(marker) and tok[len(marker)].isdigit()):
                 return family
+    # Only then fall back to the leading token, for a model this has no marker
+    # for at all (`openai/some-new-thing`). It runs second because the leading
+    # token is the HOST, which is not always the lineage: `google/zai-org/glm-5-maas`
+    # is Zhipu weights served by Google, and reading it as google put an
+    # Anthropic reserve on the wrong family too (`google/eu.claude-sonnet-5`).
+    if tokens[0] in _KNOWN_FAMILIES:
+        return tokens[0]
     return 'unknown'
 
 

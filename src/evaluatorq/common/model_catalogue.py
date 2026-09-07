@@ -229,14 +229,17 @@ def _parse_reasoning_efforts(entry: dict[str, object]) -> frozenset[str] | None:
 def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
     """Build the model table from a ``/v2/models`` payload.
 
-    Keyed on the bare ``model_id`` (``gpt-5-mini``), which is how callers name
-    models; a provider-prefixed id is normalised at lookup time. The same
-    model_id appears once per hosting provider (openai, azure, …) at the same
-    price, so the entry whose provider matches ``model_developer`` wins — that is
-    the one the router resolves ``openai/gpt-5-mini`` to — and otherwise the
-    first seen is kept. Verified against the live catalogue: of 9 duplicated
-    model_ids, none disagreed on price. A future disagreement is logged rather
-    than silently resolved.
+    Keyed twice: on the bare ``model_id`` (``gpt-5-mini``), which is how callers
+    name models, and on ``provider/model_id``, which is how the router names a
+    host-pinned one. The same model_id appears once per hosting provider
+    (openai, azure, …), so the bare key keeps the entry whose provider matches
+    ``model_developer`` — the one the router resolves ``openai/gpt-5-mini`` to —
+    and otherwise the first seen. The qualified key is what makes a pinned id
+    price at its own host: hosts republish each other's models and do not always
+    match on price, and collapsing them returned tensorix's $1.75/$3.50 for
+    ``deepseek/deepseek-v4-pro``, which bills $0.435/$0.87, a fourfold overstate
+    on a seated judge. A disagreement between hosts is logged rather than
+    silently resolved.
     """
     if not isinstance(payload, list):
         logger.warning(
@@ -273,6 +276,7 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
             supports_responses=bool(_entry_metadata(entry).get('supports_responses_api')),
             reasoning_efforts=_parse_reasoning_efforts(entry),
         )
+        models[f'{provider}/{model_id}'] = info
         existing = models.get(model_id)
         if existing is not None:
             if (existing.input_cost_per_1k, existing.output_cost_per_1k) != (

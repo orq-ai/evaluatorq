@@ -91,6 +91,42 @@ async def test_qualified_model_passes_through_and_reports_unknown():
     assert await pricing.qualified_model('unlisted-model') is None
 
 
+def _bare(prices: dict[str, ModelInfo]) -> dict[str, ModelInfo]:
+    """Just the bare-id half of the table, for assertions about which entries parsed.
+
+    Every entry is keyed twice, bare and `provider/model_id`, so a host-pinned id
+    prices at its own host rather than at whichever host the bare key kept.
+    """
+    return {model_id: info for model_id, info in prices.items() if '/' not in model_id}
+
+
+def test_a_host_pinned_id_prices_at_its_own_host():
+    """Hosts republish each other's models and do not always agree on price."""
+    prices = pricing._parse_catalogue(  # pyright: ignore[reportPrivateUsage]
+        [
+            {
+                'model_id': 'deepseek-v4-pro',
+                'provider': 'deepseek',
+                'model_developer': 'deepseek',
+                'input_cost': 0.000435,
+                'output_cost': 0.00087,
+            },
+            {
+                'model_id': 'deepseek-v4-pro',
+                'provider': 'tensorix',
+                'model_developer': 'deepseek',
+                'input_cost': 0.00175,
+                'output_cost': 0.0035,
+            },
+        ]
+    )
+
+    assert prices['deepseek/deepseek-v4-pro'].input_cost_per_1k == 0.000435
+    assert prices['tensorix/deepseek-v4-pro'].input_cost_per_1k == 0.00175
+    # The bare key still resolves to the developer's own entry, as it always did.
+    assert prices['deepseek-v4-pro'].provider == 'deepseek'
+
+
 def test_parse_catalogue_skips_malformed_entries():
     prices = pricing._parse_catalogue(  # pyright: ignore[reportPrivateUsage]
         [
@@ -101,7 +137,7 @@ def test_parse_catalogue_skips_malformed_entries():
             'nonsense',
         ]
     )
-    assert prices == {'a': ModelInfo(0.1, 0.2, 'openai', supports_responses=False)}
+    assert _bare(prices) == {'a': ModelInfo(0.1, 0.2, 'openai', supports_responses=False)}
 
 
 def test_parse_catalogue_prefers_the_developers_own_provider():
@@ -241,7 +277,7 @@ def test_parse_catalogue_skips_non_usd_currency_but_prices_empty_and_usd():
             },
         ]
     )
-    assert set(prices) == {'empty-currency', 'usd-model'}
+    assert set(_bare(prices)) == {'empty-currency', 'usd-model'}
 
 
 def test_parse_catalogue_reads_supports_responses_from_metadata():
@@ -552,7 +588,7 @@ def test_parse_catalogue_survives_a_non_mapping_metadata():
             },
         ]
     )
-    assert set(prices) == {'listy', 'stringy', 'good'}
+    assert set(_bare(prices)) == {'listy', 'stringy', 'good'}
     assert prices['listy'].supports_responses is False
     assert prices['stringy'].supports_responses is False
     assert prices['good'].supports_responses is True

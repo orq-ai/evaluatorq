@@ -200,6 +200,38 @@ async def test_drops_reasoning_effort_and_retries_when_model_rejects_it(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_a_rejected_effort_value_is_not_remembered_as_a_refused_parameter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 400 on the value says nothing about whether the model takes the parameter.
+
+    `reasoning` and `none` are rungs a card can be scored at and values no
+    provider accepts, so a preset reporting one is one copy-paste away from this
+    400. Reading it as a refused parameter would memoize the model and run every
+    later call at the provider default without saying so.
+    """
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    llm_call._REASONING_EFFORT_REJECTORS.discard(('m', False))
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(
+        side_effect=_bad_request("Invalid value: 'reasoning'. Supported values are: 'low', 'medium' and 'high'.")
+    )
+
+    with pytest.raises(BadRequestError):
+        await execute_chat_completion(
+            client=client,
+            model='m',
+            messages=[{'role': 'user', 'content': 'x'}],
+            span=None,
+            timeout_s=5.0,
+            extra_kwargs={'reasoning_effort': 'reasoning'},
+        )
+
+    assert client.chat.completions.create.await_count == 1
+    assert ('m', False) not in llm_call._REASONING_EFFORT_REJECTORS
+
+
+@pytest.mark.asyncio
 async def test_memoized_rejection_strips_reasoning_effort_up_front_no_second_400(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

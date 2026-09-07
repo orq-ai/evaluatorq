@@ -1,0 +1,73 @@
+name: Jury judge rates
+
+# The jury presets publish a $/1k figure per panel, computed from a committed
+# rate table. Providers reprice and retire models without notice, so an
+# uninspected table quietly starts advertising the wrong number. This job
+# re-captures it monthly and opens a pull request when anything moved; a human
+# still decides what to do about a repricing or a retirement.
+
+on:
+  schedule:
+    # 06:00 UTC on the 3rd, a couple of days after month-start price changes land.
+    - cron: '0 6 3 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+
+      - name: Re-capture the rate table
+        env:
+          ORQ_API_KEY: ${{ secrets.ORQ_API_KEY }}
+        run: |
+          uv sync --frozen --all-extras --all-groups
+          uv run python scripts/refresh_jury_judge_rates.py | tee refresh.log
+
+      - name: Recompute the published preset figures
+        run: uv run pytest tests/unit/test_jury_presets.py -q 2>&1 | tee presets.log
+
+      # Assembled in its own step and passed by path: a log line containing the
+      # GitHub expression syntax must never reach an expression context.
+      - name: Assemble the pull request body
+        run: |
+          {
+            echo 'Monthly re-capture of `src/evaluatorq/common/data/jury_judge_rates.json` from the live Orq catalogue.'
+            echo
+            echo 'Each line below is a decision for a human, not something this job applied. A repricing means the `estimated_cost_per_1k` published for every panel seating that judge is now stale; a model missing from the catalogue means a preset names a seat that can no longer be called, and its reserve has to be promoted deliberately.'
+            echo
+            echo 'The `seated_effort` and `priced_at_ceiling` fields were carried over untouched. They come from the intelligence/price frontier derivation, which lives in the research repo — nothing here re-derives them.'
+            echo
+            echo '### Capture'
+            echo '```'
+            cat refresh.log
+            echo '```'
+            echo
+            echo '### Preset figures'
+            echo '```'
+            tail -n 20 presets.log
+            echo '```'
+            echo
+            echo 'RES-1528 replaces this with the server-side `orq/auto` routers; until those are usable from here, this job is how the table stays honest.'
+            echo
+            echo '🤖 Generated with [Claude Code](https://claude.com/claude-code)'
+          } > pr-body.md
+
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          add-paths: src/evaluatorq/common/data/jury_judge_rates.json
+          branch: chore/jury-judge-rates-refresh
+          title: 'chore: re-capture the jury judge rate table'
+          body-path: pr-body.md
+          assignees: baukebrenninkmeijer
+          commit-message: 'chore: re-capture the jury judge rate table'

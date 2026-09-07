@@ -613,6 +613,27 @@ class TestPanelComposition:
         assert provider_family('some-unknown-model') == 'unknown'
         assert provider_family('') == 'unknown'
 
+    def test_the_first_lineage_token_wins_not_the_table_order(self):
+        """A distill names its base model; the id's own order says which lineage it is."""
+        assert provider_family('deepseek/deepseek-r1-distill-llama-70b') == 'deepseek'
+        assert provider_family('deepseek-r1-distill-qwen-32b') == 'deepseek'
+        # Both distills agree, which they did not while _FAMILY_MARKERS order decided it.
+        assert provider_family('deepseek/deepseek-r1-distill-llama-70b') == provider_family(
+            'deepseek-r1-distill-qwen-32b'
+        )
+        msgs = _panel_composition_messages(
+            ['deepseek/deepseek-r1-distill-llama-70b', 'meta/llama-4-maverick'], [], strict=False
+        )
+        assert not any('single provider family' in m for m in msgs)
+
+    def test_the_leading_token_is_the_host_not_the_lineage(self):
+        """A host that is itself a vendor must not outrank the lineage in the rest of the id."""
+        assert provider_family('google/zai-org/glm-5-maas') == 'zhipu'
+        assert provider_family('google/eu.claude-sonnet-5') == 'anthropic'
+        assert provider_family('azure/eu.gpt-5.6-luna') == 'openai'
+        # Fallback still reads the host when the id carries no lineage marker at all.
+        assert provider_family('openai/some-new-thing') == 'openai'
+
     def test_provider_family_does_not_match_incidental_substrings(self):
         # Token-anchored: a marker like 'o1'/'o3' must be a token or token prefix,
         # not an incidental substring of an unrelated id (the old substring trap).

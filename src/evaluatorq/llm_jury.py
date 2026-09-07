@@ -28,6 +28,7 @@ from evaluatorq.common.output_adapters import (
     output_to_text,
 )
 from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL, JuryResult, LLMCallConfig
+from evaluatorq.jury_presets import get_preset
 from evaluatorq.pairwise import PairwiseComparison, run_pairwise
 from evaluatorq.types import DataPoint, EvaluationResult, Evaluator, Output, ScorerParameter
 
@@ -342,6 +343,52 @@ def _resolve_and_validate_panel(
     return panel, deduped
 
 
+def _apply_preset(
+    preset: str | None,
+    *,
+    judges: list[str] | None,
+    model: str | None,
+    aggregator: AggregatorSpec | None,
+    min_successful_judges: int | None,
+    verdict_kind: str,
+    assignment: str,
+) -> tuple[list[str] | None, AggregatorSpec | None, int]:
+    """Fill in panel, aggregation and quorum from a named preset (RES-1171).
+
+    A preset is a whole panel, so it is not a default the caller tops up: naming
+    one alongside ``judges``/``model`` is a contradiction rather than an override,
+    and the panel it names is what runs. Everything else a preset decides is a
+    default the caller can still overrule, because aggregation and quorum are
+    properties of how you want to read the panel, not of the panel itself.
+
+    Quorum defaults to a majority of the seats. It is a floor on how many judges
+    have to answer at all, not the threshold the aggregation rule applies: the
+    ``majority`` aggregator takes more than half of the votes that arrived, so
+    on a trio that answers 1-1 it still returns no verdict even though the
+    quorum of 2 was met. Not one, because a preset publishes a cost and an
+    agreement story for a panel and a single surviving judge would keep the name
+    while changing what it means. Not the full panel either, which is what this
+    defaulted to until a live run showed the cost: one seat failing to return
+    made a five-judge panel answer `inconclusive` on every item while the other
+    four agreed.
+    """
+    if preset is None:
+        return judges, aggregator, 1 if min_successful_judges is None else min_successful_judges
+    if judges is not None or model is not None:
+        raise ValueError('Pass either `preset` or `judges`/`model`, not both.')
+    if assignment != 'all':
+        raise ValueError(
+            f'preset={preset!r} seats a panel that votes on every item, so it cannot run with '
+            f'assignment={assignment!r}. Pass `judges=` explicitly to run a rotation.'
+        )
+    spec = get_preset(preset)
+    panel = list(spec.judges)
+    if aggregator is None:
+        aggregator = spec.numeric_aggregation if verdict_kind == 'numeric' else 'majority'
+    quorum = len(panel) // 2 + 1 if min_successful_judges is None else min_successful_judges
+    return panel, aggregator, quorum
+
+
 def _validate_assignment(assignment: str, *, min_successful_judges: int) -> None:
     """Validate the judge-assignment strategy shared by both jury factories."""
     if assignment not in ('all', 'cyclic'):
@@ -364,12 +411,13 @@ def llm_jury(
     criteria: str | None = None,
     prompt: str | None = None,
     system_prompt: str | None = None,
+    preset: str | None = None,
     judges: list[str] | None = None,
     model: str | None = None,
     repetitions: int = 1,
     assignment: Literal['all', 'cyclic'] = 'all',
     replacement_judges: list[str] | None = None,
-    min_successful_judges: int = 1,
+    min_successful_judges: int | None = None,
     verdict_kind: Literal['categorical', 'numeric'] = 'categorical',
     labels: list[str] | None = None,
     passing_labels: list[str] | None = None,
@@ -387,6 +435,29 @@ def llm_jury(
     client: Any = None,
 ) -> Evaluator:
     """Build a jury (or single-judge) LLM evaluator for ``evaluators=[...]``.
+
+    Presets
+    -------
+    ``preset`` seats a named panel from ``evaluatorq.jury_presets`` instead of
+    listing judges by hand — ``llm_jury(name='helpfulness', preset='Balanced Trio')``.
+    The seats are derived from the committed model-garden snapshot and carry a
+    published $/1k that a test recomputes, so a preset cannot quietly become a
+    different or a differently-priced panel.
+
+    It fills in three things and contradicts none: the judges (so ``judges``/
+    ``model`` alongside it is an error, not an override), ``aggregator``
+    (``"majority"``, or the preset's numeric rule) and ``min_successful_judges``
+    (a majority of the seats, two of three or three of five, which is a floor on
+    how many judges must answer rather than the threshold the aggregator then
+    applies). Pass either of the last two explicitly to overrule it.
+
+    Presets are pointwise panels, so ``assignment="cyclic"`` is rejected: a
+    rotation runs one judge per item and there is no panel left to agree.
+
+    What a preset cannot express yet is per-judge call settings. Its seats are
+    ranked and costed at particular reasoning efforts — ``JuryPreset.seated_efforts()``
+    reports them — and ``reasoning_effort`` here applies to the whole panel
+    (RES-1347).
 
     Provider options
     ----------------
@@ -524,6 +595,15 @@ def llm_jury(
         raise ValueError(f'score_range {score_range} must be increasing (lo < hi).')
     if verdict_kind == 'numeric' and not (score_range[0] <= threshold <= score_range[1]):
         raise ValueError(f'threshold ({threshold}) must lie within score_range {score_range}.')
+    judges, aggregator, min_successful_judges = _apply_preset(
+        preset,
+        judges=judges,
+        model=model,
+        aggregator=aggregator,
+        min_successful_judges=min_successful_judges,
+        verdict_kind=verdict_kind,
+        assignment=assignment,
+    )
     validate_aggregator(
         aggregator,
         VerdictKind.NUMERIC if verdict_kind == 'numeric' else VerdictKind.CATEGORICAL,

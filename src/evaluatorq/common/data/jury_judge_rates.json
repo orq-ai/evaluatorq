@@ -1,0 +1,96 @@
+{
+  "captured_at": "2026-08-25T07:18:32.765225+00:00",
+  "catalog_scope": "project",
+  "judges": {
+    "anthropic/claude-opus-5": {
+      "input_rate": 5.0,
+      "output_rate": 25.0,
+      "seated_effort": "high",
+      "priced_at_ceiling": true
+    },
+    "aws/eu.anthropic.claude-haiku-4-5-20251001-v1:0": {
+      "input_rate": 1.1,
+      "output_rate": 5.5,
+      "seated_effort": "reasoning",
+      "priced_at_ceiling": false
+    },
+    "azure/eu.gpt-5.6-luna": {
+      "input_rate": 0.2,
+      "output_rate": 1.2,
+      "seated_effort": "max",
+      "priced_at_ceiling": false
+    },
+    "baseten/kimi-k3": {
+      "input_rate": 3.0,
+      "output_rate": 15.0,
+      "seated_effort": "max",
+      "priced_at_ceiling": true
+    },
+    "deepseek/deepseek-v4-flash": {
+      "input_rate": 0.14,
+      "output_rate": 0.28,
+      "seated_effort": "high",
+      "priced_at_ceiling": true
+    },
+    "deepseek/deepseek-v4-pro": {
+      "input_rate": 0.435,
+      "output_rate": 0.87,
+      "seated_effort": "high",
+      "priced_at_ceiling": true
+    },
+    "google/eu.claude-sonnet-5": {
+      "input_rate": 2.2,
+      "output_rate": 11.0,
+      "seated_effort": "high",
+      "priced_at_ceiling": true
+    },
+    "google/eu.gemini-3.5-flash": {
+      "input_rate": 1.5,
+      "output_rate": 9.0,
+      "seated_effort": "high",
+      "priced_at_ceiling": false
+    },
+    "google/gemini-3.6-flash": {
+      "input_rate": 1.5,
+      "output_rate": 7.5,
+      "seated_effort": "high",
+      "priced_at_ceiling": false
+    },
+    "minimax/MiniMax-M2.7": {
+      "input_rate": 0.3,
+      "output_rate": 1.2,
+      "seated_effort": "none",
+      "priced_at_ceiling": true
+    },
+    "openai/gpt-5.4-nano": {
+      "input_rate": 0.2,
+      "output_rate": 1.25,
+      "seated_effort": "medium",
+      "priced_at_ceiling": false
+    },
+    "openai/gpt-5.6-luna": {
+      "input_rate": 0.2,
+      "output_rate": 1.2,
+      "seated_effort": "max",
+      "priced_at_ceiling": false
+    },
+    "openai/gpt-5.6-sol": {
+      "input_rate": 4.0,
+      "output_rate": 20.0,
+      "seated_effort": "max",
+      "priced_at_ceiling": false
+    },
+    "openai/gpt-5.6-terra": {
+      "input_rate": 2.0,
+      "output_rate": 12.0,
+      "seated_effort": "max",
+      "priced_at_ceiling": false
+    },
+    "zai/glm-5.2": {
+      "input_rate": 1.4,
+      "output_rate": 4.4,
+      "seated_effort": "max",
+      "priced_at_ceiling": true
+    }
+  }
+}
