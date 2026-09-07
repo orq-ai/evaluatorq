@@ -153,7 +153,7 @@ If you write your own Responses-based target, call `evaluatorq.openresponses.inp
 
 `CallableTarget` wraps a plain Python function as an `AgentTarget`. You write a function that takes the conversation and returns the reply; the wrapper supplies the rest of the interface.
 
-Reach for it when the thing under test is already a function — an HTTP call, a local pipeline, a framework with no wrapper of its own — and you are testing what the agent *says*. Do not reach for it when the run needs to exercise tools: a callable declares none by default, and the strategy families gated on tools never fire. That case wants [your own target](#writing-your-own-target), or a `CallableTarget` with an explicit `agent_context=` (below).
+Reach for it when the thing under test is already a function — an HTTP call, a local pipeline, a framework with no wrapper of its own — and you are testing what the agent *says*. Do not reach for it when a **dynamic or hybrid** run needs to exercise tools: a callable declares none by default, and those two pipelines never fire the strategy families gated on tools. That case wants [your own target](#writing-your-own-target), or a `CallableTarget` with an explicit `agent_context=` (below).
 
 The wrapped function costs nothing to call, but the run around it does. The example below needs the red-team extra and a key — without the extra it raises `ImportError` on `huggingface-hub` when it fetches the default attack dataset, and without a key it raises `CredentialError` before the first attack:
 
@@ -199,7 +199,11 @@ The function may be sync or async. A sync one is run on a worker thread, so it n
 
 It receives the **full transcript** as `list[Message]` — one message on the opening turn, every prior turn afterwards — so a stateless function still sees context.
 
-Return a `str` and the wrapper boxes it into an `AgentResponse`; return an `AgentResponse` and it passes through untouched. Anything else is converted without a warning, and the two ways that goes wrong are worth telling apart. A `None` becomes the empty string, so the agent looks like it answered nothing and the judge scores a silence it never gave. Any other object is `str()`-coerced, which is the next paragraph's trap: the judge scores a Python repr as the agent's words. Return a string yourself rather than relying on either.
+Return a `str` and the wrapper boxes it into an `AgentResponse`; return an `AgentResponse` and it passes through untouched.
+
+**A `None` return becomes the empty string.** The agent then looks like it answered nothing, and the judge scores a silence your function never gave. Nothing warns.
+
+Any other object is `str()`-coerced instead, which is the next paragraph's trap in a different costume: the judge scores a Python repr as the agent's words. Return a string yourself rather than relying on either.
 
 `Message.content` is `str | list[ContentPart]`, not always a string. Call `content_to_text` on it as above — `str()` renders a Python repr that the judge then scores as the agent's words.
 
@@ -233,7 +237,11 @@ Wrap the function once and the same object goes to either entry point: `simulate
 
 ### What the attacker sees
 
-Given no `agent_context=`, `get_agent_context()` reports the function's `__name__` and the description `opaque callable target` — no tools, no memory stores, no instructions. That is the failure mode worth naming, because it is silent: strategies declared `requires_tools=True` are **skipped, not failed**, so a run against a callable can return a high resistance rate that means *those attacks were never attempted*. Read the attempt count, not only the rate.
+Given no `agent_context=`, `get_agent_context()` reports the function's `__name__` and the description `opaque callable target` — no tools, no memory stores, no instructions.
+
+**In dynamic and hybrid mode that is a silent failure mode.** Those pipelines pick strategies against the declared context, so a strategy marked `requires_tools=True` is **skipped, not failed** when the target reports no tools. A run can then return a high resistance rate that means *those attacks were never attempted*. Compare `report.summary.total_attacks` and `report.summary.evaluated_attacks` against what you expected to run, rather than reading the rate alone.
+
+Static mode does not filter this way at all. It replays dataset rows, which carry no strategy name, so declaring tools changes nothing about which attacks run — the same static run against the same dataset executes the same attacks whether the context declares tools or not. The example above is a static run for exactly that reason: it is the mode where a bare callable and a fully-declared one behave identically.
 
 Declare what the function can actually do and the planner writes against it:
 
@@ -270,9 +278,9 @@ print(asyncio.run(target.get_agent_context()).has_tools)
 # True — tool-gated strategies now apply
 ```
 
-### The two other hooks
+### The other two constructor options
 
-- **`reset_fn`** — a zero-argument callback invoked on `new()`. `red_team()` and `simulate()` call `new()` once per concurrent job, and a callable that closes over module-level state would otherwise carry one attack's leftovers into the next. The wrapper cannot see inside your function, so clearing that state is yours to do.
+- **`reset_fn`** — a zero-argument callback invoked on `new()`. `red_team()` and `simulate()` call `new()` once per concurrent job, and a callable that closes over module-level state would otherwise carry one attack's leftovers into the next. The wrapper cannot see inside your function, so clearing that state is yours to do. It is also the only cleanup hook you get: `CallableTarget` inherits the no-op `cleanup_memory`, so a run that mints memory entity ids logs a warning that adversarial data may persist and deletes nothing.
 - **`usage_fn`** — `(messages, response_text) -> TokenUsage | None`, for plumbing token counts out of a function that only returns a string. An exception raised inside it is logged and yields `usage=None` rather than failing the run. It must be **synchronous**, and that one is not forgiving: an `async def usage_fn` is never awaited, so the coroutine object reaches `AgentResponse` and the call dies with a pydantic `ValidationError` instead of degrading. On a page where every other function is `async def`, this is the easy mistake to make.
 
 ## Writing your own target
