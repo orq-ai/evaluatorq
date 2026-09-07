@@ -92,11 +92,16 @@ def caching_applies(client: AsyncOpenAI | None, model: str) -> bool:
     leave the default red-team and simulation target — the largest replayed
     transcript in either surface — uncached. The documented ignore-don't-reject
     behaviour is what makes that safe.
+
+    ``orq/<router>`` is included for the same reason (RES-1528). A system router
+    picks its model per request from the workspace's callable models, so whether
+    the call lands on Anthropic is not knowable when the breakpoint is placed;
+    ``orq/auto`` seats an Anthropic model today and may not next week.
     """
     if not client_routes_through_orq(client):
         return False
     name = model.lower()
-    return name.startswith(('anthropic/', 'agent/')) or 'claude' in name
+    return name.startswith(('anthropic/', 'agent/', 'orq/')) or 'claude' in name
 
 
 def _text_length(value: Any) -> int:

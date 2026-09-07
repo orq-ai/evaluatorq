@@ -202,7 +202,12 @@ class OpenAIModelTarget(AgentTarget):
             # Not routed through execute_chat_completion: this path extracts
             # tool_calls/response_id/finish_reason the shared executor doesn't
             # surface, so price this call's usage directly (RES-1295).
-            usage = await price_usage(TokenUsage.from_completion(response), self.model, self.client)
+            usage = await price_usage(
+                TokenUsage.from_completion(response),
+                self.model,
+                self.client,
+                served_model=getattr(response, 'model', None),
+            )
             response_id = getattr(response, 'id', None)
             finish_reason = None
             choices = getattr(response, 'choices', None) or []

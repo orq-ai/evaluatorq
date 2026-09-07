@@ -30,6 +30,14 @@ swaps a judge, because a user who picks a preset should get the panel they picke
 
 Router IDs are the literal strings the orq model garden returns from
 `GET /v2/models`; they are what the router and `common.model_catalogue` expect.
+
+They are never the `orq/*` system routers (RES-1528), which derive the same
+frontier server-side and stay current without a capture. A router resolves per
+request and optimises each one alone, so a panel of them can seat three cards
+from one vendor, which is the correlated-error case a panel exists to cancel.
+The lineage diversity is what does not transfer to the platform, so seats stay
+pinned here even where the arithmetic behind them has moved. A single judge is
+free to be a router: `llm_jury(model='orq/auto')` has no panel to correlate.
 """
 
 import json

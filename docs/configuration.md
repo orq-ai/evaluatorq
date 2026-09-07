@@ -144,6 +144,19 @@ Costs are USD **per 1000 tokens**, matching what `/v2/models` publishes.
 
 The id is stored unprefixed, so `'openai/gpt-x'` and `'gpt-x'` register and resolve the same entry — register either spelling and both lookups find it. Registering both replaces rather than duplicates: there is one model. `reasoning_efforts=None` means "unknown, cannot pre-validate"; an empty set means the same thing and is normalized to `None`, because a literally-empty accepted-values list would reject every effort including the defaults.
 
+## System routers (`orq/auto`, `orq/frontier`)
+
+Orq's model garden carries a few router ids that resolve to a real model per request rather than naming one: `orq/auto` picks by prompt complexity across the models your workspace can call, `orq/auto-open` and `orq/auto-eu` do the same under an open-weight or EU-hosted constraint, and `orq/frontier` and `orq/frontier-cheapest` skip the complexity step and take the strongest or the cheapest top-third model. Pass one anywhere a model id goes:
+
+```python
+evaluator = llm_judge(name="quality", criteria="Is the answer correct?", model="orq/auto")
+```
+
+Nothing extra is needed to reach them: a run holding `ORQ_API_KEY` already talks to the router. Two things worth knowing about what comes back:
+
+- **Cost is read off the model that answered, not the router you asked for.** The alias itself has no price, so a call is priced against the id the response came back under. A run therefore reports what it actually spent, but two runs of the same evaluation can be priced differently because they were served differently.
+- **Which model answered is not knowable in advance**, and changes on every catalog sync, model toggle and key change in the workspace. That is the point of the router, and the reason a comparison you intend to reproduce should name a model instead.
+
 ## Where to next
 
 - **[Getting Started](guides/getting-started.md)** — run your first evaluation.

@@ -428,7 +428,13 @@ async def validate_reasoning_effort(effort: str, model: str, client: AsyncOpenAI
         )
 
 
-async def price_usage(usage: Usage | None, model: str, client: AsyncOpenAI | None = None) -> Usage | None:
+async def price_usage(
+    usage: Usage | None,
+    model: str,
+    client: AsyncOpenAI | None = None,
+    *,
+    served_model: str | None = None,
+) -> Usage | None:
     """Fill in cost on a **single call's** ``usage`` when the provider reported none.
 
     Returns ``usage`` unchanged when it is ``None``, already priced, spans more
@@ -436,10 +442,31 @@ async def price_usage(usage: Usage | None, model: str, client: AsyncOpenAI | Non
     guard matters: pricing an aggregate at one model's rate would also set
     ``priced_calls == calls``, asserting full pricing for calls this function
     never saw and defeating `Usage.cost_is_partial`.
+
+    ``served_model`` is the id the response came back under, which for a router
+    alias (``orq/auto``, ``orq/frontier-cheapest``) is a different model from the
+    one the caller asked for, and is the only one with a price. It is tried
+    first and the requested id is the fallback, so a provider that answers under
+    a dated snapshot id the catalogue does not list still prices at the id that
+    was asked for rather than dropping to unpriced. Compared unprefixed, because
+    the router answers a request for ``openai/gpt-5.6-luna`` with the bare
+    ``gpt-5.6-luna`` and that is the same model, not a reroute.
     """
     if usage is None or usage.total_cost is not None or usage.calls > 1:
         return usage
-    info = await _lookup(model, client)
+    info = None
+    if served_model and served_model.split('/', 1)[-1] != model.split('/', 1)[-1]:
+        info = await _lookup(served_model, client)
+        if info is None:
+            logger.debug(
+                'Model {} served the call but is not in the Orq catalogue; pricing at the requested {} instead',
+                served_model,
+                model,
+            )
+        else:
+            logger.debug('Pricing the call at {}, which served the request for {}', served_model, model)
+    if info is None:
+        info = await _lookup(model, client)
     if info is None:
         logger.debug('Model {} is not in the Orq catalogue; call stays unpriced', model)
         return usage

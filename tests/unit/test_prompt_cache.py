@@ -278,6 +278,11 @@ def test_responses_volatile_items_rejects_a_negative_tail() -> None:
         # An Orq agent resolves its model server-side; we cannot see whether it is
         # Anthropic, and excluding it would leave the default target uncached.
         ('https://my.orq.ai/v3/router', 'agent/support-bot', True),
+        # A system router resolves its model per request, the same blind spot as
+        # an agent key: orq/auto seats claude-opus-5 today and something else
+        # after the next catalog sync.
+        ('https://my.orq.ai/v3/router', 'orq/auto', True),
+        ('https://my.orq.ai/v3/router', 'orq/frontier', True),
         ('https://my.orq.ai/v3/router', 'openai/gpt-4o', False),
         ('https://my.orq.ai/v3/router', 'google/gemini-2.5-pro', False),
         # Off the router the marker is outside the documented request schema.
