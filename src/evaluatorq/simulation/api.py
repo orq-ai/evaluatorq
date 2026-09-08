@@ -15,6 +15,7 @@ import logging
 import os
 import sys
 import uuid
+from copy import deepcopy
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -1607,6 +1608,7 @@ async def _simulate_core(
         # on_evaluator_complete is fired from once results are assembled.
         evaluator_events: list[tuple[SimulationResult, EvaluatorScore]] = []
         await await_maybe(resolved_hooks.on_run_start(run_meta))
+        primary_error: BaseException | None = None
         try:
             results = await _simulate_via_evaluatorq(
                 config=config,
@@ -1629,20 +1631,51 @@ async def _simulate_core(
         except SimulationDroppedError as dropped:
             # exit_on_failure aborted the run, but the rows that succeeded are real
             # results — hand them to on_run_complete (via the finally) instead of [].
+            primary_error = dropped
             results = dropped.partial_results
+            # The drop is raised after evaluator scores have been stamped, so the
+            # buffered callbacks still belong to this run and must be delivered
+            # before the drop propagates.
+            try:
+                await _notify_evaluator_complete(evaluator_events, resolved_hooks)
+            except BaseException:
+                # The drop is the primary run failure. An observer hook is
+                # unguarded on the success path, but must not hide the reason a
+                # fail-fast run was dropped.
+                logger.exception('on_evaluator_complete hook failed while preserving SimulationDroppedError')
+            raise
+        except BaseException as error:
+            primary_error = error
             raise
         finally:
             # Truthful stage status (§4.4): on_stage_end always fires (RichHooks
-            # render pairing) but reports the in-flight exception via
-            # sys.exc_info()[1] — None on the success path (stage → 'completed'),
-            # the live exception on failure (stage → 'error' in the manifest).
-            await await_maybe(resolved_hooks.on_run_complete(results))
-            await await_maybe(
-                resolved_hooks.on_stage_end(
-                    SimStage.SIMULATE,
-                    {'num_results': len(results), 'error': sys.exc_info()[1]},
+            # render pairing) but reports the captured in-flight exception — None
+            # on the success path (stage → 'completed'), the live exception on
+            # failure (stage → 'error' in the manifest). Do not use sys.exc_info()
+            # here: a successful simulate() called from another except block can
+            # otherwise inherit the caller's unrelated exception.
+            stage_error = primary_error
+            try:
+                await await_maybe(resolved_hooks.on_run_complete(results))
+            except BaseException as error:
+                if primary_error is None:
+                    primary_error = error
+                    stage_error = error
+                else:
+                    logger.exception('on_run_complete hook raised while preserving the primary run failure')
+            try:
+                await await_maybe(
+                    resolved_hooks.on_stage_end(
+                        SimStage.SIMULATE,
+                        {'num_results': len(results), 'error': stage_error},
+                    )
                 )
-            )
+            except BaseException:
+                if primary_error is None:
+                    raise
+                logger.exception('on_stage_end hook raised while preserving the primary run failure')
+            if primary_error is not None:
+                raise primary_error.with_traceback(primary_error.__traceback__)
 
         # Always build the run on the success path (an aborted run re-raised
         # above) so every caller — SDK and CLI alike — gets the full
@@ -2351,9 +2384,17 @@ def _sim_evaluation_raw_output(name: str, result: SimulationResult, value: objec
             else:
                 return None
 
-        reason = unverified_reason(result)
-        if 'criteria_results' in raw and reason is None:
+        reason = f'criteria_meta_invalid={len(invalid)}' if invalid else unverified_reason(result)
+        lossy_only = 'criteria_results' in raw and reason is None
+        if lossy_only:
             reason = 'criteria_meta missing (lossy dict)'
+        if reason is not None and not lossy_only:
+            # A missing audit alone does not demote the run-level flag: unlike the other
+            # reasons — which `unverified_reason` re-derives from `terminated_by` or an
+            # already-False flag — this one is not recoverable from the result, so writing it
+            # back would make the next call over the same result report
+            # 'criteria_verified=False' instead, and flip a passing criteria_met to unverified.
+            result.criteria_verified = False
         raw['criteria_verified'] = reason is None
         raw['unverified_reason'] = reason
         return raw
@@ -2563,7 +2604,7 @@ def _stamp_evaluator_scores(
     events_out: list[tuple[SimulationResult, EvaluatorScore]] | None = None,
 ) -> None:
     """Walk the evaluatorq result and stamp each evaluator score onto the
-    matching SimulationResult.metadata["evaluator_scores"].
+    matching SimulationResult.
 
     Matches by ``id(data_point)`` — on success evaluatorq returns the same
     DataPoint instance the job cached against. Error rows carry a placeholder
@@ -2576,25 +2617,71 @@ def _stamp_evaluator_scores(
     score was unusable — so the report can count a dead evaluator instead of
     silently shrinking the denominator it averages over.
 
+    Structured evaluator output is retained in ``evaluator_details`` under the
+    evaluator name, while the numeric score remains in metadata for existing
+    report and dashboard readers.
+
+    The returned detail is a deep copy of ``score.score.raw_output`` so later
+    evaluatorq bookkeeping can update the score without mutating the result
+    already handed to lifecycle hooks or the caller. A ``raw_output`` that cannot
+    be deep-copied — an uncopyable object from a custom evaluator — is stored by
+    reference with a warning rather than aborting the run. ``score.error`` is
+    filled in place for non-numeric values so the same ``EvaluatorScore``
+    delivered to hooks carries the derived failure reason.
+
+    Evaluator names are unique in the public configuration and are checked again
+    here so malformed upstream results cannot silently overwrite a name-keyed
+    score or detail: a repeated name is logged and the first score wins. The
+    duplicate still reaches ``events_out``, so the completion hook sees every
+    score evaluatorq produced.
+
     ``events_out``, when provided, collects ``(SimulationResult, EvaluatorScore)``
     for EVERY score seen, usable or not, in evaluatorq order. The caller
     (_simulate_core) fires ``on_evaluator_complete`` from it after ``results``
     is assembled, so an unguarded hook raise still leaves the real results for
     ``on_run_complete``.
     """
+    seen_names_by_result: dict[int, set[str]] = {}
     for dp_result in eq_results:
         sim_result = result_cache.get(id(dp_result.data_point))
         if sim_result is None or not dp_result.job_results:
             continue
+        seen_names = seen_names_by_result.setdefault(id(sim_result), set())
         for job_result in dp_result.job_results:
             for score in job_result.evaluator_scores or []:
-                if events_out is not None:
-                    events_out.append((sim_result, score))
+                if score.evaluator_name in seen_names:
+                    logger.warning(
+                        'Duplicate evaluator name %r for simulation result; keeping the first score '
+                        'and dropping this one from evaluator_scores/evaluator_details',
+                        score.evaluator_name,
+                    )
+                    if events_out is not None:
+                        events_out.append((sim_result, score))
+                    continue
+                seen_names.add(score.evaluator_name)
                 value = score.score.value
                 numeric = isinstance(value, (int, float)) and not isinstance(value, bool)
                 reason = (
                     score.error if score.error is not None else (None if numeric else f'non-numeric value {value!r}')
                 )
+                if reason is not None and score.error is None:
+                    score.error = reason
+                if score.score.raw_output is not None:
+                    try:
+                        detail = deepcopy(score.score.raw_output)
+                    except Exception as exc:  # noqa: BLE001 - an uncopyable detail must not kill the run
+                        # A custom evaluator can put an uncopyable object (a lock, a client) on
+                        # raw_output. Storing the reference keeps the run alive; the cost is that
+                        # later evaluatorq bookkeeping on the same object is visible to the caller.
+                        logger.warning(
+                            'Evaluator %s raw_output could not be deep-copied (%s); storing it by reference',
+                            score.evaluator_name,
+                            exc,
+                        )
+                        detail = score.score.raw_output
+                    sim_result.evaluator_details[score.evaluator_name] = detail
+                if events_out is not None:
+                    events_out.append((sim_result, score))
                 if reason is not None:
                     logger.warning(
                         'Evaluator %s produced no usable score (%s); recorded under evaluator_errors',

@@ -10,6 +10,9 @@ evaluator that errored or returned a non-numeric value is *recorded* under
 from __future__ import annotations
 
 import asyncio
+import threading
+
+import pytest
 
 from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.api import _notify_evaluator_complete, _stamp_evaluator_scores
@@ -74,6 +77,65 @@ def test_stamps_scores_onto_matching_result_by_identity():
         'criteria_met': 0.0,
     }
     assert sim.metadata['evaluation_name'] == 'my-run'
+
+
+def test_stamps_evaluator_details_onto_matching_result():
+    dp = DataPoint(inputs={'datapoint': {}})
+    sim = _sim_result()
+    raw_output = {
+        'criteria': [{'id': 'criteria_0', 'passed': True, 'audited': True}],
+        'criteria_verified': True,
+    }
+    score = EvaluatorScore(
+        evaluator_name='criteria_met',
+        score=EvaluationResult(value=1.0, raw_output=raw_output),
+    )
+    eq_results = _eq_results(
+        dp,
+        [score],
+    )
+
+    _stamp_evaluator_scores(eq_results, {id(dp): sim}, '')
+
+    assert sim.evaluator_details == {'criteria_met': raw_output}
+    assert sim.model_dump(mode='json')['evaluator_details'] == {'criteria_met': raw_output}
+
+    sim.evaluator_details['criteria_met']['criteria'][0]['passed'] = False
+    assert raw_output == {
+        'criteria': [{'id': 'criteria_0', 'passed': True, 'audited': True}],
+        'criteria_verified': True,
+    }
+    assert score.score.raw_output == raw_output
+
+
+def test_duplicate_evaluator_scores_keep_the_first_and_still_emit_events():
+    dp = DataPoint(inputs={'datapoint': {}})
+    sim = _sim_result()
+    scores = [
+        EvaluatorScore(evaluator_name='criteria_met', score=EvaluationResult(value=1.0)),
+        EvaluatorScore(evaluator_name='criteria_met', score=EvaluationResult(value=0.0, raw_output={'x': 1})),
+    ]
+    eq_results = _eq_results(dp, scores)
+    events: list[tuple[SimulationResult, EvaluatorScore]] = []
+
+    _stamp_evaluator_scores(eq_results, {id(dp): sim}, '', events_out=events)
+
+    assert sim.metadata['evaluator_scores'] == {'criteria_met': 1.0}
+    assert sim.evaluator_details == {}
+    assert [score for _, score in events] == scores
+
+
+def test_uncopyable_raw_output_is_stored_by_reference():
+    dp = DataPoint(inputs={'datapoint': {}})
+    sim = _sim_result()
+    raw_output = {'lock': threading.Lock()}
+    eq_results = _eq_results(
+        dp, [EvaluatorScore(evaluator_name='criteria_met', score=EvaluationResult(value=1.0, raw_output=raw_output))]
+    )
+
+    _stamp_evaluator_scores(eq_results, {id(dp): sim}, '')
+
+    assert sim.evaluator_details['criteria_met']['lock'] is raw_output['lock']
 
 
 def test_skips_rows_with_no_cached_result():
@@ -156,12 +218,14 @@ def test_records_non_numeric_evaluator_score_without_error(caplog):
         dp, [EvaluatorScore(evaluator_name='criteria_met', score=EvaluationResult(value='not numeric'))]
     )
 
+    events = []
     with caplog.at_level('WARNING', logger='evaluatorq.simulation.api'):
-        _stamp_evaluator_scores(eq_results, cache, 'my-run')
+        _stamp_evaluator_scores(eq_results, cache, 'my-run', events_out=events)
 
     assert 'evaluator_scores' not in sim.metadata
     assert sim.metadata['evaluator_errors'] == {'criteria_met': "non-numeric value 'not numeric'"}
     assert "Evaluator criteria_met produced no usable score (non-numeric value 'not numeric')" in caplog.text
+    assert events[0][1].error == "non-numeric value 'not numeric'"
 
 
 def test_records_bool_evaluator_score_as_non_numeric(caplog):

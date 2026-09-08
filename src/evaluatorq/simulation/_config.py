@@ -21,6 +21,7 @@ objects that aren't JSON-serializable.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import (  # noqa: TC003 — used in real (non-TYPE_CHECKING) field annotations pydantic resolves at runtime
     Awaitable,
     Callable,
@@ -29,7 +30,7 @@ from pathlib import Path  # noqa: TC003 — used in a real (non-TYPE_CHECKING) f
 from typing import Any
 
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # NOTE: these two are used directly in field annotations below (not just for
 # static typing) — pydantic resolves annotations at class-creation time even
@@ -163,6 +164,17 @@ class SimulationConfig(BaseModel):
     """Generate the LLM narrative summary in-core (before save). Off by default;
     the public ``simulate``/``generate_and_simulate`` flip it on. The CLI keeps
     it off here and generates its own after the run (avoids double generation)."""
+
+    @field_validator('evaluator_names')
+    @classmethod
+    def _reject_duplicate_evaluator_names(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        duplicates = sorted(name for name, count in Counter(value).items() if count > 1)
+        if duplicates:
+            names = ', '.join(repr(name) for name in duplicates)
+            raise ValueError(f'duplicate evaluator name(s): {names}')
+        return value
 
 
 def sim_llm_config(llm_config: LLMCallConfig | None) -> LLMCallConfig:

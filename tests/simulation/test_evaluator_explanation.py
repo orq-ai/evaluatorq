@@ -231,6 +231,13 @@ async def test_criteria_met_raw_output_reports_invalid_entries() -> None:
     assert score.raw_output is not None
     assert len(score.raw_output['criteria']) == 1
     assert score.raw_output['invalid'] == [repr({'nonsense': True})]
+    assert score.raw_output['criteria_verified'] is False
+    assert score.raw_output['unverified_reason'] == 'criteria_meta_invalid=1'
+    assert result.criteria_verified is False
+
+    second_score = await _score('criteria_met', result)
+    assert second_score.raw_output is not None
+    assert second_score.raw_output['unverified_reason'] == 'criteria_meta_invalid=1'
 
 
 @pytest.mark.asyncio
@@ -248,6 +255,7 @@ async def test_criteria_met_publishes_records_for_a_terminated_run(terminated_by
     assert [record['id'] for record in score.raw_output['criteria']] == ['criteria_0', 'criteria_1']
     assert score.raw_output['criteria_verified'] is False
     assert score.raw_output['unverified_reason'] == f'terminated_by={terminated_by.value}'
+    assert result.criteria_verified is False
 
 
 @pytest.mark.asyncio
@@ -284,6 +292,23 @@ async def test_criteria_met_raw_output_preserves_lossy_results_when_metadata_is_
         'criteria_verified': False,
         'unverified_reason': 'criteria_meta missing (lossy dict)',
     }
+
+
+@pytest.mark.asyncio
+async def test_criteria_met_lossy_raw_output_is_stable_across_repeat_scoring() -> None:
+    """A missing audit must not demote ``criteria_verified`` on the result.
+
+    Writing it back would make the second score of the same result read its own flag and
+    report 'criteria_verified=False', turning a passing criteria_met into an unverified 0.0.
+    """
+    result = _make_result(criteria_verified=True, criteria_results={'greeted user': True})
+
+    first = await _score('criteria_met', result)
+    second = await _score('criteria_met', result)
+
+    assert result.criteria_verified is True
+    assert first.raw_output == second.raw_output
+    assert first.value == second.value
 
 
 @pytest.mark.asyncio

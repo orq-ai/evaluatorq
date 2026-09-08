@@ -537,6 +537,13 @@ class SimulationResult(BaseModel):
         'rules_broken list, which cannot fail a must_happen criterion — treat them as unknown, not met. '
         'None for runs saved before this field existed.',
     )
+    evaluator_details: dict[str, dict[str, Any]] = Field(
+        default_factory=dict,
+        description='Structured raw output from evaluators that provide detail, keyed by evaluator name. '
+        'Built-in criteria_met carries per-criterion audit records and conversation_quality carries its '
+        'component scores and weights; custom evaluator raw output is retained too. The field is included '
+        'in saved SimulationRun and JSONL result exports. Empty when no evaluator provided structured output.',
+    )
     total_turns: int | None = None
     thread_id: str | None = Field(
         default=None,

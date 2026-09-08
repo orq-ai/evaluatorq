@@ -186,7 +186,7 @@ The job's output is an OpenResponses response dict. The transcript is in `input`
 | `turn_count` | `int` | Turns actually run. |
 | `rules_broken` | `list[str]` | Criteria the judge marked violated, **by id** (`criteria_0`, `criteria_1`). |
 | `criteria_results` | `dict[str, bool]` | Per-criterion pass/fail, **by description**. Present only when the judge produced at least one criterion verdict. |
-| `criteria_verified` | `bool \| None` | Whether the criteria result has a per-criterion judge audit. Always present; `None` means the result predates this field. |
+| `criteria_verified` | `bool \| None` | Whether the criteria result has a per-criterion judge audit. Always present; `None` means the audit status is unknown or not established, including legacy results and runs that ended before the audit flag was set. |
 | `criteria_meta` | `list[dict] \| None` | Per-criterion audit records, including `id`, `type`, `passed`, `audited`, and `evidence`. Always present; `None` means no records were available. |
 | `criteria_errors` | `list \| None` | Malformed criteria metadata recorded during scoring. Always present; it is `None` on this job path because conversion happens before scoring. |
 | `scorer_errors` | `dict \| None` | Scorer failures recorded after conversion. Always present; it is `None` on this job path because conversion happens before scoring. |
