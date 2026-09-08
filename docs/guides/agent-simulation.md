@@ -508,6 +508,17 @@ results = await simulate(
 
 `simulate()` takes five mutually exclusive sources — `datapoints`, `dataset_id`, `experiment_id`, `previous_run`, and `personas` + `scenarios`. Pass exactly one per run.
 
+To generate *more* cases in the same distribution as a dataset rather than replaying it, use `extend_from_dataset()`. It feeds the dataset's personas and scenarios to the generators as seeds and returns new, similar-but-not-duplicate datapoints:
+
+```python
+from evaluatorq.simulation import extend_from_dataset, simulate
+
+extra = await extend_from_dataset("my-simulation-cases", num_personas=3, num_scenarios=5)
+results = await simulate(evaluation_name="extended", datapoints=extra, target="agent:my-support-agent")
+```
+
+This mirrors `extend_from_experiment()`; the dataset's direct loader is `datapoints_from_dataset()`.
+
 ### Ground new cases in real traces
 
 Replay reruns what you already have. The other move is to generate *new* cases that are shaped by what really happened. Production traces show you the user archetypes and situations your agent actually meets.
