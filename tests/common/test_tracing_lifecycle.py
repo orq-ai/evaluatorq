@@ -131,32 +131,9 @@ async def test_evaluatorq_passes_the_yielded_session_context_to_processing(
     ]
 
 
-@pytest.mark.parametrize('raw', [None, '', '   ', 'invalid', '0', '-1'])
-def test_env_int_uses_default_for_unset_or_non_positive_values(
-    monkeypatch: pytest.MonkeyPatch, raw: str | None
-) -> None:
-    if raw is None:
-        monkeypatch.delenv('X', raising=False)
-    else:
-        monkeypatch.setenv('X', raw)
-
-    assert tracing_setup._env_int('X', 4096) == 4096
-
-
-def test_env_int_returns_positive_parsed_value(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv('X', '8192')
-
-    assert tracing_setup._env_int('X', 4096) == 8192
-
-
-@pytest.mark.parametrize('raw', ['', '   ', 'invalid', '0', '-1'])
-def test_env_int_warns_on_set_but_invalid_value(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
-    warning = Mock()
-    monkeypatch.setenv('X', raw)
-    monkeypatch.setattr(tracing_setup.logger, 'warning', warning)
-
-    assert tracing_setup._env_int('X', 4096) == 4096
-    warning.assert_called_once()
+# The ORQ_OTEL_* int knobs read through common.env_config.env_int (min_value=1); the reader's
+# contract (unset/empty/invalid/non-positive -> default + warning) is covered in
+# tests/common/test_env_config.py. The tracing-layer resolution is exercised end-to-end below.
 
 
 def _fake_tracing_sdk(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
