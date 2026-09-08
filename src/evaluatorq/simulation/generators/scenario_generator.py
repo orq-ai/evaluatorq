@@ -232,6 +232,7 @@ class ScenarioGenerator(UsageTracking):
         num_scenarios: int = 10,
         edge_case_percentage: float = 0.3,
         seed: str = '',
+        generation_instructions: str = '',
     ) -> list[Scenario]:
         """Generate scenarios for agent testing.
 
@@ -239,6 +240,13 @@ class ScenarioGenerator(UsageTracking):
         situation (e.g. ``"disputes a refund denial"``); the LLM fills the goal,
         context, and success/failure criteria. The intermediate tier between
         fully-auto generation and hand-built ``Scenario`` objects.
+
+        ``generation_instructions`` is a free-text steer applied to the whole
+        batch (e.g. ``"all post-purchase billing disputes, EU consumer-law
+        framing"``) — stacked on top of the auto/seed instruction, not a
+        replacement, and composes with ``seed``. It is a trusted caller-supplied
+        instruction (same channel as ``seed``), passed through rather than
+        delimited as inert data; the JSON-only output contract still follows it.
 
         Retry is owned by ``with_retry``; client retries are disabled.
         """
@@ -270,6 +278,12 @@ class ScenarioGenerator(UsageTracking):
                         '- Cover different emotional states and urgency levels\n'
                         '- Include both positive and potentially problematic interactions\n'
                         '- Each scenario should have clear success/failure criteria'
+                    )
+
+                if generation_instructions:
+                    instructions += (
+                        '\n\nAdditional instructions from the caller (apply to every scenario, '
+                        f'but keep each scenario coherent with clear criteria):\n{generation_instructions}'
                     )
 
                 user_prompt = f"""Agent Description: {delimit(agent_description)}

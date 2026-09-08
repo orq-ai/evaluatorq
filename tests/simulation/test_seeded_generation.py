@@ -160,3 +160,47 @@ async def test_generate_personas_scenarios_default_edge_case_percentage_unchange
     joined = " ".join(captured["prompts"])
     assert "1 edge case" in joined
     assert "3 edge case" not in joined
+
+
+@pytest.mark.asyncio
+async def test_generation_instructions_reach_both_prompts(captured):
+    """RES-1087: a free-text steer must reach BOTH the persona and the scenario
+    prompt on the auto-generated (non-seeded) path — the whole feature is 'the
+    string lands in the generation prompt', which fails silently if threading
+    breaks anywhere in the chain."""
+    from evaluatorq.simulation.api import _generate_personas_scenarios
+
+    await _generate_personas_scenarios(
+        agent_description="support agent",
+        num_personas=3,
+        num_scenarios=3,
+        llm_config=LLMCallConfig(model="m"),
+        generation_client=object(),  # pyright: ignore[reportArgumentType]
+        generation_instructions="all replying in German",
+    )
+    # Two prompts (one persona, one scenario); the steer must be in each.
+    assert len(captured["prompts"]) == 2
+    assert all("all replying in German" in p for p in captured["prompts"])
+
+
+@pytest.mark.asyncio
+async def test_generation_instructions_compose_with_seed(captured):
+    """The steer stacks on top of a seed (seeded path), so the prompt carries
+    both the archetype and the instruction."""
+    p = await generate_persona(
+        "angry customer",
+        agent_description="support agent",
+        generation_instructions="reply only in French",
+    )
+    assert isinstance(p, Persona)
+    prompt = captured["prompts"][0]
+    assert "angry customer" in prompt
+    assert "reply only in French" in prompt
+
+
+@pytest.mark.asyncio
+async def test_no_generation_instructions_injects_nothing(captured):
+    """The default empty string must not add the caller-instructions block, so an
+    ordinary run's prompt is byte-for-byte unchanged from before the feature."""
+    await generate_persona("angry customer", agent_description="support agent")
+    assert "instructions from the caller" not in captured["prompts"][0]

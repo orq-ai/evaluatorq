@@ -985,6 +985,17 @@ def run(
             ),
         ),
     ] = None,
+    generation_instructions: Annotated[
+        str,
+        typer.Option(
+            '--generation-instructions',
+            help=(
+                'Free-text steer applied to every generated persona AND scenario, '
+                'e.g. "enterprise B2B buyers, replying in German". Stacks on top of '
+                'any seeds and --edge-case-percentage.'
+            ),
+        ),
+    ] = '',
     target_reasoning_effort: Annotated[
         str | None,
         typer.Option(
@@ -1129,6 +1140,7 @@ def run(
                 recommendations=recommendations,
                 persona_seeds=persona_seed,
                 scenario_seeds=scenario_seed,
+                generation_instructions=generation_instructions,
                 target_reasoning_effort=target_reasoning_effort,
             )
         )
@@ -1190,6 +1202,7 @@ async def _run_impl(
     recommendations: bool = True,
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
+    generation_instructions: str = '',
     target_reasoning_effort: str | None = None,
 ) -> SimulationRun:
     from evaluatorq.simulation.api import _generate_and_simulate_run
@@ -1223,6 +1236,7 @@ async def _run_impl(
         recommendations=recommendations,
         persona_seeds=persona_seeds,
         scenario_seeds=scenario_seeds,
+        generation_instructions=generation_instructions,
         target_reasoning_effort=target_reasoning_effort,
     )
 
@@ -1289,6 +1303,17 @@ def generate(
             ),
         ),
     ] = None,
+    generation_instructions: Annotated[
+        str,
+        typer.Option(
+            '--generation-instructions',
+            help=(
+                'Free-text steer applied to every generated persona AND scenario, '
+                'e.g. "enterprise B2B buyers, replying in German". Stacks on top of '
+                'any seeds and --edge-case-percentage.'
+            ),
+        ),
+    ] = '',
     dataset_format: Annotated[  # noqa: FBT002
         bool,
         typer.Option(
@@ -1363,6 +1388,7 @@ def generate(
                 hooks=hooks,
                 persona_seeds=persona_seed,
                 scenario_seeds=scenario_seed,
+                generation_instructions=generation_instructions,
             )
         )
     except KeyboardInterrupt:
@@ -1608,6 +1634,7 @@ async def _generate_impl(
     hooks: Any = None,
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
+    generation_instructions: str = '',
 ) -> list[Any]:
     from evaluatorq.simulation.api import generate
 
@@ -1619,6 +1646,7 @@ async def _generate_impl(
         hooks=hooks,
         persona_seeds=persona_seeds,
         scenario_seeds=scenario_seeds,
+        generation_instructions=generation_instructions,
     )
 
 
