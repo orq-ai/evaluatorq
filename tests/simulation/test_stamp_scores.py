@@ -10,6 +10,7 @@ evaluator that errored or returned a non-numeric value is *recorded* under
 from __future__ import annotations
 
 import asyncio
+import threading
 
 import pytest
 
@@ -107,19 +108,34 @@ def test_stamps_evaluator_details_onto_matching_result():
     assert score.score.raw_output == raw_output
 
 
-def test_rejects_duplicate_evaluator_scores_for_result():
+def test_duplicate_evaluator_scores_keep_the_first_and_still_emit_events():
     dp = DataPoint(inputs={'datapoint': {}})
     sim = _sim_result()
+    scores = [
+        EvaluatorScore(evaluator_name='criteria_met', score=EvaluationResult(value=1.0)),
+        EvaluatorScore(evaluator_name='criteria_met', score=EvaluationResult(value=0.0, raw_output={'x': 1})),
+    ]
+    eq_results = _eq_results(dp, scores)
+    events: list[tuple[SimulationResult, EvaluatorScore]] = []
+
+    _stamp_evaluator_scores(eq_results, {id(dp): sim}, '', events_out=events)
+
+    assert sim.metadata['evaluator_scores'] == {'criteria_met': 1.0}
+    assert sim.evaluator_details == {}
+    assert [score for _, score in events] == scores
+
+
+def test_uncopyable_raw_output_is_stored_by_reference():
+    dp = DataPoint(inputs={'datapoint': {}})
+    sim = _sim_result()
+    raw_output = {'lock': threading.Lock()}
     eq_results = _eq_results(
-        dp,
-        [
-            EvaluatorScore(evaluator_name='criteria_met', score=EvaluationResult(value=1.0)),
-            EvaluatorScore(evaluator_name='criteria_met', score=EvaluationResult(value=0.0)),
-        ],
+        dp, [EvaluatorScore(evaluator_name='criteria_met', score=EvaluationResult(value=1.0, raw_output=raw_output))]
     )
 
-    with pytest.raises(ValueError, match="duplicate evaluator name.*'criteria_met'"):
-        _stamp_evaluator_scores(eq_results, {id(dp): sim}, '')
+    _stamp_evaluator_scores(eq_results, {id(dp): sim}, '')
+
+    assert sim.evaluator_details['criteria_met']['lock'] is raw_output['lock']
 
 
 def test_skips_rows_with_no_cached_result():

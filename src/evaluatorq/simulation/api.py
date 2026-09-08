@@ -2385,9 +2385,15 @@ def _sim_evaluation_raw_output(name: str, result: SimulationResult, value: objec
                 return None
 
         reason = f'criteria_meta_invalid={len(invalid)}' if invalid else unverified_reason(result)
-        if 'criteria_results' in raw and reason is None:
+        lossy_only = 'criteria_results' in raw and reason is None
+        if lossy_only:
             reason = 'criteria_meta missing (lossy dict)'
-        if reason is not None:
+        if reason is not None and not lossy_only:
+            # A missing audit alone does not demote the run-level flag: unlike the other
+            # reasons — which `unverified_reason` re-derives from `terminated_by` or an
+            # already-False flag — this one is not recoverable from the result, so writing it
+            # back would make the next call over the same result report
+            # 'criteria_verified=False' instead, and flip a passing criteria_met to unverified.
             result.criteria_verified = False
         raw['criteria_verified'] = reason is None
         raw['unverified_reason'] = reason
@@ -2617,13 +2623,17 @@ def _stamp_evaluator_scores(
 
     The returned detail is a deep copy of ``score.score.raw_output`` so later
     evaluatorq bookkeeping can update the score without mutating the result
-    already handed to lifecycle hooks or the caller. ``score.error`` is filled
-    in place for non-numeric values so the same ``EvaluatorScore`` delivered to
-    hooks carries the derived failure reason.
+    already handed to lifecycle hooks or the caller. A ``raw_output`` that cannot
+    be deep-copied — an uncopyable object from a custom evaluator — is stored by
+    reference with a warning rather than aborting the run. ``score.error`` is
+    filled in place for non-numeric values so the same ``EvaluatorScore``
+    delivered to hooks carries the derived failure reason.
 
     Evaluator names are unique in the public configuration and are checked again
     here so malformed upstream results cannot silently overwrite a name-keyed
-    score or detail.
+    score or detail: a repeated name is logged and the first score wins. The
+    duplicate still reaches ``events_out``, so the completion hook sees every
+    score evaluatorq produced.
 
     ``events_out``, when provided, collects ``(SimulationResult, EvaluatorScore)``
     for EVERY score seen, usable or not, in evaluatorq order. The caller
@@ -2640,7 +2650,14 @@ def _stamp_evaluator_scores(
         for job_result in dp_result.job_results:
             for score in job_result.evaluator_scores or []:
                 if score.evaluator_name in seen_names:
-                    raise ValueError(f'duplicate evaluator name for simulation result: {score.evaluator_name!r}')
+                    logger.warning(
+                        'Duplicate evaluator name %r for simulation result; keeping the first score '
+                        'and dropping this one from evaluator_scores/evaluator_details',
+                        score.evaluator_name,
+                    )
+                    if events_out is not None:
+                        events_out.append((sim_result, score))
+                    continue
                 seen_names.add(score.evaluator_name)
                 value = score.score.value
                 numeric = isinstance(value, (int, float)) and not isinstance(value, bool)
@@ -2650,7 +2667,19 @@ def _stamp_evaluator_scores(
                 if reason is not None and score.error is None:
                     score.error = reason
                 if score.score.raw_output is not None:
-                    sim_result.evaluator_details[score.evaluator_name] = deepcopy(score.score.raw_output)
+                    try:
+                        detail = deepcopy(score.score.raw_output)
+                    except Exception as exc:  # noqa: BLE001 - an uncopyable detail must not kill the run
+                        # A custom evaluator can put an uncopyable object (a lock, a client) on
+                        # raw_output. Storing the reference keeps the run alive; the cost is that
+                        # later evaluatorq bookkeeping on the same object is visible to the caller.
+                        logger.warning(
+                            'Evaluator %s raw_output could not be deep-copied (%s); storing it by reference',
+                            score.evaluator_name,
+                            exc,
+                        )
+                        detail = score.score.raw_output
+                    sim_result.evaluator_details[score.evaluator_name] = detail
                 if events_out is not None:
                     events_out.append((sim_result, score))
                 if reason is not None:

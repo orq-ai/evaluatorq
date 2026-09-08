@@ -295,6 +295,23 @@ async def test_criteria_met_raw_output_preserves_lossy_results_when_metadata_is_
 
 
 @pytest.mark.asyncio
+async def test_criteria_met_lossy_raw_output_is_stable_across_repeat_scoring() -> None:
+    """A missing audit must not demote ``criteria_verified`` on the result.
+
+    Writing it back would make the second score of the same result read its own flag and
+    report 'criteria_verified=False', turning a passing criteria_met into an unverified 0.0.
+    """
+    result = _make_result(criteria_verified=True, criteria_results={'greeted user': True})
+
+    first = await _score('criteria_met', result)
+    second = await _score('criteria_met', result)
+
+    assert result.criteria_verified is True
+    assert first.raw_output == second.raw_output
+    assert first.value == second.value
+
+
+@pytest.mark.asyncio
 async def test_criteria_met_raw_output_keeps_lossy_results_on_an_unverified_run() -> None:
     criteria_results = {'greeted user': True}
     score = await _score(
