@@ -65,6 +65,10 @@ if TYPE_CHECKING:
     from evaluatorq.simulation.agents.judge import JudgeAgent
     from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgent
     from evaluatorq.simulation.convert import to_open_responses
+    from evaluatorq.simulation.datasets import (
+        datapoints_from_dataset,
+        extend_from_dataset,
+    )
     from evaluatorq.simulation.evaluators import (
         SIMULATION_EVALUATORS,
         SimulationScorer,
@@ -208,6 +212,8 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
     'RichHooks': ('evaluatorq.simulation.hooks', 'RichHooks'),
     'SimulationRunMeta': ('evaluatorq.simulation.hooks', 'SimulationRunMeta'),
     'SimulationError': ('evaluatorq.simulation.exceptions', 'SimulationError'),
+    'datapoints_from_dataset': ('evaluatorq.simulation.datasets', 'datapoints_from_dataset'),
+    'extend_from_dataset': ('evaluatorq.simulation.datasets', 'extend_from_dataset'),
     'datapoints_from_experiment': ('evaluatorq.simulation.experiments', 'datapoints_from_experiment'),
     'extend_from_experiment': ('evaluatorq.simulation.experiments', 'extend_from_experiment'),
     'ReplayError': ('evaluatorq.common.replay', 'ReplayError'),
@@ -400,12 +406,15 @@ __all__ = [
     'auto_save_run',
     'build_simulation_run',
     'criterion_id_for',
+    # Datasets as input
+    'datapoints_from_dataset',
     # Experiments as input
     'datapoints_from_experiment',
     # Traces as input
     'datapoints_from_traces',
     'export_datapoints_to_jsonl',
     'export_results_to_jsonl',
+    'extend_from_dataset',
     'extend_from_experiment',
     'extend_from_traces',
     'fetch_trace_conversations',

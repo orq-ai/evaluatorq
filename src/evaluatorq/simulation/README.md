@@ -76,7 +76,21 @@ Each result carries `goal_achieved`, `goal_completion_score`, `turn_count`, `ter
 
 ## Datasets
 
-Set `dataset_id="..."` to pull simulation datapoints from a named Orq dataset instead of inline personas/scenarios. Each row's `inputs` must already match a simulation input shape (`datapoint`, or `persona` + `scenario`).
+A named Orq dataset can seed simulations two ways (requires `ORQ_API_KEY`):
+
+- **Direct** — set `dataset_id="..."` to pull the dataset's rows as datapoints. Each row's `inputs` must already match a simulation input shape (`datapoint`, or `persona` + `scenario`). CLI: `eq sim simulate --dataset-id`.
+- **Extension** — `extend_from_dataset()` feeds the dataset's personas and scenarios to the standard generators as seeds and returns *new* similar-but-not-duplicate datapoints matching its distribution.
+
+```python
+from evaluatorq.simulation import extend_from_dataset, simulate
+
+# direct: replay the dataset's rows
+results = await simulate(evaluation_name="replay", dataset_id="ds_abc", target=...)
+
+# extension: generate fresh datapoints seeded by the dataset
+extra = await extend_from_dataset("ds_abc", num_personas=3, num_scenarios=5)
+results = await simulate(evaluation_name="extended", datapoints=extra, target=...)
+```
 
 ## Experiments
 
@@ -104,7 +118,7 @@ Where cases come from, and what you can do with each. **Replay** re-runs the exa
 |--------|:---------------------------:|:-----------------------:|
 | Inline `personas` + `scenarios` | ✅ | — (they *are* the new cases) |
 | JSONL datapoints (`--datapoints` / `load_datapoints_from_jsonl()`) | ✅ | ⚠️ manual (hand-pick seeds) |
-| Orq dataset (`dataset_id=`) | ✅ | ⚠️ manual |
+| Orq dataset (`dataset_id=`) | ✅ | ✅ `extend_from_dataset()` |
 | Previous run (`previous_run="<id>"` / `--from-run`, or export to JSONL via `eq sim generate --datapoints`) | ✅ | ⚠️ manual |
 | Orq experiment (`experiment_id=`) | ✅ | ✅ `extend_from_experiment()` |
 | Production traces (`datapoints_from_traces` / `eq sim from-traces`) | ✅ | ✅ `extend_from_traces()` |

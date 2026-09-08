@@ -10,8 +10,8 @@ from typer.testing import CliRunner
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.api import _resolve_or_generate_datapoints
 from evaluatorq.simulation.cli import app
+from evaluatorq.simulation._seed_extension import seed_context
 from evaluatorq.simulation.experiments import (
-    _seed_context,
     datapoints_from_experiment,
     extend_from_experiment,
 )
@@ -220,18 +220,18 @@ async def test_extend_seeds_generators(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_describe_agent_falls_back_when_all_goals_blank() -> None:
-    from evaluatorq.simulation.experiments import _describe_agent
+    from evaluatorq.simulation._seed_extension import describe_agent
 
     dp = _sim_datapoint()
     dp = dp.model_copy(update={'scenario': dp.scenario.model_copy(update={'goal': ''})})
-    description = _describe_agent([dp])
+    description = describe_agent([dp])
     assert description  # not the bare truncated 'goals such as: ' prefix
     assert not description.rstrip().endswith(':')
 
 
 def test_seed_context_dedupes() -> None:
     seeds = [_sim_datapoint('A', 'S1'), _sim_datapoint('A', 'S2')]
-    context = _seed_context(seeds)
+    context = seed_context(seeds)
     assert context.count('- A: bg') == 1
     assert 'S1' in context and 'S2' in context
 
