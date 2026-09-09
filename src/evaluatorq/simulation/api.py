@@ -2062,27 +2062,14 @@ async def _resolve_or_generate_datapoints(
 
 
 async def _fetch_simulation_datapoints_from_orq(api_key: str, dataset_id: str) -> list[SimulationDatapoint]:
-    """Stream the named Orq dataset and parse each row into a simulation
-    SimulationDatapoint via the same shape-tolerant extractor used by the inline path.
+    """Load the named Orq dataset as simulation datapoints for ``simulate(dataset_id=...)``.
+
+    Thin wrapper over the canonical loader in ``simulation.datasets`` (the key is already resolved on
+    this path), so dataset fetch/parse lives in one place shared with ``extend_from_dataset``.
     """
-    from pydantic import ValidationError
+    from evaluatorq.simulation.datasets import datapoints_from_dataset
 
-    from evaluatorq.fetch_data import fetch_dataset_batches, setup_orq_client
-    from evaluatorq.simulation._datapoint_io import _extract_single_datapoint
-
-    orq_client = setup_orq_client(api_key)
-    out: list[SimulationDatapoint] = []
-    row = 0
-    async for batch in fetch_dataset_batches(orq_client, dataset_id):
-        for eq_dp in batch.datapoints:
-            try:
-                out.append(_extract_single_datapoint(eq_dp, source='row'))
-            except (ValueError, ValidationError) as e:
-                raise ValueError(f'dataset {dataset_id!r} row {row}: {e}') from e
-            row += 1
-    if not out:
-        raise ValueError(f'Dataset {dataset_id!r} returned zero simulation-compatible datapoints')
-    return out
+    return await datapoints_from_dataset(dataset_id, api_key=api_key)
 
 
 async def _generate_single_datapoint(
