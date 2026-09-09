@@ -625,6 +625,7 @@ async def generate_and_simulate(
     edge_case_percentage: float | None = None,
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
+    generation_instructions: str = '',
     max_turns: int | None = None,
     llm_config: LLMCallConfig | None = None,
     evaluator_names: list[str] | None = None,
@@ -700,6 +701,14 @@ async def generate_and_simulate(
     for it. The other dimension still auto-generates; seeded x auto still
     crosses into the full grid. See `generate` for the full semantics.
 
+    ``generation_instructions``: Free-text steer applied to every generated
+    persona AND scenario (e.g. ``"enterprise B2B buyers, frustrated, replying
+    in German"``). Unlike a seed — which names one archetype and fans out to one
+    object — this stacks on top of the whole batch and composes with seeds and
+    ``edge_case_percentage``. Empty string (the default) leaves the built-in
+    prompts unchanged. To steer personas and scenarios differently, call
+    `generate_personas` / `generate_scenarios` separately.
+
     ``evaluation_description``: Optional human-readable note passed straight
     through to the uploaded experiment (shown as its description in the Orq UI).
     Pure metadata — nothing branches on it, and it only matters when
@@ -772,6 +781,7 @@ async def generate_and_simulate(
         edge_case_percentage=edge_case_percentage,
         persona_seeds=persona_seeds,
         scenario_seeds=scenario_seeds,
+        generation_instructions=generation_instructions,
         max_turns=max_turns,
         llm_config=llm_config,
         evaluator_names=evaluator_names,
@@ -812,6 +822,7 @@ async def _generate_datapoints_inner(
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
     edge_case_percentage: float | None = None,
+    generation_instructions: str = '',
 ) -> tuple[list[SimulationDatapoint], AsyncOpenAI, bool, TokenUsage | None]:
     """Shared generation trio: personas/scenarios + first-message datapoints.
 
@@ -850,6 +861,7 @@ async def _generate_datapoints_inner(
             persona_seeds=persona_seeds,
             scenario_seeds=scenario_seeds,
             edge_case_percentage=edge_case_percentage,
+            generation_instructions=generation_instructions,
         )
         await await_maybe(gen_hooks.on_generate_inputs_ready(len(gen_personas), len(gen_scenarios)))
 
@@ -883,6 +895,7 @@ async def _generate_and_simulate_run(
     edge_case_percentage: float | None = None,
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
+    generation_instructions: str = '',
     max_turns: int | None = None,
     llm_config: LLMCallConfig | None = None,
     evaluator_names: list[str] | None = None,
@@ -990,6 +1003,7 @@ async def _generate_and_simulate_run(
                                 persona_seeds=persona_seeds,
                                 scenario_seeds=scenario_seeds,
                                 edge_case_percentage=edge_case_percentage,
+                                generation_instructions=generation_instructions,
                             )
                             if emit_datapoints is not None:
                                 emit_datapoints(datapoints)
@@ -1066,6 +1080,7 @@ async def generate(
     generation_client: AsyncOpenAI | None = None,
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
+    generation_instructions: str = '',
     edge_case_percentage: float | None = None,
     llm_parallelism: int | None = None,
 ) -> list[SimulationDatapoint]:
@@ -1081,6 +1096,11 @@ async def generate(
     object, overriding ``num_personas`` / ``num_scenarios`` for that dimension.
     The other dimension still auto-generates. Seeded x auto still crosses into
     the full persona x scenario grid.
+
+    ``generation_instructions`` is a free-text steer applied to every generated
+    persona and scenario (e.g. ``"enterprise B2B buyers, replying in German"``),
+    stacked on top of the auto/seed prompt. It composes with seeds and
+    ``edge_case_percentage``; empty string (the default) changes nothing.
 
     ``edge_case_percentage`` overrides the fraction of the auto-generated
     portion of each dimension that are edge cases (default 0.2 for personas,
@@ -1151,6 +1171,7 @@ async def generate(
                         persona_seeds=persona_seeds,
                         scenario_seeds=scenario_seeds,
                         edge_case_percentage=edge_case_percentage,
+                        generation_instructions=generation_instructions,
                     )
                 finally:
                     # Thread the in-flight exception into the stage-end meta, as
@@ -1178,6 +1199,7 @@ async def generate_personas(
     *,
     agent_description: str = '',
     context: str = '',
+    generation_instructions: str = '',
     llm_config: LLMCallConfig | None = None,
     generation_client: AsyncOpenAI | None = None,
 ) -> list[Persona]:
@@ -1188,6 +1210,9 @@ async def generate_personas(
     each archetype, the LLM fills every trait. Provider resolves via the shared
     factory: an injected ``generation_client`` → ``llm_config.client`` →
     ``ORQ_API_KEY`` → ``OPENAI_API_KEY``.
+
+    ``generation_instructions`` is an optional free-text steer applied to every
+    persona on top of its seed (e.g. ``"all replying in German"``).
 
     ``llm_config`` carries the model and everything around it: only the fields you set take effect,
     so an unset ``temperature`` still omits the parameter from the request.
@@ -1214,6 +1239,7 @@ async def generate_personas(
                 num_personas=1,
                 edge_case_percentage=0.0,
                 seed=seed,
+                generation_instructions=generation_instructions,
             )
             for seed in seeds
         ])
@@ -1232,12 +1258,14 @@ async def generate_persona(
     *,
     agent_description: str = '',
     context: str = '',
+    generation_instructions: str = '',
     llm_config: LLMCallConfig | None = None,
     generation_client: AsyncOpenAI | None = None,
 ) -> Persona:
     """Generate one ``Persona`` from a short archetype seed (e.g. ``"angry customer"``).
 
-    See `generate_personas` for the batch form and provider resolution.
+    See `generate_personas` for the batch form, ``generation_instructions``, and
+    provider resolution.
 
     ``llm_config`` carries the model and everything around it: only the fields you set take effect,
     so an unset ``temperature`` still omits the parameter from the request.
@@ -1246,6 +1274,7 @@ async def generate_persona(
         [seed],
         agent_description=agent_description,
         context=context,
+        generation_instructions=generation_instructions,
         llm_config=llm_config,
         generation_client=generation_client,
     )
@@ -1257,6 +1286,7 @@ async def generate_scenarios(
     *,
     agent_description: str = '',
     context: str = '',
+    generation_instructions: str = '',
     llm_config: LLMCallConfig | None = None,
     generation_client: AsyncOpenAI | None = None,
 ) -> list[Scenario]:
@@ -1264,6 +1294,9 @@ async def generate_scenarios(
 
     The scenario counterpart to `generate_personas`: you name each
     situation, the LLM fills the goal, context, and success/failure criteria.
+
+    ``generation_instructions`` is an optional free-text steer applied to every
+    scenario on top of its seed (e.g. ``"all EU consumer-law framing"``).
 
     ``llm_config`` carries the model and everything around it: only the fields you set take effect,
     so an unset ``temperature`` still omits the parameter from the request.
@@ -1287,6 +1320,7 @@ async def generate_scenarios(
                 num_scenarios=1,
                 edge_case_percentage=0.0,
                 seed=seed,
+                generation_instructions=generation_instructions,
             )
             for seed in seeds
         ])
@@ -1305,12 +1339,14 @@ async def generate_scenario(
     *,
     agent_description: str = '',
     context: str = '',
+    generation_instructions: str = '',
     llm_config: LLMCallConfig | None = None,
     generation_client: AsyncOpenAI | None = None,
 ) -> Scenario:
     """Generate one ``Scenario`` from a short situation seed.
 
-    See `generate_scenarios` for the batch form and provider resolution.
+    See `generate_scenarios` for the batch form, ``generation_instructions``, and
+    provider resolution.
 
     ``llm_config`` carries the model and everything around it: only the fields you set take effect,
     so an unset ``temperature`` still omits the parameter from the request.
@@ -1319,6 +1355,7 @@ async def generate_scenario(
         [seed],
         agent_description=agent_description,
         context=context,
+        generation_instructions=generation_instructions,
         llm_config=llm_config,
         generation_client=generation_client,
     )
@@ -1382,6 +1419,7 @@ async def _generate_personas_scenarios(
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
     edge_case_percentage: float | None = None,
+    generation_instructions: str = '',
 ) -> tuple[list[Persona], list[Scenario], TokenUsage | None]:
     """Generate personas and scenarios concurrently from an agent description.
 
@@ -1418,8 +1456,15 @@ async def _generate_personas_scenarios(
         async def _seeded(gen: Any, seeds: list[str], kind: str, kwarg: str) -> list[Any]:
             # One object per seed (seed=archetype, LLM fills the rest); no
             # edge-case padding so the output maps 1:1 to the seeds given.
+            # generation_instructions still applies on top of each seed.
             batches = await asyncio.gather(*[
-                gen.generate(agent_description=agent_description, edge_case_percentage=0.0, seed=s, **{kwarg: 1})
+                gen.generate(
+                    agent_description=agent_description,
+                    edge_case_percentage=0.0,
+                    seed=s,
+                    generation_instructions=generation_instructions,
+                    **{kwarg: 1},
+                )
                 for s in seeds
             ])
             out: list[Any] = []
@@ -1434,6 +1479,9 @@ async def _generate_personas_scenarios(
         if edge_case_percentage is not None:
             persona_kwargs['edge_case_percentage'] = edge_case_percentage
             scenario_kwargs['edge_case_percentage'] = edge_case_percentage
+        if generation_instructions:
+            persona_kwargs['generation_instructions'] = generation_instructions
+            scenario_kwargs['generation_instructions'] = generation_instructions
 
         personas_coro = (
             _seeded(persona_gen, persona_seeds, 'persona', 'num_personas')

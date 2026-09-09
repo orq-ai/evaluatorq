@@ -159,6 +159,7 @@ class PersonaGenerator(UsageTracking):
         num_personas: int = 5,
         edge_case_percentage: float = 0.2,
         seed: str = '',
+        generation_instructions: str = '',
     ) -> list[Persona]:
         """Generate personas for agent testing.
 
@@ -166,6 +167,13 @@ class PersonaGenerator(UsageTracking):
         (e.g. ``"angry customer"``); the LLM fills the remaining traits. This is
         the intermediate tier between fully-auto generation and hand-built
         ``Persona`` objects.
+
+        ``generation_instructions`` is a free-text steer applied to the whole
+        batch (e.g. ``"all B2B procurement managers, replying in German"``) — it
+        is stacked on top of the auto/seed instruction, not a replacement, and
+        composes with ``seed``. It is a trusted caller-supplied instruction (same
+        channel as ``seed``), so it is passed through rather than delimited as
+        inert data; the JSON-only output contract still follows it in the prompt.
 
         Retry is owned by ``with_retry``; client retries are disabled.
         """
@@ -195,6 +203,12 @@ class PersonaGenerator(UsageTracking):
                     f'- Include {num_edge_cases} edge case/challenging personas\n'
                     '- Ensure variety in patience, assertiveness, and technical levels\n'
                     "- Create realistic backgrounds relevant to the agent's domain"
+                )
+
+            if generation_instructions:
+                instructions += (
+                    '\n\nAdditional instructions from the caller (apply to every persona, '
+                    f'but keep each persona valid and coherent):\n{generation_instructions}'
                 )
 
             user_prompt = f"""Agent Description: {delimit(agent_description)}
