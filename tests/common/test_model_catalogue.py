@@ -592,3 +592,44 @@ def test_parse_catalogue_survives_a_non_mapping_metadata():
     assert prices['listy'].supports_responses is False
     assert prices['stringy'].supports_responses is False
     assert prices['good'].supports_responses is True
+
+
+# --- served_model: pricing an alias at the model that actually answered -------
+
+
+@pytest.fixture
+def _alias_catalogue(monkeypatch: pytest.MonkeyPatch):
+    """A garden holding the resolved model but not the router alias in front of it."""
+
+    async def fake_load(client=None):  # noqa: ANN001, ARG001
+        return {'deepseek-v4-flash': ModelInfo(0.00019, 0.00019, 'deepseek', supports_responses=True)}
+
+    monkeypatch.setattr(pricing, '_load_catalogue', fake_load)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('_alias_catalogue')
+async def test_alias_is_priced_at_the_model_that_served_it():
+    priced = await pricing.price_usage(_usage(), 'orq/frontier-cheapest', served_model='deepseek/deepseek-v4-flash')
+    assert priced is not None
+    assert priced.total_cost == pytest.approx(0.00019 + 0.000095)
+    assert priced.priced_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('_catalogue')
+async def test_served_model_absent_from_the_catalogue_falls_back_to_the_request():
+    """A provider that answers with a dated snapshot id must not cost the run its price."""
+    priced = await pricing.price_usage(_usage(), 'gpt-5-mini', served_model='gpt-5-mini-2026-05-13')
+    assert priced is not None
+    assert priced.total_cost == pytest.approx(0.00125)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('_alias_catalogue')
+async def test_alias_without_a_served_model_stays_unpriced():
+    """No silent $0: an alias nobody resolved is unknown, not free."""
+    priced = await pricing.price_usage(_usage(), 'orq/frontier-cheapest')
+    assert priced is not None
+    assert priced.total_cost is None
+    assert priced.priced_calls == 0

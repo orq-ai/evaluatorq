@@ -16,6 +16,7 @@ import ast
 import re
 from functools import cache
 from pathlib import Path
+from typing import TypeGuard
 
 import pytest
 
@@ -323,6 +324,58 @@ def _getattr_usage_sites() -> list[str]:
             ):
                 sites.append(f'{rel}:{node.lineno}')
     return sites
+
+
+def _is_unattributed_pricing(node: ast.AST) -> TypeGuard[ast.Call]:
+    """True for a ``price_usage(...)`` call that names no ``served_model``."""
+    return (
+        isinstance(node, ast.Call)
+        and _dotted(node.func) == 'price_usage'
+        and not any(kw.arg == 'served_model' for kw in node.keywords)
+    )
+
+
+def _unattributed_pricing_sites() -> list[str]:
+    """``path:line`` for every ``price_usage(...)`` that does not say which model served the call.
+
+    An ``orq/*`` router resolves per request, and its catalogue entry is one
+    headline rate standing in for every model it can pick, so pricing a call at
+    the id the caller asked for bills it at a rate nothing served.
+    ``served_model=`` carries the id the response came back under (RES-1528).
+    """
+    sites: list[str] = []
+    for path in sorted(SRC.rglob('*.py')):
+        rel = path.relative_to(SRC).as_posix()
+        if rel == 'common/model_catalogue.py':  # the definition itself
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
+            if _is_unattributed_pricing(node):
+                sites.append(f'{rel}:{node.lineno}')
+    return sites
+
+
+def test_pricing_names_the_model_that_served_the_call() -> None:
+    sites = _unattributed_pricing_sites()
+    assert not sites, (
+        'price_usage called without served_model: '
+        + ', '.join(sites)
+        + ". Pass served_model=getattr(response, 'model', None) so a system router "
+        '(orq/auto, orq/frontier) is priced at the model that actually answered.'
+    )
+
+
+@pytest.mark.parametrize(
+    ('source', 'expected'),
+    [
+        ("await price_usage(usage, model, client)", True),
+        ("await price_usage(usage, model, client, served_model=response.model)", False),
+        # A different function that happens to end in the same word is not this one.
+        ("await recompute_price_usage(usage, model)", False),
+    ],
+)
+def test_pricing_attribution_detector_actually_fires(source: str, expected: bool) -> None:
+    found = any(_is_unattributed_pricing(node) for node in ast.walk(ast.parse(source)))
+    assert found is expected
 
 
 def test_exception_usage_goes_through_the_shared_helper() -> None:

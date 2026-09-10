@@ -211,6 +211,7 @@ target = CallableTarget(lambda messages: my_agent(messages[-1].content or ""))
 
 ### Bug Fixes
 
+- A call is now priced against the model that answered it rather than the id the caller asked for, falling back to the requested id when the served one is not in the catalogue. An `orq/*` router resolves to a different model per request, and the catalogue lists a single nominal rate for the router itself, so a run through one was billed at that headline rate no matter what served it. Measured on the live catalogue: `orq/autorouter-anthropic-balanced` resolved to `eu.anthropic.claude-haiku-4-5` and was costed 4.55x over. A router the catalogue does not price at all reported no cost instead, which is the same defect reading as a clean run. A prompt-cache breakpoint is now placed for an `orq/*` model too, for the same reason it is for `agent/<key>`: the resolved model is not knowable when the marker is written, and the router ignores rather than rejects the marker (RES-1528).
 - `safe_substitute()` dict keys were broken by Ruff RUF027 auto-fix in `attack_generator`, `capability_classifier`, and `objective_generator` — LLM prompts were receiving unsubstituted `{placeholder}` text, silently producing degraded attacks
 - `generate_recommendations=True` now correctly uses `llm_config.evaluator.client` before falling back to `create_async_llm_client()`
 - All hardcoded timeout literals (`240_000`, `90_000`) replaced with config-driven values from `LLMConfig` / `DEFAULT_TARGET_TIMEOUT_MS`

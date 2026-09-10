@@ -196,7 +196,9 @@ async def _truncation_usage(exc: LengthFinishReasonError, call: _ChatLadderCall,
     all; the executor never returned, so pricing happens here instead.
     """
     completion = getattr(exc, 'completion', None)
-    usage = await price_usage(TokenUsage.from_completion(completion), call.model, call.client)
+    usage = await price_usage(
+        TokenUsage.from_completion(completion), call.model, call.client, served_model=getattr(completion, 'model', None)
+    )
     return _rung_usage(usage, completion, label=call.label, leg=leg)
 
 
