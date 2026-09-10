@@ -152,9 +152,11 @@ Orq's model garden carries a few router ids that resolve to a real model per req
 evaluator = llm_judge(name="quality", criteria="Is the answer correct?", model="orq/auto")
 ```
 
+A workspace can also carry routers of its own, which the catalogue lists under the same `orq/` provider (`orq/autorouter-anthropic-balanced` and friends). Everything below applies to those too.
+
 Nothing extra is needed to reach them: a run holding `ORQ_API_KEY` already talks to the router. Two things worth knowing about what comes back:
 
-- **Cost is read off the model that answered, not the router you asked for.** The alias itself has no price, so a call is priced against the id the response came back under. A run therefore reports what it actually spent, but two runs of the same evaluation can be priced differently because they were served differently.
+- **Cost is read off the model that answered, not the router you asked for.** A router does carry a price in the catalogue, but it is one headline rate standing in for every model the router can pick, so charging a run at it is wrong by whatever the gap happens to be that day — a measured example ran 4.55x over. A call is priced against the id the response came back under instead. A run therefore reports what it actually spent, but two runs of the same evaluation can be priced differently because they were served differently.
 - **Which model answered is not knowable in advance**, and changes on every catalog sync, model toggle and key change in the workspace. That is the point of the router, and the reason a comparison you intend to reproduce should name a model instead.
 
 ## Where to next

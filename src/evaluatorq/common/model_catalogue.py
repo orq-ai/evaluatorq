@@ -444,11 +444,15 @@ async def price_usage(
     never saw and defeating `Usage.cost_is_partial`.
 
     ``served_model`` is the id the response came back under, which for a router
-    alias (``orq/auto``, ``orq/frontier-cheapest``) is a different model from the
-    one the caller asked for, and is the only one with a price. It is tried
-    first and the requested id is the fallback, so a provider that answers under
-    a dated snapshot id the catalogue does not list still prices at the id that
-    was asked for rather than dropping to unpriced. Compared unprefixed, because
+    (``orq/auto``, ``orq/autorouter-anthropic-balanced``) is a different model
+    from the one the caller asked for, and is the one whose price the call
+    actually incurred. A router is usually listed too, but at a single headline
+    rate standing in for every model it can pick, so pricing a call at it is
+    wrong by whatever the gap is — measured at 4.55x on a router that resolved
+    to a cheap Anthropic model. ``served_model`` is tried first and the
+    requested id is the fallback, so a provider that answers under a dated
+    snapshot id the catalogue does not list still prices at the id that was
+    asked for rather than dropping to unpriced. Compared unprefixed, because
     the router answers a request for ``openai/gpt-5.6-luna`` with the bare
     ``gpt-5.6-luna`` and that is the same model, not a reroute.
     """

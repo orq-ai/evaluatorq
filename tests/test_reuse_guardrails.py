@@ -338,10 +338,10 @@ def _is_unattributed_pricing(node: ast.AST) -> TypeGuard[ast.Call]:
 def _unattributed_pricing_sites() -> list[str]:
     """``path:line`` for every ``price_usage(...)`` that does not say which model served the call.
 
-    A router alias (``orq/auto``) is not a priced model, so pricing it against the
-    id the caller asked for leaves the call unpriced or, worse, at the wrong rate.
-    ``served_model=`` carries the id the response came back under, which is the
-    only one the catalogue can price (RES-1528).
+    An ``orq/*`` router resolves per request, and its catalogue entry is one
+    headline rate standing in for every model it can pick, so pricing a call at
+    the id the caller asked for bills it at a rate nothing served.
+    ``served_model=`` carries the id the response came back under (RES-1528).
     """
     sites: list[str] = []
     for path in sorted(SRC.rglob('*.py')):
