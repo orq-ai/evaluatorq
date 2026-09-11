@@ -63,7 +63,7 @@ jobs:
             echo '🤖 Generated with [Claude Code](https://claude.com/claude-code)'
           } > pr-body.md
 
-      - uses: peter-evans/create-pull-request@v7
+      - uses: peter-evans/create-pull-request@v8
         with:
           add-paths: src/evaluatorq/common/data/jury_judge_rates.json
           branch: chore/jury-judge-rates-refresh
