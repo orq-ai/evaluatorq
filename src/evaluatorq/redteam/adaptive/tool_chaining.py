@@ -177,7 +177,12 @@ class ToolChainingPlanner:
         # Not routed through execute_chat_parse: this call has no span, no
         # reasoning-effort drop-retry, and no trace-header injection — adopting
         # the shared executor would add all three. Price directly instead (RES-1295).
-        token_usage = await price_usage(TokenUsage.from_completion(response), self._model, self._client)
+        token_usage = await price_usage(
+            TokenUsage.from_completion(response),
+            self._model,
+            self._client,
+            served_model=getattr(response, 'model', None),
+        )
         result = DecompositionResult(
             objective=parsed.objective,
             steps=parsed.steps,

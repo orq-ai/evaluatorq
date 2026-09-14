@@ -158,8 +158,9 @@ def create_deployment_job(
         # the deployment ran, not the key alias (RES-1295).
         priced_usage = await price_usage(
             TokenUsage.from_completion(completion),
-            getattr(completion, 'model', deployment_key),
+            deployment_key,
             None,
+            served_model=getattr(completion, 'model', None),
         )
         return {
             'response': content,

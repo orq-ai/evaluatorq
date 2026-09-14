@@ -270,7 +270,9 @@ async def execute_chat_completion(
     record_llm_response(span, response)
     # The Orq router prices Responses but not Chat Completions, so usage here carries
     # tokens only; price it from the model catalogue (RES-1295).
-    return response, await price_usage(TokenUsage.from_completion(response), model, client)
+    return response, await price_usage(
+        TokenUsage.from_completion(response), model, client, served_model=getattr(response, 'model', None)
+    )
 
 
 async def execute_chat_parse(
@@ -343,7 +345,9 @@ async def execute_chat_parse(
         params.pop('reasoning_effort', None)
         response = await _bounded_call(client.chat.completions.parse(**params), timeout_s)
     record_llm_response(span, response)
-    return response, await price_usage(TokenUsage.from_completion(response), model, client)
+    return response, await price_usage(
+        TokenUsage.from_completion(response), model, client, served_model=getattr(response, 'model', None)
+    )
 
 
 async def execute_response(
@@ -439,4 +443,9 @@ async def execute_response(
     record_llm_response(span, response)
     # Priced by the router; price_usage is a no-op unless it came back unpriced
     # (a non-Orq endpoint, or a model the router does not price).
-    return response, await price_usage(TokenUsage.extract(getattr(response, 'usage', None), calls=1), model, client)
+    return response, await price_usage(
+        TokenUsage.extract(getattr(response, 'usage', None), calls=1),
+        model,
+        client,
+        served_model=getattr(response, 'model', None),
+    )
