@@ -341,7 +341,7 @@ def _unattributed_pricing_sites() -> list[str]:
     An ``orq/*`` router resolves per request, and its catalogue entry is one
     headline rate standing in for every model it can pick, so pricing a call at
     the id the caller asked for bills it at a rate nothing served.
-    ``served_model=`` carries the id the response came back under (RES-1528).
+    ``served_model=`` carries the id the response came back under (RES-1573).
     """
     sites: list[str] = []
     for path in sorted(SRC.rglob('*.py')):

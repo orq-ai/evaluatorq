@@ -1,4 +1,4 @@
-"""Show which model a call was priced against (RES-1528).
+"""Show which model a call was priced against (RES-1573).
 
 Run it with an ORQ key and read the two ids in each line. When they differ, the
 cost came from the model that answered rather than the one that was asked for,

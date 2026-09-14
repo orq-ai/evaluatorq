@@ -31,7 +31,7 @@ swaps a judge, because a user who picks a preset should get the panel they picke
 Router IDs are the literal strings the orq model garden returns from
 `GET /v2/models`; they are what the router and `common.model_catalogue` expect.
 
-They are never `orq/*` routers (RES-1528), even ones that derive the same
+They are never `orq/*` routers (RES-1573), even ones that derive the same
 frontier server-side and stay current without a capture. A router resolves per
 request and optimises each one alone, so a panel of them can seat three cards
 from one vendor, which is the correlated-error case a panel exists to cancel.
