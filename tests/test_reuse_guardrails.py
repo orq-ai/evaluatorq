@@ -359,8 +359,8 @@ def test_pricing_names_the_model_that_served_the_call() -> None:
     assert not sites, (
         'price_usage called without served_model: '
         + ', '.join(sites)
-        + ". Pass served_model=getattr(response, 'model', None) so a system router "
-        '(orq/auto, orq/frontier) is priced at the model that actually answered.'
+        + ". Pass served_model=getattr(response, 'model', None) so a router "
+        '(orq/autorouter-anthropic-balanced) is priced at the model that actually answered.'
     )
 
 

@@ -438,54 +438,55 @@ async def price_usage(
     """Fill in cost on a **single call's** ``usage`` when the provider reported none.
 
     Returns ``usage`` unchanged when it is ``None``, already priced, spans more
-    than one call, or the model is absent from the catalogue. The multi-call
-    guard matters: pricing an aggregate at one model's rate would also set
+    than one call, the model is absent from the catalogue, or it is an
+    ``orq/*`` router whose served model cannot be priced. The multi-call guard
+    matters: pricing an aggregate at one model's rate would also set
     ``priced_calls == calls``, asserting full pricing for calls this function
     never saw and defeating `Usage.cost_is_partial`.
 
-    ``served_model`` is the id the response came back under, which for a router
-    (``orq/autorouter-anthropic-balanced``) is a different model from the one
-    the caller asked for, and is the one whose price the call actually
-    incurred. A router is usually listed too, but at a single headline rate
-    standing in for every model it can pick, so pricing a call at it is wrong
-    by whatever the gap is — measured at 4.55x on a router that resolved to a
-    cheap Anthropic model. ``served_model`` is tried first and the requested id
-    is the fallback, so a provider that answers under a dated snapshot id the
-    catalogue does not list still prices at the id that was asked for rather
-    than dropping to unpriced. An ``orq/*`` request never takes that fallback:
-    its requested id is the headline rate, so an unlisted served model leaves
-    the call unpriced and says so, unless the caller has set the router's rate
-    with `register_model`. Compared unprefixed, because
-    the router answers a request for ``openai/gpt-5.6-luna`` with the bare
-    ``gpt-5.6-luna`` and that is the same model, not a reroute.
+    The call is priced at ``served_model``, the id the response came back
+    under, and falls back to the requested id when that is not listed. An
+    ``orq/*`` request never falls back unless `register_model` set its rate:
+    the catalogue lists a router at one headline rate for every model it can
+    pick, measured 4.55x over on a live router. Ids compare without the
+    provider prefix, since ``gpt-5.6-luna`` answering ``openai/gpt-5.6-luna``
+    is the same model.
     """
     if usage is None or usage.total_cost is not None or usage.calls > 1:
         return usage
     info = None
-    rerouted = served_model is not None and served_model.split('/', 1)[-1] != model.split('/', 1)[-1]
-    if served_model is not None and rerouted:
-        info = await _lookup(served_model, client)
+    rerouted_to = (
+        served_model
+        if served_model
+        and not served_model.startswith('orq/')
+        and served_model.split('/', 1)[-1] != model.split('/', 1)[-1]
+        else None
+    )
+    if rerouted_to is not None:
+        info = await _lookup(rerouted_to, client)
         if info is not None:
-            logger.debug('Pricing the call at {}, which served the request for {}', served_model, model)
+            logger.debug('Pricing the call at {}, which served the request for {}', rerouted_to, model)
     if info is None and model.startswith('orq/'):
         info = _overrides.get(model.split('/', 1)[-1])
         if info is None:
+            if rerouted_to is not None:
+                reason = f'was served by {rerouted_to}, which the Orq catalogue does not price'
+            elif served_model:
+                reason = f'answered under router id {served_model}, not the model that served it'
+            else:
+                reason = 'did not report which model served it'
             logger.warning(
-                'Router {} {}; call stays unpriced rather than billed at the router headline rate',
-                model,
-                f'was served by {served_model}, which the Orq catalogue does not price'
-                if rerouted
-                else 'did not report which model served it',
+                'Router {} {}; call stays unpriced rather than billed at the router headline rate', model, reason
             )
             return usage
     elif info is None:
-        if rerouted:
+        info = await _lookup(model, client)
+        if info is not None and rerouted_to is not None:
             logger.debug(
                 'Model {} served the call but is not in the Orq catalogue; pricing at the requested {} instead',
-                served_model,
+                rerouted_to,
                 model,
             )
-        info = await _lookup(model, client)
     if info is None:
         logger.debug('Model {} is not in the Orq catalogue; call stays unpriced', model)
         return usage

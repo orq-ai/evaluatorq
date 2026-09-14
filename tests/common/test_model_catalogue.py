@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import httpx
 import pytest
@@ -625,38 +626,87 @@ async def test_served_model_absent_from_the_catalogue_falls_back_to_the_request(
     assert priced.total_cost == pytest.approx(0.00125)
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize('served_model', ['anthropic/claude-unlisted', None, 'orq/autorouter-openai-cost'])
-async def test_router_is_never_priced_at_its_headline_rate(monkeypatch: pytest.MonkeyPatch, served_model: str | None):
-    """A router's own rate is the wrong number, so an unlisted served model leaves the call unpriced."""
+@pytest.fixture
+def _router_catalogue(monkeypatch: pytest.MonkeyPatch):
+    """A garden listing a router at its headline rate next to one model it can serve."""
 
     async def fake_load(client=None):  # noqa: ANN001, ARG001
-        return {'autorouter-openai-cost': ModelInfo(0.001, 0.002, 'orq', supports_responses=True)}
+        return {
+            'autorouter-openai-cost': ModelInfo(0.001, 0.002, 'orq', supports_responses=True),
+            'autorouter-anthropic-balanced': ModelInfo(0.003, 0.015, 'orq', supports_responses=True),
+            'gpt-5.4': ModelInfo(0.0004, 0.0016, 'openai', supports_responses=True),
+        }
 
     monkeypatch.setattr(pricing, '_load_catalogue', fake_load)
+    monkeypatch.setattr(pricing, '_overrides', {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('_router_catalogue')
+@pytest.mark.parametrize(
+    ('served_model', 'reason'),
+    [
+        ('anthropic/claude-unlisted', 'was served by anthropic/claude-unlisted, which the Orq catalogue does not price'),
+        ('orq/autorouter-openai-cost', 'answered under router id orq/autorouter-openai-cost, not the model that served it'),
+        (
+            'orq/autorouter-anthropic-balanced',
+            'answered under router id orq/autorouter-anthropic-balanced, not the model that served it',
+        ),
+        (None, 'did not report which model served it'),
+        ('', 'did not report which model served it'),
+    ],
+)
+async def test_router_is_never_priced_at_its_headline_rate(
+    caplog: pytest.LogCaptureFixture, served_model: str | None, reason: str
+):
+    """A router's own rate is the wrong number, so the call stays unpriced and the warning says why."""
     priced = await pricing.price_usage(_usage(), 'orq/autorouter-openai-cost', served_model=served_model)
     assert priced is not None
     assert priced.total_cost is None
     assert priced.priced_calls == 0
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == 'WARNING']
+    assert warnings == [
+        f'Router orq/autorouter-openai-cost {reason}; call stays unpriced rather than billed at the router headline rate'
+    ]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('served_model', ['anthropic/claude-unlisted', None])
-async def test_router_rate_the_caller_registered_still_prices_the_call(
-    monkeypatch: pytest.MonkeyPatch, served_model: str | None
-):
+@pytest.mark.usefixtures('_router_catalogue')
+@pytest.mark.parametrize(
+    'served_model',
+    ['anthropic/claude-unlisted', None, '', 'orq/autorouter-openai-cost', 'orq/autorouter-anthropic-balanced'],
+)
+async def test_router_rate_the_caller_registered_still_prices_the_call(served_model: str | None):
     """A caller's own rate for a router is a correction, not the headline rate."""
-
-    async def fake_load(client=None):  # noqa: ANN001, ARG001
-        return {'autorouter-openai-cost': ModelInfo(0.001, 0.002, 'orq', supports_responses=True)}
-
-    monkeypatch.setattr(pricing, '_load_catalogue', fake_load)
-    monkeypatch.setattr(pricing, '_overrides', {})
     pricing.register_model('orq/autorouter-openai-cost', ModelInfo(0.00019, 0.00019, 'orq', supports_responses=True))
     priced = await pricing.price_usage(_usage(), 'orq/autorouter-openai-cost', served_model=served_model)
     assert priced is not None
     assert priced.total_cost == pytest.approx(0.00019 + 0.000095)
     assert priced.priced_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('_router_catalogue')
+async def test_listed_served_model_outranks_a_registered_router_rate():
+    """The served model's price is what the call cost; a router rate is only the fallback when that is unknown."""
+    pricing.register_model('orq/autorouter-openai-cost', ModelInfo(0.00019, 0.00019, 'orq', supports_responses=True))
+    priced = await pricing.price_usage(_usage(), 'orq/autorouter-openai-cost', served_model='openai/gpt-5.4')
+    assert priced is not None
+    assert priced.total_cost == pytest.approx(0.0004 + 0.0008)
+    assert priced.priced_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('_router_catalogue')
+async def test_unpriced_call_logs_one_reason(caplog: pytest.LogCaptureFixture):
+    """Neither id listed: say it stays unpriced, without first claiming a fallback price."""
+    caplog.set_level(logging.DEBUG)
+    priced = await pricing.price_usage(_usage(), 'openai/unlisted', served_model='openai/unlisted-2026-05-13')
+    assert priced is not None
+    assert priced.total_cost is None
+    assert [r.getMessage() for r in caplog.records if r.name == pricing.__name__] == [
+        'Model openai/unlisted is not in the Orq catalogue; call stays unpriced'
+    ]
 
 
 @pytest.mark.asyncio

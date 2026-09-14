@@ -2,13 +2,13 @@
 
 Run it with an ORQ key and read the two ids in each line. When they differ, the
 cost came from the model that answered rather than the one that was asked for,
-which is the whole point of the change: a system router (`orq/auto`) resolves
-per request and carries no price of its own.
+which is the whole point of the change: a router
+(`orq/autorouter-anthropic-balanced`) resolves per request, and its catalogue
+entry is one headline rate that does not match the model it picked.
 
     ORQ_API_KEY=... uv run python scripts/manual_tests/check_served_model_pricing.py
 
-Pass model ids as arguments to try others. `orq/auto` 404s until the platform
-side of the feature ships.
+Pass model ids as arguments to try others.
 """
 
 import asyncio
@@ -17,7 +17,7 @@ import sys
 from evaluatorq.common.llm_call import execute_chat_completion
 from evaluatorq.common.llm_client import resolve_llm_client
 
-DEFAULT_MODELS = ('openai/gpt-5.6-luna', 'anthropic/claude-sonnet-4-6', 'orq/auto')
+DEFAULT_MODELS = ('openai/gpt-5.6-luna', 'anthropic/claude-sonnet-4-6', 'orq/autorouter-anthropic-balanced')
 
 
 async def main() -> None:
