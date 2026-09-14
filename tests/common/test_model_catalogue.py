@@ -652,6 +652,10 @@ def _router_catalogue(monkeypatch: pytest.MonkeyPatch):
             'orq/autorouter-anthropic-balanced',
             'answered under router id orq/autorouter-anthropic-balanced, not the model that served it',
         ),
+        (
+            'autorouter-anthropic-balanced',
+            'answered under router id autorouter-anthropic-balanced, not the model that served it',
+        ),
         (None, 'did not report which model served it'),
         ('', 'did not report which model served it'),
     ],
@@ -705,8 +709,19 @@ async def test_unpriced_call_logs_one_reason(caplog: pytest.LogCaptureFixture):
     assert priced is not None
     assert priced.total_cost is None
     assert [r.getMessage() for r in caplog.records if r.name == pricing.__name__] == [
-        'Model openai/unlisted is not in the Orq catalogue; call stays unpriced'
+        'Model openai/unlisted is not in the Orq catalogue, nor is openai/unlisted-2026-05-13, '
+        'which served it; call stays unpriced'
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('_router_catalogue')
+async def test_router_requested_without_its_prefix_is_not_priced_at_its_headline_rate():
+    """The catalogue entry, not the ``orq/`` spelling, says an id is a router."""
+    priced = await pricing.price_usage(_usage(), 'autorouter-openai-cost', served_model='autorouter-openai-cost')
+    assert priced is not None
+    assert priced.total_cost is None
+    assert priced.priced_calls == 0
 
 
 @pytest.mark.asyncio
