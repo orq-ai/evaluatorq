@@ -116,9 +116,9 @@ Use it for run-level scores (a benchmark mean, a pass rate); keep the default `"
 
 See [Cyclic judge assignment](cyclic-judge.md) for how items map to judges, auditing the rotation via `raw_output["jury"]`, and the failure semantics.
 
-### System routers as a judge
+### Routers as a judge
 
-`model="orq/auto"` works for a single judge, and so does any other `orq/*` router (see [System routers](configuration.md#system-routers-orqauto-orqfrontier)). Do not build a panel out of them.
+A single judge can be an `orq/*` router (see [Routers](configuration.md#routers-orq)). Do not build a panel out of them.
 
 A router optimises each request on its own, so a panel of three routers can return three cards from one vendor, and a panel whose judges share a lineage shares their blind spots too. Cancelling correlated error is the whole reason to poll three judges rather than ask one judge three times, so a jury names its models: either a [preset](jury-presets.md), which seats one model per lineage deliberately, or your own `judges` list.
 

@@ -93,10 +93,10 @@ def caching_applies(client: AsyncOpenAI | None, model: str) -> bool:
     transcript in either surface — uncached. The documented ignore-don't-reject
     behaviour is what makes that safe.
 
-    ``orq/<router>`` is included for the same reason (RES-1528). A system router
-    picks its model per request from the workspace's callable models, so whether
-    the call lands on Anthropic is not knowable when the breakpoint is placed;
-    ``orq/auto`` seats an Anthropic model today and may not next week.
+    ``orq/<router>`` is included for the same reason (RES-1528). A router picks
+    its model per request from the workspace's callable models, so whether the
+    call lands on Anthropic is not knowable when the breakpoint is placed; a
+    router seating an Anthropic model today may not next week.
     """
     if not client_routes_through_orq(client):
         return False

@@ -626,6 +626,21 @@ async def test_served_model_absent_from_the_catalogue_falls_back_to_the_request(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('served_model', ['anthropic/claude-unlisted', None, 'orq/autorouter-openai-cost'])
+async def test_router_is_never_priced_at_its_headline_rate(monkeypatch: pytest.MonkeyPatch, served_model: str | None):
+    """A router's own rate is the wrong number, so an unlisted served model leaves the call unpriced."""
+
+    async def fake_load(client=None):  # noqa: ANN001, ARG001
+        return {'autorouter-openai-cost': ModelInfo(0.001, 0.002, 'orq', supports_responses=True)}
+
+    monkeypatch.setattr(pricing, '_load_catalogue', fake_load)
+    priced = await pricing.price_usage(_usage(), 'orq/autorouter-openai-cost', served_model=served_model)
+    assert priced is not None
+    assert priced.total_cost is None
+    assert priced.priced_calls == 0
+
+
+@pytest.mark.asyncio
 @pytest.mark.usefixtures('_alias_catalogue')
 async def test_alias_without_a_served_model_stays_unpriced():
     """No silent $0: an alias nobody resolved is unknown, not free."""
