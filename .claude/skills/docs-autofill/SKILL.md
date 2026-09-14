@@ -185,6 +185,8 @@ gh pr create --title "docs: <what the page covers>" \
 
 Conventional commit, `docs:` type. Never `feat!`/`fix!`. CODEOWNERS requests reviewers; do not pass `--reviewer`. Never merge.
 
+**A title tag goes in the commit subject too.** `.github/workflows/pr-title.yml` runs `validateSingleCommitMatchesPrTitle`, and this routine always opens a one-commit PR, so a `[axes]` or `[BLOCKED]` tag appended to the title alone fails the **Conventional title** check with `The pull request title doesn't match the commit`. Amend the commit subject to the exact title before pushing. Found the hard way on #200.
+
 PR body, in this order:
 
 1. **The gap** — the matrix cell as a literal `gap: <axis> × <axis>` line, then why it ranked first.
