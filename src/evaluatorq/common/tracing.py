@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from evaluatorq.common.env_config import env_bool
 from evaluatorq.common.fields import get_field as _field
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.tracing.setup import get_tracer
@@ -96,7 +97,7 @@ def capture_message_content() -> bool:
     Controlled by the ``EVALUATORQ_CAPTURE_MESSAGE_CONTENT`` env var.
 
     **Defaults to True** so the Orq dashboard's input/output panels render out of
-    the box. Set it to ``"false"`` / ``"0"`` to keep raw message content out of
+    the box. Set it to ``false`` / ``0`` / ``no`` / ``off`` (case-insensitive) to keep raw message content out of
     traces (e.g. when exporting spans to a third-party backend, or to avoid
     capturing PII) while still recording token usage, model, and latency.
 
@@ -105,10 +106,7 @@ def capture_message_content() -> bool:
     payloads. Public so domain span builders (redteam/openresponses) can gate
     input-message capture too.
     """
-    flag = os.environ.get('EVALUATORQ_CAPTURE_MESSAGE_CONTENT')
-    if flag is None:
-        return True
-    return flag.lower() == 'true' or flag == '1'
+    return env_bool('EVALUATORQ_CAPTURE_MESSAGE_CONTENT', default=True)
 
 
 # Back-compat private alias (pre-existing callers/tests import the underscored name).
@@ -617,14 +615,11 @@ def propagate_trace_context() -> bool:
 
     **Defaults to True** so a provider that runs its own tracing (the Orq
     router, the agents endpoint) nests its server-side spans under the calling
-    span instead of starting a loose root trace. Set it to ``"false"`` / ``"0"``
+    span instead of starting a loose root trace. Set it to ``false`` / ``0`` / ``no`` / ``off``
     when the receiving side should trace independently, or when a gateway
     rejects an unexpected ``traceparent`` header.
     """
-    flag = os.environ.get('EVALUATORQ_PROPAGATE_TRACE_CONTEXT')
-    if flag is None:
-        return True
-    return flag.lower() == 'true' or flag == '1'
+    return env_bool('EVALUATORQ_PROPAGATE_TRACE_CONTEXT', default=True)
 
 
 async def get_trace_context_headers() -> dict[str, str]:  # noqa: RUF029

@@ -697,6 +697,77 @@ async def test_on_run_complete_fires_when_scoring_raises(datapoint_factory):
 
 
 @pytest.mark.asyncio
+async def test_on_stage_end_fires_when_on_run_complete_raises(datapoint_factory):
+    class _CompleteBoom(_RunLevelRecorder):
+        def __init__(self) -> None:
+            super().__init__()
+            self.stage_end_error = None
+
+        def on_run_complete(self, results) -> None:
+            raise RuntimeError('run complete blew up')
+
+        def on_stage_end(self, stage, meta) -> None:
+            self.stage_end_error = meta['error']
+
+    hooks = _CompleteBoom()
+    with pytest.raises(RuntimeError, match='run complete blew up') as exc_info:
+        await simulate(
+            datapoints=[datapoint_factory('dp-1')],
+            target=_ok_target,
+            user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+            judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+            max_turns=1,
+            evaluator_names=['goal_achieved'],
+            hooks=hooks,
+        )
+    assert hooks.stage_end_error is exc_info.value
+
+
+@pytest.mark.asyncio
+async def test_successful_simulation_does_not_inherit_caller_exception(datapoint_factory):
+    async def run_inside_except():
+        try:
+            raise ValueError('caller failure')
+        except ValueError:
+            return await simulate(
+                datapoints=[datapoint_factory('dp-1')],
+                target=_ok_target,
+                user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+                judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+                max_turns=1,
+                evaluator_names=['goal_achieved'],
+            )
+
+    results = await run_inside_except()
+    assert len(results) == 1
+
+
+@pytest.mark.asyncio
+async def test_stage_end_failure_does_not_replace_simulation_failure(datapoint_factory, monkeypatch):
+    import evaluatorq.simulation.api as simulation_api
+
+    async def simulation_boom(**kwargs):
+        raise RuntimeError('simulation failed')
+
+    monkeypatch.setattr(simulation_api, '_simulate_via_evaluatorq', simulation_boom)
+
+    class _StageBoom(_RunLevelRecorder):
+        def on_stage_end(self, stage, meta) -> None:
+            raise RuntimeError('stage end failed')
+
+    with pytest.raises(RuntimeError, match='simulation failed'):
+        await simulate(
+            datapoints=[datapoint_factory('dp-1')],
+            target=_ok_target,
+            user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+            judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+            max_turns=1,
+            evaluator_names=['goal_achieved'],
+            hooks=_StageBoom(),
+        )
+
+
+@pytest.mark.asyncio
 async def test_on_run_complete_gets_partial_results_when_a_row_is_dropped(datapoint_factory, monkeypatch):
     """exit_on_failure aborts via SimulationDroppedError when a row produces no
     result, but the rows that *did* succeed must still reach on_run_complete —
@@ -726,7 +797,15 @@ async def test_on_run_complete_gets_partial_results_when_a_row_is_dropped(datapo
 
     monkeypatch.setattr(SimulationRunner, 'run', fake_run)
 
-    hooks = _RunLevelRecorder()
+    class _EvaluatorRecorder(_RunLevelRecorder):
+        def __init__(self) -> None:
+            super().__init__()
+            self.evaluator_events = []
+
+        def on_evaluator_complete(self, datapoint_id, name, score, result) -> None:
+            self.evaluator_events.append(datapoint_id)
+
+    hooks = _EvaluatorRecorder()
     with pytest.raises(SimulationDroppedError):
         await simulate(
             datapoints=[datapoint_factory('dp-good'), datapoint_factory('dp-bad')],
@@ -740,6 +819,95 @@ async def test_on_run_complete_gets_partial_results_when_a_row_is_dropped(datapo
     assert hooks.completed_with is not None  # terminal fired despite the drop
     assert len(hooks.completed_with) == 1  # the successful row, not []
     assert hooks.completed_with[0].goal_achieved is True
+    assert hooks.evaluator_events == ['dp-good']
+
+
+@pytest.mark.asyncio
+async def test_drop_error_survives_evaluator_hook_failure(datapoint_factory, monkeypatch):
+    """An evaluator observer failure must not hide the dropped-run signal."""
+    from evaluatorq.simulation.api import SimulationDroppedError, simulate
+    from evaluatorq.simulation.runner.simulation import SimulationRunner
+
+    async def fake_run(self, *, datapoint, max_turns, thread_id=None):
+        if datapoint.id == 'dp-bad':
+            raise RuntimeError('runner exploded')
+        return SimulationResult(
+            messages=[],
+            terminated_by=TerminatedBy.max_turns,
+            reason='',
+            goal_achieved=True,
+            goal_completion_score=1.0,
+            rules_broken=[],
+            turn_count=1,
+            token_usage=TokenUsage(),
+            turn_metrics=[],
+        )
+
+    monkeypatch.setattr(SimulationRunner, 'run', fake_run)
+
+    class _EvaluatorBoom(_RunLevelRecorder):
+        def on_evaluator_complete(self, datapoint_id, name, score, result) -> None:
+            raise RuntimeError('observer failed')
+
+    with pytest.raises(SimulationDroppedError, match='1 of 2 simulation'):
+        await simulate(
+            datapoints=[datapoint_factory('dp-good'), datapoint_factory('dp-bad')],
+            target=_ok_target,
+            user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+            judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+            max_turns=1,
+            evaluator_names=['goal_achieved'],
+            hooks=_EvaluatorBoom(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_drop_error_survives_on_run_complete_failure(datapoint_factory, monkeypatch):
+    """A terminal observer failure must not hide a fail-fast drop."""
+    from evaluatorq.simulation.api import SimulationDroppedError, simulate
+    from evaluatorq.simulation.runner.simulation import SimulationRunner
+
+    async def fake_run(self, *, datapoint, max_turns, thread_id=None):
+        if datapoint.id == 'dp-bad':
+            raise RuntimeError('runner exploded')
+        return SimulationResult(
+            messages=[],
+            terminated_by=TerminatedBy.max_turns,
+            reason='',
+            goal_achieved=True,
+            goal_completion_score=1.0,
+            rules_broken=[],
+            turn_count=1,
+            token_usage=TokenUsage(),
+            turn_metrics=[],
+        )
+
+    monkeypatch.setattr(SimulationRunner, 'run', fake_run)
+
+    class _CompleteBoom(_RunLevelRecorder):
+        def __init__(self) -> None:
+            super().__init__()
+            self.stage_end_error = None
+
+        def on_run_complete(self, results) -> None:
+            raise RuntimeError('observer failed')
+
+        def on_stage_end(self, stage, meta) -> None:
+            self.stage_end_error = meta['error']
+
+    hooks = _CompleteBoom()
+    with pytest.raises(SimulationDroppedError) as exc_info:
+        await simulate(
+            datapoints=[datapoint_factory('dp-good'), datapoint_factory('dp-bad')],
+            target=_ok_target,
+            user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+            judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+            max_turns=1,
+            evaluator_names=['goal_achieved'],
+            hooks=hooks,
+        )
+
+    assert hooks.stage_end_error is exc_info.value
 
 
 @pytest.mark.asyncio

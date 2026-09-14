@@ -113,13 +113,16 @@ class SimulationHooks(Protocol):
     per-datapoint hooks (``on_datapoint_complete``/``_error``,
     ``on_evaluator_complete``) are also unguarded.
 
-    ``on_evaluator_complete`` fires once per evaluator score, failed ones
-    included, and receives the whole ``EvaluatorScore`` as ``score``:
+    ``on_evaluator_complete`` fires once per evaluator score after the evaluatorq
+    batch has finished, failed ones included, and receives the whole ``EvaluatorScore`` as ``score``:
     ``score.score.value`` and ``score.score.explanation`` for the verdict,
     ``score.error`` for the reason an evaluator produced nothing usable. It used to take a bare
     ``score: float``, which a dead evaluator could not produce, so those events
-    never fired at all. Because the hook is unguarded, an implementation must
+    never fired at all. Because the hook is unguarded on a successful run, an implementation must
     tolerate a non-numeric ``value`` rather than assume a float.
+    On a fail-fast dropped run, the events for successful rows are still delivered
+    before ``SimulationDroppedError`` is re-raised; an observer failure is logged
+    without replacing that primary drop error.
 
     ``on_confirm`` is the single pre-run gate (reuses the ``SimulationRunMeta``
     payload). It fires before the runner/target exist; returning ``False``

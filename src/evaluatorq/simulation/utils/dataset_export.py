@@ -195,20 +195,24 @@ def results_to_jsonl(
         if not isinstance(result, SimulationResult):
             raise TypeError(f'Expected SimulationResult, got {type(result).__name__}')
         lines.append(
-            json.dumps({
-                'id': dp.id,
-                'persona': dp.persona.name,
-                'scenario': dp.scenario.name,
-                'first_message': dp.first_message,
-                'goal_achieved': result.goal_achieved,
-                'goal_completion_score': result.goal_completion_score,
-                'terminated_by': result.terminated_by.value,
-                'turn_count': result.turn_count,
-                'messages': [m.model_dump(mode='json') for m in result.messages],
-                'rules_broken': result.rules_broken,
-                'token_usage': result.token_usage.model_dump(mode='json'),
-                'turn_metrics': [tm.model_dump(mode='json') for tm in result.turn_metrics],
-                'metadata': result.metadata,
-            })
+            json.dumps(
+                {
+                    'id': dp.id,
+                    'persona': dp.persona.name,
+                    'scenario': dp.scenario.name,
+                    'first_message': dp.first_message,
+                    'goal_achieved': result.goal_achieved,
+                    'goal_completion_score': result.goal_completion_score,
+                    'terminated_by': result.terminated_by.value,
+                    'turn_count': result.turn_count,
+                    'messages': [m.model_dump(mode='json') for m in result.messages],
+                    'rules_broken': result.rules_broken,
+                    'token_usage': result.token_usage.model_dump(mode='json'),
+                    'turn_metrics': [tm.model_dump(mode='json') for tm in result.turn_metrics],
+                    'metadata': result.metadata,
+                    'evaluator_details': result.evaluator_details,
+                },
+                default=str,
+            )
         )
     return '\n'.join(lines)
