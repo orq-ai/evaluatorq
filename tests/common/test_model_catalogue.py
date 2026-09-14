@@ -641,6 +641,25 @@ async def test_router_is_never_priced_at_its_headline_rate(monkeypatch: pytest.M
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('served_model', ['anthropic/claude-unlisted', None])
+async def test_router_rate_the_caller_registered_still_prices_the_call(
+    monkeypatch: pytest.MonkeyPatch, served_model: str | None
+):
+    """A caller's own rate for a router is a correction, not the headline rate."""
+
+    async def fake_load(client=None):  # noqa: ANN001, ARG001
+        return {'autorouter-openai-cost': ModelInfo(0.001, 0.002, 'orq', supports_responses=True)}
+
+    monkeypatch.setattr(pricing, '_load_catalogue', fake_load)
+    monkeypatch.setattr(pricing, '_overrides', {})
+    pricing.register_model('orq/autorouter-openai-cost', ModelInfo(0.00019, 0.00019, 'orq', supports_responses=True))
+    priced = await pricing.price_usage(_usage(), 'orq/autorouter-openai-cost', served_model=served_model)
+    assert priced is not None
+    assert priced.total_cost == pytest.approx(0.00019 + 0.000095)
+    assert priced.priced_calls == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.usefixtures('_alias_catalogue')
 async def test_alias_without_a_served_model_stays_unpriced():
     """No silent $0: an alias nobody resolved is unknown, not free."""
