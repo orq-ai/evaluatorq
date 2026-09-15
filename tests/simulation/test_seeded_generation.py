@@ -204,3 +204,24 @@ async def test_no_generation_instructions_injects_nothing(captured):
     ordinary run's prompt is byte-for-byte unchanged from before the feature."""
     await generate_persona("angry customer", agent_description="support agent")
     assert "instructions from the caller" not in captured["prompts"][0]
+
+
+@pytest.mark.asyncio
+async def test_generation_instructions_reach_the_seeded_fanout(captured):
+    """RES-1087 review: the steer must also reach the _seeded fan-out branch (persona_seeds set),
+    not only the auto path. Every per-seed persona prompt must carry both its seed and the steer."""
+    from evaluatorq.simulation.api import _generate_personas_scenarios
+
+    personas, _scenarios, _usage = await _generate_personas_scenarios(
+        agent_description="support agent",
+        num_personas=99,  # ignored — one persona per seed
+        num_scenarios=2,
+        llm_config=LLMCallConfig(model="m"),
+        generation_client=object(),  # pyright: ignore[reportArgumentType]
+        persona_seeds=["angry retiree", "fraud dispute"],
+        generation_instructions="reply only in German",
+    )
+    assert len(personas) == 2
+    persona_prompts = [p for p in captured["prompts"] if "retiree" in p or "fraud dispute" in p]
+    assert len(persona_prompts) == 2
+    assert all("reply only in German" in p for p in persona_prompts)  # steer in every seeded prompt

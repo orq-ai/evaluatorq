@@ -1473,14 +1473,23 @@ async def _generate_personas_scenarios(
                 out.append(batch[0])
             return out
 
-        persona_kwargs: dict[str, Any] = {'agent_description': agent_description, 'num_personas': num_personas}
-        scenario_kwargs: dict[str, Any] = {'agent_description': agent_description, 'num_scenarios': num_scenarios}
+        # generation_instructions is passed unconditionally, like agent_description and the seeded
+        # path above: its default '' is a no-op in the generators, so no truthiness guard is needed.
+        # edge_case_percentage stays conditional because its default (None here) diverges from the
+        # generators' own default and only `is not None` preserves that.
+        persona_kwargs: dict[str, Any] = {
+            'agent_description': agent_description,
+            'num_personas': num_personas,
+            'generation_instructions': generation_instructions,
+        }
+        scenario_kwargs: dict[str, Any] = {
+            'agent_description': agent_description,
+            'num_scenarios': num_scenarios,
+            'generation_instructions': generation_instructions,
+        }
         if edge_case_percentage is not None:
             persona_kwargs['edge_case_percentage'] = edge_case_percentage
             scenario_kwargs['edge_case_percentage'] = edge_case_percentage
-        if generation_instructions:
-            persona_kwargs['generation_instructions'] = generation_instructions
-            scenario_kwargs['generation_instructions'] = generation_instructions
 
         personas_coro = (
             _seeded(persona_gen, persona_seeds, 'persona', 'num_personas')
