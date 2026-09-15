@@ -45,6 +45,65 @@ def is_valid_template_path(path: str) -> bool:
     return bool(re.match(VALID_PATH_PATTERN, path))
 
 
+def _resolve_nested(data: dict[str, Any], path: str) -> Any:
+    current: Any = data
+    for segment in path.split('.'):
+        bracket_at = segment.find('[')
+        if bracket_at == -1:
+            if not isinstance(current, dict) or segment not in current:
+                return _NOT_FOUND
+            current = current[segment]
+            continue
+        key = segment[:bracket_at]
+        if key:
+            if not isinstance(current, dict) or key not in current:
+                return _NOT_FOUND
+            current = current[key]
+        for match in _BRACKET_INDEX.finditer(segment):
+            if not isinstance(current, list):
+                return _NOT_FOUND
+            idx = int(match.group(1))
+            if idx < 0:
+                idx += len(current)
+            if idx < 0 or idx >= len(current):
+                return _NOT_FOUND
+            current = current[idx]
+    return current
+
+
+def _format(value: Any) -> str:
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, indent=2)
+    if isinstance(value, str):
+        return value
+    # Parity with upstream: bool/None/number use Python str (True/False/None),
+    # NOT JSON (true/false/null). Pinned by the parity suite — do not "fix".
+    return str(value)
+
+
+def _replacer(match: re.Match[str], replacements: dict[str, Any]) -> str:
+    key = match.group(1).strip()
+    # \n unreachable (no re.DOTALL) but kept for parity with upstream
+    if ' ' in key or '\t' in key or '\n' in key or '\r' in key:
+        return match.group(0)
+    if not is_valid_template_path(key):
+        logger.warning('Rejected template path: {!r}', key)
+        return match.group(0)
+    if key in _RESERVED_BARE_KEYS:
+        logger.warning(
+            'Bare reserved template key {!r} left unresolved — use a dotted path instead (e.g. {!r}).',
+            key,
+            f'{key}.<field>',
+        )
+        return match.group(0)
+    if key in replacements:
+        return _format(replacements[key])
+    value = _resolve_nested(replacements, key)
+    if value is _NOT_FOUND:
+        return match.group(0)
+    return _format(value)
+
+
 def render_template(template: str, replacements: dict[str, Any]) -> str:
     """Substitute every ``{{key}}`` / ``{{key.nested[0].path}}`` in ``template``.
 
@@ -53,60 +112,4 @@ def render_template(template: str, replacements: dict[str, Any]) -> str:
     against ``replacements`` first; then nested traversal; unresolved → intact.
     """
 
-    def _resolve_nested(data: dict[str, Any], path: str) -> Any:
-        current: Any = data
-        for segment in path.split('.'):
-            bracket_at = segment.find('[')
-            if bracket_at == -1:
-                if not isinstance(current, dict) or segment not in current:
-                    return _NOT_FOUND
-                current = current[segment]
-                continue
-            key = segment[:bracket_at]
-            if key:
-                if not isinstance(current, dict) or key not in current:
-                    return _NOT_FOUND
-                current = current[key]
-            for match in _BRACKET_INDEX.finditer(segment):
-                if not isinstance(current, list):
-                    return _NOT_FOUND
-                idx = int(match.group(1))
-                if idx < 0:
-                    idx += len(current)
-                if idx < 0 or idx >= len(current):
-                    return _NOT_FOUND
-                current = current[idx]
-        return current
-
-    def _format(value: Any) -> str:
-        if isinstance(value, (dict, list)):
-            return json.dumps(value, indent=2)
-        if isinstance(value, str):
-            return value
-        # Parity with upstream: bool/None/number use Python str (True/False/None),
-        # NOT JSON (true/false/null). Pinned by the parity suite — do not "fix".
-        return str(value)
-
-    def _replacer(match: re.Match[str]) -> str:
-        key = match.group(1).strip()
-        # \n unreachable (no re.DOTALL) but kept for parity with upstream
-        if ' ' in key or '\t' in key or '\n' in key or '\r' in key:
-            return match.group(0)
-        if not is_valid_template_path(key):
-            logger.warning('Rejected template path: {!r}', key)
-            return match.group(0)
-        if key in _RESERVED_BARE_KEYS:
-            logger.warning(
-                'Bare reserved template key {!r} left unresolved — use a dotted path instead (e.g. {!r}).',
-                key,
-                f'{key}.<field>',
-            )
-            return match.group(0)
-        if key in replacements:
-            return _format(replacements[key])
-        value = _resolve_nested(replacements, key)
-        if value is _NOT_FOUND:
-            return match.group(0)
-        return _format(value)
-
-    return _CURLY.sub(_replacer, template)
+    return _CURLY.sub(lambda match: _replacer(match, replacements), template)
