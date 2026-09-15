@@ -39,3 +39,10 @@ def test_dict_messages_convert():
     result = convert_to_open_responses(messages_to_dict(msgs))
     assert result.get('input')
     assert result.get('output')
+
+
+def test_unhashable_dict_message_type_is_skipped():
+    """A malformed unhashable message type is skipped without raising."""
+    result = convert_to_open_responses([{'type': ['custom']}])
+
+    assert result.get('output') == []
