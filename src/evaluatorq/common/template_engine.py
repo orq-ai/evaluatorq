@@ -137,6 +137,24 @@ def resolve_template_path(replacements: dict[str, Any], path: str, *, prefer_nes
     return False, None
 
 
+def _format(value: Any) -> str:
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, indent=2)
+    if isinstance(value, str):
+        return value
+    # Parity with upstream: bool/None/number use Python str (True/False/None),
+    # NOT JSON (true/false/null). Pinned by the parity suite — do not "fix".
+    return str(value)
+
+
+def _replacer(match: re.Match[str], replacements: dict[str, Any]) -> str:
+    path = _placeholder_path(match.group(1))
+    if path is None:
+        return match.group(0)
+    found, value = resolve_template_path(replacements, path)
+    return _format(value) if found else match.group(0)
+
+
 def render_template(template: str, replacements: dict[str, Any]) -> str:
     """Substitute every ``{{key}}`` / ``{{key.nested[0].path}}`` in ``template``.
 
@@ -148,21 +166,4 @@ def render_template(template: str, replacements: dict[str, Any]) -> str:
     `extract_template_paths`, because replacing resolved text placeholder by
     placeholder would re-expand a ``{{...}}`` string that a value itself contains.
     """
-
-    def _format(value: Any) -> str:
-        if isinstance(value, (dict, list)):
-            return json.dumps(value, indent=2)
-        if isinstance(value, str):
-            return value
-        # Parity with upstream: bool/None/number use Python str (True/False/None),
-        # NOT JSON (true/false/null). Pinned by the parity suite — do not "fix".
-        return str(value)
-
-    def _replacer(match: re.Match[str]) -> str:
-        path = _placeholder_path(match.group(1))
-        if path is None:
-            return match.group(0)
-        found, value = resolve_template_path(replacements, path)
-        return _format(value) if found else match.group(0)
-
-    return _CURLY.sub(_replacer, template)
+    return _CURLY.sub(lambda match: _replacer(match, replacements), template)
