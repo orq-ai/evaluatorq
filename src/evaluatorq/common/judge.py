@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from functools import partial
 from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
@@ -507,6 +508,236 @@ async def _json_object_judge(
     return EvaluatorResponsePayload.model_validate_json(cleaned), usage, raw
 
 
+async def _chat_verdict(
+    *,
+    client: AsyncOpenAI,
+    model: str,
+    cfg: LLMCallConfig,
+    system_prompt: str,
+    user_prompt: str,
+    span: Any,
+    temp: float | None,
+    response_model: type[_BaseModel] | None,
+    structured_output: bool,
+    raw_content: list[str],
+) -> JudgeOutcome:
+    """The Chat Completions half: tier-1 `.parse`, then the json_object paths."""
+    if structured_output and response_model is not None:
+        messages = [
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user', 'content': user_prompt},
+        ]
+        try:
+            response, usage = await execute_chat_parse(
+                client=client,
+                model=model,
+                messages=messages,
+                span=span,
+                timeout_s=cfg.timeout_ms / 1000.0,
+                response_model=response_model,
+                temperature=temp,
+                max_completion_tokens=cfg.max_tokens,
+                reasoning_effort=cfg.reasoning_effort,
+                extra_body=cfg.extra_body or None,
+                extra_kwargs=cfg.extra_kwargs or None,
+            )
+        except BadRequestError as exc:
+            err = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
+            # Only fall back when the error looks like a structured-output
+            # rejection. A miss here intentionally re-raises rather than
+            # silently degrading — do not widen this to a bare
+            # `except BadRequestError`. ('schema' already covers 'json_schema'.)
+            if not any(k in err for k in ('response_format', 'schema')):
+                raise
+            logger.warning('Model {} rejected structured output; falling back to json_object', model)
+            payload, usage, raw_content[0] = await _json_object_judge(
+                client=client,
+                model=model,
+                cfg=cfg,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                span=span,
+                temp=temp,
+                inject_model=response_model,
+            )
+            return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content[0])
+
+        msg = response.choices[0].message
+        if getattr(msg, 'refusal', None):
+            payload = EvaluatorResponsePayload(value=None, abstain=True, explanation=msg.refusal or '')
+            return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content[0])
+        parsed = msg.parsed
+        if parsed is None:
+            # No refusal, but the SDK could not produce a parsed object (truncated
+            # completion, content filter, un-coercible JSON). Surface this as a hard
+            # PARSE error rather than silently degrading to a value=None abstain.
+            finish = getattr(response.choices[0], 'finish_reason', None)
+            logger.error('Judge [{}] structured parse produced no object (finish_reason={})', model, finish)
+            return JudgeOutcome(
+                error_kind=JudgeError.PARSE,
+                error_message=f'structured output produced no parsed object (finish_reason={finish})',
+                token_usage=usage,
+                raw_content=raw_content[0],
+            )
+        # Direct attribute access (not getattr-with-default): the verdict model
+        # always defines `value`/`explanation`, so a miss is a real contract bug
+        # that should raise (-> UNKNOWN) instead of masking as a None abstain.
+        # `msg.content` over a re-serialized `parsed`, for the same reason as the
+        # Responses leg: the coercion has already run by this point.
+        raw_content[0] = getattr(msg, 'content', None) or parsed.model_dump_json()
+        if isinstance(parsed, EvaluatorResponsePayload):
+            payload = parsed
+        else:
+            payload = EvaluatorResponsePayload(
+                value=parsed.value,
+                explanation=parsed.explanation,
+                abstain=bool(getattr(parsed, 'abstain', False)),
+            )
+        return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content[0])
+    if response_model is not None:
+        # structured_output disabled, but a verdict model is set: stay on the
+        # json_object path yet inject the schema so dynamic constraints (e.g. a
+        # categorical label set) still steer the model instead of being dropped.
+        payload, usage, raw_content[0] = await _json_object_judge(
+            client=client,
+            model=model,
+            cfg=cfg,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            span=span,
+            temp=temp,
+            inject_model=response_model,
+        )
+        return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content[0])
+    # Legacy path: byte-identical to original run_judge behavior.
+    response, usage = await execute_chat_completion(
+        client=client,
+        model=model,
+        messages=[
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user', 'content': user_prompt},
+        ],
+        span=span,
+        timeout_s=cfg.timeout_ms / 1000.0,
+        temperature=temp,
+        max_completion_tokens=cfg.max_tokens,
+        reasoning_effort=cfg.reasoning_effort,
+        response_format={'type': 'json_object'},
+        extra_body=cfg.extra_body or None,
+        extra_kwargs=cfg.extra_kwargs or None,
+    )
+    raw_content[0] = response.choices[0].message.content or '{}'
+    payload = EvaluatorResponsePayload.model_validate_json(_strip_code_fences(raw_content[0]))
+    return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content[0])
+
+
+async def _attempt(
+    *,
+    client: AsyncOpenAI,
+    model: str,
+    cfg: LLMCallConfig,
+    system_prompt: str,
+    user_prompt: str,
+    span_attributes: dict[str, str] | None,
+    response_model: type[_BaseModel] | None,
+    structured_output: bool,
+    temp: float | None,
+    responses_model: list[str | None],
+    raw_content: list[str],
+) -> JudgeOutcome:
+    responses_model_value = responses_model[0]
+    # Each attempt starts from a clean slate: `raw_content` is a closure variable
+    # read by the ValidationError handler below, so without this reset a failure
+    # on attempt 3 gets logged and returned with attempt 2's body — the "raw
+    # (truncated)" line would describe a different call than the one that failed.
+    raw_content[0] = '{}'
+    # Default for judges: the Responses endpoint is the one the Orq router
+    # prices, so a judge call records cost like a target call does (RES-1295).
+    # Set `api='chat_completions'` on the evaluator config to opt out.
+    #
+    # The Responses call gets its own span, closed before any fallback opens the
+    # chat one. Sharing a span would label a chat call `responses provider/model`
+    # and let the second record_llm_response overwrite the first, hiding the
+    # billed 400 entirely.
+    if responses_model_value is not None:
+        try:
+            async with with_llm_span(
+                model=responses_model_value,
+                operation='responses',
+                temperature=temp,
+                max_tokens=cfg.max_tokens,
+                attributes=span_attributes or {},
+            ) as span:
+                outcome = _stamp_verdict_coercion(
+                    span,
+                    await _responses_judge(
+                        client=client,
+                        model=responses_model_value,
+                        cfg=cfg,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        span=span,
+                        temp=temp,
+                        response_model=response_model,
+                    ),
+                )
+        except BadRequestError as exc:
+            # The endpoint or one of its params was rejected: degrade to chat for
+            # the rest of *this* judgement (a retry must not re-pay the same 400).
+            # Only a 400 that names the endpoint or its params downgrades the model
+            # process-wide — a one-off 400 (content policy, a bad extra_kwargs)
+            # must not cost every later judge call its router-reported cost.
+            responses_model[0] = None
+            err = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
+            # Match phrases that name the *endpoint* as unsupported, not bare words.
+            # 'response' alone matches almost any 400 that mentions a response, and
+            # 'parameter' matches "Unknown parameter: reasoning_effort" — a param
+            # rejection this model would otherwise survive. A false positive here
+            # costs every later judge call in the process its router-reported cost,
+            # so the memo only takes phrases that cannot mean anything else.
+            if any(
+                k in err
+                for k in (
+                    'not supported',
+                    'unsupported',
+                    'text_format',
+                    'responses api',
+                    'responses endpoint',
+                    '/responses',
+                )
+            ):
+                _RESPONSES_REJECTORS.add(model)
+            logger.warning('Model {} rejected the Responses endpoint ({}); using chat completions', model, exc)
+        else:
+            raw_content[0] = outcome.raw_content or raw_content[0]
+            return outcome.model_copy(update={'endpoint': 'responses'})
+
+    async with with_llm_span(
+        model=model,
+        operation='chat',
+        temperature=temp,
+        max_tokens=cfg.max_tokens,
+        attributes=span_attributes or {},
+    ) as span:
+        # Stamped here rather than at each return: every path below this span is
+        # a chat call, and the Responses path returned before it opened.
+        return _stamp_verdict_coercion(
+            span,
+            await _chat_verdict(
+                client=client,
+                model=model,
+                cfg=cfg,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                span=span,
+                temp=temp,
+                response_model=response_model,
+                structured_output=structured_output,
+                raw_content=raw_content,
+            ),
+        ).model_copy(update={'endpoint': 'chat'})
+
+
 async def run_judge(
     *,
     client: AsyncOpenAI,
@@ -551,207 +782,17 @@ async def run_judge(
     user_prompt = render_template(prompt_template, replacements)
 
     client = without_client_retries(client)
-    raw_content = '{}'
+    raw_content = ['{}']
     # Resolved before the span opens so the span carries the operation and the model
     # id this call actually sends — `responses openai/gpt-5-mini`, not `chat gpt-5-mini`
     # — the way every other inference path in the codebase labels its own.
     # `structured_output=False` is a caller saying this model cannot do schema-enforced
     # output, and the Responses path is schema-only, so that opt-out stays on chat too.
-    responses_model = (
+    responses_model = [
         await _resolve_responses_model(client, model) if cfg.api == 'responses' and structured_output else None
-    )
-    if cfg.api == 'responses' and structured_output and responses_model is None:
+    ]
+    if cfg.api == 'responses' and structured_output and responses_model[0] is None:
         logger.debug('Judge [{}] cannot use the Responses endpoint; using chat completions', model)
-
-    async def _attempt() -> JudgeOutcome:
-        nonlocal raw_content, responses_model
-        # Each attempt starts from a clean slate: `raw_content` is a closure variable
-        # read by the ValidationError handler below, so without this reset a failure
-        # on attempt 3 gets logged and returned with attempt 2's body — the "raw
-        # (truncated)" line would describe a different call than the one that failed.
-        raw_content = '{}'
-        # Default for judges: the Responses endpoint is the one the Orq router
-        # prices, so a judge call records cost like a target call does (RES-1295).
-        # Set `api='chat_completions'` on the evaluator config to opt out.
-        #
-        # The Responses call gets its own span, closed before any fallback opens the
-        # chat one. Sharing a span would label a chat call `responses provider/model`
-        # and let the second record_llm_response overwrite the first, hiding the
-        # billed 400 entirely.
-        if responses_model is not None:
-            try:
-                async with with_llm_span(
-                    model=responses_model,
-                    operation='responses',
-                    temperature=temp,
-                    max_tokens=cfg.max_tokens,
-                    attributes=span_attributes or {},
-                ) as span:
-                    outcome = _stamp_verdict_coercion(
-                        span,
-                        await _responses_judge(
-                            client=client,
-                            model=responses_model,
-                            cfg=cfg,
-                            system_prompt=system_prompt,
-                            user_prompt=user_prompt,
-                            span=span,
-                            temp=temp,
-                            response_model=response_model,
-                        ),
-                    )
-            except BadRequestError as exc:
-                # The endpoint or one of its params was rejected: degrade to chat for
-                # the rest of *this* judgement (a retry must not re-pay the same 400).
-                # Only a 400 that names the endpoint or its params downgrades the model
-                # process-wide — a one-off 400 (content policy, a bad extra_kwargs)
-                # must not cost every later judge call its router-reported cost.
-                responses_model = None
-                err = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
-                # Match phrases that name the *endpoint* as unsupported, not bare words.
-                # 'response' alone matches almost any 400 that mentions a response, and
-                # 'parameter' matches "Unknown parameter: reasoning_effort" — a param
-                # rejection this model would otherwise survive. A false positive here
-                # costs every later judge call in the process its router-reported cost,
-                # so the memo only takes phrases that cannot mean anything else.
-                if any(
-                    k in err
-                    for k in (
-                        'not supported',
-                        'unsupported',
-                        'text_format',
-                        'responses api',
-                        'responses endpoint',
-                        '/responses',
-                    )
-                ):
-                    _RESPONSES_REJECTORS.add(model)
-                logger.warning('Model {} rejected the Responses endpoint ({}); using chat completions', model, exc)
-            else:
-                raw_content = outcome.raw_content or raw_content
-                return outcome.model_copy(update={'endpoint': 'responses'})
-
-        async def _chat_verdict(span: Any) -> JudgeOutcome:
-            """The Chat Completions half: tier-1 `.parse`, then the json_object paths."""
-            nonlocal raw_content
-            if structured_output and response_model is not None:
-                messages = [
-                    {'role': 'system', 'content': system_prompt},
-                    {'role': 'user', 'content': user_prompt},
-                ]
-                try:
-                    response, usage = await execute_chat_parse(
-                        client=client,
-                        model=model,
-                        messages=messages,
-                        span=span,
-                        timeout_s=cfg.timeout_ms / 1000.0,
-                        response_model=response_model,
-                        temperature=temp,
-                        max_completion_tokens=cfg.max_tokens,
-                        reasoning_effort=cfg.reasoning_effort,
-                        extra_body=cfg.extra_body or None,
-                        extra_kwargs=cfg.extra_kwargs or None,
-                    )
-                except BadRequestError as exc:
-                    err = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
-                    # Only fall back when the error looks like a structured-output
-                    # rejection. A miss here intentionally re-raises rather than
-                    # silently degrading — do not widen this to a bare
-                    # `except BadRequestError`. ('schema' already covers 'json_schema'.)
-                    if not any(k in err for k in ('response_format', 'schema')):
-                        raise
-                    logger.warning('Model {} rejected structured output; falling back to json_object', model)
-                    payload, usage, raw_content = await _json_object_judge(
-                        client=client,
-                        model=model,
-                        cfg=cfg,
-                        system_prompt=system_prompt,
-                        user_prompt=user_prompt,
-                        span=span,
-                        temp=temp,
-                        inject_model=response_model,
-                    )
-                    return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
-
-                msg = response.choices[0].message
-                if getattr(msg, 'refusal', None):
-                    payload = EvaluatorResponsePayload(value=None, abstain=True, explanation=msg.refusal or '')
-                    return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
-                parsed = msg.parsed
-                if parsed is None:
-                    # No refusal, but the SDK could not produce a parsed object (truncated
-                    # completion, content filter, un-coercible JSON). Surface this as a hard
-                    # PARSE error rather than silently degrading to a value=None abstain.
-                    finish = getattr(response.choices[0], 'finish_reason', None)
-                    logger.error('Judge [{}] structured parse produced no object (finish_reason={})', model, finish)
-                    return JudgeOutcome(
-                        error_kind=JudgeError.PARSE,
-                        error_message=f'structured output produced no parsed object (finish_reason={finish})',
-                        token_usage=usage,
-                        raw_content=raw_content,
-                    )
-                # Direct attribute access (not getattr-with-default): the verdict model
-                # always defines `value`/`explanation`, so a miss is a real contract bug
-                # that should raise (-> UNKNOWN) instead of masking as a None abstain.
-                # `msg.content` over a re-serialized `parsed`, for the same reason as the
-                # Responses leg: the coercion has already run by this point.
-                raw_content = getattr(msg, 'content', None) or parsed.model_dump_json()
-                if isinstance(parsed, EvaluatorResponsePayload):
-                    payload = parsed
-                else:
-                    payload = EvaluatorResponsePayload(
-                        value=parsed.value,
-                        explanation=parsed.explanation,
-                        abstain=bool(getattr(parsed, 'abstain', False)),
-                    )
-                return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
-            if response_model is not None:
-                # structured_output disabled, but a verdict model is set: stay on the
-                # json_object path yet inject the schema so dynamic constraints (e.g. a
-                # categorical label set) still steer the model instead of being dropped.
-                payload, usage, raw_content = await _json_object_judge(
-                    client=client,
-                    model=model,
-                    cfg=cfg,
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    span=span,
-                    temp=temp,
-                    inject_model=response_model,
-                )
-                return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
-            # Legacy path: byte-identical to original run_judge behavior.
-            response, usage = await execute_chat_completion(
-                client=client,
-                model=model,
-                messages=[
-                    {'role': 'system', 'content': system_prompt},
-                    {'role': 'user', 'content': user_prompt},
-                ],
-                span=span,
-                timeout_s=cfg.timeout_ms / 1000.0,
-                temperature=temp,
-                max_completion_tokens=cfg.max_tokens,
-                reasoning_effort=cfg.reasoning_effort,
-                response_format={'type': 'json_object'},
-                extra_body=cfg.extra_body or None,
-                extra_kwargs=cfg.extra_kwargs or None,
-            )
-            raw_content = response.choices[0].message.content or '{}'
-            payload = EvaluatorResponsePayload.model_validate_json(_strip_code_fences(raw_content))
-            return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
-
-        async with with_llm_span(
-            model=model,
-            operation='chat',
-            temperature=temp,
-            max_tokens=cfg.max_tokens,
-            attributes=span_attributes or {},
-        ) as span:
-            # Stamped here rather than at each return: every path below this span is
-            # a chat call, and the Responses path returned before it opened.
-            return _stamp_verdict_coercion(span, await _chat_verdict(span)).model_copy(update={'endpoint': 'chat'})
 
     try:
         # Retried like every other inference call in the codebase: rate limits, 5xx
@@ -759,7 +800,20 @@ async def run_judge(
         # straight through to the classification below. One span per attempt, so a
         # retried judgement shows its failed tries rather than overwriting them.
         return await with_retry(
-            _attempt,
+            partial(
+                _attempt,
+                client=client,
+                model=model,
+                cfg=cfg,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                span_attributes=span_attributes,
+                response_model=response_model,
+                structured_output=structured_output,
+                temp=temp,
+                responses_model=responses_model,
+                raw_content=raw_content,
+            ),
             max_attempts=cfg.retry_count + 1,
             label=f'judge[{model}]',
         )
@@ -771,8 +825,10 @@ async def run_judge(
             timeout_ms=cfg.timeout_ms,
         )
     except ValidationError as e:
-        logger.error('Judge [{}] returned malformed JSON: {} | raw (truncated): {}', model, e, repr(raw_content)[:500])
-        return JudgeOutcome(error_kind=JudgeError.PARSE, error_message=str(e), raw_content=raw_content)
+        logger.error(
+            'Judge [{}] returned malformed JSON: {} | raw (truncated): {}', model, e, repr(raw_content[0])[:500]
+        )
+        return JudgeOutcome(error_kind=JudgeError.PARSE, error_message=str(e), raw_content=raw_content[0])
     except (APIConnectionError, APIStatusError) as e:
         kind = _classify(e)
         logger.error('Judge [{}] API error ({}): {}', model, kind.value, e)

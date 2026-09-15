@@ -113,6 +113,16 @@ def _rt_full_options(report: Any) -> dict[str, list[str]]:
     return _rt_options_from_results(report.results)
 
 
+def _rt_result_class(result: Any) -> str:
+    # Three-way, not two-way: r.vulnerable is None means unevaluated (target/judge
+    # failure without a recorded r.error) and must file separately from 'Resistant'.
+    if result.error:
+        return 'Error'
+    if result.vulnerable is None:
+        return 'Not evaluated'
+    return 'Vulnerable' if result.vulnerable else 'Resistant'
+
+
 def _rt_apply(report: Any, selections: dict[str, list[str]]) -> list[Any]:
     """Apply all redteam filter dimensions independently (parity with Streamlit)."""
     results: list[Any] = list(report.results)
@@ -121,19 +131,7 @@ def _rt_apply(report: Any, selections: dict[str, list[str]]) -> list[Any]:
     # result (4-value multiselect: empty or all-4 => no filter)
     result_sel = selections.get('result', [])
     all_result = {'Vulnerable', 'Resistant', 'Not evaluated', 'Error'}
-    if result_sel and set(result_sel) != all_result:
-
-        def _cls(r):
-            # Three-way, not two-way: r.vulnerable is None means unevaluated (target/judge
-            # failure without a recorded r.error) and must file separately from 'Resistant'.
-            if r.error:
-                return 'Error'
-            if r.vulnerable is None:
-                return 'Not evaluated'
-            return 'Vulnerable' if r.vulnerable else 'Resistant'
-
-        chosen = set(result_sel)
-        results = [r for r in results if _cls(r) in chosen]
+    chosen = set(result_sel)
 
     # min_turns (slider)
     mt_sel = selections.get('min_turns', ['1'])
@@ -141,51 +139,53 @@ def _rt_apply(report: Any, selections: dict[str, list[str]]) -> list[Any]:
         min_turns = int(mt_sel[0]) if mt_sel else 1
     except (ValueError, TypeError):
         min_turns = 1
-    if min_turns > 1:
-        results = [r for r in results if (r.execution.turns if r.execution else 1) >= min_turns]
 
     # category (multiselect)
     all_categories = full_opts['category']
     sel_categories = _sel(selections, 'category', default=all_categories)
-    if set(sel_categories) != set(all_categories):
-        results = [r for r in results if r.attack.category in sel_categories]
 
     # severity (multiselect)
     all_severities = full_opts['severity']
     sel_severities = _sel(selections, 'severity', default=all_severities)
-    if set(sel_severities) != set(all_severities):
-        results = [r for r in results if r.attack.severity.value in sel_severities]
 
     # technique (multiselect)
     all_techniques = full_opts['technique']
     sel_techniques = _sel(selections, 'technique', default=all_techniques)
-    if set(sel_techniques) != set(all_techniques):
-        results = [r for r in results if r.attack.attack_technique.value in sel_techniques]
 
     # delivery_method (multiselect) — only when options exist
     all_delivery = full_opts['delivery_method']
-    if all_delivery:
-        sel_delivery = _sel(selections, 'delivery_method', default=all_delivery)
-        if set(sel_delivery) != set(all_delivery):
-            results = [
-                r
-                for r in results
-                if any(delivery_method_str(dm) in sel_delivery for dm in (r.attack.delivery_methods or []))
-            ]
+    sel_delivery = _sel(selections, 'delivery_method', default=all_delivery) if all_delivery else []
 
     # vulnerability (multiselect) — only when options exist
     all_vulnerabilities = full_opts['vulnerability']
-    if all_vulnerabilities:
-        sel_vulnerabilities = _sel(selections, 'vulnerability', default=all_vulnerabilities)
-        if set(sel_vulnerabilities) != set(all_vulnerabilities):
-            results = [r for r in results if r.attack.vulnerability in sel_vulnerabilities]
+    sel_vulnerabilities = _sel(selections, 'vulnerability', default=all_vulnerabilities) if all_vulnerabilities else []
 
     # agent (multiselect) — only when >1 agent
     all_agents = full_opts['agent']
-    if len(all_agents) > 1:
-        sel_agents = _sel(selections, 'agent', default=all_agents)
-        if set(sel_agents) != set(all_agents):
-            results = [r for r in results if (r.agent.key or r.agent.display_name or 'unknown') in sel_agents]
+    sel_agents = _sel(selections, 'agent', default=all_agents) if len(all_agents) > 1 else []
+
+    filters = [
+        (bool(result_sel) and chosen != all_result, lambda r: _rt_result_class(r) in chosen),
+        (min_turns > 1, lambda r: (r.execution.turns if r.execution else 1) >= min_turns),
+        (set(sel_categories) != set(all_categories), lambda r: r.attack.category in sel_categories),
+        (set(sel_severities) != set(all_severities), lambda r: r.attack.severity.value in sel_severities),
+        (set(sel_techniques) != set(all_techniques), lambda r: r.attack.attack_technique.value in sel_techniques),
+        (
+            bool(all_delivery) and set(sel_delivery) != set(all_delivery),
+            lambda r: any(delivery_method_str(dm) in sel_delivery for dm in (r.attack.delivery_methods or [])),
+        ),
+        (
+            bool(all_vulnerabilities) and set(sel_vulnerabilities) != set(all_vulnerabilities),
+            lambda r: r.attack.vulnerability in sel_vulnerabilities,
+        ),
+        (
+            len(all_agents) > 1 and set(sel_agents) != set(all_agents),
+            lambda r: (r.agent.key or r.agent.display_name or 'unknown') in sel_agents,
+        ),
+    ]
+    for is_set, predicate in filters:
+        if is_set:
+            results = [r for r in results if predicate(r)]
 
     return results
 
@@ -276,6 +276,14 @@ def _sim_full_options(run: Any) -> dict[str, list[str]]:
     return _sim_options_from_results(run.results)
 
 
+def _sim_metric_keeps(r: Any, metric: Any, threshold: float) -> bool:
+    values = [v for tm in r.turn_metrics for v in [getattr(tm, metric.key, None)] if v is not None]
+    if not values:
+        return True
+    worst = max(values) if metric.high_is_risky else min(values)
+    return worst >= threshold if metric.high_is_risky else worst <= threshold
+
+
 def _sim_apply(run: Any, selections: dict[str, list[str]]) -> list[Any]:
     """Apply all sim filter dimensions."""
     results: list[Any] = list(run.results)
@@ -286,51 +294,46 @@ def _sim_apply(run: Any, selections: dict[str, list[str]]) -> list[Any]:
     # persona (multiselect)
     all_personas = full_opts['persona']
     sel_personas = _sel(selections, 'persona', default=all_personas)
-    if set(sel_personas) != set(all_personas):
-        results = [r for r in results if _meta(r, 'persona') in sel_personas]
 
     # scenario (multiselect)
     all_scenarios = full_opts['scenario']
     sel_scenarios = _sel(selections, 'scenario', default=all_scenarios)
-    if set(sel_scenarios) != set(all_scenarios):
-        results = [r for r in results if _meta(r, 'scenario') in sel_scenarios]
 
     # terminated_by (multiselect)
     all_terminated = full_opts['terminated_by']
     sel_terminated = _sel(selections, 'terminated_by', default=all_terminated)
-    if set(sel_terminated) != set(all_terminated):
-        results = [r for r in results if r.terminated_by.value in sel_terminated]
 
     # goal_outcome (two-value multiselect: one => that outcome; zero/two => All)
     goal_sel = [v for v in selections.get('goal_outcome', []) if v in {'Achieved', 'Not achieved'}]
-    if len(goal_sel) == 1:
-        want = goal_sel[0] == 'Achieved'
-        results = [r for r in results if bool(r.goal_achieved) == want]
+    want = goal_sel[0] == 'Achieved' if len(goal_sel) == 1 else False
 
     # rule_broken (opt-in chip): only 'yes' narrows to results with any broken rule.
-    if 'yes' in selections.get('rule_broken', []):
-        results = [r for r in results if r.rules_broken]
 
     # max_goal_score (ceiling on goal_completion_score)
     gs_sel = selections.get('max_goal_score', [])
-    if gs_sel:
-        threshold = _clamp_score(gs_sel[0])
-        if threshold is not None:
-            results = [r for r in results if r.goal_completion_score <= threshold]
+    goal_score_threshold = _clamp_score(gs_sel[0]) if gs_sel else None
 
     # min_turns (floor on turn_count, raw integer)
     turns_sel = selections.get('min_turns', [])
-    if turns_sel:
-        min_turns = _parse_positive_int(turns_sel[0])
-        if min_turns is not None:
-            results = [r for r in results if r.turn_count >= min_turns]
+    min_turns = _parse_positive_int(turns_sel[0]) if turns_sel else None
 
     # min_total_tokens (floor on token_usage.total_tokens, raw integer)
     tokens_sel = selections.get('min_total_tokens', [])
-    if tokens_sel:
-        min_tokens = _parse_positive_int(tokens_sel[0])
-        if min_tokens is not None:
-            results = [r for r in results if r.token_usage.total_tokens >= min_tokens]
+    min_tokens = _parse_positive_int(tokens_sel[0]) if tokens_sel else None
+
+    filters = [
+        (set(sel_personas) != set(all_personas), lambda r: _meta(r, 'persona') in sel_personas),
+        (set(sel_scenarios) != set(all_scenarios), lambda r: _meta(r, 'scenario') in sel_scenarios),
+        (set(sel_terminated) != set(all_terminated), lambda r: r.terminated_by.value in sel_terminated),
+        (len(goal_sel) == 1, lambda r: bool(r.goal_achieved) == want),
+        ('yes' in selections.get('rule_broken', []), lambda r: r.rules_broken),
+        (
+            goal_score_threshold is not None,
+            lambda r: r.goal_completion_score <= goal_score_threshold,
+        ),
+        (min_turns is not None, lambda r: r.turn_count >= min_turns),
+        (min_tokens is not None, lambda r: r.token_usage.total_tokens >= min_tokens),
+    ]
 
     # per-turn quality/risk metric thresholds — worst turn per result, unscored
     # results always stay visible.
@@ -342,15 +345,14 @@ def _sim_apply(run: Any, selections: dict[str, list[str]]) -> list[Any]:
         threshold = _clamp_score(metric_sel[0])
         if threshold is None:
             continue
+        filters.append((
+            True,
+            lambda r, metric=metric, threshold=threshold: _sim_metric_keeps(r, metric, threshold),
+        ))
 
-        def _keeps(r: Any, metric: Any = metric, threshold: float = threshold) -> bool:
-            values = [v for tm in r.turn_metrics for v in [getattr(tm, metric.key, None)] if v is not None]
-            if not values:
-                return True
-            worst = max(values) if metric.high_is_risky else min(values)
-            return worst >= threshold if metric.high_is_risky else worst <= threshold
-
-        results = [r for r in results if _keeps(r)]
+    for is_set, predicate in filters:
+        if is_set:
+            results = [r for r in results if predicate(r)]
 
     return results
 
