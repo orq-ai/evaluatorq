@@ -85,6 +85,22 @@ class Landing:
     recent: list[RunRow] = field(default_factory=list)
 
 
+class _TileStats(NamedTuple):
+    tokens: int
+    cost: float
+    costed_runs: int
+    input_cost: float
+    output_cost: float
+    has_input_cost: bool
+    has_output_cost: bool
+    priced_calls: int
+    cost_calls: int
+    unknown_calls: int
+    resistant: int
+    vulnerable: int
+    by_severity: dict[str, int]
+
+
 def _roots_key(roots: list[Path] | None) -> tuple[str, ...]:
     """Hashable, resolved form of *roots* for the aggregate caches."""
     return tuple(str(r.resolve()) for r in (roots or library.default_roots()))
@@ -378,33 +394,21 @@ def run_rows(roots: list[Path] | None = None) -> list[RunRow]:
     return rows
 
 
-def landing(roots: list[Path] | None = None) -> Landing:
-    """Compute the Dashboard landing aggregates across all run stores."""
-    rows = run_rows(roots)
-    redteam = [r for r in rows if r.surface == 'redteam']
-    sim = [r for r in rows if r.surface == 'sim']
-    pairwise = [r for r in rows if r.surface == 'pairwise']
-
-    # Roll up severity counts + token usage + resistant/vulnerable from raw JSON.
+def _redteam_tiles(manifests: list[library.ReportCard]) -> _TileStats:
     severity_counts: dict[str, int] = {}
-    total_tokens = 0
-    rt_tokens = 0
-    sim_tokens = 0
-    rt_cost = 0.0
-    sim_cost = 0.0
+    tokens = 0
+    cost = 0.0
     costed_runs = 0
-    pw_tokens = 0
-    pw_cost = 0.0
-    input_cost_total = 0.0
-    output_cost_total = 0.0
-    priced_calls_total = 0
-    cost_calls_total = 0
-    unknown_calls_total = 0
+    input_cost = 0.0
+    output_cost = 0.0
     has_input_cost = False
     has_output_cost = False
+    priced_calls = 0
+    cost_calls = 0
+    unknown_calls = 0
     resistant = 0
     vulnerable = 0
-    for card in library.scan(roots):
+    for card in manifests:
         # In-flight runs have no report on disk — nothing to roll up.
         if card.path is None:
             continue
@@ -412,108 +416,193 @@ def landing(roots: list[Path] | None = None) -> Landing:
             data = library.read_json_cached(card.path)
         except (OSError, ValueError):
             continue
-        if card.surface == 'redteam':
-            summary = data.get('summary')
-            summary = summary if isinstance(summary, dict) else {}
-            if summary.get('evaluated_attacks') is None:
-                # Legacy report: its summary predates ``evaluated_attacks``, and
-                # with it ``by_severity`` and ``token_usage_total``. Every
-                # aggregate below is therefore derived from the results list —
-                # otherwise the run adds zero to the donut, the severity bars and
-                # the cost totals while its own row still shows a rate (RES-1202).
-                counts = _redteam_counts(data)
-                logger.debug(
-                    'landing: derived legacy red-team counts for {} — evaluated={} vulnerable={} tokens={}',
-                    card.id,
-                    counts.evaluated,
-                    counts.vulnerable,
-                    counts.tokens,
-                )
-                legacy_resistance = _legacy_resistance(counts)
-                if legacy_resistance is not None:
-                    resistant += round(legacy_resistance * counts.evaluated)
-                vulnerable += counts.vulnerable
-                rt_tokens += counts.tokens
-                total_tokens += counts.tokens
-                # Derived cost is a known-$0-or-more sum, but a run whose results
-                # carried no readable cost must not count as "costed" — mirror
-                # the None semantics of _cost_usd for stored summaries.
-                if counts.cost is not None:
-                    rt_cost += counts.cost
-                    costed_runs += 1
-                # The input/output split is not recoverable from legacy results.
-                by_sev = counts.by_severity
-            else:
-                resistant += _as_int(summary.get('evaluated_attacks')) - _as_int(summary.get('vulnerabilities_found'))
-                vulnerable += _as_int(summary.get('vulnerabilities_found'))
-                usage = summary.get('token_usage_total')
-                tok = _tokens_total(usage)
-                rt_tokens += tok
-                total_tokens += tok
-                run_cost = _cost_usd(usage)
-                if run_cost is not None:
-                    rt_cost += run_cost
-                    costed_runs += 1
-                run_input = _input_cost(usage)
-                if run_input is not None:
-                    input_cost_total += run_input
-                    has_input_cost = True
-                run_output = _output_cost(usage)
-                if run_output is not None:
-                    output_cost_total += run_output
-                    has_output_cost = True
-                run_priced, run_calls, run_unknown = _cost_calls(usage)
-                priced_calls_total += run_priced
-                cost_calls_total += run_calls
-                unknown_calls_total += run_unknown
-                by_sev = _summary_severity(summary)
-            for sev, n in by_sev.items():
-                severity_counts[sev] = severity_counts.get(sev, 0) + n
-        elif card.surface == 'sim':
-            results = _results(data)
-            tok = sum(_as_int(_result_tokens(res)) for res in results)
-            sim_tokens += tok
-            total_tokens += tok
-            usages = [res.get('token_usage') for res in results]
-            costs = [c for c in (_cost_usd(u) for u in usages) if c is not None]
-            if costs:
-                sim_cost += sum(costs)
+        summary = data.get('summary')
+        summary = summary if isinstance(summary, dict) else {}
+        if summary.get('evaluated_attacks') is None:
+            # Legacy report: its summary predates ``evaluated_attacks``, and
+            # with it ``by_severity`` and ``token_usage_total``. Every
+            # aggregate below is therefore derived from the results list —
+            # otherwise the run adds zero to the donut, the severity bars and
+            # the cost totals while its own row still shows a rate (RES-1202).
+            counts = _redteam_counts(data)
+            logger.debug(
+                'landing: derived legacy red-team counts for {} — evaluated={} vulnerable={} tokens={}',
+                card.id,
+                counts.evaluated,
+                counts.vulnerable,
+                counts.tokens,
+            )
+            legacy_resistance = _legacy_resistance(counts)
+            if legacy_resistance is not None:
+                resistant += round(legacy_resistance * counts.evaluated)
+            vulnerable += counts.vulnerable
+            tokens += counts.tokens
+            # Derived cost is a known-$0-or-more sum, but a run whose results
+            # carried no readable cost must not count as "costed" — mirror
+            # the None semantics of _cost_usd for stored summaries.
+            if counts.cost is not None:
+                cost += counts.cost
                 costed_runs += 1
-            inputs = [c for c in (_input_cost(u) for u in usages) if c is not None]
-            if inputs:
-                input_cost_total += sum(inputs)
-                has_input_cost = True
-            outputs = [c for c in (_output_cost(u) for u in usages) if c is not None]
-            if outputs:
-                output_cost_total += sum(outputs)
-                has_output_cost = True
-            for u in usages:
-                res_priced, res_calls, res_unknown = _cost_calls(u)
-                priced_calls_total += res_priced
-                cost_calls_total += res_calls
-                unknown_calls_total += res_unknown
-        elif card.surface == 'pairwise':
-            usages = [_comparison_usage(entry) for entry in _entries(data)]
-            tok = sum(_tokens_total(u) for u in usages)
-            pw_tokens += tok
-            total_tokens += tok
-            costs = [c for c in (_cost_usd(u) for u in usages) if c is not None]
-            if costs:
-                pw_cost += sum(costs)
+            # The input/output split is not recoverable from legacy results.
+            by_sev = counts.by_severity
+        else:
+            resistant += _as_int(summary.get('evaluated_attacks')) - _as_int(summary.get('vulnerabilities_found'))
+            vulnerable += _as_int(summary.get('vulnerabilities_found'))
+            usage = summary.get('token_usage_total')
+            tok = _tokens_total(usage)
+            tokens += tok
+            run_cost = _cost_usd(usage)
+            if run_cost is not None:
+                cost += run_cost
                 costed_runs += 1
-            inputs = [c for c in (_input_cost(u) for u in usages) if c is not None]
-            if inputs:
-                input_cost_total += sum(inputs)
+            run_input = _input_cost(usage)
+            if run_input is not None:
+                input_cost += run_input
                 has_input_cost = True
-            outputs = [c for c in (_output_cost(u) for u in usages) if c is not None]
-            if outputs:
-                output_cost_total += sum(outputs)
+            run_output = _output_cost(usage)
+            if run_output is not None:
+                output_cost += run_output
                 has_output_cost = True
-            for u in usages:
-                res_priced, res_calls, res_unknown = _cost_calls(u)
-                priced_calls_total += res_priced
-                cost_calls_total += res_calls
-                unknown_calls_total += res_unknown
+            run_priced, run_calls, run_unknown = _cost_calls(usage)
+            priced_calls += run_priced
+            cost_calls += run_calls
+            unknown_calls += run_unknown
+            by_sev = _summary_severity(summary)
+        for sev, n in by_sev.items():
+            severity_counts[sev] = severity_counts.get(sev, 0) + n
+    return _TileStats(
+        tokens=tokens,
+        cost=cost,
+        costed_runs=costed_runs,
+        input_cost=input_cost,
+        output_cost=output_cost,
+        has_input_cost=has_input_cost,
+        has_output_cost=has_output_cost,
+        priced_calls=priced_calls,
+        cost_calls=cost_calls,
+        unknown_calls=unknown_calls,
+        resistant=resistant,
+        vulnerable=vulnerable,
+        by_severity=severity_counts,
+    )
+
+
+def _sim_tiles(manifests: list[library.ReportCard]) -> _TileStats:
+    tokens = 0
+    cost = 0.0
+    costed_runs = 0
+    input_cost = 0.0
+    output_cost = 0.0
+    has_input_cost = False
+    has_output_cost = False
+    priced_calls = 0
+    cost_calls = 0
+    unknown_calls = 0
+    for card in manifests:
+        # In-flight runs have no report on disk — nothing to roll up.
+        if card.path is None:
+            continue
+        try:
+            data = library.read_json_cached(card.path)
+        except (OSError, ValueError):
+            continue
+        results = _results(data)
+        tok = sum(_as_int(_result_tokens(res)) for res in results)
+        tokens += tok
+        usages = [res.get('token_usage') for res in results]
+        costs = [c for c in (_cost_usd(u) for u in usages) if c is not None]
+        if costs:
+            cost += sum(costs)
+            costed_runs += 1
+        inputs = [c for c in (_input_cost(u) for u in usages) if c is not None]
+        if inputs:
+            input_cost += sum(inputs)
+            has_input_cost = True
+        outputs = [c for c in (_output_cost(u) for u in usages) if c is not None]
+        if outputs:
+            output_cost += sum(outputs)
+            has_output_cost = True
+        for u in usages:
+            res_priced, res_calls, res_unknown = _cost_calls(u)
+            priced_calls += res_priced
+            cost_calls += res_calls
+            unknown_calls += res_unknown
+    return _TileStats(
+        tokens=tokens,
+        cost=cost,
+        costed_runs=costed_runs,
+        input_cost=input_cost,
+        output_cost=output_cost,
+        has_input_cost=has_input_cost,
+        has_output_cost=has_output_cost,
+        priced_calls=priced_calls,
+        cost_calls=cost_calls,
+        unknown_calls=unknown_calls,
+        resistant=0,
+        vulnerable=0,
+        by_severity={},
+    )
+
+
+def landing(roots: list[Path] | None = None) -> Landing:
+    """Compute the Dashboard landing aggregates across all run stores."""
+    rows = run_rows(roots)
+    redteam = [r for r in rows if r.surface == 'redteam']
+    sim = [r for r in rows if r.surface == 'sim']
+    pairwise = [r for r in rows if r.surface == 'pairwise']
+    manifests = library.scan(roots)
+    redteam_tiles = _redteam_tiles([card for card in manifests if card.surface == 'redteam'])
+    sim_tiles = _sim_tiles([card for card in manifests if card.surface == 'sim'])
+    pairwise_manifests = [card for card in manifests if card.surface == 'pairwise']
+
+    # Roll up severity counts + token usage + resistant/vulnerable from raw JSON.
+    severity_counts = redteam_tiles.by_severity
+    total_tokens = redteam_tiles.tokens + sim_tiles.tokens
+    rt_tokens = redteam_tiles.tokens
+    sim_tokens = sim_tiles.tokens
+    rt_cost = redteam_tiles.cost
+    sim_cost = sim_tiles.cost
+    costed_runs = redteam_tiles.costed_runs + sim_tiles.costed_runs
+    pw_tokens = 0
+    pw_cost = 0.0
+    input_cost_total = redteam_tiles.input_cost + sim_tiles.input_cost
+    output_cost_total = redteam_tiles.output_cost + sim_tiles.output_cost
+    priced_calls_total = redteam_tiles.priced_calls + sim_tiles.priced_calls
+    cost_calls_total = redteam_tiles.cost_calls + sim_tiles.cost_calls
+    unknown_calls_total = redteam_tiles.unknown_calls + sim_tiles.unknown_calls
+    has_input_cost = redteam_tiles.has_input_cost or sim_tiles.has_input_cost
+    has_output_cost = redteam_tiles.has_output_cost or sim_tiles.has_output_cost
+    resistant = redteam_tiles.resistant
+    vulnerable = redteam_tiles.vulnerable
+    for card in pairwise_manifests:
+        # In-flight runs have no report on disk — nothing to roll up.
+        if card.path is None:
+            continue
+        try:
+            data = library.read_json_cached(card.path)
+        except (OSError, ValueError):
+            continue
+        usages = [_comparison_usage(entry) for entry in _entries(data)]
+        tok = sum(_tokens_total(u) for u in usages)
+        pw_tokens += tok
+        total_tokens += tok
+        costs = [c for c in (_cost_usd(u) for u in usages) if c is not None]
+        if costs:
+            pw_cost += sum(costs)
+            costed_runs += 1
+        inputs = [c for c in (_input_cost(u) for u in usages) if c is not None]
+        if inputs:
+            input_cost_total += sum(inputs)
+            has_input_cost = True
+        outputs = [c for c in (_output_cost(u) for u in usages) if c is not None]
+        if outputs:
+            output_cost_total += sum(outputs)
+            has_output_cost = True
+        for u in usages:
+            res_priced, res_calls, res_unknown = _cost_calls(u)
+            priced_calls_total += res_priced
+            cost_calls_total += res_calls
+            unknown_calls_total += res_unknown
 
     # Unknown sorts last, after the real scale, and only appears when non-zero.
     severity = [(sev, severity_counts[sev]) for sev in (*SEVERITY_ORDER, UNKNOWN_SEVERITY) if severity_counts.get(sev)]

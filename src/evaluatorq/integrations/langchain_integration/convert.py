@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 import time
@@ -62,6 +63,154 @@ CONSTRUCTOR_TYPE_MAP = {
 }
 
 
+@dataclass
+class _ConversionState:
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_tokens: int = 0
+    cached_tokens: int = 0
+    reasoning_tokens: int = 0
+    model_name: str = 'unknown'
+    last_finish_reason: str = 'stop'
+    last_ai_message_id: str | None = None
+    model_provider: str | None = None
+    system_fingerprint: str | None = None
+
+
+def _convert_human_message(
+    msg_data: MessageData,
+    input_items: list[Message],
+    output_items: list[FunctionCall | FunctionCallOutput | Message],
+    state: _ConversionState,
+) -> None:
+    """Convert a human message into an input message."""
+    del output_items, state
+    content_text = _get_content(msg_data)
+    input_message = Message(
+        type='message',
+        id=get_attr(msg_data, 'id') or generate_item_id('msg'),
+        role=MessageRole.user,
+        status=MessageStatus.completed,
+        content=[InputTextContent(type='input_text', text=content_text)],
+    )
+    input_items.append(input_message)
+
+
+def _convert_ai_message(
+    msg_data: MessageData,
+    input_items: list[Message],
+    output_items: list[FunctionCall | FunctionCallOutput | Message],
+    state: _ConversionState,
+) -> None:
+    """Convert an AI message into output items and update response metadata."""
+    del input_items
+    # Extract usage metadata
+    usage = _extract_usage(msg_data)
+    if usage:
+        state.total_input_tokens += usage.get('input_tokens', 0)
+        state.total_output_tokens += usage.get('output_tokens', 0)
+        state.total_tokens += usage.get('total_tokens', 0)
+        input_details = usage.get('input_token_details', {})
+        state.cached_tokens += input_details.get('cache_read', 0)
+        output_details = usage.get('output_token_details', {})
+        state.reasoning_tokens += output_details.get('reasoning', 0)
+
+    # Extract model name and other metadata from response metadata
+    response_metadata = _get_response_metadata(msg_data)
+    state.model_name = response_metadata.get('model_name') or state.model_name
+    state.last_finish_reason = response_metadata.get('finish_reason') or state.last_finish_reason
+    state.model_provider = response_metadata.get('model_provider') or state.model_provider
+    state.system_fingerprint = response_metadata.get('system_fingerprint') or state.system_fingerprint
+
+    # Extract message ID (e.g., chatcmpl-... from OpenAI)
+    message_id = _get_message_id(msg_data)
+    if message_id:
+        state.last_ai_message_id = message_id
+
+    # Emitted whenever content is present, even alongside tool calls.
+    content_text = _get_content(msg_data)
+    if content_text:
+        output_message = Message(
+            type='message',
+            id=get_attr(msg_data, 'id') or generate_item_id('msg'),
+            role=MessageRole.assistant,
+            status=MessageStatus.completed,
+            content=[
+                OutputTextContent(
+                    type='output_text',
+                    text=content_text,
+                    annotations=[],
+                    logprobs=[],
+                )
+            ],
+        )
+        output_items.append(output_message)
+
+    # Check for tool calls
+    tool_calls = _get_tool_calls(msg_data)
+    if tool_calls:
+        # AI message with tool calls -> function_call items
+        for tc in tool_calls:
+            call_id: str = tc.get('id') or generate_item_id('call')
+            function_call = FunctionCall(
+                type='function_call',
+                id=generate_item_id('fc'),
+                call_id=call_id,
+                name=tc.get('name', 'unknown'),
+                arguments=_serialize_args(tc.get('args', {})),
+                status=FunctionCallStatus.completed,
+            )
+            output_items.append(function_call)
+
+
+def _convert_tool_message(
+    msg_data: MessageData,
+    input_items: list[Message],
+    output_items: list[FunctionCall | FunctionCallOutput | Message],
+    state: _ConversionState,
+) -> None:
+    """Convert a tool message into a function call output item."""
+    del input_items, state
+    tool_call_id = _get_tool_call_id(msg_data)
+    output_content = _get_content(msg_data)
+
+    function_call_output = FunctionCallOutput(
+        type='function_call_output',
+        id=get_attr(msg_data, 'id') or generate_item_id('fco'),
+        call_id=tool_call_id,
+        output=output_content,
+        status=FunctionCallOutputStatusEnum.completed,
+    )
+    output_items.append(function_call_output)
+
+
+def _convert_system_message(
+    msg_data: MessageData,
+    input_items: list[Message],
+    output_items: list[FunctionCall | FunctionCallOutput | Message],
+    state: _ConversionState,
+) -> None:
+    """Convert a system message into an input message."""
+    del output_items, state
+    content_text = _get_content(msg_data)
+    input_message = Message(
+        type='message',
+        id=get_attr(msg_data, 'id') or generate_item_id('msg'),
+        role=MessageRole.system,
+        status=MessageStatus.completed,
+        content=[InputTextContent(type='input_text', text=content_text)],
+    )
+    input_items.append(input_message)
+
+
+_MESSAGE_CONVERTERS = {
+    'human': _convert_human_message,
+    'ai': _convert_ai_message,
+    'tool': _convert_tool_message,
+    'system': _convert_system_message,
+}
+
+
 def convert_to_open_responses(
     messages: Sequence[MessageData],
     tools: list[dict[str, Any]] | None = None,
@@ -84,122 +233,18 @@ def convert_to_open_responses(
     input_items: list[Message] = []
     output_items: list[FunctionCall | FunctionCallOutput | Message] = []
 
-    # Track usage across all messages
-    total_input_tokens = 0
-    total_output_tokens = 0
-    total_tokens = 0
-    cached_tokens = 0
-    reasoning_tokens = 0
-    model_name = 'unknown'
-    last_finish_reason = 'stop'
-    last_ai_message_id: str | None = None
-    model_provider: str | None = None
-    system_fingerprint: str | None = None
+    state = _ConversionState()
 
     for msg in messages:
         # Handle both message objects and dict format
         msg_type = get_message_type(msg)
         msg_data = get_message_data(msg)
 
-        if msg_type == 'human':
-            # User message goes into input
-            content_text = _get_content(msg_data)
-            input_message = Message(
-                type='message',
-                id=get_attr(msg_data, 'id') or generate_item_id('msg'),
-                role=MessageRole.user,
-                status=MessageStatus.completed,
-                content=[InputTextContent(type='input_text', text=content_text)],
-            )
-            input_items.append(input_message)
-
-        elif msg_type == 'ai':
-            # Extract usage metadata
-            usage = _extract_usage(msg_data)
-            if usage:
-                total_input_tokens += usage.get('input_tokens', 0)
-                total_output_tokens += usage.get('output_tokens', 0)
-                total_tokens += usage.get('total_tokens', 0)
-                input_details = usage.get('input_token_details', {})
-                cached_tokens += input_details.get('cache_read', 0)
-                output_details = usage.get('output_token_details', {})
-                reasoning_tokens += output_details.get('reasoning', 0)
-
-            # Extract model name and other metadata from response metadata
-            response_metadata = _get_response_metadata(msg_data)
-            model_name = response_metadata.get('model_name') or model_name
-            last_finish_reason = response_metadata.get('finish_reason') or last_finish_reason
-            model_provider = response_metadata.get('model_provider') or model_provider
-            system_fingerprint = response_metadata.get('system_fingerprint') or system_fingerprint
-
-            # Extract message ID (e.g., chatcmpl-... from OpenAI)
-            message_id = _get_message_id(msg_data)
-            if message_id:
-                last_ai_message_id = message_id
-
-            # Emitted whenever content is present, even alongside tool calls.
-            content_text = _get_content(msg_data)
-            if content_text:
-                output_message = Message(
-                    type='message',
-                    id=get_attr(msg_data, 'id') or generate_item_id('msg'),
-                    role=MessageRole.assistant,
-                    status=MessageStatus.completed,
-                    content=[
-                        OutputTextContent(
-                            type='output_text',
-                            text=content_text,
-                            annotations=[],
-                            logprobs=[],
-                        )
-                    ],
-                )
-                output_items.append(output_message)
-
-            # Check for tool calls
-            tool_calls = _get_tool_calls(msg_data)
-            if tool_calls:
-                # AI message with tool calls -> function_call items
-                for tc in tool_calls:
-                    call_id: str = tc.get('id') or generate_item_id('call')
-                    function_call = FunctionCall(
-                        type='function_call',
-                        id=generate_item_id('fc'),
-                        call_id=call_id,
-                        name=tc.get('name', 'unknown'),
-                        arguments=_serialize_args(tc.get('args', {})),
-                        status=FunctionCallStatus.completed,
-                    )
-                    output_items.append(function_call)
-
-        elif msg_type == 'tool':
-            # Tool output -> function_call_output
-            tool_call_id = _get_tool_call_id(msg_data)
-            output_content = _get_content(msg_data)
-
-            function_call_output = FunctionCallOutput(
-                type='function_call_output',
-                id=get_attr(msg_data, 'id') or generate_item_id('fco'),
-                call_id=tool_call_id,
-                output=output_content,
-                status=FunctionCallOutputStatusEnum.completed,
-            )
-            output_items.append(function_call_output)
-
-        elif msg_type == 'system':
-            # System message goes into input
-            content_text = _get_content(msg_data)
-            input_message = Message(
-                type='message',
-                id=get_attr(msg_data, 'id') or generate_item_id('msg'),
-                role=MessageRole.system,
-                status=MessageStatus.completed,
-                content=[InputTextContent(type='input_text', text=content_text)],
-            )
-            input_items.append(input_message)
-
-        else:
+        converter = _MESSAGE_CONVERTERS.get(msg_type) if isinstance(msg_type, str) else None
+        if converter is None:
             logger.warning('Skipping unknown LangChain message type: %s', msg_type)
+        else:
+            converter(msg_data, input_items, output_items, state)
 
     # Build tools array
     tools_array: list[FunctionTool] = [
@@ -216,32 +261,32 @@ def convert_to_open_responses(
     # Determine status from finish reason
     status = 'completed'
     incomplete_details: IncompleteDetails | None = None
-    if last_finish_reason == 'error':
+    if state.last_finish_reason == 'error':
         status = 'failed'
-    elif last_finish_reason in ('length', 'content-filter'):
+    elif state.last_finish_reason in ('length', 'content-filter'):
         status = 'incomplete'
-        incomplete_details = IncompleteDetails(reason=last_finish_reason)
+        incomplete_details = IncompleteDetails(reason=state.last_finish_reason)
 
     # Build usage
     usage_data: Usage | None = None
-    if total_tokens > 0:
+    if state.total_tokens > 0:
         usage_data = Usage(
-            input_tokens=total_input_tokens,
-            output_tokens=total_output_tokens,
-            total_tokens=total_tokens,
-            input_tokens_details=InputTokensDetails(cached_tokens=cached_tokens),
-            output_tokens_details=OutputTokensDetails(reasoning_tokens=reasoning_tokens),
+            input_tokens=state.total_input_tokens,
+            output_tokens=state.total_output_tokens,
+            total_tokens=state.total_tokens,
+            input_tokens_details=InputTokensDetails(cached_tokens=state.cached_tokens),
+            output_tokens_details=OutputTokensDetails(reasoning_tokens=state.reasoning_tokens),
         )
 
     # Use the last AI message ID as the response ID if available
-    response_id = last_ai_message_id or generate_item_id('resp')
+    response_id = state.last_ai_message_id or generate_item_id('resp')
 
     # Build metadata with optional fields
     metadata: dict[str, Any] = {'framework': 'langchain'}
-    if model_provider:
-        metadata['model_provider'] = model_provider
-    if system_fingerprint:
-        metadata['system_fingerprint'] = system_fingerprint
+    if state.model_provider:
+        metadata['model_provider'] = state.model_provider
+    if state.system_fingerprint:
+        metadata['system_fingerprint'] = state.system_fingerprint
 
     # Serialize Pydantic models to dicts for the response
     return {
@@ -251,7 +296,7 @@ def convert_to_open_responses(
         'completed_at': now if status == 'completed' else None,
         'status': status,
         'incomplete_details': incomplete_details.model_dump() if incomplete_details else None,
-        'model': model_name,
+        'model': state.model_name,
         'previous_response_id': None,
         'instructions': None,
         'input': [item.model_dump() for item in input_items],
