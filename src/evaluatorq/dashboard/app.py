@@ -29,8 +29,6 @@ from __future__ import annotations
 import csv
 import io
 import json
-from functools import partial
-from inspect import signature
 from pathlib import Path
 from typing import Any
 
@@ -165,18 +163,8 @@ def _settings_config(roots: list[Path] | None) -> list[tuple[str, str | list[str
     return config
 
 
-def _bind_roots(handler: Any, roots: list[Path] | None, route_name: str) -> Any:
-    bound = partial(handler, roots=roots)
-    bound.__name__ = route_name
-    bound.__qualname__ = route_name
-    handler_signature = signature(handler, eval_str=True)
-    bound.__signature__ = handler_signature.replace(
-        parameters=[parameter for parameter in handler_signature.parameters.values() if parameter.name != 'roots']
-    )
-    return bound
-
-
-def _index(req: Request, roots: list[Path] | None) -> NotStr:
+def _index(req: Request) -> NotStr:
+    roots = req.app.state.roots
     surface = req.query_params.get('surface') or None
     if surface is None:
         # Combined Dashboard landing — aggregates across all run stores.
@@ -202,17 +190,20 @@ def _index(req: Request, roots: list[Path] | None) -> NotStr:
     return NotStr(page(label, body, active_surface=surface))
 
 
-def _settings(roots: list[Path] | None) -> NotStr:
+def _settings(req: Request) -> NotStr:
+    roots = req.app.state.roots
     body = settings_body(_settings_config(roots))
     return NotStr(page('Settings', body, active_nav='settings'))
 
 
-def _search(req: Request, roots: list[Path] | None) -> NotStr:
+def _search(req: Request) -> NotStr:
+    roots = req.app.state.roots
     q = req.query_params.get('q') or ''
     return NotStr(search_results(library.scan(roots), q))
 
 
-def _report_view(rid: str, roots: list[Path] | None) -> NotStr | Response:
+def _report_view(rid: str, req: Request) -> NotStr | Response:
+    roots = req.app.state.roots
     path = library.resolve(rid, roots)
     if path is None:
         # No report on disk — this may be an in-flight (running/error/
@@ -286,7 +277,8 @@ def _report_view(rid: str, roots: list[Path] | None) -> NotStr | Response:
     return NotStr(html)
 
 
-async def _sim_agent_card(rid: str, roots: list[Path] | None) -> NotStr | Response:
+async def _sim_agent_card(rid: str, req: Request) -> NotStr | Response:
+    roots = req.app.state.roots
     path = library.resolve(rid, roots)
     if path is None:
         return Response('404 Not Found', status_code=404, media_type='text/plain')
@@ -304,7 +296,8 @@ async def _sim_agent_card(rid: str, roots: list[Path] | None) -> NotStr | Respon
     return NotStr(await report_tabs.sim_agent_card_fragment(run))
 
 
-async def _report_filter(rid: str, req: Request, roots: list[Path] | None) -> NotStr | Response:
+async def _report_filter(rid: str, req: Request) -> NotStr | Response:
+    roots = req.app.state.roots
     path = library.resolve(rid, roots)
     if path is None:
         return Response('404 Not Found', status_code=404, media_type='text/plain')
@@ -391,15 +384,18 @@ def _do_html_export(rid: str, roots: list[Path] | None) -> Response:
     )
 
 
-def _report_export(rid: str, roots: list[Path] | None) -> Response:
+def _report_export(rid: str, req: Request) -> Response:
+    roots = req.app.state.roots
     return _do_html_export(rid, roots)
 
 
-def _report_export_html(rid: str, roots: list[Path] | None) -> Response:
+def _report_export_html(rid: str, req: Request) -> Response:
+    roots = req.app.state.roots
     return _do_html_export(rid, roots)
 
 
-def _report_export_md(rid: str, roots: list[Path] | None) -> Response:
+def _report_export_md(rid: str, req: Request) -> Response:
+    roots = req.app.state.roots
     path = library.resolve(rid, roots)
     if path is None:
         return Response('404 Not Found', status_code=404, media_type='text/plain')
@@ -434,7 +430,8 @@ def _report_export_md(rid: str, roots: list[Path] | None) -> Response:
     )
 
 
-def _report_export_csv(rid: str, req: Request, roots: list[Path] | None) -> Response:
+def _report_export_csv(rid: str, req: Request) -> Response:
+    roots = req.app.state.roots
     path = library.resolve(rid, roots)
     if path is None:
         return Response('404 Not Found', status_code=404, media_type='text/plain')
@@ -497,7 +494,8 @@ def _report_export_csv(rid: str, req: Request, roots: list[Path] | None) -> Resp
     )
 
 
-def _report_export_json(rid: str, req: Request, roots: list[Path] | None) -> Response:
+def _report_export_json(rid: str, req: Request) -> Response:
+    roots = req.app.state.roots
     path = library.resolve(rid, roots)
     if path is None:
         return Response('404 Not Found', status_code=404, media_type='text/plain')
@@ -539,19 +537,19 @@ def _report_export_json(rid: str, req: Request, roots: list[Path] | None) -> Res
     )
 
 
-def register_report_routes(app: Any, roots: list[Path] | None = None) -> None:
+def register_report_routes(app: Any) -> None:
     """Register the report routes on *app*."""
-    app.get('/')(_bind_roots(_index, roots, 'build_app_index'))
-    app.get('/settings')(_bind_roots(_settings, roots, 'build_app_settings'))
-    app.get('/search')(_bind_roots(_search, roots, 'build_app_search'))
-    app.get('/r/{rid}')(_bind_roots(_report_view, roots, 'build_app_report_view'))
-    app.get('/r/{rid}/sim/agent-card')(_bind_roots(_sim_agent_card, roots, 'build_app_sim_agent_card'))
-    app.post('/r/{rid}/filter')(_bind_roots(_report_filter, roots, 'build_app_report_filter'))
-    app.get('/r/{rid}/export')(_bind_roots(_report_export, roots, 'build_app_report_export'))
-    app.get('/r/{rid}/export.html')(_bind_roots(_report_export_html, roots, 'build_app_report_export_html'))
-    app.get('/r/{rid}/export.md')(_bind_roots(_report_export_md, roots, 'build_app_report_export_md'))
-    app.get('/r/{rid}/export.csv')(_bind_roots(_report_export_csv, roots, 'build_app_report_export_csv'))
-    app.get('/r/{rid}/export.json')(_bind_roots(_report_export_json, roots, 'build_app_report_export_json'))
+    app.get('/')(_index)
+    app.get('/settings')(_settings)
+    app.get('/search')(_search)
+    app.get('/r/{rid}')(_report_view)
+    app.get('/r/{rid}/sim/agent-card')(_sim_agent_card)
+    app.post('/r/{rid}/filter')(_report_filter)
+    app.get('/r/{rid}/export')(_report_export)
+    app.get('/r/{rid}/export.html')(_report_export_html)
+    app.get('/r/{rid}/export.md')(_report_export_md)
+    app.get('/r/{rid}/export.csv')(_report_export_csv)
+    app.get('/r/{rid}/export.json')(_report_export_json)
 
 
 def build_app(roots: list[Path] | None = None) -> FastHTML:
@@ -572,6 +570,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         default_hdrs=False,
         pico=False,
     )
+    app.state.roots = roots
     # NOTE: static_route_exts is registered AFTER all custom routes so that
     # its catch-all /{fname:path}.{ext:static} does not steal requests for
     # /r/{rid}/export.html, export.md, export.csv, export.json etc.
@@ -580,7 +579,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     # ------------------------------------------------------------------
     # Routes: report pages and exports
     # ------------------------------------------------------------------
-    register_report_routes(app, roots)
+    register_report_routes(app)
     # ------------------------------------------------------------------
     # Routes: GET /r/{rid}/view/*  — redteam interactive fragment views
     # ------------------------------------------------------------------
