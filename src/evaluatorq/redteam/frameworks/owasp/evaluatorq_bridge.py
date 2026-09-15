@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from collections import Counter
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -192,6 +193,58 @@ def _error_result(
     })
 
 
+def _span_pass_state(value: object) -> bool | str:
+    """Encode an absent binary verdict with the shared trace sentinel."""
+    return value if isinstance(value, bool) else 'inconclusive'
+
+
+def _error_result_with_span(
+    evaluation_span: Any,
+    explanation: str,
+    *,
+    token_usage: TokenUsage | None = None,
+    error_payload: dict[str, Any] | None = None,
+) -> EvaluationResult:
+    set_span_attrs(evaluation_span, {'orq.redteam.passed': 'inconclusive', 'output': explanation})
+    return _error_result(
+        explanation,
+        token_usage=token_usage,
+        error_payload=error_payload,
+    )
+
+
+async def _owasp_judge_fn(
+    model: str,
+    *,
+    client: AsyncOpenAI,
+    cfg: LLMCallConfig,
+    prompt_template: str,
+    replacements: dict[str, Any],
+    last_error: dict[str, JudgeOutcome | None],
+) -> Prediction:
+    outcome = await run_judge(
+        client=client,
+        model=model,
+        cfg=cfg,
+        prompt_template=prompt_template,
+        replacements=replacements,
+    )
+    if outcome.error_kind is not None or outcome.payload is None:
+        last_error['value'] = outcome
+        return Prediction(
+            error=outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'error'),
+            # The judge's tokens were billed whether or not the verdict
+            # parsed — dropping them here undercounts the run's cost.
+            token_usage=outcome.token_usage,
+        )
+    return Prediction(
+        value=outcome.payload.value,
+        explanation=outcome.payload.explanation,
+        token_usage=outcome.token_usage,
+        abstained=outcome.payload.abstain,
+    )
+
+
 def create_owasp_evaluator(
     evaluator_model: str = DEFAULT_PIPELINE_MODEL,
     llm_client: AsyncOpenAI | None = None,
@@ -243,39 +296,21 @@ def create_owasp_evaluator(
         async with annotate_current_span(
             {'orq.redteam.category': category, 'orq.redteam.model': evaluator_model},
         ) as evaluation_span:
-
-            def span_pass_state(value: object) -> bool | str:
-                """Encode an absent binary verdict with the shared trace sentinel."""
-                return value if isinstance(value, bool) else 'inconclusive'
-
-            def error_result(
-                explanation: str,
-                *,
-                token_usage: TokenUsage | None = None,
-                error_payload: dict[str, Any] | None = None,
-            ) -> EvaluationResult:
-                set_span_attrs(evaluation_span, {'orq.redteam.passed': 'inconclusive', 'output': explanation})
-                return _error_result(
-                    explanation,
-                    token_usage=token_usage,
-                    error_payload=error_payload,
-                )
-
             if not category:
                 logger.error("Scorer received datapoint with missing 'category' field")
-                return error_result("Missing 'category' in datapoint inputs — cannot score")
+                return _error_result_with_span(evaluation_span, "Missing 'category' in datapoint inputs — cannot score")
 
             evaluator_entity = get_evaluator_for_category(category, evaluator_model)
             if evaluator_entity is None:
                 logger.warning(f'No evaluator found for category {category}')
-                return error_result(f'No evaluator found for category {category}')
+                return _error_result_with_span(evaluation_span, f'No evaluator found for category {category}')
 
             # A target-level failure ([ERROR: ...] with AgentResponseError) is not
             # content — short-circuit before the judge so a failure is never scored
             # as RESISTANT.
             target_error = output_error_text(output)
             if target_error is not None:
-                return error_result(f'Target agent error — not scored: {target_error}')
+                return _error_result_with_span(evaluation_span, f'Target agent error — not scored: {target_error}')
 
             output_messages = output_to_messages(output)
 
@@ -295,13 +330,15 @@ def create_owasp_evaluator(
 
                 # Static path swallows ALL errors into an inconclusive row (never re-raises).
                 if outcome.error_kind is JudgeError.TIMEOUT:
-                    return error_result(
+                    return _error_result_with_span(
+                        evaluation_span,
                         f'Evaluation timed out after {outcome.timeout_ms}ms',
                         token_usage=outcome.token_usage,
                         error_payload=judge_error_payload(outcome, category),
                     )
                 if outcome.error_kind is not None or outcome.payload is None:
-                    return error_result(
+                    return _error_result_with_span(
+                        evaluation_span,
                         f'Evaluation error: {outcome.error_message}',
                         token_usage=outcome.token_usage,
                         error_payload=judge_error_payload(outcome, category),
@@ -310,7 +347,7 @@ def create_owasp_evaluator(
                 passed = outcome.payload.value if isinstance(outcome.payload.value, bool) else None
                 set_span_attrs(
                     evaluation_span,
-                    {'orq.redteam.passed': span_pass_state(passed), 'output': outcome.payload.explanation},
+                    {'orq.redteam.passed': _span_pass_state(passed), 'output': outcome.payload.explanation},
                 )
                 return EvaluationResult.model_validate({
                     'value': outcome.payload.value if outcome.payload.value is not None else 'inconclusive',
@@ -321,34 +358,17 @@ def create_owasp_evaluator(
                 })
 
             # Kept so the panel can name a cause, not just "quorum not met".
-            last_error: JudgeOutcome | None = None
+            last_error: dict[str, JudgeOutcome | None] = {'value': None}
 
-            async def judge_fn(model: str) -> Prediction:
-                nonlocal last_error
-                outcome = await run_judge(
+            deliberation = await run_jury(
+                judge_fn=partial(
+                    _owasp_judge_fn,
                     client=client,
-                    model=model,
                     cfg=call_cfg,
                     prompt_template=evaluator_entity.prompt,
                     replacements=eval_replacements,
-                )
-                if outcome.error_kind is not None or outcome.payload is None:
-                    last_error = outcome
-                    return Prediction(
-                        error=outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'error'),
-                        # The judge's tokens were billed whether or not the verdict
-                        # parsed — dropping them here undercounts the run's cost.
-                        token_usage=outcome.token_usage,
-                    )
-                return Prediction(
-                    value=outcome.payload.value,
-                    explanation=outcome.payload.explanation,
-                    token_usage=outcome.token_usage,
-                    abstained=outcome.payload.abstain,
-                )
-
-            deliberation = await run_jury(
-                judge_fn=judge_fn,
+                    last_error=last_error,
+                ),
                 panel=panel,
                 repetitions=repetitions,
                 replacement_judges=replacements,
@@ -358,14 +378,14 @@ def create_owasp_evaluator(
             )
             passed = deliberation.verdict if isinstance(deliberation.verdict, bool) else None
             explanation = append_jury_summary(deliberation.explanation, deliberation.jury)
-            set_span_attrs(evaluation_span, {'orq.redteam.passed': span_pass_state(passed), 'output': explanation})
+            set_span_attrs(evaluation_span, {'orq.redteam.passed': _span_pass_state(passed), 'output': explanation})
             set_jury_span_attrs(evaluation_span, deliberation.jury)
             # No verdict means the judges failed; record it or the outage is invisible.
             raw_output = attach_jury_raw_output(
                 {'value': passed, 'explanation': deliberation.explanation},
                 deliberation.jury,
-                error_payload=judge_error_payload(last_error, category)
-                if passed is None and last_error is not None
+                error_payload=judge_error_payload(last_error['value'], category)
+                if passed is None and last_error['value'] is not None
                 else None,
             )
             return EvaluationResult.model_validate({

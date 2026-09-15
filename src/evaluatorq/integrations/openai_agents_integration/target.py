@@ -24,6 +24,38 @@ from evaluatorq.contracts import (
 from evaluatorq.openresponses.input_items import message_to_responses_input_items
 
 
+def _record_tool_call(
+    output_items: list[OutputMessage],
+    tool_call_index: dict[str, int],
+    name: str,
+    arguments: str,
+    item_id: str,
+    call_id: str,
+) -> None:
+    tc = (
+        ToolCallOutputItem(name=name, arguments=arguments, id=item_id, call_id=call_id)
+        if item_id and call_id
+        else ToolCallOutputItem(name=name, arguments=arguments)
+    )
+    output_items.append(tc)
+    if call_id:
+        tool_call_index[call_id] = len(output_items) - 1
+
+
+def _attach_tool_output(
+    output_items: list[OutputMessage],
+    tool_call_index: dict[str, int],
+    call_id: str,
+    output: str,
+) -> None:
+    idx = tool_call_index.get(call_id)
+    if idx is None:
+        return
+    existing = output_items[idx]
+    if isinstance(existing, ToolCallOutputItem):
+        output_items[idx] = existing.model_copy(update={'result': output})
+
+
 class OpenAIAgentTarget(AgentTarget):
     """Wraps an OpenAI Agents SDK Agent as an AgentTarget.
 
@@ -109,24 +141,6 @@ class OpenAIAgentTarget(AgentTarget):
         # ``function_call_output`` item is encountered later in the stream.
         tool_call_index: dict[str, int] = {}
 
-        def _record_tool_call(name: str, arguments: str, item_id: str, call_id: str) -> None:
-            tc = (
-                ToolCallOutputItem(name=name, arguments=arguments, id=item_id, call_id=call_id)
-                if item_id and call_id
-                else ToolCallOutputItem(name=name, arguments=arguments)
-            )
-            output_items.append(tc)
-            if call_id:
-                tool_call_index[call_id] = len(output_items) - 1
-
-        def _attach_tool_output(call_id: str, output: str) -> None:
-            idx = tool_call_index.get(call_id)
-            if idx is None:
-                return
-            existing = output_items[idx]
-            if isinstance(existing, ToolCallOutputItem):
-                output_items[idx] = existing.model_copy(update={'result': output})
-
         for item in new_items:
             # Agents SDK to_input_list() returns Responses API items for tool calls,
             # e.g. {"type": "function_call", "id": "fc_...", "call_id": "call_...", "name": "...", "arguments": "..."}.
@@ -135,14 +149,14 @@ class OpenAIAgentTarget(AgentTarget):
                 call_id = item.get('call_id', '')
                 name = str(item.get('name', ''))
                 arguments = _normalize_args_str(item.get('arguments', '{}'))
-                _record_tool_call(name, arguments, item_id, call_id)
+                _record_tool_call(output_items, tool_call_index, name, arguments, item_id, call_id)
             # function_call_output items appear after their matching function_call in
             # ``result.to_input_list()`` and carry the tool's result. Merge into the
             # prior ToolCallOutputItem so transcript replay preserves the result.
             elif isinstance(item, dict) and item.get('type') == 'function_call_output':
                 call_id = item.get('call_id', '')
                 output_str = _extract_function_call_output(item.get('output'))
-                _attach_tool_output(call_id, output_str)
+                _attach_tool_output(output_items, tool_call_index, call_id, output_str)
             # Handle dict format (standard OpenAI message format)
             elif isinstance(item, dict) and item.get('role') == 'assistant':
                 text = _extract_assistant_text(item.get('content'))
@@ -154,7 +168,7 @@ class OpenAIAgentTarget(AgentTarget):
                         name = func.get('name', '') if isinstance(func, dict) else ''
                         args_raw = _normalize_args_str(func.get('arguments', '{}') if isinstance(func, dict) else '{}')
                         tc_id = tc.get('id', '')
-                        _record_tool_call(name, args_raw, tc_id, tc_id)
+                        _record_tool_call(output_items, tool_call_index, name, args_raw, tc_id, tc_id)
             # Handle typed SDK objects (future-proofing if to_input_list() returns non-dict items)
             elif not isinstance(item, dict):
                 if getattr(item, 'type', None) == 'function_call':
@@ -162,11 +176,11 @@ class OpenAIAgentTarget(AgentTarget):
                     call_id = getattr(item, 'call_id', '')
                     name = str(getattr(item, 'name', ''))
                     arguments = _normalize_args_str(getattr(item, 'arguments', '{}'))
-                    _record_tool_call(name, arguments, item_id, call_id)
+                    _record_tool_call(output_items, tool_call_index, name, arguments, item_id, call_id)
                 elif getattr(item, 'type', None) == 'function_call_output':
                     call_id = getattr(item, 'call_id', '')
                     output_str = _extract_function_call_output(getattr(item, 'output', None))
-                    _attach_tool_output(call_id, output_str)
+                    _attach_tool_output(output_items, tool_call_index, call_id, output_str)
                 elif getattr(item, 'role', None) == 'assistant':
                     text = _extract_assistant_text(getattr(item, 'content', None))
                     if text:
@@ -177,7 +191,7 @@ class OpenAIAgentTarget(AgentTarget):
                             getattr(tc, 'arguments', None) or getattr(getattr(tc, 'function', None), 'arguments', '{}')
                         )
                         tc_id = getattr(tc, 'id', '')
-                        _record_tool_call(str(tc_name), tc_args_raw, tc_id, tc_id)
+                        _record_tool_call(output_items, tool_call_index, str(tc_name), tc_args_raw, tc_id, tc_id)
 
         # Reflect final_output as a TextOutputItem unless history's last text already
         # matches. tool_result_to_text, not str(): a repr is not what the agent said.
