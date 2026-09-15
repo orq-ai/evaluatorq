@@ -34,7 +34,7 @@ from evaluatorq.common.tracing import (
 )
 from evaluatorq.contracts import (
     _RESERVED_COMPLETION_KEYS,
-    _RESERVED_RESPONSES_KEYS,
+    LLMCallConfig,
     TokenUsage,
     check_reserved_keys,
 )
@@ -354,6 +354,51 @@ async def execute_chat_parse(
     )
 
 
+def _build_response_params(
+    *,
+    model: str,
+    messages: list[dict[str, Any]],
+    response_model: type[BaseModel] | None,
+    response_text_format: type[BaseModel] | None,
+    temperature: float | None,
+    max_output_tokens: int | None,
+    reasoning_effort: str | None,
+    instructions: str | None,
+    tools: list[dict[str, Any]] | None,
+    extra_body: dict[str, Any] | None,
+    extra_kwargs: dict[str, Any] | None,
+) -> dict[str, Any]:
+    params: dict[str, Any] = {'model': model, 'input': messages}
+    if instructions is not None:
+        params['instructions'] = instructions
+    if tools:
+        params['tools'] = tools
+    if temperature is not None:
+        params['temperature'] = temperature
+    if max_output_tokens is not None:
+        params['max_output_tokens'] = max_output_tokens
+    if reasoning_effort:
+        params['reasoning'] = {'effort': reasoning_effort}
+
+    config = LLMCallConfig(
+        api='responses',
+        max_tokens=1,
+        extra_body=extra_body or {},
+        extra_kwargs=extra_kwargs or {},
+    )
+    params = config.request_params(api='responses', **params)
+    if max_output_tokens is None and 'max_output_tokens' not in (extra_kwargs or {}):
+        params.pop('max_output_tokens', None)
+    if extra_kwargs and 'temperature' in extra_kwargs and extra_kwargs['temperature'] is None:
+        params['temperature'] = None
+
+    if response_model is not None and response_text_format is not None:
+        raise ValueError('response_model and response_text_format are mutually exclusive')
+    if response_text_format is not None:
+        params['text'] = responses_text_config(response_text_format)
+    return params
+
+
 async def execute_response(
     *,
     client: AsyncOpenAI,
@@ -397,27 +442,19 @@ async def execute_response(
     there, where the wire payload's ``output_text`` parts would `str()` into a
     Python repr (see CLAUDE.md's ``content_to_text`` row).
     """
-    params: dict[str, Any] = {'model': model, 'input': messages}
-    if instructions is not None:
-        params['instructions'] = instructions
-    if tools:
-        params['tools'] = tools
-    if temperature is not None:
-        params['temperature'] = temperature
-    if max_output_tokens is not None:
-        params['max_output_tokens'] = max_output_tokens
-    if reasoning_effort:
-        params['reasoning'] = {'effort': reasoning_effort}
-    if extra_body:
-        params['extra_body'] = extra_body
-    if extra_kwargs:
-        check_reserved_keys(extra_kwargs, _RESERVED_RESPONSES_KEYS)
-        params.update(extra_kwargs)
-
-    if response_model is not None and response_text_format is not None:
-        raise ValueError('response_model and response_text_format are mutually exclusive')
-    if response_text_format is not None:
-        params['text'] = responses_text_config(response_text_format)
+    params = _build_response_params(
+        model=model,
+        messages=messages,
+        response_model=response_model,
+        response_text_format=response_text_format,
+        temperature=temperature,
+        max_output_tokens=max_output_tokens,
+        reasoning_effort=reasoning_effort,
+        instructions=instructions,
+        tools=tools,
+        extra_body=extra_body,
+        extra_kwargs=extra_kwargs,
+    )
 
     strip_known_rejected_responses_reasoning(model, params)
     apply_pipeline_metadata(params)
