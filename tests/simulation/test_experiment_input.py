@@ -220,13 +220,22 @@ async def test_extend_seeds_generators(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_describe_agent_falls_back_when_all_goals_blank() -> None:
+    from loguru import logger
+
     from evaluatorq.simulation._seed_extension import describe_agent
 
     dp = _sim_datapoint()
     dp = dp.model_copy(update={'scenario': dp.scenario.model_copy(update={'goal': ''})})
-    description = describe_agent([dp])
+    warnings: list[str] = []
+    sink_id = logger.add(warnings.append, level='WARNING')
+    try:
+        description = describe_agent([dp])
+    finally:
+        logger.remove(sink_id)
     assert description  # not the bare truncated 'goals such as: ' prefix
     assert not description.rstrip().endswith(':')
+    # the degraded path must announce itself (house rule)
+    assert any('blank goal' in w for w in warnings)
 
 
 def test_seed_context_dedupes() -> None:

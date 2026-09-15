@@ -13,6 +13,8 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
+from loguru import logger
+
 if TYPE_CHECKING:
     from evaluatorq.contracts import LLMCallConfig
     from evaluatorq.simulation.types import SimulationDatapoint
@@ -74,6 +76,11 @@ def describe_agent(seeds: list[SimulationDatapoint]) -> str:
     """
     goals = list(dict.fromkeys(dp.scenario.goal for dp in seeds if dp.scenario.goal))
     if not goals:
+        logger.warning(
+            'All {} seed scenario(s) have a blank goal; falling back to a generic agent description '
+            'for datapoint generation. The generated personas/scenarios will be less targeted.',
+            len(seeds),
+        )
         return 'A general-purpose assistant agent; extend the seed personas and scenarios below.'
     return 'An agent whose users pursue goals such as: ' + '; '.join(goals[:10])
 
