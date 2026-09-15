@@ -297,6 +297,7 @@ async def test_initialization_debug_prints_endpoint_source(
         monkeypatch.setenv('ORQ_BASE_URL', base_url)
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
     monkeypatch.setenv('ORQ_DEBUG', '1')
+    monkeypatch.delenv('OTEL_EXPORTER_OTLP_HEADERS', raising=False)
     printed = Mock()
     monkeypatch.setattr(builtins, 'print', printed)
 
