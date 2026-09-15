@@ -149,6 +149,74 @@ def _orq_map_error(exc: Exception) -> tuple[str, str]:
     return 'orq.unknown', f'{type(exc).__name__}: {exc}'
 
 
+def _extract_tool_call_items(resp: object) -> list[ToolCallOutputItem]:
+    """Extract tool calls from a response as ToolCallOutputItem instances."""
+    pending = getattr(resp, 'pending_tool_calls', None) or []
+    items: list[ToolCallOutputItem] = []
+    for call in pending:
+        name = getattr(call, 'name', None) or (call.get('name') if isinstance(call, dict) else None) or ''
+        args_raw = getattr(call, 'arguments', None) or (call.get('arguments') if isinstance(call, dict) else None) or {}
+        if isinstance(args_raw, str):
+            try:
+                json.loads(args_raw)
+                args_str = args_raw
+            except (json.JSONDecodeError, ValueError):
+                logger.warning(
+                    f"Failed to parse tool call arguments as JSON for tool '{name}'; "
+                    f"wrapping raw string under 'raw' key. Raw: {args_raw!r:.200}"
+                )
+                args_str = json.dumps({'raw': args_raw})
+        else:
+            try:
+                args_str = json.dumps(args_raw if isinstance(args_raw, dict) else {})
+            except (TypeError, ValueError):
+                args_str = json.dumps(args_raw, default=str)
+        call_id = getattr(call, 'id', None) or (call.get('id') if isinstance(call, dict) else None)
+        kwargs: dict[str, Any] = {'name': str(name), 'arguments': args_str}
+        if isinstance(call_id, str) and call_id:
+            kwargs['id'] = call_id
+        items.append(ToolCallOutputItem(**kwargs))
+    return items
+
+
+def _accumulate_usage(resp: object, accumulated_usage: TokenUsage) -> TokenUsage:
+    """Accumulate token usage from a response into a running total.
+
+    Routes through the shared extractor so cached/reasoning/cost are carried
+    and the total fallback matches every other path.
+    """
+    delta = TokenUsage.extract(getattr(resp, 'usage', None), calls=1)
+    if delta is not None:
+        accumulated_usage = accumulated_usage + delta
+    return accumulated_usage
+
+
+def _extract_text(resp: object) -> str:
+    """Extract the first non-empty text part from an agent response."""
+    output = getattr(resp, 'output', None) or []
+    for item in output:
+        parts = getattr(item, 'parts', None) or []
+        for part in parts:
+            if getattr(part, 'kind', None) == 'text':
+                text = getattr(part, 'text', None)
+                if isinstance(text, str) and text.strip():
+                    return text
+    return ''
+
+
+def _pending_tool_call_ids(resp: object) -> list[str]:
+    """Return IDs of pending tool calls from a response."""
+    pending = getattr(resp, 'pending_tool_calls', None) or []
+    ids: list[str] = []
+    for call in pending:
+        call_id = getattr(call, 'id', None)
+        if not call_id and isinstance(call, dict):
+            call_id = call.get('id')
+        if isinstance(call_id, str) and call_id.strip():
+            ids.append(call_id)
+    return ids
+
+
 class ORQAgentTarget(AgentTarget):
     """Target adapter for ORQ agents.
 
@@ -206,6 +274,93 @@ class ORQAgentTarget(AgentTarget):
         self._memory_entity_id = value
         self._memory_entity_seeded = value is not None
 
+    async def _create_traced(
+        self,
+        input_messages: list[dict[str, Any]],
+        **kwargs: Any,
+    ) -> Any:
+        """Run one ``agents.responses.create`` inside its own LLM span.
+
+        The agents endpoint is stateful and loops for tool continuations, so a
+        single ``respond()`` makes several calls. Each gets a span mirroring the
+        chat-completions / responses shape other backends emit, carrying that
+        call's own usage. The enclosing target span deliberately records no
+        usage of its own: a total there would double-count against these.
+        """
+        async with with_llm_span(
+            model=self.model or self.agent_key,
+            operation='agents.responses',
+            provider='orq',
+            input_messages=input_messages,
+            attributes={'orq.redteam.llm_purpose': 'target', 'orq.agent.key': self.agent_key},
+        ) as llm_span:
+            # Propagate W3C trace context so the server-side agent trace nests
+            # under this span instead of starting a loose root trace. Captured
+            # inside the span so `traceparent` points at it; gated by
+            # EVALUATORQ_PROPAGATE_TRACE_CONTEXT.
+            trace_headers = await get_trace_context_headers()
+            if trace_headers:
+                kwargs['http_headers'] = {**(kwargs.get('http_headers') or {}), **trace_headers}
+            resp = await asyncio.to_thread(self.orq_client.agents.responses.create, **kwargs)
+            record_llm_response(llm_span, resp, output_content=_extract_text(resp))
+            return resp
+
+    async def _poll_until_done(
+        self,
+        response: Any,
+        text_response: str,
+        all_tool_calls: list[ToolCallOutputItem],
+        accumulated_usage: TokenUsage,
+    ) -> tuple[Any, str, list[ToolCallOutputItem], TokenUsage]:
+        max_tool_continuations = self._max_tool_continuations
+        pending_ids = _pending_tool_call_ids(response)
+        continuation_count = 0
+        while pending_ids and continuation_count < max_tool_continuations:
+            continuation_count += 1
+            logger.debug(
+                f'{self.agent_key}: resolving {len(pending_ids)} pending tool call(s) '
+                f'via synthetic tool_result (step {continuation_count}/{max_tool_continuations})'
+            )
+
+            tool_parts = [
+                {
+                    'kind': 'tool_result',
+                    'tool_call_id': tool_call_id,
+                    'result': {
+                        'ok': False,
+                        'error': 'Tool execution unavailable in red-teaming harness',
+                    },
+                }
+                for tool_call_id in pending_ids
+            ]
+            response = await self._create_traced(
+                [{'role': 'tool', 'content': json.dumps(tool_parts, ensure_ascii=False)}],
+                agent_key=self.agent_key,
+                message={'role': 'tool', 'parts': tool_parts},
+                task_id=self._task_id,
+                background=False,
+                # The continuation is still one target exchange.
+                retries=None,
+                **thread_body_param(),
+                **pipeline_metadata_param(),
+            )
+            if response.task_id:
+                self._task_id = response.task_id
+            accumulated_usage = _accumulate_usage(response, accumulated_usage)
+            extracted = _extract_text(response)
+            if extracted:
+                text_response = extracted
+            all_tool_calls.extend(_extract_tool_call_items(response))
+            pending_ids = _pending_tool_call_ids(response)
+
+        if pending_ids:
+            raise RuntimeError(
+                f'Unresolved pending tool calls after {max_tool_continuations} continuations '
+                f'({len(pending_ids)} remaining)'
+            )
+
+        return response, text_response, all_tool_calls, accumulated_usage
+
     async def respond(self, messages: list[Message]) -> AgentResponse:
         """Send the last user message to the ORQ agents endpoint, threaded via ``task_id``.
 
@@ -235,101 +390,6 @@ class ORQAgentTarget(AgentTarget):
         # parts, which this stateful text endpoint cannot forward anyway.
         prompt = content_to_text(messages[-1].content)
         accumulated_usage = TokenUsage()
-
-        def _accumulate_usage(resp: object) -> None:
-            """Accumulate token usage from a response into a running total.
-
-            Routes through the shared extractor so cached/reasoning/cost are carried
-            and the total fallback matches every other path.
-            """
-            nonlocal accumulated_usage
-            delta = TokenUsage.extract(getattr(resp, 'usage', None), calls=1)
-            if delta is not None:
-                accumulated_usage = accumulated_usage + delta
-
-        def _extract_text(resp: object) -> str:
-            """Extract the first non-empty text part from an agent response."""
-            output = getattr(resp, 'output', None) or []
-            for item in output:
-                parts = getattr(item, 'parts', None) or []
-                for part in parts:
-                    if getattr(part, 'kind', None) == 'text':
-                        text = getattr(part, 'text', None)
-                        if isinstance(text, str) and text.strip():
-                            return text
-            return ''
-
-        async def _create_traced(input_messages: list[dict[str, Any]], **kwargs: Any) -> Any:
-            """Run one ``agents.responses.create`` inside its own LLM span.
-
-            The agents endpoint is stateful and loops for tool continuations, so a
-            single ``respond()`` makes several calls. Each gets a span mirroring the
-            chat-completions / responses shape other backends emit, carrying that
-            call's own usage. The enclosing target span deliberately records no
-            usage of its own: a total there would double-count against these.
-            """
-            async with with_llm_span(
-                model=self.model or self.agent_key,
-                operation='agents.responses',
-                provider='orq',
-                input_messages=input_messages,
-                attributes={'orq.redteam.llm_purpose': 'target', 'orq.agent.key': self.agent_key},
-            ) as llm_span:
-                # Propagate W3C trace context so the server-side agent trace nests
-                # under this span instead of starting a loose root trace. Captured
-                # inside the span so `traceparent` points at it; gated by
-                # EVALUATORQ_PROPAGATE_TRACE_CONTEXT.
-                trace_headers = await get_trace_context_headers()
-                if trace_headers:
-                    kwargs['http_headers'] = {**(kwargs.get('http_headers') or {}), **trace_headers}
-                resp = await asyncio.to_thread(self.orq_client.agents.responses.create, **kwargs)
-                record_llm_response(llm_span, resp, output_content=_extract_text(resp))
-                return resp
-
-        def _pending_tool_call_ids(resp: object) -> list[str]:
-            """Return IDs of pending tool calls from a response."""
-            pending = getattr(resp, 'pending_tool_calls', None) or []
-            ids: list[str] = []
-            for call in pending:
-                call_id = getattr(call, 'id', None)
-                if not call_id and isinstance(call, dict):
-                    call_id = call.get('id')
-                if isinstance(call_id, str) and call_id.strip():
-                    ids.append(call_id)
-            return ids
-
-        def _extract_tool_call_items(resp: object) -> list[ToolCallOutputItem]:
-            """Extract tool calls from a response as ToolCallOutputItem instances."""
-            pending = getattr(resp, 'pending_tool_calls', None) or []
-            items: list[ToolCallOutputItem] = []
-            for call in pending:
-                name = getattr(call, 'name', None) or (call.get('name') if isinstance(call, dict) else None) or ''
-                args_raw = (
-                    getattr(call, 'arguments', None)
-                    or (call.get('arguments') if isinstance(call, dict) else None)
-                    or {}
-                )
-                if isinstance(args_raw, str):
-                    try:
-                        json.loads(args_raw)
-                        args_str = args_raw
-                    except (json.JSONDecodeError, ValueError):
-                        logger.warning(
-                            f"Failed to parse tool call arguments as JSON for tool '{name}'; "
-                            f"wrapping raw string under 'raw' key. Raw: {args_raw!r:.200}"
-                        )
-                        args_str = json.dumps({'raw': args_raw})
-                else:
-                    try:
-                        args_str = json.dumps(args_raw if isinstance(args_raw, dict) else {})
-                    except (TypeError, ValueError):
-                        args_str = json.dumps(args_raw, default=str)
-                call_id = getattr(call, 'id', None) or (call.get('id') if isinstance(call, dict) else None)
-                kwargs: dict[str, Any] = {'name': str(name), 'arguments': args_str}
-                if isinstance(call_id, str) and call_id:
-                    kwargs['id'] = call_id
-                items.append(ToolCallOutputItem(**kwargs))
-            return items
 
         async with with_redteam_span(
             f'agent {self.agent_key}',
@@ -363,63 +423,23 @@ class ORQAgentTarget(AgentTarget):
                 kwargs.update(thread_body_param())
                 kwargs.update(pipeline_metadata_param())
 
-                response = await _create_traced([{'role': 'user', 'content': prompt}], **kwargs)
+                response = await self._create_traced([{'role': 'user', 'content': prompt}], **kwargs)
 
                 if response.task_id:
                     self._task_id = response.task_id
 
-                _accumulate_usage(response)
+                accumulated_usage = _accumulate_usage(response, accumulated_usage)
                 text_response = _extract_text(response)
                 all_tool_calls: list[ToolCallOutputItem] = _extract_tool_call_items(response)
 
                 # Some agent tool flows require client-provided tool_result parts.
                 # Continue the same task with synthetic tool results so the thread can progress.
-                max_tool_continuations = self._max_tool_continuations
-                pending_ids = _pending_tool_call_ids(response)
-                continuation_count = 0
-                while pending_ids and continuation_count < max_tool_continuations:
-                    continuation_count += 1
-                    logger.debug(
-                        f'{self.agent_key}: resolving {len(pending_ids)} pending tool call(s) '
-                        f'via synthetic tool_result (step {continuation_count}/{max_tool_continuations})'
-                    )
-
-                    tool_parts = [
-                        {
-                            'kind': 'tool_result',
-                            'tool_call_id': tool_call_id,
-                            'result': {
-                                'ok': False,
-                                'error': 'Tool execution unavailable in red-teaming harness',
-                            },
-                        }
-                        for tool_call_id in pending_ids
-                    ]
-                    response = await _create_traced(
-                        [{'role': 'tool', 'content': json.dumps(tool_parts, ensure_ascii=False)}],
-                        agent_key=self.agent_key,
-                        message={'role': 'tool', 'parts': tool_parts},
-                        task_id=self._task_id,
-                        background=False,
-                        # The continuation is still one target exchange.
-                        retries=None,
-                        **thread_body_param(),
-                        **pipeline_metadata_param(),
-                    )
-                    if response.task_id:
-                        self._task_id = response.task_id
-                    _accumulate_usage(response)
-                    extracted = _extract_text(response)
-                    if extracted:
-                        text_response = extracted
-                    all_tool_calls.extend(_extract_tool_call_items(response))
-                    pending_ids = _pending_tool_call_ids(response)
-
-                if pending_ids:
-                    raise RuntimeError(
-                        f'Unresolved pending tool calls after {max_tool_continuations} continuations '
-                        f'({len(pending_ids)} remaining)'
-                    )
+                response, text_response, all_tool_calls, accumulated_usage = await self._poll_until_done(
+                    response,
+                    text_response,
+                    all_tool_calls,
+                    accumulated_usage,
+                )
 
                 response_model = getattr(response, 'model', None)
                 if response_model:
