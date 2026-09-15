@@ -1,9 +1,11 @@
 """Converters between pipeline-specific formats and unified result models."""
 
 import json
+from collections.abc import Callable, Sequence
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
 from loguru import logger as _converters_logger
 from pydantic import ValidationError
@@ -22,6 +24,7 @@ from evaluatorq.redteam.contracts import (
     CategorySummary,
     DeliveryMethod,
     DeliveryMethodSummary,
+    DimensionSummary,
     DomainSummary,
     EvaluatedRow,
     ExecutionDetails,
@@ -141,124 +144,126 @@ def _raw_output_without_lifted(raw_output: Any) -> dict[str, Any] | None:
 # ---------------------------------------------------------------------------
 
 
-def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
-    """Normalize evaluatorq job output into a typed payload."""
+def _flatten_turns(d: dict[str, Any]) -> dict[str, Any]:
+    """If ``turns`` is a list of new-shape Turn dicts, translate to the legacy
+    wire fields (turns:int, conversation:list[Message-dict], final_response)
+    so JobOutputPayload validates.
+    """
+    turns_val = d.get('turns')
+    if not isinstance(turns_val, list) or not turns_val:
+        return d
+    first = turns_val[0]
+    if not (isinstance(first, dict) and 'attacker' in first and 'target' in first):
+        return d
+    conversation: list[dict[str, Any]] = []
+    final_response_text = ''
+    # Per-turn trace/span handles for each successful (non-errored) target turn,
+    # mirroring the simulation surface; the dashboard links to the last one.
+    response_traces: list[dict[str, Any]] = []
 
-    def _flatten_turns(d: dict[str, Any]) -> dict[str, Any]:
-        """If ``turns`` is a list of new-shape Turn dicts, translate to the legacy
-        wire fields (turns:int, conversation:list[Message-dict], final_response)
-        so JobOutputPayload validates.
-        """
-        turns_val = d.get('turns')
-        if not isinstance(turns_val, list) or not turns_val:
-            return d
-        first = turns_val[0]
-        if not (isinstance(first, dict) and 'attacker' in first and 'target' in first):
-            return d
-        conversation: list[dict[str, Any]] = []
-        final_response_text = ''
-        # Per-turn trace/span handles for each successful (non-errored) target turn,
-        # mirroring the simulation surface; the dashboard links to the last one.
-        response_traces: list[dict[str, Any]] = []
+    # Validate each turn through the Turn model — the single migration authority
+    # (its validator maps the pre-RES-883 ``generated_prompt`` to ``text``) — then
+    # read canonical ``AgentResponse.text`` (joins every text item, matching what
+    # turns_to_messages/the judge saw). A turn that fails validation degrades to
+    # empty text for that row rather than dropping the whole coercion.
+    for t in turns_val:
+        try:
+            turn = Turn.model_validate(t)
+            atk_text, tgt_text = turn.attacker.text, turn.target.text
+            if not turn.errored and (turn.target.trace_id or turn.target.span_id):
+                response_traces.append({'trace_id': turn.target.trace_id, 'span_id': turn.target.span_id})
+        except ValidationError:
+            atk_text = tgt_text = ''
+        conversation.extend((
+            {'role': 'user', 'content': atk_text},
+            {'role': 'assistant', 'content': tgt_text},
+        ))
+        final_response_text = tgt_text or final_response_text
+    out = dict(d)
+    out['turns'] = len(turns_val)
+    out.setdefault('conversation', conversation)
+    out.setdefault('final_response', final_response_text)
+    if response_traces:
+        out.setdefault('response_traces', response_traces)
+    return out
 
-        # Validate each turn through the Turn model — the single migration authority
-        # (its validator maps the pre-RES-883 ``generated_prompt`` to ``text``) — then
-        # read canonical ``AgentResponse.text`` (joins every text item, matching what
-        # turns_to_messages/the judge saw). A turn that fails validation degrades to
-        # empty text for that row rather than dropping the whole coercion.
-        for t in turns_val:
-            try:
-                turn = Turn.model_validate(t)
-                atk_text, tgt_text = turn.attacker.text, turn.target.text
-                if not turn.errored and (turn.target.trace_id or turn.target.span_id):
-                    response_traces.append({'trace_id': turn.target.trace_id, 'span_id': turn.target.span_id})
-            except ValidationError:
-                atk_text = tgt_text = ''
-            conversation.extend((
-                {'role': 'user', 'content': atk_text},
-                {'role': 'assistant', 'content': tgt_text},
-            ))
-            final_response_text = tgt_text or final_response_text
-        out = dict(d)
-        out['turns'] = len(turns_val)
-        out.setdefault('conversation', conversation)
-        out.setdefault('final_response', final_response_text)
-        if response_traces:
-            out.setdefault('response_traces', response_traces)
-        return out
 
-    def _normalize_output_dict(d: dict[str, Any]) -> dict[str, Any]:
-        """Unwrap nested 'output' keys and merge top-level fields into a flat dict."""
+def _normalize_output_dict(d: dict[str, Any]) -> dict[str, Any]:
+    """Unwrap nested 'output' keys and merge top-level fields into a flat dict."""
 
-        def _flatten_error_fields(output: dict[str, Any]) -> dict[str, Any]:
-            raw_error = output.get('error')
-            if raw_error is None or isinstance(raw_error, str):
-                return output
+    def _flatten_error_fields(output: dict[str, Any]) -> dict[str, Any]:
+        raw_error = output.get('error')
+        if raw_error is None or isinstance(raw_error, str):
+            return output
 
-            if isinstance(raw_error, AgentResponseError):
-                error_data = raw_error.model_dump(mode='json')
-            elif isinstance(raw_error, dict):
-                error_data = dict(raw_error)
-            else:
-                error_data = {
-                    field: getattr(raw_error, field, None)
-                    for field in (
-                        'message',
-                        'error_type',
-                        'code',
-                        'error_stage',
-                        'error_code',
-                        'error_turn',
-                        'error_details',
-                    )
-                }
-
-            message = error_data.get('message') or error_data.get('error')
-            error_type = error_data.get('error_type')
-            if not isinstance(message, str) or not isinstance(error_type, str):
-                _converters_logger.warning(
-                    'Flattening an unrecognized job output error shape as an unknown target error: {}',
-                    type(raw_error).__name__,
+        if isinstance(raw_error, AgentResponseError):
+            error_data = raw_error.model_dump(mode='json')
+        elif isinstance(raw_error, dict):
+            error_data = dict(raw_error)
+        else:
+            error_data = {
+                field: getattr(raw_error, field, None)
+                for field in (
+                    'message',
+                    'error_type',
+                    'code',
+                    'error_stage',
+                    'error_code',
+                    'error_turn',
+                    'error_details',
                 )
-                message = str(raw_error)
-                error_type = 'unknown'
-                error_data = {}
+            }
 
-            error = AgentResponseError(
-                message=message,
-                error_type=error_type,
-                code=error_data.get('code') if isinstance(error_data.get('code'), str) else None,
+        message = error_data.get('message') or error_data.get('error')
+        error_type = error_data.get('error_type')
+        if not isinstance(message, str) or not isinstance(error_type, str):
+            _converters_logger.warning(
+                'Flattening an unrecognized job output error shape as an unknown target error: {}',
+                type(raw_error).__name__,
             )
-            flattened = TargetCallResult(
-                response=AgentResponse(),
-                attempts=1,
-                error=error,
-                error_details=error_data.get('error_details') or error_data.get('details'),
-            ).error_payload(turn=error_data.get('error_turn') or error_data.get('turn') or 1)
-            for field in flattened:
-                if field in error_data and error_data[field] is not None:
-                    flattened[field] = error_data[field]
+            message = str(raw_error)
+            error_type = 'unknown'
+            error_data = {}
 
-            normalized = dict(output)
-            normalized.update(flattened)
-            return normalized
+        error = AgentResponseError(
+            message=message,
+            error_type=error_type,
+            code=error_data.get('code') if isinstance(error_data.get('code'), str) else None,
+        )
+        flattened = TargetCallResult(
+            response=AgentResponse(),
+            attempts=1,
+            error=error,
+            error_details=error_data.get('error_details') or error_data.get('details'),
+        ).error_payload(turn=error_data.get('error_turn') or error_data.get('turn') or 1)
+        for field in flattened:
+            if field in error_data and error_data[field] is not None:
+                flattened[field] = error_data[field]
 
-        wrapped = d.get('output')
-        if isinstance(wrapped, dict):
-            merged = dict(wrapped)
+        normalized = dict(output)
+        normalized.update(flattened)
+        return normalized
+
+    wrapped = d.get('output')
+    if isinstance(wrapped, dict):
+        merged = dict(wrapped)
+        for k, v in d.items():
+            if k != 'output' and k not in merged:
+                merged[k] = v
+        return _flatten_error_fields(_flatten_turns(merged))
+    if isinstance(wrapped, str):
+        nested = _coerce_job_output_payload(wrapped).model_dump(mode='json')
+        if nested:
+            merged = dict(nested)
             for k, v in d.items():
                 if k != 'output' and k not in merged:
                     merged[k] = v
             return _flatten_error_fields(_flatten_turns(merged))
-        if isinstance(wrapped, str):
-            nested = _coerce_job_output_payload(wrapped).model_dump(mode='json')
-            if nested:
-                merged = dict(nested)
-                for k, v in d.items():
-                    if k != 'output' and k not in merged:
-                        merged[k] = v
-                return _flatten_error_fields(_flatten_turns(merged))
-        return _flatten_error_fields(_flatten_turns(d))
+    return _flatten_error_fields(_flatten_turns(d))
+
+
+def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
+    """Normalize evaluatorq job output into a typed payload."""
 
     if isinstance(raw_output, dict):
         return JobOutputPayload.model_validate(_normalize_output_dict(raw_output))
@@ -974,6 +979,75 @@ def _compute_jury_reliability(results: list[RedTeamResult]) -> JuryReliability |
     return JuryReliability(krippendorff_alpha=alpha, samples=samples)
 
 
+@dataclass
+class GroupCounts:
+    total: int = 0
+    passed: int = 0
+    failed: int = 0
+    errored: int = 0
+    turns: int = 0
+
+
+SummaryT = TypeVar('SummaryT', bound=DimensionSummary)
+
+
+def _group_counts(
+    results: Sequence[RedTeamResult], key: Callable[[RedTeamResult], str | None]
+) -> dict[str, GroupCounts]:
+    """Bucket results by ``key`` and tally passed / failed / errored per bucket. A ``None`` key skips the result."""
+    grouped: dict[str, GroupCounts] = {}
+    for result in results:
+        group = key(result)
+        if group is None:
+            continue
+        counts = grouped.setdefault(group, GroupCounts())
+        counts.total += 1
+        if _is_evaluated(result):
+            if _is_vulnerable(result):
+                counts.failed += 1
+            else:
+                counts.passed += 1
+        if result.error:
+            counts.errored += 1
+        if result.execution:
+            counts.turns += result.execution.turns
+    return grouped
+
+
+def _build_dimension_summaries(
+    grouped: dict[str, GroupCounts],
+    summary_type: type[SummaryT],
+    *,
+    include_average_turns: bool = False,
+) -> dict[str, SummaryT]:
+    summaries: dict[str, SummaryT] = {}
+    for name, counts in grouped.items():
+        evaluated = counts.passed + counts.failed
+        fields: dict[str, Any] = {
+            'total_attacks': counts.total,
+            'vulnerabilities_found': counts.failed,
+            'resistance_rate': _verdict_rate(counts.passed, evaluated),
+            'vulnerability_rate': _verdict_rate(counts.failed, evaluated),
+        }
+        if include_average_turns:
+            fields['average_turns'] = counts.turns / counts.total if counts.total > 0 else 0.0
+        summaries[name] = summary_type(**fields)
+    return summaries
+
+
+def _group_delivery_method_counts(results: Sequence[RedTeamResult]) -> dict[str, GroupCounts]:
+    delivery_method_results: dict[str, list[RedTeamResult]] = {}
+    for result in results:
+        for raw_dm in result.attack.delivery_methods:
+            # String-key so a DeliveryMethod member never leaks its 3.10 repr
+            # (DeliveryMethod.X) into report keys — see delivery_method_str.
+            dm = delivery_method_str(raw_dm)
+            delivery_method_results.setdefault(dm, []).append(result)
+    return {
+        dm: _group_counts(dm_results, lambda _, dm=dm: dm)[dm] for dm, dm_results in delivery_method_results.items()
+    }
+
+
 def compute_report_summary(
     results: list[RedTeamResult],
     *,
@@ -1011,44 +1085,33 @@ def compute_report_summary(
     total_turns = sum(r.execution.turns for r in results if r.execution)
 
     # ── Group by category ──────────────────────────────────────────────
-    by_cat: dict[str, list[RedTeamResult]] = {}
-    for r in results:
-        by_cat.setdefault(r.attack.category, []).append(r)
-
+    by_cat = _group_counts(results, lambda r: r.attack.category)
     cat_summaries: dict[str, CategorySummary] = {}
-    for cat, cat_results in by_cat.items():
-        cat_eval = [r for r in cat_results if _is_evaluated(r)]
-        cat_eval_total = len(cat_eval)
-        cat_total = len(cat_results)
-        cat_vulns = sum(1 for r in cat_eval if _is_vulnerable(r))
-        cat_resistant = cat_eval_total - cat_vulns
-        cat_turns = sum(r.execution.turns for r in cat_results if r.execution)
-        cat_errors = sum(1 for r in cat_results if r.error)
+    for cat, cat_counts in by_cat.items():
+        cat_eval_total = cat_counts.passed + cat_counts.failed
+        cat_vulns = cat_counts.failed
+        cat_resistant = cat_counts.passed
         cat_summaries[cat] = CategorySummary(
             category=cat,
             category_name=OWASP_CATEGORY_NAMES.get(cat, cat),
-            total_attacks=cat_total,
+            total_attacks=cat_counts.total,
             evaluated_attacks=cat_eval_total,
-            unevaluated_attacks=cat_total - cat_eval_total,
-            evaluation_coverage=_rate(cat_eval_total, cat_total, default=0.0),
-            total_conversations=cat_total,
-            total_turns=cat_turns,
+            unevaluated_attacks=cat_counts.total - cat_eval_total,
+            evaluation_coverage=_rate(cat_eval_total, cat_counts.total, default=0.0),
+            total_conversations=cat_counts.total,
+            total_turns=cat_counts.turns,
             vulnerabilities_found=cat_vulns,
             vulnerability_rate=_verdict_rate(cat_vulns, cat_eval_total),
             resistance_rate=_verdict_rate(cat_resistant, cat_eval_total),
-            total_errors=cat_errors,
-            strategies_used=list({r.attack.strategy_name for r in cat_results if r.attack.strategy_name}),
+            total_errors=cat_counts.errored,
+            strategies_used=list({
+                r.attack.strategy_name for r in results if r.attack.category == cat and r.attack.strategy_name
+            }),
         )
 
     # ── Group by vulnerability ────────────────────────────────────────
-    by_vuln: dict[str, list[RedTeamResult]] = {}
-    unresolved_vuln_count = 0
-    for r in results:
-        v = r.attack.vulnerability
-        if v:
-            by_vuln.setdefault(v, []).append(r)
-        else:
-            unresolved_vuln_count += 1
+    unresolved_vuln_count = sum(1 for r in results if not r.attack.vulnerability)
+    by_vuln = _group_counts(results, lambda r: r.attack.vulnerability or None)
 
     if unresolved_vuln_count > 0:
         _converters_logger.warning(
@@ -1057,174 +1120,53 @@ def compute_report_summary(
         )
 
     vuln_summaries: dict[str, VulnerabilitySummary] = {}
-    for v, v_results in by_vuln.items():
+    for v, v_counts in by_vuln.items():
         try:
             vuln_enum = Vulnerability(v)
         except ValueError:
             _converters_logger.warning('Skipping unknown vulnerability %r in by_vulnerability grouping.', v)
             continue
         vdef = VULNERABILITY_DEFS.get(vuln_enum)
-        v_eval = [r for r in v_results if _is_evaluated(r)]
-        v_eval_total = len(v_eval)
-        v_vulns = sum(1 for r in v_eval if _is_vulnerable(r))
-        v_resistant = v_eval_total - v_vulns
+        v_eval_total = v_counts.passed + v_counts.failed
+        v_vulns = v_counts.failed
+        v_resistant = v_counts.passed
         vuln_summaries[v] = VulnerabilitySummary(
             vulnerability=v,
             vulnerability_name=get_vulnerability_name(vuln_enum),
             domain=vdef.domain.value if vdef else '',
-            total_attacks=len(v_results),
+            total_attacks=v_counts.total,
             evaluated_attacks=v_eval_total,
             vulnerabilities_found=v_vulns,
             resistance_rate=_verdict_rate(v_resistant, v_eval_total),
-            strategies_used=list({r.attack.strategy_name for r in v_results if r.attack.strategy_name}),
+            strategies_used=list({
+                r.attack.strategy_name for r in results if r.attack.vulnerability == v and r.attack.strategy_name
+            }),
             framework_categories=get_framework_categories(vuln_enum),
         )
 
     # ── Group by technique ─────────────────────────────────────────────
-    tech_totals: dict[str, int] = {}
-    tech_eval_totals: dict[str, int] = {}
-    tech_vulns: dict[str, int] = {}
-    for r in results:
-        tech = r.attack.attack_technique
-        tech_totals[tech] = tech_totals.get(tech, 0) + 1
-        if _is_evaluated(r):
-            tech_eval_totals[tech] = tech_eval_totals.get(tech, 0) + 1
-        if _is_vulnerable(r):
-            tech_vulns[tech] = tech_vulns.get(tech, 0) + 1
-    by_technique: dict[str, TechniqueSummary] = {}
-    for tech, t_total in tech_totals.items():
-        t_eval = tech_eval_totals.get(tech, 0)
-        t_vulns = tech_vulns.get(tech, 0)
-        t_resistant = t_eval - t_vulns
-        by_technique[tech] = TechniqueSummary(
-            total_attacks=t_total,
-            vulnerabilities_found=t_vulns,
-            resistance_rate=_verdict_rate(t_resistant, t_eval),
-            vulnerability_rate=_verdict_rate(t_vulns, t_eval),
-        )
+    tech_counts = _group_counts(results, lambda r: r.attack.attack_technique)
+    by_technique = _build_dimension_summaries(tech_counts, TechniqueSummary)
 
     # ── Group by severity ──────────────────────────────────────────────
-    sev_totals: dict[str, int] = {}
-    sev_eval_totals: dict[str, int] = {}
-    sev_vulns: dict[str, int] = {}
-    for r in results:
-        sev = r.attack.severity
-        sev_totals[sev] = sev_totals.get(sev, 0) + 1
-        if _is_evaluated(r):
-            sev_eval_totals[sev] = sev_eval_totals.get(sev, 0) + 1
-        if _is_vulnerable(r):
-            sev_vulns[sev] = sev_vulns.get(sev, 0) + 1
-    by_severity: dict[str, SeveritySummary] = {}
-    for sev, s_total in sev_totals.items():
-        s_eval = sev_eval_totals.get(sev, 0)
-        s_vulns = sev_vulns.get(sev, 0)
-        s_resistant = s_eval - s_vulns
-        by_severity[sev] = SeveritySummary(
-            total_attacks=s_total,
-            vulnerabilities_found=s_vulns,
-            resistance_rate=_verdict_rate(s_resistant, s_eval),
-            vulnerability_rate=_verdict_rate(s_vulns, s_eval),
-        )
+    sev_counts = _group_counts(results, lambda r: r.attack.severity)
+    by_severity = _build_dimension_summaries(sev_counts, SeveritySummary)
 
     # ── Group by delivery method ───────────────────────────────────────
-    dm_totals: dict[str, int] = {}
-    dm_eval_totals: dict[str, int] = {}
-    dm_vulns: dict[str, int] = {}
-    for r in results:
-        for raw_dm in r.attack.delivery_methods:
-            # String-key so a DeliveryMethod member never leaks its 3.10 repr
-            # (DeliveryMethod.X) into report keys — see delivery_method_str.
-            dm = delivery_method_str(raw_dm)
-            dm_totals[dm] = dm_totals.get(dm, 0) + 1
-            if _is_evaluated(r):
-                dm_eval_totals[dm] = dm_eval_totals.get(dm, 0) + 1
-            if _is_vulnerable(r):
-                dm_vulns[dm] = dm_vulns.get(dm, 0) + 1
-    by_delivery_method: dict[str, DeliveryMethodSummary] = {}
-    for dm, d_total in dm_totals.items():
-        d_eval = dm_eval_totals.get(dm, 0)
-        d_vulns = dm_vulns.get(dm, 0)
-        d_resistant = d_eval - d_vulns
-        by_delivery_method[dm] = DeliveryMethodSummary(
-            total_attacks=d_total,
-            vulnerabilities_found=d_vulns,
-            resistance_rate=_verdict_rate(d_resistant, d_eval),
-            vulnerability_rate=_verdict_rate(d_vulns, d_eval),
-        )
+    dm_counts = _group_delivery_method_counts(results)
+    by_delivery_method = _build_dimension_summaries(dm_counts, DeliveryMethodSummary)
 
     # ── Group by turn type ─────────────────────────────────────────────
-    tt_totals: dict[str, int] = {}
-    tt_eval_totals: dict[str, int] = {}
-    tt_vulns: dict[str, int] = {}
-    tt_turns: dict[str, int] = {}
-    for r in results:
-        tt = r.attack.turn_type
-        tt_totals[tt] = tt_totals.get(tt, 0) + 1
-        if _is_evaluated(r):
-            tt_eval_totals[tt] = tt_eval_totals.get(tt, 0) + 1
-        if r.execution:
-            tt_turns[tt] = tt_turns.get(tt, 0) + r.execution.turns
-        if _is_vulnerable(r):
-            tt_vulns[tt] = tt_vulns.get(tt, 0) + 1
-    by_turn_type: dict[str, TurnTypeSummary] = {}
-    for tt, t_total in tt_totals.items():
-        t_eval = tt_eval_totals.get(tt, 0)
-        t_vulns = tt_vulns.get(tt, 0)
-        t_resistant = t_eval - t_vulns
-        by_turn_type[tt] = TurnTypeSummary(
-            total_attacks=t_total,
-            vulnerabilities_found=t_vulns,
-            resistance_rate=_verdict_rate(t_resistant, t_eval),
-            vulnerability_rate=_verdict_rate(t_vulns, t_eval),
-            average_turns=tt_turns.get(tt, 0) / t_total if t_total > 0 else 0.0,
-        )
+    tt_counts = _group_counts(results, lambda r: r.attack.turn_type)
+    by_turn_type = _build_dimension_summaries(tt_counts, TurnTypeSummary, include_average_turns=True)
 
     # ── Group by vulnerability domain ──────────────────────────────────
-    domain_totals: dict[str, int] = {}
-    domain_eval_totals: dict[str, int] = {}
-    domain_vulns: dict[str, int] = {}
-    for r in results:
-        sc = r.attack.vulnerability_domain
-        if sc is not None:
-            domain_totals[sc] = domain_totals.get(sc, 0) + 1
-            if _is_evaluated(r):
-                domain_eval_totals[sc] = domain_eval_totals.get(sc, 0) + 1
-            if _is_vulnerable(r):
-                domain_vulns[sc] = domain_vulns.get(sc, 0) + 1
-    by_domain: dict[str, DomainSummary] = {}
-    for sc, s_total in domain_totals.items():
-        s_eval = domain_eval_totals.get(sc, 0)
-        s_vulns = domain_vulns.get(sc, 0)
-        s_resistant = s_eval - s_vulns
-        by_domain[sc] = DomainSummary(
-            total_attacks=s_total,
-            vulnerabilities_found=s_vulns,
-            resistance_rate=_verdict_rate(s_resistant, s_eval),
-            vulnerability_rate=_verdict_rate(s_vulns, s_eval),
-        )
+    domain_counts = _group_counts(results, lambda r: r.attack.vulnerability_domain)
+    by_domain = _build_dimension_summaries(domain_counts, DomainSummary)
 
     # ── Group by framework ─────────────────────────────────────────────
-    fw_totals: dict[str, int] = {}
-    fw_eval_totals: dict[str, int] = {}
-    fw_vulns: dict[str, int] = {}
-    for r in results:
-        fw = r.attack.framework
-        fw_totals[fw] = fw_totals.get(fw, 0) + 1
-        if _is_evaluated(r):
-            fw_eval_totals[fw] = fw_eval_totals.get(fw, 0) + 1
-        if _is_vulnerable(r):
-            fw_vulns[fw] = fw_vulns.get(fw, 0) + 1
-    by_framework: dict[str, FrameworkSummary] = {}
-    for fw, f_total in fw_totals.items():
-        f_eval = fw_eval_totals.get(fw, 0)
-        f_vulns = fw_vulns.get(fw, 0)
-        f_resistant = f_eval - f_vulns
-        by_framework[fw] = FrameworkSummary(
-            total_attacks=f_total,
-            vulnerabilities_found=f_vulns,
-            resistance_rate=_verdict_rate(f_resistant, f_eval),
-            vulnerability_rate=_verdict_rate(f_vulns, f_eval),
-        )
+    framework_counts = _group_counts(results, lambda r: r.attack.framework)
+    by_framework = _build_dimension_summaries(framework_counts, FrameworkSummary)
 
     # ── Count errors by type ───────────────────────────────────────────
     # Execution failures and judge failures are counted in the same rollup but keyed
