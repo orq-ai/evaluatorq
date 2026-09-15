@@ -29,7 +29,10 @@ from __future__ import annotations
 import csv
 import io
 import json
+from functools import partial
+from inspect import signature
 from pathlib import Path
+from typing import Any
 
 from fasthtml.core import FastHTML, NotStr
 from loguru import logger
@@ -162,6 +165,395 @@ def _settings_config(roots: list[Path] | None) -> list[tuple[str, str | list[str
     return config
 
 
+def _bind_roots(handler: Any, roots: list[Path] | None, route_name: str) -> Any:
+    bound = partial(handler, roots=roots)
+    bound.__name__ = route_name
+    bound.__qualname__ = route_name
+    handler_signature = signature(handler, eval_str=True)
+    bound.__signature__ = handler_signature.replace(
+        parameters=[parameter for parameter in handler_signature.parameters.values() if parameter.name != 'roots']
+    )
+    return bound
+
+
+def _index(req: Request, roots: list[Path] | None) -> NotStr:
+    surface = req.query_params.get('surface') or None
+    if surface is None:
+        # Combined Dashboard landing — aggregates across all run stores.
+        body = landing_body(metrics.landing(roots))
+        return NotStr(page('Dashboard', body, active_nav='dashboard'))
+    # Agent Sim is the design's rich item-level overview; Red Team (and any
+    # unknown surface) still render the run list.  Unknown surfaces fall
+    # through to an empty run-list screen rather than 500.
+    label = SURFACE_LABELS.get(surface, 'Reports')
+    pg, per_pg = _paging(req)
+    if surface == 'sim':
+        # Compare picker options: sim runs only, excluding error-flagged runs
+        # (they route to a 404), newest-first, capped so the dropdown stays
+        # usable on large stores. library.scan reuses the mtime-keyed JSON
+        # cache metrics.sim_overview already warmed, so this is not a full re-parse.
+        sim_choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'sim' and not c.error][:100]
+        body = sim_overview_body(metrics.sim_overview(roots, page=pg, per_page=per_pg), compare_choices=sim_choices)
+    elif surface == 'redteam':
+        body = redteam_overview_body(metrics.redteam_overview(roots, page=pg, per_page=per_pg))
+    else:
+        rows = [r for r in metrics.run_rows(roots) if r.surface == surface]
+        body = runs_screen_body(rows, surface)
+    return NotStr(page(label, body, active_surface=surface))
+
+
+def _settings(roots: list[Path] | None) -> NotStr:
+    body = settings_body(_settings_config(roots))
+    return NotStr(page('Settings', body, active_nav='settings'))
+
+
+def _search(req: Request, roots: list[Path] | None) -> NotStr:
+    q = req.query_params.get('q') or ''
+    return NotStr(search_results(library.scan(roots), q))
+
+
+def _report_view(rid: str, roots: list[Path] | None) -> NotStr | Response:
+    path = library.resolve(rid, roots)
+    if path is None:
+        # No report on disk — this may be an in-flight (running/error/
+        # cancelled) run tracked only by a manifest. Render its status/stage.
+        manifest = library.resolve_manifest(rid, roots)
+        if manifest is not None:
+            from evaluatorq.dashboard.view import report_in_flight
+
+            in_flight_html = page(
+                manifest.run_name,
+                report_in_flight(manifest),
+                active_surface=manifest.surface.value,
+            )
+            return NotStr(in_flight_html)
+        not_found_html = page('Not found', report_not_found(rid))
+        return Response(not_found_html, status_code=404, media_type='text/html')
+
+    surface, _raw = library.load_surface(path)
+    adapter = ADAPTERS.get(surface or '')
+    if adapter is None:
+        not_found_html = page('Not found', report_not_found(rid))
+        return Response(not_found_html, status_code=404, media_type='text/html')
+
+    try:
+        report_obj = adapter.load(path)
+    except Exception as exc:
+        logger.warning('Failed to load report {}: {}', path.name, exc)
+        broken_html = page(
+            f'Error — {path.name}',
+            report_broken(rid, path.name, str(exc)),
+            active_surface=surface,
+        )
+        return Response(broken_html, status_code=200, media_type='text/html')
+
+    name = adapter.name(report_obj)
+    back_link = report_back_link(surface or '')
+
+    # Render filter form alongside the body.  Both known surfaces
+    # (redteam, sim) are registered in FILTERS; fall back to 404 for unknown surfaces.
+    filter_def = FILTERS.get(surface or '')
+    if filter_def is None:
+        not_found_html = page('Not found', report_not_found(rid))
+        return Response(not_found_html, status_code=404, media_type='text/html')
+
+    # Tabbed body for the known surfaces (Streamlit-aligned); the interactive
+    # panels live inside their tabs, so they are no longer appended separately.
+    if surface == 'sim':
+        from evaluatorq.dashboard.view import sim_run_compare_control
+
+        # Same choice list as the overview picker (sim only, no error runs,
+        # capped); the control itself drops the current run from the options.
+        choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'sim' and not c.error][:100]
+        body_html = report_tabs.sim_report_tabs(rid, report_obj, compare_html=sim_run_compare_control(rid, choices))
+    elif surface == 'redteam':
+        body_html = report_tabs.redteam_report_tabs(rid, report_obj)
+    else:
+        body_html = adapter.body(report_obj)
+
+    opts = filter_def.options(report_obj)
+    total_results = len(filter_def.results(report_obj))
+    form_html = render_filter_form(rid, surface or '', opts, {}, shown=total_results, total=total_results)
+    body_with_filters = report_view_with_filters(rid, surface or '', body_html, form_html)
+
+    html = page(
+        name,
+        body_with_filters,
+        active_surface=surface,
+        actions_html=report_actions(rid),
+        back_html=back_link,
+    )
+    return NotStr(html)
+
+
+async def _sim_agent_card(rid: str, roots: list[Path] | None) -> NotStr | Response:
+    path = library.resolve(rid, roots)
+    if path is None:
+        return Response('404 Not Found', status_code=404, media_type='text/plain')
+    surface, _raw = library.load_surface(path)
+    if surface != 'sim':
+        return Response('404 Not Found', status_code=404, media_type='text/plain')
+    adapter = ADAPTERS.get(surface)
+    if adapter is None:
+        return Response('404 Not Found', status_code=404, media_type='text/plain')
+    try:
+        run = adapter.load(path)
+    except Exception as exc:
+        logger.warning('Failed to load sim report for agent card {}: {}', path.name, exc)
+        return Response('Error loading report', status_code=422, media_type='text/plain')
+    return NotStr(await report_tabs.sim_agent_card_fragment(run))
+
+
+async def _report_filter(rid: str, req: Request, roots: list[Path] | None) -> NotStr | Response:
+    path = library.resolve(rid, roots)
+    if path is None:
+        return Response('404 Not Found', status_code=404, media_type='text/plain')
+
+    surface, _raw = library.load_surface(path)
+    adapter = ADAPTERS.get(surface or '')
+    filter_def = FILTERS.get(surface or '')
+    if adapter is None or filter_def is None:
+        return Response('404 Not Found', status_code=404, media_type='text/plain')
+
+    try:
+        report_obj = adapter.load(path)
+    except Exception as exc:
+        logger.warning('Failed to load report for filter {}: {}', path.name, exc)
+        return Response(
+            f'Error loading report: {exc}',
+            status_code=422,
+            media_type='text/plain',
+        )
+
+    # Parse form data — build selections dict[str, list[str]]
+    form_data = await req.form()
+    selections: dict[str, list[str]] = {}
+    for key, value in form_data.multi_items():
+        selections.setdefault(key, []).append(str(value))
+
+    # Apply filters to get the shown rows, but keep the option lists fixed
+    # to the FULL dataset.  Recomputing options from the filtered rows made
+    # a just-deselected value disappear from its own multi-select.
+    filtered = filter_def.apply(report_obj, selections)
+    new_opts = filter_def.options(report_obj)
+
+    # Render the tabbed body from the filtered results so the static tab
+    # content (tables, charts) tracks the filter, not just the HTMX panels.
+    if surface == 'sim':
+        body_html = report_tabs.sim_report_tabs(rid, report_obj, filtered)
+    elif surface == 'redteam':
+        from evaluatorq.redteam.reports.converters import rebuild_filtered_report
+
+        body_html = report_tabs.redteam_report_tabs(rid, rebuild_filtered_report(report_obj, filtered))
+    else:
+        body_html = adapter.body_from_results(report_obj, filtered)
+
+    form_html = render_filter_form(
+        rid, surface or '', new_opts, selections, shown=len(filtered), total=len(filter_def.results(report_obj))
+    )
+    fragment_html = filter_fragment(rid, surface or '', body_html, form_html)
+
+    # Signal interactive panels to refetch with the new filter.  Panels
+    # that carry hx-trigger="load, orq:filter-changed from:body" and
+    # hx-include="#filter-form" will catch this event, re-issue their
+    # hx-get requests with the current form values, and re-render from the
+    # filtered result set.
+    return Response(
+        fragment_html,
+        media_type='text/html',
+        headers={'HX-Trigger': 'orq:filter-changed'},
+    )
+
+
+def _do_html_export(rid: str, roots: list[Path] | None) -> Response:
+    path = library.resolve(rid, roots)
+    if path is None:
+        return Response('404 Not Found', status_code=404, media_type='text/plain')
+
+    surface, _raw = library.load_surface(path)
+    adapter = ADAPTERS.get(surface or '')
+    if adapter is None:
+        return Response('404 Not Found', status_code=404, media_type='text/plain')
+
+    try:
+        report_obj = adapter.load(path)
+    except Exception as exc:
+        logger.warning('Failed to load report for export {}: {}', path.name, exc)
+        return Response(
+            f'Error loading report {path.name}: {exc}',
+            status_code=422,
+            media_type='text/plain',
+        )
+    return Response(
+        adapter.export(report_obj),
+        media_type='text/html',
+        headers={'Content-Disposition': f'attachment; filename="{rid}.html"'},
+    )
+
+
+def _report_export(rid: str, roots: list[Path] | None) -> Response:
+    return _do_html_export(rid, roots)
+
+
+def _report_export_html(rid: str, roots: list[Path] | None) -> Response:
+    return _do_html_export(rid, roots)
+
+
+def _report_export_md(rid: str, roots: list[Path] | None) -> Response:
+    path = library.resolve(rid, roots)
+    if path is None:
+        return Response('404 Not Found', status_code=404, media_type='text/plain')
+
+    surface, _raw = library.load_surface(path)
+    adapter = ADAPTERS.get(surface or '')
+    if adapter is None:
+        return Response('404 Not Found', status_code=404, media_type='text/plain')
+
+    if adapter.export_markdown is None:
+        return Response(
+            'no markdown export for this surface',
+            status_code=404,
+            media_type='text/plain',
+        )
+
+    try:
+        report_obj = adapter.load(path)
+    except Exception as exc:
+        logger.warning('Failed to load report for md export {}: {}', path.name, exc)
+        return Response(
+            f'Error loading report {path.name}: {exc}',
+            status_code=422,
+            media_type='text/plain',
+        )
+
+    md_text = adapter.export_markdown(report_obj)
+    return Response(
+        md_text,
+        media_type='text/markdown',
+        headers={'Content-Disposition': f'attachment; filename="{rid}.md"'},
+    )
+
+
+def _report_export_csv(rid: str, req: Request, roots: list[Path] | None) -> Response:
+    path = library.resolve(rid, roots)
+    if path is None:
+        return Response('404 Not Found', status_code=404, media_type='text/plain')
+
+    surface, _raw = library.load_surface(path)
+    adapter = ADAPTERS.get(surface or '')
+    filter_def = FILTERS.get(surface or '')
+    if adapter is None:
+        return Response('404 Not Found', status_code=404, media_type='text/plain')
+
+    # sim never had a CSV export — honest parity.
+    if surface == 'sim':
+        return Response(
+            'no CSV export for simulation runs',
+            status_code=404,
+            media_type='text/plain',
+        )
+
+    if adapter.rows is None:
+        return Response(
+            'CSV export not supported for this surface',
+            status_code=404,
+            media_type='text/plain',
+        )
+
+    try:
+        report_obj = adapter.load(path)
+    except Exception as exc:
+        logger.warning('Failed to load report for csv {}: {}', path.name, exc)
+        return Response(
+            f'Error loading report {path.name}: {exc}',
+            status_code=422,
+            media_type='text/plain',
+        )
+
+    # Apply filters from the query-string (same logic as POST /filter).
+    selections = parse_selections(req, surface or '')
+    filtered = apply_or_all(report_obj, surface or '', selections)
+
+    row_dicts = adapter.rows(report_obj, filtered)
+
+    if not row_dicts:
+        # Return an empty CSV with just the header row (parity: empty filter)
+        return Response(
+            '',
+            media_type='text/csv',
+            headers={'Content-Disposition': f'attachment; filename="{rid}.csv"'},
+        )
+
+    # Headers as well as cells: a judge's model name becomes a column name.
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=[str(_csv_safe(k)) for k in row_dicts[0]])
+    writer.writeheader()
+    writer.writerows({str(_csv_safe(k)): _csv_safe(v) for k, v in row.items()} for row in row_dicts)
+
+    return Response(
+        buf.getvalue(),
+        media_type='text/csv',
+        headers={'Content-Disposition': f'attachment; filename="{rid}.csv"'},
+    )
+
+
+def _report_export_json(rid: str, req: Request, roots: list[Path] | None) -> Response:
+    path = library.resolve(rid, roots)
+    if path is None:
+        return Response('404 Not Found', status_code=404, media_type='text/plain')
+
+    surface, _raw = library.load_surface(path)
+    adapter = ADAPTERS.get(surface or '')
+    filter_def = FILTERS.get(surface or '')
+    if adapter is None:
+        return Response('404 Not Found', status_code=404, media_type='text/plain')
+
+    if adapter.rows is None:
+        return Response(
+            'JSON export not supported for this surface',
+            status_code=404,
+            media_type='text/plain',
+        )
+
+    try:
+        report_obj = adapter.load(path)
+    except Exception as exc:
+        logger.warning('Failed to load report for json {}: {}', path.name, exc)
+        return Response(
+            f'Error loading report {path.name}: {exc}',
+            status_code=422,
+            media_type='text/plain',
+        )
+
+    # Apply filters from the query-string.
+    selections = parse_selections(req, surface or '')
+    filtered = apply_or_all(report_obj, surface or '', selections)
+
+    row_dicts = adapter.rows(report_obj, filtered)
+
+    json_str = json.dumps(row_dicts, indent=2, default=str)
+    return Response(
+        json_str,
+        media_type='application/json',
+        headers={'Content-Disposition': f'attachment; filename="{rid}.json"'},
+    )
+
+
+def register_report_routes(app: Any, roots: list[Path] | None = None) -> None:
+    """Register the report routes on *app*."""
+    app.get('/')(_bind_roots(_index, roots, 'build_app_index'))
+    app.get('/settings')(_bind_roots(_settings, roots, 'build_app_settings'))
+    app.get('/search')(_bind_roots(_search, roots, 'build_app_search'))
+    app.get('/r/{rid}')(_bind_roots(_report_view, roots, 'build_app_report_view'))
+    app.get('/r/{rid}/sim/agent-card')(_bind_roots(_sim_agent_card, roots, 'build_app_sim_agent_card'))
+    app.post('/r/{rid}/filter')(_bind_roots(_report_filter, roots, 'build_app_report_filter'))
+    app.get('/r/{rid}/export')(_bind_roots(_report_export, roots, 'build_app_report_export'))
+    app.get('/r/{rid}/export.html')(_bind_roots(_report_export_html, roots, 'build_app_report_export_html'))
+    app.get('/r/{rid}/export.md')(_bind_roots(_report_export_md, roots, 'build_app_report_export_md'))
+    app.get('/r/{rid}/export.csv')(_bind_roots(_report_export_csv, roots, 'build_app_report_export_csv'))
+    app.get('/r/{rid}/export.json')(_bind_roots(_report_export_json, roots, 'build_app_report_export_json'))
+
+
 def build_app(roots: list[Path] | None = None) -> FastHTML:
     """Create and return the configured FastHTML dashboard application.
 
@@ -186,398 +578,9 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     # We call it at the end of build_app() instead.
 
     # ------------------------------------------------------------------
-    # Route: GET /  — report index
+    # Routes: report pages and exports
     # ------------------------------------------------------------------
-    @app.get('/')
-    def index(req: Request) -> NotStr:
-        surface = req.query_params.get('surface') or None
-        if surface is None:
-            # Combined Dashboard landing — aggregates across all run stores.
-            body = landing_body(metrics.landing(roots))
-            return NotStr(page('Dashboard', body, active_nav='dashboard'))
-        # Agent Sim is the design's rich item-level overview; Red Team (and any
-        # unknown surface) still render the run list.  Unknown surfaces fall
-        # through to an empty run-list screen rather than 500.
-        label = SURFACE_LABELS.get(surface, 'Reports')
-        pg, per_pg = _paging(req)
-        if surface == 'sim':
-            # Compare picker options: sim runs only, excluding error-flagged runs
-            # (they route to a 404), newest-first, capped so the dropdown stays
-            # usable on large stores. library.scan reuses the mtime-keyed JSON
-            # cache metrics.sim_overview already warmed, so this is not a full re-parse.
-            sim_choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'sim' and not c.error][:100]
-            body = sim_overview_body(metrics.sim_overview(roots, page=pg, per_page=per_pg), compare_choices=sim_choices)
-        elif surface == 'redteam':
-            body = redteam_overview_body(metrics.redteam_overview(roots, page=pg, per_page=per_pg))
-        else:
-            rows = [r for r in metrics.run_rows(roots) if r.surface == surface]
-            body = runs_screen_body(rows, surface)
-        return NotStr(page(label, body, active_surface=surface))
-
-    # ------------------------------------------------------------------
-    # Route: GET /settings  — read-only runtime config (host/workspace derive
-    # from each run's experiment_url, so there's nothing to edit here).
-    # ------------------------------------------------------------------
-    @app.get('/settings')
-    def settings() -> NotStr:
-        body = settings_body(_settings_config(roots))
-        return NotStr(page('Settings', body, active_nav='settings'))
-
-    # ------------------------------------------------------------------
-    # Route: GET /search?q=  — ⌘K global search fragment (HTMX)
-    # ------------------------------------------------------------------
-    @app.get('/search')
-    def search(req: Request) -> NotStr:
-        q = req.query_params.get('q') or ''
-        return NotStr(search_results(library.scan(roots), q))
-
-    # ------------------------------------------------------------------
-    # Route: GET /r/{rid}  — embedded report view
-    # ------------------------------------------------------------------
-    @app.get('/r/{rid}')
-    def report_view(rid: str) -> NotStr | Response:
-        path = library.resolve(rid, roots)
-        if path is None:
-            # No report on disk — this may be an in-flight (running/error/
-            # cancelled) run tracked only by a manifest. Render its status/stage.
-            manifest = library.resolve_manifest(rid, roots)
-            if manifest is not None:
-                from evaluatorq.dashboard.view import report_in_flight
-
-                in_flight_html = page(
-                    manifest.run_name,
-                    report_in_flight(manifest),
-                    active_surface=manifest.surface.value,
-                )
-                return NotStr(in_flight_html)
-            not_found_html = page('Not found', report_not_found(rid))
-            return Response(not_found_html, status_code=404, media_type='text/html')
-
-        surface, _raw = library.load_surface(path)
-        adapter = ADAPTERS.get(surface or '')
-        if adapter is None:
-            not_found_html = page('Not found', report_not_found(rid))
-            return Response(not_found_html, status_code=404, media_type='text/html')
-
-        try:
-            report_obj = adapter.load(path)
-        except Exception as exc:
-            logger.warning('Failed to load report {}: {}', path.name, exc)
-            broken_html = page(
-                f'Error — {path.name}',
-                report_broken(rid, path.name, str(exc)),
-                active_surface=surface,
-            )
-            return Response(broken_html, status_code=200, media_type='text/html')
-
-        name = adapter.name(report_obj)
-        back_link = report_back_link(surface or '')
-
-        # Render filter form alongside the body.  Both known surfaces
-        # (redteam, sim) are registered in FILTERS; fall back to 404 for unknown surfaces.
-        filter_def = FILTERS.get(surface or '')
-        if filter_def is None:
-            not_found_html = page('Not found', report_not_found(rid))
-            return Response(not_found_html, status_code=404, media_type='text/html')
-
-        # Tabbed body for the known surfaces (Streamlit-aligned); the interactive
-        # panels live inside their tabs, so they are no longer appended separately.
-        if surface == 'sim':
-            from evaluatorq.dashboard.view import sim_run_compare_control
-
-            # Same choice list as the overview picker (sim only, no error runs,
-            # capped); the control itself drops the current run from the options.
-            choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'sim' and not c.error][:100]
-            body_html = report_tabs.sim_report_tabs(rid, report_obj, compare_html=sim_run_compare_control(rid, choices))
-        elif surface == 'redteam':
-            body_html = report_tabs.redteam_report_tabs(rid, report_obj)
-        else:
-            body_html = adapter.body(report_obj)
-
-        opts = filter_def.options(report_obj)
-        total_results = len(filter_def.results(report_obj))
-        form_html = render_filter_form(rid, surface or '', opts, {}, shown=total_results, total=total_results)
-        body_with_filters = report_view_with_filters(rid, surface or '', body_html, form_html)
-
-        html = page(
-            name,
-            body_with_filters,
-            active_surface=surface,
-            actions_html=report_actions(rid),
-            back_html=back_link,
-        )
-        return NotStr(html)
-
-    # ------------------------------------------------------------------
-    # Route: GET /r/{rid}/sim/agent-card — deferred live Orq enrichment
-    # ------------------------------------------------------------------
-    @app.get('/r/{rid}/sim/agent-card')
-    async def sim_agent_card(rid: str) -> NotStr | Response:
-        path = library.resolve(rid, roots)
-        if path is None:
-            return Response('404 Not Found', status_code=404, media_type='text/plain')
-        surface, _raw = library.load_surface(path)
-        if surface != 'sim':
-            return Response('404 Not Found', status_code=404, media_type='text/plain')
-        adapter = ADAPTERS.get(surface)
-        if adapter is None:
-            return Response('404 Not Found', status_code=404, media_type='text/plain')
-        try:
-            run = adapter.load(path)
-        except Exception as exc:
-            logger.warning('Failed to load sim report for agent card {}: {}', path.name, exc)
-            return Response('Error loading report', status_code=422, media_type='text/plain')
-        return NotStr(await report_tabs.sim_agent_card_fragment(run))
-
-    # ------------------------------------------------------------------
-    # Route: POST /r/{rid}/filter  — HTMX filter round-trip
-    # ------------------------------------------------------------------
-    @app.post('/r/{rid}/filter')
-    async def report_filter(rid: str, req: Request) -> NotStr | Response:
-        path = library.resolve(rid, roots)
-        if path is None:
-            return Response('404 Not Found', status_code=404, media_type='text/plain')
-
-        surface, _raw = library.load_surface(path)
-        adapter = ADAPTERS.get(surface or '')
-        filter_def = FILTERS.get(surface or '')
-        if adapter is None or filter_def is None:
-            return Response('404 Not Found', status_code=404, media_type='text/plain')
-
-        try:
-            report_obj = adapter.load(path)
-        except Exception as exc:
-            logger.warning('Failed to load report for filter {}: {}', path.name, exc)
-            return Response(
-                f'Error loading report: {exc}',
-                status_code=422,
-                media_type='text/plain',
-            )
-
-        # Parse form data — build selections dict[str, list[str]]
-        form_data = await req.form()
-        selections: dict[str, list[str]] = {}
-        for key, value in form_data.multi_items():
-            selections.setdefault(key, []).append(str(value))
-
-        # Apply filters to get the shown rows, but keep the option lists fixed
-        # to the FULL dataset.  Recomputing options from the filtered rows made
-        # a just-deselected value disappear from its own multi-select.
-        filtered = filter_def.apply(report_obj, selections)
-        new_opts = filter_def.options(report_obj)
-
-        # Render the tabbed body from the filtered results so the static tab
-        # content (tables, charts) tracks the filter, not just the HTMX panels.
-        if surface == 'sim':
-            body_html = report_tabs.sim_report_tabs(rid, report_obj, filtered)
-        elif surface == 'redteam':
-            from evaluatorq.redteam.reports.converters import rebuild_filtered_report
-
-            body_html = report_tabs.redteam_report_tabs(rid, rebuild_filtered_report(report_obj, filtered))
-        else:
-            body_html = adapter.body_from_results(report_obj, filtered)
-
-        form_html = render_filter_form(
-            rid, surface or '', new_opts, selections, shown=len(filtered), total=len(filter_def.results(report_obj))
-        )
-        fragment_html = filter_fragment(rid, surface or '', body_html, form_html)
-
-        # Signal interactive panels to refetch with the new filter.  Panels
-        # that carry hx-trigger="load, orq:filter-changed from:body" and
-        # hx-include="#filter-form" will catch this event, re-issue their
-        # hx-get requests with the current form values, and re-render from the
-        # filtered result set.
-        return Response(
-            fragment_html,
-            media_type='text/html',
-            headers={'HX-Trigger': 'orq:filter-changed'},
-        )
-
-    # ------------------------------------------------------------------
-    # Route: GET /r/{rid}/export  (legacy alias) + export.html
-    # ------------------------------------------------------------------
-    def _do_html_export(rid: str) -> Response:
-        path = library.resolve(rid, roots)
-        if path is None:
-            return Response('404 Not Found', status_code=404, media_type='text/plain')
-
-        surface, _raw = library.load_surface(path)
-        adapter = ADAPTERS.get(surface or '')
-        if adapter is None:
-            return Response('404 Not Found', status_code=404, media_type='text/plain')
-
-        try:
-            report_obj = adapter.load(path)
-        except Exception as exc:
-            logger.warning('Failed to load report for export {}: {}', path.name, exc)
-            return Response(
-                f'Error loading report {path.name}: {exc}',
-                status_code=422,
-                media_type='text/plain',
-            )
-        return Response(
-            adapter.export(report_obj),
-            media_type='text/html',
-            headers={'Content-Disposition': f'attachment; filename="{rid}.html"'},
-        )
-
-    @app.get('/r/{rid}/export')
-    def report_export(rid: str) -> Response:
-        return _do_html_export(rid)
-
-    @app.get('/r/{rid}/export.html')
-    def report_export_html(rid: str) -> Response:
-        return _do_html_export(rid)
-
-    # ------------------------------------------------------------------
-    # Route: GET /r/{rid}/export.md  — Markdown (redteam and sim)
-    # ------------------------------------------------------------------
-    @app.get('/r/{rid}/export.md')
-    def report_export_md(rid: str) -> Response:
-        path = library.resolve(rid, roots)
-        if path is None:
-            return Response('404 Not Found', status_code=404, media_type='text/plain')
-
-        surface, _raw = library.load_surface(path)
-        adapter = ADAPTERS.get(surface or '')
-        if adapter is None:
-            return Response('404 Not Found', status_code=404, media_type='text/plain')
-
-        if adapter.export_markdown is None:
-            return Response(
-                'no markdown export for this surface',
-                status_code=404,
-                media_type='text/plain',
-            )
-
-        try:
-            report_obj = adapter.load(path)
-        except Exception as exc:
-            logger.warning('Failed to load report for md export {}: {}', path.name, exc)
-            return Response(
-                f'Error loading report {path.name}: {exc}',
-                status_code=422,
-                media_type='text/plain',
-            )
-
-        md_text = adapter.export_markdown(report_obj)
-        return Response(
-            md_text,
-            media_type='text/markdown',
-            headers={'Content-Disposition': f'attachment; filename="{rid}.md"'},
-        )
-
-    # ------------------------------------------------------------------
-    # Route: GET /r/{rid}/export.csv  — CSV of (filtered) result rows
-    # ------------------------------------------------------------------
-    @app.get('/r/{rid}/export.csv')
-    def report_export_csv(rid: str, req: Request) -> Response:
-        path = library.resolve(rid, roots)
-        if path is None:
-            return Response('404 Not Found', status_code=404, media_type='text/plain')
-
-        surface, _raw = library.load_surface(path)
-        adapter = ADAPTERS.get(surface or '')
-        filter_def = FILTERS.get(surface or '')
-        if adapter is None:
-            return Response('404 Not Found', status_code=404, media_type='text/plain')
-
-        # sim never had a CSV export — honest parity.
-        if surface == 'sim':
-            return Response(
-                'no CSV export for simulation runs',
-                status_code=404,
-                media_type='text/plain',
-            )
-
-        if adapter.rows is None:
-            return Response(
-                'CSV export not supported for this surface',
-                status_code=404,
-                media_type='text/plain',
-            )
-
-        try:
-            report_obj = adapter.load(path)
-        except Exception as exc:
-            logger.warning('Failed to load report for csv {}: {}', path.name, exc)
-            return Response(
-                f'Error loading report {path.name}: {exc}',
-                status_code=422,
-                media_type='text/plain',
-            )
-
-        # Apply filters from the query-string (same logic as POST /filter).
-        selections = parse_selections(req, surface or '')
-        filtered = apply_or_all(report_obj, surface or '', selections)
-
-        row_dicts = adapter.rows(report_obj, filtered)
-
-        if not row_dicts:
-            # Return an empty CSV with just the header row (parity: empty filter)
-            return Response(
-                '',
-                media_type='text/csv',
-                headers={'Content-Disposition': f'attachment; filename="{rid}.csv"'},
-            )
-
-        # Headers as well as cells: a judge's model name becomes a column name.
-        buf = io.StringIO()
-        writer = csv.DictWriter(buf, fieldnames=[str(_csv_safe(k)) for k in row_dicts[0]])
-        writer.writeheader()
-        writer.writerows({str(_csv_safe(k)): _csv_safe(v) for k, v in row.items()} for row in row_dicts)
-
-        return Response(
-            buf.getvalue(),
-            media_type='text/csv',
-            headers={'Content-Disposition': f'attachment; filename="{rid}.csv"'},
-        )
-
-    # ------------------------------------------------------------------
-    # Route: GET /r/{rid}/export.json  — JSON of (filtered) result rows
-    # ------------------------------------------------------------------
-    @app.get('/r/{rid}/export.json')
-    def report_export_json(rid: str, req: Request) -> Response:
-        path = library.resolve(rid, roots)
-        if path is None:
-            return Response('404 Not Found', status_code=404, media_type='text/plain')
-
-        surface, _raw = library.load_surface(path)
-        adapter = ADAPTERS.get(surface or '')
-        filter_def = FILTERS.get(surface or '')
-        if adapter is None:
-            return Response('404 Not Found', status_code=404, media_type='text/plain')
-
-        if adapter.rows is None:
-            return Response(
-                'JSON export not supported for this surface',
-                status_code=404,
-                media_type='text/plain',
-            )
-
-        try:
-            report_obj = adapter.load(path)
-        except Exception as exc:
-            logger.warning('Failed to load report for json {}: {}', path.name, exc)
-            return Response(
-                f'Error loading report {path.name}: {exc}',
-                status_code=422,
-                media_type='text/plain',
-            )
-
-        # Apply filters from the query-string.
-        selections = parse_selections(req, surface or '')
-        filtered = apply_or_all(report_obj, surface or '', selections)
-
-        row_dicts = adapter.rows(report_obj, filtered)
-
-        json_str = json.dumps(row_dicts, indent=2, default=str)
-        return Response(
-            json_str,
-            media_type='application/json',
-            headers={'Content-Disposition': f'attachment; filename="{rid}.json"'},
-        )
-
+    register_report_routes(app, roots)
     # ------------------------------------------------------------------
     # Routes: GET /r/{rid}/view/*  — redteam interactive fragment views
     # ------------------------------------------------------------------
