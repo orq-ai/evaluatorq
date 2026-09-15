@@ -9,6 +9,7 @@ import re
 import shlex
 import sys
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
@@ -241,6 +242,117 @@ def _evaluation_error_hint(report: RedTeamReport) -> str:
     sample = next((msg for code, msg in causes if code == top_code), '')
     detail = f': {sample[:200]}' if sample else ''
     return f'Dominant failure: {top_code} ({top_n}/{len(causes)} unscored attacks){detail}. {_GENERIC_EVAL_HINT}'
+
+
+@dataclass(frozen=True)
+class RunOptions:
+    strategies: list[str] | None
+    delivery_methods: list[DeliveryMethod | str] | None
+    categories: list[str] | None
+    vulnerabilities: list[str] | None
+    target_config: Any
+    targets: list[str] | str
+    config: LLMConfig
+
+
+def _resolve_run_options(
+    target: list[str],
+    categories: list[str] | None,
+    vulnerabilities: list[str] | None,
+    strategies: list[str] | None,
+    delivery_methods: list[str] | None,
+    system_prompt: str | None,
+    attack_model: str,
+    evaluator_model: str,
+    min_evaluation_coverage: float,
+    target_timeout_ms: int,
+    max_target_retries: int,
+    retry_count: int,
+    max_tool_continuations: int,
+    target_reasoning_effort: str | None,
+) -> RunOptions:
+    from evaluatorq.redteam.contracts import LLMCallConfig, TargetConfig
+
+    # Allow comma-separated values within repeatable flags (-s a,b == -s a -s b).
+    # Done before validation so the checks below see individual tokens.
+    strategies = _split_csv(strategies)
+    delivery_tokens = _split_csv(delivery_methods)
+    categories = _split_csv(categories)
+    vulnerabilities = _split_csv(vulnerabilities)
+
+    # Validate vulnerability IDs early for a clean error message
+    if vulnerabilities:
+        from evaluatorq.redteam.vulnerability_registry import CATEGORY_TO_VULNERABILITY
+
+        valid_ids = {v.value for v in Vulnerability} | set(CATEGORY_TO_VULNERABILITY.keys())
+        for v in vulnerabilities:
+            if v not in valid_ids:
+                raise typer.BadParameter(
+                    f'Unknown vulnerability ID: {v!r}. Valid IDs: {sorted(vi.value for vi in Vulnerability)}'
+                )
+
+    # Validate strategy names early: must be a registered strategy or a
+    # runtime-generated name (generated_* prefix). Mirrors --vulnerability.
+    if strategies:
+        from evaluatorq.redteam.adaptive.strategy_registry import known_strategy_names
+
+        known = known_strategy_names()
+        unknown = [s for s in strategies if s not in known and not s.startswith('generated_')]
+        if unknown:
+            raise typer.BadParameter(
+                f'Unknown strategy name(s): {unknown}. '
+                f"Valid names: {sorted(known)} (or a 'generated_*' name from a prior run)."
+            )
+
+    # Resolve delivery methods against the registry (enum plus registered), parsed
+    # as plain strings to support comma-separated input which typer's enum
+    # binding cannot do. Known values coerce to the DeliveryMethod object;
+    # unknown ones are an open set — kept as raw strings (so a dataset's custom
+    # delivery method is still filterable) with a warning, not a hard error.
+    resolved_delivery_methods: list[DeliveryMethod | str] | None = None
+    if delivery_tokens:
+        from evaluatorq.redteam.delivery_method_registry import (
+            delivery_method_str,
+            is_known_delivery_method,
+            list_available_delivery_methods,
+            resolve_delivery_methods,
+        )
+
+        unknown = [d for d in delivery_tokens if not is_known_delivery_method(d)]
+        if unknown:
+            # delivery_method_str, not str(): a member's str() is its repr on the
+            # 3.10 StrEnum polyfill, which would print unusable 'DeliveryMethod.X'.
+            known_repr = sorted(delivery_method_str(m) for m in list_available_delivery_methods())
+            typer.echo(
+                f'Warning: delivery method(s) {unknown} are not known delivery methods {known_repr}; '
+                'filtering by them literally (they will only match a dataset row spelled exactly the same).',
+                err=True,
+            )
+        resolved_delivery_methods = resolve_delivery_methods(list(delivery_tokens))
+
+    target_config = TargetConfig(system_prompt=system_prompt) if system_prompt else None
+    targets: list[str] | str = target if len(target) > 1 else target[0]
+
+    # Build LLMConfig from CLI flags
+    config = LLMConfig(
+        attacker=LLMCallConfig(model=attack_model),
+        evaluator=EvaluatorConfig(model=evaluator_model, min_evaluation_coverage=min_evaluation_coverage),
+        target_agent_timeout_ms=target_timeout_ms,
+        max_target_retries=max_target_retries,
+        retry_count=retry_count,
+        max_tool_continuations=max_tool_continuations,
+        target_reasoning_effort=target_reasoning_effort,
+    )
+
+    return RunOptions(
+        strategies=strategies,
+        delivery_methods=resolved_delivery_methods,
+        categories=categories,
+        vulnerabilities=vulnerabilities,
+        target_config=target_config,
+        targets=targets,
+        config=config,
+    )
 
 
 @app.command(no_args_is_help=True, epilog=_RUN_EPILOG)
@@ -515,80 +627,32 @@ def run(
 
     from evaluatorq.common.replay import ReplayError
     from evaluatorq.redteam import red_team
-    from evaluatorq.redteam.contracts import LLMCallConfig, TargetConfig
     from evaluatorq.redteam.exceptions import CancelledError, RedTeamError
     from evaluatorq.redteam.hooks import RichHooks
 
-    # Allow comma-separated values within repeatable flags (-s a,b == -s a -s b).
-    # Done before validation so the checks below see individual tokens.
-    strategies = _split_csv(strategies)
-    delivery_tokens = _split_csv(delivery_methods)
-    categories = _split_csv(categories)
-    vulnerabilities = _split_csv(vulnerabilities)
-
-    # Validate vulnerability IDs early for a clean error message
-    if vulnerabilities:
-        from evaluatorq.redteam.vulnerability_registry import CATEGORY_TO_VULNERABILITY
-
-        valid_ids = {v.value for v in Vulnerability} | set(CATEGORY_TO_VULNERABILITY.keys())
-        for v in vulnerabilities:
-            if v not in valid_ids:
-                raise typer.BadParameter(
-                    f'Unknown vulnerability ID: {v!r}. Valid IDs: {sorted(vi.value for vi in Vulnerability)}'
-                )
-
-    # Validate strategy names early: must be a registered strategy or a
-    # runtime-generated name (generated_* prefix). Mirrors --vulnerability.
-    if strategies:
-        from evaluatorq.redteam.adaptive.strategy_registry import known_strategy_names
-
-        known = known_strategy_names()
-        unknown = [s for s in strategies if s not in known and not s.startswith('generated_')]
-        if unknown:
-            raise typer.BadParameter(
-                f'Unknown strategy name(s): {unknown}. '
-                f"Valid names: {sorted(known)} (or a 'generated_*' name from a prior run)."
-            )
-
-    # Resolve delivery methods against the registry (enum plus registered), parsed
-    # as plain strings to support comma-separated input which typer's enum
-    # binding cannot do. Known values coerce to the DeliveryMethod object;
-    # unknown ones are an open set — kept as raw strings (so a dataset's custom
-    # delivery method is still filterable) with a warning, not a hard error.
-    resolved_delivery_methods: list[DeliveryMethod | str] | None = None
-    if delivery_tokens:
-        from evaluatorq.redteam.delivery_method_registry import (
-            delivery_method_str,
-            is_known_delivery_method,
-            list_available_delivery_methods,
-            resolve_delivery_methods,
-        )
-
-        unknown = [d for d in delivery_tokens if not is_known_delivery_method(d)]
-        if unknown:
-            # delivery_method_str, not str(): a member's str() is its repr on the
-            # 3.10 StrEnum polyfill, which would print unusable 'DeliveryMethod.X'.
-            known_repr = sorted(delivery_method_str(m) for m in list_available_delivery_methods())
-            typer.echo(
-                f'Warning: delivery method(s) {unknown} are not known delivery methods {known_repr}; '
-                'filtering by them literally (they will only match a dataset row spelled exactly the same).',
-                err=True,
-            )
-        resolved_delivery_methods = resolve_delivery_methods(list(delivery_tokens))
-
-    target_config = TargetConfig(system_prompt=system_prompt) if system_prompt else None
-    targets: list[str] | str = target if len(target) > 1 else target[0]
-
-    # Build LLMConfig from CLI flags
-    config = LLMConfig(
-        attacker=LLMCallConfig(model=attack_model),
-        evaluator=EvaluatorConfig(model=evaluator_model, min_evaluation_coverage=min_evaluation_coverage),
-        target_agent_timeout_ms=target_timeout_ms,
+    options = _resolve_run_options(
+        target=target,
+        categories=categories,
+        vulnerabilities=vulnerabilities,
+        strategies=strategies,
+        delivery_methods=delivery_methods,
+        system_prompt=system_prompt,
+        attack_model=attack_model,
+        evaluator_model=evaluator_model,
+        min_evaluation_coverage=min_evaluation_coverage,
+        target_timeout_ms=target_timeout_ms,
         max_target_retries=max_target_retries,
         retry_count=retry_count,
         max_tool_continuations=max_tool_continuations,
         target_reasoning_effort=target_reasoning_effort,
     )
+    strategies = options.strategies
+    resolved_delivery_methods = options.delivery_methods
+    categories = options.categories
+    vulnerabilities = options.vulnerabilities
+    target_config = options.target_config
+    targets = options.targets
+    config = options.config
 
     try:
         report = asyncio.run(
@@ -732,6 +796,77 @@ def ui(
     launch_streamlit(dashboard_script, report_path, port=port, host=host, extra='redteam')
 
 
+def _import_hf_download() -> Any:
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError:
+        typer.echo(
+            'huggingface-hub not installed. Install with: uv add "evaluatorq[redteam]" '
+            '(or: python -m pip install "evaluatorq[redteam]")',
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    return hf_hub_download
+
+
+def _download_and_read_hf_dataset(hf_hub_download: Any, repo: str, filename: str) -> Any:
+    typer.echo(f'Downloading from HuggingFace: {repo}/{filename}')
+    try:
+        local_path = hf_hub_download(repo_id=repo, filename=filename, repo_type='dataset')
+    except Exception as e:
+        typer.echo(
+            f'Failed to download dataset from HuggingFace ({repo}/{filename}): {e}. '
+            'Check your network connection, that the repository exists, and your '
+            'access (set HF_TOKEN for gated/private datasets).',
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    try:
+        with open(local_path) as f:
+            raw = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        typer.echo(f'Failed to read dataset file: {e}', err=True)
+        raise typer.Exit(code=1)
+    return raw
+
+
+def _load_raw_dataset(dataset: str | None) -> Any:
+    # Load raw JSON via the unified dataset loader's internal helpers
+    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import (
+        DEFAULT_HF_FILENAME,
+        DEFAULT_HF_REPO,
+        _parse_hf_source,
+    )
+
+    if dataset is None:
+        hf_hub_download = _import_hf_download()
+        return _download_and_read_hf_dataset(hf_hub_download, DEFAULT_HF_REPO, DEFAULT_HF_FILENAME)
+    if dataset.startswith('hf:'):
+        hf_hub_download = _import_hf_download()
+        repo, filename = _parse_hf_source(dataset.removeprefix('hf:'))
+        return _download_and_read_hf_dataset(hf_hub_download, repo, filename)
+    path = Path(dataset)
+    typer.echo(f'Validating local file: {path}')
+    with path.open() as f:
+        return json.load(f)
+
+
+def _collect_sample_errors(samples: Any) -> list[str]:
+    from pydantic import ValidationError as _ValidationError
+
+    from evaluatorq.redteam.contracts import RedTeamSample
+
+    errors: list[str] = []
+    for i, sample in enumerate(samples):
+        try:
+            RedTeamSample.model_validate(sample)
+        except _ValidationError as e:  # noqa: PERF203
+            for err in e.errors():
+                loc = ' -> '.join(str(loc_part) for loc_part in err['loc'])
+                errors.append(f'  sample[{i}].{loc}: {err["msg"]}')
+    return errors
+
+
 @app.command()
 def validate_dataset(
     dataset: Annotated[
@@ -747,79 +882,7 @@ def validate_dataset(
     are well-formed.  Does NOT enforce enum membership for open-set
     fields like attack_technique or delivery_method.
     """
-    from pydantic import ValidationError as _ValidationError
-
-    from evaluatorq.redteam.contracts import RedTeamSample
-
-    # Load raw JSON via the unified dataset loader's internal helpers
-    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import (
-        DEFAULT_HF_FILENAME,
-        DEFAULT_HF_REPO,
-        _parse_hf_source,
-    )
-
-    if dataset is None:
-        # Default: download from HuggingFace
-        try:
-            from huggingface_hub import hf_hub_download
-        except ImportError:
-            typer.echo(
-                'huggingface-hub not installed. Install with: uv add "evaluatorq[redteam]" '
-                '(or: python -m pip install "evaluatorq[redteam]")',
-                err=True,
-            )
-            raise typer.Exit(code=1)
-        typer.echo(f'Downloading from HuggingFace: {DEFAULT_HF_REPO}/{DEFAULT_HF_FILENAME}')
-        try:
-            local_path = hf_hub_download(repo_id=DEFAULT_HF_REPO, filename=DEFAULT_HF_FILENAME, repo_type='dataset')
-        except Exception as e:
-            typer.echo(
-                f'Failed to download dataset from HuggingFace '
-                f'({DEFAULT_HF_REPO}/{DEFAULT_HF_FILENAME}): {e}. Check your network '
-                'connection, that the repository exists, and your access '
-                '(set HF_TOKEN for gated/private datasets).',
-                err=True,
-            )
-            raise typer.Exit(code=1)
-        try:
-            with open(local_path) as f:
-                raw = json.load(f)
-        except (OSError, json.JSONDecodeError) as e:
-            typer.echo(f'Failed to read dataset file: {e}', err=True)
-            raise typer.Exit(code=1)
-    elif dataset.startswith('hf:'):
-        try:
-            from huggingface_hub import hf_hub_download
-        except ImportError:
-            typer.echo(
-                'huggingface-hub not installed. Install with: uv add "evaluatorq[redteam]" '
-                '(or: python -m pip install "evaluatorq[redteam]")',
-                err=True,
-            )
-            raise typer.Exit(code=1)
-        repo, filename = _parse_hf_source(dataset.removeprefix('hf:'))
-        typer.echo(f'Downloading from HuggingFace: {repo}/{filename}')
-        try:
-            local_path = hf_hub_download(repo_id=repo, filename=filename, repo_type='dataset')
-        except Exception as e:
-            typer.echo(
-                f'Failed to download dataset from HuggingFace ({repo}/{filename}): {e}. '
-                'Check your network connection, that the repository exists, and your '
-                'access (set HF_TOKEN for gated/private datasets).',
-                err=True,
-            )
-            raise typer.Exit(code=1)
-        try:
-            with open(local_path) as f:
-                raw = json.load(f)
-        except (OSError, json.JSONDecodeError) as e:
-            typer.echo(f'Failed to read dataset file: {e}', err=True)
-            raise typer.Exit(code=1)
-    else:
-        path = Path(dataset)
-        typer.echo(f'Validating local file: {path}')
-        with path.open() as f:
-            raw = json.load(f)
+    raw = _load_raw_dataset(dataset)
 
     # Validate top-level shape
     if not isinstance(raw, dict) or 'samples' not in raw:
@@ -829,14 +892,7 @@ def validate_dataset(
     samples = raw['samples']
     typer.echo(f'Found {len(samples)} samples.')
 
-    errors: list[str] = []
-    for i, sample in enumerate(samples):
-        try:
-            RedTeamSample.model_validate(sample)
-        except _ValidationError as e:  # noqa: PERF203
-            for err in e.errors():
-                loc = ' -> '.join(str(loc_part) for loc_part in err['loc'])
-                errors.append(f'  sample[{i}].{loc}: {err["msg"]}')
+    errors = _collect_sample_errors(samples)
 
     if errors:
         typer.echo(f'\nFAIL: {len(errors)} validation error(s):', err=True)
@@ -847,6 +903,64 @@ def validate_dataset(
         raise typer.Exit(code=1)
 
     typer.echo(f'OK: All {len(samples)} samples are valid.')
+
+
+def _row(manifest: Any, report_path: Path | None, _manifest_card_id: Any) -> dict[str, Any] | None:
+    """Normalize a (manifest, report_path) record to the fields the table needs.
+
+    Manifest rows read the compact ``summary`` (no full-report read); legacy
+    rows (manifest is None) read the full report as before. Returns None when
+    a legacy report can't be parsed.
+    """
+    if manifest is not None:
+        summary = manifest.summary or {}
+        rid = report_id(report_path) if report_path is not None else _manifest_card_id(manifest.run_id)
+        return {
+            'report_id': rid,
+            'run_name': manifest.run_name,
+            'created_at': manifest.started_at.isoformat(),
+            'status': manifest.status.value,
+            'pipeline': summary.get('pipeline'),
+            'tested_agents': summary.get('tested_agents', []),
+            'total_attacks': summary.get('total_attacks', summary.get('total_results')),
+            'vulnerability_rate': summary.get('vulnerability_rate'),
+            'file': report_path.name if report_path is not None else None,
+            # Which summary shape these stats came from; None on a legacy row
+            # built by reading the report itself (see RUN_SUMMARY_VERSION).
+            'summary_version': manifest.summary_version,
+        }
+    # Legacy report with no manifest — read the full report for its stats.
+    if report_path is None:
+        return None
+    try:
+        data = json.loads(report_path.read_text(encoding='utf-8'))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    summary = data.get('summary', {})
+    if not isinstance(summary, dict):
+        return None  # malformed report shape — skip (matches legacy behavior)
+    return {
+        'report_id': report_id(report_path),
+        'run_name': data.get('run_name', report_path.stem),
+        'created_at': data.get('created_at'),
+        'status': 'completed',
+        'pipeline': data.get('pipeline'),
+        'tested_agents': data.get('tested_agents', []),
+        'total_attacks': summary.get('total_attacks', data.get('total_results')),
+        'vulnerability_rate': summary.get('vulnerability_rate'),
+        'file': report_path.name,
+        'summary_version': None,  # read from the report, not from a stored summary
+    }
+
+
+def _fmt_created(created: Any) -> str:
+    return created[:16].replace('T', ' ') if isinstance(created, str) and len(created) >= 16 else str(created or '')
+
+
+def _fmt_asr(asr: Any) -> str:
+    return f'{asr:.0%}' if isinstance(asr, (int, float)) else '—'
 
 
 @app.command()
@@ -890,59 +1004,10 @@ def runs(
         typer.echo(f'No runs found in {runs_dir}.')
         raise typer.Exit(code=0)
 
-    def _row(manifest: Any, report_path: Path | None) -> dict[str, Any] | None:
-        """Normalize a (manifest, report_path) record to the fields the table needs.
-
-        Manifest rows read the compact ``summary`` (no full-report read); legacy
-        rows (manifest is None) read the full report as before. Returns None when
-        a legacy report can't be parsed.
-        """
-        if manifest is not None:
-            summary = manifest.summary or {}
-            rid = report_id(report_path) if report_path is not None else _manifest_card_id(manifest.run_id)
-            return {
-                'report_id': rid,
-                'run_name': manifest.run_name,
-                'created_at': manifest.started_at.isoformat(),
-                'status': manifest.status.value,
-                'pipeline': summary.get('pipeline'),
-                'tested_agents': summary.get('tested_agents', []),
-                'total_attacks': summary.get('total_attacks', summary.get('total_results')),
-                'vulnerability_rate': summary.get('vulnerability_rate'),
-                'file': report_path.name if report_path is not None else None,
-                # Which summary shape these stats came from; None on a legacy row
-                # built by reading the report itself (see RUN_SUMMARY_VERSION).
-                'summary_version': manifest.summary_version,
-            }
-        # Legacy report with no manifest — read the full report for its stats.
-        if report_path is None:
-            return None
-        try:
-            data = json.loads(report_path.read_text(encoding='utf-8'))
-        except (json.JSONDecodeError, OSError):
-            return None
-        if not isinstance(data, dict):
-            return None
-        summary = data.get('summary', {})
-        if not isinstance(summary, dict):
-            return None  # malformed report shape — skip (matches legacy behavior)
-        return {
-            'report_id': report_id(report_path),
-            'run_name': data.get('run_name', report_path.stem),
-            'created_at': data.get('created_at'),
-            'status': 'completed',
-            'pipeline': data.get('pipeline'),
-            'tested_agents': data.get('tested_agents', []),
-            'total_attacks': summary.get('total_attacks', data.get('total_results')),
-            'vulnerability_rate': summary.get('vulnerability_rate'),
-            'file': report_path.name,
-            'summary_version': None,  # read from the report, not from a stored summary
-        }
-
     rows: list[dict[str, Any]] = []
     skipped = 0
     for manifest, report_path in records_src:
-        row = _row(manifest, report_path)
+        row = _row(manifest, report_path, _manifest_card_id)
         if row is None:
             skipped += 1
             continue
@@ -953,12 +1018,6 @@ def runs(
         if skipped:
             typer.echo(f'Warning: {skipped} file(s) could not be parsed and were skipped.', err=True)
         raise typer.Exit(code=0)
-
-    def _fmt_created(created: Any) -> str:
-        return created[:16].replace('T', ' ') if isinstance(created, str) and len(created) >= 16 else str(created or '')
-
-    def _fmt_asr(asr: Any) -> str:
-        return f'{asr:.0%}' if isinstance(asr, (int, float)) else '—'
 
     try:
         from rich import box

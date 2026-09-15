@@ -32,6 +32,7 @@ import logging
 import os
 import shlex
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, NoReturn
 
@@ -493,6 +494,70 @@ _UPLOAD_DATASET_EPILOG = _examples(
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class SimulateOptions:
+    verbose: int
+    hooks: Any
+
+
+def _resolve_simulate_options(
+    *,
+    datapoints: Path | None,
+    dataset_id: str | None,
+    experiment_id: str | None,
+    experiment_run_id: str | None,
+    from_run: str | None,
+    sim_model: str,
+    verbose: int,
+    quiet: bool,
+    yes: bool,
+    executive_summary: bool,
+) -> SimulateOptions:
+    if quiet:
+        verbose = -1
+
+    hooks: Any = None
+    log_console: Any = None
+    if not quiet:
+        from rich.console import Console
+
+        from evaluatorq.simulation.hooks import RichHooks
+
+        log_console = Console(stderr=True)
+        hooks = RichHooks(
+            console=log_console,
+            skip_confirm=should_skip_confirm(yes),
+            defer_summary=executive_summary,
+            verbose=verbose,
+        )
+    _configure_logging(verbose, console=log_console)
+    _echo_using(sim_model)
+
+    sources = [
+        name
+        for name, given in (
+            ('--input', datapoints),
+            ('--dataset-id', dataset_id),
+            ('--experiment-id', experiment_id),
+            ('--from-run', from_run),
+        )
+        if given is not None
+    ]
+    if len(sources) != 1:
+        got = f' (got: {", ".join(sources)})' if sources else ''
+        raise typer.BadParameter(f'Provide exactly one of --input, --dataset-id, --experiment-id, or --from-run{got}.')
+    if experiment_run_id is not None and experiment_id is None:
+        raise typer.BadParameter('--experiment-run-id requires --experiment-id.')
+    if datapoints is not None and not datapoints.exists():
+        raise typer.BadParameter(f'Datapoints file not found: {datapoints}')
+    if dataset_id is not None:
+        _require_orq_api_key('--dataset-id')
+    if experiment_id is not None:
+        _require_orq_api_key('--experiment-id')
+
+    return SimulateOptions(verbose=verbose, hooks=hooks)
+
+
 @app.command(no_args_is_help=True, epilog=_SIMULATE_EPILOG)
 def simulate(
     datapoints: Annotated[
@@ -705,47 +770,20 @@ def simulate(
     Note: --target agent:<key> invokes a hosted Orq agent through the Responses
     router. --target deployment:<key> uses the deployment callback path.
     """
-    if quiet:
-        verbose = -1
-
-    hooks: Any = None
-    log_console: Any = None
-    if not quiet:
-        from rich.console import Console
-
-        from evaluatorq.simulation.hooks import RichHooks
-
-        log_console = Console(stderr=True)
-        hooks = RichHooks(
-            console=log_console,
-            skip_confirm=should_skip_confirm(yes),
-            defer_summary=executive_summary,
-            verbose=verbose,
-        )
-    _configure_logging(verbose, console=log_console)
-    _echo_using(sim_model)
-
-    sources = [
-        name
-        for name, given in (
-            ('--input', datapoints),
-            ('--dataset-id', dataset_id),
-            ('--experiment-id', experiment_id),
-            ('--from-run', from_run),
-        )
-        if given is not None
-    ]
-    if len(sources) != 1:
-        got = f' (got: {", ".join(sources)})' if sources else ''
-        raise typer.BadParameter(f'Provide exactly one of --input, --dataset-id, --experiment-id, or --from-run{got}.')
-    if experiment_run_id is not None and experiment_id is None:
-        raise typer.BadParameter('--experiment-run-id requires --experiment-id.')
-    if datapoints is not None and not datapoints.exists():
-        raise typer.BadParameter(f'Datapoints file not found: {datapoints}')
-    if dataset_id is not None:
-        _require_orq_api_key('--dataset-id')
-    if experiment_id is not None:
-        _require_orq_api_key('--experiment-id')
+    options = _resolve_simulate_options(
+        datapoints=datapoints,
+        dataset_id=dataset_id,
+        experiment_id=experiment_id,
+        experiment_run_id=experiment_run_id,
+        from_run=from_run,
+        sim_model=sim_model,
+        verbose=verbose,
+        quiet=quiet,
+        yes=yes,
+        executive_summary=executive_summary,
+    )
+    verbose = options.verbose
+    hooks = options.hooks
 
     try:
         resolved_target = _resolve_target(
@@ -1883,6 +1921,56 @@ def upload_dataset(
 # ---------------------------------------------------------------------------
 
 
+def _record(manifest: Any, report_path: Path | None, _manifest_card_id: Any) -> dict[str, Any] | None:
+    """Normalize a (manifest, report_path) record to display/JSON fields.
+
+    Manifest rows read the compact ``summary`` (no full-report read); legacy
+    rows (manifest is None) read the full report. Returns None on a legacy
+    report that can't be parsed.
+    """
+    if manifest is not None:
+        summary = manifest.summary or {}
+        rid = report_id(report_path) if report_path is not None else _manifest_card_id(manifest.run_id)
+        return {
+            'report_id': rid,
+            'run_name': manifest.run_name,
+            'created_at': manifest.started_at.isoformat(),
+            'status': manifest.status.value,
+            'mode': summary.get('mode'),
+            'target_kind': summary.get('target_kind'),
+            'total_results': summary.get('total_results'),
+            'scorer_averages': summary.get('scorer_averages', {}),
+            'file': report_path.name if report_path is not None else None,
+            # Which summary shape these stats came from; None on a legacy row
+            # built by reading the report itself (see RUN_SUMMARY_VERSION).
+            'summary_version': manifest.summary_version,
+        }
+    if report_path is None:
+        return None
+    try:
+        data = json.loads(report_path.read_text(encoding='utf-8'))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return {
+        'report_id': report_id(report_path),
+        'run_name': data.get('run_name'),
+        'created_at': data.get('created_at'),
+        'status': 'completed',
+        'mode': data.get('mode'),
+        'target_kind': data.get('target_kind'),
+        'total_results': data.get('total_results'),
+        'scorer_averages': data.get('scorer_averages', {}),
+        'file': report_path.name,
+        'summary_version': None,  # read from the report, not from a stored summary
+    }
+
+
+def _fmt_date(created: Any) -> str:
+    return created[:19].replace('T', ' ') if isinstance(created, str) else str(created or '—')
+
+
 @app.command()
 def runs(
     directory: Annotated[
@@ -1928,55 +2016,10 @@ def runs(
         typer.echo(f'No runs found in {runs_dir}')
         raise typer.Exit(0)
 
-    def _record(manifest: Any, report_path: Path | None) -> dict[str, Any] | None:
-        """Normalize a (manifest, report_path) record to display/JSON fields.
-
-        Manifest rows read the compact ``summary`` (no full-report read); legacy
-        rows (manifest is None) read the full report. Returns None on a legacy
-        report that can't be parsed.
-        """
-        if manifest is not None:
-            summary = manifest.summary or {}
-            rid = report_id(report_path) if report_path is not None else _manifest_card_id(manifest.run_id)
-            return {
-                'report_id': rid,
-                'run_name': manifest.run_name,
-                'created_at': manifest.started_at.isoformat(),
-                'status': manifest.status.value,
-                'mode': summary.get('mode'),
-                'target_kind': summary.get('target_kind'),
-                'total_results': summary.get('total_results'),
-                'scorer_averages': summary.get('scorer_averages', {}),
-                'file': report_path.name if report_path is not None else None,
-                # Which summary shape these stats came from; None on a legacy row
-                # built by reading the report itself (see RUN_SUMMARY_VERSION).
-                'summary_version': manifest.summary_version,
-            }
-        if report_path is None:
-            return None
-        try:
-            data = json.loads(report_path.read_text(encoding='utf-8'))
-        except (json.JSONDecodeError, OSError):
-            return None
-        if not isinstance(data, dict):
-            return None
-        return {
-            'report_id': report_id(report_path),
-            'run_name': data.get('run_name'),
-            'created_at': data.get('created_at'),
-            'status': 'completed',
-            'mode': data.get('mode'),
-            'target_kind': data.get('target_kind'),
-            'total_results': data.get('total_results'),
-            'scorer_averages': data.get('scorer_averages', {}),
-            'file': report_path.name,
-            'summary_version': None,  # read from the report, not from a stored summary
-        }
-
     records: list[dict[str, Any]] = []
     malformed = 0
     for manifest, report_path in records_src:
-        rec = _record(manifest, report_path)
+        rec = _record(manifest, report_path, _manifest_card_id)
         if rec is None:
             malformed += 1
             continue
@@ -1987,9 +2030,6 @@ def runs(
         if malformed:
             typer.echo(f'Warning: {malformed} malformed file(s) skipped.', err=True)
         raise typer.Exit(0)
-
-    def _fmt_date(created: Any) -> str:
-        return created[:19].replace('T', ' ') if isinstance(created, str) else str(created or '—')
 
     rows: list[dict[str, Any]] = [
         {
