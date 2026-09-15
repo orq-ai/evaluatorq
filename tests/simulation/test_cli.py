@@ -2316,3 +2316,50 @@ def test_run_no_recommendations_flag_skips_generation(
     await_args = mock_impl.await_args
     assert await_args is not None
     assert await_args.kwargs['recommendations'] is False
+
+
+def test_generate_forwards_generation_instructions(tmp_path: Path) -> None:
+    """RES-1087 review: --generation-instructions on `sim generate` must reach _generate_impl."""
+    out_file = tmp_path / "dp.jsonl"
+
+    with patch("evaluatorq.simulation.cli._generate_impl", new_callable=AsyncMock) as mock_impl:
+        mock_impl.return_value = _make_datapoints(2)
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                "--agent-description", "A helpful bot",
+                "--datapoints", str(out_file),
+                "--generation-instructions", "all replying in German",
+            ],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    assert mock_impl.call_args.kwargs["generation_instructions"] == "all replying in German"
+
+
+def test_run_forwards_generation_instructions(tmp_path: Path) -> None:
+    """--generation-instructions on `sim run` must reach _run_impl."""
+    with (
+        patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
+        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
+    ):
+        mock_target.return_value = MagicMock()
+        mock_impl.return_value = _stub_run([_make_result()], mode="run")
+
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--agent-description", "A helpful bot",
+                "--openai-model", "gpt-4o",
+                "--generation-instructions", "EU consumer-law framing",
+                "--no-save",
+            ],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    assert mock_impl.call_args.kwargs["generation_instructions"] == "EU consumer-law framing"

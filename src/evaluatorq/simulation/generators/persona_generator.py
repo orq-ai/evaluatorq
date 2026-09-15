@@ -159,6 +159,7 @@ class PersonaGenerator(UsageTracking):
         num_personas: int = 5,
         edge_case_percentage: float = 0.2,
         seed: str = '',
+        generation_instructions: str = '',
     ) -> list[Persona]:
         """Generate personas for agent testing.
 
@@ -166,6 +167,20 @@ class PersonaGenerator(UsageTracking):
         (e.g. ``"angry customer"``); the LLM fills the remaining traits. This is
         the intermediate tier between fully-auto generation and hand-built
         ``Persona`` objects.
+
+        ``generation_instructions`` is a free-text steer applied to the whole
+        batch (e.g. ``"all B2B procurement managers, replying in German"``). It is
+        stacked on top of the auto/seed instruction, not a replacement, and
+        composes with ``seed``. Like ``seed`` it is meant to STEER generation, so
+        it is passed through as an instruction rather than ``delimit()``-ed; that
+        is the instruction-vs-data line, not the channel. ``agent_description``
+        and ``context`` arrive through the same caller but are data the personas
+        describe, so those are delimited. The output shape is not held by where
+        this steer sits in the prompt: ``generate_structured`` enforces the
+        ``PersonaListResponse`` schema via ``response_format`` (the Responses
+        structured-output path), so the JSON contract holds regardless of the
+        steer. Only the ``json_object`` fallback would depend on prompt wording,
+        so do not copy this pass-through to a prompt-only, unvalidated call site.
 
         Retry is owned by ``with_retry``; client retries are disabled.
         """
@@ -195,6 +210,12 @@ class PersonaGenerator(UsageTracking):
                     f'- Include {num_edge_cases} edge case/challenging personas\n'
                     '- Ensure variety in patience, assertiveness, and technical levels\n'
                     "- Create realistic backgrounds relevant to the agent's domain"
+                )
+
+            if generation_instructions:
+                instructions += (
+                    '\n\nAdditional instructions from the caller (apply to every persona, '
+                    f'but keep each persona valid and coherent):\n{generation_instructions}'
                 )
 
             user_prompt = f"""Agent Description: {delimit(agent_description)}
