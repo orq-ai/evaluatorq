@@ -95,6 +95,82 @@ def _lc_message_role(msg: Any) -> str:
     return _LC_TYPE_TO_ROLE.get(get_message_type(msg), '')
 
 
+def _extract_tool_calls(result: list[Any]) -> list[OutputMessage]:
+    output_items: list[OutputMessage] = []
+    tool_index: dict[str, int] = {}
+    for msg in result:
+        role = _lc_message_role(msg)
+        # Peels the messages_to_dict()/constructor envelope; a no-op on message objects.
+        data = get_message_data(msg)
+
+        if role == 'tool':
+            tool_call_id = str(get_attr(data, 'tool_call_id', '') or '')
+            # pop: a second ToolMessage for the same id must not overwrite the first.
+            idx = tool_index.pop(tool_call_id, None)
+            if idx is None:
+                logger.warning(
+                    'LangGraphTarget: discarding the tool result for call_id=%r — no tool call with that '
+                    'id was emitted in this ainvoke. In interrupt()/resume graphs the call was emitted '
+                    '(and dropped, result=None) in an earlier turn, so neither it nor this result reaches '
+                    'the transcript.',
+                    tool_call_id,
+                )
+                continue
+            # tool_index only ever holds indices of ToolCallOutputItems.
+            item = cast('ToolCallOutputItem', output_items[idx])
+            output_items[idx] = item.model_copy(
+                update={'result': _lc_tool_result_to_text(get_attr(data, 'content', ''))}
+            )
+            continue
+        if not role:
+            logger.warning(
+                'LangGraphTarget: skipping a state message of unrecognized shape (type=%r); any tool '
+                'calls or results it carries will not appear in the transcript.',
+                type(msg).__name__,
+            )
+            continue
+        if role != 'assistant':
+            continue
+
+        msg_content = _lc_content_to_text(get_attr(data, 'content', ''))
+        if msg_content:
+            output_items.append(TextOutputItem(text=msg_content, annotations=[]))
+
+        for tc in get_attr(data, 'tool_calls', None) or []:
+            call_id = get_attr(tc, 'id', '')
+            name = str(get_attr(tc, 'name', ''))
+            args = get_attr(tc, 'args', {})
+            args_str = json.dumps(args if isinstance(args, dict) else {}, default=str)
+            # ``id`` is the Responses item id, never the provider's — see
+            # ``openresponses.input_items.responses_function_call_item_id``.
+            if not call_id:
+                logger.warning(
+                    'LangGraphTarget: tool call %r was emitted without an id, so its ToolMessage result '
+                    'cannot be paired with it and the call is dropped from the transcript.',
+                    name,
+                )
+                output_items.append(ToolCallOutputItem(name=name, arguments=args_str))
+                continue
+            output_items.append(ToolCallOutputItem(name=name, arguments=args_str, call_id=call_id))
+            tool_index[str(call_id)] = len(output_items) - 1
+    return output_items
+
+
+def _extract_final_message(result: list[Any], output_items: list[OutputMessage]) -> list[OutputMessage]:
+    # Fallback: if no AIMessage text was emitted (e.g. duck-typed message objects
+    # that don't subclass AIMessage), use the last message's .content so that
+    # AgentResponse.text remains well-defined.
+    if not any(isinstance(item, TextOutputItem) for item in output_items):
+        last = result[-1]
+        logger.warning(
+            'LangGraphTarget: no AIMessage text in turn; falling back to last message content (type=%s)',
+            type(last).__name__,
+        )
+        last_content = last.get('content', '') if isinstance(last, dict) else getattr(last, 'content', '')
+        output_items.append(TextOutputItem(text=_lc_content_to_text(last_content), annotations=[]))
+    return output_items
+
+
 class _TokenUsageCollector(BaseCallbackHandler):
     """Sync LangChain callback handler that accumulates token usage across LLM calls.
 
@@ -319,76 +395,11 @@ class LangGraphTarget(AgentTarget):
                 len(result_messages),
             )
             sliced = result_messages
-        tool_index: dict[str, int] = {}
-        for msg in sliced:
-            role = _lc_message_role(msg)
-            # Peels the messages_to_dict()/constructor envelope; a no-op on message objects.
-            data = get_message_data(msg)
-
-            if role == 'tool':
-                tool_call_id = str(get_attr(data, 'tool_call_id', '') or '')
-                # pop: a second ToolMessage for the same id must not overwrite the first.
-                idx = tool_index.pop(tool_call_id, None)
-                if idx is None:
-                    logger.warning(
-                        'LangGraphTarget: discarding the tool result for call_id=%r — no tool call with that '
-                        'id was emitted in this ainvoke. In interrupt()/resume graphs the call was emitted '
-                        '(and dropped, result=None) in an earlier turn, so neither it nor this result reaches '
-                        'the transcript.',
-                        tool_call_id,
-                    )
-                    continue
-                # tool_index only ever holds indices of ToolCallOutputItems.
-                item = cast('ToolCallOutputItem', output_items[idx])
-                output_items[idx] = item.model_copy(
-                    update={'result': _lc_tool_result_to_text(get_attr(data, 'content', ''))}
-                )
-                continue
-            if not role:
-                logger.warning(
-                    'LangGraphTarget: skipping a state message of unrecognized shape (type=%r); any tool '
-                    'calls or results it carries will not appear in the transcript.',
-                    type(msg).__name__,
-                )
-                continue
-            if role != 'assistant':
-                continue
-
-            msg_content = _lc_content_to_text(get_attr(data, 'content', ''))
-            if msg_content:
-                output_items.append(TextOutputItem(text=msg_content, annotations=[]))
-
-            for tc in get_attr(data, 'tool_calls', None) or []:
-                call_id = get_attr(tc, 'id', '')
-                name = str(get_attr(tc, 'name', ''))
-                args = get_attr(tc, 'args', {})
-                args_str = json.dumps(args if isinstance(args, dict) else {}, default=str)
-                # ``id`` is the Responses item id, never the provider's — see
-                # ``openresponses.input_items.responses_function_call_item_id``.
-                if not call_id:
-                    logger.warning(
-                        'LangGraphTarget: tool call %r was emitted without an id, so its ToolMessage result '
-                        'cannot be paired with it and the call is dropped from the transcript.',
-                        name,
-                    )
-                    output_items.append(ToolCallOutputItem(name=name, arguments=args_str))
-                    continue
-                output_items.append(ToolCallOutputItem(name=name, arguments=args_str, call_id=call_id))
-                tool_index[str(call_id)] = len(output_items) - 1
+        output_items = _extract_tool_calls(sliced)
 
         self._prev_msg_count = len(result_messages)
 
-        # Fallback: if no AIMessage text was emitted (e.g. duck-typed message objects
-        # that don't subclass AIMessage), use the last message's .content so that
-        # AgentResponse.text remains well-defined.
-        if not any(isinstance(item, TextOutputItem) for item in output_items):
-            last = result_messages[-1]
-            logger.warning(
-                'LangGraphTarget: no AIMessage text in turn; falling back to last message content (type=%s)',
-                type(last).__name__,
-            )
-            last_content = last.get('content', '') if isinstance(last, dict) else getattr(last, 'content', '')
-            output_items.append(TextOutputItem(text=_lc_content_to_text(last_content), annotations=[]))
+        output_items = _extract_final_message(result_messages, output_items)
         return AgentResponse(output=output_items, usage=usage)
 
     def reset_conversation(self) -> None:
