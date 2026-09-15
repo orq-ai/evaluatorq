@@ -678,6 +678,77 @@ def run(
         raise typer.Exit(code=1)
 
 
+def _import_hf_download() -> Any:
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError:
+        typer.echo(
+            'huggingface-hub not installed. Install with: uv add "evaluatorq[redteam]" '
+            '(or: python -m pip install "evaluatorq[redteam]")',
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    return hf_hub_download
+
+
+def _download_and_read_hf_dataset(hf_hub_download: Any, repo: str, filename: str) -> Any:
+    typer.echo(f'Downloading from HuggingFace: {repo}/{filename}')
+    try:
+        local_path = hf_hub_download(repo_id=repo, filename=filename, repo_type='dataset')
+    except Exception as e:
+        typer.echo(
+            f'Failed to download dataset from HuggingFace ({repo}/{filename}): {e}. '
+            'Check your network connection, that the repository exists, and your '
+            'access (set HF_TOKEN for gated/private datasets).',
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    try:
+        with open(local_path) as f:
+            raw = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        typer.echo(f'Failed to read dataset file: {e}', err=True)
+        raise typer.Exit(code=1)
+    return raw
+
+
+def _load_raw_dataset(dataset: str | None) -> Any:
+    # Load raw JSON via the unified dataset loader's internal helpers
+    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import (
+        DEFAULT_HF_FILENAME,
+        DEFAULT_HF_REPO,
+        _parse_hf_source,
+    )
+
+    if dataset is None:
+        hf_hub_download = _import_hf_download()
+        return _download_and_read_hf_dataset(hf_hub_download, DEFAULT_HF_REPO, DEFAULT_HF_FILENAME)
+    if dataset.startswith('hf:'):
+        hf_hub_download = _import_hf_download()
+        repo, filename = _parse_hf_source(dataset.removeprefix('hf:'))
+        return _download_and_read_hf_dataset(hf_hub_download, repo, filename)
+    path = Path(dataset)
+    typer.echo(f'Validating local file: {path}')
+    with path.open() as f:
+        return json.load(f)
+
+
+def _collect_sample_errors(samples: Any) -> list[str]:
+    from pydantic import ValidationError as _ValidationError
+
+    from evaluatorq.redteam.contracts import RedTeamSample
+
+    errors: list[str] = []
+    for i, sample in enumerate(samples):
+        try:
+            RedTeamSample.model_validate(sample)
+        except _ValidationError as e:  # noqa: PERF203
+            for err in e.errors():
+                loc = ' -> '.join(str(loc_part) for loc_part in err['loc'])
+                errors.append(f'  sample[{i}].{loc}: {err["msg"]}')
+    return errors
+
+
 @app.command()
 def validate_dataset(
     dataset: Annotated[
@@ -693,79 +764,7 @@ def validate_dataset(
     are well-formed.  Does NOT enforce enum membership for open-set
     fields like attack_technique or delivery_method.
     """
-    from pydantic import ValidationError as _ValidationError
-
-    from evaluatorq.redteam.contracts import RedTeamSample
-
-    # Load raw JSON via the unified dataset loader's internal helpers
-    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import (
-        DEFAULT_HF_FILENAME,
-        DEFAULT_HF_REPO,
-        _parse_hf_source,
-    )
-
-    if dataset is None:
-        # Default: download from HuggingFace
-        try:
-            from huggingface_hub import hf_hub_download
-        except ImportError:
-            typer.echo(
-                'huggingface-hub not installed. Install with: uv add "evaluatorq[redteam]" '
-                '(or: python -m pip install "evaluatorq[redteam]")',
-                err=True,
-            )
-            raise typer.Exit(code=1)
-        typer.echo(f'Downloading from HuggingFace: {DEFAULT_HF_REPO}/{DEFAULT_HF_FILENAME}')
-        try:
-            local_path = hf_hub_download(repo_id=DEFAULT_HF_REPO, filename=DEFAULT_HF_FILENAME, repo_type='dataset')
-        except Exception as e:
-            typer.echo(
-                f'Failed to download dataset from HuggingFace '
-                f'({DEFAULT_HF_REPO}/{DEFAULT_HF_FILENAME}): {e}. Check your network '
-                'connection, that the repository exists, and your access '
-                '(set HF_TOKEN for gated/private datasets).',
-                err=True,
-            )
-            raise typer.Exit(code=1)
-        try:
-            with open(local_path) as f:
-                raw = json.load(f)
-        except (OSError, json.JSONDecodeError) as e:
-            typer.echo(f'Failed to read dataset file: {e}', err=True)
-            raise typer.Exit(code=1)
-    elif dataset.startswith('hf:'):
-        try:
-            from huggingface_hub import hf_hub_download
-        except ImportError:
-            typer.echo(
-                'huggingface-hub not installed. Install with: uv add "evaluatorq[redteam]" '
-                '(or: python -m pip install "evaluatorq[redteam]")',
-                err=True,
-            )
-            raise typer.Exit(code=1)
-        repo, filename = _parse_hf_source(dataset.removeprefix('hf:'))
-        typer.echo(f'Downloading from HuggingFace: {repo}/{filename}')
-        try:
-            local_path = hf_hub_download(repo_id=repo, filename=filename, repo_type='dataset')
-        except Exception as e:
-            typer.echo(
-                f'Failed to download dataset from HuggingFace ({repo}/{filename}): {e}. '
-                'Check your network connection, that the repository exists, and your '
-                'access (set HF_TOKEN for gated/private datasets).',
-                err=True,
-            )
-            raise typer.Exit(code=1)
-        try:
-            with open(local_path) as f:
-                raw = json.load(f)
-        except (OSError, json.JSONDecodeError) as e:
-            typer.echo(f'Failed to read dataset file: {e}', err=True)
-            raise typer.Exit(code=1)
-    else:
-        path = Path(dataset)
-        typer.echo(f'Validating local file: {path}')
-        with path.open() as f:
-            raw = json.load(f)
+    raw = _load_raw_dataset(dataset)
 
     # Validate top-level shape
     if not isinstance(raw, dict) or 'samples' not in raw:
@@ -775,14 +774,7 @@ def validate_dataset(
     samples = raw['samples']
     typer.echo(f'Found {len(samples)} samples.')
 
-    errors: list[str] = []
-    for i, sample in enumerate(samples):
-        try:
-            RedTeamSample.model_validate(sample)
-        except _ValidationError as e:  # noqa: PERF203
-            for err in e.errors():
-                loc = ' -> '.join(str(loc_part) for loc_part in err['loc'])
-                errors.append(f'  sample[{i}].{loc}: {err["msg"]}')
+    errors = _collect_sample_errors(samples)
 
     if errors:
         typer.echo(f'\nFAIL: {len(errors)} validation error(s):', err=True)
