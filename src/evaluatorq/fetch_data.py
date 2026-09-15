@@ -202,6 +202,29 @@ def _experiment_row_to_datapoint(row: dict[str, Any]) -> DataPoint:
     return DataPoint(inputs=inputs, expected_output=row.get('expected_output'))
 
 
+def _rows_from_page(
+    page: str,
+    resolved_run_id: str,
+    experiment_id: str,
+) -> list[Any]:
+    rows = []
+    for lineno, line in enumerate(page.splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f'Malformed JSONL on line {lineno} of the export for run '
+                f"'{resolved_run_id}' (experiment '{experiment_id}'): {exc}"
+            ) from exc
+    if not rows:
+        raise ValueError(
+            f"Experiment run '{resolved_run_id}' (experiment '{experiment_id}') returned no rows to evaluate."
+        )
+    return rows
+
+
 async def fetch_experiment_datapoints(
     api_key: str,
     experiment_id: str,
@@ -317,20 +340,6 @@ async def fetch_experiment_datapoints(
                     f'{download_resp.status_code} {download_resp.reason_phrase}'
                 )
             export_text = download_resp.text
-        rows = []
-        for lineno, line in enumerate(export_text.splitlines(), start=1):
-            if not line.strip():
-                continue
-            try:
-                rows.append(json.loads(line))
-            except json.JSONDecodeError as exc:
-                raise ValueError(
-                    f'Malformed JSONL on line {lineno} of the export for run '
-                    f"'{resolved_run_id}' (experiment '{experiment_id}'): {exc}"
-                ) from exc
+        rows = _rows_from_page(export_text, resolved_run_id, experiment_id)
 
-    if not rows:
-        raise ValueError(
-            f"Experiment run '{resolved_run_id}' (experiment '{experiment_id}') returned no rows to evaluate."
-        )
     return [_experiment_row_to_datapoint(row) for row in rows]
