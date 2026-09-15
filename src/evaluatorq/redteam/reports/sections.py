@@ -428,6 +428,24 @@ def _build_attack_heatmap_section(report: RedTeamReport) -> ReportSection:
 # ---------------------------------------------------------------------------
 
 
+def _collect_agent_results(report: RedTeamReport, agents: list[str]) -> dict[str, list[RedTeamResult]]:
+    """Group report results by the tested agent key or display name."""
+    agent_results: dict[str, list[RedTeamResult]] = {a: [] for a in agents}
+    warned_agents: set[str] = set()
+    for r in report.results:
+        key = r.agent.key or r.agent.display_name or 'unknown'
+        display = r.agent.display_name or r.agent.key or 'unknown'
+        if key in agent_results:
+            agent_results[key].append(r)
+        elif display in agent_results:
+            agent_results[display].append(r)
+        else:
+            if key not in warned_agents:
+                logger.warning('Result agent {!r} (display={!r}) not in tested_agents, skipping', key, display)
+                warned_agents.add(key)
+    return agent_results
+
+
 def _build_agent_comparison_section(report: RedTeamReport) -> ReportSection:
     """Build multi-agent comparison data.
 
@@ -443,19 +461,7 @@ def _build_agent_comparison_section(report: RedTeamReport) -> ReportSection:
     agents = list(report.tested_agents)
 
     # Group results by agent key
-    agent_results: dict[str, list[RedTeamResult]] = {a: [] for a in agents}
-    warned_agents: set[str] = set()
-    for r in report.results:
-        key = r.agent.key or r.agent.display_name or 'unknown'
-        display = r.agent.display_name or r.agent.key or 'unknown'
-        if key in agent_results:
-            agent_results[key].append(r)
-        elif display in agent_results:
-            agent_results[display].append(r)
-        else:
-            if key not in warned_agents:
-                logger.warning('Result agent {!r} (display={!r}) not in tested_agents, skipping', key, display)
-                warned_agents.add(key)
+    agent_results = _collect_agent_results(report, agents)
 
     # Per-agent top-level metrics
     agent_metrics: list[dict[str, Any]] = []
