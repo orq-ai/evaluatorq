@@ -4145,7 +4145,7 @@ def _load_static_datapoints(
         if not filtered_data and data:
             msg = 'All datapoints were filtered out — no evaluator registered for any category.'
             raise ValueError(msg)
-        data = filtered_data  # type: ignore[assignment]
+        data = filtered_data
 
     # The delivery-method filter was applied at load time (above). Strategy-name
     # selection cannot apply to static rows (dataset records with no strategy
@@ -4166,29 +4166,28 @@ def _report_static_filter_results(
     filter_selection: tuple[str, list[str]] | None,
     output_dir: Path | None,
 ) -> None:
-    if isinstance(data, list):
-        # On an empty delivery-filtered static run, reload unfiltered (cheap, error
-        # path only) to report the delivery_method values the dataset actually
-        # carries — surfacing spelling/format drift instead of a bare "zero datapoints".
-        present_methods: list[str] | None = None
-        if resolved_delivery_methods is not None and not data:
-            from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import load_owasp_agentic_dataset
+    # On an empty delivery-filtered static run, reload unfiltered (cheap, error
+    # path only) to report the delivery_method values the dataset actually
+    # carries — surfacing spelling/format drift instead of a bare "zero datapoints".
+    present_methods: list[str] | None = None
+    if resolved_delivery_methods is not None and not data:
+        from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import load_owasp_agentic_dataset
 
-            # categories=None, not the resolved selection: this reload exists to report
-            # what the dataset carries, and `categories=[]` now filters to nothing — so
-            # reusing it would empty the diagnostic and hand back the bare "zero
-            # datapoints" error this hint was added to avoid.
-            present_rows = load_owasp_agentic_dataset(dataset=dataset, categories=None)
-            present_methods = sorted({m for dp in present_rows if (m := dp.inputs.get('delivery_method'))})
-        _check_filter_results(
-            data,
-            None,
-            resolved_delivery_methods,
-            names_apply=False,
-            present_methods=present_methods,
-            filter_selection=filter_selection,
-        )
-        _save_stage(output_dir, '01_datapoints.json', json.dumps([dp.inputs for dp in data], indent=2, default=str))
+        # categories=None, not the resolved selection: this reload exists to report
+        # what the dataset carries, and `categories=[]` now filters to nothing — so
+        # reusing it would empty the diagnostic and hand back the bare "zero
+        # datapoints" error this hint was added to avoid.
+        present_rows = load_owasp_agentic_dataset(dataset=dataset, categories=None)
+        present_methods = sorted({m for dp in present_rows if (m := dp.inputs.get('delivery_method'))})
+    _check_filter_results(
+        data,
+        None,
+        resolved_delivery_methods,
+        names_apply=False,
+        present_methods=present_methods,
+        filter_selection=filter_selection,
+    )
+    _save_stage(output_dir, '01_datapoints.json', json.dumps([dp.inputs for dp in data], indent=2, default=str))
 
 
 @dataclass(frozen=True)
@@ -4239,9 +4238,19 @@ async def _static_agent_contexts(
     resolved_agent_targets: list[AgentTarget],
     agent_target_labels: dict[int, str],
 ) -> dict[str, AgentContext]:
-    # Agent contexts, best-effort. Resolved before the evaluator and the confirm hook
-    # because the self-judge guard and the reasoning-effort pre-flight both need the
-    # target's model before the first paid call.
+    """Resolve agent contexts for the static leg, best-effort.
+
+    Callers must invoke this before ``_build_static_evaluator`` and
+    ``_preflight_target_reasoning_effort``: the self-judge guard and the
+    reasoning-effort pre-flight both need the target's model before the first
+    paid call, and both silently degrade if the context is not yet resolved.
+
+    Deliberately **not** merged with ``_retrieve_agent_contexts`` (the dynamic
+    leg's equivalent). That one raises ``RuntimeError``/``TypeError`` when a
+    target's ``get_agent_context()`` fails or returns the wrong type; this one
+    is best-effort and only warns before proceeding without context. Merging
+    them would turn the static leg's warnings into hard failures.
+    """
     agent_contexts: dict[str, AgentContext] = {}
     try:
         static_backend = resolve_backend(
@@ -4359,20 +4368,12 @@ def _static_confirm_payload(*, inputs: _StaticConfirmPayloadInputs) -> tuple[Con
     replay_of = inputs.replay_of
 
     # Confirm hook — report aggregate counts
-    vulnerabilities: list[str] = list(
-        {
-            dp.inputs.get('category', '')
-            for dp in data  # pyright: ignore[reportAttributeAccessIssue]
-            if dp.inputs.get('category')
-        }
-        if isinstance(data, list)
-        else []
-    )
+    vulnerabilities: list[str] = list({dp.inputs.get('category', '') for dp in data if dp.inputs.get('category')})
     confirm_payload: ConfirmPayload = {
         'agent_context': None,
-        'num_datapoints': len(data) if isinstance(data, list) else 0,  # type: ignore[arg-type]
+        'num_datapoints': len(data),
         'num_dynamic': None,
-        'num_static': len(data) if isinstance(data, list) else 0,  # type: ignore[arg-type]
+        'num_static': len(data),
         'categories': categories or vulnerabilities,
         'attack_model': '',
         'evaluator_model': evaluator_model,
@@ -4643,8 +4644,8 @@ async def _run_static(
         _save_report(output_dir, '03_summary_report.json', merged)
 
     return merged, RedTeamRunMetrics(
-        num_datapoints=len(data) if isinstance(data, list) else 0,
+        num_datapoints=len(data),
         num_categories=len(vulnerabilities),
         duration_seconds=pipeline_duration,
-        datapoint_inputs=[dict(dp.inputs) for dp in data] if isinstance(data, list) else [],
+        datapoint_inputs=[dict(dp.inputs) for dp in data],
     )
