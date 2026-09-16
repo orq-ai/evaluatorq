@@ -83,13 +83,10 @@ class RunSinks:
     goal_completion_score: float = 0.0
     thread_id: str | None = None
     response_traces: list[ResponseTrace] = field(default_factory=list)
+    # Lazily captured on the first turn that reports a model identity.
+    # NEVER set this from the runner's own ``model`` — that is the
+    # user-simulator/judge model, not the target's.
     target_model: str | None = None
-
-
-@dataclass(frozen=True)
-class _TurnOutcome:
-    result: SimulationResult | None
-    judgment: Judgment | None
 
 
 def _refresh_token_usage(sinks: RunSinks, user_simulator: UserSimulatorAgent, judge: JudgeAgent) -> None:
@@ -888,6 +885,12 @@ class SimulationRunner:
         scenario: Scenario | None,
         system_prompt: str,
     ) -> tuple[UserSimulatorAgent, JudgeAgent]:
+        """Return this run's user simulator and judge.
+
+        An injected agent is shallow-copied and usage-reset so concurrent
+        ``run_batch`` tasks cannot share its per-run state; otherwise a fresh
+        agent is built on the shared client, which is resolved at most once.
+        """
         client: AsyncOpenAI | None = None
 
         if self._injected_user_simulator is not None:
@@ -960,14 +963,21 @@ class SimulationRunner:
         judge: JudgeAgent,
         sinks: RunSinks,
         conversation_target: AgentTarget | None,
-        target_model_holder: dict[str, str | None],
         persona: Persona | None,
         scenario: Scenario | None,
         run_span: Span | None,
         criteria_tracker: _CriteriaTracker,
         usage_before: TokenUsage,
         datapoint_id: str,
-    ) -> _TurnOutcome:
+    ) -> SimulationResult | Judgment:
+        """Run one conversation turn inside the caller's ``orq.simulation.turn`` span.
+
+        Returns a ``SimulationResult`` when the turn ended the run — today only
+        a target call that exhausted its retries — and the caller must return it
+        unchanged. Otherwise returns this turn's ``Judgment``, which the caller
+        records on the turn span and consults for termination. The two cases are
+        distinct types so no call site can read a judgment off a terminated turn.
+        """
         # The user's line opens the turn it belongs to. Turn 1's line is the
         # generated first message; every later turn asks the simulator here,
         # so a turn span reads user -> target -> judge instead of trailing the
@@ -999,9 +1009,9 @@ class SimulationRunner:
                 sinks.target_token_usage = sinks.target_token_usage + agent_response_usage
                 sinks.token_usage = sinks.token_usage + agent_response_usage
             # Capture the first non-None model the target reports; it
-            # should be stable across turns for a given target.
-            if agent_response_model is not None and target_model_holder['model'] is None:
-                target_model_holder['model'] = agent_response_model
+            # should be stable across turns for a given target. Never the
+            # runner's own model — see the note on RunSinks.target_model.
+            if agent_response_model is not None and sinks.target_model is None:
                 sinks.target_model = agent_response_model
             record_llm_output(target_span, agent_response_text)
         # The failed turn IS recorded (mirrors orchestrator.py's
@@ -1009,16 +1019,13 @@ class SimulationRunner:
         sinks.messages.extend(build_assistant_message(call.response))
 
         if not call.succeeded:
-            return _TurnOutcome(
-                result=self._target_failure_result(
-                    call,
-                    persona=persona,
-                    scenario=scenario,
-                    sinks=sinks,
-                    run_span=run_span,
-                    criteria_tracker=criteria_tracker,
-                ),
-                judgment=None,
+            return self._target_failure_result(
+                call,
+                persona=persona,
+                scenario=scenario,
+                sinks=sinks,
+                run_span=run_span,
+                criteria_tracker=criteria_tracker,
             )
 
         # Record this successful target response's trace/span handles (in
@@ -1064,7 +1071,7 @@ class SimulationRunner:
                 datapoint_id,
                 exc_info=True,
             )
-        return _TurnOutcome(result=None, judgment=judgment)
+        return judgment
 
     def _terminal_result(
         self,
@@ -1074,12 +1081,17 @@ class SimulationRunner:
         sinks: RunSinks,
         run_span: Span | None,
         criteria_tracker: _CriteriaTracker,
-        target_model_holder: dict[str, str | None],
         user_simulator: UserSimulatorAgent,
         judge: JudgeAgent,
         last_judgment: Judgment,
         turn: int,
     ) -> SimulationResult:
+        """Build the result for a run the judge terminated on turn ``turn``.
+
+        Folds the run-level criteria state over ``last_judgment`` and records
+        the termination attributes on the run span, so the caller only has to
+        return what comes back.
+        """
         _refresh_token_usage(sinks, user_simulator, judge)
         # rules_broken is the run-level fold, not just this turn's judgment.
         resolved = criteria_tracker.resolve(last_judgment)
@@ -1097,7 +1109,7 @@ class SimulationRunner:
             _build_criteria_meta(scenario, resolved, criteria_tracker.audited_ids, criteria_tracker.evidence)
             if scenario
             else None,
-            target_model_holder['model'],
+            sinks.target_model,
         )
         return SimulationResult(
             messages=sinks.messages,
@@ -1135,10 +1147,6 @@ class SimulationRunner:
             system_prompt=system_prompt,
         )
 
-        # Lazily captured on the first turn that reports a model identity.
-        # NEVER set this from self._model — that is the user-simulator/judge model.
-        target_model_holder: dict[str, str | None] = {'model': None}
-
         if first_message:
             first_msg = first_message
         else:
@@ -1175,7 +1183,6 @@ class SimulationRunner:
                     judge=judge,
                     sinks=sinks,
                     conversation_target=conversation_target,
-                    target_model_holder=target_model_holder,
                     persona=persona,
                     scenario=scenario,
                     run_span=run_span,
@@ -1183,17 +1190,15 @@ class SimulationRunner:
                     usage_before=usage_before,
                     datapoint_id=datapoint_id,
                 )
-                if outcome.result is not None:
-                    return outcome.result
-                last_judgment = outcome.judgment
+                if isinstance(outcome, SimulationResult):
+                    return outcome
+                last_judgment = outcome
                 set_span_attrs(
                     turn_span,
                     {
-                        'orq.simulation.goal_achieved': cast('Judgment', outcome.judgment).goal_achieved,
-                        'orq.simulation.goal_completion_score': cast(
-                            'Judgment', outcome.judgment
-                        ).goal_completion_score,
-                        'orq.simulation.should_terminate': cast('Judgment', outcome.judgment).should_terminate,
+                        'orq.simulation.goal_achieved': outcome.goal_achieved,
+                        'orq.simulation.goal_completion_score': outcome.goal_completion_score,
+                        'orq.simulation.should_terminate': outcome.should_terminate,
                     },
                 )
 
@@ -1204,7 +1209,6 @@ class SimulationRunner:
                     sinks=sinks,
                     run_span=run_span,
                     criteria_tracker=criteria_tracker,
-                    target_model_holder=target_model_holder,
                     user_simulator=user_simulator,
                     judge=judge,
                     last_judgment=last_judgment,
@@ -1230,7 +1234,7 @@ class SimulationRunner:
             persona,
             scenario,
             resolved,
-            target_model=target_model_holder['model'],
+            target_model=sinks.target_model,
             criteria_verified=criteria_tracker.verified,
             token_usage_known=sinks.token_usage_known,
             audited_ids=criteria_tracker.audited_ids,
