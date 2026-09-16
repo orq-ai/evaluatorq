@@ -36,6 +36,8 @@ from .types import (
 )
 
 if TYPE_CHECKING:
+    from orq_ai_sdk import Orq
+
     from .tracing.context import TracingContext
 
 
@@ -196,6 +198,196 @@ async def _poll_progress(progress: ProgressService, state: _StreamingProgress) -
             type(exc).__name__,
             exc,
         )
+
+
+@dataclass(frozen=True)
+class _StreamingInputs:
+    progress: ProgressService
+    datapoint_parallelism: int
+    orq_client: 'Orq'
+    dataset_id: str
+    include_messages: bool
+    jobs: list[Job]
+    evaluators_list: list[Evaluator]
+    tracing_context: 'TracingContext'
+    on_datapoint_complete: DataPointComplete | None
+
+
+async def _run_streaming_evaluation(inputs: _StreamingInputs) -> EvaluatorqResult:
+    progress = inputs.progress
+    datapoint_parallelism = inputs.datapoint_parallelism
+    orq_client = inputs.orq_client
+    dataset_id = inputs.dataset_id
+    include_messages = inputs.include_messages
+    jobs = inputs.jobs
+    evaluators_list = inputs.evaluators_list
+    tracing_context = inputs.tracing_context
+    on_datapoint_complete = inputs.on_datapoint_complete
+
+    all_results: EvaluatorqResult = []
+    processing_tasks: list[asyncio.Task[list[Any]]] = []
+    datapoint_index = 0
+
+    # Counters shared with the datapoint workers and the poller.
+    state = _StreamingProgress()
+
+    # Semaphore bounding concurrent datapoints
+    data_point_semaphore = asyncio.Semaphore(datapoint_parallelism)
+
+    # Initialize progress with unknown total (streaming mode)
+    await safe_update_progress(
+        progress,
+        operation='streaming initialization',
+        total_data_points=0,
+        current_data_point=0,
+        phase=Phase.FETCHING,
+    )
+
+    # Start a background task to poll and update progress
+    polling_task = asyncio.create_task(_poll_progress(progress, state))
+    fetch_error: BaseException | None = None
+    cancelled_for_fetch: set[asyncio.Task[Any]] = set()
+
+    try:
+        # Fetch and process batches
+        async for batch in fetch_dataset_batches(orq_client, dataset_id, include_messages=include_messages):
+            state.total += len(batch.datapoints)
+
+            # Start processing this batch immediately
+            for datapoint in batch.datapoints:
+                task = asyncio.create_task(
+                    _process_with_semaphore(
+                        datapoint_index,
+                        datapoint,
+                        data_point_semaphore,
+                        jobs,
+                        evaluators_list,
+                        datapoint_parallelism,
+                        state,
+                        tracing_context,
+                        on_datapoint_complete,
+                    )
+                )
+                processing_tasks.append(task)
+                datapoint_index += 1
+
+    except asyncio.CancelledError as exc:
+        fetch_error = exc
+    except Exception as exc:  # noqa: BLE001 - collect fetch failures with task failures
+        fetch_error = exc
+    finally:
+        # A fetch failure also cancels in-flight processing.
+        state.stop = True
+        if fetch_error is not None:
+            for task in processing_tasks:
+                if not task.done():
+                    task.cancel()
+                    cancelled_for_fetch.add(task)
+        _ = polling_task.cancel()
+        processing_results = await asyncio.gather(
+            *processing_tasks,
+            return_exceptions=True,
+        )
+        # Deliberately cancelled above; poll_progress logs the rest.
+        _ = await asyncio.gather(polling_task, return_exceptions=True)
+
+    # Tasks we cancelled ourselves are not errors the caller should see.
+    task_errors = [
+        result
+        for task, result in zip(processing_tasks, processing_results, strict=True)
+        if isinstance(result, BaseException)
+        and not (isinstance(result, asyncio.CancelledError) and task in cancelled_for_fetch)
+    ]
+    if isinstance(fetch_error, asyncio.CancelledError):
+        for error in task_errors:
+            logger.warning(
+                'Discarding processing task error while caller cancellation wins: {}: {}',
+                type(error).__name__,
+                error,
+            )
+        raise fetch_error
+
+    errors = ([fetch_error] if fetch_error is not None else []) + task_errors
+    if errors:
+        if len(errors) == 1:
+            raise errors[0]
+        raise _StreamingEvaluationError(errors)
+    results_nested = cast('list[list[Any]]', processing_results)
+
+    # Final progress update
+    await safe_update_progress(
+        progress,
+        operation='streaming final update',
+        total_data_points=state.total,
+        current_data_point=state.processed,
+        phase=Phase.PROCESSING,
+    )
+
+    # Flatten results
+    for result_list in results_nested:
+        all_results.extend(result_list)
+
+    return all_results
+
+
+async def _run_in_memory_evaluation(
+    data_promises: list[DataPoint],
+    progress: ProgressService,
+    datapoint_parallelism: int,
+    jobs: list[Job],
+    evaluators_list: list[Evaluator],
+    tracing_context: 'TracingContext',
+    on_datapoint_complete: DataPointComplete | None,
+) -> EvaluatorqResult:
+    # Initialize progress
+    await safe_update_progress(
+        progress,
+        operation='evaluation initialization',
+        total_data_points=len(data_promises),
+        current_data_point=0,
+        phase=Phase.INITIALIZING,
+    )
+
+    # Process data points with controlled concurrency
+    data_point_semaphore = asyncio.Semaphore(datapoint_parallelism)
+
+    async def process_with_semaphore(index: int, data_promise: Awaitable[DataPoint] | DataPoint) -> list[Any]:
+        async with data_point_semaphore:
+            result = await process_data_point(
+                data_promise,
+                index,
+                jobs,
+                evaluators_list,
+                datapoint_parallelism,
+                progress,
+                tracing_context,
+            )
+            await _notify_datapoint_complete(on_datapoint_complete, result)
+            return result
+
+    tasks = [
+        asyncio.create_task(process_with_semaphore(index, data_promise))
+        for index, data_promise in enumerate(data_promises)
+    ]
+
+    # Gather all results
+    try:
+        results_nested = await asyncio.gather(*tasks)
+    except BaseException:
+        # Keep this run's work inside its tracing/client contexts even
+        # when a callback fails or the caller cancels the evaluation.
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
+    # Flatten results
+    results: EvaluatorqResult = []
+    for result_list in results_nested:
+        results.extend(result_list)
+
+    return results
 
 
 async def evaluatorq(
@@ -415,172 +607,43 @@ async def evaluatorq(
                 )
 
             # Stream fetch and process batches concurrently
-            async def run_streaming_evaluation() -> EvaluatorqResult:
-                all_results: EvaluatorqResult = []
-                processing_tasks: list[asyncio.Task[list[Any]]] = []
-                datapoint_index = 0
-
-                # Counters shared with the datapoint workers and the poller.
-                state = _StreamingProgress()
-
-                # Semaphore bounding concurrent datapoints
-                data_point_semaphore = asyncio.Semaphore(datapoint_parallelism)
-
-                # Initialize progress with unknown total (streaming mode)
-                await safe_update_progress(
-                    progress,
-                    operation='streaming initialization',
-                    total_data_points=0,
-                    current_data_point=0,
-                    phase=Phase.FETCHING,
-                )
-
-                # Start a background task to poll and update progress
-                polling_task = asyncio.create_task(_poll_progress(progress, state))
-                fetch_error: BaseException | None = None
-                cancelled_for_fetch: set[asyncio.Task[Any]] = set()
-
-                try:
-                    # Fetch and process batches
-                    async for batch in fetch_dataset_batches(orq_client, dataset_id, include_messages=include_messages):
-                        state.total += len(batch.datapoints)
-
-                        # Start processing this batch immediately
-                        for datapoint in batch.datapoints:
-                            task = asyncio.create_task(
-                                _process_with_semaphore(
-                                    datapoint_index,
-                                    datapoint,
-                                    data_point_semaphore,
-                                    jobs,
-                                    evaluators_list,
-                                    datapoint_parallelism,
-                                    state,
-                                    tracing_context,
-                                    on_datapoint_complete,
-                                )
-                            )
-                            processing_tasks.append(task)
-                            datapoint_index += 1
-
-                except asyncio.CancelledError as exc:
-                    fetch_error = exc
-                except Exception as exc:  # noqa: BLE001 - collect fetch failures with task failures
-                    fetch_error = exc
-                finally:
-                    # A fetch failure also cancels in-flight processing.
-                    state.stop = True
-                    if fetch_error is not None:
-                        for task in processing_tasks:
-                            if not task.done():
-                                task.cancel()
-                                cancelled_for_fetch.add(task)
-                    _ = polling_task.cancel()
-                    processing_results = await asyncio.gather(
-                        *processing_tasks,
-                        return_exceptions=True,
+            orq_client_for_streaming = orq_client
+            dataset_id_for_streaming = dataset_id
+            results = await with_progress(
+                _run_streaming_evaluation(
+                    _StreamingInputs(
+                        progress=progress,
+                        datapoint_parallelism=datapoint_parallelism,
+                        orq_client=orq_client_for_streaming,
+                        dataset_id=dataset_id_for_streaming,
+                        include_messages=include_messages,
+                        jobs=jobs,
+                        evaluators_list=evaluators_list,
+                        tracing_context=tracing_context,
+                        on_datapoint_complete=on_datapoint_complete,
                     )
-                    # Deliberately cancelled above; poll_progress logs the rest.
-                    _ = await asyncio.gather(polling_task, return_exceptions=True)
-
-                # Tasks we cancelled ourselves are not errors the caller should see.
-                task_errors = [
-                    result
-                    for task, result in zip(processing_tasks, processing_results, strict=True)
-                    if isinstance(result, BaseException)
-                    and not (isinstance(result, asyncio.CancelledError) and task in cancelled_for_fetch)
-                ]
-                if isinstance(fetch_error, asyncio.CancelledError):
-                    for error in task_errors:
-                        logger.warning(
-                            'Discarding processing task error while caller cancellation wins: {}: {}',
-                            type(error).__name__,
-                            error,
-                        )
-                    raise fetch_error
-
-                errors = ([fetch_error] if fetch_error is not None else []) + task_errors
-                if errors:
-                    if len(errors) == 1:
-                        raise errors[0]
-                    raise _StreamingEvaluationError(errors)
-                results_nested = cast('list[list[Any]]', processing_results)
-
-                # Final progress update
-                await safe_update_progress(
-                    progress,
-                    operation='streaming final update',
-                    total_data_points=state.total,
-                    current_data_point=state.processed,
-                    phase=Phase.PROCESSING,
-                )
-
-                # Flatten results
-                for result_list in results_nested:
-                    all_results.extend(result_list)
-
-                return all_results
-
-            results = await with_progress(run_streaming_evaluation(), progress, show_progress=print_results)
+                ),
+                progress,
+                show_progress=print_results,
+            )
 
         else:
             # Non-streaming case: process all data at once
             data_promises = cast('list[DataPoint]', data)
 
-            async def run_evaluation() -> EvaluatorqResult:
-                # Initialize progress
-                await safe_update_progress(
+            results = await with_progress(
+                _run_in_memory_evaluation(
+                    data_promises,
                     progress,
-                    operation='evaluation initialization',
-                    total_data_points=len(data_promises),
-                    current_data_point=0,
-                    phase=Phase.INITIALIZING,
-                )
-
-                # Process data points with controlled concurrency
-                data_point_semaphore = asyncio.Semaphore(datapoint_parallelism)
-
-                async def process_with_semaphore(
-                    index: int, data_promise: Awaitable[DataPoint] | DataPoint
-                ) -> list[Any]:
-                    async with data_point_semaphore:
-                        result = await process_data_point(
-                            data_promise,
-                            index,
-                            jobs,
-                            evaluators_list,
-                            datapoint_parallelism,
-                            progress,
-                            tracing_context,
-                        )
-                        await _notify_datapoint_complete(on_datapoint_complete, result)
-                        return result
-
-                tasks = [
-                    asyncio.create_task(process_with_semaphore(index, data_promise))
-                    for index, data_promise in enumerate(data_promises)
-                ]
-
-                # Gather all results
-                try:
-                    results_nested = await asyncio.gather(*tasks)
-                except BaseException:
-                    # Keep this run's work inside its tracing/client contexts even
-                    # when a callback fails or the caller cancels the evaluation.
-                    for task in tasks:
-                        if not task.done():
-                            task.cancel()
-                    await asyncio.gather(*tasks, return_exceptions=True)
-                    raise
-
-                # Flatten results
-                results: EvaluatorqResult = []
-                for result_list in results_nested:
-                    results.extend(result_list)
-
-                return results
-
-            results = await with_progress(run_evaluation(), progress, show_progress=print_results)
+                    datapoint_parallelism,
+                    jobs,
+                    evaluators_list,
+                    tracing_context,
+                    on_datapoint_complete,
+                ),
+                progress,
+                show_progress=print_results,
+            )
 
         # Display results table
         if print_results:
