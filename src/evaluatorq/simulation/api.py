@@ -67,6 +67,34 @@ logger = logging.getLogger(__name__)
 from evaluatorq.simulation.exceptions import SimulationDroppedError
 
 
+def _validate_datapoint_sources(
+    *,
+    datapoints: list[SimulationDatapoint] | None,
+    personas: list[Persona] | None,
+    scenarios: list[Scenario] | None,
+    dataset_id: str | None,
+    experiment_id: str | None,
+    experiment_run_id: str | None,
+    previous_run: str | None,
+) -> None:
+    """Reject a call that names more than one datapoint source, or a run id without its experiment."""
+    sources = [
+        ('previous_run', previous_run is not None),
+        ('dataset_id', dataset_id is not None),
+        ('experiment_id', experiment_id is not None),
+        ('datapoints', datapoints is not None),
+        ('personas/scenarios', personas is not None or scenarios is not None),
+    ]
+    chosen = [name for name, present in sources if present]
+    if len(chosen) > 1:
+        raise ValueError(
+            f'Pass exactly one of previous_run, dataset_id, experiment_id, datapoints, '
+            f'or personas+scenarios; got: {", ".join(chosen)}'
+        )
+    if experiment_run_id is not None and experiment_id is None:
+        raise ValueError("'experiment_run_id' requires 'experiment_id'")
+
+
 async def _attach_recommendations(
     run: SimulationRun,
     config: SimulationRecommendationConfig,
@@ -1947,21 +1975,15 @@ async def _resolve_or_generate_datapoints(
     public entry point so any API-key error message points the user at the right
     function.
     """
-    sources = [
-        ('previous_run', previous_run is not None),
-        ('dataset_id', dataset_id is not None),
-        ('experiment_id', experiment_id is not None),
-        ('datapoints', datapoints is not None),
-        ('personas/scenarios', personas is not None or scenarios is not None),
-    ]
-    chosen = [name for name, present in sources if present]
-    if len(chosen) > 1:
-        raise ValueError(
-            f'Pass exactly one of previous_run, dataset_id, experiment_id, datapoints, '
-            f'or personas+scenarios; got: {", ".join(chosen)}'
-        )
-    if experiment_run_id is not None and experiment_id is None:
-        raise ValueError("'experiment_run_id' requires 'experiment_id'")
+    _validate_datapoint_sources(
+        datapoints=datapoints,
+        personas=personas,
+        scenarios=scenarios,
+        dataset_id=dataset_id,
+        experiment_id=experiment_id,
+        experiment_run_id=experiment_run_id,
+        previous_run=previous_run,
+    )
 
     if previous_run is not None:
         # The caller loads the replay (it also needs the run's turn cap) and

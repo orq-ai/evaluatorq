@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import typing
+from functools import partial
 from typing import Any, Literal
 
 from loguru import logger
@@ -400,6 +401,164 @@ def _validate_assignment(assignment: str, *, min_successful_judges: int) -> None
         )
 
 
+async def _llm_jury_judge_fn(
+    judge_model: str,
+    *,
+    client: Any,
+    template: str,
+    replacements: dict[str, Any],
+    system_prompt: str,
+    verdict_model: type[BaseModel],
+    structured_output: bool,
+    temperature: float | None,
+    max_tokens: int,
+    timeout_ms: int,
+    extra_kwargs: dict[str, Any] | None,
+    extra_body: dict[str, Any] | None,
+    reasoning_effort: str | None,
+) -> Prediction:
+    """Adapt `run_jury`'s positional ``judge_fn(model)`` call onto `_run_single_judge`.
+
+    Exists only for the calling convention: `run_jury` passes the model
+    positionally while `_run_single_judge` is keyword-only, so a bare
+    ``functools.partial`` cannot bridge the two. Forwards every argument
+    unchanged.
+    """
+    return await _run_single_judge(
+        client=client,
+        model=judge_model,
+        template=template,
+        replacements=replacements,
+        system_prompt=system_prompt,
+        verdict_model=verdict_model,
+        structured_output=structured_output,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout_ms=timeout_ms,
+        extra_kwargs=extra_kwargs,
+        extra_body=extra_body,
+        reasoning_effort=reasoning_effort,
+    )
+
+
+async def _llm_jury_scorer(
+    params: ScorerParameter,
+    *,
+    client_state: list[Any],  # single-element cell: the lazily resolved client, or None
+    criteria: str | None,
+    template: str,
+    sys_prompt: str,
+    verdict_model: type[BaseModel],
+    structured_output: bool,
+    temperature: float | None,
+    max_tokens: int,
+    timeout_ms: int,
+    extra_kwargs: dict[str, Any] | None,
+    extra_body: dict[str, Any] | None,
+    reasoning_effort: str | None,
+    assignment: Literal['all', 'cyclic'],
+    deduped: list[str],
+    cycle: Any,
+    panel: list[str],
+    repetitions: int,
+    replacement_judges: list[str] | None,
+    min_successful_judges: int,
+    vkind: VerdictKind,
+    aggregator: AggregatorSpec | None,
+    tie_break: TieBreak | None,
+    verdict_kind: Literal['categorical', 'numeric'],
+    passing_labels: list[str] | None,
+    threshold: float,
+    score_range: tuple[float, float],
+) -> EvaluationResult:
+    """Score one datapoint with the configured panel.
+
+    Bound to its configuration by `llm_jury` via ``functools.partial``; the long
+    keyword list is that partial's payload, not a call-site surface.
+    ``client_state`` is a single-element mutable cell holding the resolved LLM
+    client, so the first call that needs credentials resolves them and every
+    later call reuses the result — declaring an evaluator must not require
+    credentials.
+    """
+    resolved_client = client_state[0]
+    data = params['data']
+    output = params['output']
+    # A target that errored produced no answer to grade. Judging it anyway would
+    # score an empty response as if the agent had genuinely replied that way.
+    # Checked before resolving the client: skipping the judges must not require
+    # LLM credentials.
+    target_error = output_error_text(output)
+    if target_error is not None:
+        logger.warning('Target errored, skipping judges: {}', target_error)
+        return EvaluationResult.model_validate({
+            'value': 'inconclusive',
+            'explanation': f'Not judged: the target returned an error: {target_error}',
+            'pass': None,
+        })
+    if resolved_client is None:
+        resolved_client = resolve_llm_client(config_client=None, max_retries=0).client
+        client_state[0] = resolved_client
+    replacements = _build_replacements(data=data, output=output, criteria=criteria or '')
+    judge_fn = partial(
+        _llm_jury_judge_fn,
+        client=resolved_client,
+        template=template,
+        replacements=replacements,
+        system_prompt=sys_prompt,
+        verdict_model=verdict_model,
+        structured_output=structured_output,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout_ms=timeout_ms,
+        extra_kwargs=extra_kwargs,
+        extra_body=extra_body,
+        reasoning_effort=reasoning_effort,
+    )
+
+    if assignment == 'cyclic':
+        # Runner path: key on the dataset row so the mapping is reproducible
+        # regardless of parallelism or arrival order. Direct invocation has
+        # no row and falls back to the arrival-order cursor; that advance
+        # happens before any await, so concurrent calls still hand out
+        # exactly balanced judge shares.
+        row = params.get('row')
+        run_panel = [deduped[row % len(deduped)]] if row is not None else [next(cycle)]
+    else:
+        run_panel = panel
+    deliberation = await run_jury(
+        judge_fn=judge_fn,
+        panel=run_panel,
+        repetitions=repetitions,
+        replacement_judges=replacement_judges or [],
+        min_successful_judges=min_successful_judges,
+        verdict_kind=vkind,
+        aggregator=aggregator,
+        tie_break=tie_break,
+        # A lone judge with no stand-ins has no redundancy: re-raise an outage
+        # loudly instead of silently returning inconclusive on every datapoint.
+        # Cyclic assignment over a multi-judge panel keeps run-level redundancy
+        # (other items get other judges), so a failed item degrades to
+        # inconclusive instead of killing the whole run.
+        propagate_errors=(len(deduped) == 1 and not replacement_judges),
+    )
+    if assignment == 'cyclic':
+        # A cyclic item is scored by one judge, so there is no cross-judge
+        # agreement to report: a single vote renders raw_agreement=1.0 and
+        # std=0.0, byte-identical to a genuinely unanimous panel. Null both
+        # so downstream filters cannot read a cyclic run as uniformly
+        # confident (mirrors build_report's None mean_agreement).
+        deliberation = deliberation.model_copy(
+            update={'jury': deliberation.jury.model_copy(update={'stats': None, 'raw_agreement': None})}
+        )
+    return _to_evaluation_result(
+        deliberation=deliberation,
+        verdict_kind=verdict_kind,
+        passing_labels=passing_labels,
+        threshold=threshold,
+        score_range=score_range,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public factory
 # ---------------------------------------------------------------------------
@@ -633,8 +792,10 @@ def llm_jury(
 
     # Resolve the client lazily on first scorer call, not here: declaring an
     # evaluator at module scope should never require credentials. An explicit
-    # client= is used as-is; otherwise we resolve once on first use.
-    resolved_client = client
+    # client= is used as-is; otherwise we resolve once on first use. A
+    # single-element list, not a plain local: the scorer is a module-level
+    # function bound by partial and so cannot rebind this frame's names.
+    client_state = [client]
     verdict_model = _build_verdict_model(verdict_kind=verdict_kind, labels=labels, score_range=score_range)
     template = prompt if prompt is not None else DEFAULT_TEMPLATE
     sys_prompt = (
@@ -644,86 +805,35 @@ def llm_jury(
     )
     vkind = VerdictKind.NUMERIC if verdict_kind == 'numeric' else VerdictKind.CATEGORICAL
 
-    async def scorer(params: ScorerParameter) -> EvaluationResult:
-        nonlocal resolved_client
-        data = params['data']
-        output = params['output']
-        # A target that errored produced no answer to grade. Judging it anyway would
-        # score an empty response as if the agent had genuinely replied that way.
-        # Checked before resolving the client: skipping the judges must not require
-        # LLM credentials.
-        target_error = output_error_text(output)
-        if target_error is not None:
-            logger.warning('Target errored, skipping judges: {}', target_error)
-            return EvaluationResult.model_validate({
-                'value': 'inconclusive',
-                'explanation': f'Not judged: the target returned an error: {target_error}',
-                'pass': None,
-            })
-        if resolved_client is None:
-            resolved_client = resolve_llm_client(config_client=None, max_retries=0).client
-        replacements = _build_replacements(data=data, output=output, criteria=criteria or '')
-
-        async def judge_fn(judge_model: str) -> Prediction:
-            return await _run_single_judge(
-                client=resolved_client,
-                model=judge_model,
-                template=template,
-                replacements=replacements,
-                system_prompt=sys_prompt,
-                verdict_model=verdict_model,
-                structured_output=structured_output,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                timeout_ms=timeout_ms,
-                extra_kwargs=extra_kwargs,
-                extra_body=extra_body,
-                reasoning_effort=reasoning_effort,
-            )
-
-        if assignment == 'cyclic':
-            # Runner path: key on the dataset row so the mapping is reproducible
-            # regardless of parallelism or arrival order. Direct invocation has
-            # no row and falls back to the arrival-order cursor; that advance
-            # happens before any await, so concurrent calls still hand out
-            # exactly balanced judge shares.
-            row = params.get('row')
-            run_panel = [deduped[row % len(deduped)]] if row is not None else [next(cycle)]
-        else:
-            run_panel = panel
-        deliberation = await run_jury(
-            judge_fn=judge_fn,
-            panel=run_panel,
-            repetitions=repetitions,
-            replacement_judges=replacement_judges or [],
-            min_successful_judges=min_successful_judges,
-            verdict_kind=vkind,
-            aggregator=aggregator,
-            tie_break=tie_break,
-            # A lone judge with no stand-ins has no redundancy: re-raise an outage
-            # loudly instead of silently returning inconclusive on every datapoint.
-            # Cyclic assignment over a multi-judge panel keeps run-level redundancy
-            # (other items get other judges), so a failed item degrades to
-            # inconclusive instead of killing the whole run.
-            propagate_errors=(len(deduped) == 1 and not replacement_judges),
-        )
-        if assignment == 'cyclic':
-            # A cyclic item is scored by one judge, so there is no cross-judge
-            # agreement to report: a single vote renders raw_agreement=1.0 and
-            # std=0.0, byte-identical to a genuinely unanimous panel. Null both
-            # so downstream filters cannot read a cyclic run as uniformly
-            # confident (mirrors build_report's None mean_agreement).
-            deliberation = deliberation.model_copy(
-                update={'jury': deliberation.jury.model_copy(update={'stats': None, 'raw_agreement': None})}
-            )
-        return _to_evaluation_result(
-            deliberation=deliberation,
-            verdict_kind=verdict_kind,
-            passing_labels=passing_labels,
-            threshold=threshold,
-            score_range=score_range,
-        )
-
+    scorer = partial(
+        _llm_jury_scorer,
+        client_state=client_state,
+        criteria=criteria,
+        template=template,
+        sys_prompt=sys_prompt,
+        verdict_model=verdict_model,
+        structured_output=structured_output,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout_ms=timeout_ms,
+        extra_kwargs=extra_kwargs,
+        extra_body=extra_body,
+        reasoning_effort=reasoning_effort,
+        assignment=assignment,
+        deduped=deduped,
+        cycle=cycle,
+        panel=panel,
+        repetitions=repetitions,
+        replacement_judges=replacement_judges,
+        min_successful_judges=min_successful_judges,
+        vkind=vkind,
+        aggregator=aggregator,
+        tie_break=tie_break,
+        verdict_kind=verdict_kind,
+        passing_labels=passing_labels,
+        threshold=threshold,
+        score_range=score_range,
+    )
     return {'name': name, 'scorer': scorer}
 
 

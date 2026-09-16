@@ -31,6 +31,104 @@ logger = logging.getLogger(__name__)
 SIM_RUNS_DIR_NAME = Path('.evaluatorq') / 'sim-runs'
 
 
+def _agent_info_from_response(agent_data: Any, agent_key: str) -> AgentInfoSnapshot:
+    """Flatten one ``agents.retrieve`` payload into the run-store snapshot.
+
+    Pure and non-raising on shape alone: every field is read defensively because
+    the SDK's optional fields hold a truthy ``Unset()`` placeholder rather than
+    None. The caller owns the try/except that turns an API failure into None.
+    """
+    agent_id = _coerce_text(getattr(agent_data, '_id', None))
+    if agent_id is None:
+        agent_id = _coerce_text(getattr(agent_data, 'id', None))
+    model = getattr(agent_data, 'model', None)
+    model_id = _coerce_text(getattr(model, 'id', None)) if model is not None else None
+
+    # Entries with no resolvable name are dropped rather than persisted as
+    # None (the card would render them as literal "None" chips).
+    settings = getattr(agent_data, 'settings', None)
+    raw_tools = getattr(settings, 'tools', None) if settings is not None else None
+    tools = []
+    if isinstance(raw_tools, list):
+        for tool in raw_tools:
+            name = _coerce_text(getattr(tool, 'display_name', None)) or _coerce_text(getattr(tool, 'key', None))
+            if name is not None:
+                tools.append(name)
+
+    raw_kbs = getattr(agent_data, 'knowledge_bases', None)
+    knowledge_bases = []
+    if isinstance(raw_kbs, list):
+        for kb in raw_kbs:
+            name = _coerce_text(kb if isinstance(kb, str) else getattr(kb, 'knowledge_id', None))
+            if name is not None:
+                knowledge_bases.append(name)
+
+    raw_stores = getattr(agent_data, 'memory_stores', None)
+    memory_stores = []
+    if isinstance(raw_stores, list):
+        for store in raw_stores:
+            name = _coerce_text(store if isinstance(store, str) else getattr(store, 'key', None))
+            if name is not None:
+                memory_stores.append(name)
+
+    raw_sub_agents = getattr(agent_data, 'team_of_agents', None)
+    sub_agents = []
+    if isinstance(raw_sub_agents, list):
+        for sub_agent in raw_sub_agents:
+            name = _coerce_text(
+                sub_agent.get('key') if isinstance(sub_agent, dict) else getattr(sub_agent, 'key', None)
+            )
+            if name is not None:
+                sub_agents.append(name)
+
+    # Unset optional SDK fields hold a truthy `Unset()` placeholder rather than
+    # None. This snapshot is a plain TypedDict with no validator between it and
+    # `model_dump_json()`, so a placeholder reaching it would break the save.
+    # orq-ai-sdk 4.12.x renamed `version_hash` to `version`; pick by type, since
+    # the placeholder would satisfy an `or` chain. Empty counts as absent — live
+    # 4.4.x agents carry `version_hash=''`.
+    version = next(
+        (
+            candidate
+            for candidate in (getattr(agent_data, 'version', None), getattr(agent_data, 'version_hash', None))
+            if isinstance(candidate, str) and candidate
+        ),
+        None,
+    )
+    raw_skills = getattr(agent_data, 'skills', None)
+    skills = [s for s in raw_skills if isinstance(s, str)] if isinstance(raw_skills, list) else []
+
+    from evaluatorq.dashboard.orq_links import orq_studio_url, studio_workspace_key
+
+    workspace_id = _coerce_text(getattr(agent_data, 'workspace_id', None))
+    # Entity APIs expose workspace_id (a UUID), which Studio routes reject; links
+    # use the configured ORQ_WORKSPACE key instead. The agent payload has never
+    # carried a workspace_key on any SDK version — do not re-add a fallback arg.
+    workspace_key = studio_workspace_key()
+    base_url = os.getenv('ORQ_BASE_URL', 'https://my.orq.ai').rstrip('/')
+    url = orq_studio_url(target_kind='agent', entity_id=agent_id, workspace_id=workspace_key, base_url=base_url)
+
+    return {
+        'key': agent_key,
+        'id': agent_id,
+        'role': _coerce_text(getattr(agent_data, 'role', None)),
+        'description': _coerce_text(getattr(agent_data, 'description', None)),
+        'model': model_id,
+        'version': _coerce_text(version),
+        'tools': tools,
+        'skills': skills,
+        'knowledge_bases': knowledge_bases,
+        'memory_stores': memory_stores,
+        'sub_agents': sub_agents,
+        'agent_type': _coerce_text(getattr(agent_data, 'type', None)),
+        'engine': _coerce_text(getattr(agent_data, 'engine', None)),
+        'workspace_id': workspace_id,
+        'workspace_key': workspace_key,
+        'base_url': base_url,
+        'url': url,
+    }
+
+
 async def fetch_agent_info(agent_key: str) -> AgentInfoSnapshot | None:
     """Best-effort snapshot of an ORQ agent's configuration, for the run-store
     record. Never raises — no API key, network errors, and unknown agents all
@@ -47,96 +145,7 @@ async def fetch_agent_info(agent_key: str) -> AgentInfoSnapshot | None:
 
         orq_client = setup_orq_client(api_key)
         agent_data = await asyncio.to_thread(orq_client.agents.retrieve, agent_key=agent_key)
-
-        agent_id = _coerce_text(getattr(agent_data, '_id', None))
-        if agent_id is None:
-            agent_id = _coerce_text(getattr(agent_data, 'id', None))
-        model = getattr(agent_data, 'model', None)
-        model_id = _coerce_text(getattr(model, 'id', None)) if model is not None else None
-
-        # Entries with no resolvable name are dropped rather than persisted as
-        # None (the card would render them as literal "None" chips).
-        settings = getattr(agent_data, 'settings', None)
-        raw_tools = getattr(settings, 'tools', None) if settings is not None else None
-        tools = []
-        if isinstance(raw_tools, list):
-            for tool in raw_tools:
-                name = _coerce_text(getattr(tool, 'display_name', None)) or _coerce_text(getattr(tool, 'key', None))
-                if name is not None:
-                    tools.append(name)
-
-        raw_kbs = getattr(agent_data, 'knowledge_bases', None)
-        knowledge_bases = []
-        if isinstance(raw_kbs, list):
-            for kb in raw_kbs:
-                name = _coerce_text(kb if isinstance(kb, str) else getattr(kb, 'knowledge_id', None))
-                if name is not None:
-                    knowledge_bases.append(name)
-
-        raw_stores = getattr(agent_data, 'memory_stores', None)
-        memory_stores = []
-        if isinstance(raw_stores, list):
-            for store in raw_stores:
-                name = _coerce_text(store if isinstance(store, str) else getattr(store, 'key', None))
-                if name is not None:
-                    memory_stores.append(name)
-
-        raw_sub_agents = getattr(agent_data, 'team_of_agents', None)
-        sub_agents = []
-        if isinstance(raw_sub_agents, list):
-            for sub_agent in raw_sub_agents:
-                name = _coerce_text(
-                    sub_agent.get('key') if isinstance(sub_agent, dict) else getattr(sub_agent, 'key', None)
-                )
-                if name is not None:
-                    sub_agents.append(name)
-
-        # Unset optional SDK fields hold a truthy `Unset()` placeholder rather than
-        # None. This snapshot is a plain TypedDict with no validator between it and
-        # `model_dump_json()`, so a placeholder reaching it would break the save.
-        # orq-ai-sdk 4.12.x renamed `version_hash` to `version`; pick by type, since
-        # the placeholder would satisfy an `or` chain. Empty counts as absent — live
-        # 4.4.x agents carry `version_hash=''`.
-        version = next(
-            (
-                candidate
-                for candidate in (getattr(agent_data, 'version', None), getattr(agent_data, 'version_hash', None))
-                if isinstance(candidate, str) and candidate
-            ),
-            None,
-        )
-        raw_skills = getattr(agent_data, 'skills', None)
-        skills = [s for s in raw_skills if isinstance(s, str)] if isinstance(raw_skills, list) else []
-
-        from evaluatorq.dashboard.orq_links import orq_studio_url, studio_workspace_key
-
-        workspace_id = _coerce_text(getattr(agent_data, 'workspace_id', None))
-        # Entity APIs expose workspace_id (a UUID), which Studio routes reject; links
-        # use the configured ORQ_WORKSPACE key instead. The agent payload has never
-        # carried a workspace_key on any SDK version — do not re-add a fallback arg.
-        workspace_key = studio_workspace_key()
-        base_url = os.getenv('ORQ_BASE_URL', 'https://my.orq.ai').rstrip('/')
-        url = orq_studio_url(target_kind='agent', entity_id=agent_id, workspace_id=workspace_key, base_url=base_url)
-
-        return {
-            'key': agent_key,
-            'id': agent_id,
-            'role': _coerce_text(getattr(agent_data, 'role', None)),
-            'description': _coerce_text(getattr(agent_data, 'description', None)),
-            'model': model_id,
-            'version': _coerce_text(version),
-            'tools': tools,
-            'skills': skills,
-            'knowledge_bases': knowledge_bases,
-            'memory_stores': memory_stores,
-            'sub_agents': sub_agents,
-            'agent_type': _coerce_text(getattr(agent_data, 'type', None)),
-            'engine': _coerce_text(getattr(agent_data, 'engine', None)),
-            'workspace_id': workspace_id,
-            'workspace_key': workspace_key,
-            'base_url': base_url,
-            'url': url,
-        }
+        return _agent_info_from_response(agent_data, agent_key)
     except Exception as exc:
         # Best-effort snapshot: a missing agent (404) is expected for non-Orq
         # targets and degrades to None quietly. Anything else (bad ORQ_API_KEY,

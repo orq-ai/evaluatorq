@@ -2,9 +2,10 @@ import asyncio
 import os
 from collections.abc import Awaitable, Sequence
 from contextlib import AsyncExitStack
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import starmap
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
@@ -31,6 +32,9 @@ from .types import (
     ExperimentInput,
     Job,
 )
+
+if TYPE_CHECKING:
+    from .tracing.context import TracingContext
 
 
 class _StreamingEvaluationError(RuntimeError):
@@ -111,6 +115,71 @@ async def _replay_recorded_response(data_point: DataPoint, _row_index: int) -> d
     """Synthetic job for the no-inference path: replays the pre-recorded response."""
     response = extract_recorded_response(data_point.inputs.get('messages'))
     return {'name': 'recorded', 'output': response}
+
+
+@dataclass
+class _StreamingProgress:
+    """Counters the streaming fetch, the datapoint workers and the poller share.
+
+    One mutable object rather than three boxed locals: the two helpers below run
+    outside ``evaluatorq``'s frame, so they cannot rebind its locals, and a
+    single owner beats a mix of one-element lists and a stringly-keyed dict.
+    Mutated from several concurrent tasks, but only by ``+= 1`` on a distinct
+    field per writer and a single set of ``stop``, all inside one event loop.
+    """
+
+    total: int = 0
+    processed: int = 0
+    stop: bool = False
+
+
+async def _process_with_semaphore(
+    index: int,
+    data_promise: DataPoint,
+    data_point_semaphore: asyncio.Semaphore,
+    jobs: list[Job],
+    evaluators_list: list[Evaluator],
+    datapoint_parallelism: int,
+    state: _StreamingProgress,
+    tracing_context: 'TracingContext | None',
+) -> list[Any]:
+    """Process one datapoint under the concurrency bound, then count it as done."""
+    async with data_point_semaphore:
+        result = await process_data_point(
+            data_promise,
+            index,
+            jobs,
+            evaluators_list,
+            datapoint_parallelism,
+            None,  # Don't pass progress in streaming mode - use polling instead
+            tracing_context,
+        )
+        state.processed += 1
+        return result
+
+
+async def _poll_progress(progress: ProgressService, state: _StreamingProgress) -> None:
+    """Redraw the progress display until ``state.stop`` is set by the fetch loop.
+
+    A display fault is logged and ends polling; it never fails a run that has
+    otherwise completed.
+    """
+    try:
+        while not state.stop:
+            await progress.update_progress(
+                total_data_points=state.total,
+                current_data_point=state.processed,
+                phase=Phase.PROCESSING if state.processed > 0 else Phase.FETCHING,
+            )
+            await asyncio.sleep(0.1)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - display faults must not fail a completed run
+        logger.warning(
+            'Progress polling stopped after display failure: {}: {}',
+            type(exc).__name__,
+            exc,
+        )
 
 
 async def evaluatorq(
@@ -328,28 +397,13 @@ async def evaluatorq(
             async def run_streaming_evaluation() -> EvaluatorqResult:
                 all_results: EvaluatorqResult = []
                 processing_tasks: list[asyncio.Task[list[Any]]] = []
-                total_datapoints = 0
                 datapoint_index = 0
 
-                # Shared progress state for tracking processed count
-                progress_ref = {'processed': 0}
+                # Counters shared with the datapoint workers and the poller.
+                state = _StreamingProgress()
 
                 # Semaphore bounding concurrent datapoints
                 data_point_semaphore = asyncio.Semaphore(datapoint_parallelism)
-
-                async def process_with_semaphore(index: int, data_promise: DataPoint) -> list[Any]:
-                    async with data_point_semaphore:
-                        result = await process_data_point(
-                            data_promise,
-                            index,
-                            jobs,
-                            evaluators_list,
-                            datapoint_parallelism,
-                            None,  # Don't pass progress in streaming mode - use polling instead
-                            tracing_context,
-                        )
-                        progress_ref['processed'] += 1
-                        return result
 
                 # Initialize progress with unknown total (streaming mode)
                 await safe_update_progress(
@@ -361,38 +415,29 @@ async def evaluatorq(
                 )
 
                 # Start a background task to poll and update progress
-                stop_polling = False
-
-                async def poll_progress():
-                    try:
-                        while not stop_polling:
-                            await progress.update_progress(
-                                total_data_points=total_datapoints,
-                                current_data_point=progress_ref['processed'],
-                                phase=Phase.PROCESSING if progress_ref['processed'] > 0 else Phase.FETCHING,
-                            )
-                            await asyncio.sleep(0.1)
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as exc:  # noqa: BLE001 - display faults must not fail a completed run
-                        logger.warning(
-                            'Progress polling stopped after display failure: {}: {}',
-                            type(exc).__name__,
-                            exc,
-                        )
-
-                polling_task = asyncio.create_task(poll_progress())
+                polling_task = asyncio.create_task(_poll_progress(progress, state))
                 fetch_error: BaseException | None = None
                 cancelled_for_fetch: set[asyncio.Task[Any]] = set()
 
                 try:
                     # Fetch and process batches
                     async for batch in fetch_dataset_batches(orq_client, dataset_id, include_messages=include_messages):
-                        total_datapoints += len(batch.datapoints)
+                        state.total += len(batch.datapoints)
 
                         # Start processing this batch immediately
                         for datapoint in batch.datapoints:
-                            task = asyncio.create_task(process_with_semaphore(datapoint_index, datapoint))
+                            task = asyncio.create_task(
+                                _process_with_semaphore(
+                                    datapoint_index,
+                                    datapoint,
+                                    data_point_semaphore,
+                                    jobs,
+                                    evaluators_list,
+                                    datapoint_parallelism,
+                                    state,
+                                    tracing_context,
+                                )
+                            )
                             processing_tasks.append(task)
                             datapoint_index += 1
 
@@ -402,7 +447,7 @@ async def evaluatorq(
                     fetch_error = exc
                 finally:
                     # A fetch failure also cancels in-flight processing.
-                    stop_polling = True
+                    state.stop = True
                     if fetch_error is not None:
                         for task in processing_tasks:
                             if not task.done():
@@ -443,8 +488,8 @@ async def evaluatorq(
                 await safe_update_progress(
                     progress,
                     operation='streaming final update',
-                    total_data_points=total_datapoints,
-                    current_data_point=progress_ref['processed'],
+                    total_data_points=state.total,
+                    current_data_point=state.processed,
                     phase=Phase.PROCESSING,
                 )
 
