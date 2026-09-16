@@ -164,7 +164,6 @@ def _render_category_bar_chart(rows: list[dict[str, Any]]) -> str:
 def _render_technique_bar_chart(rows: list[dict[str, Any]]) -> str:
     """Render a horizontal bar chart of ASR% by technique.
 
-    Mirrors the "ASR by Technique" chart shown in the Streamlit dashboard.
     Techniques are sorted by vulnerability rate (highest first) and capped at
     the top 15 to keep the chart readable.
     """
@@ -191,7 +190,6 @@ def _render_technique_bar_chart(rows: list[dict[str, Any]]) -> str:
 def _render_vulnerability_bar_chart(rows: list[dict[str, Any]]) -> str:
     """Render a horizontal bar chart of ASR% by vulnerability.
 
-    Mirrors the "ASR by Vulnerability" chart shown in the Streamlit dashboard.
     Vulnerabilities are sorted by vulnerability rate (highest first) and capped
     at the top 15 to keep the chart readable.
     """

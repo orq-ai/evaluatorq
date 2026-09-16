@@ -41,10 +41,8 @@ redteam/
 │   ├── export_md.py          #   Markdown report export
 │   ├── recommendations.py    #   LLM-generated remediation advice
 │   └── sections.py           #   Report section builders
-├── runtime/                  # Job execution
-│   └── jobs.py               #   Async job runner + job-name sanitizer
-└── ui/                       # Streamlit interactive dashboard
-    └── dashboard.py
+└── runtime/                  # Job execution
+    └── jobs.py               #   Async job runner + job-name sanitizer
 ```
 
 ## Key design decisions
