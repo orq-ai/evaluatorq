@@ -2742,13 +2742,7 @@ async def _run_dynamic_or_hybrid(
         replay_of: Name of the run being replayed, surfaced in the confirm
             prompt so a replay is not mistaken for a fresh run.
     """
-    from evaluatorq import evaluatorq
-    from evaluatorq.redteam.reports.converters import (
-        dynamic_evaluatorq_results_to_report,
-        merge_reports,
-        static_evaluatorq_results_to_reports,
-        static_results_to_report,
-    )
+    from evaluatorq.redteam.reports.converters import merge_reports, static_results_to_report
 
     resolved_name = name or 'red-team'
     # One Orq observability run id shared across every target/attack so the
@@ -2789,13 +2783,12 @@ async def _run_dynamic_or_hybrid(
             llm_client,
         )
 
-    if targets:
-        first_agent_context = all_agent_contexts[targets[0]]
-    elif resolved_agent_targets:
-        first_agent_context = at_contexts[id(resolved_agent_targets[0])]
-    else:
-        msg = 'red_team() requires at least one target'
-        raise ValueError(msg)
+    first_agent_context = _resolve_first_agent_context(
+        targets=targets,
+        resolved_agent_targets=resolved_agent_targets,
+        all_agent_contexts=all_agent_contexts,
+        at_contexts=at_contexts,
+    )
 
     classified_capabilities = await _classify_capabilities(
         inputs=_CapabilityClassificationInputs(
@@ -2847,26 +2840,11 @@ async def _run_dynamic_or_hybrid(
         )
 
     # Step 2: Estimate datapoint counts (cheap registry lookups, no LLM).
-    # Use the first target's classified capabilities (already in
-    # all_agent_caps / at_caps from Step 1b) so the estimator's
-    # capability-gated filter matches what the planner will actually do
-    # at run time. Passing None here would fall back to the
-    # tool-presence heuristic and over-count email/payment-only
-    # strategies on agents that don't have those capabilities,
-    # inflating the datapoint count shown in the confirm prompt.
-    first_caps: AgentCapabilities | None = None
-    if targets:
-        first_caps = all_agent_caps.get(targets[0])
-    elif resolved_agent_targets:
-        first_caps = at_caps.get(id(resolved_agent_targets[0]))
-
-    # Mirror strategy_planner's caps_for_filter normalization: an empty
-    # AgentCapabilities (classification skipped or no tags found) must be
-    # treated as None so the estimator falls through to the same heuristic
-    # the planner uses at run time. Without this, the confirm-prompt count
-    # under-represents what the planner actually runs.
-    first_caps_for_estimate: AgentCapabilities | None = (
-        first_caps if first_caps is not None and first_caps.capabilities else None
+    first_caps_for_estimate = _resolve_first_caps_for_estimate(
+        targets=targets,
+        resolved_agent_targets=resolved_agent_targets,
+        all_agent_caps=all_agent_caps,
+        at_caps=at_caps,
     )
 
     est_dynamic, strategy_breakdown = _estimate_dynamic_datapoints(
@@ -2899,27 +2877,29 @@ async def _run_dynamic_or_hybrid(
     est_total = est_dynamic + (est_static or 0)
 
     # Confirm before expensive datapoint generation.
-    at_contexts_by_label = {agent_target_labels[id(at)]: at_contexts[id(at)] for at in resolved_agent_targets}
-    all_contexts_for_confirm = {**all_agent_contexts, **at_contexts_by_label}
-    confirm_payload: ConfirmPayload = {
-        'agent_contexts': {t: ctx.model_dump(mode='json') for t, ctx in all_contexts_for_confirm.items()},
-        'agent_context': first_agent_context.model_dump(mode='json'),
-        'num_datapoints': est_total,
-        'num_dynamic': est_dynamic,
-        'num_static': est_static if mode == Pipeline.HYBRID else None,
-        'categories': resolved_categories,
-        'attack_model': attack_model,
-        'evaluator_model': evaluator_model,
-        'max_turns': max_turns,
-        'datapoint_parallelism': datapoint_parallelism,
-        'filtering_metadata': None,
-        'strategy_breakdown': strategy_breakdown or None,
-        'mode': str(mode.value) if hasattr(mode, 'value') else str(mode),
-        'target': ', '.join(all_target_labels),
-        'dataset_path': str(dataset) if dataset else None,
-        'vulnerabilities': [v.value for v in resolved_vulns] if resolved_vulns else None,
-        'replay_of': replay_of,
-    }
+    confirm_payload = _build_confirm_payload(
+        inputs=_ConfirmPayloadInputs(
+            resolved_agent_targets=resolved_agent_targets,
+            agent_target_labels=agent_target_labels,
+            at_contexts=at_contexts,
+            all_agent_contexts=all_agent_contexts,
+            first_agent_context=first_agent_context,
+            est_total=est_total,
+            est_dynamic=est_dynamic,
+            est_static=est_static,
+            mode=mode,
+            resolved_categories=resolved_categories,
+            attack_model=attack_model,
+            evaluator_model=evaluator_model,
+            max_turns=max_turns,
+            datapoint_parallelism=datapoint_parallelism,
+            strategy_breakdown=strategy_breakdown,
+            all_target_labels=all_target_labels,
+            dataset=dataset,
+            resolved_vulns=resolved_vulns,
+            replay_of=replay_of,
+        )
+    )
 
     if not await await_maybe(resolved_hooks.on_confirm(confirm_payload)):
         msg = 'Execution cancelled by confirmation callback'
@@ -3094,6 +3074,304 @@ async def _run_dynamic_or_hybrid(
         )
     )
 
+    has_static = any(pt.static_datapoints for pt in prepared_targets)
+    evaluators = _build_redteam_evaluators(
+        inputs=_RedTeamEvaluatorInputs(
+            mode=mode,
+            evaluator_model=evaluator_model,
+            pipeline_config=pipeline_config,
+            llm_client=llm_client,
+            prepared_targets=prepared_targets,
+            has_static=has_static,
+        )
+    )
+
+    results = await _execute_attacks(
+        inputs=_AttackExecutionInputs(
+            resolved_name=resolved_name,
+            all_datapoints=all_datapoints,
+            all_jobs=all_jobs,
+            evaluators=evaluators,
+            datapoint_parallelism=datapoint_parallelism,
+            description=description,
+            mode=mode,
+            all_target_labels=all_target_labels,
+            est_total=est_total,
+            prepared_targets=prepared_targets,
+            verbosity=verbosity,
+            cleanup_memory=cleanup_memory,
+            all_at_cleanup_info=all_at_cleanup_info,
+        )
+    )
+
+    await await_maybe(resolved_hooks.on_stage_end(PipelineStage.ATTACK_EXECUTION, {'num_results': len(results)}))
+
+    _save_stage(
+        output_dir,
+        '02_attack_results.json',
+        json.dumps([r.model_dump(mode='json') for r in results], indent=2, default=str),
+    )
+
+    pipeline_duration = (datetime.now(tz=timezone.utc).astimezone() - pipeline_start).total_seconds()
+
+    # Stage: report_generation — split by job_name, convert, merge
+    await await_maybe(resolved_hooks.on_stage_start(PipelineStage.REPORT_GENERATION, {'num_results': len(results)}))
+
+    results_by_target = _group_results_by_target(results=results, prepared_targets=prepared_targets)
+
+    per_target_reports: list[RedTeamReport] = []
+    for pt in prepared_targets:
+        t_report = _convert_target_report(
+            inputs=_TargetReportInputs(
+                pt=pt,
+                target_results=results_by_target.get(pt.safe_target, []),
+                mode=mode,
+                has_static=has_static,
+                pipeline_duration=pipeline_duration,
+                description=description,
+                run_id=run_id,
+            )
+        )
+        per_target_reports.append(t_report)
+
+    if not per_target_reports:
+        merged = static_results_to_report(
+            [],
+            description=description or f'{mode.capitalize()} red teaming ({len(all_target_labels)} targets)',
+        )
+    else:
+        merged = merge_reports(
+            *per_target_reports,
+            description=description or f'{mode.capitalize()} red teaming ({len(all_target_labels)} targets)',
+        )
+
+    merged = _finalize_merged_report(
+        merged=merged,
+        run_id=run_id,
+        pipeline_duration=pipeline_duration,
+        prepared_targets=prepared_targets,
+        mode=mode,
+        all_datapoints=all_datapoints,
+    )
+
+    merged.pipeline_warnings.extend(_collect_filter_warnings(prepared_targets=prepared_targets))
+
+    _apply_coverage_policy(merged, pipeline_config)
+
+    await await_maybe(
+        resolved_hooks.on_stage_end(
+            PipelineStage.REPORT_GENERATION,
+            {
+                'resistance_rate': merged.summary.resistance_rate,
+                'elapsed_s': pipeline_duration,
+            },
+        )
+    )
+
+    # Upload cleaned results to Orq platform — strip skipped job results
+    # (jobs return None for datapoints belonging to a different target).
+    # Send before saving so report.experiment_url is included in the persisted JSON.
+    # try/finally guarantees the report is written even if upload is cancelled
+    # (CancelledError bypasses the except Exception inside _send_cleaned_results).
+    try:
+        await _send_cleaned_results(
+            results=results,
+            name=resolved_name,
+            description=description or f'{mode.capitalize()} red teaming ({len(all_target_labels)} targets)',
+            start_time=pipeline_start,
+            report=merged,
+            # The attacker LLM client — the same Orq host that owns the
+            # ORQ_API_KEY used for this run, shared across all prepared
+            # targets, so the first one is representative of the upload host.
+            inference_client=prepared_targets[0].resolved_llm_client if prepared_targets else None,
+        )
+    finally:
+        _save_report(output_dir, '03_summary_report.json', merged)
+
+    merged.pipeline_warnings.extend(
+        await _cleanup_target_memory(
+            prepared_targets=prepared_targets,
+            cleanup_memory=cleanup_memory,
+            resolved_hooks=resolved_hooks,
+        )
+    )
+
+    return merged, RedTeamRunMetrics(
+        num_datapoints=len(all_datapoints),
+        num_categories=len(resolved_categories),
+        duration_seconds=pipeline_duration,
+        datapoint_inputs=[dict(dp.inputs) for dp in all_datapoints],
+    )
+
+
+def _finalize_merged_report(
+    *,
+    merged: RedTeamReport,
+    run_id: str,
+    pipeline_duration: float,
+    prepared_targets: list[PreparedTarget],
+    mode: Pipeline,
+    all_datapoints: list[Any],
+) -> RedTeamReport:
+    # Static report conversion has no run_id parameter. Preserve the invocation's
+    # id even for static-only hybrid runs so its run-level trace deep link matches
+    # the thread IDs emitted by static jobs.
+    merged.run_id = run_id
+    merged.duration_seconds = pipeline_duration
+    merged.agent_contexts = {pt.target_value: pt.agent_context for pt in prepared_targets}
+    # Canonical tested_agents: use the same keys as agent_contexts so
+    # dashboard/report lookups resolve correctly.
+    merged.tested_agents = [pt.target_value for pt in prepared_targets]
+    if mode == Pipeline.HYBRID:
+        merged.summary.datapoint_breakdown = _datapoint_breakdown(all_datapoints)
+
+    if len(all_datapoints) == 0:
+        merged.pipeline_warnings.append(
+            'Zero datapoints generated for requested vulnerabilities. '
+            'Strategy generation may have failed — check logs for details.'
+        )
+    elif merged.summary.total_attacks == 0:
+        merged.pipeline_warnings.append(
+            'Zero attacks executed. The resistance rate of 100% does not reflect actual security posture — '
+            'no attacks were run. Check strategy generation logs and LLM credentials.'
+        )
+    return merged
+
+
+def _resolve_first_agent_context(
+    *,
+    targets: list[str],
+    resolved_agent_targets: list[AgentTarget],
+    all_agent_contexts: dict[str, AgentContext],
+    at_contexts: dict[int, AgentContext],
+) -> AgentContext:
+    if targets:
+        first_agent_context = all_agent_contexts[targets[0]]
+    elif resolved_agent_targets:
+        first_agent_context = at_contexts[id(resolved_agent_targets[0])]
+    else:
+        msg = 'red_team() requires at least one target'
+        raise ValueError(msg)
+    return first_agent_context
+
+
+def _resolve_first_caps_for_estimate(
+    *,
+    targets: list[str],
+    resolved_agent_targets: list[AgentTarget],
+    all_agent_caps: dict[str, AgentCapabilities],
+    at_caps: dict[int, AgentCapabilities],
+) -> AgentCapabilities | None:
+    # Use the first target's classified capabilities (already in
+    # all_agent_caps / at_caps from Step 1b) so the estimator's
+    # capability-gated filter matches what the planner will actually do
+    # at run time. Passing None here would fall back to the
+    # tool-presence heuristic and over-count email/payment-only
+    # strategies on agents that don't have those capabilities,
+    # inflating the datapoint count shown in the confirm prompt.
+    first_caps: AgentCapabilities | None = None
+    if targets:
+        first_caps = all_agent_caps.get(targets[0])
+    elif resolved_agent_targets:
+        first_caps = at_caps.get(id(resolved_agent_targets[0]))
+
+    # Mirror strategy_planner's caps_for_filter normalization: an empty
+    # AgentCapabilities (classification skipped or no tags found) must be
+    # treated as None so the estimator falls through to the same heuristic
+    # the planner uses at run time. Without this, the confirm-prompt count
+    # under-represents what the planner actually runs.
+    first_caps_for_estimate: AgentCapabilities | None = (
+        first_caps if first_caps is not None and first_caps.capabilities else None
+    )
+    return first_caps_for_estimate
+
+
+@dataclass(frozen=True)
+class _ConfirmPayloadInputs:
+    resolved_agent_targets: list[AgentTarget]
+    agent_target_labels: dict[int, str]
+    at_contexts: dict[int, AgentContext]
+    all_agent_contexts: dict[str, AgentContext]
+    first_agent_context: AgentContext
+    est_total: int
+    est_dynamic: int
+    est_static: int | None
+    mode: Pipeline
+    resolved_categories: list[str]
+    attack_model: str
+    evaluator_model: str
+    max_turns: int
+    datapoint_parallelism: int
+    strategy_breakdown: dict[str, Any]
+    all_target_labels: list[str]
+    dataset: Any
+    resolved_vulns: list[Vulnerability] | None
+    replay_of: str | None
+
+
+def _build_confirm_payload(*, inputs: _ConfirmPayloadInputs) -> ConfirmPayload:
+    resolved_agent_targets = inputs.resolved_agent_targets
+    agent_target_labels = inputs.agent_target_labels
+    at_contexts = inputs.at_contexts
+    all_agent_contexts = inputs.all_agent_contexts
+    first_agent_context = inputs.first_agent_context
+    est_total = inputs.est_total
+    est_dynamic = inputs.est_dynamic
+    est_static = inputs.est_static
+    mode = inputs.mode
+    resolved_categories = inputs.resolved_categories
+    attack_model = inputs.attack_model
+    evaluator_model = inputs.evaluator_model
+    max_turns = inputs.max_turns
+    datapoint_parallelism = inputs.datapoint_parallelism
+    strategy_breakdown = inputs.strategy_breakdown
+    all_target_labels = inputs.all_target_labels
+    dataset = inputs.dataset
+    resolved_vulns = inputs.resolved_vulns
+    replay_of = inputs.replay_of
+
+    at_contexts_by_label = {agent_target_labels[id(at)]: at_contexts[id(at)] for at in resolved_agent_targets}
+    all_contexts_for_confirm = {**all_agent_contexts, **at_contexts_by_label}
+    confirm_payload: ConfirmPayload = {
+        'agent_contexts': {t: ctx.model_dump(mode='json') for t, ctx in all_contexts_for_confirm.items()},
+        'agent_context': first_agent_context.model_dump(mode='json'),
+        'num_datapoints': est_total,
+        'num_dynamic': est_dynamic,
+        'num_static': est_static if mode == Pipeline.HYBRID else None,
+        'categories': resolved_categories,
+        'attack_model': attack_model,
+        'evaluator_model': evaluator_model,
+        'max_turns': max_turns,
+        'datapoint_parallelism': datapoint_parallelism,
+        'filtering_metadata': None,
+        'strategy_breakdown': strategy_breakdown or None,
+        'mode': str(mode.value) if hasattr(mode, 'value') else str(mode),
+        'target': ', '.join(all_target_labels),
+        'dataset_path': str(dataset) if dataset else None,
+        'vulnerabilities': [v.value for v in resolved_vulns] if resolved_vulns else None,
+        'replay_of': replay_of,
+    }
+    return confirm_payload
+
+
+@dataclass(frozen=True)
+class _RedTeamEvaluatorInputs:
+    mode: Pipeline
+    evaluator_model: str
+    pipeline_config: LLMConfig | None
+    llm_client: AsyncOpenAI | None
+    prepared_targets: list[PreparedTarget]
+    has_static: bool
+
+
+def _build_redteam_evaluators(*, inputs: _RedTeamEvaluatorInputs) -> list[Any]:
+    mode = inputs.mode
+    evaluator_model = inputs.evaluator_model
+    pipeline_config = inputs.pipeline_config
+    llm_client = inputs.llm_client
+    prepared_targets = inputs.prepared_targets
+    has_static = inputs.has_static
+
     resolved_llm_client = llm_client
 
     # Resolve evaluator client — prefer per-role evaluator client if set
@@ -3102,7 +3380,6 @@ async def _run_dynamic_or_hybrid(
 
     # Build evaluator — hybrid routes on hybrid_source; dynamic uses the
     # dynamic evaluator directly.
-    has_static = any(pt.static_datapoints for pt in prepared_targets)
     evaluator_cfg = pipeline_config.evaluator if pipeline_config else None
     # Self-judge / family-bias guard (RES-739): compare the panel against the
     # target's underlying model. ``agent_context.model`` is populated for ORQ
@@ -3161,6 +3438,43 @@ async def _run_dynamic_or_hybrid(
         )
         evaluators = [evaluator]
 
+    return evaluators
+
+
+@dataclass(frozen=True)
+class _AttackExecutionInputs:
+    resolved_name: str
+    all_datapoints: list[Any]
+    all_jobs: list[Any]
+    evaluators: list[Any]
+    datapoint_parallelism: int
+    description: str | None
+    mode: Pipeline
+    all_target_labels: list[str]
+    est_total: int
+    prepared_targets: list[PreparedTarget]
+    verbosity: int
+    cleanup_memory: bool
+    all_at_cleanup_info: list[tuple[AgentContext, list[str], Any]]
+
+
+async def _execute_attacks(*, inputs: _AttackExecutionInputs) -> list[Any]:
+    from evaluatorq import evaluatorq
+
+    resolved_name = inputs.resolved_name
+    all_datapoints = inputs.all_datapoints
+    all_jobs = inputs.all_jobs
+    evaluators = inputs.evaluators
+    datapoint_parallelism = inputs.datapoint_parallelism
+    description = inputs.description
+    mode = inputs.mode
+    all_target_labels = inputs.all_target_labels
+    est_total = inputs.est_total
+    prepared_targets = inputs.prepared_targets
+    verbosity = inputs.verbosity
+    cleanup_memory = inputs.cleanup_memory
+    all_at_cleanup_info = inputs.all_at_cleanup_info
+
     async with ProgressDisplay(est_total * len(prepared_targets), verbosity):
         try:
             results = await evaluatorq(
@@ -3202,19 +3516,10 @@ async def _run_dynamic_or_hybrid(
                     )
             raise
 
-    await await_maybe(resolved_hooks.on_stage_end(PipelineStage.ATTACK_EXECUTION, {'num_results': len(results)}))
+    return results
 
-    _save_stage(
-        output_dir,
-        '02_attack_results.json',
-        json.dumps([r.model_dump(mode='json') for r in results], indent=2, default=str),
-    )
 
-    pipeline_duration = (datetime.now(tz=timezone.utc).astimezone() - pipeline_start).total_seconds()
-
-    # Stage: report_generation — split by job_name, convert, merge
-    await await_maybe(resolved_hooks.on_stage_start(PipelineStage.REPORT_GENERATION, {'num_results': len(results)}))
-
+def _group_results_by_target(*, results: list[Any], prepared_targets: list[PreparedTarget]) -> dict[str, list[Any]]:
     # Group raw evaluatorq results by target safe_target slug.
     # Build a direct job_name → safe_target lookup to avoid substring matching.
     job_name_to_safe: dict[str, str] = {}
@@ -3240,165 +3545,137 @@ async def _run_dynamic_or_hybrid(
             else:
                 logger.warning(f'Job result with name {jr.job_name!r} did not match any target — excluded from reports')
 
-    per_target_reports: list[RedTeamReport] = []
-    for pt in prepared_targets:
-        safe = pt.safe_target
-        target_results = results_by_target.get(safe, [])
+    return results_by_target
 
-        if mode == Pipeline.HYBRID and has_static:
-            # Split by hybrid_source and convert separately, then merge
-            dynamic_results = [
-                r
-                for r in target_results
-                if getattr(r, 'data_point', None) is not None and r.data_point.inputs.get('hybrid_source') == 'dynamic'
-            ]
-            static_results_for_target = [
-                r
-                for r in target_results
-                if getattr(r, 'data_point', None) is not None and r.data_point.inputs.get('hybrid_source') != 'dynamic'
-            ]
 
-            target_sub_reports: list[RedTeamReport] = []
+@dataclass(frozen=True)
+class _TargetReportInputs:
+    pt: PreparedTarget
+    target_results: list[Any]
+    mode: Pipeline
+    has_static: bool
+    pipeline_duration: float
+    description: str | None
+    run_id: str
 
-            if dynamic_results:
-                dyn_report = dynamic_evaluatorq_results_to_report(
-                    agent_context=pt.agent_context,
-                    results=dynamic_results,
-                    duration_seconds=pipeline_duration,
-                    description=f'{description or "Hybrid"} ({pt.target}) (dynamic)',
-                    run_id=run_id,
-                )
-                target_sub_reports.append(dyn_report)
 
-            if static_results_for_target:
-                static_reports = static_evaluatorq_results_to_reports(
-                    results=static_results_for_target,
-                    agent_model=pt.target_value if pt.target_kind.is_model else None,
-                    agent_key=pt.target_value if not pt.target_kind.is_model else None,
-                    description=f'{description or "Hybrid"} ({pt.target}) (static)',
-                )
-                target_sub_reports.extend(static_reports.values())
+def _convert_target_report(*, inputs: _TargetReportInputs) -> RedTeamReport:
+    from evaluatorq.redteam.reports.converters import (
+        dynamic_evaluatorq_results_to_report,
+        merge_reports,
+        static_evaluatorq_results_to_reports,
+        static_results_to_report,
+    )
 
-            if target_sub_reports:
-                t_report = merge_reports(
-                    *target_sub_reports,
-                    description=f'{description or "Hybrid red teaming"} ({pt.target})',
-                )
-            else:
-                t_report = static_results_to_report(
-                    [],
-                    description=f'{description or "Hybrid red teaming"} ({pt.target})',
-                )
+    pt = inputs.pt
+    target_results = inputs.target_results
+    mode = inputs.mode
+    has_static = inputs.has_static
+    pipeline_duration = inputs.pipeline_duration
+    description = inputs.description
+    run_id = inputs.run_id
 
-            t_report.summary.datapoint_breakdown = _datapoint_breakdown(pt.all_datapoints)
+    if mode == Pipeline.HYBRID and has_static:
+        # Split by hybrid_source and convert separately, then merge
+        dynamic_results = [
+            r
+            for r in target_results
+            if getattr(r, 'data_point', None) is not None and r.data_point.inputs.get('hybrid_source') == 'dynamic'
+        ]
+        static_results_for_target = [
+            r
+            for r in target_results
+            if getattr(r, 'data_point', None) is not None and r.data_point.inputs.get('hybrid_source') != 'dynamic'
+        ]
 
+        target_sub_reports: list[RedTeamReport] = []
+
+        if dynamic_results:
+            dyn_report = dynamic_evaluatorq_results_to_report(
+                agent_context=pt.agent_context,
+                results=dynamic_results,
+                duration_seconds=pipeline_duration,
+                description=f'{description or "Hybrid"} ({pt.target}) (dynamic)',
+                run_id=run_id,
+            )
+            target_sub_reports.append(dyn_report)
+
+        if static_results_for_target:
+            static_reports = static_evaluatorq_results_to_reports(
+                results=static_results_for_target,
+                agent_model=pt.target_value if pt.target_kind.is_model else None,
+                agent_key=pt.target_value if not pt.target_kind.is_model else None,
+                description=f'{description or "Hybrid"} ({pt.target}) (static)',
+            )
+            target_sub_reports.extend(static_reports.values())
+
+        if target_sub_reports:
+            t_report = merge_reports(
+                *target_sub_reports,
+                description=f'{description or "Hybrid red teaming"} ({pt.target})',
+            )
         else:
-            # Dynamic mode: convert all target results as dynamic
-            if target_results:
-                t_report = dynamic_evaluatorq_results_to_report(
-                    agent_context=pt.agent_context,
-                    results=target_results,
-                    duration_seconds=pipeline_duration,
-                    description=f'{description or "Dynamic red teaming"} ({pt.target})',
-                    run_id=run_id,
-                )
-            else:
-                t_report = static_results_to_report(
-                    [],
-                    description=f'{description or "Dynamic red teaming"} ({pt.target})',
-                )
+            t_report = static_results_to_report(
+                [],
+                description=f'{description or "Hybrid red teaming"} ({pt.target})',
+            )
 
-        per_target_reports.append(t_report)
+        t_report.summary.datapoint_breakdown = _datapoint_breakdown(pt.all_datapoints)
 
-    if not per_target_reports:
-        merged = static_results_to_report(
-            [],
-            description=description or f'{mode.capitalize()} red teaming ({len(all_target_labels)} targets)',
-        )
     else:
-        merged = merge_reports(
-            *per_target_reports,
-            description=description or f'{mode.capitalize()} red teaming ({len(all_target_labels)} targets)',
-        )
+        # Dynamic mode: convert all target results as dynamic
+        if target_results:
+            t_report = dynamic_evaluatorq_results_to_report(
+                agent_context=pt.agent_context,
+                results=target_results,
+                duration_seconds=pipeline_duration,
+                description=f'{description or "Dynamic red teaming"} ({pt.target})',
+                run_id=run_id,
+            )
+        else:
+            t_report = static_results_to_report(
+                [],
+                description=f'{description or "Dynamic red teaming"} ({pt.target})',
+            )
 
-    # Static report conversion has no run_id parameter. Preserve the invocation's
-    # id even for static-only hybrid runs so its run-level trace deep link matches
-    # the thread IDs emitted by static jobs.
-    merged.run_id = run_id
-    merged.duration_seconds = pipeline_duration
-    merged.agent_contexts = {pt.target_value: pt.agent_context for pt in prepared_targets}
-    # Canonical tested_agents: use the same keys as agent_contexts so
-    # dashboard/report lookups resolve correctly.
-    merged.tested_agents = [pt.target_value for pt in prepared_targets]
-    if mode == Pipeline.HYBRID:
-        merged.summary.datapoint_breakdown = _datapoint_breakdown(all_datapoints)
+    return t_report
 
-    if len(all_datapoints) == 0:
-        merged.pipeline_warnings.append(
-            'Zero datapoints generated for requested vulnerabilities. '
-            'Strategy generation may have failed — check logs for details.'
-        )
-    elif merged.summary.total_attacks == 0:
-        merged.pipeline_warnings.append(
-            'Zero attacks executed. The resistance rate of 100% does not reflect actual security posture — '
-            'no attacks were run. Check strategy generation logs and LLM credentials.'
-        )
 
+def _collect_filter_warnings(*, prepared_targets: list[PreparedTarget]) -> list[str]:
+    filter_warnings: list[str] = []
     for pt in prepared_targets:
         fm = pt.filtering_metadata
         if not fm:
             continue
         unresolved = fm.get('_unresolved_categories', [])
         for cat in unresolved:
-            merged.pipeline_warnings.append(
+            filter_warnings.extend([
                 f'Category {cat!r}: zero strategies selected — category could not be resolved. Check for typos or unsupported category names.'
-            )
+            ])
         for cat_key, cat_meta in fm.items():
             if cat_key.startswith('_') or not isinstance(cat_meta, dict):
                 continue
             if cat_meta.get('total_selected', 0) == 0:
                 gen_error = cat_meta.get('generation_error')
                 if gen_error:
-                    merged.pipeline_warnings.append(
+                    filter_warnings.append(
                         f'Category {cat_key!r}: zero strategies selected (generation error: {gen_error})'
                     )
                 else:
-                    merged.pipeline_warnings.append(
+                    filter_warnings.append(
                         f'Category {cat_key!r}: zero strategies selected — no applicable strategies found for this agent.'
                     )
 
-    _apply_coverage_policy(merged, pipeline_config)
+    return filter_warnings
 
-    await await_maybe(
-        resolved_hooks.on_stage_end(
-            PipelineStage.REPORT_GENERATION,
-            {
-                'resistance_rate': merged.summary.resistance_rate,
-                'elapsed_s': pipeline_duration,
-            },
-        )
-    )
 
-    # Upload cleaned results to Orq platform — strip skipped job results
-    # (jobs return None for datapoints belonging to a different target).
-    # Send before saving so report.experiment_url is included in the persisted JSON.
-    # try/finally guarantees the report is written even if upload is cancelled
-    # (CancelledError bypasses the except Exception inside _send_cleaned_results).
-    try:
-        await _send_cleaned_results(
-            results=results,
-            name=resolved_name,
-            description=description or f'{mode.capitalize()} red teaming ({len(all_target_labels)} targets)',
-            start_time=pipeline_start,
-            report=merged,
-            # The attacker LLM client — the same Orq host that owns the
-            # ORQ_API_KEY used for this run, shared across all prepared
-            # targets, so the first one is representative of the upload host.
-            inference_client=prepared_targets[0].resolved_llm_client if prepared_targets else None,
-        )
-    finally:
-        _save_report(output_dir, '03_summary_report.json', merged)
-
+async def _cleanup_target_memory(
+    *,
+    prepared_targets: list[PreparedTarget],
+    cleanup_memory: bool,
+    resolved_hooks: PipelineHooks,
+) -> list[str]:
+    cleanup_warnings: list[str] = []
     # Memory cleanup for targets with configured stores — use runtime-accumulated entity IDs
     for pt in prepared_targets:
         if cleanup_memory and pt.agent_context.memory_stores:
@@ -3425,7 +3702,7 @@ async def _run_dynamic_or_hybrid(
                         },
                     )
                 if cleanup_error:
-                    merged.pipeline_warnings.append(
+                    cleanup_warnings.append(
                         f'Memory cleanup failed: {cleanup_error}. '
                         "Red-team attack data may persist in the agent's memory stores. "
                         'Manual cleanup may be required.'
@@ -3434,12 +3711,7 @@ async def _run_dynamic_or_hybrid(
                     resolved_hooks.on_stage_end(PipelineStage.CLEANUP, {'num_entities_cleaned': len(entity_ids)})
                 )
 
-    return merged, RedTeamRunMetrics(
-        num_datapoints=len(all_datapoints),
-        num_categories=len(resolved_categories),
-        duration_seconds=pipeline_duration,
-        datapoint_inputs=[dict(dp.inputs) for dp in all_datapoints],
-    )
+    return cleanup_warnings
 
 
 # ---------------------------------------------------------------------------
