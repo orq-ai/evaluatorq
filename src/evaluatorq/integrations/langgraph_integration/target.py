@@ -95,10 +95,17 @@ def _lc_message_role(msg: Any) -> str:
     return _LC_TYPE_TO_ROLE.get(get_message_type(msg), '')
 
 
-def _extract_tool_calls(result: list[Any]) -> list[OutputMessage]:
+def _extract_output_items(messages: list[Any]) -> list[OutputMessage]:
+    """Render this turn's LangGraph state messages as ordered output items.
+
+    Text and tool calls are appended in encounter order so ReAct-style
+    interleaving survives, and each ToolMessage is paired back onto the call it
+    answers. Every message that cannot be placed is dropped with a warning
+    naming what was lost.
+    """
     output_items: list[OutputMessage] = []
     tool_index: dict[str, int] = {}
-    for msg in result:
+    for msg in messages:
         role = _lc_message_role(msg)
         # Peels the messages_to_dict()/constructor envelope; a no-op on message objects.
         data = get_message_data(msg)
@@ -156,19 +163,21 @@ def _extract_tool_calls(result: list[Any]) -> list[OutputMessage]:
     return output_items
 
 
-def _extract_final_message(result: list[Any], output_items: list[OutputMessage]) -> list[OutputMessage]:
-    # Fallback: if no AIMessage text was emitted (e.g. duck-typed message objects
-    # that don't subclass AIMessage), use the last message's .content so that
-    # AgentResponse.text remains well-defined.
-    if not any(isinstance(item, TextOutputItem) for item in output_items):
-        last = result[-1]
-        logger.warning(
-            'LangGraphTarget: no AIMessage text in turn; falling back to last message content (type=%s)',
-            type(last).__name__,
-        )
-        last_content = last.get('content', '') if isinstance(last, dict) else getattr(last, 'content', '')
-        output_items.append(TextOutputItem(text=_lc_content_to_text(last_content), annotations=[]))
-    return output_items
+def _fallback_text_item(messages: list[Any]) -> TextOutputItem:
+    """The last message's content as a text item, for a turn that emitted none.
+
+    Reached when no AIMessage text was extracted (e.g. duck-typed message
+    objects that don't subclass AIMessage), so ``AgentResponse.text`` stays
+    well-defined rather than empty. Always warns: this is a degraded read of the
+    turn, not the normal path.
+    """
+    last = messages[-1]
+    logger.warning(
+        'LangGraphTarget: no AIMessage text in turn; falling back to last message content (type=%s)',
+        type(last).__name__,
+    )
+    last_content = last.get('content', '') if isinstance(last, dict) else getattr(last, 'content', '')
+    return TextOutputItem(text=_lc_content_to_text(last_content), annotations=[])
 
 
 class _TokenUsageCollector(BaseCallbackHandler):
@@ -382,7 +391,6 @@ class LangGraphTarget(AgentTarget):
         # slicing from _prev_msg_count avoids duplicating tool calls across turns.
         # Build ToolCallOutputItem directly (not via the .tool_calls view) so
         # interleaved text/tool ordering is preserved in .output.
-        output_items: list[OutputMessage] = []
         sliced = result_messages[self._prev_msg_count :]
         if not sliced and self._prev_msg_count > 0:
             # Graph may use a trimming reducer; fall back to the full result set
@@ -395,11 +403,12 @@ class LangGraphTarget(AgentTarget):
                 len(result_messages),
             )
             sliced = result_messages
-        output_items = _extract_tool_calls(sliced)
+        output_items = _extract_output_items(sliced)
 
         self._prev_msg_count = len(result_messages)
 
-        output_items = _extract_final_message(result_messages, output_items)
+        if not any(isinstance(item, TextOutputItem) for item in output_items):
+            output_items.append(_fallback_text_item(result_messages))
         return AgentResponse(output=output_items, usage=usage)
 
     def reset_conversation(self) -> None:

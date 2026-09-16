@@ -175,43 +175,6 @@ _AGGREGATORS: dict[str, Aggregator] = {
     'max': _make_numeric_agg('max'),
 }
 
-_AggregationHandler = Callable[..., tuple[VerdictValue | None, bool]]
-
-
-def _aggregate_mode(
-    *,
-    agg_fn: Aggregator,
-    decisive_values: list[VerdictValue],
-    votes: list[JuryVote],
-    tie_break: TieBreak | None,
-) -> tuple[VerdictValue | None, bool]:
-    del agg_fn, votes
-    verdict, tie = _plurality_vote(decisive_values)
-    if tie and tie_break is not None:
-        verdict = tie_break(decisive_values)
-    return verdict, tie
-
-
-def _aggregate_default(
-    *,
-    agg_fn: Aggregator,
-    decisive_values: list[VerdictValue],
-    votes: list[JuryVote],
-    tie_break: TieBreak | None,
-) -> tuple[VerdictValue | None, bool]:
-    del decisive_values, tie_break
-    return agg_fn(votes), False
-
-
-_AGGREGATION_HANDLERS: dict[str, _AggregationHandler] = {
-    'mode': _aggregate_mode,
-    'majority': _aggregate_default,
-    'mean_std': _aggregate_default,
-    'median': _aggregate_default,
-    'min': _aggregate_default,
-    'max': _aggregate_default,
-}
-
 
 def _aggregate_panel_verdict(
     *,
@@ -221,16 +184,23 @@ def _aggregate_panel_verdict(
     votes: list[JuryVote],
     tie_break: TieBreak | None,
 ) -> tuple[VerdictValue | None, bool]:
-    if isinstance(aggregator, str):
-        handler = _AGGREGATION_HANDLERS.get(aggregator, _aggregate_default)
-    else:
-        handler = _aggregate_default
-    return handler(
-        agg_fn=agg_fn,
-        decisive_values=decisive_values,
-        votes=votes,
-        tie_break=tie_break,
-    )
+    """Reduce one panel's votes to ``(verdict, tie)``.
+
+    ``mode`` is special-cased so plurality ties route through ``tie_break`` and
+    set the tie flag; every other built-in keyword and custom callable is a
+    plain decisive-votes -> verdict reduction (no tie concept). Extracted from
+    ``_run_jury_core`` for its complexity budget, not because the two branches
+    generalise: a dispatch table over the aggregator keywords would be five
+    aliases for this one ``else``.
+    """
+    if aggregator == 'mode':
+        verdict, tie = _plurality_vote(decisive_values)
+        if tie and tie_break is not None:
+            verdict = tie_break(decisive_values)
+        return verdict, tie
+    # Pass ALL votes — custom callables may want abstained/failed votes for
+    # quorum/weighting; built-ins re-filter to decisive internally.
+    return agg_fn(votes), False
 
 
 # Single source of truth for the keyword -> verdict-kind partition. Keep in sync
@@ -790,8 +760,6 @@ async def _run_jury_core(
     verdict: VerdictValue | None = None
 
     if not inconclusive:
-        # Pass ALL votes — custom callables may want abstained/failed votes
-        # for quorum/weighting; built-ins re-filter to decisive internally.
         verdict, tie = _aggregate_panel_verdict(
             aggregator=aggregator,
             agg_fn=agg_fn,
