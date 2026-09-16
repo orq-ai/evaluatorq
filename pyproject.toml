@@ -137,7 +137,7 @@ src = [ "src" ]
 
     [tool.ruff.lint.mccabe]
     # Cyclomatic complexity ceiling. 15 is the knee of this repo's distribution:
-    # 53 functions in 33 files exceed it (registered below), the worst at 108.
+    # 42 functions in 24 files exceed it (registered below), the worst at 108.
     # Lower it as that list shrinks — a new function over 15 should be split, not
     # exempted.
     max-complexity = 15
