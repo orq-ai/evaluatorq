@@ -47,7 +47,7 @@ from evaluatorq.common.cli_json import echo_json
 from evaluatorq.common.cli_tty import should_skip_confirm
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.contracts import LLMCallConfig
-from evaluatorq.dashboard.library import report_id
+from evaluatorq.dashboard.library import _manifest_card_id, report_id
 from evaluatorq.simulation.types import DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run as _auto_save_run
 from evaluatorq.simulation.utils.run_store import get_sim_runs_dir as _get_sim_runs_dir
@@ -513,6 +513,19 @@ def _resolve_simulate_options(
     yes: bool,
     executive_summary: bool,
 ) -> SimulateOptions:
+    """Configure logging and hooks for ``eq simulate``, then validate its input-source flags.
+
+    This is not a pure resolver. Before validating anything it sets the process
+    log level via ``_configure_logging``, builds a stderr ``rich.Console`` and a
+    ``RichHooks`` unless ``--quiet``, and echoes the resolved simulation model.
+    That ordering is deliberate so a validation error is rendered by the same
+    console the run would have used.
+
+    Raises ``typer.BadParameter`` when the number of input sources is not
+    exactly one, when ``--experiment-run-id`` is given without
+    ``--experiment-id``, or when ``--input`` names a file that does not exist.
+    ``--dataset-id`` and ``--experiment-id`` additionally require ``ORQ_API_KEY``.
+    """
     if quiet:
         verbose = -1
 
@@ -1921,7 +1934,7 @@ def upload_dataset(
 # ---------------------------------------------------------------------------
 
 
-def _record(manifest: Any, report_path: Path | None, _manifest_card_id: Any) -> dict[str, Any] | None:
+def _record(manifest: Any, report_path: Path | None) -> dict[str, Any] | None:
     """Normalize a (manifest, report_path) record to display/JSON fields.
 
     Manifest rows read the compact ``summary`` (no full-report read); legacy
@@ -2001,7 +2014,6 @@ def runs(
         raise typer.Exit(0)
 
     from evaluatorq.common.run_manifest import list_run_records
-    from evaluatorq.dashboard.library import _manifest_card_id
 
     # Manifest-first: build rows from the tiny manifest sidecars (status + compact
     # summary), falling back to a full-report read only for legacy runs with no
@@ -2019,7 +2031,7 @@ def runs(
     records: list[dict[str, Any]] = []
     malformed = 0
     for manifest, report_path in records_src:
-        rec = _record(manifest, report_path, _manifest_card_id)
+        rec = _record(manifest, report_path)
         if rec is None:
             malformed += 1
             continue

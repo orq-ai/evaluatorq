@@ -22,7 +22,7 @@ from evaluatorq.common.cli_help import CONTEXT_SETTINGS, MODEL_OPTION_NOTE
 from evaluatorq.common.cli_json import echo_json
 from evaluatorq.common.cli_tty import should_skip_confirm
 from evaluatorq.common.reports.html_helpers import pct
-from evaluatorq.dashboard.library import report_id
+from evaluatorq.dashboard.library import _manifest_card_id, report_id
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
     DeliveryMethod,
@@ -271,6 +271,13 @@ def _resolve_run_options(
     max_tool_continuations: int,
     target_reasoning_effort: str | None,
 ) -> RunOptions:
+    """Flatten, validate and resolve ``eq redteam run``'s raw CLI flags into a RunOptions bundle.
+
+    Raises ``typer.BadParameter`` on an unknown vulnerability ID or an unknown
+    strategy name. An unknown delivery method is deliberately not fatal: it is
+    kept as a literal string so a dataset's custom delivery method stays
+    filterable, and a warning is echoed to stderr.
+    """
     from evaluatorq.redteam.contracts import LLMCallConfig, TargetConfig
 
     # Allow comma-separated values within repeatable flags (-s a,b == -s a -s b).
@@ -851,7 +858,7 @@ def validate_dataset(
     typer.echo(f'OK: All {len(samples)} samples are valid.')
 
 
-def _row(manifest: Any, report_path: Path | None, _manifest_card_id: Any) -> dict[str, Any] | None:
+def _row(manifest: Any, report_path: Path | None) -> dict[str, Any] | None:
     """Normalize a (manifest, report_path) record to the fields the table needs.
 
     Manifest rows read the compact ``summary`` (no full-report read); legacy
@@ -936,7 +943,6 @@ def runs(
         raise typer.Exit(code=0)
 
     from evaluatorq.common.run_manifest import list_run_records
-    from evaluatorq.dashboard.library import _manifest_card_id
 
     # Manifest-first: build rows from the tiny manifest sidecars (status + compact
     # summary), falling back to a full-report read only for legacy runs with no
@@ -953,7 +959,7 @@ def runs(
     rows: list[dict[str, Any]] = []
     skipped = 0
     for manifest, report_path in records_src:
-        row = _row(manifest, report_path, _manifest_card_id)
+        row = _row(manifest, report_path)
         if row is None:
             skipped += 1
             continue

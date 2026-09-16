@@ -143,7 +143,13 @@ def _debug_endpoint_source() -> str:
 
 
 def _resolve_batch_settings() -> tuple[int, int]:
-    """Resolve and clamp the OTLP batch processor queue and batch sizes."""
+    """Resolve and clamp the OTLP batch processor queue and batch sizes.
+
+    Both are env-tunable because a long-lived process never tears the provider
+    down, so one queue absorbs every run and the SDK's 2048 default overflows.
+    A batch size larger than the queue is clamped to the queue size, with a
+    warning naming both values.
+    """
     max_queue_size = env_int('ORQ_OTEL_MAX_QUEUE_SIZE', 4096, min_value=1)
     requested_batch_size = env_int('ORQ_OTEL_MAX_BATCH_SIZE', 512, min_value=1)
     batch_size = min(requested_batch_size, max_queue_size)
@@ -198,10 +204,7 @@ async def init_tracing_if_needed() -> bool:  # noqa: RUF029
         SERVICE_NAME = 'service.name'
         SERVICE_VERSION = 'service.version'
 
-        # Ensure endpoint has the traces path
         traces_endpoint = _resolve_traces_endpoint(endpoint)
-
-        # Build headers for the exporter
         headers = _resolve_exporter_headers(traces_endpoint)
 
         resource = Resource.create({
@@ -223,9 +226,7 @@ async def init_tracing_if_needed() -> bool:  # noqa: RUF029
             timeout=5,  # 5 second timeout for telemetry
         )
 
-        # Use BatchSpanProcessor to export spans asynchronously in batches.
-        # Env-tunable because a long-lived process never tears the provider down,
-        # so one queue absorbs every run and the SDK's 2048 default overflows.
+        # BatchSpanProcessor exports spans asynchronously in batches.
         max_queue_size, batch_size = _resolve_batch_settings()
         span_processor = BatchSpanProcessor(
             exporter,

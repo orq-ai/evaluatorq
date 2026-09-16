@@ -7,10 +7,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import huggingface_hub
+import pytest
 from typer.testing import CliRunner
 
 from evaluatorq.redteam.cli import app
+
+
+# huggingface-hub ships only with the `redteam` extra; skip rather than fail collection.
+huggingface_hub = pytest.importorskip('huggingface_hub')
 
 
 runner = CliRunner()
