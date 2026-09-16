@@ -169,6 +169,54 @@ _FLAG_TO_CAPABILITY: dict[str, tuple[str, list[AgentCapability]]] = {
 }
 
 
+async def _send_probe(
+    probe: str,
+    group: str,
+    convo: list[Message],
+    *,
+    agent_target: AgentTarget,
+    target_agent_timeout_ms: int,
+    max_target_retries: int,
+    answered_by_group: dict[str, int],
+    turns: list[int],
+    target: AgentTarget | None = None,
+) -> bool:
+    """Send one probe turn and record whether the target answered.
+
+    ``turns`` is a single-slot cell owned by ``_run_probes`` and INCREMENTED here — it is
+    the shared turn budget every probe phase draws down, so passing a fresh list makes the
+    budget never run out.
+    """
+    turns[0] += 1
+    convo.append(Message(role='user', content=probe))
+    probe_target = target if target is not None else agent_target
+
+    try:
+        result = await call_target_with_retry(
+            probe_target,
+            convo,
+            target_agent_timeout_ms=target_agent_timeout_ms,
+            max_target_retries=max_target_retries,
+            map_error=probe_target.map_error,
+        )
+    except Exception as e:  # one flaky turn must not abort classification  # noqa: BLE001
+        logger.warning('Blackbox probe ({}) failed: {}', group, e)
+        # Drop the unanswered user turn so it does not pollute the judge
+        # transcript with a question that has no paired reply.
+        convo.pop()
+        return False
+    if not result.succeeded:
+        logger.warning('Blackbox probe ({}) failed: {}', group, result.error)
+        # Drop the unanswered user turn so it does not pollute the judge
+        # transcript with a question that has no paired reply.
+        convo.pop()
+        return False
+    response = result.response
+    answered_by_group[group] += 1
+    convo.append(Message(role='assistant', content=response.text or ''))
+    return True
+
+
 BLACKBOX_JUDGE_PROMPT = """You are analyzing a conversation used to probe an AI agent's capabilities for \
 security testing. The agent was sent targeted probe questions; below is the full transcript of \
 probe questions and the agent's own responses.
@@ -240,42 +288,8 @@ async def _run_probes(
     silently reporting the capability absent.
     """
     transcript: list[Message] = []
-    turns = 0
+    turns = [0]
     answered_by_group: dict[str, int] = {group: 0 for group in PROBES}
-
-    async def _send(probe: str, group: str, convo: list[Message], *, target: AgentTarget | None = None) -> bool:
-        nonlocal turns
-        turns += 1
-        convo.append(Message(role='user', content=probe))
-        probe_target = target if target is not None else agent_target
-
-        def _map_probe_error(exc: Exception) -> tuple[str, str] | None:
-            return probe_target.map_error(exc)
-
-        try:
-            result = await call_target_with_retry(
-                probe_target,
-                convo,
-                target_agent_timeout_ms=target_agent_timeout_ms,
-                max_target_retries=max_target_retries,
-                map_error=_map_probe_error,
-            )
-        except Exception as e:  # one flaky turn must not abort classification  # noqa: BLE001
-            logger.warning('Blackbox probe ({}) failed: {}', group, e)
-            # Drop the unanswered user turn so it does not pollute the judge
-            # transcript with a question that has no paired reply.
-            convo.pop()
-            return False
-        if not result.succeeded:
-            logger.warning('Blackbox probe ({}) failed: {}', group, result.error)
-            # Drop the unanswered user turn so it does not pollute the judge
-            # transcript with a question that has no paired reply.
-            convo.pop()
-            return False
-        response = result.response
-        answered_by_group[group] += 1
-        convo.append(Message(role='assistant', content=response.text or ''))
-        return True
 
     # The memory RECALL probe runs LAST and in a FRESH conversation: in the
     # accumulating transcript every stateless LLM "recalls" the code because it
@@ -284,19 +298,37 @@ async def _run_probes(
     # running it last also gives eventually-consistent stores time to index.
     memory_write_probe, memory_recall_probe = PROBES['memory']
     write_ok = False
-    if turns < max_probe_turns:
-        write_ok = await _send(memory_write_probe, 'memory', transcript)
+    if turns[0] < max_probe_turns:
+        write_ok = await _send_probe(
+            memory_write_probe,
+            'memory',
+            transcript,
+            agent_target=agent_target,
+            target_agent_timeout_ms=target_agent_timeout_ms,
+            max_target_retries=max_target_retries,
+            answered_by_group=answered_by_group,
+            turns=turns,
+        )
     for group, probes in PROBES.items():
         if group == 'memory':
             continue
         for probe in probes:
-            if turns >= max_probe_turns:
+            if turns[0] >= max_probe_turns:
                 logger.debug('Blackbox probe budget ({}) reached; stopping', max_probe_turns)
                 break
-            await _send(probe, group, transcript)
+            await _send_probe(
+                probe,
+                group,
+                transcript,
+                agent_target=agent_target,
+                target_agent_timeout_ms=target_agent_timeout_ms,
+                max_target_retries=max_target_retries,
+                answered_by_group=answered_by_group,
+                turns=turns,
+            )
     recall_ok = False
     # A recall without a successful write tests nothing, so it is skipped.
-    if write_ok and turns < max_probe_turns:
+    if write_ok and turns[0] < max_probe_turns:
         # The recall runs on a FRESH TARGET INSTANCE, not just a fresh message
         # list: targets like ORQAgentTarget thread server-side conversation
         # state via a per-instance task id and forward only the last turn, so a
@@ -310,7 +342,17 @@ async def _run_probes(
             recall_target.memory_entity_id = parent_entity
         try:
             recall_convo: list[Message] = []
-            if await _send(memory_recall_probe, 'memory', recall_convo, target=recall_target):
+            if await _send_probe(
+                memory_recall_probe,
+                'memory',
+                recall_convo,
+                agent_target=agent_target,
+                target_agent_timeout_ms=target_agent_timeout_ms,
+                max_target_retries=max_target_retries,
+                answered_by_group=answered_by_group,
+                turns=turns,
+                target=recall_target,
+            ):
                 recall_ok = True
                 # Mark the context break so the judge knows the agent could not
                 # have seen the code in this conversation.
