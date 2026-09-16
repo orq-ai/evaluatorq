@@ -10,8 +10,8 @@ eq         = "evaluatorq.cli:main"
 
 Subcommands are registered at startup. `eq redteam` requires the `redteam` extra; `eq sim` requires the `simulation` extra.
 
-!!! note "Primary UI — `eq dashboard`"
-    The recommended way to browse saved runs is the multi-run FastHTML dashboard, `eq dashboard`. The canonical invocation scans a run directory — `eq dashboard` browses both default stores (red team + simulation), and `eq dashboard .evaluatorq/sim-runs` scopes to simulation. Passing a single JSON report file is an optional direct deep-link. See [Dashboard](../dashboard.md) and [Simulation](simulation.md).
+!!! note "The UI — `eq dashboard`"
+    The way to browse saved runs is the multi-run FastHTML dashboard, `eq dashboard`. The canonical invocation scans a run directory — `eq dashboard` browses both default stores (red team + simulation), and `eq dashboard .evaluatorq/sim-runs` scopes to simulation. Passing a single JSON report file is an optional direct deep-link. See [Dashboard](../dashboard.md) and [Simulation](simulation.md).
 
 Two command groups have their own pages:
 

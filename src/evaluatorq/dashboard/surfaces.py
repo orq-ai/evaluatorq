@@ -62,9 +62,8 @@ def _redteam_adapter() -> SurfaceAdapter:
     def _rt_rows(report: RedTeamReport, filtered: list[RedTeamResult]) -> list[dict[str, Any]]:
         """Build CSV/JSON row dicts from filtered RedTeamResult objects.
 
-        Parity: redteam/ui/dashboard.py:1754-1771 (table_rows construction).
-        Note: this is a deliberate 10-column summary shape (more consumable
-        than full model_dump); the old Streamlit JSON used model_dump verbatim.
+        Note: this is a deliberate 10-column summary shape, more consumable
+        than a full ``model_dump``.
         """
         rows: list[dict[str, Any]] = []
         for r in filtered:
@@ -112,10 +111,6 @@ def _sim_adapter() -> SurfaceAdapter:
 
     def _sim_rows(run: SimulationRun, filtered: list[SimulationResult]) -> list[dict[str, Any]]:
         """Build JSON row dicts from filtered SimulationResult objects.
-
-        Parity: simulation/ui/dashboard.py:322-334 (table dict inside
-        ``_render_transcripts``).  This matches the shape used by the
-        Streamlit JSON download button (dashboard.py:338).
 
         Returns plain dicts (not SimulationEntry models) because the output
         flows directly into ``json.dumps(..., default=str)`` in the export

@@ -4,8 +4,8 @@ Agent simulation subcommand group. Registered only when `evaluatorq[simulation]`
 
 Three main verbs: `generate` (datapoints only), `simulate` (run against pre-built datapoints), `run` (generate then simulate in one shot).
 
-!!! note "Primary UI — `eq dashboard`"
-    The recommended way to browse saved simulation runs is the multi-run FastHTML dashboard, `eq dashboard .evaluatorq/sim-runs` (scopes to simulation) or `eq dashboard` (both stores). Passing a single JSON report file is an optional direct deep-link.
+!!! note "The UI — `eq dashboard`"
+    The way to browse saved simulation runs is the multi-run FastHTML dashboard, `eq dashboard .evaluatorq/sim-runs` (scopes to simulation) or `eq dashboard` (both stores). Passing a single JSON report file is an optional direct deep-link.
 
 --8<-- "docs/_snippets/openai-direct-model.md"
 

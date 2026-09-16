@@ -93,6 +93,7 @@ All notable changes to `evaluatorq` are documented here.
 
 ### Breaking Changes
 
+- **The deprecated Streamlit dashboards are removed: `eq redteam ui` and `eq sim ui` no longer exist.** Both have printed `Warning: eq … ui is deprecated; use eq dashboard instead.` since July 2026; `eq dashboard` is the replacement and reads the same saved run files, with no migration beyond the command name. The `redteam` and `simulation` extras no longer pull in `streamlit`, `plotly` or `watchdog` — they now install only `huggingface-hub` plus chart rendering (`vl-convert-python`) and, for `simulation`, `orq-ai-sdk`. The `evaluatorq.redteam.ui`, `evaluatorq.simulation.ui` and `evaluatorq.common.ui` packages are gone, including `simulation.ui.token_display`; nothing outside the deleted viewers imported them.
 - `red_team()` parameter renamed: `config=` → `llm_config=`. The old `config=` keyword still works in 1.3.0 but emits a `DeprecationWarning` and **will be removed in 1.4.0**.
 - `LLMConfig` flat fields removed: `attack_model`, `evaluator_model`, `adversarial_temperature`, `adversarial_max_tokens`, `llm_call_timeout_ms`, `llm_kwargs` — replaced by role-based `attacker` / `evaluator` sub-configs (`LLMCallConfig`)
 - `wrap_simulation_agent()` no longer accepts the `evaluators=` kwarg. Evaluators are wired through `evaluatorq()` directly (the framework that consumes the job); callers passing `evaluators=[...]` will now get a `TypeError` and should move the list onto their `evaluatorq(..., evaluators=...)` call instead (RES-594).
