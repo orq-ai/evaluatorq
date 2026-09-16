@@ -9,8 +9,10 @@ import asyncio
 import contextvars
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from functools import partial
 from inspect import signature
 from typing import TYPE_CHECKING, Any, cast
 
@@ -28,7 +30,7 @@ from evaluatorq.common.content_filter import (
 from evaluatorq.common.llm_call import execute_chat_completion
 from evaluatorq.common.prompt_cache import apply_cache_breakpoints, caching_applies
 from evaluatorq.common.sanitize import xml_escape
-from evaluatorq.common.target_call import call_target_with_retry, default_map_error
+from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry, default_map_error
 from evaluatorq.common.tracing import set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentResponse, AgentTarget, Message, TextOutputItem
 from evaluatorq.redteam.adaptive.tool_chaining import (
@@ -303,6 +305,74 @@ def _progress_label(category: str, strategy_name: str) -> str:
     return raw[: _PROGRESS_LABEL_MAX_LEN - 1] + '…'
 
 
+async def _start_attack_progress(
+    progress: 'ProgressDisplay | None', strategy: AttackStrategy, max_turns: int
+) -> TaskID | None:
+    """Open a progress row for this attack, returning ``None`` if there is none.
+
+    A progress display is cosmetic, so a failure to open the row is swallowed
+    to a debug log rather than failing the attack; the caller then runs with
+    ``task_id=None`` and skips every later update.
+    """
+    task_id: TaskID | None = None
+    if progress is not None:
+        try:
+            task_id = await progress.start_attack(_progress_label(strategy.category, strategy.name), max_turns)
+        except Exception:  # noqa: BLE001
+            logger.debug('Failed to update progress display', exc_info=True)
+    return task_id
+
+
+@asynccontextmanager
+async def _target_attempt_span(attempt_index: int, *, prompt: str, turn: int, strategy_name: str) -> AsyncIterator[Any]:
+    """Open one ``orq.redteam.target_call`` span per target attempt.
+
+    Passed to ``call_target_with_retry`` as its ``on_attempt`` hook, so it runs
+    once per retry attempt rather than once per turn.
+
+    Yields:
+        The attempt span, for the caller to record the response on.
+    """
+    async with with_redteam_span(
+        'orq.redteam.target_call',
+        {
+            'orq.redteam.turn': turn + 1,
+            'orq.redteam.strategy_name': strategy_name,
+            'orq.redteam.target_attempt': attempt_index + 1,
+            'input': truncate_for_span(prompt),
+            'orq.redteam.input': truncate_for_span(prompt),
+        },
+    ) as span:
+        yield span
+
+
+def _record_attempt_response(span: Any, response: AgentResponse) -> None:
+    """Write a target attempt's output onto its own per-attempt span."""
+    response_text = truncate_for_span(response.text or '')
+    set_span_attrs(
+        span,
+        {
+            'output': response_text,
+            'orq.redteam.output': response_text,
+        },
+    )
+
+
+def _accumulate_target_usage(acc: TokenUsage, turn_usage: TokenUsage | None) -> TokenUsage:
+    """Return ``acc`` plus one turn's target usage. Pure — ``acc`` is not mutated.
+
+    Deliberately computed outside the target call so an arithmetic bug here is
+    never misattributed to the target.
+    """
+    if turn_usage is None:
+        return acc
+    # Targets report their own call count (orq sums tool-continuation
+    # rounds); fall back to 1 only when a usage-bearing turn forgot to.
+    if turn_usage.calls == 0:
+        turn_usage = turn_usage.with_calls(1)
+    return acc + turn_usage
+
+
 def _build_adversarial_system_prompt(
     objective: str,
     strategy: AttackStrategy,
@@ -353,6 +423,70 @@ def _merge_usage(*usages: TokenUsage | None) -> TokenUsage | None:
     for u in present[1:]:
         merged = merged + u
     return merged
+
+
+@dataclass(frozen=True)
+class _AttackError:
+    """The six error fields an aborted turn reports on ``OrchestratorResult``.
+
+    Named rather than positional: four of the six are ``str``, so a tuple would
+    let a transposition at any construction site swap two of them with no type
+    error and no test failure. ``error_turn`` is optional because the
+    end-of-run unresolved-timeout path leaves it unset, as the inline code did.
+    """
+
+    error: str
+    error_type: str
+    error_stage: str
+    error_code: str
+    error_details: dict[str, Any]
+    error_turn: int | None = None
+
+
+@dataclass(frozen=True)
+class _AttackerTurn:
+    """Outcome of one adversarial generation phase.
+
+    ``failure`` set means the turn loop breaks; ``retry`` means it continues.
+    The two are mutually exclusive and ``__post_init__`` enforces that.
+
+    ``truncated`` is independent of both and is always meaningful: a turn cut
+    off at ``max_tokens`` is recorded in ``OrchestratorResult.truncated_turns``
+    even when that same turn then aborts, so the caller reads it before it
+    branches on ``failure``. ``attacker``/``attack_prompt``/``usage`` are only
+    meaningful when neither ``failure`` nor ``retry`` is set.
+    """
+
+    usage_delta: TokenUsage
+    consecutive_adversarial_timeouts: int
+    failure: _AttackError | None = None
+    retry: bool = False
+    truncated: bool = False
+    usage: TokenUsage | None = None
+    attack_prompt: str = ''
+    attacker: AgentResponse = field(default_factory=AgentResponse)
+
+    def __post_init__(self) -> None:
+        if self.failure is not None and self.retry:
+            raise ValueError('_AttackerTurn cannot both abort the loop (failure) and continue it (retry)')
+
+
+@dataclass(frozen=True)
+class _MarkerPhase:
+    """Outcome of the objective-marker check on one attacker prompt.
+
+    ``stop=True`` means the turn loop breaks without calling the target; the
+    marker phase has already logged, updated progress and closed out the turn
+    span itself. The other four fields are always populated and are written
+    back onto the caller's state either way — ``attack_prompt`` and
+    ``attacker`` are the marker-stripped forms when a marker was present.
+    """
+
+    attack_prompt: str
+    attacker: AgentResponse
+    objective_achieved: bool
+    objective_rationale: str | None
+    stop: bool
 
 
 class MultiTurnOrchestrator:
@@ -544,6 +678,516 @@ class MultiTurnOrchestrator:
             )
             return None, planner_usage
 
+    async def _adversarial_generation(
+        self,
+        *,
+        attempt: int,
+        turn: int,
+        strategy: AttackStrategy,
+        messages: list[dict[str, Any]],
+        timeout_s: float,
+        record_usage: Callable[[TokenUsage], None],
+    ) -> tuple[Any, TokenUsage | None, str]:
+        """Run one adversarial generation attempt and return its raw response.
+
+        This is a single attempt with no retry logic of its own; the caller's
+        ``regenerate_on_content_filter`` wrapper decides whether to call it
+        again. ``record_usage`` therefore fires once per *attempt*, not once
+        per turn, and is called before the response body is read so a
+        malformed response still counts the call that was billed for it.
+        """
+        async with (
+            with_redteam_span(
+                'orq.redteam.adversarial_generation',
+                {
+                    'orq.redteam.turn': turn + 1,
+                    'orq.redteam.strategy_name': strategy.name,
+                },
+            ),
+            with_llm_span(
+                model=self.model,
+                temperature=self._cfg.attacker.temperature,
+                max_tokens=self._cfg.attacker.max_tokens,
+                input_messages=messages,
+                attributes={
+                    'orq.redteam.llm_purpose': 'adversarial',
+                    'orq.redteam.turn': turn + 1,
+                    'orq.redteam.strategy_name': strategy.name,
+                },
+            ) as adv_span,
+        ):
+            if attempt > 0:
+                set_span_attrs(adv_span, {'orq.redteam.adversarial_retry': attempt})
+            response, usage = await execute_chat_completion(
+                client=self.llm_client,
+                model=self.model,
+                messages=messages,
+                span=adv_span,
+                timeout_s=timeout_s,
+                temperature=self._cfg.attacker.temperature,
+                max_completion_tokens=self._cfg.attacker.max_tokens,
+                reasoning_effort=self._cfg.attacker.reasoning_effort,
+                extra_body=self._cfg.retry_extra_body(self.llm_client),
+                extra_kwargs=self._cfg.attacker.extra_kwargs,
+            )
+            # Every attempt counts, including content-filtered retries.
+            if usage is not None:
+                # Fold usage when present (carries cached/reasoning/cost
+                # via __add__); every attempt is a real billed call.
+                record_usage(usage)
+            else:
+                # No usage block, but still a billed attempt — count the
+                # bare call so content-filtered retries aren't undercounted.
+                record_usage(TokenUsage(calls=1))
+            attack_prompt = response.choices[0].message.content or ''
+            return response, usage, attack_prompt
+
+    def _unresolved_timeout_error(
+        self,
+        *,
+        consecutive_adversarial_timeouts: int,
+        error: str | None,
+        strategy: AttackStrategy,
+        turns_record: list[Turn],
+    ) -> _AttackError | None:
+        """Classify a timeout that was still outstanding when the loop ended.
+
+        Returns an error only when no turn completed at all. With turns on
+        record the dropped turn is reported as a warning and ``None`` is
+        returned, so the run keeps the turns it did collect — the inline code
+        this replaces behaved the same way, including leaving ``error_turn``
+        unset.
+        """
+        if consecutive_adversarial_timeouts > 0 and error is None:
+            logger.warning(
+                f'Conversation for {strategy.name} ended with an unresolved adversarial timeout '
+                '— the last turn was dropped silently'
+            )
+            if not turns_record:
+                timeout_s = self._cfg.attacker.timeout_ms / 1000.0
+                return _AttackError(
+                    error=f'Adversarial LLM timed out after {timeout_s:.0f}s with no turns completed',
+                    error_type='llm_error',
+                    error_stage='adversarial_generation',
+                    error_code='adversarial.timeout',
+                    error_details={'timeout_ms': self._cfg.attacker.timeout_ms},
+                )
+        return None
+
+    async def _attacker_turn(
+        self,
+        *,
+        turn: int,
+        max_turns: int,
+        strategy: AttackStrategy,
+        adversarial_messages: 'list[ChatCompletionMessageParam]',
+        consecutive_adversarial_timeouts: int,
+        turn_span: Any,
+    ) -> _AttackerTurn:
+        """Generate one attacker prompt and classify the outcome for the loop.
+
+        ``regenerate_on_content_filter`` is the only retry layer on this call
+        path; neither this method nor ``_adversarial_generation`` adds a second
+        one. Writes error attributes onto ``turn_span`` on every failing path.
+        """
+        # Retry when the provider
+        # content-filters the attacker turn (finish_reason='content_filter');
+        # after retries are exhausted the turn is stopped cleanly below rather
+        # than forwarded to the target. Natural-language self-censorship is not
+        # detected — it is forwarded to the target and left for the judge.
+        llm_timeout_s = self._cfg.attacker.timeout_ms / 1000.0
+        usage: TokenUsage | None = None
+        finish_reason: str | None = None
+        unusable_kind: str | None = None
+        attack_prompt = ''
+        attack_response: Any = None
+        max_attempts = max(1, self._cfg.max_content_filter_retries + 1)
+        adversarial_usage_acc = TokenUsage()
+
+        # Anthropic caches nothing without an explicit breakpoint, and this loop
+        # replays a growing append-only transcript. Recomputed per turn against
+        # the live list: `apply_cache_breakpoints` returns a marked copy, so one
+        # hoisted above the loop would freeze the turn-1 snapshot and send it for
+        # the rest of the attack. volatile_tail=0 — nothing here is rebuilt, the
+        # turn loop only appends (see common/prompt_cache.py).
+        # The cast is the same accommodation `redteam/backends/openai.py` makes:
+        # the helpers speak plain dicts, the transcript is annotated with the
+        # OpenAI param union, and `list` is invariant. It is deliberately taken
+        # on a per-turn local — `adversarial_messages` keeps its annotation, so
+        # reassigning the marked copy onto it stays a type error.
+        raw_messages = cast('list[dict[str, Any]]', adversarial_messages)
+        sent_messages = (
+            apply_cache_breakpoints(raw_messages, volatile_tail=0)
+            if caching_applies(self.llm_client, self.model)
+            else raw_messages
+        )
+
+        def _fold_adversarial_usage(delta: TokenUsage) -> None:
+            nonlocal adversarial_usage_acc
+            adversarial_usage_acc = adversarial_usage_acc + delta
+
+        # Loop vars are bound as eager defaults (_turn/_strategy/_messages) so the
+        # closure doesn't capture the mutating loop variables (avoids B023).
+        async def _generate_attack_turn(
+            attempt: int,
+            _turn=turn,
+            _strategy=strategy,
+            _messages=sent_messages,
+            _timeout=llm_timeout_s,
+        ) -> Any:
+            nonlocal usage, attack_prompt
+            response, usage, attack_prompt = await self._adversarial_generation(
+                attempt=attempt,
+                turn=_turn,
+                strategy=_strategy,
+                messages=_messages,
+                timeout_s=_timeout,
+                record_usage=_fold_adversarial_usage,
+            )
+            return response
+
+        try:
+            attack_response = await regenerate_on_content_filter(
+                _generate_attack_turn,
+                max_attempts=max_attempts,
+                label=f'Attack model for {strategy.name} on turn {turn + 1}',
+            )
+            choice = attack_response.choices[0] if attack_response.choices else None
+            finish_reason = getattr(choice, 'finish_reason', None) if choice else None
+            unusable_kind = classify_finish_reason(finish_reason)
+        except asyncio.TimeoutError:
+            consecutive_adversarial_timeouts += 1
+            logger.warning(
+                f'Adversarial LLM timed out for {strategy.name} on turn {turn + 1} '
+                f'({consecutive_adversarial_timeouts} consecutive)'
+            )
+            set_span_attrs(
+                turn_span,
+                {
+                    'orq.redteam.error_type': 'llm_error',
+                    'orq.redteam.finish_reason': 'adversarial_timeout',
+                },
+            )
+            if consecutive_adversarial_timeouts >= self._cfg.max_consecutive_adversarial_timeouts:
+                return _AttackerTurn(
+                    usage_delta=adversarial_usage_acc,
+                    consecutive_adversarial_timeouts=consecutive_adversarial_timeouts,
+                    failure=_AttackError(
+                        error=(
+                            f'Adversarial LLM timed out {consecutive_adversarial_timeouts} consecutive turns '
+                            f'after {llm_timeout_s:.0f}s each'
+                        ),
+                        error_type='llm_error',
+                        error_stage='adversarial_generation',
+                        error_code='adversarial.timeout',
+                        error_details={
+                            'timeout_ms': self._cfg.attacker.timeout_ms,
+                            'consecutive_timeouts': consecutive_adversarial_timeouts,
+                        },
+                        error_turn=turn + 1,
+                    ),
+                )
+            return _AttackerTurn(
+                usage_delta=adversarial_usage_acc,
+                consecutive_adversarial_timeouts=consecutive_adversarial_timeouts,
+                retry=True,
+            )
+        except Exception as e:  # noqa: BLE001
+            # A provider can block the attacker prompt at the moderation layer
+            # and raise (e.g. Azure → HTTP 400 code='content_filter') instead
+            # of returning finish_reason='content_filter'. Classify that as a
+            # content filter, not a generic LLM error, so it's detected the same
+            # way as the 200-response form.
+            is_filter = is_content_filter_error(e)
+            error_type = 'content_filter' if is_filter else 'llm_error'
+            logger.warning(f'Adversarial LLM failed for {strategy.name}: {e}')
+            set_span_attrs(
+                turn_span,
+                {
+                    'orq.redteam.error_type': error_type,
+                    'orq.redteam.finish_reason': 'adversarial_error',
+                },
+            )
+            return _AttackerTurn(
+                usage_delta=adversarial_usage_acc,
+                consecutive_adversarial_timeouts=consecutive_adversarial_timeouts,
+                failure=_AttackError(
+                    error=f'Adversarial LLM exception: {e}',
+                    error_type=error_type,
+                    error_stage='adversarial_generation',
+                    error_code='adversarial.content_filter' if is_filter else 'adversarial.llm_exception',
+                    error_details={
+                        'exception_type': type(e).__name__,
+                        'raw_message': str(e),
+                    },
+                    error_turn=turn + 1,
+                ),
+            )
+
+        # Reset adversarial timeout counter on a successful LLM call
+        consecutive_adversarial_timeouts = 0
+
+        # Track max_tokens truncation (even when content is non-empty)
+        truncated = finish_reason == 'length'
+
+        # Build the canonical attacker record for this turn (used whether
+        # the target then succeeds or fails).
+        fr = finish_reason if isinstance(finish_reason, str) else None
+        # Attacker output is an AgentResponse (RES-883): the prompt is the
+        # response text; truncation is derivable from finish_reason == 'length'.
+        current_attacker = AgentResponse(text=attack_prompt, usage=usage, finish_reason=fr)
+
+        # Abort if adversarial LLM returned empty content
+        if not attack_prompt.strip():
+            model_used = getattr(attack_response, 'model', self.model)
+
+            reason_to_type = {
+                'content_filter': 'content_filter',
+                'length': 'max_tokens',
+            }
+            error_type = reason_to_type.get(finish_reason or '', 'empty_response')
+            error = (
+                f'Empty adversarial prompt: finish_reason={finish_reason}, '
+                f'model={model_used}, turn={turn + 1}/{max_turns}'
+            )
+            logger.warning(f'Empty prompt for {strategy.category}/{strategy.name}: {error}')
+            span_finish = 'content_filter' if finish_reason == 'content_filter' else 'empty_prompt'
+            set_span_attrs(
+                turn_span,
+                {
+                    'orq.redteam.error_type': error_type,
+                    'orq.redteam.finish_reason': span_finish,
+                },
+            )
+            return _AttackerTurn(
+                usage_delta=adversarial_usage_acc,
+                consecutive_adversarial_timeouts=consecutive_adversarial_timeouts,
+                failure=_AttackError(
+                    error=error,
+                    error_type=error_type,
+                    error_stage='adversarial_generation',
+                    error_code=f'adversarial.{error_type}',
+                    error_details={
+                        'finish_reason': finish_reason,
+                        'model': model_used,
+                        'turn': turn + 1,
+                    },
+                    error_turn=turn + 1,
+                ),
+                truncated=truncated,
+            )
+
+        # Stop cleanly if the provider content-filtered the attacker turn
+        # (non-empty body but finish_reason='content_filter') and retries are
+        # exhausted. Never forward a content-filtered turn to the target — doing
+        # so would silently corrupt this datapoint with a benign reply scored as
+        # if it answered a real attack.
+        if unusable_kind is not None:
+            error = (
+                f'Attack model {unusable_kind} after {max_attempts} attempt(s): '
+                f'finish_reason={finish_reason}, turn={turn + 1}/{max_turns}'
+            )
+            logger.warning(f'{strategy.category}/{strategy.name}: {error}')
+            set_span_attrs(
+                turn_span,
+                {
+                    'orq.redteam.error_type': unusable_kind,
+                    'orq.redteam.finish_reason': unusable_kind,
+                },
+            )
+            return _AttackerTurn(
+                usage_delta=adversarial_usage_acc,
+                consecutive_adversarial_timeouts=consecutive_adversarial_timeouts,
+                failure=_AttackError(
+                    error=error,
+                    error_type=unusable_kind,
+                    error_stage='adversarial_generation',
+                    error_code=f'adversarial.{unusable_kind}',
+                    error_details={
+                        'finish_reason': finish_reason,
+                        'turn': turn + 1,
+                        'attempts': max_attempts,
+                    },
+                    error_turn=turn + 1,
+                ),
+                truncated=truncated,
+            )
+
+        return _AttackerTurn(
+            usage_delta=adversarial_usage_acc,
+            consecutive_adversarial_timeouts=consecutive_adversarial_timeouts,
+            truncated=truncated,
+            usage=usage,
+            attack_prompt=attack_prompt,
+            attacker=current_attacker,
+        )
+
+    async def _objective_marker_phase(
+        self,
+        *,
+        attack_prompt: str,
+        attacker: AgentResponse,
+        turns_record: list[Turn],
+        usage: TokenUsage | None,
+        objective_achieved: bool,
+        objective_rationale: str | None,
+        turn: int,
+        turn_span: Any,
+        progress: 'ProgressDisplay | None',
+        task_id: 'TaskID | None',
+    ) -> _MarkerPhase:
+        """Strip an OBJECTIVE_ACHIEVED marker off the attacker prompt and decide whether to stop.
+
+        When the marker leaves nothing to send this closes the turn out itself
+        (progress update plus span attributes) and returns ``stop=True``, so
+        the caller must not repeat that work.
+        """
+        marker_present, marker_rationale, marker_prompt = _parse_objective_marker(attack_prompt)
+        if not marker_present:
+            return _MarkerPhase(
+                attack_prompt=attack_prompt,
+                attacker=attacker,
+                objective_achieved=objective_achieved,
+                objective_rationale=objective_rationale,
+                stop=False,
+            )
+
+        # Only accept self-reported success when at least one full turn has
+        # completed (conversation is non-empty).  An adversarial LLM claiming
+        # success before any target interaction is an invalid signal — and we
+        # also drop its rationale, since there is nothing it can have achieved.
+        if turns_record:
+            objective_achieved = True
+            objective_rationale = marker_rationale
+        else:
+            logger.warning(
+                'Adversarial LLM sent OBJECTIVE_ACHIEVED on turn 0 with no prior '
+                'target interaction; ignoring self-report'
+            )
+        # Use the marker-stripped prompt as the payload to send to the target.
+        # The rationale is kept OUT of the transcript on purpose: it is a
+        # signal, not evidence, and must never reach the scorer/judge.
+        attack_prompt = marker_prompt
+        # Rebuild the attacker record with the stripped prompt as its
+        # only text item, preserving every other field (usage,
+        # finish_reason, model, response_id, error) via model_copy
+        # (RES-883: attacker is an AgentResponse).
+        attacker = attacker.model_copy(update={'output': [TextOutputItem(text=attack_prompt, annotations=[])]})
+        if not attack_prompt:
+            # Nothing left to send. Distinguish a genuine accepted
+            # success from a rejected turn-0 marker (objective_achieved
+            # stays False above) so logs/spans never claim a success
+            # that was dropped.
+            if objective_achieved:
+                logger.info('Adversarial LLM signaled objective achieved')
+                finish_reason = 'objective_achieved'
+            else:
+                logger.info('Adversarial LLM produced only a rejected turn-0 marker; ending with no usable prompt')
+                finish_reason = 'no_usable_prompt'
+            if progress is not None and task_id is not None:
+                await progress.update_attack(task_id, completed=turn + 1)
+            set_span_attrs(
+                turn_span,
+                {
+                    'orq.redteam.adversarial_tokens': int(usage.total_tokens or 0) if usage is not None else 0,
+                    'orq.redteam.finish_reason': finish_reason,
+                    'orq.redteam.objective_rationale': (objective_rationale or '')[:500],
+                },
+            )
+            return _MarkerPhase(
+                attack_prompt=attack_prompt,
+                attacker=attacker,
+                objective_achieved=objective_achieved,
+                objective_rationale=objective_rationale,
+                stop=True,
+            )
+
+        return _MarkerPhase(
+            attack_prompt=attack_prompt,
+            attacker=attacker,
+            objective_achieved=objective_achieved,
+            objective_rationale=objective_rationale,
+            stop=False,
+        )
+
+    async def _target_turn(
+        self,
+        *,
+        target: AgentTarget,
+        turns_record: list[Turn],
+        attack_prompt: str,
+        turn: int,
+        strategy: AttackStrategy,
+        turn_span: Any,
+    ) -> TargetCallResult:
+        """Send one attack prompt to the target and record its output on the span.
+
+        Retries live entirely in ``call_target_with_retry``; this method adds no
+        retry layer of its own. The turn span is written only on success — the
+        failure attributes are `_record_target_failure`'s job.
+        """
+        # The transcript is derived from
+        # the recorded turns BEFORE the call: it is a pure local op, so a
+        # bug here must not be misattributed to the target by the retry helper.
+        # A failed target exchange is retried with the exact same prompt and
+        # transcript. Advancing the adversarial conversation after dropping
+        # an error response would splice the evidence, so exhausted retries
+        # end the run as unscorable instead.
+        transcript = turns_to_messages(turns_record, skip_errors=True)
+        messages_to_send = [*transcript, Message(role='user', content=attack_prompt)]
+
+        result = await call_target_with_retry(
+            target,
+            messages_to_send,
+            target_agent_timeout_ms=self._cfg.target_agent_timeout_ms,
+            max_target_retries=self._cfg.max_target_retries,
+            map_error=self._backend.map_error if self._backend is not None else default_map_error,
+            on_attempt=partial(
+                _target_attempt_span,
+                prompt=attack_prompt,
+                turn=turn,
+                strategy_name=strategy.name,
+            ),
+            on_attempt_response=_record_attempt_response,
+        )
+
+        if result.succeeded:
+            # The per-attempt span closes inside the helper, so record the
+            # target output on the surrounding turn-level span instead.
+            agent_response = result.response.text
+            set_span_attrs(
+                turn_span,
+                {
+                    'output': truncate_for_span(agent_response or ''),
+                    'orq.redteam.output': truncate_for_span(agent_response or ''),
+                },
+            )
+
+        return result
+
+    async def _record_target_failure(
+        self,
+        *,
+        turn: int,
+        usage: TokenUsage | None,
+        error_type: str | None,
+        turn_span: Any,
+        progress: 'ProgressDisplay | None',
+        task_id: 'TaskID | None',
+    ) -> None:
+        """Close out a turn whose target call failed: advance progress, mark the span."""
+        if progress is not None and task_id is not None:
+            await progress.update_attack(task_id, completed=turn + 1)
+        finish_reason = 'target_timeout' if error_type == 'timeout' else 'target_error'
+        set_span_attrs(
+            turn_span,
+            {
+                'orq.redteam.adversarial_tokens': int(usage.total_tokens or 0) if usage is not None else 0,
+                'orq.redteam.error_type': error_type,
+                'orq.redteam.finish_reason': finish_reason,
+            },
+        )
+
     async def run_attack(
         self,
         target: AgentTarget,
@@ -610,15 +1254,7 @@ class MultiTurnOrchestrator:
         truncation_warnings: list[int] = []  # turns where finish_reason=length
 
         progress = _get_active_progress()
-        task_id: TaskID | None = None
-        if progress is not None:
-            try:
-                task_id = await progress.start_attack(
-                    _progress_label(strategy.category, strategy.name),
-                    max_turns,
-                )
-            except Exception:  # noqa: BLE001
-                logger.debug('Failed to update progress display', exc_info=True)
+        task_id = await _start_attack_progress(progress, strategy, max_turns)
 
         try:
             for turn in range(max_turns):
@@ -638,354 +1274,64 @@ class MultiTurnOrchestrator:
                     if progress is not None:
                         await progress.update_attack(task_id, completed=turn)
 
-                    # Generate attack prompt from adversarial LLM. Retry when the provider
-                    # content-filters the attacker turn (finish_reason='content_filter');
-                    # after retries are exhausted the turn is stopped cleanly below rather
-                    # than forwarded to the target. Natural-language self-censorship is not
-                    # detected — it is forwarded to the target and left for the judge.
-                    llm_timeout_s = self._cfg.attacker.timeout_ms / 1000.0
-                    usage: TokenUsage | None = None
-                    finish_reason: str | None = None
-                    unusable_kind: str | None = None
-                    attack_prompt = ''
-                    attack_response: Any = None
-                    max_attempts = max(1, self._cfg.max_content_filter_retries + 1)
-
-                    # Anthropic caches nothing without an explicit breakpoint, and this loop
-                    # replays a growing append-only transcript. Recomputed per turn against
-                    # the live list: `apply_cache_breakpoints` returns a marked copy, so one
-                    # hoisted above the loop would freeze the turn-1 snapshot and send it for
-                    # the rest of the attack. volatile_tail=0 — nothing here is rebuilt, the
-                    # turn loop only appends (see common/prompt_cache.py).
-                    # The cast is the same accommodation `redteam/backends/openai.py` makes:
-                    # the helpers speak plain dicts, the transcript is annotated with the
-                    # OpenAI param union, and `list` is invariant. It is deliberately taken
-                    # on a per-turn local — `adversarial_messages` keeps its annotation, so
-                    # reassigning the marked copy onto it stays a type error.
-                    raw_messages = cast('list[dict[str, Any]]', adversarial_messages)
-                    sent_messages = (
-                        apply_cache_breakpoints(raw_messages, volatile_tail=0)
-                        if caching_applies(self.llm_client, self.model)
-                        else raw_messages
+                    gen = await self._attacker_turn(
+                        turn=turn,
+                        max_turns=max_turns,
+                        strategy=strategy,
+                        adversarial_messages=adversarial_messages,
+                        consecutive_adversarial_timeouts=consecutive_adversarial_timeouts,
+                        turn_span=turn_span,
                     )
-
-                    # Loop vars are bound as eager defaults (_turn/_strategy/_messages) so the
-                    # closure doesn't capture the mutating loop variables (avoids B023).
-                    async def _generate_attack_turn(
-                        attempt: int,
-                        _turn=turn,
-                        _strategy=strategy,
-                        _messages=sent_messages,
-                        _timeout=llm_timeout_s,
-                    ) -> Any:
-                        # One adversarial generation. Owns its span + per-attempt token
-                        # accounting (every attempt counts, including content-filtered
-                        # retries, so the call total isn't undercounted). The shared
-                        # regenerate_on_content_filter helper decides whether to retry.
-                        nonlocal usage, attack_prompt, adversarial_usage_acc
-                        async with (
-                            with_redteam_span(
-                                'orq.redteam.adversarial_generation',
-                                {
-                                    'orq.redteam.turn': _turn + 1,
-                                    'orq.redteam.strategy_name': _strategy.name,
-                                },
-                            ),
-                            with_llm_span(
-                                model=self.model,
-                                temperature=self._cfg.attacker.temperature,
-                                max_tokens=self._cfg.attacker.max_tokens,
-                                input_messages=_messages,
-                                attributes={
-                                    'orq.redteam.llm_purpose': 'adversarial',
-                                    'orq.redteam.turn': _turn + 1,
-                                    'orq.redteam.strategy_name': _strategy.name,
-                                },
-                            ) as adv_span,
-                        ):
-                            if attempt > 0:
-                                set_span_attrs(adv_span, {'orq.redteam.adversarial_retry': attempt})
-                            response, usage = await execute_chat_completion(
-                                client=self.llm_client,
-                                model=self.model,
-                                messages=_messages,
-                                span=adv_span,
-                                timeout_s=_timeout,
-                                temperature=self._cfg.attacker.temperature,
-                                max_completion_tokens=self._cfg.attacker.max_tokens,
-                                reasoning_effort=self._cfg.attacker.reasoning_effort,
-                                extra_body=self._cfg.retry_extra_body(self.llm_client),
-                                extra_kwargs=self._cfg.attacker.extra_kwargs,
-                            )
-                            if usage is not None:
-                                # Fold usage when present (carries cached/reasoning/cost
-                                # via __add__); every attempt is a real billed call.
-                                adversarial_usage_acc = adversarial_usage_acc + usage
-                            else:
-                                # No usage block, but still a billed attempt — count the
-                                # bare call so content-filtered retries aren't undercounted.
-                                adversarial_usage_acc = adversarial_usage_acc + TokenUsage(calls=1)
-                            attack_prompt = response.choices[0].message.content or ''
-                            return response
-
-                    try:
-                        attack_response = await regenerate_on_content_filter(
-                            _generate_attack_turn,
-                            max_attempts=max_attempts,
-                            label=f'Attack model for {strategy.name} on turn {turn + 1}',
-                        )
-                        choice = attack_response.choices[0] if attack_response.choices else None
-                        finish_reason = getattr(choice, 'finish_reason', None) if choice else None
-                        unusable_kind = classify_finish_reason(finish_reason)
-                    except asyncio.TimeoutError:
-                        consecutive_adversarial_timeouts += 1
-                        logger.warning(
-                            f'Adversarial LLM timed out for {strategy.name} on turn {turn + 1} '
-                            f'({consecutive_adversarial_timeouts} consecutive)'
-                        )
-                        set_span_attrs(
-                            turn_span,
-                            {
-                                'orq.redteam.error_type': 'llm_error',
-                                'orq.redteam.finish_reason': 'adversarial_timeout',
-                            },
-                        )
-                        if consecutive_adversarial_timeouts >= self._cfg.max_consecutive_adversarial_timeouts:
-                            error = (
-                                f'Adversarial LLM timed out {consecutive_adversarial_timeouts} consecutive turns '
-                                f'after {llm_timeout_s:.0f}s each'
-                            )
-                            error_type = 'llm_error'
-                            error_stage = 'adversarial_generation'
-                            error_code = 'adversarial.timeout'
-                            error_details = {
-                                'timeout_ms': self._cfg.attacker.timeout_ms,
-                                'consecutive_timeouts': consecutive_adversarial_timeouts,
-                            }
-                            error_turn = turn + 1
-                            break
-                        continue
-                    except Exception as e:  # noqa: BLE001
-                        # A provider can block the attacker prompt at the moderation layer
-                        # and raise (e.g. Azure → HTTP 400 code='content_filter') instead
-                        # of returning finish_reason='content_filter'. Classify that as a
-                        # content filter, not a generic LLM error, so it's detected the same
-                        # way as the 200-response form.
-                        is_filter = is_content_filter_error(e)
-                        error = f'Adversarial LLM exception: {e}'
-                        error_type = 'content_filter' if is_filter else 'llm_error'
-                        error_stage = 'adversarial_generation'
-                        error_code = 'adversarial.content_filter' if is_filter else 'adversarial.llm_exception'
-                        error_details = {
-                            'exception_type': type(e).__name__,
-                            'raw_message': str(e),
-                        }
-                        error_turn = turn + 1
-                        logger.warning(f'Adversarial LLM failed for {strategy.name}: {e}')
-                        set_span_attrs(
-                            turn_span,
-                            {
-                                'orq.redteam.error_type': error_type,
-                                'orq.redteam.finish_reason': 'adversarial_error',
-                            },
-                        )
-                        break
-
-                    # Reset adversarial timeout counter on a successful LLM call
-                    consecutive_adversarial_timeouts = 0
-
-                    # finish_reason / unusable_kind were computed in the generation
-                    # retry loop above.
-
-                    # Track max_tokens truncation (even when content is non-empty)
-                    if finish_reason == 'length':
+                    adversarial_usage_acc = adversarial_usage_acc + gen.usage_delta
+                    consecutive_adversarial_timeouts = gen.consecutive_adversarial_timeouts
+                    # Read before the failure branch on purpose: a turn cut off
+                    # at max_tokens is recorded even when it then aborts.
+                    if gen.truncated:
                         truncation_warnings.append(turn + 1)
+                    if gen.failure is not None:
+                        error = gen.failure.error
+                        error_type = gen.failure.error_type
+                        error_stage = gen.failure.error_stage
+                        error_code = gen.failure.error_code
+                        error_details = gen.failure.error_details
+                        error_turn = gen.failure.error_turn
+                        break
+                    if gen.retry:
+                        continue
+                    usage = gen.usage
+                    attack_prompt = gen.attack_prompt
+                    current_attacker = gen.attacker
 
-                    # Build the canonical attacker record for this turn (used whether
-                    # the target then succeeds or fails).
-                    fr = finish_reason if isinstance(finish_reason, str) else None
-                    # Attacker output is an AgentResponse (RES-883): the prompt is the
-                    # response text; truncation is derivable from finish_reason == 'length'.
-                    current_attacker = AgentResponse(text=attack_prompt, usage=usage, finish_reason=fr)
-
-                    # Abort if adversarial LLM returned empty content
-                    if not attack_prompt.strip():
-                        model_used = getattr(attack_response, 'model', self.model)
-
-                        reason_to_type = {
-                            'content_filter': 'content_filter',
-                            'length': 'max_tokens',
-                        }
-                        error_type = reason_to_type.get(finish_reason or '', 'empty_response')
-                        error_stage = 'adversarial_generation'
-                        error_code = f'adversarial.{error_type}'
-                        error_details = {
-                            'finish_reason': finish_reason,
-                            'model': model_used,
-                            'turn': turn + 1,
-                        }
-                        error_turn = turn + 1
-                        error = (
-                            f'Empty adversarial prompt: finish_reason={finish_reason}, '
-                            f'model={model_used}, turn={turn + 1}/{max_turns}'
-                        )
-                        logger.warning(f'Empty prompt for {strategy.category}/{strategy.name}: {error}')
-                        span_finish = 'content_filter' if finish_reason == 'content_filter' else 'empty_prompt'
-                        set_span_attrs(
-                            turn_span,
-                            {
-                                'orq.redteam.error_type': error_type,
-                                'orq.redteam.finish_reason': span_finish,
-                            },
-                        )
+                    marker = await self._objective_marker_phase(
+                        attack_prompt=attack_prompt,
+                        attacker=current_attacker,
+                        turns_record=turns_record,
+                        usage=usage,
+                        objective_achieved=objective_achieved,
+                        objective_rationale=objective_rationale,
+                        turn=turn,
+                        turn_span=turn_span,
+                        progress=progress,
+                        task_id=task_id,
+                    )
+                    attack_prompt = marker.attack_prompt
+                    current_attacker = marker.attacker
+                    objective_achieved = marker.objective_achieved
+                    objective_rationale = marker.objective_rationale
+                    if marker.stop:
                         break
 
-                    # Stop cleanly if the provider content-filtered the attacker turn
-                    # (non-empty body but finish_reason='content_filter') and retries are
-                    # exhausted. Never forward a content-filtered turn to the target — doing
-                    # so would silently corrupt this datapoint with a benign reply scored as
-                    # if it answered a real attack.
-                    if unusable_kind is not None:
-                        error_type = unusable_kind
-                        error_stage = 'adversarial_generation'
-                        error_code = f'adversarial.{unusable_kind}'
-                        error_details = {
-                            'finish_reason': finish_reason,
-                            'turn': turn + 1,
-                            'attempts': max_attempts,
-                        }
-                        error_turn = turn + 1
-                        error = (
-                            f'Attack model {unusable_kind} after {max_attempts} attempt(s): '
-                            f'finish_reason={finish_reason}, turn={turn + 1}/{max_turns}'
-                        )
-                        logger.warning(f'{strategy.category}/{strategy.name}: {error}')
-                        set_span_attrs(
-                            turn_span,
-                            {
-                                'orq.redteam.error_type': error_type,
-                                'orq.redteam.finish_reason': unusable_kind,
-                            },
-                        )
-                        break
-
-                    # Check if adversarial LLM thinks objective is achieved
-                    marker_present, marker_rationale, marker_prompt = _parse_objective_marker(attack_prompt)
-                    if marker_present:
-                        # Only accept self-reported success when at least one full turn has
-                        # completed (conversation is non-empty).  An adversarial LLM claiming
-                        # success before any target interaction is an invalid signal — and we
-                        # also drop its rationale, since there is nothing it can have achieved.
-                        if turns_record:
-                            objective_achieved = True
-                            objective_rationale = marker_rationale
-                        else:
-                            logger.warning(
-                                'Adversarial LLM sent OBJECTIVE_ACHIEVED on turn 0 with no prior '
-                                'target interaction; ignoring self-report'
-                            )
-                        # Use the marker-stripped prompt as the payload to send to the target.
-                        # The rationale is kept OUT of the transcript on purpose: it is a
-                        # signal, not evidence, and must never reach the scorer/judge.
-                        attack_prompt = marker_prompt
-                        # Rebuild the attacker record with the stripped prompt as its
-                        # only text item, preserving every other field (usage,
-                        # finish_reason, model, response_id, error) via model_copy
-                        # (RES-883: attacker is an AgentResponse).
-                        current_attacker = current_attacker.model_copy(
-                            update={'output': [TextOutputItem(text=attack_prompt, annotations=[])]}
-                        )
-                        if not attack_prompt:
-                            # Nothing left to send. Distinguish a genuine accepted
-                            # success from a rejected turn-0 marker (objective_achieved
-                            # stays False above) so logs/spans never claim a success
-                            # that was dropped.
-                            if objective_achieved:
-                                logger.info('Adversarial LLM signaled objective achieved')
-                                finish_reason = 'objective_achieved'
-                            else:
-                                logger.info(
-                                    'Adversarial LLM produced only a rejected turn-0 marker; '
-                                    'ending with no usable prompt'
-                                )
-                                finish_reason = 'no_usable_prompt'
-                            if progress is not None and task_id is not None:
-                                await progress.update_attack(task_id, completed=turn + 1)
-                            set_span_attrs(
-                                turn_span,
-                                {
-                                    'orq.redteam.adversarial_tokens': int(usage.total_tokens or 0)
-                                    if usage is not None
-                                    else 0,
-                                    'orq.redteam.finish_reason': finish_reason,
-                                    'orq.redteam.objective_rationale': (objective_rationale or '')[:500],
-                                },
-                            )
-                            break
-
-                    # Send attack to target agent. The transcript is derived from
-                    # the recorded turns BEFORE the call: it is a pure local op, so a
-                    # bug here must not be misattributed to the target by the retry helper.
-                    # A failed target exchange is retried with the exact same prompt and
-                    # transcript. Advancing the adversarial conversation after dropping
-                    # an error response would splice the evidence, so exhausted retries
-                    # end the run as unscorable instead.
-                    transcript = turns_to_messages(turns_record, skip_errors=True)
-                    messages_to_send = [*transcript, Message(role='user', content=attack_prompt)]
-
-                    @asynccontextmanager
-                    async def _attempt_span(
-                        attempt_index: int,
-                        _prompt: str = attack_prompt,
-                        _turn: int = turn,
-                        _strategy_name: str = strategy.name,
-                    ) -> AsyncIterator[Any]:
-                        async with with_redteam_span(
-                            'orq.redteam.target_call',
-                            {
-                                'orq.redteam.turn': _turn + 1,
-                                'orq.redteam.strategy_name': _strategy_name,
-                                'orq.redteam.target_attempt': attempt_index + 1,
-                                'input': truncate_for_span(_prompt),
-                                'orq.redteam.input': truncate_for_span(_prompt),
-                            },
-                        ) as span:
-                            yield span
-
-                    def _record_attempt_response(span: Any, response: AgentResponse) -> None:
-                        response_text = truncate_for_span(response.text or '')
-                        set_span_attrs(
-                            span,
-                            {
-                                'output': response_text,
-                                'orq.redteam.output': response_text,
-                            },
-                        )
-
-                    result = await call_target_with_retry(
-                        target,
-                        messages_to_send,
-                        target_agent_timeout_ms=self._cfg.target_agent_timeout_ms,
-                        max_target_retries=self._cfg.max_target_retries,
-                        map_error=self._backend.map_error if self._backend is not None else default_map_error,
-                        on_attempt=_attempt_span,
-                        on_attempt_response=_record_attempt_response,
+                    result = await self._target_turn(
+                        target=target,
+                        turns_record=turns_record,
+                        attack_prompt=attack_prompt,
+                        turn=turn,
+                        strategy=strategy,
+                        turn_span=turn_span,
                     )
 
                     tgt_result = result.response
                     agent_response = tgt_result.text
-                    turn_usage: TokenUsage | None = tgt_result.usage if result.succeeded else None
-
-                    if result.succeeded:
-                        # The per-attempt span closes inside the helper, so record the
-                        # target output on the surrounding turn-level span instead.
-                        set_span_attrs(
-                            turn_span,
-                            {
-                                'output': truncate_for_span(agent_response or ''),
-                                'orq.redteam.output': truncate_for_span(agent_response or ''),
-                            },
-                        )
 
                     if not result.succeeded:
                         # The adversarial branches above set these same locals, so unpack
@@ -999,29 +1345,18 @@ class MultiTurnOrchestrator:
                         error_details = fields['error_details']
                         error_turn = fields['error_turn']
                         turns_record.append(Turn(attacker=current_attacker, target=tgt_result))
-                        if progress is not None and task_id is not None:
-                            await progress.update_attack(task_id, completed=turn + 1)
-                        finish_reason = 'target_timeout' if error_type == 'timeout' else 'target_error'
-                        set_span_attrs(
-                            turn_span,
-                            {
-                                'orq.redteam.adversarial_tokens': int(usage.total_tokens or 0)
-                                if usage is not None
-                                else 0,
-                                'orq.redteam.error_type': error_type,
-                                'orq.redteam.finish_reason': finish_reason,
-                            },
+                        await self._record_target_failure(
+                            turn=turn,
+                            usage=usage,
+                            error_type=error_type,
+                            turn_span=turn_span,
+                            progress=progress,
+                            task_id=task_id,
                         )
                         break
 
-                    # Accumulate token usage outside the target call, so arithmetic bugs
-                    # are never misattributed to the target.
-                    if turn_usage is not None:
-                        # Targets report their own call count (orq sums tool-continuation
-                        # rounds); fall back to 1 only when a usage-bearing turn forgot to.
-                        if turn_usage.calls == 0:
-                            turn_usage = turn_usage.with_calls(1)
-                        target_usage_acc = target_usage_acc + turn_usage
+                    turn_usage: TokenUsage | None = tgt_result.usage
+                    target_usage_acc = _accumulate_target_usage(target_usage_acc, turn_usage)
 
                     # Record the completed turn (target succeeded)
                     turns_record.append(Turn(attacker=current_attacker, target=tgt_result))
@@ -1057,18 +1392,20 @@ class MultiTurnOrchestrator:
             if progress is not None:
                 await progress.finish_attack(task_id)
 
-        if consecutive_adversarial_timeouts > 0 and error is None:
-            logger.warning(
-                f'Conversation for {strategy.name} ended with an unresolved adversarial timeout '
-                '— the last turn was dropped silently'
-            )
-            if not turns_record:
-                timeout_s = self._cfg.attacker.timeout_ms / 1000.0
-                error = f'Adversarial LLM timed out after {timeout_s:.0f}s with no turns completed'
-                error_type = 'llm_error'
-                error_stage = 'adversarial_generation'
-                error_code = 'adversarial.timeout'
-                error_details = {'timeout_ms': self._cfg.attacker.timeout_ms}
+        timeout_failure = self._unresolved_timeout_error(
+            consecutive_adversarial_timeouts=consecutive_adversarial_timeouts,
+            error=error,
+            strategy=strategy,
+            turns_record=turns_record,
+        )
+        if timeout_failure is not None:
+            # error_turn is deliberately left as-is: this path fires only when
+            # no turn was recorded, so there is no turn to point at.
+            error = timeout_failure.error
+            error_type = timeout_failure.error_type
+            error_stage = timeout_failure.error_stage
+            error_code = timeout_failure.error_code
+            error_details = timeout_failure.error_details
 
         duration = time.time() - start_time
         logger.debug(
