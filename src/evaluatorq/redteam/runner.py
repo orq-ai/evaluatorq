@@ -103,6 +103,7 @@ from evaluatorq.tracing import tracing_session
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
+    from evaluatorq.common.run_manifest import ManifestWriter
     from evaluatorq.types import DataPointResult
 
 
@@ -581,18 +582,32 @@ def _resolve_replay(*, inputs: _ReplayResolutionInputs) -> _ResolvedReplay:
     return _ResolvedReplay(replay, mode, max_turns, attacker_instructions)
 
 
-def _resolve_output_dirs(*, save: SaveMode, artifacts_dir: Path | str | None) -> tuple[Path | None, Path | None]:
+@dataclass(frozen=True)
+class _ResolvedOutputDirs:
+    """Two `Path | None` slots that mean different things — named so they cannot be transposed.
+
+    `user_output_dir` is whatever the caller passed as `artifacts_dir`, used for the
+    final summary write and the `on_complete` payload. `pipeline_output_dir` is the
+    one handed to the inner pipeline, and is `None` unless `save='detail'`.
+    """
+
+    user_output_dir: Path | None
+    pipeline_output_dir: Path | None
+
+
+def _resolve_output_dirs(*, save: SaveMode, artifacts_dir: Path | str | None) -> _ResolvedOutputDirs:
     user_output_dir = Path(artifacts_dir) if artifacts_dir is not None else None
     # Inner pipelines (_run_dynamic, _run_static) only write 01/02/03 to their
     # output_dir parameter, so we gate it on save='detail'. For 'final' the
-    # outer red_team() does the single summary write after inner returns.
+    # caller's `_persist_and_index_run` does the single summary write after the
+    # inner pipeline returns.
     resolved_output_dir: Path | None = None
     if save == 'detail':
         if user_output_dir is None:
             msg = "save='detail' requires artifacts_dir to be set."
             raise ValueError(msg)
         resolved_output_dir = user_output_dir
-    return user_output_dir, resolved_output_dir
+    return _ResolvedOutputDirs(user_output_dir=user_output_dir, pipeline_output_dir=resolved_output_dir)
 
 
 def _split_and_dedupe_targets(
@@ -696,8 +711,8 @@ def _resolve_filter_sets(
     # the actual dataset), plus a hard RedTeamError if the selection is fully empty.
 
     # Snapshot the caller's raw category/vulnerability selection for the empty-run
-    # guard, before the resolution chain below defaults an unfiltered run to the
-    # full category sweep. Reading it off resolved_categories instead would make
+    # guard, before `_resolve_vulns_and_categories` defaults an unfiltered run to
+    # the full category sweep. Reading it off resolved_categories instead would make
     # every default run look like a filter that selected all 36 categories, and a
     # run that came back empty for an unrelated reason would be blamed on a filter
     # the caller never set.
@@ -719,8 +734,8 @@ def _resolve_vulns_and_categories(
     resolved_vulns: list[Vulnerability] | None
     if replay is not None:
         # A replay's scope is whatever it recorded. Resolving vulnerabilities
-        # (and running the evaluability gate below) would re-derive a selection
-        # the stored datapoints have already made.
+        # (and running `_apply_evaluability_gate` on the result) would re-derive a
+        # selection the stored datapoints have already made.
         resolved_categories = replay.categories
         resolved_vulns = None
     elif vulnerabilities is not None:
@@ -811,14 +826,16 @@ def _apply_evaluability_gate(
     return resolved_vulns, resolved_categories, unevaluable_codes
 
 
-def _compose_redteam_hooks(*, hooks: PipelineHooks | None, name: str | None, save: SaveMode) -> tuple[Any, Any]:
+def _compose_redteam_hooks(
+    *, hooks: PipelineHooks | None, name: str | None, save: SaveMode
+) -> tuple[Any, ManifestWriter | None]:
     # Persist run state alongside the report.  Compose user hooks with the
     # manifest hook only after argument validation, so bad input creates no
     # misleading in-progress manifest.
     from evaluatorq.common.hook_compose import compose_run_hooks
     from evaluatorq.common.run_manifest import start_manifest
 
-    def _make_manifest() -> Any:
+    def _make_manifest() -> ManifestWriter:
         return start_manifest(
             run_id=uuid.uuid4().hex,
             surface='redteam',
@@ -1080,9 +1097,10 @@ async def _generate_executive_summary_section(
 def _fold_post_processing_usage(*, report: RedTeamReport, post_processing_usages: list[TokenUsage | None]) -> None:
     from evaluatorq.common.structured_output import sum_structured_usage
 
-    # Fold post-processing spend into the run total now that both steps above
-    # have run (or been skipped/failed) — `report.summary.token_usage_total` up
-    # to this point only covers attack results (see `_aggregate_token_usage`).
+    # Fold post-processing spend into the run total now that both post-processing
+    # steps have run in the caller (or been skipped/failed) —
+    # `report.summary.token_usage_total` up to this point only covers attack
+    # results (see `_aggregate_token_usage`).
     post_processing_usage = sum_structured_usage(post_processing_usages)
     if post_processing_usage is not None:
         report.summary.post_processing_token_usage = post_processing_usage
@@ -1090,6 +1108,19 @@ def _fold_post_processing_usage(*, report: RedTeamReport, post_processing_usages
             report.summary.token_usage_total,
             post_processing_usage,
         ])
+
+
+@dataclass(frozen=True)
+class _PersistedRun:
+    """Two `Path | None` slots that mean different things — named so they cannot be transposed.
+
+    `auto_save_path` is what `on_complete` reports to the caller. `run_path` is the
+    `.evaluatorq/runs/` index entry the manifest records as its report path, and is
+    `None` when indexing was skipped or failed.
+    """
+
+    auto_save_path: Path | None
+    run_path: Path | None
 
 
 def _persist_and_index_run(
@@ -1102,7 +1133,7 @@ def _persist_and_index_run(
     metrics: RedTeamRunMetrics,
     resolved_max_turns: int,
     attacker_instructions: str | None,
-) -> tuple[Path | None, Path | None]:
+) -> _PersistedRun:
     # Persist report according to the save mode. 'detail' mode already had
     # the inner pipeline write 01/02/03 to resolved_output_dir, so here we
     # only handle 'final' (single summary file) and record the saved path.
@@ -1134,7 +1165,7 @@ def _persist_and_index_run(
                 'Failed to auto-save run report. The run will not appear in `evaluatorq redteam runs`.'
             )
 
-    return auto_save_path, run_path
+    return _PersistedRun(auto_save_path=auto_save_path, run_path=run_path)
 
 
 # ---------------------------------------------------------------------------
@@ -1368,7 +1399,9 @@ async def red_team(
 
     resolved_max_turns = max_turns if max_turns is not None else DEFAULT_MAX_TURNS
 
-    user_output_dir, resolved_output_dir = _resolve_output_dirs(save=save, artifacts_dir=artifacts_dir)
+    output_dirs = _resolve_output_dirs(save=save, artifacts_dir=artifacts_dir)
+    user_output_dir = output_dirs.user_output_dir
+    resolved_output_dir = output_dirs.pipeline_output_dir
 
     targets, agent_targets = _split_and_dedupe_targets(target=target)
 
@@ -1522,7 +1555,7 @@ async def red_team(
 
             _fold_post_processing_usage(report=report, post_processing_usages=post_processing_usages)
 
-            auto_save_path, run_path = _persist_and_index_run(
+            persisted = _persist_and_index_run(
                 report=report,
                 save=save,
                 user_output_dir=user_output_dir,
@@ -1537,14 +1570,14 @@ async def red_team(
                 resolved_hooks.on_complete(
                     report,
                     output_dir=str(user_output_dir) if user_output_dir and save != 'none' else None,
-                    auto_save_path=str(auto_save_path) if auto_save_path else None,
+                    auto_save_path=str(persisted.auto_save_path) if persisted.auto_save_path else None,
                 )
             )
 
             # Only mark completion after the user completion hook succeeds.  If
             # it raises, the lifecycle context above records the surfaced error.
             if manifest_writer is not None:
-                manifest_writer.complete(report_path=run_path, summary=report.manifest_summary())
+                manifest_writer.complete(report_path=persisted.run_path, summary=report.manifest_summary())
 
             return report
 
