@@ -12,6 +12,7 @@ import asyncio
 import math
 import statistics
 from collections import Counter
+from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -754,18 +755,32 @@ async def _pairwise_prediction(
     return await (judge_fn(response_b, response_a, model) if swapped else judge_fn(response_a, response_b, model))
 
 
+@dataclass(frozen=True)
+class _PairwiseCall:
+    """The per-comparison inputs every ordering and stand-in round shares.
+
+    Bundled rather than threaded: these seven are identical at all five call
+    sites, and repeating them keyword by keyword is how one of them silently
+    stops matching the others. ``jury_ctx`` is the comparison-level OTel context,
+    so an instance must be built *after* ``current_otel_context()`` has been
+    captured inside the ``orq.pairwise_jury`` span.
+    """
+
+    judge_fn: PairwiseJudgeFn
+    response_a: Any
+    response_b: Any
+    repetitions: int
+    propagate_errors: bool
+    semaphore: asyncio.Semaphore | None
+    jury_ctx: object | None
+
+
 async def _run_pairwise_ordering(
     models: Sequence[str],
+    call: _PairwiseCall,
     *,
     swapped: bool,
     replacement: bool,
-    judge_fn: PairwiseJudgeFn,
-    response_a: Any,
-    response_b: Any,
-    repetitions: int,
-    propagate_errors: bool,
-    semaphore: asyncio.Semaphore | None,
-    jury_ctx: object | None,
 ) -> tuple[dict[str, JuryVote], TokenUsage | None]:
     # _run_jury_core, not run_jury: this comparison owns ONE orq.pairwise_jury span
     # across both orderings, and run_jury would open a second one per
@@ -777,15 +792,15 @@ async def _run_pairwise_ordering(
     # promoted independently per ordering (and then silently dropped in
     # reconciliation).
     deliberation = await _run_jury_core(
-        judge_fn=partial(_pairwise_prediction, judge_fn, response_a, response_b, swapped=swapped),
+        judge_fn=partial(_pairwise_prediction, call.judge_fn, call.response_a, call.response_b, swapped=swapped),
         panel=models,
-        repetitions=repetitions,
+        repetitions=call.repetitions,
         replacement_judges=None,
         min_successful_judges=1,
-        propagate_errors=propagate_errors,
-        max_concurrency=semaphore,
+        propagate_errors=call.propagate_errors,
+        max_concurrency=call.semaphore,
         label_swapped=swapped,
-        parent_context=jury_ctx,
+        parent_context=call.jury_ctx,
         replacement=replacement,
     )
     return {v.model: v for v in deliberation.jury.votes}, deliberation.token_usage
@@ -793,56 +808,17 @@ async def _run_pairwise_ordering(
 
 async def _run_pairwise_both(
     models: Sequence[str],
+    call: _PairwiseCall,
     *,
     swap: bool,
     replacement: bool = False,
-    judge_fn: PairwiseJudgeFn,
-    response_a: Any,
-    response_b: Any,
-    repetitions: int,
-    propagate_errors: bool,
-    semaphore: asyncio.Semaphore | None,
-    jury_ctx: object | None,
 ) -> tuple[dict[str, JuryVote], dict[str, JuryVote], list[TokenUsage]]:
     if not swap:
-        first_votes, first_usage = await _run_pairwise_ordering(
-            models,
-            swapped=False,
-            replacement=replacement,
-            judge_fn=judge_fn,
-            response_a=response_a,
-            response_b=response_b,
-            repetitions=repetitions,
-            propagate_errors=propagate_errors,
-            semaphore=semaphore,
-            jury_ctx=jury_ctx,
-        )
+        first_votes, first_usage = await _run_pairwise_ordering(models, call, swapped=False, replacement=replacement)
         return first_votes, {}, [u for u in (first_usage,) if u]
     (first_votes, first_usage), (second_votes, second_usage) = await asyncio.gather(
-        _run_pairwise_ordering(
-            models,
-            swapped=False,
-            replacement=replacement,
-            judge_fn=judge_fn,
-            response_a=response_a,
-            response_b=response_b,
-            repetitions=repetitions,
-            propagate_errors=propagate_errors,
-            semaphore=semaphore,
-            jury_ctx=jury_ctx,
-        ),
-        _run_pairwise_ordering(
-            models,
-            swapped=True,
-            replacement=replacement,
-            judge_fn=judge_fn,
-            response_a=response_a,
-            response_b=response_b,
-            repetitions=repetitions,
-            propagate_errors=propagate_errors,
-            semaphore=semaphore,
-            jury_ctx=jury_ctx,
-        ),
+        _run_pairwise_ordering(models, call, swapped=False, replacement=replacement),
+        _run_pairwise_ordering(models, call, swapped=True, replacement=replacement),
     )
     return first_votes, second_votes, [u for u in (first_usage, second_usage) if u]
 
@@ -963,9 +939,7 @@ async def run_pairwise(
         # Captured before any judge runs so every judge span (both orderings,
         # replacements included) parents to this one comparison-level span.
         jury_ctx = current_otel_context()
-        first_votes, second_votes, usages = await _run_pairwise_both(
-            resolved_panel,
-            swap=swap,
+        call = _PairwiseCall(
             judge_fn=judge_fn,
             response_a=response_a,
             response_b=response_b,
@@ -974,6 +948,7 @@ async def run_pairwise(
             semaphore=semaphore,
             jury_ctx=jury_ctx,
         )
+        first_votes, second_votes, usages = await _run_pairwise_both(resolved_panel, call, swap=swap)
 
         num_failed = sum(1 for model in resolved_panel if _pairwise_failed(model, first_votes, second_votes, swap=swap))
         seen = set(resolved_panel)
@@ -986,18 +961,7 @@ async def run_pairwise(
 
         stand_in_set = set(stand_ins)
         if stand_ins:
-            rep_first, rep_second, rep_usages = await _run_pairwise_both(
-                stand_ins,
-                swap=swap,
-                replacement=True,
-                judge_fn=judge_fn,
-                response_a=response_a,
-                response_b=response_b,
-                repetitions=repetitions,
-                propagate_errors=propagate_errors,
-                semaphore=semaphore,
-                jury_ctx=jury_ctx,
-            )
+            rep_first, rep_second, rep_usages = await _run_pairwise_both(stand_ins, call, swap=swap, replacement=True)
             first_votes.update(rep_first)
             second_votes.update(rep_second)
             usages.extend(rep_usages)
