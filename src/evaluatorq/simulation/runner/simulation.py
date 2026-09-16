@@ -86,6 +86,37 @@ class RunSinks:
     target_model: str | None = None
 
 
+@dataclass(frozen=True)
+class _TurnOutcome:
+    result: SimulationResult | None
+    judgment: Judgment | None
+
+
+def _refresh_token_usage(sinks: RunSinks, user_simulator: UserSimulatorAgent, judge: JudgeAgent) -> None:
+    """Refresh aggregate usage, retaining partial spend if a getter fails."""
+    try:
+        sinks.token_usage = user_simulator.get_usage() + judge.get_usage() + sinks.target_token_usage
+    except Exception as usage_err:
+        sinks.token_usage_known = False
+        logger.warning(
+            'Unable to determine complete simulation token usage; reporting partial usage as unknown: %s',
+            usage_err,
+            exc_info=True,
+        )
+
+
+def _build_turn_metrics(turn_num: int, judgment: Judgment, usage_before: TokenUsage, sinks: RunSinks) -> TurnMetrics:
+    return TurnMetrics(
+        turn_number=turn_num,
+        token_usage=sinks.token_usage - usage_before,
+        response_quality=judgment.response_quality,
+        hallucination_risk=judgment.hallucination_risk,
+        tone_appropriateness=judgment.tone_appropriateness,
+        factual_accuracy=judgment.factual_accuracy,
+        judge_reason=judgment.reason,
+    )
+
+
 _MAX_TOOL_RESULT_CHARS = 500
 
 
@@ -850,20 +881,13 @@ class SimulationRunner:
                 error_type=error_type,
             )
 
-    async def _run_inner(
+    def _resolve_simulator_and_judge(
         self,
         *,
         persona: Persona | None,
         scenario: Scenario | None,
-        datapoint_id: str,
-        first_message: str | None,
-        effective_max_turns: int,
-        sinks: RunSinks,
-        run_span: Span | None,
-        conversation_target: AgentTarget | None = None,
-    ) -> SimulationResult:
-        """Inner simulation body (runs inside the orq.simulation.run span)."""
-        system_prompt = build_datapoint_system_prompt(persona, scenario)  # pyright: ignore[reportArgumentType]
+        system_prompt: str,
+    ) -> tuple[UserSimulatorAgent, JudgeAgent]:
         client: AsyncOpenAI | None = None
 
         if self._injected_user_simulator is not None:
@@ -926,32 +950,194 @@ class SimulationRunner:
                 ground_truth=scenario.ground_truth or '' if scenario else '',
             )
 
+        return user_simulator, judge
+
+    async def _run_turn(
+        self,
+        *,
+        turn: int,
+        user_simulator: UserSimulatorAgent,
+        judge: JudgeAgent,
+        sinks: RunSinks,
+        conversation_target: AgentTarget | None,
+        target_model_holder: dict[str, str | None],
+        persona: Persona | None,
+        scenario: Scenario | None,
+        run_span: Span | None,
+        criteria_tracker: _CriteriaTracker,
+        usage_before: TokenUsage,
+        datapoint_id: str,
+    ) -> _TurnOutcome:
+        # The user's line opens the turn it belongs to. Turn 1's line is the
+        # generated first message; every later turn asks the simulator here,
+        # so a turn span reads user -> target -> judge instead of trailing the
+        # next user message off the end of the previous turn.
+        if turn > 0:
+            async with with_simulation_span('orq.simulation.user_simulator_call', None):
+                user_response = await user_simulator.respond_async(
+                    _invert_roles_for_simulator(sinks.messages, self._max_tool_result_chars),
+                    llm_purpose='user_simulator',
+                )
+            sinks.messages.append(Message(role='user', content=user_response))
+            _refresh_token_usage(sinks, user_simulator, judge)
+
+        async with with_simulation_span('orq.simulation.target_call', None) as target_span:
+            # `span_message_text`, not `m.content or ''`: multi-part content
+            # would otherwise land on the span as a Python repr. Same helper
+            # the agent LLM spans use, so the two renderings cannot drift.
+            record_llm_input(
+                target_span,
+                [{'role': m.role, 'content': span_message_text(m.content)} for m in sinks.messages],
+            )
+            call = await self._get_target_response(sinks.messages, target=conversation_target)
+            agent_response_text = call.response.text
+            # An errored response may still be a real, billed provider
+            # response. Its usage belongs in the run just like a success.
+            agent_response_usage = call.response.usage
+            agent_response_model = call.response.model
+            if agent_response_usage is not None:
+                sinks.target_token_usage = sinks.target_token_usage + agent_response_usage
+                sinks.token_usage = sinks.token_usage + agent_response_usage
+            # Capture the first non-None model the target reports; it
+            # should be stable across turns for a given target.
+            if agent_response_model is not None and target_model_holder['model'] is None:
+                target_model_holder['model'] = agent_response_model
+                sinks.target_model = agent_response_model
+            record_llm_output(target_span, agent_response_text)
+        # The failed turn IS recorded (mirrors orchestrator.py's
+        # turns_record.append on exhaustion) before terminating.
+        sinks.messages.extend(build_assistant_message(call.response))
+
+        if not call.succeeded:
+            return _TurnOutcome(
+                result=self._target_failure_result(
+                    call,
+                    persona=persona,
+                    scenario=scenario,
+                    sinks=sinks,
+                    run_span=run_span,
+                    criteria_tracker=criteria_tracker,
+                ),
+                judgment=None,
+            )
+
+        # Record this successful target response's trace/span handles (in
+        # turn order); the last with a trace id is the conversation's final
+        # target-agent trace. Excludes user-simulator and judge calls,
+        # which don't set these here.
+        if call.response.trace_id or call.response.span_id:
+            sinks.response_traces.append(ResponseTrace(trace_id=call.response.trace_id, span_id=call.response.span_id))
+
+        async with with_simulation_span('orq.simulation.judge_evaluation', None):
+            judgment = await judge.evaluate(sinks.messages)
+        criteria_tracker.observe(judgment.criteria_verdicts)
+        state_judgment = criteria_tracker.resolve(judgment) if criteria_tracker.audited_ids else judgment
+        sinks.criteria_verified = criteria_tracker.verified
+        sinks.criteria_results = _build_criteria_results(scenario, state_judgment) if scenario else None
+        sinks.criteria_meta = (
+            _build_criteria_meta(
+                scenario,
+                state_judgment,
+                criteria_tracker.audited_ids,
+                criteria_tracker.evidence,
+            )
+            if scenario
+            else None
+        )
+        sinks.rules_broken = state_judgment.rules_broken
+        sinks.goal_achieved = judgment.goal_achieved
+        sinks.goal_completion_score = judgment.goal_completion_score
+        # Occurrence is sticky, so a confirmed criterion cannot change —
+        # stop paying for it in every remaining turn's audit payload. Duck
+        # typed, per the _implements note above: a custom judge without the
+        # method simply keeps auditing everything.
+        if _implements(judge, _SETTLEABLE_JUDGE_METHODS):
+            judge.mark_settled(criteria_tracker.settled_ids)
+
+        _refresh_token_usage(sinks, user_simulator, judge)
+        sinks.turn_metrics.append(_build_turn_metrics(turn + 1, judgment, usage_before, sinks))
+        try:
+            await await_maybe(self._hooks.on_turn_complete(datapoint_id, sinks.turn_metrics[-1]))
+        except Exception:
+            logger.warning(
+                'on_turn_complete hook raised for datapoint %s; ignoring',
+                datapoint_id,
+                exc_info=True,
+            )
+        return _TurnOutcome(result=None, judgment=judgment)
+
+    def _terminal_result(
+        self,
+        *,
+        persona: Persona | None,
+        scenario: Scenario | None,
+        sinks: RunSinks,
+        run_span: Span | None,
+        criteria_tracker: _CriteriaTracker,
+        target_model_holder: dict[str, str | None],
+        user_simulator: UserSimulatorAgent,
+        judge: JudgeAgent,
+        last_judgment: Judgment,
+        turn: int,
+    ) -> SimulationResult:
+        _refresh_token_usage(sinks, user_simulator, judge)
+        # rules_broken is the run-level fold, not just this turn's judgment.
+        resolved = criteria_tracker.resolve(last_judgment)
+        set_span_attrs(
+            run_span,
+            {
+                'orq.simulation.terminated_by': 'judge',
+                'orq.simulation.goal_achieved': resolved.goal_achieved,
+                'orq.simulation.turn_count': turn + 1,
+            },
+        )
+        judge_metadata = _build_simulation_metadata(
+            persona,
+            scenario,
+            _build_criteria_meta(scenario, resolved, criteria_tracker.audited_ids, criteria_tracker.evidence)
+            if scenario
+            else None,
+            target_model_holder['model'],
+        )
+        return SimulationResult(
+            messages=sinks.messages,
+            terminated_by=TerminatedBy.judge,
+            reason=resolved.reason,
+            goal_achieved=resolved.goal_achieved,
+            goal_completion_score=resolved.goal_completion_score,
+            rules_broken=resolved.rules_broken,
+            turn_count=turn + 1,
+            turn_metrics=sinks.turn_metrics,
+            token_usage=sinks.token_usage,
+            token_usage_known=sinks.token_usage_known,
+            criteria_results=self._build_criteria_results(scenario, resolved) if scenario else None,  # type: ignore[arg-type]
+            criteria_verified=criteria_tracker.verified,
+            metadata=judge_metadata,  # type: ignore[union-attr]
+        )
+
+    async def _run_inner(
+        self,
+        *,
+        persona: Persona | None,
+        scenario: Scenario | None,
+        datapoint_id: str,
+        first_message: str | None,
+        effective_max_turns: int,
+        sinks: RunSinks,
+        run_span: Span | None,
+        conversation_target: AgentTarget | None = None,
+    ) -> SimulationResult:
+        """Inner simulation body (runs inside the orq.simulation.run span)."""
+        system_prompt = build_datapoint_system_prompt(persona, scenario)  # pyright: ignore[reportArgumentType]
+        user_simulator, judge = self._resolve_simulator_and_judge(
+            persona=persona,
+            scenario=scenario,
+            system_prompt=system_prompt,
+        )
+
         # Lazily captured on the first turn that reports a model identity.
         # NEVER set this from self._model — that is the user-simulator/judge model.
         target_model_holder: dict[str, str | None] = {'model': None}
-
-        def _refresh_token_usage() -> None:
-            """Refresh aggregate usage, retaining partial spend if a getter fails."""
-            try:
-                sinks.token_usage = user_simulator.get_usage() + judge.get_usage() + sinks.target_token_usage
-            except Exception as usage_err:
-                sinks.token_usage_known = False
-                logger.warning(
-                    'Unable to determine complete simulation token usage; reporting partial usage as unknown: %s',
-                    usage_err,
-                    exc_info=True,
-                )
-
-        def _build_turn_metrics(turn_num: int, judgment: Judgment, usage_before: TokenUsage) -> TurnMetrics:
-            return TurnMetrics(
-                turn_number=turn_num,
-                token_usage=sinks.token_usage - usage_before,
-                response_quality=judgment.response_quality,
-                hallucination_risk=judgment.hallucination_risk,
-                tone_appropriateness=judgment.tone_appropriateness,
-                factual_accuracy=judgment.factual_accuracy,
-                judge_reason=judgment.reason,
-            )
 
         if first_message:
             first_msg = first_message
@@ -966,7 +1152,7 @@ class SimulationRunner:
             ):
                 first_msg = await user_simulator.generate_first_message()
         sinks.messages.append(Message(role='user', content=first_msg))
-        _refresh_token_usage()
+        _refresh_token_usage(sinks, user_simulator, judge)
 
         last_judgment: Judgment | None = None
         # Accumulates every turn's criteria audit; a violation seen on turn 2 must
@@ -983,150 +1169,50 @@ class SimulationRunner:
                     'orq.simulation.max_turns': effective_max_turns,
                 },
             ) as turn_span:
-                # The user's line opens the turn it belongs to. Turn 1's line is the
-                # generated first message; every later turn asks the simulator here,
-                # so a turn span reads user -> target -> judge instead of trailing the
-                # next user message off the end of the previous turn.
-                if turn > 0:
-                    async with with_simulation_span('orq.simulation.user_simulator_call', None):
-                        user_response = await user_simulator.respond_async(
-                            _invert_roles_for_simulator(sinks.messages, self._max_tool_result_chars),
-                            llm_purpose='user_simulator',
-                        )
-                    sinks.messages.append(Message(role='user', content=user_response))
-                    _refresh_token_usage()
-
-                async with with_simulation_span('orq.simulation.target_call', None) as target_span:
-                    # `span_message_text`, not `m.content or ''`: multi-part content
-                    # would otherwise land on the span as a Python repr. Same helper
-                    # the agent LLM spans use, so the two renderings cannot drift.
-                    record_llm_input(
-                        target_span,
-                        [{'role': m.role, 'content': span_message_text(m.content)} for m in sinks.messages],
-                    )
-                    call = await self._get_target_response(sinks.messages, target=conversation_target)
-                    agent_response_text = call.response.text
-                    # An errored response may still be a real, billed provider
-                    # response. Its usage belongs in the run just like a success.
-                    agent_response_usage = call.response.usage
-                    agent_response_model = call.response.model
-                    if agent_response_usage is not None:
-                        sinks.target_token_usage = sinks.target_token_usage + agent_response_usage
-                        sinks.token_usage = sinks.token_usage + agent_response_usage
-                    # Capture the first non-None model the target reports; it
-                    # should be stable across turns for a given target.
-                    if agent_response_model is not None and target_model_holder['model'] is None:
-                        target_model_holder['model'] = agent_response_model
-                        sinks.target_model = agent_response_model
-                    record_llm_output(target_span, agent_response_text)
-                # The failed turn IS recorded (mirrors orchestrator.py's
-                # turns_record.append on exhaustion) before terminating.
-                sinks.messages.extend(build_assistant_message(call.response))
-
-                if not call.succeeded:
-                    return self._target_failure_result(
-                        call,
-                        persona=persona,
-                        scenario=scenario,
-                        sinks=sinks,
-                        run_span=run_span,
-                        criteria_tracker=criteria_tracker,
-                    )
-
-                # Record this successful target response's trace/span handles (in
-                # turn order); the last with a trace id is the conversation's final
-                # target-agent trace. Excludes user-simulator and judge calls,
-                # which don't set these here.
-                if call.response.trace_id or call.response.span_id:
-                    sinks.response_traces.append(
-                        ResponseTrace(trace_id=call.response.trace_id, span_id=call.response.span_id)
-                    )
-
-                async with with_simulation_span('orq.simulation.judge_evaluation', None):
-                    judgment = await judge.evaluate(sinks.messages)
-                criteria_tracker.observe(judgment.criteria_verdicts)
-                state_judgment = criteria_tracker.resolve(judgment) if criteria_tracker.audited_ids else judgment
-                sinks.criteria_verified = criteria_tracker.verified
-                sinks.criteria_results = _build_criteria_results(scenario, state_judgment) if scenario else None
-                sinks.criteria_meta = (
-                    _build_criteria_meta(
-                        scenario,
-                        state_judgment,
-                        criteria_tracker.audited_ids,
-                        criteria_tracker.evidence,
-                    )
-                    if scenario
-                    else None
+                outcome = await self._run_turn(
+                    turn=turn,
+                    user_simulator=user_simulator,
+                    judge=judge,
+                    sinks=sinks,
+                    conversation_target=conversation_target,
+                    target_model_holder=target_model_holder,
+                    persona=persona,
+                    scenario=scenario,
+                    run_span=run_span,
+                    criteria_tracker=criteria_tracker,
+                    usage_before=usage_before,
+                    datapoint_id=datapoint_id,
                 )
-                sinks.rules_broken = state_judgment.rules_broken
-                sinks.goal_achieved = judgment.goal_achieved
-                sinks.goal_completion_score = judgment.goal_completion_score
-                # Occurrence is sticky, so a confirmed criterion cannot change —
-                # stop paying for it in every remaining turn's audit payload. Duck
-                # typed, per the _implements note above: a custom judge without the
-                # method simply keeps auditing everything.
-                if _implements(judge, _SETTLEABLE_JUDGE_METHODS):
-                    judge.mark_settled(criteria_tracker.settled_ids)
-
-                _refresh_token_usage()
-                sinks.turn_metrics.append(_build_turn_metrics(turn + 1, judgment, usage_before))
-                try:
-                    await await_maybe(self._hooks.on_turn_complete(datapoint_id, sinks.turn_metrics[-1]))
-                except Exception:
-                    logger.warning(
-                        'on_turn_complete hook raised for datapoint %s; ignoring',
-                        datapoint_id,
-                        exc_info=True,
-                    )
-                last_judgment = judgment
-
+                if outcome.result is not None:
+                    return outcome.result
+                last_judgment = outcome.judgment
                 set_span_attrs(
                     turn_span,
                     {
-                        'orq.simulation.goal_achieved': judgment.goal_achieved,
-                        'orq.simulation.goal_completion_score': judgment.goal_completion_score,
-                        'orq.simulation.should_terminate': judgment.should_terminate,
+                        'orq.simulation.goal_achieved': cast('Judgment', outcome.judgment).goal_achieved,
+                        'orq.simulation.goal_completion_score': cast(
+                            'Judgment', outcome.judgment
+                        ).goal_completion_score,
+                        'orq.simulation.should_terminate': cast('Judgment', outcome.judgment).should_terminate,
                     },
                 )
 
             if last_judgment and last_judgment.should_terminate:
-                _refresh_token_usage()
-                # rules_broken is the run-level fold, not just this turn's judgment.
-                resolved = criteria_tracker.resolve(last_judgment)
-                set_span_attrs(
-                    run_span,
-                    {
-                        'orq.simulation.terminated_by': 'judge',
-                        'orq.simulation.goal_achieved': resolved.goal_achieved,
-                        'orq.simulation.turn_count': turn + 1,
-                    },
-                )
-                judge_metadata = _build_simulation_metadata(
-                    persona,
-                    scenario,
-                    _build_criteria_meta(scenario, resolved, criteria_tracker.audited_ids, criteria_tracker.evidence)
-                    if scenario
-                    else None,
-                    target_model_holder['model'],
-                )
-                return SimulationResult(
-                    messages=sinks.messages,
-                    terminated_by=TerminatedBy.judge,
-                    reason=resolved.reason,
-                    goal_achieved=resolved.goal_achieved,
-                    goal_completion_score=resolved.goal_completion_score,
-                    rules_broken=resolved.rules_broken,
-                    turn_count=turn + 1,
-                    turn_metrics=sinks.turn_metrics,
-                    token_usage=sinks.token_usage,
-                    token_usage_known=sinks.token_usage_known,
-                    criteria_results=self._build_criteria_results(scenario, resolved) if scenario else None,  # type: ignore[arg-type]
-                    criteria_verified=criteria_tracker.verified,
-                    metadata=judge_metadata,  # type: ignore[union-attr]
+                return self._terminal_result(
+                    persona=persona,
+                    scenario=scenario,
+                    sinks=sinks,
+                    run_span=run_span,
+                    criteria_tracker=criteria_tracker,
+                    target_model_holder=target_model_holder,
+                    user_simulator=user_simulator,
+                    judge=judge,
+                    last_judgment=last_judgment,
+                    turn=turn,
                 )
 
         # Max turns reached
-        _refresh_token_usage()
+        _refresh_token_usage(sinks, user_simulator, judge)
         resolved = criteria_tracker.resolve(last_judgment) if last_judgment else None
         set_span_attrs(
             run_span,
