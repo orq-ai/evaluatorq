@@ -1,7 +1,7 @@
 """Canonical shared brand color palette for all evaluatorq reports.
 
 This is the single source of truth for ORQ brand colors, semantic aliases,
-and Plotly colorscales used by both ``redteam`` and ``simulation`` report
+and colour scales used by both ``redteam`` and ``simulation`` report
 renderers. Any module that previously maintained its own color definitions
 should import from here instead.
 
@@ -75,7 +75,7 @@ STATUS_COLORS: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# Plotly colorscales (list-of-[position, color] pairs)
+# Colour scales (list-of-[position, color] pairs, read by ``scale_color``)
 # ---------------------------------------------------------------------------
 
 # Sequential heat: sand -> orange -> red  (replaces "Reds")

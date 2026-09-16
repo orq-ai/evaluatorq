@@ -585,7 +585,7 @@ def test_runs_skips_malformed(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# ui command  (Streamlit launcher)
+# run-file helper
 # ---------------------------------------------------------------------------
 
 
@@ -605,70 +605,6 @@ def _write_run_file(path: Path, name: str = "r") -> None:
         ),
         encoding="utf-8",
     )
-
-
-def test_ui_latest_resolves_most_recent(tmp_path: Path) -> None:
-    runs_dir = tmp_path / "sim-runs"
-    runs_dir.mkdir()
-    older = runs_dir / "a_20260101-000000.json"
-    newer = runs_dir / "b_20260102-000000.json"
-    _write_run_file(older)
-    _write_run_file(newer)
-    import os
-
-    os.utime(older, (1, 1))
-    os.utime(newer, (2, 2))
-
-    with (
-        patch("evaluatorq.simulation.cli._get_sim_runs_dir", return_value=runs_dir),
-        patch("evaluatorq.common.ui.launch.launch_streamlit") as launch,
-    ):
-        result = runner.invoke(app, ["ui", "--latest"])
-
-    assert result.exit_code == 0
-    assert launch.call_args.args[1] == newer.resolve()
-
-
-def test_ui_no_runs_errors(tmp_path: Path) -> None:
-    with patch("evaluatorq.simulation.cli._get_sim_runs_dir", return_value=tmp_path / "empty"):
-        result = runner.invoke(app, ["ui"])
-    assert result.exit_code == 1
-    assert "No runs found" in result.output
-
-
-def test_ui_explicit_path(tmp_path: Path) -> None:
-    run_file = tmp_path / "run.json"
-    _write_run_file(run_file)
-    with (
-        patch("evaluatorq.simulation.cli._get_sim_runs_dir", return_value=tmp_path / "sim-runs"),
-        patch("evaluatorq.common.ui.launch.launch_streamlit") as launch,
-    ):
-        result = runner.invoke(app, ["ui", str(run_file)])
-    assert result.exit_code == 0
-    assert launch.call_args.args[1] == run_file.resolve()
-    assert 'deprecated' in result.stderr.lower()
-    assert 'eq dashboard' in result.stderr
-
-
-def test_ui_bare_filename_fallback(tmp_path: Path) -> None:
-    runs_dir = tmp_path / "sim-runs"
-    runs_dir.mkdir()
-    run_file = runs_dir / "my-run.json"
-    _write_run_file(run_file)
-    with (
-        patch("evaluatorq.simulation.cli._get_sim_runs_dir", return_value=runs_dir),
-        patch("evaluatorq.common.ui.launch.launch_streamlit") as launch,
-    ):
-        result = runner.invoke(app, ["ui", "my-run.json"])
-    assert result.exit_code == 0
-    assert launch.call_args.args[1] == run_file
-
-
-def test_ui_missing_path_errors(tmp_path: Path) -> None:
-    with patch("evaluatorq.simulation.cli._get_sim_runs_dir", return_value=tmp_path / "sim-runs"):
-        result = runner.invoke(app, ["ui", str(tmp_path / "nope.json")])
-    assert result.exit_code == 1
-    assert "does not exist" in result.output
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 # Dashboard (`eq dashboard`)
 
-Launches the FastHTML dashboard, the primary UI for browsing saved runs. It is the only report surface receiving new features; `eq redteam ui` and `eq sim ui` are the retired Streamlit viewers, still registered but no longer documented.
+Launches the FastHTML dashboard, the only UI for browsing saved runs. The Streamlit viewers it replaced, `eq redteam ui` and `eq sim ui`, have been removed.
 
 For what the dashboard shows once it is open — the run index, the red-team and simulation walkthroughs, and applying recommendations to an agent — see [Dashboard](../dashboard.md). This page covers the command only.
 

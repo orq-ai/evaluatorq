@@ -3,7 +3,7 @@
 ``export_html(results)`` produces a self-contained HTML document styled with
 the shared report CSS. All charts are Vega-Lite specs rendered to SVG via
 ``vl-convert-python``; when that package is absent charts are omitted and
-the report degrades to a tables-only layout (this module imports no plotly).
+the report degrades to a tables-only layout.
 """
 
 from __future__ import annotations

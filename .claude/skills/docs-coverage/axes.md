@@ -84,7 +84,6 @@ Marked `N/A` in the matrix, never reported as a gap.
 | API endpoint × `evaluatorq()` / `llm_jury()` | juries pin `api='responses'` internally; there is no parameter to choose |
 | API endpoint × dashboard | reads saved artifacts; issues no request |
 | API endpoint × target kind `deployment:` / callable / Vercel | these do not go through `request_params`; the endpoint is fixed by the transport |
-| `eq redteam ui` / `eq sim ui` × anything | retired Streamlit viewers. Still registered for compatibility, deliberately de-documented in favour of `eq dashboard` (stated in `docs/cli-reference/dashboard.md`). A deliberate de-documentation is a decision, not a coverage gap |
 | own-calls LLM config × dashboard | it reads saved artifacts; it makes no call of its own to configure |
 | own-calls LLM config × `evaluatorq()` | the core loop runs your task function and your evaluators; it has no own-calls role to configure. Judge settings go to `llm_jury(...)` |
 | own-calls LLM config `model-name shorthand` × `red_team()` | red team has no `sim_model` equivalent; both roles are named on `LLMConfig` |
