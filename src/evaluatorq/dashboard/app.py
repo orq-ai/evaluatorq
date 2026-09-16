@@ -30,7 +30,6 @@ import csv
 import io
 import json
 from pathlib import Path
-from typing import Any
 
 from fasthtml.core import FastHTML, NotStr
 from loguru import logger
@@ -163,8 +162,20 @@ def _settings_config(roots: list[Path] | None) -> list[tuple[str, str | list[str
     return config
 
 
+def _roots(req: Request) -> list[Path] | None:
+    """Run-store roots stashed on the app by ``build_app``.
+
+    Starlette's ``app.state`` is an untyped attribute bag, so reading
+    ``req.app.state.roots`` inline degrades the value to ``Any`` at every handler.
+    Every route reads the roots through here instead, so the declared type survives
+    and there is one place to change if the stash moves.
+    """
+    roots: list[Path] | None = req.app.state.roots
+    return roots
+
+
 def _index(req: Request) -> NotStr:
-    roots = req.app.state.roots
+    roots = _roots(req)
     surface = req.query_params.get('surface') or None
     if surface is None:
         # Combined Dashboard landing — aggregates across all run stores.
@@ -191,19 +202,19 @@ def _index(req: Request) -> NotStr:
 
 
 def _settings(req: Request) -> NotStr:
-    roots = req.app.state.roots
+    roots = _roots(req)
     body = settings_body(_settings_config(roots))
     return NotStr(page('Settings', body, active_nav='settings'))
 
 
 def _search(req: Request) -> NotStr:
-    roots = req.app.state.roots
+    roots = _roots(req)
     q = req.query_params.get('q') or ''
     return NotStr(search_results(library.scan(roots), q))
 
 
 def _report_view(rid: str, req: Request) -> NotStr | Response:
-    roots = req.app.state.roots
+    roots = _roots(req)
     path = library.resolve(rid, roots)
     if path is None:
         # No report on disk — this may be an in-flight (running/error/
@@ -278,7 +289,7 @@ def _report_view(rid: str, req: Request) -> NotStr | Response:
 
 
 async def _sim_agent_card(rid: str, req: Request) -> NotStr | Response:
-    roots = req.app.state.roots
+    roots = _roots(req)
     path = library.resolve(rid, roots)
     if path is None:
         return Response('404 Not Found', status_code=404, media_type='text/plain')
@@ -297,7 +308,7 @@ async def _sim_agent_card(rid: str, req: Request) -> NotStr | Response:
 
 
 async def _report_filter(rid: str, req: Request) -> NotStr | Response:
-    roots = req.app.state.roots
+    roots = _roots(req)
     path = library.resolve(rid, roots)
     if path is None:
         return Response('404 Not Found', status_code=404, media_type='text/plain')
@@ -385,17 +396,17 @@ def _do_html_export(rid: str, roots: list[Path] | None) -> Response:
 
 
 def _report_export(rid: str, req: Request) -> Response:
-    roots = req.app.state.roots
+    roots = _roots(req)
     return _do_html_export(rid, roots)
 
 
 def _report_export_html(rid: str, req: Request) -> Response:
-    roots = req.app.state.roots
+    roots = _roots(req)
     return _do_html_export(rid, roots)
 
 
 def _report_export_md(rid: str, req: Request) -> Response:
-    roots = req.app.state.roots
+    roots = _roots(req)
     path = library.resolve(rid, roots)
     if path is None:
         return Response('404 Not Found', status_code=404, media_type='text/plain')
@@ -431,7 +442,7 @@ def _report_export_md(rid: str, req: Request) -> Response:
 
 
 def _report_export_csv(rid: str, req: Request) -> Response:
-    roots = req.app.state.roots
+    roots = _roots(req)
     path = library.resolve(rid, roots)
     if path is None:
         return Response('404 Not Found', status_code=404, media_type='text/plain')
@@ -495,7 +506,7 @@ def _report_export_csv(rid: str, req: Request) -> Response:
 
 
 def _report_export_json(rid: str, req: Request) -> Response:
-    roots = req.app.state.roots
+    roots = _roots(req)
     path = library.resolve(rid, roots)
     if path is None:
         return Response('404 Not Found', status_code=404, media_type='text/plain')
@@ -537,7 +548,7 @@ def _report_export_json(rid: str, req: Request) -> Response:
     )
 
 
-def register_report_routes(app: Any) -> None:
+def register_report_routes(app: FastHTML) -> None:
     """Register the report routes on *app*."""
     app.get('/')(_index)
     app.get('/settings')(_settings)
