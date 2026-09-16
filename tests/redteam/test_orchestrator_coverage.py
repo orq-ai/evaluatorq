@@ -805,6 +805,41 @@ class TestRunAttack:
 
         assert result.error_type == "max_tokens"
         assert result.error_code == "adversarial.max_tokens"
+        # A turn cut off at max_tokens is recorded even though the empty body
+        # then aborts the attack. Pins the ordering: the truncation is tracked
+        # before the early break, not after it.
+        assert result.truncated_turns == [1]
+
+    @pytest.mark.asyncio
+    @patch(_PATCH_RECORD_LLM)
+    @patch(_PATCH_LLM_SPAN, side_effect=_noop_span_ctx)
+    @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
+    async def test_adversarial_empty_choices_still_bills_the_attempt(self, _rs, _ls, _rl):
+        """A response with no choices aborts cleanly and still counts the billed call.
+
+        Reading ``choices[0]`` raises IndexError. The attempt was paid for
+        regardless, so the usage fold has to happen before that read — this
+        pins it, since an attack that drops the call would report $0.
+        """
+        orchestrator, mock_llm = _make_orchestrator()
+        target = _make_target()
+
+        response = _make_completion("")
+        response.choices = []
+        mock_llm.chat.completions.create.return_value = response
+
+        result = await orchestrator.run_attack(
+            target=target,
+            strategy=_make_strategy(),
+            objective="Test",
+            agent_context=_make_context(),
+            max_turns=3,
+        )
+
+        assert result.error_type == "llm_error"
+        assert result.error_code == "adversarial.llm_exception"
+        assert result.token_usage_adversarial is not None
+        assert result.token_usage_adversarial.calls == 1
 
     @pytest.mark.asyncio
     @patch(_PATCH_RECORD_LLM)
