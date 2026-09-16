@@ -169,10 +169,6 @@ _FLAG_TO_CAPABILITY: dict[str, tuple[str, list[AgentCapability]]] = {
 }
 
 
-def _map_probe_error(probe_target: AgentTarget, exc: Exception) -> tuple[str, str] | None:
-    return probe_target.map_error(exc)
-
-
 async def _send_probe(
     probe: str,
     group: str,
@@ -185,6 +181,12 @@ async def _send_probe(
     turns: list[int],
     target: AgentTarget | None = None,
 ) -> bool:
+    """Send one probe turn and record whether the target answered.
+
+    ``turns`` is a single-slot cell owned by ``_run_probes`` and INCREMENTED here — it is
+    the shared turn budget every probe phase draws down, so passing a fresh list makes the
+    budget never run out.
+    """
     turns[0] += 1
     convo.append(Message(role='user', content=probe))
     probe_target = target if target is not None else agent_target
@@ -195,7 +197,7 @@ async def _send_probe(
             convo,
             target_agent_timeout_ms=target_agent_timeout_ms,
             max_target_retries=max_target_retries,
-            map_error=lambda exc: _map_probe_error(probe_target, exc),
+            map_error=probe_target.map_error,
         )
     except Exception as e:  # one flaky turn must not abort classification  # noqa: BLE001
         logger.warning('Blackbox probe ({}) failed: {}', group, e)
