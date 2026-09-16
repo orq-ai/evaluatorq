@@ -6,6 +6,7 @@ import json
 import logging
 import math
 from dataclasses import dataclass
+from types import MappingProxyType
 
 logger = logging.getLogger(__name__)
 import time
@@ -32,7 +33,7 @@ from evaluatorq.openresponses.convert_models import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     from langchain_core.messages.tool import ToolCall
 
@@ -203,12 +204,23 @@ def _convert_system_message(
     input_items.append(input_message)
 
 
-_MESSAGE_CONVERTERS = {
+if TYPE_CHECKING:
+    # One entry of the message-type dispatch table below.
+    _MessageConverter = Callable[
+        [MessageData, list[Message], list[FunctionCall | FunctionCallOutput | Message], _ConversionState],
+        None,
+    ]
+
+
+# Frozen so dispatch cannot be mutated at runtime. There is no enum to assert
+# this against: LangChain's message-type strings are an open set, so an unlisted
+# type takes the warn-and-skip path in ``convert_to_open_responses`` by design.
+_MESSAGE_CONVERTERS: Mapping[str, _MessageConverter] = MappingProxyType({
     'human': _convert_human_message,
     'ai': _convert_ai_message,
     'tool': _convert_tool_message,
     'system': _convert_system_message,
-}
+})
 
 
 def convert_to_open_responses(
