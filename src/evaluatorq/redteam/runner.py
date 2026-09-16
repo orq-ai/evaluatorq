@@ -2280,9 +2280,9 @@ def _estimate_static_datapoints(
     max_static_datapoints: int | None,
     categories: list[str] | None,
     resolved_delivery_methods: set[DeliveryMethod | str] | None,
-) -> tuple[int | None, list[Any] | None]:
+) -> tuple[int | None, list[DataPoint] | None]:
     est_static: int | None = None
-    static_data: list[Any] | None = None
+    static_data: list[DataPoint] | None = None
     if replay_datapoints is not None:
         est_static = sum(1 for dp in replay_datapoints if dp.inputs.get('hybrid_source') == 'static')
     elif mode == Pipeline.HYBRID:
@@ -2332,11 +2332,12 @@ class _TargetPrepInputs:
     all_agent_contexts: dict[str, AgentContext]
     all_agent_caps: dict[str, AgentCapabilities]
     first_agent_context: AgentContext
-    static_data: list[Any] | None
+    static_data: list[DataPoint] | None
     replay_datapoints: list[DataPoint] | None
 
 
 async def _prepare_string_targets(*, inputs: _TargetPrepInputs) -> list[PreparedTarget]:
+    """Prepare every string target: the first generates the shared datapoints, the rest reuse them."""
     mode = inputs.mode
     filter_selection = inputs.filter_selection
     categories = inputs.categories
@@ -2469,7 +2470,9 @@ class _AgentTargetDatapointInputs:
     max_dynamic_datapoints: int | None
 
 
-async def _generate_agent_target_datapoints(*, inputs: _AgentTargetDatapointInputs) -> tuple[list[Any], dict[str, Any]]:
+async def _generate_agent_target_datapoints(
+    *, inputs: _AgentTargetDatapointInputs
+) -> tuple[list[DataPoint], dict[str, Any]]:
     resolved_hooks = inputs.resolved_hooks
     at_label = inputs.at_label
     resolved_categories = inputs.resolved_categories
@@ -2544,17 +2547,19 @@ async def _generate_agent_target_datapoints(*, inputs: _AgentTargetDatapointInpu
 @dataclass(frozen=True)
 class _AgentTargetJobInputs:
     mode: Pipeline
-    at_dps: list[Any]
-    static_data: list[Any] | None
+    at_dps: list[DataPoint]
+    static_data: list[DataPoint] | None
     at_safe: str
-    at_backend: Any
+    at_backend: Backend
     at_label: str
     pipeline_config: LLMConfig | None
-    at_dyn_job: Any
+    at_dyn_job: Callable[..., Any]
     run_id: str
 
 
-def _build_agent_target_jobs(*, inputs: _AgentTargetJobInputs) -> tuple[Any, list[Any], list[Any], list[Any]]:
+def _build_agent_target_jobs(
+    *, inputs: _AgentTargetJobInputs
+) -> tuple[Callable[..., Any], list[DataPoint], list[DataPoint], list[DataPoint]]:
     mode = inputs.mode
     at_dps = inputs.at_dps
     static_data = inputs.static_data
@@ -2566,7 +2571,7 @@ def _build_agent_target_jobs(*, inputs: _AgentTargetJobInputs) -> tuple[Any, lis
     run_id = inputs.run_id
 
     # Build the appropriate job based on mode (hybrid vs dynamic-only)
-    at_static_dps: list[Any] = []
+    at_static_dps: list[DataPoint] = []
     if mode == Pipeline.HYBRID:
         # Shared/replayed datapoints already carry both legs tagged, so
         # split them back out rather than appending the static set twice.
@@ -2905,7 +2910,8 @@ async def _run_dynamic_or_hybrid(
         msg = 'Execution cancelled by confirmation callback'
         raise CancelledError(msg)
 
-    # Step 3: Prepare the first target fully — generates shared datapoints.
+    # Steps 3-4: Prepare every string target — the first fully (generating the shared
+    # datapoints), the rest reusing them.
     prepared_targets = await _prepare_string_targets(
         inputs=_TargetPrepInputs(
             mode=mode,
@@ -2943,7 +2949,7 @@ async def _run_dynamic_or_hybrid(
 
     # Track memory entity info for all AgentTargets so cleanup can
     # reach them even if prepared_targets.append hasn't run yet.
-    all_at_cleanup_info: list[tuple[AgentContext, list[str], Any]] = []
+    all_at_cleanup_info: list[tuple[AgentContext, list[str], Backend]] = []
 
     # Step 4b: Prepare AgentTarget objects (direct targets)
     if resolved_agent_targets:
@@ -3145,7 +3151,7 @@ async def _run_dynamic_or_hybrid(
             description=description or f'{mode.capitalize()} red teaming ({len(all_target_labels)} targets)',
         )
 
-    merged = _finalize_merged_report(
+    _finalize_merged_report(
         merged=merged,
         run_id=run_id,
         pipeline_duration=pipeline_duration,
@@ -3212,7 +3218,8 @@ def _finalize_merged_report(
     prepared_targets: list[PreparedTarget],
     mode: Pipeline,
     all_datapoints: list[Any],
-) -> RedTeamReport:
+) -> None:
+    """Stamp run-level fields onto ``merged`` in place and append the zero-result warnings."""
     # Static report conversion has no run_id parameter. Preserve the invocation's
     # id even for static-only hybrid runs so its run-level trace deep link matches
     # the thread IDs emitted by static jobs.
@@ -3235,7 +3242,6 @@ def _finalize_merged_report(
             'Zero attacks executed. The resistance rate of 100% does not reflect actual security posture — '
             'no attacks were run. Check strategy generation logs and LLM credentials.'
         )
-    return merged
 
 
 def _resolve_first_agent_context(
@@ -3455,7 +3461,7 @@ class _AttackExecutionInputs:
     prepared_targets: list[PreparedTarget]
     verbosity: int
     cleanup_memory: bool
-    all_at_cleanup_info: list[tuple[AgentContext, list[str], Any]]
+    all_at_cleanup_info: list[tuple[AgentContext, list[str], Backend]]
 
 
 async def _execute_attacks(*, inputs: _AttackExecutionInputs) -> list[Any]:
@@ -3648,10 +3654,10 @@ def _collect_filter_warnings(*, prepared_targets: list[PreparedTarget]) -> list[
         if not fm:
             continue
         unresolved = fm.get('_unresolved_categories', [])
-        for cat in unresolved:
-            filter_warnings.extend([
-                f'Category {cat!r}: zero strategies selected — category could not be resolved. Check for typos or unsupported category names.'
-            ])
+        filter_warnings.extend(
+            f'Category {cat!r}: zero strategies selected — category could not be resolved. Check for typos or unsupported category names.'
+            for cat in unresolved
+        )
         for cat_key, cat_meta in fm.items():
             if cat_key.startswith('_') or not isinstance(cat_meta, dict):
                 continue
