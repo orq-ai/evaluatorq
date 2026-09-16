@@ -4105,6 +4105,323 @@ async def _cleanup_target_memory(
 # ---------------------------------------------------------------------------
 
 
+def _load_static_datapoints(
+    *,
+    prefetched_data: list[DataPoint] | None,
+    dataset: Any,
+    max_static_datapoints: int | None,
+    categories: list[str] | None,
+    resolved_delivery_methods: set[DeliveryMethod | str] | None,
+    resolved_strategy_names: set[str] | None,
+) -> list[Any]:
+    # Load the shared dataset once for all targets (a replay brings its own)
+    if prefetched_data is not None:
+        data: list[Any] = list(prefetched_data)
+    else:
+        from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import load_owasp_agentic_dataset
+
+        data = load_owasp_agentic_dataset(
+            dataset=dataset,
+            num_samples=max_static_datapoints,
+            categories=categories,
+            delivery_methods=resolved_delivery_methods,
+        )
+
+    # Filter out datapoints whose category has no registered evaluator
+    if data:
+        from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category
+
+        skipped: Counter[str] = Counter()
+        filtered_data: list[Any] = []
+        for dp in data:
+            cat = dp.inputs.get('category', '')
+            norm_cat = normalize_category(cat)
+            if get_evaluator_for_category(norm_cat) is None:
+                skipped[norm_cat] += 1
+            else:
+                filtered_data.append(dp)
+        for cat, count in sorted(skipped.items()):
+            logger.warning(f'Skipped {count} datapoints for {cat}: no evaluator registered')
+        if not filtered_data and data:
+            msg = 'All datapoints were filtered out — no evaluator registered for any category.'
+            raise ValueError(msg)
+        data = filtered_data  # type: ignore[assignment]
+
+    # The delivery-method filter was applied at load time (above). Strategy-name
+    # selection cannot apply to static rows (dataset records with no strategy
+    # name), so warn that it is ignored rather than silently dropping the flag.
+    if resolved_strategy_names is not None:
+        logger.warning(
+            '--strategy does not apply to static datapoints (dataset rows carry no strategy name); '
+            f'ignoring strategy filter {sorted(resolved_strategy_names)} in static mode.'
+        )
+    return data
+
+
+def _report_static_filter_results(
+    *,
+    data: list[Any],
+    resolved_delivery_methods: set[DeliveryMethod | str] | None,
+    dataset: Any,
+    filter_selection: tuple[str, list[str]] | None,
+    output_dir: Path | None,
+) -> None:
+    if isinstance(data, list):
+        # On an empty delivery-filtered static run, reload unfiltered (cheap, error
+        # path only) to report the delivery_method values the dataset actually
+        # carries — surfacing spelling/format drift instead of a bare "zero datapoints".
+        present_methods: list[str] | None = None
+        if resolved_delivery_methods is not None and not data:
+            from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import load_owasp_agentic_dataset
+
+            # categories=None, not the resolved selection: this reload exists to report
+            # what the dataset carries, and `categories=[]` now filters to nothing — so
+            # reusing it would empty the diagnostic and hand back the bare "zero
+            # datapoints" error this hint was added to avoid.
+            present_rows = load_owasp_agentic_dataset(dataset=dataset, categories=None)
+            present_methods = sorted({m for dp in present_rows if (m := dp.inputs.get('delivery_method'))})
+        _check_filter_results(
+            data,
+            None,
+            resolved_delivery_methods,
+            names_apply=False,
+            present_methods=present_methods,
+            filter_selection=filter_selection,
+        )
+        _save_stage(output_dir, '01_datapoints.json', json.dumps([dp.inputs for dp in data], indent=2, default=str))
+
+
+@dataclass(frozen=True)
+class _StaticJobInputs:
+    targets: list[str]
+    llm_client: AsyncOpenAI | None
+    target_config: TargetConfig | None
+    pipeline_config: LLMConfig | None
+    run_id: str | None
+    resolved_agent_targets: list[AgentTarget]
+    agent_target_labels: dict[int, str]
+
+
+def _build_static_jobs(*, inputs: _StaticJobInputs) -> list[Any]:
+    targets = inputs.targets
+    llm_client = inputs.llm_client
+    target_config = inputs.target_config
+    pipeline_config = inputs.pipeline_config
+    run_id = inputs.run_id
+    resolved_agent_targets = inputs.resolved_agent_targets
+    agent_target_labels = inputs.agent_target_labels
+
+    # Build one job per target using the shared helper
+    sys_prompt = target_config.system_prompt if target_config else None
+    jobs: list[Any] = [
+        _create_job_for_target(t, llm_client, sys_prompt, pipeline_config=pipeline_config, run_id=run_id)
+        for t in targets
+    ]
+    jobs.extend(
+        _create_static_job_for_agent_target(
+            at.new,
+            agent_target_labels[id(at)],
+            cfg=pipeline_config,
+            map_error=BareTargetBackend(at).map_error,
+            run_id=run_id,
+        )
+        for at in resolved_agent_targets
+    )
+    return jobs
+
+
+async def _static_agent_contexts(
+    *,
+    targets: list[str],
+    llm_client: AsyncOpenAI | None,
+    target_config: TargetConfig | None,
+    pipeline_config: LLMConfig | None,
+    resolved_agent_targets: list[AgentTarget],
+    agent_target_labels: dict[int, str],
+) -> dict[str, AgentContext]:
+    # Agent contexts, best-effort. Resolved before the evaluator and the confirm hook
+    # because the self-judge guard and the reasoning-effort pre-flight both need the
+    # target's model before the first paid call.
+    agent_contexts: dict[str, AgentContext] = {}
+    try:
+        static_backend = resolve_backend(
+            'orq', llm_client=llm_client, target_config=target_config, pipeline_config=pipeline_config
+        )
+        for t in targets:
+            kind, value = parse_target(t)
+            if kind is not TargetKind.AGENT:
+                # Only the agents API answers a context query. Asking it about a
+                # deployment key 404s and lands in the except below, which reads as
+                # a transient failure; skipping says what is actually true. Costs
+                # the target model, so the RES-739 family-bias guard falls back to
+                # the raw target string for this run.
+                logger.warning(
+                    f'No agent context for {value!r}: context is only retrievable for agent targets, '
+                    f'not for {kind.value} ones — proceeding without it'
+                )
+                continue
+            try:
+                ctx = await static_backend.resolve_context(value)
+                agent_contexts[value] = ctx
+            except Exception as exc:
+                logger.warning(f'Could not retrieve agent context for {value!r}: {exc} — proceeding without it')
+    except Exception as exc:
+        logger.warning(f'Could not resolve backend for agent context retrieval: {exc} — proceeding without context')
+
+    # Pull agent context from AgentTarget objects that expose it.
+    for at in resolved_agent_targets:
+        label = agent_target_labels[id(at)]
+        provider = getattr(at, 'get_agent_context', None)
+        if not callable(provider):
+            continue
+        try:
+            agent_contexts[label] = await cast('Any', provider)()
+        except Exception:
+            logger.warning(f'Could not retrieve agent context for {label!r} — proceeding without it')
+    return agent_contexts
+
+
+@dataclass(frozen=True)
+class _StaticEvaluatorInputs:
+    evaluator_model: str
+    llm_client: AsyncOpenAI | None
+    pipeline_config: LLMConfig | None
+    agent_contexts: dict[str, AgentContext]
+    targets: list[str]
+    resolved_agent_targets: list[AgentTarget]
+    agent_target_labels: dict[int, str]
+
+
+def _build_static_evaluator(*, inputs: _StaticEvaluatorInputs) -> Any:
+    evaluator_model = inputs.evaluator_model
+    llm_client = inputs.llm_client
+    pipeline_config = inputs.pipeline_config
+    agent_contexts = inputs.agent_contexts
+    targets = inputs.targets
+    resolved_agent_targets = inputs.resolved_agent_targets
+    agent_target_labels = inputs.agent_target_labels
+
+    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
+
+    evaluator_client = pipeline_config.evaluator.client if pipeline_config else None
+    evaluator_client = evaluator_client or llm_client
+    evaluator_cfg = pipeline_config.evaluator if pipeline_config else None
+    panel_cfg = pipeline_config.evaluator if pipeline_config else None
+    # Resolved model ids (falling back to the raw target string when a context
+    # never resolved), not the raw target list: RES-739's family-bias guard
+    # compares this against the judge model, and an unresolved raw string like
+    # ``agent:abc123`` always resolves to provider family ``unknown``, which
+    # silently defeats the guard (matches the dynamic leg's
+    # ``pt.agent_context.model`` pattern above).
+    static_target_models: list[str] = []
+    for t in targets:
+        _kind, value = parse_target(t)
+        ctx = agent_contexts.get(value)
+        static_target_models.append(ctx.model if ctx is not None and ctx.model else t)
+    for at in resolved_agent_targets:
+        label = agent_target_labels[id(at)]
+        ctx = agent_contexts.get(label)
+        static_target_models.append(ctx.model if ctx is not None and ctx.model else label)
+    panel_kwargs: dict[str, Any] = {
+        'judges': panel_cfg.judges[1:] if panel_cfg else [],
+        'judge_repetitions': panel_cfg.repetitions if panel_cfg else 1,
+        'replacement_judges': panel_cfg.replacement_judges if panel_cfg else [],
+        'min_successful_judges': panel_cfg.min_successful_judges if panel_cfg else 1,
+        'target_models': list(dict.fromkeys(static_target_models)),
+        'strict_panel': panel_cfg.strict_panel if panel_cfg else False,
+    }
+    return create_owasp_evaluator(
+        evaluator_model=evaluator_model,
+        llm_client=evaluator_client,
+        cfg=evaluator_cfg,
+        **panel_kwargs,
+    )
+
+
+@dataclass(frozen=True)
+class _StaticConfirmPayloadInputs:
+    data: list[Any]
+    categories: list[str] | None
+    evaluator_model: str
+    datapoint_parallelism: int
+    all_target_labels: list[str]
+    dataset: Any
+    replay_of: str | None
+
+
+def _static_confirm_payload(*, inputs: _StaticConfirmPayloadInputs) -> tuple[ConfirmPayload, list[str]]:
+    data = inputs.data
+    categories = inputs.categories
+    evaluator_model = inputs.evaluator_model
+    datapoint_parallelism = inputs.datapoint_parallelism
+    all_target_labels = inputs.all_target_labels
+    dataset = inputs.dataset
+    replay_of = inputs.replay_of
+
+    # Confirm hook — report aggregate counts
+    vulnerabilities: list[str] = list(
+        {
+            dp.inputs.get('category', '')
+            for dp in data  # pyright: ignore[reportAttributeAccessIssue]
+            if dp.inputs.get('category')
+        }
+        if isinstance(data, list)
+        else []
+    )
+    confirm_payload: ConfirmPayload = {
+        'agent_context': None,
+        'num_datapoints': len(data) if isinstance(data, list) else 0,  # type: ignore[arg-type]
+        'num_dynamic': None,
+        'num_static': len(data) if isinstance(data, list) else 0,  # type: ignore[arg-type]
+        'categories': categories or vulnerabilities,
+        'attack_model': '',
+        'evaluator_model': evaluator_model,
+        'max_turns': 1,
+        'datapoint_parallelism': datapoint_parallelism,
+        'filtering_metadata': None,
+        'mode': 'static',
+        'target': ', '.join(all_target_labels),
+        'dataset_path': str(dataset) if dataset else None,
+        'vulnerabilities': vulnerabilities,
+        'replay_of': replay_of,
+    }
+    return confirm_payload, vulnerabilities
+
+
+def _patch_static_job_reports(
+    per_job_reports: dict[str, RedTeamReport],
+    *,
+    targets: list[str],
+    resolved_agent_targets: list[AgentTarget],
+    agent_target_labels: dict[int, str],
+) -> None:
+    # Build a job_name → (target_kind, target_value) lookup from the actual
+    # job objects so that we can populate agent_key / agent_model correctly.
+    job_name_to_target: dict[str, tuple[TargetKind, str]] = {}
+    for t in targets:
+        t_kind, t_value = parse_target(t)
+        safe = _make_safe_target(t_value)
+        # create_deployment_job names follow "redteam:static:<safe_target>" convention;
+        # use the safe slug for the lookup key to handle collisions gracefully.
+        job_name_to_target[safe] = (t_kind, t_value)
+    for at in resolved_agent_targets:
+        label = agent_target_labels[id(at)]
+        safe = _sanitize_job_name(label)
+        job_name_to_target[safe] = (_safe_resolve_target_kind(at), label)
+
+    # Patch each per-job report with the correct agent identity, since
+    # static_evaluatorq_results_to_reports does not know about target mapping.
+    for job_name, job_report in per_job_reports.items():
+        # Match by looking for the target slug as a suffix of the job_name.
+        for slug, (t_kind, t_value) in job_name_to_target.items():
+            if job_name.endswith(f':{slug}'):
+                for result in job_report.results:
+                    result.agent.key = t_value if not t_kind.is_model else result.agent.key
+                    result.agent.model = t_value if t_kind.is_model else result.agent.model
+                job_report.tested_agents = [t_value]
+                break
+
+
 async def _run_static(
     *,
     targets: list[str],
@@ -4154,127 +4471,42 @@ async def _run_static(
     resolved_hooks: PipelineHooks = hooks or DefaultHooks()
     pipeline_start = datetime.now(tz=timezone.utc).astimezone()
 
-    # Load the shared dataset once for all targets (a replay brings its own)
-    if prefetched_data is not None:
-        data: list[Any] = list(prefetched_data)
-    else:
-        from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import load_owasp_agentic_dataset
-
-        data = load_owasp_agentic_dataset(
-            dataset=dataset,
-            num_samples=max_static_datapoints,
-            categories=categories,
-            delivery_methods=resolved_delivery_methods,
-        )
-
-    # Filter out datapoints whose category has no registered evaluator
-    if data:
-        from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category
-
-        skipped: Counter[str] = Counter()
-        filtered_data: list[Any] = []
-        for dp in data:
-            cat = dp.inputs.get('category', '')
-            norm_cat = normalize_category(cat)
-            if get_evaluator_for_category(norm_cat) is None:
-                skipped[norm_cat] += 1
-            else:
-                filtered_data.append(dp)
-        for cat, count in sorted(skipped.items()):
-            logger.warning(f'Skipped {count} datapoints for {cat}: no evaluator registered')
-        if not filtered_data and data:
-            msg = 'All datapoints were filtered out — no evaluator registered for any category.'
-            raise ValueError(msg)
-        data = filtered_data  # type: ignore[assignment]
-
-    # The delivery-method filter was applied at load time (above). Strategy-name
-    # selection cannot apply to static rows (dataset records with no strategy
-    # name), so warn that it is ignored rather than silently dropping the flag.
-    if resolved_strategy_names is not None:
-        logger.warning(
-            '--strategy does not apply to static datapoints (dataset rows carry no strategy name); '
-            f'ignoring strategy filter {sorted(resolved_strategy_names)} in static mode.'
-        )
-    if isinstance(data, list):
-        # On an empty delivery-filtered static run, reload unfiltered (cheap, error
-        # path only) to report the delivery_method values the dataset actually
-        # carries — surfacing spelling/format drift instead of a bare "zero datapoints".
-        present_methods: list[str] | None = None
-        if resolved_delivery_methods is not None and not data:
-            from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import load_owasp_agentic_dataset
-
-            # categories=None, not the resolved selection: this reload exists to report
-            # what the dataset carries, and `categories=[]` now filters to nothing — so
-            # reusing it would empty the diagnostic and hand back the bare "zero
-            # datapoints" error this hint was added to avoid.
-            present_rows = load_owasp_agentic_dataset(dataset=dataset, categories=None)
-            present_methods = sorted({m for dp in present_rows if (m := dp.inputs.get('delivery_method'))})
-        _check_filter_results(
-            data,
-            None,
-            resolved_delivery_methods,
-            names_apply=False,
-            present_methods=present_methods,
-            filter_selection=filter_selection,
-        )
-        _save_stage(output_dir, '01_datapoints.json', json.dumps([dp.inputs for dp in data], indent=2, default=str))
-
-    # Build one job per target using the shared helper
-    sys_prompt = target_config.system_prompt if target_config else None
-    jobs: list[Any] = [
-        _create_job_for_target(t, llm_client, sys_prompt, pipeline_config=pipeline_config, run_id=run_id)
-        for t in targets
-    ]
-    jobs.extend(
-        _create_static_job_for_agent_target(
-            at.new,
-            agent_target_labels[id(at)],
-            cfg=pipeline_config,
-            map_error=BareTargetBackend(at).map_error,
-            run_id=run_id,
-        )
-        for at in resolved_agent_targets
+    data = _load_static_datapoints(
+        prefetched_data=prefetched_data,
+        dataset=dataset,
+        max_static_datapoints=max_static_datapoints,
+        categories=categories,
+        resolved_delivery_methods=resolved_delivery_methods,
+        resolved_strategy_names=resolved_strategy_names,
+    )
+    _report_static_filter_results(
+        data=data,
+        resolved_delivery_methods=resolved_delivery_methods,
+        dataset=dataset,
+        filter_selection=filter_selection,
+        output_dir=output_dir,
     )
 
-    # Agent contexts, best-effort. Resolved before the evaluator and the confirm hook
-    # because the self-judge guard and the reasoning-effort pre-flight both need the
-    # target's model before the first paid call.
-    agent_contexts: dict[str, AgentContext] = {}
-    try:
-        static_backend = resolve_backend(
-            'orq', llm_client=llm_client, target_config=target_config, pipeline_config=pipeline_config
+    jobs = _build_static_jobs(
+        inputs=_StaticJobInputs(
+            targets=targets,
+            llm_client=llm_client,
+            target_config=target_config,
+            pipeline_config=pipeline_config,
+            run_id=run_id,
+            resolved_agent_targets=resolved_agent_targets,
+            agent_target_labels=agent_target_labels,
         )
-        for t in targets:
-            kind, value = parse_target(t)
-            if kind is not TargetKind.AGENT:
-                # Only the agents API answers a context query. Asking it about a
-                # deployment key 404s and lands in the except below, which reads as
-                # a transient failure; skipping says what is actually true. Costs
-                # the target model, so the RES-739 family-bias guard falls back to
-                # the raw target string for this run.
-                logger.warning(
-                    f'No agent context for {value!r}: context is only retrievable for agent targets, '
-                    f'not for {kind.value} ones — proceeding without it'
-                )
-                continue
-            try:
-                ctx = await static_backend.resolve_context(value)
-                agent_contexts[value] = ctx
-            except Exception as exc:
-                logger.warning(f'Could not retrieve agent context for {value!r}: {exc} — proceeding without it')
-    except Exception as exc:
-        logger.warning(f'Could not resolve backend for agent context retrieval: {exc} — proceeding without context')
+    )
 
-    # Pull agent context from AgentTarget objects that expose it.
-    for at in resolved_agent_targets:
-        label = agent_target_labels[id(at)]
-        provider = getattr(at, 'get_agent_context', None)
-        if not callable(provider):
-            continue
-        try:
-            agent_contexts[label] = await cast('Any', provider)()
-        except Exception:
-            logger.warning(f'Could not retrieve agent context for {label!r} — proceeding without it')
+    agent_contexts = await _static_agent_contexts(
+        targets=targets,
+        llm_client=llm_client,
+        target_config=target_config,
+        pipeline_config=pipeline_config,
+        resolved_agent_targets=resolved_agent_targets,
+        agent_target_labels=agent_target_labels,
+    )
 
     def _static_target_model(_target_str: str, value: str) -> str | None:
         ctx = agent_contexts.get(value)
@@ -4290,69 +4522,29 @@ async def _run_static(
             llm_client,
         )
 
-    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
-
-    evaluator_client = pipeline_config.evaluator.client if pipeline_config else None
-    evaluator_client = evaluator_client or llm_client
-    evaluator_cfg = pipeline_config.evaluator if pipeline_config else None
-    panel_cfg = pipeline_config.evaluator if pipeline_config else None
-    # Resolved model ids (falling back to the raw target string when a context
-    # never resolved), not the raw target list: RES-739's family-bias guard
-    # compares this against the judge model, and an unresolved raw string like
-    # ``agent:abc123`` always resolves to provider family ``unknown``, which
-    # silently defeats the guard (matches the dynamic leg's
-    # ``pt.agent_context.model`` pattern above).
-    static_target_models: list[str] = []
-    for t in targets:
-        _kind, value = parse_target(t)
-        ctx = agent_contexts.get(value)
-        static_target_models.append(ctx.model if ctx is not None and ctx.model else t)
-    for at in resolved_agent_targets:
-        label = agent_target_labels[id(at)]
-        ctx = agent_contexts.get(label)
-        static_target_models.append(ctx.model if ctx is not None and ctx.model else label)
-    panel_kwargs: dict[str, Any] = {
-        'judges': panel_cfg.judges[1:] if panel_cfg else [],
-        'judge_repetitions': panel_cfg.repetitions if panel_cfg else 1,
-        'replacement_judges': panel_cfg.replacement_judges if panel_cfg else [],
-        'min_successful_judges': panel_cfg.min_successful_judges if panel_cfg else 1,
-        'target_models': list(dict.fromkeys(static_target_models)),
-        'strict_panel': panel_cfg.strict_panel if panel_cfg else False,
-    }
-    evaluator = create_owasp_evaluator(
-        evaluator_model=evaluator_model,
-        llm_client=evaluator_client,
-        cfg=evaluator_cfg,
-        **panel_kwargs,
+    evaluator = _build_static_evaluator(
+        inputs=_StaticEvaluatorInputs(
+            evaluator_model=evaluator_model,
+            llm_client=llm_client,
+            pipeline_config=pipeline_config,
+            agent_contexts=agent_contexts,
+            targets=targets,
+            resolved_agent_targets=resolved_agent_targets,
+            agent_target_labels=agent_target_labels,
+        )
     )
 
-    # Confirm hook — report aggregate counts
-    vulnerabilities: list[str] = list(
-        {
-            dp.inputs.get('category', '')
-            for dp in data  # pyright: ignore[reportAttributeAccessIssue]
-            if dp.inputs.get('category')
-        }
-        if isinstance(data, list)
-        else []
+    confirm_payload, vulnerabilities = _static_confirm_payload(
+        inputs=_StaticConfirmPayloadInputs(
+            data=data,
+            categories=categories,
+            evaluator_model=evaluator_model,
+            datapoint_parallelism=datapoint_parallelism,
+            all_target_labels=all_target_labels,
+            dataset=dataset,
+            replay_of=replay_of,
+        )
     )
-    confirm_payload: ConfirmPayload = {
-        'agent_context': None,
-        'num_datapoints': len(data) if isinstance(data, list) else 0,  # type: ignore[arg-type]
-        'num_dynamic': None,
-        'num_static': len(data) if isinstance(data, list) else 0,  # type: ignore[arg-type]
-        'categories': categories or vulnerabilities,
-        'attack_model': '',
-        'evaluator_model': evaluator_model,
-        'max_turns': 1,
-        'datapoint_parallelism': datapoint_parallelism,
-        'filtering_metadata': None,
-        'mode': 'static',
-        'target': ', '.join(all_target_labels),
-        'dataset_path': str(dataset) if dataset else None,
-        'vulnerabilities': vulnerabilities,
-        'replay_of': replay_of,
-    }
     if not await await_maybe(resolved_hooks.on_confirm(confirm_payload)):
         msg = 'Execution cancelled by confirmation callback'
         raise CancelledError(msg)
@@ -4391,20 +4583,6 @@ async def _run_static(
 
     await await_maybe(resolved_hooks.on_stage_start(PipelineStage.REPORT_GENERATION, {'num_results': len(results)}))
 
-    # Build a job_name → (target_kind, target_value) lookup from the actual
-    # job objects so that we can populate agent_key / agent_model correctly.
-    job_name_to_target: dict[str, tuple[TargetKind, str]] = {}
-    for t in targets:
-        t_kind, t_value = parse_target(t)
-        safe = _make_safe_target(t_value)
-        # create_deployment_job names follow "redteam:static:<safe_target>" convention;
-        # use the safe slug for the lookup key to handle collisions gracefully.
-        job_name_to_target[safe] = (t_kind, t_value)
-    for at in resolved_agent_targets:
-        label = agent_target_labels[id(at)]
-        safe = _sanitize_job_name(label)
-        job_name_to_target[safe] = (_safe_resolve_target_kind(at), label)
-
     # static_evaluatorq_results_to_reports groups by job_name already.
     # We call it once with all results; it returns a dict keyed by job_name.
     per_job_reports: dict[str, RedTeamReport] = static_evaluatorq_results_to_reports(
@@ -4412,17 +4590,12 @@ async def _run_static(
         description=description or 'Static red teaming',
     )
 
-    # Patch each per-job report with the correct agent identity, since
-    # static_evaluatorq_results_to_reports does not know about target mapping.
-    for job_name, job_report in per_job_reports.items():
-        # Match by looking for the target slug as a suffix of the job_name.
-        for slug, (t_kind, t_value) in job_name_to_target.items():
-            if job_name.endswith(f':{slug}'):
-                for result in job_report.results:
-                    result.agent.key = t_value if not t_kind.is_model else result.agent.key
-                    result.agent.model = t_value if t_kind.is_model else result.agent.model
-                job_report.tested_agents = [t_value]
-                break
+    _patch_static_job_reports(
+        per_job_reports,
+        targets=targets,
+        resolved_agent_targets=resolved_agent_targets,
+        agent_target_labels=agent_target_labels,
+    )
 
     all_job_reports = list(per_job_reports.values())
     if not all_job_reports:
