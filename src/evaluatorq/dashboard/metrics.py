@@ -21,7 +21,7 @@ from __future__ import annotations
 import functools
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, NamedTuple, TypeVar
+from typing import TYPE_CHECKING, Any, NamedTuple, TypeVar
 
 from loguru import logger
 
@@ -29,7 +29,7 @@ from evaluatorq.common.reports.palette import SEVERITY_ORDER
 from evaluatorq.dashboard import library
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable, Iterator
     from datetime import datetime
 
 # Bucket for a vulnerability whose report does not record a severity. ``severity``
@@ -86,6 +86,8 @@ class Landing:
 
 
 class _TileStats(NamedTuple):
+    """Token and cost rollup for one surface. Every field applies to every surface."""
+
     tokens: int
     cost: float
     costed_runs: int
@@ -96,9 +98,42 @@ class _TileStats(NamedTuple):
     priced_calls: int
     cost_calls: int
     unknown_calls: int
+
+
+class _RedteamTiles(NamedTuple):
+    """Red-team rollup: the shared cost stats plus the counts only attacks have.
+
+    ``resistant``, ``vulnerable`` and ``by_severity`` live here rather than on
+    ``_TileStats`` because a simulation run has no notion of a resisted attack.
+    Putting them on the shared type would force every other surface to report a
+    zero that means "not applicable", which reads identically to a real zero.
+    """
+
+    stats: _TileStats
     resistant: int
     vulnerable: int
     by_severity: dict[str, int]
+
+
+def _iter_report_data(manifests: Iterable[library.ReportCard]) -> Iterator[tuple[library.ReportCard, Any]]:
+    """Read each manifest's report off disk for the surface rollups.
+
+    Manifests with no report on disk (in-flight runs) and reports that cannot be
+    read or parsed are skipped, so that policy lives in one place rather than
+    once per surface.
+
+    Yields:
+        Each readable manifest paired with its parsed report JSON.
+    """
+    for card in manifests:
+        # In-flight runs have no report on disk — nothing to roll up.
+        if card.path is None:
+            continue
+        try:
+            data = library.read_json_cached(card.path)
+        except (OSError, ValueError):
+            continue
+        yield card, data
 
 
 def _roots_key(roots: list[Path] | None) -> tuple[str, ...]:
@@ -394,7 +429,8 @@ def run_rows(roots: list[Path] | None = None) -> list[RunRow]:
     return rows
 
 
-def _redteam_tiles(manifests: list[library.ReportCard]) -> _TileStats:
+def _redteam_tiles(manifests: list[library.ReportCard]) -> _RedteamTiles:
+    """Roll up token, cost, resistance and severity totals across red-team reports."""
     severity_counts: dict[str, int] = {}
     tokens = 0
     cost = 0.0
@@ -408,14 +444,7 @@ def _redteam_tiles(manifests: list[library.ReportCard]) -> _TileStats:
     unknown_calls = 0
     resistant = 0
     vulnerable = 0
-    for card in manifests:
-        # In-flight runs have no report on disk — nothing to roll up.
-        if card.path is None:
-            continue
-        try:
-            data = library.read_json_cached(card.path)
-        except (OSError, ValueError):
-            continue
+    for card, data in _iter_report_data(manifests):
         summary = data.get('summary')
         summary = summary if isinstance(summary, dict) else {}
         if summary.get('evaluated_attacks') is None:
@@ -470,17 +499,19 @@ def _redteam_tiles(manifests: list[library.ReportCard]) -> _TileStats:
             by_sev = _summary_severity(summary)
         for sev, n in by_sev.items():
             severity_counts[sev] = severity_counts.get(sev, 0) + n
-    return _TileStats(
-        tokens=tokens,
-        cost=cost,
-        costed_runs=costed_runs,
-        input_cost=input_cost,
-        output_cost=output_cost,
-        has_input_cost=has_input_cost,
-        has_output_cost=has_output_cost,
-        priced_calls=priced_calls,
-        cost_calls=cost_calls,
-        unknown_calls=unknown_calls,
+    return _RedteamTiles(
+        stats=_TileStats(
+            tokens=tokens,
+            cost=cost,
+            costed_runs=costed_runs,
+            input_cost=input_cost,
+            output_cost=output_cost,
+            has_input_cost=has_input_cost,
+            has_output_cost=has_output_cost,
+            priced_calls=priced_calls,
+            cost_calls=cost_calls,
+            unknown_calls=unknown_calls,
+        ),
         resistant=resistant,
         vulnerable=vulnerable,
         by_severity=severity_counts,
@@ -488,6 +519,7 @@ def _redteam_tiles(manifests: list[library.ReportCard]) -> _TileStats:
 
 
 def _sim_tiles(manifests: list[library.ReportCard]) -> _TileStats:
+    """Roll up token and cost totals across simulation reports."""
     tokens = 0
     cost = 0.0
     costed_runs = 0
@@ -498,14 +530,7 @@ def _sim_tiles(manifests: list[library.ReportCard]) -> _TileStats:
     priced_calls = 0
     cost_calls = 0
     unknown_calls = 0
-    for card in manifests:
-        # In-flight runs have no report on disk — nothing to roll up.
-        if card.path is None:
-            continue
-        try:
-            data = library.read_json_cached(card.path)
-        except (OSError, ValueError):
-            continue
+    for _card, data in _iter_report_data(manifests):
         results = _results(data)
         tok = sum(_as_int(_result_tokens(res)) for res in results)
         tokens += tok
@@ -538,9 +563,6 @@ def _sim_tiles(manifests: list[library.ReportCard]) -> _TileStats:
         priced_calls=priced_calls,
         cost_calls=cost_calls,
         unknown_calls=unknown_calls,
-        resistant=0,
-        vulnerable=0,
-        by_severity={},
     )
 
 
@@ -554,34 +576,28 @@ def landing(roots: list[Path] | None = None) -> Landing:
     redteam_tiles = _redteam_tiles([card for card in manifests if card.surface == 'redteam'])
     sim_tiles = _sim_tiles([card for card in manifests if card.surface == 'sim'])
     pairwise_manifests = [card for card in manifests if card.surface == 'pairwise']
+    rt = redteam_tiles.stats
 
     # Roll up severity counts + token usage + resistant/vulnerable from raw JSON.
     severity_counts = redteam_tiles.by_severity
-    total_tokens = redteam_tiles.tokens + sim_tiles.tokens
-    rt_tokens = redteam_tiles.tokens
+    total_tokens = rt.tokens + sim_tiles.tokens
+    rt_tokens = rt.tokens
     sim_tokens = sim_tiles.tokens
-    rt_cost = redteam_tiles.cost
+    rt_cost = rt.cost
     sim_cost = sim_tiles.cost
-    costed_runs = redteam_tiles.costed_runs + sim_tiles.costed_runs
+    costed_runs = rt.costed_runs + sim_tiles.costed_runs
     pw_tokens = 0
     pw_cost = 0.0
-    input_cost_total = redteam_tiles.input_cost + sim_tiles.input_cost
-    output_cost_total = redteam_tiles.output_cost + sim_tiles.output_cost
-    priced_calls_total = redteam_tiles.priced_calls + sim_tiles.priced_calls
-    cost_calls_total = redteam_tiles.cost_calls + sim_tiles.cost_calls
-    unknown_calls_total = redteam_tiles.unknown_calls + sim_tiles.unknown_calls
-    has_input_cost = redteam_tiles.has_input_cost or sim_tiles.has_input_cost
-    has_output_cost = redteam_tiles.has_output_cost or sim_tiles.has_output_cost
+    input_cost_total = rt.input_cost + sim_tiles.input_cost
+    output_cost_total = rt.output_cost + sim_tiles.output_cost
+    priced_calls_total = rt.priced_calls + sim_tiles.priced_calls
+    cost_calls_total = rt.cost_calls + sim_tiles.cost_calls
+    unknown_calls_total = rt.unknown_calls + sim_tiles.unknown_calls
+    has_input_cost = rt.has_input_cost or sim_tiles.has_input_cost
+    has_output_cost = rt.has_output_cost or sim_tiles.has_output_cost
     resistant = redteam_tiles.resistant
     vulnerable = redteam_tiles.vulnerable
-    for card in pairwise_manifests:
-        # In-flight runs have no report on disk — nothing to roll up.
-        if card.path is None:
-            continue
-        try:
-            data = library.read_json_cached(card.path)
-        except (OSError, ValueError):
-            continue
+    for _card, data in _iter_report_data(pairwise_manifests):
         usages = [_comparison_usage(entry) for entry in _entries(data)]
         tok = sum(_tokens_total(u) for u in usages)
         pw_tokens += tok
