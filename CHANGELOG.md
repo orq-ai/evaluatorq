@@ -4,7 +4,7 @@ All notable changes to `evaluatorq` are documented here.
 
 ---
 
-## [1.3.0] — unreleased
+## [Unreleased]
 
 ### Notable defaults
 
