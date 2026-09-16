@@ -592,3 +592,12 @@ async def test_simulate_save_failure_still_returns_results(
 
     assert out == results  # results survived the save failure
     assert list(tmp_path.glob("*.json")) == []  # nothing written
+
+    # _persist_run closes the manifest out on EVERY path, saved or not: a run
+    # whose report write failed must not sit at 'running' forever. report_path
+    # stays None because nothing reached disk.
+    from evaluatorq.common.run_manifest import list_manifests
+
+    [manifest] = list_manifests(tmp_path)
+    assert manifest.status == "completed"
+    assert manifest.report_path is None
