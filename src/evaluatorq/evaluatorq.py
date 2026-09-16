@@ -196,6 +196,228 @@ class _StreamingInputs:
     tracing_context: 'TracingContext'
 
 
+@dataclass(frozen=True)
+class _EvaluationInputs:
+    params: EvaluatorParams | dict[str, Any] | None
+    data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None
+    jobs: list[Job] | None
+    evaluators: list[Evaluator] | None
+    datapoint_parallelism: int
+    llm_parallelism: int | None
+    print_results: bool
+    description: str | None
+    path: str | None
+    inference: bool
+    single_trace: bool
+
+
+@dataclass(frozen=True)
+class _ResolvedEvaluationInputs:
+    data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput]
+    inference: bool
+    jobs: list[Job]
+    evaluators_list: list[Evaluator]
+    datapoint_parallelism: int
+    llm_parallelism: int | None
+    print_results: bool
+    description: str | None
+    path: str | None
+    single_trace: bool
+
+
+def _normalise_params(inputs: _EvaluationInputs) -> _ResolvedEvaluationInputs:
+    params = inputs.params
+    data = inputs.data
+    jobs = inputs.jobs
+    evaluators = inputs.evaluators
+    datapoint_parallelism = inputs.datapoint_parallelism
+    llm_parallelism = inputs.llm_parallelism
+    print_results = inputs.print_results
+    description = inputs.description
+    path = inputs.path
+    inference = inputs.inference
+    single_trace = inputs.single_trace
+
+    # Handle params dict/object vs kwargs
+    if params is not None:
+        # Validate params if passed as dict
+        validated = EvaluatorParams.model_validate(params) if isinstance(params, dict) else params
+    elif data is not None and (jobs is not None or not inference):
+        # Use kwargs ('jobs' is optional when inference=False, since responses are replayed).
+        validated = EvaluatorParams(
+            data=data,
+            jobs=jobs,
+            evaluators=evaluators,
+            datapoint_parallelism=datapoint_parallelism,
+            llm_parallelism=llm_parallelism,
+            print_results=print_results,
+            description=description,
+            path=path,
+            inference=inference,
+            single_trace=single_trace,
+        )
+    else:
+        raise ValueError(
+            "Either 'params' or both 'data' and 'jobs' keyword arguments are required "
+            "(omit 'jobs' only when inference=False)"
+        )
+
+    # Extract validated values
+    data = validated.data
+    inference = validated.inference
+    if inference:
+        # The validator guarantees jobs is non-empty whenever inference=True.
+        jobs = cast('list[Job]', validated.jobs)
+    else:
+        # No-inference mode: skip generation and replay each row's recorded response.
+        if validated.jobs:
+            logger.warning(
+                "inference=False: ignoring the provided 'jobs'; responses are replayed from the 'messages' column."
+            )
+        jobs = [_replay_recorded_response]
+    evaluators_list = validated.evaluators or []
+    datapoint_parallelism = validated.datapoint_parallelism
+    llm_parallelism = validated.llm_parallelism
+    print_results = validated.print_results
+    description = validated.description
+    path = validated.path
+    single_trace = validated.single_trace
+
+    return _ResolvedEvaluationInputs(
+        data=data,
+        inference=inference,
+        jobs=cast('list[Job]', jobs),
+        evaluators_list=evaluators_list,
+        datapoint_parallelism=datapoint_parallelism,
+        llm_parallelism=llm_parallelism,
+        print_results=print_results,
+        description=description,
+        path=path,
+        single_trace=single_trace,
+    )
+
+
+async def _enter_single_trace(
+    span_stack: AsyncExitStack,
+    tracing_context: 'TracingContext',
+    name: str,
+    trace_type: str,
+) -> None:
+    from .tracing.spans import RunSpanOptions, with_run_span
+
+    run_span = await span_stack.enter_async_context(
+        with_run_span(
+            RunSpanOptions(
+                run_id=tracing_context.run_id,
+                run_name=name,
+                parent_context=tracing_context.parent_context,
+                trace_type=trace_type,
+            )
+        )
+    )
+    # Re-point the context the per-row job spans parent to. tracing_session
+    # captured the ambient context *before* this span existed, and jobs pass
+    # parent_context explicitly rather than reading the ambient one.
+    if run_span is not None:
+        tracing_context.parent_context = await capture_parent_context()
+
+
+async def _resolve_experiment_input(
+    data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None,
+    orq_api_key: str | None,
+    base_url: str | None,
+) -> DatasetIdInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None:
+    # Experiment source (no-inference only): replace the input with the experiment's
+    # recorded responses, then fall through to the in-memory data path below. The
+    # validator already guarantees inference=False here.
+    if isinstance(data, ExperimentInput):
+        if not orq_api_key:
+            raise ValueError('ORQ_API_KEY environment variable must be set to load responses from an Orq experiment.')
+        data = await fetch_experiment_datapoints(
+            orq_api_key,
+            data.experiment_id,
+            data.run_id,
+            base_url=base_url,
+        )
+    return data
+
+
+def _resolve_streaming_inputs(
+    data: DatasetIdInput,
+    orq_api_key: str | None,
+    *,
+    inference: bool,
+) -> tuple['Orq', str, bool]:
+    orq_client: Orq | None = None
+
+    if orq_api_key:
+        orq_client = setup_orq_client(orq_api_key)
+
+    if not orq_api_key or not orq_client:
+        raise ValueError('ORQ_API_KEY environment variable must be set to fetch datapoints from Orq platform.')
+    dataset_id = data.dataset_id
+    # No-inference mode needs the recorded responses, which arrive in the
+    # 'messages' column only when include_messages is enabled.
+    include_messages = data.include_messages or not inference
+    if include_messages and not data.include_messages:
+        logger.debug(
+            'inference=False: enabling include_messages to load recorded responses '
+            'despite include_messages=False on the dataset input.'
+        )
+    return orq_client, dataset_id, include_messages
+
+
+@dataclass(frozen=True)
+class _EvaluationFinishInputs:
+    print_results: bool
+    orq_api_key: str | None
+    send_results: bool
+    name: str
+    description: str | None
+    dataset_id: str | None
+    results: EvaluatorqResult
+    start_time: datetime
+    path: str | None
+    base_url: str | None
+    experiment_url_out: list[str] | None
+
+
+async def _finish_evaluation(inputs: _EvaluationFinishInputs) -> None:
+    print_results = inputs.print_results
+    orq_api_key = inputs.orq_api_key
+    send_results = inputs.send_results
+    name = inputs.name
+    description = inputs.description
+    dataset_id = inputs.dataset_id
+    results = inputs.results
+    start_time = inputs.start_time
+    path = inputs.path
+    base_url = inputs.base_url
+    experiment_url_out = inputs.experiment_url_out
+
+    # Display results table
+    if print_results:
+        await display_results_table(results)
+
+    # Upload results to Orq platform if API key is available
+    if orq_api_key and send_results:
+        upload_response = await send_results_to_orq(
+            orq_api_key,
+            name,
+            description,
+            dataset_id,
+            results,
+            start_time,
+            datetime.now(timezone.utc),
+            path=path,
+            base_url=base_url,
+        )
+        # Hand the created experiment's URL back to callers that opted in with a
+        # sink list (e.g. simulation persists it on the SimulationRun report).
+        if experiment_url_out is not None and upload_response is not None and upload_response.experiment_url:
+            experiment_url_out.append(upload_response.experiment_url)
+
+
 async def _run_streaming_evaluation(inputs: _StreamingInputs) -> EvaluatorqResult:
     progress = inputs.progress
     datapoint_parallelism = inputs.datapoint_parallelism
@@ -454,13 +676,9 @@ async def evaluatorq(
     datapoint_parallelism = resolve_datapoint_parallelism(
         datapoint_parallelism, parallelism, default=10, caller='evaluatorq'
     )
-    # Handle params dict/object vs kwargs
-    if params is not None:
-        # Validate params if passed as dict
-        validated = EvaluatorParams.model_validate(params) if isinstance(params, dict) else params
-    elif data is not None and (jobs is not None or not inference):
-        # Use kwargs ('jobs' is optional when inference=False, since responses are replayed).
-        validated = EvaluatorParams(
+    resolved = _normalise_params(
+        _EvaluationInputs(
+            params=params,
             data=data,
             jobs=jobs,
             evaluators=evaluators,
@@ -472,32 +690,17 @@ async def evaluatorq(
             inference=inference,
             single_trace=single_trace,
         )
-    else:
-        raise ValueError(
-            "Either 'params' or both 'data' and 'jobs' keyword arguments are required "
-            "(omit 'jobs' only when inference=False)"
-        )
-
-    # Extract validated values
-    data = validated.data
-    inference = validated.inference
-    if inference:
-        # The validator guarantees jobs is non-empty whenever inference=True.
-        jobs = cast('list[Job]', validated.jobs)
-    else:
-        # No-inference mode: skip generation and replay each row's recorded response.
-        if validated.jobs:
-            logger.warning(
-                "inference=False: ignoring the provided 'jobs'; responses are replayed from the 'messages' column."
-            )
-        jobs = [_replay_recorded_response]
-    evaluators_list = validated.evaluators or []
-    datapoint_parallelism = validated.datapoint_parallelism
-    llm_parallelism = validated.llm_parallelism
-    print_results = validated.print_results
-    description = validated.description
-    path = validated.path
-    single_trace = validated.single_trace
+    )
+    data = resolved.data
+    inference = resolved.inference
+    jobs = resolved.jobs
+    evaluators_list = resolved.evaluators_list
+    datapoint_parallelism = resolved.datapoint_parallelism
+    llm_parallelism = resolved.llm_parallelism
+    print_results = resolved.print_results
+    description = resolved.description
+    path = resolved.path
+    single_trace = resolved.single_trace
 
     async with (
         tracing_session(name, trace_type=_trace_type) as tracing_context,
@@ -506,23 +709,7 @@ async def evaluatorq(
         # Before any fan-out, so every task created below inherits the budget.
         _ = span_stack.enter_context(llm_concurrency_limit(llm_parallelism))
         if single_trace:
-            from .tracing.spans import RunSpanOptions, with_run_span
-
-            run_span = await span_stack.enter_async_context(
-                with_run_span(
-                    RunSpanOptions(
-                        run_id=tracing_context.run_id,
-                        run_name=name,
-                        parent_context=tracing_context.parent_context,
-                        trace_type=_trace_type,
-                    )
-                )
-            )
-            # Re-point the context the per-row job spans parent to. tracing_session
-            # captured the ambient context *before* this span existed, and jobs pass
-            # parent_context explicitly rather than reading the ambient one.
-            if run_span is not None:
-                tracing_context.parent_context = await capture_parent_context()
+            await _enter_single_trace(span_stack, tracing_context, name, _trace_type)
 
         orq_api_key = os.environ.get('ORQ_API_KEY')
 
@@ -530,53 +717,23 @@ async def evaluatorq(
 
         dataset_id: str | None = None
 
-        # Experiment source (no-inference only): replace the input with the experiment's
-        # recorded responses, then fall through to the in-memory data path below. The
-        # validator already guarantees inference=False here.
-        if isinstance(data, ExperimentInput):
-            if not orq_api_key:
-                raise ValueError(
-                    'ORQ_API_KEY environment variable must be set to load responses from an Orq experiment.'
-                )
-            data = await fetch_experiment_datapoints(
-                orq_api_key,
-                data.experiment_id,
-                data.run_id,
-                base_url=_base_url,
-            )
+        data = await _resolve_experiment_input(data, orq_api_key, _base_url)
 
         # Create progress service
         progress = ProgressService()
 
         # Handle dataset_id case - use streaming fetch
         if isinstance(data, DatasetIdInput):
-            orq_client = None
-
-            if orq_api_key:
-                orq_client = setup_orq_client(orq_api_key)
-
-            if not orq_api_key or not orq_client:
-                raise ValueError('ORQ_API_KEY environment variable must be set to fetch datapoints from Orq platform.')
-            dataset_id = data.dataset_id
-            # No-inference mode needs the recorded responses, which arrive in the
-            # 'messages' column only when include_messages is enabled.
-            include_messages = data.include_messages or not inference
-            if include_messages and not data.include_messages:
-                logger.debug(
-                    'inference=False: enabling include_messages to load recorded responses '
-                    'despite include_messages=False on the dataset input.'
-                )
+            orq_client, dataset_id, include_messages = _resolve_streaming_inputs(data, orq_api_key, inference=inference)
 
             # Stream fetch and process batches concurrently
-            orq_client_for_streaming = orq_client
-            dataset_id_for_streaming = dataset_id
             results = await with_progress(
                 _run_streaming_evaluation(
                     _StreamingInputs(
                         progress=progress,
                         datapoint_parallelism=datapoint_parallelism,
-                        orq_client=orq_client_for_streaming,
-                        dataset_id=dataset_id_for_streaming,
+                        orq_client=orq_client,
+                        dataset_id=dataset_id,
                         include_messages=include_messages,
                         jobs=jobs,
                         evaluators_list=evaluators_list,
@@ -604,26 +761,20 @@ async def evaluatorq(
                 show_progress=print_results,
             )
 
-        # Display results table
-        if print_results:
-            await display_results_table(results)
-
-        # Upload results to Orq platform if API key is available
-        if orq_api_key and _send_results:
-            upload_response = await send_results_to_orq(
-                orq_api_key,
-                name,
-                description,
-                dataset_id,
-                results,
-                start_time,
-                datetime.now(timezone.utc),
+        await _finish_evaluation(
+            _EvaluationFinishInputs(
+                print_results=print_results,
+                orq_api_key=orq_api_key,
+                send_results=_send_results,
+                name=name,
+                description=description,
+                dataset_id=dataset_id,
+                results=results,
+                start_time=start_time,
                 path=path,
                 base_url=_base_url,
+                experiment_url_out=_experiment_url_out,
             )
-            # Hand the created experiment's URL back to callers that opted in with a
-            # sink list (e.g. simulation persists it on the SimulationRun report).
-            if _experiment_url_out is not None and upload_response is not None and upload_response.experiment_url:
-                _experiment_url_out.append(upload_response.experiment_url)
+        )
 
         return results
