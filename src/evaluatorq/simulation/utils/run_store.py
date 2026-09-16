@@ -32,6 +32,12 @@ SIM_RUNS_DIR_NAME = Path('.evaluatorq') / 'sim-runs'
 
 
 def _agent_info_from_response(agent_data: Any, agent_key: str) -> AgentInfoSnapshot:
+    """Flatten one ``agents.retrieve`` payload into the run-store snapshot.
+
+    Pure and non-raising on shape alone: every field is read defensively because
+    the SDK's optional fields hold a truthy ``Unset()`` placeholder rather than
+    None. The caller owns the try/except that turns an API failure into None.
+    """
     agent_id = _coerce_text(getattr(agent_data, '_id', None))
     if agent_id is None:
         agent_id = _coerce_text(getattr(agent_data, 'id', None))

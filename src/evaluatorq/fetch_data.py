@@ -202,13 +202,21 @@ def _experiment_row_to_datapoint(row: dict[str, Any]) -> DataPoint:
     return DataPoint(inputs=inputs, expected_output=row.get('expected_output'))
 
 
-def _rows_from_page(
-    page: str,
+def _rows_from_export(
+    export_text: str,
+    *,
     resolved_run_id: str,
     experiment_id: str,
 ) -> list[Any]:
+    """Parse one JSONL export body into rows, or raise naming the run.
+
+    Not paginated despite the loop: an experiment export is a single body, and
+    the caller has already assembled all of it. Raises rather than returning an
+    empty list when the export has no rows, so an empty run cannot be mistaken
+    for a run that scored nothing.
+    """
     rows = []
-    for lineno, line in enumerate(page.splitlines(), start=1):
+    for lineno, line in enumerate(export_text.splitlines(), start=1):
         if not line.strip():
             continue
         try:
@@ -340,6 +348,6 @@ async def fetch_experiment_datapoints(
                     f'{download_resp.status_code} {download_resp.reason_phrase}'
                 )
             export_text = download_resp.text
-        rows = _rows_from_page(export_text, resolved_run_id, experiment_id)
+        rows = _rows_from_export(export_text, resolved_run_id=resolved_run_id, experiment_id=experiment_id)
 
     return [_experiment_row_to_datapoint(row) for row in rows]

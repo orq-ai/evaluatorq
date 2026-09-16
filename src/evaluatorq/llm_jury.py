@@ -717,6 +717,13 @@ async def _llm_jury_judge_fn(
     classify_empty_warned: list[bool],
     on_classify: typing.Callable[[str], None],
 ) -> Prediction:
+    """Adapt `run_jury`'s positional ``judge_fn(model)`` call onto `_run_single_judge`.
+
+    Exists only for the calling convention: `run_jury` passes the model
+    positionally while `_run_single_judge` is keyword-only, so a bare
+    ``functools.partial`` cannot bridge the two. Forwards every argument
+    unchanged.
+    """
     return await _run_single_judge(
         client=client,
         model=judge_model,
@@ -741,7 +748,7 @@ async def _llm_jury_judge_fn(
 async def _llm_jury_scorer(
     params: ScorerParameter,
     *,
-    client_state: list[Any],
+    client_state: list[Any],  # single-element cell: the lazily resolved client, or None
     criteria: str | None,
     template: str,
     sys_prompt: str,
@@ -773,6 +780,15 @@ async def _llm_jury_scorer(
     classify_empty_warned: list[bool],
     on_classify: typing.Callable[[str], None],
 ) -> EvaluationResult:
+    """Score one datapoint with the configured panel.
+
+    Bound to its configuration by `llm_jury` via ``functools.partial``; the long
+    keyword list is that partial's payload, not a call-site surface.
+    ``client_state`` is a single-element mutable cell holding the resolved LLM
+    client, so the first call that needs credentials resolves them and every
+    later call reuses the result — declaring an evaluator must not require
+    credentials.
+    """
     resolved_client = client_state[0]
     data = params['data']
     output = params['output']
@@ -1164,7 +1180,9 @@ def llm_jury(
 
     # Resolve the client lazily on first scorer call, not here: declaring an
     # evaluator at module scope should never require credentials. An explicit
-    # client= is used as-is; otherwise we resolve once on first use.
+    # client= is used as-is; otherwise we resolve once on first use. A
+    # single-element list, not a plain local: the scorer is a module-level
+    # function bound by partial and so cannot rebind this frame's names.
     client_state = [client]
     verdict_model = _build_verdict_model(
         verdict_kind=verdict_kind,
