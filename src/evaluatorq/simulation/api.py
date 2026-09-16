@@ -1497,20 +1497,29 @@ def _log_saved_run(path: Path) -> None:
 
 @dataclass(frozen=True)
 class _RunSettings:
+    """Run-level identity derived from the resolved target, for `_simulate_core`.
+
+    ``run_meta`` is the payload the ``on_confirm``/``on_run_start`` hooks receive;
+    the other fields are what `build_simulation_run` needs and are deliberately
+    not re-read off ``run_meta``, whose keys are display strings.
+    """
+
     evaluator_names: list[str]
-    target_label: str
     target_name: str
-    target_model: Any
+    target_model: str | None
     run_meta: SimulationRunMeta
 
 
 @dataclass(frozen=True)
 class _ExecutionOutcome:
+    """What a completed `_execute_simulation` hands back to `_simulate_core`."""
+
     results: list[SimulationResult]
     experiment_url: str | None
 
 
 def _resolve_max_turns(*, config: SimulationConfig, replayed: SimulationReplay | None) -> int:
+    """Pick the turn cap: explicit ``config.max_turns`` wins, then the replay's, then the default."""
     return (
         config.max_turns
         if config.max_turns is not None
@@ -1525,15 +1534,19 @@ def _resolve_run_settings(
     target_agent: AgentTarget | None,
     target_kind_hint: str | None,
     sim_datapoints: Sequence[SimulationDatapoint],
-    model: str,
     max_turns: int,
-    datapoint_parallelism: int,
-    evaluation_name: str,
 ) -> _RunSettings:
+    """Derive the run's identity (evaluators, target label/name/model, hook meta) from ``config``.
+
+    ``config`` is the single source for every scalar but ``max_turns``, which is
+    passed separately only because ``config.max_turns`` is typed optional while
+    the hook payload needs the resolved ``int``.
+    """
     # The sync-hook deprecation nudge fires once in SimulationRunner.__init__
     # (the single choke point both this path and direct runner use share).
     resolved_evaluator_names = config.evaluator_names if config.evaluator_names is not None else DEFAULT_EVALUATOR_NAMES
-    # Derive a human-readable target label mirroring the save block's precedence:
+    # Derive a human-readable target label mirroring the target_kind precedence
+    # `_simulate_core` applies when it builds the run:
     # AgentTarget instances → "agent:<key>" (or, for the self-describing
     # openai_model/vercel targets, their own `.name`), deployment strings →
     # "deployment:<key>", plain callables → "callback".
@@ -1553,19 +1566,21 @@ def _resolve_run_settings(
         target_name = 'callback'
     # Model the target ran, only when the client knows it (e.g. an OpenAI-model
     # target exposes ``.model``); orq agents/deployments resolve it server-side.
-    target_model = getattr(target_agent, 'model', None) or getattr(target_callable, 'model', None)
+    # Narrowed here rather than at the consumer: a non-str ``.model`` attribute
+    # is not something `build_simulation_run` can record, so it never escapes.
+    raw_target_model = getattr(target_agent, 'model', None) or getattr(target_callable, 'model', None)
+    target_model = raw_target_model if isinstance(raw_target_model, str) else None
     run_meta: SimulationRunMeta = {
         'num_datapoints': len(sim_datapoints),
-        'model': model,
+        'model': config.model,
         'max_turns': max_turns,
-        'datapoint_parallelism': datapoint_parallelism,
-        'evaluation_name': evaluation_name,
+        'datapoint_parallelism': config.datapoint_parallelism,
+        'evaluation_name': config.evaluation_name,
         'evaluator_names': resolved_evaluator_names,
         'target': target_label,
     }
     return _RunSettings(
         evaluator_names=resolved_evaluator_names,
-        target_label=target_label,
         target_name=target_name,
         target_model=target_model,
         run_meta=run_meta,
@@ -1584,12 +1599,27 @@ async def _execute_simulation(
     run_id: str,
     run_meta: SimulationRunMeta,
 ) -> _ExecutionOutcome:
+    """Run the confirm gate, the SIMULATE stage bracket and the simulation itself.
+
+    Owns the run-level lifecycle: ``on_confirm`` (a decline raises
+    ``SimulationCancelledError``) → ``on_stage_start`` → ``on_run_start`` →
+    ``_simulate_via_evaluatorq`` → ``on_run_complete`` → ``on_stage_end``. The
+    terminal hooks always fire, including on failure. Nothing here touches the
+    manifest: `_simulate_core` owns every terminal manifest transition, because a
+    raise from this function's own ``finally`` has to reach it.
+
+    Raises whatever the run raised, with the primary failure preserved — a hook
+    that raises while a run failure is in flight is logged, not propagated in its
+    place. ``SimulationDroppedError`` propagates carrying its partial results,
+    which ``on_run_complete`` has already been handed.
+    """
     from evaluatorq.common.async_utils import await_maybe
     from evaluatorq.simulation.exceptions import SimulationCancelledError
     from evaluatorq.simulation.hooks import SimStage
 
     # Gate first — before the evaluatorq run is built. A decline is a clean
-    # cancel (SimulationCancelledError → writer.cancel below), never an error.
+    # cancel: `_simulate_core` turns the SimulationCancelledError into
+    # manifest_writer.cancel(), never an error.
     if not await await_maybe(resolved_hooks.on_confirm(run_meta)):
         raise SimulationCancelledError('Simulation run declined by on_confirm hook')
 
@@ -1685,14 +1715,22 @@ async def _execute_simulation(
     )
 
 
-async def _publish_run(*, run: SimulationRun, config: SimulationConfig, model: str) -> None:
+async def _publish_run(*, run: SimulationRun, config: SimulationConfig) -> None:
+    """Attach the report enrichments (recommendations, executive summary) to ``run`` in place.
+
+    Called before `_persist_run` so a saved report carries them, and while the
+    pipeline span and evaluatorq run context are still active so their LLM spans
+    land under the simulation root with the same run metadata bound. The
+    executive summary is best-effort and logs on failure; a recommendations
+    failure propagates.
+    """
     # Remediation suggestions, generated before persistence so a saved run carries
     # them, and inside the pipeline span so their LLM calls bind the run metadata.
     if config.recommendations is not None:
         await _attach_recommendations(
             run,
             config.recommendations,
-            model,
+            config.model,
             persisted=config.save or config.run_output is not None,
             llm_config=config.llm_config,
         )
@@ -1704,7 +1742,7 @@ async def _publish_run(*, run: SimulationRun, config: SimulationConfig, model: s
         from evaluatorq.simulation.reports.executive_summary import populate_run_executive_summary
 
         try:
-            await populate_run_executive_summary(run, enabled=True, model=model, llm_config=config.llm_config)
+            await populate_run_executive_summary(run, enabled=True, model=config.model, llm_config=config.llm_config)
         except Exception:
             logger.warning('Failed to generate executive summary (results still returned)', exc_info=True)
 
@@ -1712,25 +1750,28 @@ async def _publish_run(*, run: SimulationRun, config: SimulationConfig, model: s
 def _persist_run(
     *,
     run: SimulationRun,
-    save: bool,
-    run_output: str | Path | None,
+    config: SimulationConfig,
     manifest_writer: ManifestWriter | None,
 ) -> None:
-    # CLI-only report enrichments run before persistence while the pipeline
-    # span and evaluatorq run context are still active. This keeps their LLM
-    # spans under the main simulation root and binds the same run metadata.
+    """Write the report when the caller opted in, then close the manifest out.
+
+    Never raises on a write failure: a completed, paid-for run must survive a
+    full disk or a read-only directory, so the failure is logged and the
+    manifest is still marked completed (with no report path). The manifest
+    transition happens on every path, saved or not.
+    """
     # Persist only when the caller opts in (save=True).
     # TODO(RES-963): inline because on_run_complete carries no run metadata and
     # hooks aren't yet composable; move to a save hook once that lands.
     saved_path = None
-    if save:
+    if config.save:
         # A persistence failure (disk full, read-only .evaluatorq/, perms, or the
         # collision-exhaustion RuntimeError) must NOT discard a completed, paid-for
         # run. Log and still return the run — the saved file is a convenience.
         try:
-            if run_output is not None:
-                write_report(run, Path(run_output))
-                saved_path = Path(run_output)
+            if config.run_output is not None:
+                write_report(run, Path(config.run_output))
+                saved_path = Path(config.run_output)
             else:
                 saved_path = auto_save_run(run=run, run_name=run.run_name)
             _log_saved_run(saved_path)
@@ -1775,10 +1816,6 @@ async def _simulate_core(
     from evaluatorq.simulation.replay import load_simulation_replay
 
     evaluation_name = config.evaluation_name
-    model = config.model
-    datapoint_parallelism = config.datapoint_parallelism
-    save = config.save
-    run_output = config.run_output
 
     target_callable, target_agent, target_kind_hint = _resolve_target(
         config.target,
@@ -1825,24 +1862,20 @@ async def _simulate_core(
         target_agent=target_agent,
         target_kind_hint=target_kind_hint,
         sim_datapoints=sim_datapoints,
-        model=model,
         max_turns=max_turns,
-        datapoint_parallelism=datapoint_parallelism,
-        evaluation_name=evaluation_name,
     )
     resolved_evaluator_names = run_settings.evaluator_names
     target_name = run_settings.target_name
-    target_model = run_settings.target_model
     # The manifest was minted at the outer entry and composed in as the first
     # hook (ManifestStageHooks), so stage transitions reach disk automatically.
     # The raw ``manifest_writer`` reference is retained here purely for the
     # terminal complete/cancel/fail transitions (§4.5) — those cannot be a hook
     # because a hook can't guarantee a terminal write on crash.
     #
-    # Everything from the confirm gate through save is guarded by the outer
-    # try/except: any failure — including a hook raising before/inside the inner
-    # try or in its finally — marks the manifest 'error' (or 'cancelled' on a
-    # declined confirm), so a run can never stay 'running' once it has finished.
+    # Everything from the confirm gate through save is guarded by this try/except:
+    # any failure — including one `_execute_simulation` raises out of its own
+    # confirm gate or its finally — marks the manifest 'error' (or 'cancelled' on
+    # a declined confirm), so a run can never stay 'running' once it has finished.
     # Terminal transitions are idempotent, so the single one that lands first wins.
     try:
         execution = await _execute_simulation(
@@ -1858,10 +1891,10 @@ async def _simulate_core(
         )
         results = execution.results
 
-        # Always build the run on the success path (an aborted run re-raised
-        # above) so every caller — SDK and CLI alike — gets the full
-        # SimulationRun (target/agent metadata, run_id, experiment_url) without
-        # having to rebuild it from the bare results list.
+        # Always build the run on the success path (an aborted run already
+        # re-raised out of `_execute_simulation`) so every caller — SDK and CLI
+        # alike — gets the full SimulationRun (target/agent metadata, run_id,
+        # experiment_url) without having to rebuild it from the bare results list.
         # _resolve_target's kind hint resolves the target_kind the dashboard reads;
         # hint is 'orq_agent' for AgentTarget / "agent:" strings, 'orq_deployment'
         # for "deployment:" strings, and None for plain callables.
@@ -1876,7 +1909,7 @@ async def _simulate_core(
             mode='simulate' if caller == 'simulate' else 'run',
             target_kind=target_kind,
             target=target_name,
-            target_model=target_model if isinstance(target_model, str) else None,
+            target_model=run_settings.target_model,
             max_turns=max_turns,
             agent_info=agent_info,
             evaluator_names=resolved_evaluator_names,
@@ -1895,13 +1928,11 @@ async def _simulate_core(
         results_usage = sum((r.token_usage for r in results), Usage())
         run.token_usage_total = sum_structured_usage([results_usage, config.generation_token_usage])
 
-        await _publish_run(run=run, config=config, model=model)
-        _persist_run(
-            run=run,
-            save=save,
-            run_output=run_output,
-            manifest_writer=manifest_writer,
-        )
+        # Enrichments run before persistence while the pipeline span and
+        # evaluatorq run context are still active, so their LLM spans stay under
+        # the main simulation root and bind the same run metadata.
+        await _publish_run(run=run, config=config)
+        _persist_run(run=run, config=config, manifest_writer=manifest_writer)
     except SimulationCancelledError:
         # A declined on_confirm is a clean cancel, not a failure (Dec1): the run
         # is 'cancelled' and any already-completed stage (e.g. GENERATE in the
