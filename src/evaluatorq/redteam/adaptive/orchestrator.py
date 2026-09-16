@@ -9,7 +9,7 @@ import asyncio
 import contextvars
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from functools import partial
@@ -632,7 +632,8 @@ class MultiTurnOrchestrator:
         strategy: AttackStrategy,
         messages: list[dict[str, Any]],
         timeout_s: float,
-    ) -> tuple[Any, TokenUsage | None, str, TokenUsage]:
+        record_usage: Callable[[TokenUsage], None],
+    ) -> tuple[Any, TokenUsage | None, str]:
         # One adversarial generation. Owns its span + per-attempt token
         # accounting (every attempt counts, including content-filtered
         # retries, so the call total isn't undercounted). The shared
@@ -671,16 +672,17 @@ class MultiTurnOrchestrator:
                 extra_body=self._cfg.retry_extra_body(self.llm_client),
                 extra_kwargs=self._cfg.attacker.extra_kwargs,
             )
-            if usage is not None:  # noqa: SIM108
+            # Every attempt counts, including content-filtered retries.
+            if usage is not None:
                 # Fold usage when present (carries cached/reasoning/cost
                 # via __add__); every attempt is a real billed call.
-                usage_delta = usage
+                record_usage(usage)
             else:
                 # No usage block, but still a billed attempt — count the
                 # bare call so content-filtered retries aren't undercounted.
-                usage_delta = TokenUsage(calls=1)
+                record_usage(TokenUsage(calls=1))
             attack_prompt = response.choices[0].message.content or ''
-            return response, usage, attack_prompt, usage_delta
+            return response, usage, attack_prompt
 
     def _unresolved_timeout_error(
         self,
@@ -747,6 +749,10 @@ class MultiTurnOrchestrator:
             else raw_messages
         )
 
+        def _fold_adversarial_usage(delta: TokenUsage) -> None:
+            nonlocal adversarial_usage_acc
+            adversarial_usage_acc = adversarial_usage_acc + delta
+
         # Loop vars are bound as eager defaults (_turn/_strategy/_messages) so the
         # closure doesn't capture the mutating loop variables (avoids B023).
         async def _generate_attack_turn(
@@ -756,12 +762,15 @@ class MultiTurnOrchestrator:
             _messages=sent_messages,
             _timeout=llm_timeout_s,
         ) -> Any:
-            nonlocal usage, attack_prompt, adversarial_usage_acc
-            response, usage, attack_prompt, usage_delta = await self._adversarial_generation(
-                attempt=attempt, turn=_turn, strategy=_strategy, messages=_messages, timeout_s=_timeout
+            nonlocal usage, attack_prompt
+            response, usage, attack_prompt = await self._adversarial_generation(
+                attempt=attempt,
+                turn=_turn,
+                strategy=_strategy,
+                messages=_messages,
+                timeout_s=_timeout,
+                record_usage=_fold_adversarial_usage,
             )
-            # Every attempt counts, including content-filtered retries.
-            adversarial_usage_acc = adversarial_usage_acc + usage_delta
             return response
 
         try:
