@@ -77,6 +77,7 @@ def _validate_datapoint_sources(
     experiment_run_id: str | None,
     previous_run: str | None,
 ) -> None:
+    """Reject a call that names more than one datapoint source, or a run id without its experiment."""
     sources = [
         ('previous_run', previous_run is not None),
         ('dataset_id', dataset_id is not None),

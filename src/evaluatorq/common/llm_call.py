@@ -32,7 +32,7 @@ from evaluatorq.common.tracing import (
 )
 from evaluatorq.contracts import (
     _RESERVED_COMPLETION_KEYS,
-    LLMCallConfig,
+    _RESERVED_RESPONSES_KEYS,
     TokenUsage,
     check_reserved_keys,
 )
@@ -364,6 +364,18 @@ def _build_response_params(
     extra_body: dict[str, Any] | None,
     extra_kwargs: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    """Assemble the Responses API call parameters for `execute_response`.
+
+    Not routed through `LLMCallConfig.request_params`: this helper takes loose
+    scalars rather than a config, and the only way to borrow that builder would
+    be to fabricate a config whose ``max_tokens`` sentinel is then popped back
+    out of the result. The reserved-key guard the config exists to enforce is
+    called directly here instead, on the same ``_RESERVED_RESPONSES_KEYS`` set.
+
+    ``extra_kwargs`` is applied last, so caller-supplied values win. A caller
+    that puts ``temperature: None`` there gets an explicit null on the wire,
+    which is the pre-existing contract of this path.
+    """
     params: dict[str, Any] = {'model': model, 'input': messages}
     if instructions is not None:
         params['instructions'] = instructions
@@ -375,18 +387,11 @@ def _build_response_params(
         params['max_output_tokens'] = max_output_tokens
     if reasoning_effort:
         params['reasoning'] = {'effort': reasoning_effort}
-
-    config = LLMCallConfig(
-        api='responses',
-        max_tokens=1,
-        extra_body=extra_body or {},
-        extra_kwargs=extra_kwargs or {},
-    )
-    params = config.request_params(api='responses', **params)
-    if max_output_tokens is None and 'max_output_tokens' not in (extra_kwargs or {}):
-        params.pop('max_output_tokens', None)
-    if extra_kwargs and 'temperature' in extra_kwargs and extra_kwargs['temperature'] is None:
-        params['temperature'] = None
+    if extra_body:
+        params['extra_body'] = extra_body
+    if extra_kwargs:
+        check_reserved_keys(extra_kwargs, _RESERVED_RESPONSES_KEYS)
+        params.update(extra_kwargs)
 
     if response_model is not None and response_text_format is not None:
         raise ValueError('response_model and response_text_format are mutually exclusive')
