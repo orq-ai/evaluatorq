@@ -1,6 +1,6 @@
 # Simulation (`eq sim`)
 
-Agent simulation subcommand group. Registered only when `evaluatorq[simulation]` is installed. `sim` is shorthand for convenience — the feature is **agent simulation**.
+Agent simulation subcommand group. Always registered; the `simulation` extra (`evaluatorq[simulation]`) supplies the optional dependencies some of its commands need at runtime. `sim` is shorthand for convenience — the feature is **agent simulation**.
 
 Three main verbs: `generate` (datapoints only), `simulate` (run against pre-built datapoints), `run` (generate then simulate in one shot).
 
