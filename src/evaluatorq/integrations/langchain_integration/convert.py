@@ -252,7 +252,13 @@ def convert_to_open_responses(
         msg_type = get_message_type(msg)
         msg_data = get_message_data(msg)
 
-        converter = _MESSAGE_CONVERTERS.get(msg_type) if isinstance(msg_type, str) else None
+        try:
+            converter = _MESSAGE_CONVERTERS.get(msg_type) if isinstance(msg_type, str) else None
+        except TypeError:
+            # A str subclass with __hash__ set to None passes isinstance(msg_type, str)
+            # but still can't be used as a dict key. Same warn-and-skip path as an
+            # unrecognised type.
+            converter = None
         if converter is None:
             logger.warning('Skipping unknown LangChain message type: %s', msg_type)
         else:
