@@ -7,6 +7,7 @@ so no fixture beyond `CliRunner` and `tmp_path` is needed.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -20,10 +21,20 @@ runner = CliRunner()
 
 _BAD_PARAMETER_EXIT_CODE = 2
 
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
+
 
 def _squeezed(text: str) -> str:
-    """Drop all whitespace and rich's box glyphs so a wrapped message matches as one string."""
-    return ''.join(text.replace('│', '').split())
+    """Drop ANSI colour codes, rich's box glyphs, and all whitespace.
+
+    Typer forces rich's colourised rendering whenever ``GITHUB_ACTIONS`` is set
+    (see ``typer.rich_utils.FORCE_TERMINAL``), which CI always sets and a local
+    shell normally does not. That highlighting splits option tokens like
+    ``--input`` into separately-coloured runs (e.g. ``\\x1b[1;36m-\\x1b[0m\\x1b[1;36m-input\\x1b[0m``),
+    so the escape codes must be stripped before whitespace, or a CI-only run
+    leaves stray control sequences inside the squeezed string and breaks the match.
+    """
+    return ''.join(_ANSI_RE.sub('', text).replace('│', '').split())
 
 
 def _assert_rejected(result: Result, expected: str) -> None:
