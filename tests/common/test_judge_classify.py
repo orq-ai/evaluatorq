@@ -163,7 +163,15 @@ async def test_choice_verdict_is_the_label_and_records_confidence(monkeypatch: p
 
 @pytest.mark.asyncio
 async def test_score_verdict_maps_onto_the_unit_interval():
-    client = _client(_reply({'type': 'score', 'score': 2.3, 'confidence': 0.81}))
+    client = _client(
+        _reply({
+            'type': 'score',
+            'score': 2.3,
+            'confidence': 0.81,
+            'legend': {'0': 'useless', '1': 'poor', '2': 'ok', '3': 'good', '4': 'excellent'},
+            'probabilities': {'0': 0.1, '1': 0.2, '2': 0.3, '3': 0.3, '4': 0.1},
+        })
+    )
     question = ClassifyQuestion(
         kind='score',
         instructions='Rate the helpfulness.',

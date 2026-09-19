@@ -187,7 +187,8 @@ class ClassifyAnswer(BaseModel):
     noul: float | None = None
     choice: str | None = None
     score: float | None = None
-    legend: list[str] | None = None
+    # The live router keys the legend by level index (``{"0": "useless", ...}``), not a list.
+    legend: dict[str, str] | list[str] | None = None
     probabilities: dict[str, float] | None = None
     confidence: float | None = None
 
