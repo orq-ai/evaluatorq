@@ -354,7 +354,7 @@ async def _enter_single_trace(
         name: Run name recorded on the span.
         trace_type: Trace type recorded on the span.
     """
-    from .tracing.spans import RunSpanOptions, with_run_span
+    from evaluatorq.tracing.spans import RunSpanOptions, with_run_span
 
     run_span = await span_stack.enter_async_context(
         with_run_span(
