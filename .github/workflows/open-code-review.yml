@@ -63,6 +63,13 @@ jobs:
           # three times. true appends only comments whose (path, line range) does
           # not overlap one the bot already left; it deletes nothing.
           incremental: 'true'
+          # The next run reviews <last reviewed head>..<new head> rather than
+          # <merge-base>..<new head>, so a re-push is not re-reviewed at all.
+          # Fail-closed: a missing or unreadable checkpoint, a moved base or a
+          # config change all fall back to the full range. Relies on
+          # sticky_summary, which defaults to true. Set full_review: 'true' for
+          # one deliberate re-review from the merge-base.
+          checkpoint_range: 'true'
           llm_use_anthropic: 'true'
           # Required, not cosmetic: the action's default extra_body is
           # {"thinking": {"type": "disabled"}}, which would silently switch the
