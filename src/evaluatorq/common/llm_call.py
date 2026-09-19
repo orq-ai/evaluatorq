@@ -16,6 +16,7 @@ Pass the call-site body as ``extra_body=`` and user options as ``extra_kwargs=``
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -28,7 +29,9 @@ from evaluatorq.common.thread_context import pipeline_metadata
 from evaluatorq.common.tracing import (
     get_trace_context_headers,
     record_llm_input,
+    record_llm_output,
     record_llm_response,
+    record_token_usage,
 )
 from evaluatorq.contracts import (
     _RESERVED_COMPLETION_KEYS,
@@ -44,6 +47,8 @@ if TYPE_CHECKING:
     from openai.types.chat import ChatCompletion, ParsedChatCompletion
     from opentelemetry.trace import Span
     from pydantic import BaseModel
+
+    from evaluatorq.common.judge import ClassifyQuestion, ClassifyResponse
 
 logger = logging.getLogger(__name__)
 
@@ -449,3 +454,63 @@ async def execute_response(
         client,
         served_model=getattr(response, 'model', None),
     )
+
+
+async def execute_classify(
+    *,
+    client: AsyncOpenAI,
+    model: str,
+    question: ClassifyQuestion,
+    span: Span | None,
+    timeout_s: float,
+    inject_trace_headers: bool = True,
+) -> tuple[ClassifyResponse, TokenUsage | None]:
+    """Execute one Orq router ``/classify`` call and return the answer plus its usage.
+
+    The classify endpoint has no SDK method, so this is the one sanctioned
+    ``client.post`` in the package — it owns the same things the chat and
+    Responses executors own: the bounded call, trace-header injection, span
+    input/output recording and usage extraction.
+
+    ``cast_to=object`` rather than `ClassifyResponse`: the SDK refuses a plain
+    pydantic model (``TypeError: Pydantic models must subclass our base model
+    type``) and would only ``model_construct`` it anyway, leaving the nested
+    answers as raw dicts. The decoded JSON is validated here instead, so a
+    payload shape change raises ``ValidationError`` rather than surfacing as a
+    missing verdict field later.
+
+    **Retry.** None here. The single retry layer on this path is ``run_judge``'s
+    ``with_retry``, which is why the client arrives with ``max_retries=0``.
+    """
+    body: dict[str, Any] = {
+        'model': model,
+        'state': question.state,
+        'questions': {'verdict': {'type': question.kind, 'instructions': question.instructions}},
+    }
+    if question.criteria is not None:
+        body['questions']['verdict']['criteria'] = question.criteria
+
+    # `apply_trace_headers` merges into `params['extra_headers']`, the SDK's
+    # per-method spelling; `post` takes the same headers under `options`.
+    params: dict[str, Any] = {}
+    if inject_trace_headers:
+        await apply_trace_headers(params)
+    options: dict[str, Any] = {}
+    trace_headers = params.get('extra_headers')
+    if trace_headers:
+        options['headers'] = trace_headers
+
+    record_llm_input(span, [{'role': 'user', 'content': json.dumps(question.state, default=str)}])
+    payload = await _bounded_call(
+        client.post('/classify', cast_to=object, body=body, options=options),  # pyright: ignore[reportArgumentType]
+        timeout_s,
+    )
+    # Imported here, not at module scope: `judge` imports this module.
+    from evaluatorq.common.judge import ClassifyResponse as _ClassifyResponse
+
+    response = _ClassifyResponse.model_validate(payload)
+    record_llm_output(span, response.model_dump_json())
+    usage = TokenUsage.extract(response.usage, calls=1)
+    record_token_usage(span, usage=usage)
+    # Priced by the router; price_usage is a no-op unless it came back unpriced.
+    return response, await price_usage(usage, model, client, served_model=response.model)

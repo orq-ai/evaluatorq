@@ -15,12 +15,18 @@ from loguru import logger
 from openai import APIConnectionError, APIStatusError, APITimeoutError, BadRequestError
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, model_validator
 
-from evaluatorq.common.llm_call import execute_chat_completion, execute_chat_parse, execute_response
+from evaluatorq.common.llm_call import (
+    execute_chat_completion,
+    execute_chat_parse,
+    execute_classify,
+    execute_response,
+)
 from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.messages import coerce_content_text
-from evaluatorq.common.model_catalogue import qualified_model
+from evaluatorq.common.model_catalogue import qualified_model, supports_classify
 from evaluatorq.common.responses import first_responses_refusal, parse_responses_response, responses_stop_reason
 from evaluatorq.common.retry import with_retry, without_client_retries
+from evaluatorq.common.structured_output import warn_unread_config_fields
 from evaluatorq.common.template_engine import render_template
 from evaluatorq.common.tracing import set_span_attrs, with_llm_span
 from evaluatorq.contracts import (
@@ -83,6 +89,12 @@ DEFAULT_SECURITY_EVALUATOR_SYSTEM_PROMPT = (
 # `JuryVote` (contracts.py) raises on that same pair — reaching it after the judge is
 # billed takes down the run's report instead of the one verdict.
 #
+# The classify leg is the second producer of this payload and fills it differently:
+# a `/classify` answer carries a distribution, not prose, so it never abstains and its
+# `explanation` is synthesised from the numbers (`ClassifyQuestion` below). Nothing on
+# that path is generated against this model's schema, so the field-order and prompt
+# notes above do not bind it.
+#
 # The mirror case (`abstain=False`, `value=None`) is deliberately NOT normalised, and
 # the two judge surfaces read it differently: the redteam paths pass `abstain` and
 # `value` through separately, so the jury's `failed_count` (common/jury.py) counts it
@@ -129,6 +141,67 @@ class EvaluatorResponsePayload(BaseModel):
         return self
 
 
+class ClassifyQuestion(BaseModel):
+    """One question for the Orq router's ``/classify`` endpoint.
+
+    A classify model is not prompted: it is handed the material to judge
+    (``state``) and a question about it. ``kind`` picks the answer shape —
+    ``noul`` a probability, ``choice`` one of a labelled set, ``score`` a
+    probability-weighted mean over ordered levels — and ``criteria`` describes
+    the answer space for that shape. ``noul_threshold`` is read by `run_judge`,
+    not sent: it turns the probability into the boolean verdict a jury counts.
+    """
+
+    kind: Literal['noul', 'choice', 'score']
+    instructions: str
+    criteria: dict[str, str | None] | list[str] | None = None
+    state: dict[str, Any] | str | list[Any]
+    noul_threshold: float = 0.5
+
+    @model_validator(mode='after')
+    def _check_criteria_matches_kind(self) -> ClassifyQuestion:
+        """Reject a criteria shape the endpoint would 400 on, before the call is paid for."""
+        if self.kind == 'choice':
+            if not isinstance(self.criteria, dict) or not self.criteria:
+                raise ValueError("a 'choice' question needs a non-empty {label: description} criteria dict")
+        elif self.kind == 'score':
+            if not isinstance(self.criteria, list) or not 2 <= len(self.criteria) <= 10:
+                raise ValueError("a 'score' question needs an ordered list of 2 to 10 level descriptions")
+        elif self.criteria is not None and (
+            not isinstance(self.criteria, dict) or set(self.criteria) != {'true', 'false'}
+        ):
+            raise ValueError("a 'noul' question's criteria, when given, is a dict with keys 'true' and 'false'")
+        return self
+
+
+class ClassifyAnswer(BaseModel):
+    """One answer from ``/classify``; only the field matching ``type`` is filled.
+
+    ``extra='allow'`` because the endpoint's answer shape is the provider's to
+    extend — an unknown field is kept in `raw_content` rather than dropped.
+    """
+
+    model_config = ConfigDict(extra='allow')
+
+    type: str
+    noul: float | None = None
+    choice: str | None = None
+    score: float | None = None
+    legend: list[str] | None = None
+    probabilities: dict[str, float] | None = None
+    confidence: float | None = None
+
+
+class ClassifyResponse(BaseModel):
+    """A ``/classify`` reply. ``model`` is the bare id the router served (``jev-latest``)."""
+
+    model_config = ConfigDict(extra='allow')
+
+    answers: dict[str, ClassifyAnswer]
+    usage: dict[str, Any] | None = None
+    model: str | None = None
+
+
 class JudgeError(StrEnum):
     TIMEOUT = 'timeout'
     PARSE = 'parse'
@@ -149,11 +222,12 @@ class JudgeOutcome(BaseModel):
     error_message: str | None = None
     error_exc: Exception | None = None
     timeout_ms: int | None = None
-    endpoint: Literal['chat', 'responses'] | None = Field(
+    endpoint: Literal['chat', 'responses', 'classify'] | None = Field(
         default=None,
         description='Which endpoint actually served the verdict. Lets a report tell '
         '"the model is not in the catalogue" apart from "Responses fell back to chat" '
-        'when total_cost is None; None on an outcome that never reached a call.',
+        'when total_cost is None, and marks the verdicts a classify model produced '
+        'rather than a prompted one; None on an outcome that never reached a call.',
     )
 
     @property
@@ -507,6 +581,104 @@ async def _json_object_judge(
     return EvaluatorResponsePayload.model_validate_json(cleaned), usage, raw
 
 
+# Models already warned about a system prompt a classify judge cannot use: the judge
+# is rebuilt once per datapoint, and one line per model per run is the useful volume.
+_CLASSIFY_SYSTEM_PROMPT_WARNED: set[str] = set()
+
+
+def reset_classify_warnings() -> None:
+    """Clear the classify warning memos; exists for test isolation."""
+    _CLASSIFY_SYSTEM_PROMPT_WARNED.clear()
+
+
+def _classify_verdict(question: ClassifyQuestion, answer: ClassifyAnswer) -> tuple[bool | float | str, str] | None:
+    """Turn one classify answer into ``(value, explanation)``, or None when it is unreadable.
+
+    The question's ``kind`` is the authority, not the answer's ``type``: the
+    question is what was asked and what the caller's threshold and levels
+    describe. The explanation is synthesised here because a classify model
+    returns a distribution and no prose — the numbers that decided the verdict
+    are the explanation.
+    """
+    if question.kind == 'noul':
+        if answer.noul is None:
+            return None
+        return answer.noul >= question.noul_threshold, (
+            f'noul={answer.noul:.2f} (threshold {question.noul_threshold:g})'
+        )
+    if question.kind == 'choice':
+        if answer.choice is None:
+            return None
+        confidence = '' if answer.confidence is None else f' (confidence {answer.confidence:.2f})'
+        return answer.choice, f'choice={answer.choice!r}{confidence}'
+    if answer.score is None or not isinstance(question.criteria, list):
+        return None
+    top = len(question.criteria) - 1
+    value = min(1.0, max(0.0, answer.score / top))
+    confidence = '' if answer.confidence is None else f' (confidence {answer.confidence:.2f})'
+    return value, f'score={answer.score:.2f}/{top} → {value:.2f}{confidence}'
+
+
+async def _classify_judge(
+    *,
+    client: AsyncOpenAI,
+    model: str,
+    cfg: LLMCallConfig,
+    question: ClassifyQuestion,
+    span: Any,
+) -> JudgeOutcome:
+    """Judge via the Orq router's ``/classify`` endpoint — the only endpoint a classify model serves.
+
+    There is no prompt and no verdict schema on this path: the model answers the
+    question it was handed, and `_classify_verdict` maps that answer onto the
+    payload every other judge leg returns. A classify answer never abstains — an
+    answer that cannot be read at all is a `JudgeError.PARSE`, not an abstention,
+    so a broken verdict is never counted as a judge declining to call it.
+    """
+    response, usage = await execute_classify(
+        client=client,
+        model=model,
+        question=question,
+        span=span,
+        timeout_s=cfg.timeout_ms / 1000.0,
+    )
+    raw = response.model_dump_json()
+    answer = response.answers.get('verdict')
+    if answer is None:
+        logger.error('Judge [{}] classify reply carried no verdict answer (keys={})', model, list(response.answers))
+        return JudgeOutcome(
+            error_kind=JudgeError.PARSE,
+            error_message=f'classify reply carried no verdict answer (keys={sorted(response.answers)})',
+            token_usage=usage,
+            raw_content=raw,
+            endpoint='classify',
+        )
+    verdict = _classify_verdict(question, answer)
+    if verdict is None:
+        logger.error('Judge [{}] classify {} answer carried no {} field', model, question.kind, question.kind)
+        return JudgeOutcome(
+            error_kind=JudgeError.PARSE,
+            error_message=f'classify answer carried no {question.kind} value',
+            token_usage=usage,
+            raw_content=raw,
+            endpoint='classify',
+        )
+    value, explanation = verdict
+    set_span_attrs(
+        span,
+        {
+            'judge.confidence': answer.confidence,
+            'judge.probabilities': json.dumps(answer.probabilities) if answer.probabilities else None,
+        },
+    )
+    return JudgeOutcome(
+        payload=EvaluatorResponsePayload(value=value, explanation=explanation, abstain=False),
+        token_usage=usage,
+        raw_content=answer.model_dump_json(),
+        endpoint='classify',
+    )
+
+
 async def run_judge(
     *,
     client: AsyncOpenAI,
@@ -519,8 +691,16 @@ async def run_judge(
     response_model: type[_BaseModel] | None = None,
     structured_output: bool = True,
     temperature: float | _UseCfg | None = _USE_CFG,
+    classify: ClassifyQuestion | None = None,
 ) -> JudgeOutcome:
     """Render the template, call the judge model, and parse the verdict.
+
+    **Classify models.** A model the catalogue marks as classify-only (Jev) is
+    judged on the router's ``/classify`` endpoint from the ``classify`` question,
+    and the prompt, schema and sampling settings play no part — the leg warns
+    about every config field it therefore does not read. Such a model reached
+    without a ``classify`` question is an error, not a fallback: prompting it
+    would produce a bill and no verdict.
 
     **Which endpoint.** ``cfg.api='responses'`` (the default for evaluators) sends
     the call to the Orq router's Responses endpoint — the one it prices — but only
@@ -552,15 +732,36 @@ async def run_judge(
 
     client = without_client_retries(client)
     raw_content = '{}'
+    # Decided before the endpoint resolution below, and independently of `cfg.api`:
+    # a classify model serves neither chat nor Responses, so `api='responses'` (what
+    # `llm_jury` always sets) says nothing about it.
+    use_classify = client_routes_through_orq(client) and await supports_classify(model, client)
+    if use_classify and classify is None:
+        logger.error('Judge [{}] is a classify model but no classify question was supplied', model)
+        return JudgeOutcome(
+            error_kind=JudgeError.UNKNOWN,
+            error_message=f'{model} is a classify model but the caller passed no classify question',
+            endpoint=None,
+        )
+    if use_classify:
+        warn_unread_config_fields(
+            cfg,
+            read=frozenset({'model', 'timeout_ms', 'retry_count'}),
+            caller='run_judge[classify]',
+        )
+        if system_prompt != DEFAULT_SECURITY_EVALUATOR_SYSTEM_PROMPT and model not in _CLASSIFY_SYSTEM_PROMPT_WARNED:
+            _CLASSIFY_SYSTEM_PROMPT_WARNED.add(model)
+            logger.warning(
+                'Judge [{}] is a classify model; it takes no system prompt, so the one supplied is ignored', model
+            )
     # Resolved before the span opens so the span carries the operation and the model
     # id this call actually sends — `responses openai/gpt-5-mini`, not `chat gpt-5-mini`
     # — the way every other inference path in the codebase labels its own.
     # `structured_output=False` is a caller saying this model cannot do schema-enforced
     # output, and the Responses path is schema-only, so that opt-out stays on chat too.
-    responses_model = (
-        await _resolve_responses_model(client, model) if cfg.api == 'responses' and structured_output else None
-    )
-    if cfg.api == 'responses' and structured_output and responses_model is None:
+    wants_responses = not use_classify and cfg.api == 'responses' and structured_output
+    responses_model = await _resolve_responses_model(client, model) if wants_responses else None
+    if wants_responses and responses_model is None:
         logger.debug('Judge [{}] cannot use the Responses endpoint; using chat completions', model)
 
     async def _attempt() -> JudgeOutcome:
@@ -570,6 +771,15 @@ async def run_judge(
         # on attempt 3 gets logged and returned with attempt 2's body — the "raw
         # (truncated)" line would describe a different call than the one that failed.
         raw_content = '{}'
+        if classify is not None and use_classify:
+            async with with_llm_span(
+                model=model,
+                operation='classify',
+                attributes=span_attributes or {},
+            ) as span:
+                outcome = await _classify_judge(client=client, model=model, cfg=cfg, question=classify, span=span)
+            raw_content = outcome.raw_content or raw_content
+            return outcome
         # Default for judges: the Responses endpoint is the one the Orq router
         # prices, so a judge call records cost like a target call does (RES-1295).
         # Set `api='chat_completions'` on the evaluator config to opt out.
