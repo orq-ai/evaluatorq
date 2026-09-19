@@ -1,6 +1,6 @@
 # Red Teaming (`eq redteam`)
 
-Red teaming subcommand group. Registered only when `evaluatorq[redteam]` is installed.
+Red teaming subcommand group. Always registered; the `redteam` extra (`evaluatorq[redteam]`) supplies the optional dependencies some of its commands need at runtime.
 
 --8<-- "docs/_snippets/openai-direct-model.md"
 
