@@ -5,7 +5,9 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 import importlib
+from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, Mock
 
@@ -174,6 +176,200 @@ def _fake_tracing_sdk(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
     monkeypatch.delenv('ORQ_DISABLE_TRACING', raising=False)
     monkeypatch.setenv('OTEL_EXPORTER_OTLP_ENDPOINT', 'https://example.test')
     return processor_options
+
+
+def _capture_tracing_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, dict[str, object]]:
+    """Patch the SDK classes and capture exporter and processor options."""
+    from opentelemetry import trace
+    from opentelemetry.exporter.otlp.proto.http import trace_exporter
+    from opentelemetry.sdk import trace as sdk_trace
+    from opentelemetry.sdk.trace import export as trace_export
+
+    construction: dict[str, dict[str, object]] = {'exporter': {}, 'processor': {}}
+
+    class FakeExporter:
+        def __init__(self, **kwargs: object) -> None:
+            construction['exporter'].update(kwargs)
+
+    class FakeSpanProcessor:
+        def __init__(self, exporter: object, **kwargs: object) -> None:
+            del exporter
+            construction['processor'].update(kwargs)
+
+    class FakeProvider:
+        def __init__(self, **kwargs: object) -> None:
+            del kwargs
+
+        def add_span_processor(self, processor: object) -> None:
+            del processor
+
+    monkeypatch.setattr(trace_export, 'BatchSpanProcessor', FakeSpanProcessor)
+    monkeypatch.setattr(trace_exporter, 'OTLPSpanExporter', FakeExporter)
+    monkeypatch.setattr(sdk_trace, 'TracerProvider', FakeProvider)
+    monkeypatch.setattr(trace, 'get_tracer', Mock())
+    monkeypatch.setattr(trace, 'set_tracer_provider', Mock())
+    monkeypatch.setattr(tracing_setup, '_sdk', None)
+    monkeypatch.setattr(tracing_setup, '_tracer', None)
+    monkeypatch.setattr(tracing_setup, '_is_initialized', False)
+    monkeypatch.setattr(tracing_setup, '_initialization_attempted', False)
+    monkeypatch.delenv('ORQ_DISABLE_TRACING', raising=False)
+    return construction
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('endpoint', 'expected_endpoint', 'expected_headers'),
+    [
+        (
+            'https://orq.ai/v2/otel',
+            'https://orq.ai/v2/otel/v1/traces',
+            {'Authorization': 'Bearer test-key'},
+        ),
+        (
+            'https://tenant.orq.ai/v2/otel/v1/traces',
+            'https://tenant.orq.ai/v2/otel/v1/traces',
+            {'Authorization': 'Bearer test-key'},
+        ),
+        ('https://collector.example/v2/otel', 'https://collector.example/v2/otel/v1/traces', {}),
+    ],
+)
+async def test_initialization_resolves_endpoint_and_domain_scoped_auth_headers(
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint: str,
+    expected_endpoint: str,
+    expected_headers: dict[str, str],
+) -> None:
+    construction = _capture_tracing_construction(monkeypatch)
+    monkeypatch.setenv('OTEL_EXPORTER_OTLP_ENDPOINT', endpoint)
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    monkeypatch.delenv('OTEL_EXPORTER_OTLP_HEADERS', raising=False)
+
+    assert await tracing_setup.init_tracing_if_needed() is True
+    assert construction['exporter'] == {
+        'endpoint': expected_endpoint,
+        'headers': expected_headers,
+        'timeout': 5,
+    }
+
+
+@pytest.mark.asyncio
+async def test_initialization_parses_headers_with_equals_and_skips_empty_or_malformed_pairs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    construction = _capture_tracing_construction(monkeypatch)
+    monkeypatch.setenv('OTEL_EXPORTER_OTLP_ENDPOINT', 'https://collector.example')
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    monkeypatch.setenv('OTEL_EXPORTER_OTLP_HEADERS', 'token=abc=def,malformed,=empty-key,empty-value=, spaced = value ')
+
+    assert await tracing_setup.init_tracing_if_needed() is True
+    assert construction['exporter']['headers'] == {
+        'token': 'abc=def',
+        'spaced': 'value',
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('endpoint', 'base_url', 'expected_source', 'expected_traces_endpoint'),
+    [
+        ('https://collector.example', 'https://ignored.example', 'OTEL_EXPORTER_OTLP_ENDPOINT', 'https://collector.example/v1/traces'),
+        (None, 'https://collector.example', 'ORQ_BASE_URL', 'https://collector.example/v2/otel/v1/traces'),
+        (None, None, 'default (ORQ_API_KEY)', 'https://my.orq.ai/v2/otel/v1/traces'),
+    ],
+)
+async def test_initialization_debug_prints_endpoint_source(
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint: str | None,
+    base_url: str | None,
+    expected_source: str,
+    expected_traces_endpoint: str,
+) -> None:
+    _capture_tracing_construction(monkeypatch)
+    if endpoint is None:
+        monkeypatch.delenv('OTEL_EXPORTER_OTLP_ENDPOINT', raising=False)
+    else:
+        monkeypatch.setenv('OTEL_EXPORTER_OTLP_ENDPOINT', endpoint)
+    if base_url is None:
+        monkeypatch.delenv('ORQ_BASE_URL', raising=False)
+    else:
+        monkeypatch.setenv('ORQ_BASE_URL', base_url)
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    monkeypatch.setenv('ORQ_DEBUG', '1')
+    monkeypatch.delenv('OTEL_EXPORTER_OTLP_HEADERS', raising=False)
+    printed = Mock()
+    monkeypatch.setattr(builtins, 'print', printed)
+
+    assert await tracing_setup.init_tracing_if_needed() is True
+    expected_prints = [
+        ('[evaluatorq] OTEL tracing enabled',),
+        (f'[evaluatorq] OTEL endpoint: {expected_traces_endpoint}',),
+        (f'[evaluatorq] OTEL endpoint source: {expected_source}',),
+    ]
+    if expected_source == 'default (ORQ_API_KEY)':
+        expected_prints.append(('[evaluatorq] Authorization: Bearer ***',))
+    assert [call.args for call in printed.call_args_list] == expected_prints
+
+
+@pytest.mark.asyncio
+async def test_initialization_returns_false_when_tracing_is_not_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(tracing_setup, '_sdk', None)
+    monkeypatch.setattr(tracing_setup, '_tracer', None)
+    monkeypatch.setattr(tracing_setup, '_is_initialized', False)
+    monkeypatch.setattr(tracing_setup, '_initialization_attempted', False)
+    monkeypatch.delenv('ORQ_DISABLE_TRACING', raising=False)
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+    monkeypatch.delenv('OTEL_EXPORTER_OTLP_ENDPOINT', raising=False)
+
+    assert await tracing_setup.init_tracing_if_needed() is False
+
+
+@pytest.mark.asyncio
+async def test_initialization_returns_false_when_endpoint_resolution_is_falsy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(tracing_setup, '_sdk', None)
+    monkeypatch.setattr(tracing_setup, '_tracer', None)
+    monkeypatch.setattr(tracing_setup, '_is_initialized', False)
+    monkeypatch.setattr(tracing_setup, '_initialization_attempted', False)
+    monkeypatch.delenv('ORQ_DISABLE_TRACING', raising=False)
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    monkeypatch.delenv('OTEL_EXPORTER_OTLP_ENDPOINT', raising=False)
+    monkeypatch.setattr(tracing_setup, '_get_otlp_endpoint', Mock(return_value=None))
+
+    assert await tracing_setup.init_tracing_if_needed() is False
+
+
+@pytest.mark.asyncio
+async def test_initialization_returns_false_when_opentelemetry_import_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(tracing_setup, '_sdk', None)
+    monkeypatch.setattr(tracing_setup, '_tracer', None)
+    monkeypatch.setattr(tracing_setup, '_is_initialized', False)
+    monkeypatch.setattr(tracing_setup, '_initialization_attempted', False)
+    monkeypatch.delenv('ORQ_DISABLE_TRACING', raising=False)
+    monkeypatch.setenv('OTEL_EXPORTER_OTLP_ENDPOINT', 'https://collector.example')
+
+    real_import = builtins.__import__
+
+    def fail_opentelemetry_import(
+        name: str,
+        globals_: Mapping[str, object] | None = None,
+        locals_: Mapping[str, object] | None = None,
+        fromlist: Sequence[str] | None = None,
+        level: int = 0,
+    ) -> object:
+        if name == 'opentelemetry':
+            raise ImportError('OpenTelemetry unavailable')
+        return real_import(name, globals_, locals_, fromlist, level)
+
+    monkeypatch.setattr(builtins, '__import__', fail_opentelemetry_import)
+
+    assert await tracing_setup.init_tracing_if_needed() is False
 
 
 @pytest.mark.asyncio

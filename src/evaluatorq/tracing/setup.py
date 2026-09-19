@@ -97,6 +97,72 @@ def _get_otlp_endpoint() -> str | None:
     return None
 
 
+def _resolve_traces_endpoint(endpoint: str) -> str:
+    """Ensure the OTLP endpoint has the traces path."""
+    return endpoint if endpoint.endswith('/v1/traces') else f'{endpoint}/v1/traces'
+
+
+def _resolve_exporter_headers(traces_endpoint: str) -> dict[str, str]:
+    """Build headers for the OTLP exporter."""
+    headers: dict[str, str] = {}
+    api_key = os.environ.get('ORQ_API_KEY')
+
+    # Add Authorization header only for verified orq.ai domains
+    # Use proper domain validation to prevent leaking API keys to malicious endpoints
+    from urllib.parse import urlparse
+
+    parsed_endpoint = urlparse(traces_endpoint)
+    is_orq_domain = parsed_endpoint.netloc.endswith('.orq.ai') or parsed_endpoint.netloc == 'orq.ai'
+    if api_key and is_orq_domain:
+        headers['Authorization'] = f'Bearer {api_key}'
+
+    # Parse OTEL_EXPORTER_OTLP_HEADERS if present
+    # Format: "key1=value1,key2=value2" - values may contain "=" (e.g., JWT tokens)
+    env_headers = os.environ.get('OTEL_EXPORTER_OTLP_HEADERS')
+    if env_headers:
+        for pair in env_headers.split(','):
+            eq_index = pair.find('=')
+            if eq_index > 0:
+                key = pair[:eq_index].strip()
+                value = pair[eq_index + 1 :].strip()
+                if key and value:
+                    headers[key] = value
+
+    return headers
+
+
+def _debug_endpoint_source() -> str:
+    """Return the environment source used to resolve the OTLP endpoint."""
+    if os.environ.get('OTEL_EXPORTER_OTLP_ENDPOINT'):
+        source = 'OTEL_EXPORTER_OTLP_ENDPOINT'
+    elif os.environ.get('ORQ_BASE_URL'):
+        source = 'ORQ_BASE_URL'
+    else:
+        source = 'default (ORQ_API_KEY)'
+    return source
+
+
+def _resolve_batch_settings() -> tuple[int, int]:
+    """Resolve and clamp the OTLP batch processor queue and batch sizes.
+
+    Both are env-tunable because a long-lived process never tears the provider
+    down, so one queue absorbs every run and the SDK's 2048 default overflows.
+    A batch size larger than the queue is clamped to the queue size, with a
+    warning naming both values.
+    """
+    max_queue_size = env_int('ORQ_OTEL_MAX_QUEUE_SIZE', 4096, min_value=1)
+    requested_batch_size = env_int('ORQ_OTEL_MAX_BATCH_SIZE', 512, min_value=1)
+    batch_size = min(requested_batch_size, max_queue_size)
+    if batch_size != requested_batch_size:
+        logger.warning(
+            'ORQ_OTEL_MAX_BATCH_SIZE ({}) exceeds ORQ_OTEL_MAX_QUEUE_SIZE ({}); clamping the export batch size to {}.',
+            requested_batch_size,
+            max_queue_size,
+            batch_size,
+        )
+    return max_queue_size, batch_size
+
+
 async def init_tracing_if_needed() -> bool:  # noqa: RUF029
     """
     Initialize the OpenTelemetry SDK if not already initialized.
@@ -138,33 +204,8 @@ async def init_tracing_if_needed() -> bool:  # noqa: RUF029
         SERVICE_NAME = 'service.name'
         SERVICE_VERSION = 'service.version'
 
-        # Ensure endpoint has the traces path
-        traces_endpoint = endpoint if endpoint.endswith('/v1/traces') else f'{endpoint}/v1/traces'
-
-        # Build headers for the exporter
-        headers: dict[str, str] = {}
-        api_key = os.environ.get('ORQ_API_KEY')
-
-        # Add Authorization header only for verified orq.ai domains
-        # Use proper domain validation to prevent leaking API keys to malicious endpoints
-        from urllib.parse import urlparse
-
-        parsed_endpoint = urlparse(traces_endpoint)
-        is_orq_domain = parsed_endpoint.netloc.endswith('.orq.ai') or parsed_endpoint.netloc == 'orq.ai'
-        if api_key and is_orq_domain:
-            headers['Authorization'] = f'Bearer {api_key}'
-
-        # Parse OTEL_EXPORTER_OTLP_HEADERS if present
-        # Format: "key1=value1,key2=value2" - values may contain "=" (e.g., JWT tokens)
-        env_headers = os.environ.get('OTEL_EXPORTER_OTLP_HEADERS')
-        if env_headers:
-            for pair in env_headers.split(','):
-                eq_index = pair.find('=')
-                if eq_index > 0:
-                    key = pair[:eq_index].strip()
-                    value = pair[eq_index + 1 :].strip()
-                    if key and value:
-                        headers[key] = value
+        traces_endpoint = _resolve_traces_endpoint(endpoint)
+        headers = _resolve_exporter_headers(traces_endpoint)
 
         resource = Resource.create({
             SERVICE_NAME: os.environ.get('OTEL_SERVICE_NAME', 'evaluatorq'),
@@ -172,12 +213,7 @@ async def init_tracing_if_needed() -> bool:  # noqa: RUF029
         })
 
         if debug:
-            if os.environ.get('OTEL_EXPORTER_OTLP_ENDPOINT'):
-                source = 'OTEL_EXPORTER_OTLP_ENDPOINT'
-            elif os.environ.get('ORQ_BASE_URL'):
-                source = 'ORQ_BASE_URL'
-            else:
-                source = 'default (ORQ_API_KEY)'
+            source = _debug_endpoint_source()
             print('[evaluatorq] OTEL tracing enabled')
             print(f'[evaluatorq] OTEL endpoint: {traces_endpoint}')
             print(f'[evaluatorq] OTEL endpoint source: {source}')
@@ -190,20 +226,8 @@ async def init_tracing_if_needed() -> bool:  # noqa: RUF029
             timeout=5,  # 5 second timeout for telemetry
         )
 
-        # Use BatchSpanProcessor to export spans asynchronously in batches.
-        # Env-tunable because a long-lived process never tears the provider down,
-        # so one queue absorbs every run and the SDK's 2048 default overflows.
-        max_queue_size = env_int('ORQ_OTEL_MAX_QUEUE_SIZE', 4096, min_value=1)
-        requested_batch_size = env_int('ORQ_OTEL_MAX_BATCH_SIZE', 512, min_value=1)
-        batch_size = min(requested_batch_size, max_queue_size)
-        if batch_size != requested_batch_size:
-            logger.warning(
-                'ORQ_OTEL_MAX_BATCH_SIZE ({}) exceeds ORQ_OTEL_MAX_QUEUE_SIZE ({}); '
-                'clamping the export batch size to {}.',
-                requested_batch_size,
-                max_queue_size,
-                batch_size,
-            )
+        # BatchSpanProcessor exports spans asynchronously in batches.
+        max_queue_size, batch_size = _resolve_batch_settings()
         span_processor = BatchSpanProcessor(
             exporter,
             max_queue_size=max_queue_size,
