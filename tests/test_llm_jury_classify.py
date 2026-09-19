@@ -250,6 +250,55 @@ def test_classify_panel_warns_once_on_repetitions() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Settings a classify judge cannot read
+# ---------------------------------------------------------------------------
+
+
+def test_a_classify_panel_that_sets_none_of_the_prompted_settings_is_quiet() -> None:
+    with patch.object(llm_jury_mod.logger, 'warning') as warn:
+        llm_jury(name='x', criteria='c', judges=[JEV, 'gpt-5-mini'], client=MagicMock())
+    assert not any('do not reach' in call.args[0] for call in warn.call_args_list)
+
+
+def test_a_classify_panel_names_the_settings_it_cannot_read_once() -> None:
+    with patch.object(llm_jury_mod.logger, 'warning') as warn:
+        llm_jury(
+            name='x',
+            criteria='c',
+            judges=[JEV, 'gpt-5-mini'],
+            system_prompt='x',
+            temperature=0.2,
+            client=MagicMock(),
+        )
+    named = [call for call in warn.call_args_list if 'do not reach' in call.args[0]]
+    assert len(named) == 1
+    assert named[0].args[2] == 'system_prompt, temperature'
+    assert named[0].args[1] == JEV
+
+
+def test_an_llm_only_panel_never_warns_about_unread_settings() -> None:
+    with patch.object(llm_jury_mod.logger, 'warning') as warn:
+        llm_jury(name='x', criteria='c', judges=['gpt-5-mini'], system_prompt='x', temperature=0.2, client=MagicMock())
+    assert not any('do not reach' in call.args[0] for call in warn.call_args_list)
+
+
+def test_a_pairwise_classify_panel_that_sets_none_of_the_prompted_settings_is_quiet() -> None:
+    with patch.object(llm_jury_mod.logger, 'warning') as warn:
+        llm_jury_pairwise(criteria='c', judges=[JEV, 'gpt-5-mini'], client=MagicMock())
+    assert not any('do not reach' in call.args[0] for call in warn.call_args_list)
+
+
+def test_a_pairwise_classify_panel_names_the_settings_it_cannot_read_once() -> None:
+    with patch.object(llm_jury_mod.logger, 'warning') as warn:
+        llm_jury_pairwise(
+            criteria='c', judges=[JEV, 'gpt-5-mini'], system_prompt='x', temperature=0.2, client=MagicMock()
+        )
+    named = [call for call in warn.call_args_list if 'do not reach' in call.args[0]]
+    assert len(named) == 1
+    assert named[0].args[2] == 'system_prompt, temperature'
+
+
+# ---------------------------------------------------------------------------
 # Question building
 # ---------------------------------------------------------------------------
 
@@ -312,6 +361,36 @@ async def test_a_state_that_resolves_to_nothing_warns() -> None:
         judges=[JEV],
         state_fields=['ouput.response'],  # typo on purpose: nothing resolves
         client=MagicMock(),
+    )
+    with patch.object(llm_jury_mod.logger, 'warning') as warn:
+        await _run_and_capture(evaluator, sink)
+    messages = [call.args[0] for call in warn.call_args_list]
+    assert sum('classify state is empty' in message for message in messages) == 1
+    assert cast(dict[str, Any], sink[0].state) == {}
+
+
+@pytest.mark.asyncio
+async def test_an_llm_only_panel_builds_no_question_and_no_state() -> None:
+    """A panel of prompted judges must not pay for a question nobody answers — nor warn about it."""
+    sink: list[Any] = []
+    evaluator = llm_jury(
+        name='x',
+        criteria='c',
+        judges=['gpt-5-mini'],
+        state_fields=['ouput.response'],  # typo on purpose: nothing would resolve
+        client=MagicMock(),
+    )
+    with patch.object(llm_jury_mod.logger, 'warning') as warn:
+        await _run_and_capture(evaluator, sink)
+    assert sink == [None]
+    assert not any('classify state' in call.args[0] for call in warn.call_args_list)
+
+
+@pytest.mark.asyncio
+async def test_a_classify_panel_whose_prompt_renders_nothing_warns_about_the_empty_state() -> None:
+    sink: list[Any] = []
+    evaluator = llm_jury(
+        name='x', criteria='c', prompt='judge against {{criteria}}', judges=[JEV], client=MagicMock()
     )
     with patch.object(llm_jury_mod.logger, 'warning') as warn:
         await _run_and_capture(evaluator, sink)
@@ -432,6 +511,21 @@ async def test_pairwise_state_fields_override() -> None:
         'response_a.output.response',
         'response_b.output.response',
     ]
+
+
+@pytest.mark.asyncio
+async def test_pairwise_llm_only_panel_builds_no_question() -> None:
+    sink: list[Any] = []
+    comparator = llm_jury_pairwise(criteria='c', judges=['gpt-5-mini'], swap=False, client=MagicMock())
+
+    async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
+        sink.append(kwargs.get('classify'))
+        return JudgeOutcome(payload=EvaluatorResponsePayload(value='A', explanation='ok'))
+
+    with patch.object(llm_jury_mod, 'run_judge', side_effect=fake_run_judge):
+        await comparator.compare(question='q?', response_a='alpha', response_b='beta')
+
+    assert sink == [None]
 
 
 def test_pairwise_comparator_accepts_state_fields_directly() -> None:

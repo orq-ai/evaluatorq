@@ -98,6 +98,8 @@ The material it compares is every placeholder the template renders except `crite
 
 Position-bias swapping is unchanged. The question is rebuilt per ordering, so each call states which response sits in which seat, and the two verdicts reconcile exactly as a prompted judge's do.
 
+A classify judge is not prompted, so `system_prompt`, `prompt`, `temperature` and `structured_output` never reach it. `llm_jury_pairwise()` names the ones you set in a single warning when it builds the comparator; on a mixed panel they still apply in full to the prompted judges.
+
 ## Reading a comparison
 
 `compare()` returns a `PairwiseComparison`:
