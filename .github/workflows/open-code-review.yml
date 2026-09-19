@@ -71,6 +71,15 @@ jobs:
           # one deliberate re-review from the merge-base.
           checkpoint_range: 'true'
           llm_use_anthropic: 'true'
+          # Pinned rather than left empty, which would also resolve to medium:
+          # the cost dial should be visible in the file, not inherited. One
+          # 90-line diff cost 924,609 tokens (216,641 of them not cache reads)
+          # in 9m33s at this setting. Drop to 'low' if that proves too dear.
+          # Note llm_reasoning_effort is a different dial and must stay unset —
+          # it is OpenAI-protocol only, and the action fails fast when it is set
+          # on the Anthropic protocol this workflow uses. The Anthropic-side
+          # equivalent is the thinking budget in llm_extra_body below.
+          effort: 'medium'
           # Required, not cosmetic: the action's default extra_body is
           # {"thinking": {"type": "disabled"}}, which would silently switch the
           # reasoning off again. Budget stays under the CLI's 16384 max_tokens.
