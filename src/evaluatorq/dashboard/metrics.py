@@ -19,6 +19,7 @@ rate, severity, token usage) when nothing in a store reported cost.
 from __future__ import annotations
 
 import functools
+import math
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, TypeVar
@@ -433,10 +434,10 @@ def _redteam_tiles(manifests: list[library.ReportCard]) -> _RedteamTiles:
     """Roll up token, cost, resistance and severity totals across red-team reports."""
     severity_counts: dict[str, int] = {}
     tokens = 0
-    cost = 0.0
+    costs: list[float] = []
     costed_runs = 0
-    input_cost = 0.0
-    output_cost = 0.0
+    input_costs: list[float] = []
+    output_costs: list[float] = []
     has_input_cost = False
     has_output_cost = False
     priced_calls = 0
@@ -470,7 +471,8 @@ def _redteam_tiles(manifests: list[library.ReportCard]) -> _RedteamTiles:
             # carried no readable cost must not count as "costed" — mirror
             # the None semantics of _cost_usd for stored summaries.
             if counts.cost is not None:
-                cost += counts.cost
+                # fsum: order-independent, so per-surface grouping cannot change the total
+                costs.append(counts.cost)
                 costed_runs += 1
             # The input/output split is not recoverable from legacy results.
             by_sev = counts.by_severity
@@ -482,15 +484,15 @@ def _redteam_tiles(manifests: list[library.ReportCard]) -> _RedteamTiles:
             tokens += tok
             run_cost = _cost_usd(usage)
             if run_cost is not None:
-                cost += run_cost
+                costs.append(run_cost)
                 costed_runs += 1
             run_input = _input_cost(usage)
             if run_input is not None:
-                input_cost += run_input
+                input_costs.append(run_input)
                 has_input_cost = True
             run_output = _output_cost(usage)
             if run_output is not None:
-                output_cost += run_output
+                output_costs.append(run_output)
                 has_output_cost = True
             run_priced, run_calls, run_unknown = _cost_calls(usage)
             priced_calls += run_priced
@@ -502,10 +504,10 @@ def _redteam_tiles(manifests: list[library.ReportCard]) -> _RedteamTiles:
     return _RedteamTiles(
         stats=_TileStats(
             tokens=tokens,
-            cost=cost,
+            cost=math.fsum(costs),
             costed_runs=costed_runs,
-            input_cost=input_cost,
-            output_cost=output_cost,
+            input_cost=math.fsum(input_costs),
+            output_cost=math.fsum(output_costs),
             has_input_cost=has_input_cost,
             has_output_cost=has_output_cost,
             priced_calls=priced_calls,
@@ -521,10 +523,10 @@ def _redteam_tiles(manifests: list[library.ReportCard]) -> _RedteamTiles:
 def _sim_tiles(manifests: list[library.ReportCard]) -> _TileStats:
     """Roll up token and cost totals across simulation reports."""
     tokens = 0
-    cost = 0.0
+    all_costs: list[float] = []
     costed_runs = 0
-    input_cost = 0.0
-    output_cost = 0.0
+    all_input_costs: list[float] = []
+    all_output_costs: list[float] = []
     has_input_cost = False
     has_output_cost = False
     priced_calls = 0
@@ -537,15 +539,15 @@ def _sim_tiles(manifests: list[library.ReportCard]) -> _TileStats:
         usages = [res.get('token_usage') for res in results]
         costs = [c for c in (_cost_usd(u) for u in usages) if c is not None]
         if costs:
-            cost += sum(costs)
+            all_costs.extend(costs)
             costed_runs += 1
         inputs = [c for c in (_input_cost(u) for u in usages) if c is not None]
         if inputs:
-            input_cost += sum(inputs)
+            all_input_costs.extend(inputs)
             has_input_cost = True
         outputs = [c for c in (_output_cost(u) for u in usages) if c is not None]
         if outputs:
-            output_cost += sum(outputs)
+            all_output_costs.extend(outputs)
             has_output_cost = True
         for u in usages:
             res_priced, res_calls, res_unknown = _cost_calls(u)
@@ -554,10 +556,10 @@ def _sim_tiles(manifests: list[library.ReportCard]) -> _TileStats:
             unknown_calls += res_unknown
     return _TileStats(
         tokens=tokens,
-        cost=cost,
+        cost=math.fsum(all_costs),
         costed_runs=costed_runs,
-        input_cost=input_cost,
-        output_cost=output_cost,
+        input_cost=math.fsum(all_input_costs),
+        output_cost=math.fsum(all_output_costs),
         has_input_cost=has_input_cost,
         has_output_cost=has_output_cost,
         priced_calls=priced_calls,
@@ -587,7 +589,7 @@ def landing(roots: list[Path] | None = None) -> Landing:
     sim_cost = sim_tiles.cost
     costed_runs = rt.costed_runs + sim_tiles.costed_runs
     pw_tokens = 0
-    pw_cost = 0.0
+    pw_costs: list[float] = []
     input_cost_total = rt.input_cost + sim_tiles.input_cost
     output_cost_total = rt.output_cost + sim_tiles.output_cost
     priced_calls_total = rt.priced_calls + sim_tiles.priced_calls
@@ -604,7 +606,7 @@ def landing(roots: list[Path] | None = None) -> Landing:
         total_tokens += tok
         costs = [c for c in (_cost_usd(u) for u in usages) if c is not None]
         if costs:
-            pw_cost += sum(costs)
+            pw_costs.extend(costs)
             costed_runs += 1
         inputs = [c for c in (_input_cost(u) for u in usages) if c is not None]
         if inputs:
@@ -619,6 +621,7 @@ def landing(roots: list[Path] | None = None) -> Landing:
             priced_calls_total += res_priced
             cost_calls_total += res_calls
             unknown_calls_total += res_unknown
+    pw_cost = math.fsum(pw_costs)
 
     # Unknown sorts last, after the real scale, and only appears when non-zero.
     severity = [(sev, severity_counts[sev]) for sev in (*SEVERITY_ORDER, UNKNOWN_SEVERITY) if severity_counts.get(sev)]
