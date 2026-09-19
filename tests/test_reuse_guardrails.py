@@ -112,6 +112,59 @@ def test_llm_calls_go_through_the_shared_helper() -> None:
     )
 
 
+# The one module allowed to POST /classify. Every other call site goes through
+# `execute_classify`, which owns the bounded call, trace headers, span recording
+# and usage extraction the same way the chat and Responses executors do.
+_CLASSIFY_POST_OWNER = 'common/llm_call.py'
+
+
+def _classify_post_lines(source: str) -> list[int]:
+    """Line numbers of ``<something>.post('/classify'...)`` calls.
+
+    Narrow on purpose: the package POSTs to plenty of non-LLM endpoints
+    (`send_results.py`, `fetch_data.py`, `simulation/traces.py`), so the
+    predicate is the endpoint literal, not the method name.
+    """
+    return [
+        node.lineno
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == 'post'
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and isinstance(node.args[0].value, str)
+        and node.args[0].value.startswith('/classify')
+    ]
+
+
+def test_classify_posts_go_through_execute_classify() -> None:
+    hits = [
+        f'{path.relative_to(SRC).as_posix()}:{lineno}'
+        for path in sorted(SRC.rglob('*.py'))
+        if path.relative_to(SRC).as_posix() != _CLASSIFY_POST_OWNER
+        for lineno in _classify_post_lines(path.read_text(encoding='utf-8'))
+    ]
+    assert not hits, (
+        'Direct POST to /classify outside common/llm_call.py: '
+        + ', '.join(hits)
+        + '. Use evaluatorq.common.llm_call.execute_classify — it owns the bounded '
+        'call, trace-header injection, span input/output recording and usage extraction.'
+    )
+
+
+def test_classify_post_detector_actually_fires() -> None:
+    """A guardrail nobody proved can fail is a guardrail that silently no-ops."""
+    assert _classify_post_lines("await client.post('/classify', body=b)") == [1]
+    assert _classify_post_lines('await client.post("/classify", body=b)') == [1]
+    # Other endpoints are other people's business.
+    assert _classify_post_lines("await client.post('/v2/traces', json=b)") == []
+    # A mention is not a call.
+    assert _classify_post_lines('"""Docstring mentions client.post(\'/classify\')."""') == []
+    assert _classify_post_lines("# client.post('/classify')") == []
+    assert _classify_post_lines("path = '/classify'") == []
+
+
 def test_openai_clients_come_from_llm_client() -> None:
     extra = _hits(lambda name: _tail(name) in OPENAI_CLIENT_NAMES, allow={'common/llm_client.py'})
     assert not extra, (

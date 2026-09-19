@@ -21,6 +21,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from openai import BadRequestError
+from pydantic import ValidationError
 
 from evaluatorq.common.llm_limit import llm_slot
 from evaluatorq.common.model_catalogue import price_usage
@@ -482,6 +483,9 @@ async def execute_classify(
     **Retry.** None here. The single retry layer on this path is ``run_judge``'s
     ``with_retry``, which is why the client arrives with ``max_retries=0``.
     """
+    # No `apply_pipeline_metadata` here: the /classify wire contract accepts only
+    # model, state and questions, so a metadata block is an unknown key on a body
+    # the router validates strictly.
     body: dict[str, Any] = {
         'model': model,
         'state': question.state,
@@ -508,9 +512,24 @@ async def execute_classify(
     # Imported here, not at module scope: `judge` imports this module.
     from evaluatorq.common.judge import ClassifyResponse as _ClassifyResponse
 
-    response = _ClassifyResponse.model_validate(payload)
+    try:
+        response = _ClassifyResponse.model_validate(payload)
+    except ValidationError:
+        # `run_judge`'s ValidationError handler only knows the body it was given, and
+        # on this path that is still '{}' — log the wire body here or it is lost.
+        logger.exception(
+            'Classify %s reply did not validate | raw (truncated): %s',
+            model,
+            json.dumps(payload, default=str)[:500],
+        )
+        raise
     record_llm_output(span, response.model_dump_json())
     usage = TokenUsage.extract(response.usage, calls=1)
-    record_token_usage(span, usage=usage)
+    if usage is None:
+        # Not recorded as zeros: a call with no readable usage is unpriced, and
+        # `gen_ai.usage.*` zeros on the span would read as a genuinely free call.
+        logger.warning('Classify %s reply carried no usage block; the call stays unpriced and unrecorded', model)
+    else:
+        record_token_usage(span, usage=usage)
     # Priced by the router; price_usage is a no-op unless it came back unpriced.
     return response, await price_usage(usage, model, client, served_model=response.model)

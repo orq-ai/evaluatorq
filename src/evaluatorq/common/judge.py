@@ -743,6 +743,9 @@ async def run_judge(
             error_message=f'{model} is a classify model but the caller passed no classify question',
             endpoint=None,
         )
+    # The single "is this attempt a classify call" flag from here on: the pair above
+    # is already resolved, so nothing downstream has to re-check both.
+    classify_question = classify if use_classify else None
     if use_classify:
         warn_unread_config_fields(
             cfg,
@@ -771,13 +774,15 @@ async def run_judge(
         # on attempt 3 gets logged and returned with attempt 2's body — the "raw
         # (truncated)" line would describe a different call than the one that failed.
         raw_content = '{}'
-        if classify is not None and use_classify:
+        if classify_question is not None:
             async with with_llm_span(
                 model=model,
                 operation='classify',
                 attributes=span_attributes or {},
             ) as span:
-                outcome = await _classify_judge(client=client, model=model, cfg=cfg, question=classify, span=span)
+                outcome = await _classify_judge(
+                    client=client, model=model, cfg=cfg, question=classify_question, span=span
+                )
             raw_content = outcome.raw_content or raw_content
             return outcome
         # Default for judges: the Responses endpoint is the one the Orq router

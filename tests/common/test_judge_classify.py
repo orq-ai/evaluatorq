@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -9,8 +10,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from loguru import logger
 from openai import RateLimitError
+from pydantic import ValidationError
 
 from evaluatorq.common import judge as judge_mod
+from evaluatorq.common import llm_call
 from evaluatorq.common import model_catalogue
 from evaluatorq.common.judge import ClassifyQuestion, JudgeError, run_judge
 from evaluatorq.contracts import LLMCallConfig
@@ -172,7 +175,7 @@ async def test_score_verdict_maps_onto_the_unit_interval():
 
     assert outcome.payload is not None
     assert outcome.payload.value == pytest.approx(0.575)
-    assert 'score=2.30/4' in outcome.payload.explanation
+    assert outcome.payload.explanation == 'score=2.30/4 → 0.57 (confidence 0.81)'
 
 
 @pytest.mark.asyncio
@@ -251,3 +254,87 @@ async def test_router_reported_cost_lands_on_the_token_usage():
     assert outcome.token_usage.total_cost == pytest.approx(0.004)
     assert outcome.token_usage.input_tokens == 120
     assert outcome.token_usage.priced_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_an_answer_missing_its_value_field_is_a_parse_error_not_an_abstention():
+    """A verdict that cannot be read is a broken judge, not a judge declining to call it."""
+    client = _client(_reply({'type': 'noul'}))
+
+    outcome = await _judge(client, _noul_question())
+
+    assert outcome.error_kind is JudgeError.PARSE
+    assert outcome.payload is None
+    assert outcome.endpoint == 'classify'
+    assert outcome.error_message is not None
+    assert 'noul' in outcome.error_message
+
+
+@pytest.mark.asyncio
+async def test_a_reply_without_a_verdict_answer_is_a_parse_error():
+    client = _client({'answers': {'other': {'type': 'noul', 'noul': 0.9}}, 'usage': _usage(), 'model': 'jev-latest'})
+
+    outcome = await _judge(client, _noul_question())
+
+    assert outcome.error_kind is JudgeError.PARSE
+    assert outcome.payload is None
+    assert outcome.error_message is not None
+    assert 'other' in outcome.error_message
+
+
+@pytest.mark.asyncio
+async def test_an_answer_of_the_wrong_type_for_the_question_is_a_parse_error():
+    """The question's kind is the authority: a choice answer cannot settle a noul question."""
+    client = _client(_reply({'type': 'choice', 'choice': 'neutral'}))
+
+    outcome = await _judge(client, _noul_question())
+
+    assert outcome.error_kind is JudgeError.PARSE
+    assert outcome.payload is None
+
+
+@pytest.mark.asyncio
+async def test_a_reply_that_does_not_validate_is_a_parse_error_naming_the_body(caplog: pytest.LogCaptureFixture):
+    client = _client({'answers': 'not-a-mapping', 'model': 'jev-latest'})
+
+    with caplog.at_level(logging.ERROR, logger='evaluatorq.common.llm_call'):
+        outcome = await _judge(client, _noul_question())
+
+    assert outcome.error_kind is JudgeError.PARSE
+    assert outcome.payload is None
+    assert 'not-a-mapping' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_reply_without_usage_stays_unpriced_and_unrecorded(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    """Zeros on the span would read as a genuinely free call; unknown must stay unknown."""
+    recorded: list[Any] = []
+    monkeypatch.setattr(llm_call, 'record_token_usage', lambda span, **kw: recorded.append(kw))  # noqa: ARG005
+    client = _client({'answers': {'verdict': {'type': 'noul', 'noul': 0.9}}, 'model': 'jev-latest'})
+
+    with caplog.at_level(logging.WARNING, logger='evaluatorq.common.llm_call'):
+        outcome = await _judge(client, _noul_question())
+
+    assert outcome.error_kind is None
+    assert outcome.token_usage is None
+    assert recorded == []
+    assert 'no usage block' in caplog.text
+    assert JEV in caplog.text
+
+
+@pytest.mark.parametrize(
+    'kwargs',
+    [
+        pytest.param({'kind': 'choice', 'criteria': {}}, id='choice-with-no-labels'),
+        pytest.param({'kind': 'score', 'criteria': ['only-one']}, id='score-with-one-level'),
+        pytest.param({'kind': 'score', 'criteria': [f'level {i}' for i in range(11)]}, id='score-with-eleven-levels'),
+        pytest.param({'kind': 'noul', 'criteria': {'yes': 'a', 'no': 'b'}}, id='noul-with-wrong-keys'),
+    ],
+)
+def test_a_criteria_shape_the_endpoint_would_reject_is_refused_locally(kwargs: dict[str, Any]):
+    """Rejected before the call is paid for, not after a 400."""
+    with pytest.raises(ValidationError):
+        ClassifyQuestion(instructions='q', state='s', **kwargs)  # pyright: ignore[reportArgumentType]
