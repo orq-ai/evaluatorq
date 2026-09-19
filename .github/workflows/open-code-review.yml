@@ -22,7 +22,7 @@ permissions:
 jobs:
   open-code-review:
     # A dependabot-triggered run reads the Dependabot secret store, where
-    # ORQ_API_KEY does not exist.
+    # ORQ_REVIEW_API_KEY does not exist.
     if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 30
