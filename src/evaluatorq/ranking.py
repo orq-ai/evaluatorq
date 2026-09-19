@@ -168,25 +168,12 @@ def binarize(comparisons: Iterable[JudgedComparison]) -> list[JudgedComparison]:
     return out
 
 
-def fit_bt(
+def _validate_bt_inputs(
     comparisons: Sequence[JudgedComparison],
     *,
-    judge_sigma: bool = True,
-    hard: bool = False,
-) -> BTFit:
-    """Fit the Bradley-Terry family by MLE on the given comparisons.
-
-    ``judge_sigma`` adds the per-judge discriminator (BT-sigma). ``hard``
-    binarizes preferences first (hard BT / hard BT-sigma) - the paper's most
-    robust variant when judges are highly inconsistent.
-
-    Degradations (recorded in ``warnings``, never raised):
-
-    - a single judge with ``judge_sigma=True`` falls back to plain BT - a lone
-      sigma is absorbed into the skill scale and carries no information
-      (paper section 3.3);
-    - a tiny ridge keeps disconnected graphs / perfect separation finite.
-    """
+    judge_sigma: bool,
+    hard: bool,
+) -> tuple[Sequence[JudgedComparison], list[str], list[str], list[str], bool]:
     if not comparisons:
         msg = 'fit_bt needs at least one comparison'
         raise ValueError(msg)
@@ -232,6 +219,16 @@ def fit_bt(
         warnings.append('single judge: sigma is unidentifiable, fitted plain BT instead')
         logger.warning('fit_bt: {}', warnings[-1])
 
+    return comparisons, items, judges, warnings, use_sigma
+
+
+def _bt_iterate(
+    comparisons: Sequence[JudgedComparison],
+    items: list[str],
+    judges: list[str],
+    *,
+    use_sigma: bool,
+) -> tuple[dict[str, float], dict[str, float], int, bool, float]:
     s = dict.fromkeys(items, 0.0)  # skills
     tau = dict.fromkeys(judges, 0.0)  # log sigmas
     # Adam state
@@ -310,6 +307,40 @@ def fit_bt(
         if still_streak >= _TOL_STREAK:
             converged = True
             break
+
+    return s, tau, iterations, converged, delta
+
+
+def fit_bt(
+    comparisons: Sequence[JudgedComparison],
+    *,
+    judge_sigma: bool = True,
+    hard: bool = False,
+) -> BTFit:
+    """Fit the Bradley-Terry family by MLE on the given comparisons.
+
+    ``judge_sigma`` adds the per-judge discriminator (BT-sigma). ``hard``
+    binarizes preferences first (hard BT / hard BT-sigma) - the paper's most
+    robust variant when judges are highly inconsistent.
+
+    Degradations (recorded in ``warnings``, never raised):
+
+    - a single judge with ``judge_sigma=True`` falls back to plain BT - a lone
+      sigma is absorbed into the skill scale and carries no information
+      (paper section 3.3);
+    - a tiny ridge keeps disconnected graphs / perfect separation finite.
+    """
+    comparisons, items, judges, warnings, use_sigma = _validate_bt_inputs(
+        comparisons,
+        judge_sigma=judge_sigma,
+        hard=hard,
+    )
+    s, tau, iterations, converged, delta = _bt_iterate(
+        comparisons,
+        items,
+        judges,
+        use_sigma=use_sigma,
+    )
 
     if not converged:
         warnings.append(f'fit stopped at the {_MAX_ITER}-iteration cap (max|step|={delta:.2e})')

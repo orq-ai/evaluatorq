@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage, messages_to_dict
 
 from evaluatorq.integrations.langchain_integration.convert import convert_to_open_responses
@@ -39,3 +42,38 @@ def test_dict_messages_convert():
     result = convert_to_open_responses(messages_to_dict(msgs))
     assert result.get('input')
     assert result.get('output')
+
+
+def test_unhashable_dict_message_type_is_skipped(caplog: pytest.LogCaptureFixture):
+    """A malformed unhashable message type is skipped, and the skip is announced.
+
+    The empty ``output`` alone proves nothing — an unrecognised type produces no
+    items whether or not the degraded path ran. The warning is what distinguishes
+    "skipped this message on purpose" from "crashed before producing anything".
+    """
+    logger_name = 'evaluatorq.integrations.langchain_integration.convert'
+    with caplog.at_level(logging.WARNING, logger=logger_name):
+        result = convert_to_open_responses([{'type': ['custom']}])
+
+    assert result.get('output') == []
+    assert result.get('input') == []
+    assert 'Skipping unknown LangChain message type' in caplog.text
+    assert "['custom']" in caplog.text
+
+
+def test_unhashable_str_subclass_message_type_is_skipped(caplog: pytest.LogCaptureFixture):
+    """A ``str`` subclass with ``__hash__`` disabled passes the ``isinstance`` guard
+    but still can't be used as a dict key. It must take the same warn-and-skip
+    path as any other unrecognised type, not raise ``TypeError``.
+    """
+
+    class UnhashableStr(str):
+        __hash__ = None  # pyright: ignore[reportAssignmentType]
+
+    logger_name = 'evaluatorq.integrations.langchain_integration.convert'
+    with caplog.at_level(logging.WARNING, logger=logger_name):
+        result = convert_to_open_responses([{'type': UnhashableStr('human')}])
+
+    assert result.get('output') == []
+    assert result.get('input') == []
+    assert 'Skipping unknown LangChain message type' in caplog.text
