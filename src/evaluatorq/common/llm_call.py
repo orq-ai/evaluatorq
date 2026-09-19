@@ -457,6 +457,21 @@ async def execute_response(
     )
 
 
+class ClassifyResponseError(ValueError):
+    """A ``/classify`` reply that did not validate, carrying the wire body that did not.
+
+    The body travels on the exception because it is the only place it exists: the
+    caller's raw-content variable still holds the placeholder it was initialised
+    with, so a judge that reported the failure without this would name a body it
+    never saw. ``raw`` is untruncated — the reader truncates for the log, and the
+    trace keeps the whole thing.
+    """
+
+    def __init__(self, message: str, *, raw: str) -> None:
+        super().__init__(message)
+        self.raw = raw
+
+
 async def execute_classify(
     *,
     client: AsyncOpenAI,
@@ -514,15 +529,10 @@ async def execute_classify(
 
     try:
         response = _ClassifyResponse.model_validate(payload)
-    except ValidationError:
-        # `run_judge`'s ValidationError handler only knows the body it was given, and
-        # on this path that is still '{}' — log the wire body here or it is lost.
-        logger.exception(
-            'Classify %s reply did not validate | raw (truncated): %s',
-            model,
-            json.dumps(payload, default=str)[:500],
-        )
-        raise
+    except ValidationError as e:
+        raise ClassifyResponseError(
+            f'classify reply from {model} did not validate', raw=json.dumps(payload, default=str)
+        ) from e
     record_llm_output(span, response.model_dump_json())
     usage = TokenUsage.extract(response.usage, calls=1)
     if usage is None:

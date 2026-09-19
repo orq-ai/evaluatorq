@@ -29,7 +29,6 @@ def _jev_entry() -> model_catalogue.ModelInfo:
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch: pytest.MonkeyPatch):
     model_catalogue.reset_catalogue_cache()
-    judge_mod.reset_classify_warnings()
 
     async def fake_load(client=None):  # noqa: ANN001, ARG001
         return {
@@ -41,7 +40,6 @@ def _isolate(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
     yield
     model_catalogue.reset_catalogue_cache()
-    judge_mod.reset_classify_warnings()
 
 
 def _usage(total_cost: float | None = None) -> dict[str, Any]:
@@ -299,17 +297,67 @@ async def test_an_answer_of_the_wrong_type_for_the_question_is_a_parse_error():
 
     assert outcome.error_kind is JudgeError.PARSE
     assert outcome.payload is None
+    assert 'neutral' in outcome.raw_content
 
 
 @pytest.mark.asyncio
-async def test_a_reply_that_does_not_validate_is_a_parse_error_naming_the_body(caplog: pytest.LogCaptureFixture):
+async def test_a_choice_outside_the_question_labels_is_a_parse_error():
+    """A label nobody offered is not a verdict about this question."""
+    question = ClassifyQuestion(
+        kind='choice',
+        instructions='which is better?',
+        criteria={'A': 'A is better', 'B': 'B is better'},
+        state={'pair': 'x'},
+    )
+    client = _client(_reply({'type': 'choice', 'choice': 'C'}))
+
+    outcome = await _judge(client, question)
+
+    assert outcome.error_kind is JudgeError.PARSE
+    assert outcome.payload is None
+    assert "'choice': 'C'" in outcome.raw_content or '"choice":"C"' in outcome.raw_content
+
+
+@pytest.mark.asyncio
+async def test_a_probability_outside_the_unit_interval_is_a_parse_error():
+    client = _client(_reply({'type': 'noul', 'noul': 1.5}))
+
+    outcome = await _judge(client, _noul_question())
+
+    assert outcome.error_kind is JudgeError.PARSE
+    assert outcome.payload is None
+    assert '1.5' in outcome.raw_content
+
+
+@pytest.mark.asyncio
+async def test_a_score_off_the_level_scale_is_a_parse_error():
+    question = ClassifyQuestion(
+        kind='score',
+        instructions='rate it',
+        criteria=['useless', 'fine', 'excellent'],
+        state={'answer': 'x'},
+    )
+    client = _client(_reply({'type': 'score', 'score': -1.0}))
+
+    outcome = await _judge(client, question)
+
+    assert outcome.error_kind is JudgeError.PARSE
+    assert outcome.payload is None
+    assert '-1' in outcome.raw_content
+
+
+@pytest.mark.asyncio
+async def test_a_reply_that_does_not_validate_is_a_parse_error_carrying_the_body(caplog: pytest.LogCaptureFixture):
+    """The unreadable body reaches the outcome: '{}' would describe a call that never happened."""
     client = _client({'answers': 'not-a-mapping', 'model': 'jev-latest'})
 
-    with caplog.at_level(logging.ERROR, logger='evaluatorq.common.llm_call'):
+    with caplog.at_level(logging.ERROR, logger='evaluatorq.common.judge'):
         outcome = await _judge(client, _noul_question())
 
     assert outcome.error_kind is JudgeError.PARSE
     assert outcome.payload is None
+    assert outcome.endpoint == 'classify'
+    assert 'not-a-mapping' in outcome.raw_content
     assert 'not-a-mapping' in caplog.text
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
@@ -16,6 +17,7 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError, BadReque
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, model_validator
 
 from evaluatorq.common.llm_call import (
+    ClassifyResponseError,
     execute_chat_completion,
     execute_chat_parse,
     execute_classify,
@@ -582,39 +584,37 @@ async def _json_object_judge(
     return EvaluatorResponsePayload.model_validate_json(cleaned), usage, raw
 
 
-# Models already warned about a system prompt a classify judge cannot use: the judge
-# is rebuilt once per datapoint, and one line per model per run is the useful volume.
-_CLASSIFY_SYSTEM_PROMPT_WARNED: set[str] = set()
-
-
-def reset_classify_warnings() -> None:
-    """Clear the classify warning memos; exists for test isolation."""
-    _CLASSIFY_SYSTEM_PROMPT_WARNED.clear()
-
-
 def _classify_verdict(question: ClassifyQuestion, answer: ClassifyAnswer) -> tuple[bool | float | str, str] | None:
     """Turn one classify answer into ``(value, explanation)``, or None when it is unreadable.
 
-    The question's ``kind`` is the authority, not the answer's ``type``: the
-    question is what was asked and what the caller's threshold and levels
-    describe. The explanation is synthesised here because a classify model
-    returns a distribution and no prose — the numbers that decided the verdict
-    are the explanation.
+    The question's ``kind`` is the authority on what was asked — it is what the
+    caller's threshold and levels describe — and the answer's ``type`` has to
+    agree with it, because an answer of another shape settles a different
+    question. The value has to fall inside the domain the question posed too: an
+    unlisted choice label, a probability outside [0, 1] or a score off the level
+    scale is as unreadable as a missing field, and scoring it would invent a
+    verdict the model never gave. The explanation is synthesised here because a
+    classify model returns a distribution and no prose — the numbers that decided
+    the verdict are the explanation.
     """
+    if answer.type != question.kind:
+        return None
     if question.kind == 'noul':
-        if answer.noul is None:
+        if answer.noul is None or not math.isfinite(answer.noul) or not 0.0 <= answer.noul <= 1.0:
             return None
         return answer.noul >= question.noul_threshold, (
             f'noul={answer.noul:.2f} (threshold {question.noul_threshold:g})'
         )
     if question.kind == 'choice':
-        if answer.choice is None:
+        if answer.choice is None or not isinstance(question.criteria, dict) or answer.choice not in question.criteria:
             return None
         confidence = '' if answer.confidence is None else f' (confidence {answer.confidence:.2f})'
         return answer.choice, f'choice={answer.choice!r}{confidence}'
     if answer.score is None or not isinstance(question.criteria, list):
         return None
     top = len(question.criteria) - 1
+    if not math.isfinite(answer.score) or not 0.0 <= answer.score <= top:
+        return None
     value = min(1.0, max(0.0, answer.score / top))
     confidence = '' if answer.confidence is None else f' (confidence {answer.confidence:.2f})'
     return value, f'score={answer.score:.2f}/{top} → {value:.2f}{confidence}'
@@ -636,13 +636,27 @@ async def _classify_judge(
     answer that cannot be read at all is a `JudgeError.PARSE`, not an abstention,
     so a broken verdict is never counted as a judge declining to call it.
     """
-    response, usage = await execute_classify(
-        client=client,
-        model=model,
-        question=question,
-        span=span,
-        timeout_s=cfg.timeout_ms / 1000.0,
-    )
+    try:
+        response, usage = await execute_classify(
+            client=client,
+            model=model,
+            question=question,
+            span=span,
+            timeout_s=cfg.timeout_ms / 1000.0,
+        )
+    except ClassifyResponseError as e:
+        logger.error(
+            'Judge [{}] classify reply did not validate ({}) | raw (truncated): {}',
+            model,
+            e.__cause__ or e,
+            e.raw[:500],
+        )
+        return JudgeOutcome(
+            error_kind=JudgeError.PARSE,
+            error_message=str(e.__cause__ or e),
+            raw_content=e.raw,
+            endpoint='classify',
+        )
     raw = response.model_dump_json()
     answer = response.answers.get('verdict')
     if answer is None:
@@ -656,10 +670,16 @@ async def _classify_judge(
         )
     verdict = _classify_verdict(question, answer)
     if verdict is None:
-        logger.error('Judge [{}] classify {} answer carried no {} field', model, question.kind, question.kind)
+        logger.error(
+            'Judge [{}] classify answer is not a readable {} verdict (type={}, raw={})',
+            model,
+            question.kind,
+            answer.type,
+            answer.model_dump_json()[:500],
+        )
         return JudgeOutcome(
             error_kind=JudgeError.PARSE,
-            error_message=f'classify answer carried no {question.kind} value',
+            error_message=f'classify answer is not a readable {question.kind} verdict',
             token_usage=usage,
             raw_content=raw,
             endpoint='classify',
@@ -697,11 +717,14 @@ async def run_judge(
     """Render the template, call the judge model, and parse the verdict.
 
     **Classify models.** A model the catalogue marks as classify-only (Jev) is
-    judged on the router's ``/classify`` endpoint from the ``classify`` question,
-    and the prompt, schema and sampling settings play no part — the leg warns
-    about every config field it therefore does not read. Such a model reached
-    without a ``classify`` question is an error, not a fallback: prompting it
-    would produce a bill and no verdict.
+    judged on the router's ``/classify`` endpoint from the ``classify`` question.
+    The prompt, the verdict schema and the sampling keywords play no part in that
+    call: the leg warns per call about every `LLMCallConfig` field it does not
+    read, and the keywords that are not config fields (``system_prompt``,
+    ``prompt``, ``temperature``, ``structured_output``) are warned about once by
+    the caller that set them — `llm_jury` does it at construction. Such a model
+    reached without a ``classify`` question is an error, not a fallback: prompting
+    it would produce a bill and no verdict.
 
     **Which endpoint.** ``cfg.api='responses'`` (the default for evaluators) sends
     the call to the Orq router's Responses endpoint — the one it prices — but only
@@ -738,14 +761,20 @@ async def run_judge(
     # `llm_jury` always sets) says nothing about it.
     use_classify = client_routes_through_orq(client) and await supports_classify(model, client)
     if use_classify and classify is None:
-        logger.error('Judge [{}] is a classify model but no classify question was supplied', model)
+        logger.error(
+            'Judge [{}] is a classify model but no classify question was supplied; `llm_jury` builds one only '
+            'for a model listed in KNOWN_CLASSIFY_MODELS (evaluatorq.common.model_catalogue)',
+            model,
+        )
         return JudgeOutcome(
             error_kind=JudgeError.UNKNOWN,
-            error_message=f'{model} is a classify model but the caller passed no classify question',
+            error_message=(
+                f'{model} is a classify model but the caller passed no classify question; a model the catalogue '
+                f'marks classify must also be listed in KNOWN_CLASSIFY_MODELS '
+                f'(evaluatorq.common.model_catalogue) for llm_jury to build its question'
+            ),
             endpoint=None,
         )
-    # The single "is this attempt a classify call" flag from here on: the pair above
-    # is already resolved, so nothing downstream has to re-check both.
     classify_question = classify if use_classify else None
     if use_classify:
         warn_unread_config_fields(
@@ -753,11 +782,6 @@ async def run_judge(
             read=frozenset({'model', 'timeout_ms', 'retry_count'}),
             caller='run_judge[classify]',
         )
-        if system_prompt != DEFAULT_SECURITY_EVALUATOR_SYSTEM_PROMPT and model not in _CLASSIFY_SYSTEM_PROMPT_WARNED:
-            _CLASSIFY_SYSTEM_PROMPT_WARNED.add(model)
-            logger.warning(
-                'Judge [{}] is a classify model; it takes no system prompt, so the one supplied is ignored', model
-            )
     # Resolved before the span opens so the span carries the operation and the model
     # id this call actually sends — `responses openai/gpt-5-mini`, not `chat gpt-5-mini`
     # — the way every other inference path in the codebase labels its own.
