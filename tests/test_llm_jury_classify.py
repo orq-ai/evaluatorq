@@ -1,0 +1,401 @@
+"""A classify judge (Jev) can be seated on `llm_jury` / `llm_jury_pairwise` panels (RES-1600).
+
+The jury layer never calls ``/classify`` itself: it builds the `ClassifyQuestion` and
+hands it to `run_judge`, which decides the endpoint. These tests therefore capture the
+``classify=`` keyword rather than any request body, and pin the one guarantee the change
+had to keep — a panel with plain list labels and no ``levels`` produces exactly the
+verdict schema and system prompt it produced before.
+"""
+
+from __future__ import annotations
+
+import importlib
+from typing import Any, cast
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from evaluatorq.common.judge import ClassifyQuestion, EvaluatorResponsePayload, JudgeOutcome
+from evaluatorq.llm_jury import (
+    DEFAULT_TEMPLATE,
+    PairwiseComparator,
+    _build_verdict_model,  # pyright: ignore[reportPrivateUsage]
+    _default_system_prompt,  # pyright: ignore[reportPrivateUsage]
+    llm_jury,
+    llm_jury_pairwise,
+)
+from evaluatorq.types import DataPoint, Evaluator, Output, ScorerParameter
+
+# Patch via the module object, not the dotted string: the package re-exports the
+# ``llm_jury`` function, which shadows the same-named submodule (see test_llm_jury_factory).
+llm_jury_mod = importlib.import_module('evaluatorq.llm_jury')
+
+JEV = 'typesafe/jev-latest'
+
+# Captured from the pre-change `_build_verdict_model` / `_default_system_prompt`. A panel
+# that names no label descriptions and no levels must keep producing these byte for byte.
+BOOLEAN_SCHEMA = {
+    'properties': {
+        'explanation': {
+            'default': '',
+            'description': 'Explanation for the verdict',
+            'title': 'Explanation',
+            'type': 'string',
+        },
+        'value': {'title': 'Value', 'type': 'boolean'},
+    },
+    'required': ['value'],
+    'title': 'VerdictModel',
+    'type': 'object',
+}
+LIST_LABELS_SCHEMA = {
+    'properties': {
+        'explanation': {
+            'default': '',
+            'description': 'Explanation for the verdict',
+            'title': 'Explanation',
+            'type': 'string',
+        },
+        'value': {'enum': ['a', 'b'], 'title': 'Value', 'type': 'string'},
+    },
+    'required': ['value'],
+    'title': 'VerdictModel',
+    'type': 'object',
+}
+NUMERIC_SCHEMA = {
+    'properties': {
+        'explanation': {
+            'default': '',
+            'description': 'Explanation for the verdict',
+            'title': 'Explanation',
+            'type': 'string',
+        },
+        'value': {'title': 'Value', 'type': 'number'},
+    },
+    'required': ['value'],
+    'title': 'VerdictModel',
+    'type': 'object',
+}
+BOOLEAN_SYSTEM_PROMPT = (
+    "You are a strict evaluator. Read the input, the model's output, any expected output, and judge "
+    'against the stated criterion. Return a structured verdict with a 2-3 sentence explanation. '
+    '`value` must be a boolean: true if the criterion is met, false otherwise.'
+)
+LIST_LABELS_SYSTEM_PROMPT = (
+    "You are a strict evaluator. Read the input, the model's output, any expected output, and judge "
+    'against the stated criterion. Return a structured verdict with a 2-3 sentence explanation. '
+    '`value` must be exactly one of: a, b.'
+)
+NUMERIC_SYSTEM_PROMPT = (
+    "You are a strict evaluator. Read the input, the model's output, any expected output, and judge "
+    'against the stated criterion. Return a structured verdict with a 2-3 sentence explanation. '
+    '`value` must be a number between 0.0 and 1.0 (higher is better).'
+)
+
+
+def _params(output: Output = 'the answer') -> ScorerParameter:
+    data = DataPoint(inputs={'messages': [{'role': 'user', 'content': 'q'}]}, expected_output='4')
+    return ScorerParameter(data=data, output=output)
+
+
+async def _run_and_capture(evaluator: Evaluator, sink: list[Any]) -> None:
+    """Run the evaluator's scorer once with `run_judge` replaced by a capturing fake."""
+
+    async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
+        sink.append(kwargs.get('classify'))
+        return JudgeOutcome(payload=EvaluatorResponsePayload(value=True, explanation='ok'))
+
+    with patch.object(llm_jury_mod, 'run_judge', side_effect=fake_run_judge):
+        await evaluator['scorer'](_params())
+
+
+# ---------------------------------------------------------------------------
+# Verdict model and system prompt
+# ---------------------------------------------------------------------------
+
+
+def test_plain_panel_schema_and_prompt_are_unchanged() -> None:
+    for kind, labels, schema, prompt in (
+        ('categorical', None, BOOLEAN_SCHEMA, BOOLEAN_SYSTEM_PROMPT),
+        ('categorical', ['a', 'b'], LIST_LABELS_SCHEMA, LIST_LABELS_SYSTEM_PROMPT),
+        ('numeric', None, NUMERIC_SCHEMA, NUMERIC_SYSTEM_PROMPT),
+    ):
+        model = _build_verdict_model(kind, labels, (0.0, 1.0))
+        assert model.model_json_schema() == schema
+        assert _default_system_prompt(kind, labels, (0.0, 1.0)) == prompt
+
+
+def test_label_descriptions_reach_schema_and_prompt() -> None:
+    described = {'a': 'the good one', 'b': None}
+    model = _build_verdict_model('categorical', ['a', 'b'], (0.0, 1.0), label_descriptions=described)
+    value = model.model_json_schema()['properties']['value']
+    assert value['enum'] == ['a', 'b']
+    assert value['description'] == 'One of: a: the good one; b'
+    prompt = _default_system_prompt('categorical', ['a', 'b'], (0.0, 1.0), label_descriptions=described)
+    assert prompt.startswith(LIST_LABELS_SYSTEM_PROMPT)
+    assert 'One of: a: the good one; b' in prompt
+
+
+def test_levels_reach_schema_and_prompt() -> None:
+    levels = ['useless', 'fine', 'excellent']
+    model = _build_verdict_model('numeric', None, (0.0, 1.0), levels=levels)
+    description = model.model_json_schema()['properties']['value']['description']
+    assert description == 'Scale from 0.0 to 1.0. Levels: 0=useless; 1=fine; 2=excellent'
+    prompt = _default_system_prompt('numeric', None, (0.0, 1.0), levels=levels)
+    assert prompt.startswith(NUMERIC_SYSTEM_PROMPT)
+    assert '0=useless; 1=fine; 2=excellent' in prompt
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+
+def test_prompt_and_criteria_may_both_be_set_but_not_neither() -> None:
+    with pytest.raises(ValueError, match='`criteria`, `prompt`, or both'):
+        llm_jury(name='x')
+    evaluator = llm_jury(name='x', criteria='c', prompt='judge {{criteria}}', client=MagicMock())
+    assert evaluator['name'] == 'x'
+
+
+def test_both_set_without_a_criteria_placeholder_warns_once() -> None:
+    with patch.object(llm_jury_mod.logger, 'warning') as warn:
+        llm_jury(name='x', criteria='c', prompt='judge {{output.response}}', client=MagicMock())
+    messages = [call.args[0] for call in warn.call_args_list]
+    assert sum('no judge reads it' in message for message in messages) == 1
+
+
+def test_no_warning_when_the_prompt_reads_criteria() -> None:
+    with patch.object(llm_jury_mod.logger, 'warning') as warn:
+        llm_jury(name='x', criteria='c', prompt='judge {{criteria}} {{output.response}}', client=MagicMock())
+    assert not any('no judge reads it' in call.args[0] for call in warn.call_args_list)
+
+
+def test_no_unread_criteria_warning_for_a_classify_panel() -> None:
+    with patch.object(llm_jury_mod.logger, 'warning') as warn:
+        llm_jury(name='x', criteria='c', prompt='judge {{output.response}}', judges=[JEV], client=MagicMock())
+    assert not any('no judge reads it' in call.args[0] for call in warn.call_args_list)
+
+
+def test_levels_require_numeric_and_a_sane_length() -> None:
+    with pytest.raises(ValueError, match='levels'):
+        llm_jury(name='x', criteria='c', levels=['lo', 'hi'])
+    with pytest.raises(ValueError, match='levels'):
+        llm_jury(name='x', criteria='c', verdict_kind='numeric', levels=['only'])
+    with pytest.raises(ValueError, match='levels'):
+        llm_jury(name='x', criteria='c', verdict_kind='numeric', levels=[str(i) for i in range(11)])
+
+
+def test_classify_panel_requires_criteria() -> None:
+    with pytest.raises(ValueError, match='criteria'):
+        llm_jury(name='x', prompt='judge {{output.response}}', judges=[JEV])
+
+
+def test_classify_panel_numeric_requires_levels() -> None:
+    with pytest.raises(ValueError, match='levels'):
+        llm_jury(name='x', criteria='c', verdict_kind='numeric', judges=[JEV])
+
+
+def test_classify_panel_requires_the_default_score_range() -> None:
+    with pytest.raises(ValueError, match=r'score_range'):
+        llm_jury(
+            name='x',
+            criteria='c',
+            verdict_kind='numeric',
+            levels=['lo', 'hi'],
+            score_range=(1.0, 5.0),
+            threshold=3.0,
+            judges=[JEV],
+        )
+
+
+def test_a_replacement_classify_judge_seats_the_same_rules() -> None:
+    with pytest.raises(ValueError, match='criteria'):
+        llm_jury(name='x', prompt='p', judges=['gpt-5-mini'], replacement_judges=[JEV])
+
+
+def test_classify_panel_warns_once_on_repetitions() -> None:
+    with patch.object(llm_jury_mod.logger, 'warning') as warn:
+        llm_jury(name='x', criteria='c', judges=[JEV], repetitions=3, client=MagicMock())
+    assert sum('repetitions' in call.args[0] for call in warn.call_args_list) == 1
+
+
+# ---------------------------------------------------------------------------
+# Question building
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_boolean_panel_builds_a_noul_question_from_the_default_template() -> None:
+    sink: list[Any] = []
+    evaluator = llm_jury(name='x', criteria='is it right?', judges=[JEV], threshold=0.8, client=MagicMock())
+    await _run_and_capture(evaluator, sink)
+
+    question = sink[0]
+    assert isinstance(question, ClassifyQuestion)
+    assert question.kind == 'noul'
+    assert question.criteria is None
+    assert question.instructions == 'is it right?'
+    assert question.noul_threshold == 0.8
+    assert set(cast(dict[str, Any], question.state)) == {
+        'input.all_messages',
+        'output.response',
+        'input.expected_output',
+    }
+    assert 'criteria' not in cast(dict[str, Any], question.state)
+    assert cast(dict[str, Any], question.state)['output.response'] == 'the answer'
+
+
+@pytest.mark.asyncio
+async def test_state_keys_track_the_default_template() -> None:
+    sink: list[Any] = []
+    await _run_and_capture(llm_jury(name='x', criteria='c', judges=[JEV], client=MagicMock()), sink)
+    expected = [path for path in llm_jury_mod.extract_template_paths(DEFAULT_TEMPLATE) if path != 'criteria']
+    assert list(cast(dict[str, Any], sink[0].state)) == expected
+
+
+@pytest.mark.asyncio
+async def test_state_fields_override_the_template_paths() -> None:
+    sink: list[Any] = []
+    evaluator = llm_jury(
+        name='x', criteria='c', judges=[JEV], state_fields=['output.response', 'criteria'], client=MagicMock()
+    )
+    await _run_and_capture(evaluator, sink)
+    assert list(cast(dict[str, Any], sink[0].state)) == ['output.response']
+
+
+@pytest.mark.asyncio
+async def test_a_missing_state_path_is_skipped() -> None:
+    sink: list[Any] = []
+    evaluator = llm_jury(
+        name='x', criteria='c', judges=[JEV], state_fields=['output.response', 'input.nothing'], client=MagicMock()
+    )
+    await _run_and_capture(evaluator, sink)
+    assert list(cast(dict[str, Any], sink[0].state)) == ['output.response']
+
+
+@pytest.mark.asyncio
+async def test_labeled_panel_builds_a_choice_question_carrying_the_descriptions() -> None:
+    sink: list[Any] = []
+    evaluator = llm_jury(
+        name='x',
+        criteria='grade it',
+        labels={'good': 'fully correct', 'bad': None},
+        passing_labels=['good'],
+        judges=[JEV],
+        client=MagicMock(),
+    )
+    await _run_and_capture(evaluator, sink)
+    assert sink[0].kind == 'choice'
+    assert sink[0].criteria == {'good': 'fully correct', 'bad': None}
+
+
+@pytest.mark.asyncio
+async def test_numeric_panel_builds_a_score_question_from_levels() -> None:
+    sink: list[Any] = []
+    evaluator = llm_jury(
+        name='x',
+        criteria='rate it',
+        verdict_kind='numeric',
+        levels=['useless', 'fine', 'excellent'],
+        judges=[JEV],
+        client=MagicMock(),
+    )
+    await _run_and_capture(evaluator, sink)
+    assert sink[0].kind == 'score'
+    assert sink[0].criteria == ['useless', 'fine', 'excellent']
+
+
+@pytest.mark.asyncio
+async def test_every_judge_on_a_mixed_panel_gets_the_question() -> None:
+    sink: list[Any] = []
+    evaluator = llm_jury(name='x', criteria='c', judges=[JEV, 'gpt-5-mini'], client=MagicMock())
+    await _run_and_capture(evaluator, sink)
+    assert len(sink) == 2
+    assert all(isinstance(question, ClassifyQuestion) for question in sink)
+
+
+def test_labels_as_a_list_and_as_a_dict_build_the_same_verdict_literal() -> None:
+    from_list = llm_jury(name='x', criteria='c', labels=['a', 'b'], client=MagicMock())
+    from_dict = llm_jury(name='x', criteria='c', labels={'a': None, 'b': None}, client=MagicMock())
+    assert from_list['name'] == from_dict['name']
+    plain = _build_verdict_model('categorical', ['a', 'b'], (0.0, 1.0), label_descriptions={'a': None, 'b': None})
+    assert plain.model_json_schema() == LIST_LABELS_SCHEMA
+
+
+# ---------------------------------------------------------------------------
+# Pairwise
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pairwise_builds_an_a_b_tie_choice_question() -> None:
+    sink: list[Any] = []
+    comparator = llm_jury_pairwise(criteria='which is better?', judges=[JEV], swap=False, client=MagicMock())
+
+    async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
+        sink.append(kwargs.get('classify'))
+        return JudgeOutcome(payload=EvaluatorResponsePayload(value='A', explanation='ok'))
+
+    with patch.object(llm_jury_mod, 'run_judge', side_effect=fake_run_judge):
+        await comparator.compare(question='q?', response_a='alpha', response_b='beta')
+
+    question = sink[0]
+    assert isinstance(question, ClassifyQuestion)
+    assert question.kind == 'choice'
+    assert question.instructions == 'which is better?'
+    assert question.criteria == {
+        'A': 'Response A is better',
+        'B': 'Response B is better',
+        'tie': 'Neither is clearly better',
+    }
+    state = cast(dict[str, Any], question.state)
+    assert 'criteria' not in state
+    assert state['question'] == 'q?'
+    assert state['response_a.output.response'] == 'alpha'
+    assert state['response_b.output.response'] == 'beta'
+
+
+@pytest.mark.asyncio
+async def test_pairwise_state_fields_override() -> None:
+    sink: list[Any] = []
+    comparator = llm_jury_pairwise(
+        criteria='c',
+        judges=[JEV],
+        swap=False,
+        state_fields=['response_a.output.response', 'response_b.output.response'],
+        client=MagicMock(),
+    )
+
+    async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
+        sink.append(kwargs.get('classify'))
+        return JudgeOutcome(payload=EvaluatorResponsePayload(value='tie', explanation='ok'))
+
+    with patch.object(llm_jury_mod, 'run_judge', side_effect=fake_run_judge):
+        await comparator.compare(question='q?', response_a='alpha', response_b='beta')
+
+    assert list(cast(dict[str, Any], sink[0].state)) == [
+        'response_a.output.response',
+        'response_b.output.response',
+    ]
+
+
+def test_pairwise_comparator_accepts_state_fields_directly() -> None:
+    comparator = PairwiseComparator(
+        panel=[JEV],
+        criteria='c',
+        system_prompt='s',
+        swap=False,
+        repetitions=1,
+        replacement_judges=None,
+        min_successful_judges=1,
+        max_tokens=100,
+        timeout_ms=1000,
+        temperature=None,
+        structured_output=True,
+        extra_kwargs=None,
+        extra_body=None,
+        client=MagicMock(),
+        state_fields=['question'],
+    )
+    assert isinstance(comparator, PairwiseComparator)

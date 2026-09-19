@@ -8,7 +8,7 @@ from typing import Any, Literal
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from evaluatorq.common.judge import JudgeOutcome, build_eval_replacements, run_judge
+from evaluatorq.common.judge import ClassifyQuestion, JudgeOutcome, build_eval_replacements, run_judge
 from evaluatorq.common.jury import (
     AggregatorSpec,
     JuryDeliberation,
@@ -21,12 +21,14 @@ from evaluatorq.common.jury import (
     validate_aggregator,
 )
 from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.common.model_catalogue import is_known_classify_model
 from evaluatorq.common.output_adapters import (
     inputs_to_messages,
     output_error_text,
     output_to_messages,
     output_to_text,
 )
+from evaluatorq.common.template_engine import extract_template_paths, resolve_template_path
 from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL, JuryResult, LLMCallConfig
 from evaluatorq.jury_presets import get_preset
 from evaluatorq.pairwise import PairwiseComparison, run_pairwise
@@ -36,14 +38,46 @@ DEFAULT_JUDGE_MODEL = DEFAULT_PIPELINE_MODEL
 """Judge model when the caller names neither ``model=`` nor ``judges=``."""
 
 PAIRWISE_LABELS = ['A', 'B', 'tie']
+PAIRWISE_CLASSIFY_CRITERIA = {
+    'A': 'Response A is better',
+    'B': 'Response B is better',
+    'tie': 'Neither is clearly better',
+}
+"""The three options a classify judge picks between on a pairwise comparison."""
 DEFAULT_PAIRWISE_CRITERIA = (
     'Compare the two responses on accuracy and correctness, helpfulness and '
     'completeness, clarity and organization, and relevance to the question.'
 )
 
 
+def _labels_description(label_descriptions: dict[str, str | None] | None) -> str | None:
+    """Render ``{label: description}`` as one line, or ``None`` when no label is described.
+
+    A caller who passed ``labels`` as a plain list has nothing to describe, so the
+    line is omitted entirely and the verdict schema and system prompt stay exactly
+    what they were before descriptions existed.
+    """
+    if not label_descriptions or not any(label_descriptions.values()):
+        return None
+    return 'One of: ' + '; '.join(f'{k}: {v}' if v else k for k, v in label_descriptions.items())
+
+
+def _levels_description(levels: list[str] | None, score_range: tuple[float, float]) -> str | None:
+    """Render ordered numeric levels as one line, or ``None`` when there are none."""
+    if not levels:
+        return None
+    lo, hi = score_range
+    joined = '; '.join(f'{index}={level}' for index, level in enumerate(levels))
+    return f'Scale from {lo} to {hi}. Levels: {joined}'
+
+
 def _build_verdict_model(
-    verdict_kind: str, labels: list[str] | None, score_range: tuple[float, float]
+    verdict_kind: str,
+    labels: list[str] | None,
+    score_range: tuple[float, float],
+    *,
+    label_descriptions: dict[str, str | None] | None = None,
+    levels: list[str] | None = None,
 ) -> type[BaseModel]:
     """Build a dynamic Pydantic verdict model based on verdict spec.
 
@@ -51,6 +85,11 @@ def _build_verdict_model(
         verdict_kind: The kind of verdict ("categorical" or "numeric")
         labels: List of allowed categorical labels, or None for boolean/numeric
         score_range: The score range (min, max) for numeric verdicts
+        label_descriptions: What each label means, for the ``value`` field
+            description. Omitted from the schema when no label carries a
+            description, so plain list labels keep their original schema.
+        levels: Ordered level descriptions for a numeric verdict, likewise
+            omitted from the schema when absent.
 
     Returns:
         A Pydantic BaseModel class with 'explanation' and 'value' fields, in
@@ -59,13 +98,17 @@ def _build_verdict_model(
     """
     if verdict_kind == 'categorical':
         value_annotation = bool if labels is None else typing.Literal[tuple(labels)]  # type: ignore[valid-type]
+        description = _labels_description(label_descriptions)
     else:  # numeric
         value_annotation = float
+        description = _levels_description(levels, score_range)
 
     # Create model dynamically
     class VerdictModel(BaseModel):
         explanation: str = Field(default='', description='Explanation for the verdict')
-        value: value_annotation  # type: ignore  # pyright: ignore[reportInvalidTypeForm]
+        value: value_annotation = (  # type: ignore  # pyright: ignore[reportInvalidTypeForm]
+            Field(description=description) if description is not None else Field()
+        )
 
     return VerdictModel
 
@@ -89,16 +132,27 @@ def _build_replacements(data: DataPoint, output: Output, criteria: str) -> dict[
     return reps
 
 
-def _default_system_prompt(verdict_kind: str, labels: list[str] | None, score_range: tuple[float, float]) -> str:
+def _default_system_prompt(
+    verdict_kind: str,
+    labels: list[str] | None,
+    score_range: tuple[float, float],
+    *,
+    label_descriptions: dict[str, str | None] | None = None,
+    levels: list[str] | None = None,
+) -> str:
     """Return a sensible system prompt for the jury judge.
 
     The prompt instructs the model to return a structured verdict and a 2-3
     sentence explanation.  The ``value`` constraint is tailored to the
     ``verdict_kind``:
 
-    - ``"numeric"`` — a float in ``[lo, hi]``.
-    - ``"categorical"`` with labels — one of the given label strings.
+    - ``"numeric"`` — a float in ``[lo, hi]``, plus the ``levels`` line when given.
+    - ``"categorical"`` with labels — one of the given label strings, plus the
+      label descriptions when any label carries one.
     - ``"categorical"`` without labels — a boolean.
+
+    Described labels and levels are appended rather than substituted, so a panel
+    that names neither gets the prompt this function has always returned.
     """
     base = (
         "You are a strict evaluator. Read the input, the model's output, any "
@@ -107,10 +161,14 @@ def _default_system_prompt(verdict_kind: str, labels: list[str] | None, score_ra
     )
     if verdict_kind == 'numeric':
         lo, hi = score_range
-        return f'{base} `value` must be a number between {lo} and {hi} (higher is better).'
-    if labels:
-        return f'{base} `value` must be exactly one of: {", ".join(labels)}.'
-    return f'{base} `value` must be a boolean: true if the criterion is met, false otherwise.'
+        prompt = f'{base} `value` must be a number between {lo} and {hi} (higher is better).'
+        extra = _levels_description(levels, score_range)
+    elif labels:
+        prompt = f'{base} `value` must be exactly one of: {", ".join(labels)}.'
+        extra = _labels_description(label_descriptions)
+    else:
+        return f'{base} `value` must be a boolean: true if the criterion is met, false otherwise.'
+    return f'{prompt} {extra}' if extra is not None else prompt
 
 
 # Default Mustache-style evaluation prompt template.  Placeholder tokens use the
@@ -124,6 +182,62 @@ DEFAULT_TEMPLATE = (
     '# Output\n{{output.response}}\n\n'
     '# Expected output\n{{input.expected_output}}\n'
 )
+
+
+def _build_classify_state(
+    *, template: str, replacements: dict[str, Any], state_fields: list[str] | None
+) -> dict[str, Any]:
+    """Collect the material a classify judge is handed instead of a rendered prompt.
+
+    Defaults to every path the template would render, because that is exactly what
+    an LLM judge on the same panel gets to read. ``criteria`` is always left out: a
+    classify question carries it as ``instructions``, and repeating it inside the
+    material to judge would ask the model to classify its own rubric. A path with no
+    value in ``replacements`` is skipped with a debug log rather than sent as null.
+    """
+    paths = state_fields if state_fields is not None else extract_template_paths(template)
+    state: dict[str, Any] = {}
+    for path in paths:
+        if path == 'criteria':
+            continue
+        found, value = resolve_template_path(replacements, path)
+        if not found:
+            logger.debug('classify state: no value for template path {!r}, skipping it', path)
+            continue
+        state[path] = value
+    return state
+
+
+def _build_classify_question(
+    *,
+    verdict_kind: str,
+    criteria: str | None,
+    label_descriptions: dict[str, str | None] | None,
+    levels: list[str] | None,
+    threshold: float,
+    state: dict[str, Any],
+) -> ClassifyQuestion | None:
+    """Build the question a classify judge answers, or ``None`` when the panel cannot pose one.
+
+    Built for every panel, not only one `is_known_classify_model` recognises, so a
+    classify model the catalogue knows and this package does not still gets its
+    question. `run_judge` ignores it for a model it judges by prompt.
+
+    ``None`` means the configuration cannot express a classify question — no
+    ``criteria`` to ask, or a numeric panel with no ``levels`` to score against. A
+    classify model reached with ``None`` fails loudly inside `run_judge`, which is
+    the point: guessing an empty rubric would bill a call and return a verdict about
+    nothing.
+    """
+    if not criteria:
+        return None
+    if verdict_kind == 'numeric':
+        if not levels:
+            return None
+        return ClassifyQuestion(kind='score', instructions=criteria, criteria=list(levels), state=state)
+    if label_descriptions:
+        return ClassifyQuestion(kind='choice', instructions=criteria, criteria=dict(label_descriptions), state=state)
+    return ClassifyQuestion(kind='noul', instructions=criteria, state=state, noul_threshold=threshold)
 
 
 # ---------------------------------------------------------------------------
@@ -173,12 +287,18 @@ async def _run_single_judge(
     extra_kwargs: dict[str, Any] | None,
     extra_body: dict[str, Any] | None = None,
     reasoning_effort: str | None = None,
+    classify: ClassifyQuestion | None = None,
 ) -> Prediction:
     """Run one judge call and map its outcome to a `Prediction`.
 
     The single ``run_judge`` call site shared by the pointwise (`llm_jury`)
     and pairwise (`PairwiseComparator`) juries — only the ``replacements``
-    differ between them, so keeping one path stops the two from drifting.
+    and the ``classify`` question differ between them, so keeping one path
+    stops the two from drifting.
+
+    ``classify`` is passed for every judge; `run_judge` reads it only for a
+    model that serves the router's ``/classify`` endpoint and ignores it for
+    every prompted judge.
     """
     # api='responses': the priced endpoint on the Orq router, so a jury verdict
     # records cost like the call it judges (RES-1295). run_judge falls back to chat
@@ -205,6 +325,7 @@ async def _run_single_judge(
         # Cross-domain purpose tag (same key redteam/simulation use) so the
         # platform can query every judge call in a run, not just walk the tree.
         span_attributes={'orq.llm.purpose': 'judge'},
+        classify=classify,
     )
     return _outcome_to_prediction(outcome=outcome)
 
@@ -419,8 +540,10 @@ def llm_jury(
     replacement_judges: list[str] | None = None,
     min_successful_judges: int | None = None,
     verdict_kind: Literal['categorical', 'numeric'] = 'categorical',
-    labels: list[str] | None = None,
+    labels: list[str] | dict[str, str | None] | None = None,
+    levels: list[str] | None = None,
     passing_labels: list[str] | None = None,
+    state_fields: list[str] | None = None,
     aggregator: AggregatorSpec | None = None,
     threshold: float = 0.5,
     score_range: tuple[float, float] = (0.0, 1.0),
@@ -471,6 +594,30 @@ def llm_jury(
     Reach for ``extra_body`` for anything the provider reads out of the body that
     the SDK has no named parameter for. Passing it inside ``extra_kwargs`` raises
     at judge time, not at construction.
+
+    Criteria and prompt
+    -------------------
+    Pass ``criteria``, ``prompt``, or both — at least one, because a judge with
+    neither has nothing to go on. An LLM judge reads the rendered ``prompt``, which
+    can pull the rubric in with a ``{{criteria}}`` placeholder; a classify judge is
+    handed ``criteria`` directly as its question and never sees the prompt. Setting
+    both on a panel that seats no classify judge and whose prompt never renders
+    ``{{criteria}}`` logs one warning: nothing would read the rubric.
+
+    Classify judges
+    ---------------
+    A classify model (``typesafe/jev-latest``) is not prompted. It is handed the
+    material to judge and a question about it, so ``criteria`` is required on a panel
+    that seats one, and ``prompt``, ``system_prompt`` and the sampling settings play
+    no part in its verdict. These four keywords shape that question, and three of
+    them reach an LLM judge on the same panel too:
+
+    | keyword | what it does |
+    | --- | --- |
+    | ``labels={'good': 'fully correct', 'bad': None}`` | the dict form of ``labels``: the options of a ``choice`` question, with what each one means. An LLM judge gets the same descriptions through the verdict schema and the default system prompt. ``labels=[...]`` stays valid and describes nothing |
+    | ``levels=['useless', 'ok', 'excellent']`` | 2-10 ordered level descriptions for a ``score`` question. ``verdict_kind="numeric"`` only, required there when a classify judge is seated, and ``score_range`` must stay ``(0.0, 1.0)`` because the score comes back scaled into it |
+    | ``state_fields=['output.response']`` | which template paths are handed over as the material to judge. Defaults to every placeholder the prompt template renders, minus ``criteria`` (which is the question, not the material). A path with no value is skipped |
+    | ``threshold`` | in boolean mode, the cutoff the classify judge's probability must clear to read as ``true``. An LLM judge returns a boolean and ignores it (in numeric mode it is the pass/fail cutoff for both) |
 
     Verdict modes
     -------------
@@ -572,24 +719,34 @@ def llm_jury(
     ```
     """
     # --- validation (fail fast) ---
-    if bool(criteria) == bool(prompt):
-        raise ValueError('Pass exactly one of `criteria` or `prompt`.')
+    # `labels` accepts both shapes and everything downstream sees only the two
+    # normalized forms, so the boolean/labeled branching never learns about dicts.
+    label_descriptions: dict[str, str | None] | None = (
+        None if labels is None else (dict.fromkeys(labels) if isinstance(labels, list) else dict(labels))
+    )
+    label_names: list[str] | None = None if label_descriptions is None else list(label_descriptions)
+    if not criteria and not prompt:
+        raise ValueError('Pass `criteria`, `prompt`, or both.')
     if repetitions < 1:
         raise ValueError(f'repetitions ({repetitions}) must be >= 1.')
-    if verdict_kind != 'categorical' and (labels or passing_labels):
+    if verdict_kind != 'categorical' and (label_names or passing_labels):
         raise ValueError("`labels`/`passing_labels` are only valid for verdict_kind='categorical'.")
-    if labels is not None and len(labels) < 2:
+    if levels is not None and verdict_kind != 'numeric':
+        raise ValueError("`levels` is only valid for verdict_kind='numeric'.")
+    if levels is not None and not 2 <= len(levels) <= 10:
+        raise ValueError(f'`levels` must list between 2 and 10 ordered descriptions, got {len(levels)}.')
+    if label_names is not None and len(label_names) < 2:
         # A categorical judge with 0/1 options is meaningless, and an empty list
         # would build a degenerate ``Literal[()]`` verdict model.
         raise ValueError('categorical `labels` must list at least two options.')
-    if passing_labels and not labels:
+    if passing_labels and not label_names:
         # Boolean mode (categorical + no labels) derives pass/fail from the verdict
         # directly, so passing_labels would be silently ignored — reject it loudly.
         raise ValueError(
             '`passing_labels` requires `labels` (categorical labeled mode); '
             'boolean mode derives pass/fail from the verdict directly.'
         )
-    if labels and passing_labels and not set(passing_labels) <= set(labels):
+    if label_names and passing_labels and not set(passing_labels) <= set(label_names):
         raise ValueError('`passing_labels` must be a subset of `labels`.')
     if verdict_kind == 'numeric' and score_range[0] >= score_range[1]:
         raise ValueError(f'score_range {score_range} must be increasing (lo < hi).')
@@ -612,6 +769,37 @@ def llm_jury(
         judges=judges, model=model, min_successful_judges=min_successful_judges
     )
     _validate_assignment(assignment, min_successful_judges=min_successful_judges)
+    # A construction-time hint only: `run_judge` asks the catalogue per call and is
+    # the authority on which endpoint serves a judge. What it buys is rejecting a
+    # panel that cannot produce a verdict before a single datapoint is billed.
+    classify_seated = any(is_known_classify_model(judge) for judge in panel + (replacement_judges or []))
+    if classify_seated:
+        if not criteria:
+            raise ValueError(
+                'A classify judge is not prompted, so it needs `criteria` to ask about; '
+                '`prompt` alone reaches it as nothing.'
+            )
+        if verdict_kind == 'numeric' and not levels:
+            raise ValueError(
+                'A classify judge scoring numerically needs `levels`: 2-10 ordered level '
+                'descriptions the score is a weighted mean over.'
+            )
+        if tuple(score_range) != (0.0, 1.0):
+            raise ValueError(
+                f'A classify judge returns a score scaled into (0.0, 1.0), so score_range '
+                f'{score_range} cannot be honoured. Drop the override or drop the classify judge.'
+            )
+        if repetitions > 1:
+            logger.warning(
+                'repetitions={} on a panel seating a classify judge: a classify verdict is '
+                'deterministic, so the extra calls are billed for identical answers',
+                repetitions,
+            )
+    elif prompt and criteria and 'criteria' not in extract_template_paths(prompt):
+        logger.warning(
+            'criteria is set but no judge reads it: the panel seats no classify judge and '
+            'the prompt never renders {{criteria}}. Add the placeholder or drop `criteria`.'
+        )
     # Round-robin assignment (CyclicJudge, arXiv:2603.01865): each datapoint is
     # scored by exactly one judge over the deduplicated panel. Inside
     # evaluatorq() the runner passes the dataset row, so the item->judge
@@ -635,12 +823,24 @@ def llm_jury(
     # evaluator at module scope should never require credentials. An explicit
     # client= is used as-is; otherwise we resolve once on first use.
     resolved_client = client
-    verdict_model = _build_verdict_model(verdict_kind=verdict_kind, labels=labels, score_range=score_range)
+    verdict_model = _build_verdict_model(
+        verdict_kind=verdict_kind,
+        labels=label_names,
+        score_range=score_range,
+        label_descriptions=label_descriptions,
+        levels=levels,
+    )
     template = prompt if prompt is not None else DEFAULT_TEMPLATE
     sys_prompt = (
         system_prompt
         if system_prompt is not None
-        else _default_system_prompt(verdict_kind=verdict_kind, labels=labels, score_range=score_range)
+        else _default_system_prompt(
+            verdict_kind=verdict_kind,
+            labels=label_names,
+            score_range=score_range,
+            label_descriptions=label_descriptions,
+            levels=levels,
+        )
     )
     vkind = VerdictKind.NUMERIC if verdict_kind == 'numeric' else VerdictKind.CATEGORICAL
 
@@ -663,6 +863,16 @@ def llm_jury(
         if resolved_client is None:
             resolved_client = resolve_llm_client(config_client=None, max_retries=0).client
         replacements = _build_replacements(data=data, output=output, criteria=criteria or '')
+        # Built once per datapoint and handed to every judge: a classify model the
+        # catalogue knows but `is_known_classify_model` does not still gets its question.
+        question = _build_classify_question(
+            verdict_kind=verdict_kind,
+            criteria=criteria,
+            label_descriptions=label_descriptions,
+            levels=levels,
+            threshold=threshold,
+            state=_build_classify_state(template=template, replacements=replacements, state_fields=state_fields),
+        )
 
         async def judge_fn(judge_model: str) -> Prediction:
             return await _run_single_judge(
@@ -679,6 +889,7 @@ def llm_jury(
                 extra_kwargs=extra_kwargs,
                 extra_body=extra_body,
                 reasoning_effort=reasoning_effort,
+                classify=question,
             )
 
         if assignment == 'cyclic':
@@ -792,6 +1003,7 @@ class PairwiseComparator:
         client: Any,
         reasoning_effort: str | None = None,
         max_concurrency: int | None = None,
+        state_fields: list[str] | None = None,
     ) -> None:
         self._panel = panel
         self._criteria = criteria
@@ -812,6 +1024,7 @@ class PairwiseComparator:
         self._extra_body = extra_body
         self._reasoning_effort = reasoning_effort
         self._client = client
+        self._state_fields = state_fields
         if max_concurrency is not None and max_concurrency < 1:
             raise ValueError(f'max_concurrency ({max_concurrency}) must be >= 1.')
         self._max_concurrency = max_concurrency
@@ -859,6 +1072,16 @@ class PairwiseComparator:
             replacements: dict[str, Any] = {'question': question, 'criteria': self._criteria}
             replacements.update(_side_to_namespace('response_a', first))
             replacements.update(_side_to_namespace('response_b', second))
+            # Rebuilt per ordering: with swap on, the two calls hand the judge the
+            # same pair in opposite seats, and the state has to say which is which.
+            classify_question = ClassifyQuestion(
+                kind='choice',
+                instructions=self._criteria,
+                criteria=dict(PAIRWISE_CLASSIFY_CRITERIA),
+                state=_build_classify_state(
+                    template=self._template, replacements=replacements, state_fields=self._state_fields
+                ),
+            )
             return await _run_single_judge(
                 client=self._client,
                 model=model,
@@ -873,6 +1096,7 @@ class PairwiseComparator:
                 extra_kwargs=self._extra_kwargs,
                 extra_body=self._extra_body,
                 reasoning_effort=self._reasoning_effort,
+                classify=classify_question,
             )
 
         # CyclicJudge: one judge per comparison, cycling through the panel.
@@ -914,6 +1138,7 @@ def llm_jury_pairwise(
     reasoning_effort: str | None = None,
     client: Any = None,
     max_concurrency: int | None = None,
+    state_fields: list[str] | None = None,
 ) -> PairwiseComparator:
     """Build a pairwise (A-vs-B) LLM jury that reuses the shared panel machinery.
 
@@ -925,6 +1150,13 @@ def llm_jury_pairwise(
     leave it ``None`` to use the default. Returns a `PairwiseComparator`;
     call ``compare`` per A/B pair, and roll many comparisons up with
     `evaluatorq.pairwise.build_report`.
+
+    A classify judge (``typesafe/jev-latest``) is seated the same way it is on a
+    pointwise panel: it answers an ``A``/``B``/``tie`` choice question whose question
+    is ``criteria`` and whose material is every placeholder the template renders
+    except ``criteria`` itself. ``state_fields`` narrows that material to the paths
+    you name. Position-bias swapping is unchanged — the question is rebuilt per
+    ordering, so each call says which response sits in which seat.
 
     ``max_concurrency`` caps TOTAL in-flight judge LLM calls across all
     concurrently running ``compare`` calls on the returned comparator (each
@@ -990,4 +1222,5 @@ def llm_jury_pairwise(
         reasoning_effort=reasoning_effort,
         client=client,
         max_concurrency=max_concurrency,
+        state_fields=state_fields,
     )
