@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import logging
 from typing import Any, cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import BaseModel
 
+from evaluatorq.common import model_catalogue, structured_output
 from evaluatorq.common.judge import ClassifyQuestion, EvaluatorResponsePayload, JudgeOutcome
 from evaluatorq.llm_jury import (
     DEFAULT_TEMPLATE,
@@ -191,6 +193,28 @@ def test_no_unread_criteria_warning_for_a_classify_panel() -> None:
     assert not any('no judge reads it' in call.args[0] for call in warn.call_args_list)
 
 
+def test_pairwise_warns_when_criteria_is_set_but_never_rendered() -> None:
+    """The pairwise factory drops an unread `criteria` exactly as the pointwise one does."""
+    with patch.object(llm_jury_mod.logger, 'warning') as warn:
+        llm_jury_pairwise(criteria='c', prompt='compare {{response_a.output.response}}', client=MagicMock())
+    messages = [call.args[0] for call in warn.call_args_list]
+    assert sum('no judge reads it' in message for message in messages) == 1
+
+
+def test_pairwise_is_quiet_when_the_prompt_reads_criteria() -> None:
+    with patch.object(llm_jury_mod.logger, 'warning') as warn:
+        llm_jury_pairwise(criteria='c', prompt='compare {{criteria}} {{response_a.output.response}}', client=MagicMock())
+    assert not any('no judge reads it' in call.args[0] for call in warn.call_args_list)
+
+
+def test_pairwise_classify_panel_never_warns_about_unread_criteria() -> None:
+    with patch.object(llm_jury_mod.logger, 'warning') as warn:
+        llm_jury_pairwise(
+            criteria='c', prompt='compare {{response_a.output.response}}', judges=[JEV], client=MagicMock()
+        )
+    assert not any('no judge reads it' in call.args[0] for call in warn.call_args_list)
+
+
 def test_levels_require_numeric_and_a_sane_length() -> None:
     with pytest.raises(ValueError, match='levels'):
         llm_jury(name='x', criteria='c', levels=['lo', 'hi'])
@@ -274,6 +298,47 @@ def test_a_classify_panel_names_the_settings_it_cannot_read_once() -> None:
     assert len(named) == 1
     assert named[0].args[2] == 'system_prompt, temperature'
     assert named[0].args[1] == JEV
+
+
+def test_a_panel_of_only_classify_judges_does_not_claim_a_prompted_judge_reads_them() -> None:
+    """There is no prompted judge on this panel, so the settings reach nobody at all."""
+    with patch.object(llm_jury_mod.logger, 'warning') as warn:
+        llm_jury(name='x', criteria='c', judges=[JEV], temperature=0.3, client=MagicMock())
+    named = [call for call in warn.call_args_list if 'do not reach' in call.args[0]]
+    assert len(named) == 1
+    assert named[0].args[3] == ''
+    assert 'still apply' not in named[0].args[0].format(*named[0].args[1:])
+
+
+def test_a_mixed_panel_still_says_the_prompted_judges_read_them() -> None:
+    with patch.object(llm_jury_mod.logger, 'warning') as warn:
+        llm_jury(name='x', criteria='c', judges=[JEV, 'gpt-5-mini'], temperature=0.3, client=MagicMock())
+    named = [call for call in warn.call_args_list if 'do not reach' in call.args[0]]
+    assert len(named) == 1
+    assert named[0].args[3] == ' (they still apply to the prompted judges)'
+
+
+def test_the_config_fields_a_classify_judge_never_receives_are_named_too() -> None:
+    """`_run_single_judge` keeps these off the classify config, so nothing downstream reports them."""
+    with patch.object(llm_jury_mod.logger, 'warning') as warn:
+        llm_jury(
+            name='x',
+            criteria='c',
+            judges=[JEV, 'gpt-5-mini'],
+            reasoning_effort='high',
+            extra_kwargs={'top_p': 0.9},
+            extra_body={'retry': {'count': 2}},
+            client=MagicMock(),
+        )
+    named = [call for call in warn.call_args_list if 'do not reach' in call.args[0]]
+    assert len(named) == 1
+    assert named[0].args[2] == 'reasoning_effort, extra_kwargs, extra_body'
+
+
+def test_empty_extra_kwargs_and_extra_body_are_not_reported_as_set() -> None:
+    with patch.object(llm_jury_mod.logger, 'warning') as warn:
+        llm_jury(name='x', criteria='c', judges=[JEV], extra_kwargs={}, extra_body={}, client=MagicMock())
+    assert not any('do not reach' in call.args[0] for call in warn.call_args_list)
 
 
 def test_an_llm_only_panel_never_warns_about_unread_settings() -> None:
@@ -454,6 +519,63 @@ async def test_labels_as_a_list_and_as_a_dict_build_the_same_verdict_literal() -
     assert dict_value['description'] == 'One of: a: the good one; b'
     plain = _build_verdict_model('categorical', ['a', 'b'], (0.0, 1.0), label_descriptions={'a': None, 'b': None})
     assert plain.model_json_schema() == LIST_LABELS_SCHEMA
+
+
+# ---------------------------------------------------------------------------
+# The config a classify judge is handed
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_vanilla_classify_panel_warns_about_no_unread_config_field(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A caller who set nothing must not be told their settings were ignored — on every datapoint."""
+    jev = model_catalogue.ModelInfo(0.0, 0.0, 'typesafe', False, supports_classify=True)  # noqa: FBT003
+
+    async def fake_load(client=None):  # noqa: ANN001, ARG001
+        return {JEV: jev, 'jev-latest': jev}
+
+    monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
+    structured_output._WARNED_UNREAD.clear()  # pyright: ignore[reportPrivateUsage]
+    client = MagicMock()
+    client.base_url = 'https://my.orq.ai/v3/router'
+    client.post = AsyncMock(
+        return_value={
+            'answers': {'verdict': {'type': 'noul', 'noul': 0.9}},
+            'usage': {'input_tokens': 10, 'output_tokens': 1},
+            'model': 'jev-latest',
+        }
+    )
+    evaluator = llm_jury(name='x', criteria='is it right?', judges=[JEV], client=client)
+
+    with caplog.at_level(logging.WARNING, logger='evaluatorq.common.structured_output'):
+        result = await evaluator['scorer'](_params())
+
+    assert cast('Any', result).value is True
+    assert 'run_judge[classify]' not in caplog.text
+    client.post.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_a_prompted_judge_on_a_mixed_panel_keeps_the_full_config() -> None:
+    """Only the classify seat loses the sampling settings; the prompted judge still reads them."""
+    sink: dict[str, Any] = {}
+
+    async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
+        sink[cast(str, kwargs['model'])] = kwargs['cfg']
+        return JudgeOutcome(payload=EvaluatorResponsePayload(value=True, explanation='ok'))
+
+    evaluator = llm_jury(
+        name='x', criteria='c', judges=[JEV, 'gpt-5-mini'], max_tokens=1234, reasoning_effort='high', client=MagicMock()
+    )
+    with patch.object(llm_jury_mod, 'run_judge', side_effect=fake_run_judge):
+        await evaluator['scorer'](_params())
+
+    assert sink['gpt-5-mini'].max_tokens == 1234
+    assert sink['gpt-5-mini'].reasoning_effort == 'high'
+    assert sink[JEV].model_fields_set == {'model', 'timeout_ms'}
 
 
 # ---------------------------------------------------------------------------

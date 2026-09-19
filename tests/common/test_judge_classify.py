@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from types import SimpleNamespace
 from typing import Any
@@ -15,6 +16,7 @@ from pydantic import ValidationError
 from evaluatorq.common import judge as judge_mod
 from evaluatorq.common import llm_call
 from evaluatorq.common import model_catalogue
+from evaluatorq.common import tracing
 from evaluatorq.common.judge import ClassifyQuestion, JudgeError, run_judge
 from evaluatorq.contracts import LLMCallConfig
 
@@ -157,6 +159,46 @@ async def test_choice_verdict_is_the_label_and_records_confidence(monkeypatch: p
     assert '"neutral": 0.96' in attrs['judge.probabilities']
     body = client.post.await_args.kwargs['body']
     assert body['questions']['verdict']['criteria'] == {'neutral': 'plain', 'harmful': 'abusive'}
+
+
+@pytest.mark.asyncio
+async def test_an_empty_probability_distribution_is_still_recorded(monkeypatch: pytest.MonkeyPatch):
+    """An empty distribution is something the model reported; dropping it reads as never reported."""
+    recorded: list[dict[str, Any]] = []
+    monkeypatch.setattr(judge_mod, 'set_span_attrs', lambda span, attrs: recorded.append(attrs))  # noqa: ARG005
+    client = _client(_reply({'type': 'noul', 'noul': 0.9, 'probabilities': {}}))
+
+    outcome = await _judge(client, _noul_question())
+
+    assert outcome.error_kind is None
+    attrs = {k: v for entry in recorded for k, v in entry.items()}
+    assert attrs['judge.probabilities'] == '{}'
+
+
+@pytest.mark.asyncio
+async def test_the_span_input_carries_the_question_as_well_as_the_state(monkeypatch: pytest.MonkeyPatch):
+    """A trace reader who sees only the state cannot tell what Jev was asked."""
+    recorded: list[list[dict[str, Any]]] = []
+    monkeypatch.setattr(llm_call, 'record_llm_input', lambda span, messages: recorded.append(messages))  # noqa: ARG005
+    question = ClassifyQuestion(
+        kind='choice',
+        instructions='Classify the tone.',
+        criteria={'neutral': 'plain', 'harmful': 'abusive'},
+        state='the reply',
+    )
+    client = _client(_reply({'type': 'choice', 'choice': 'neutral'}))
+
+    await _judge(client, question)
+
+    assert len(recorded) == 1
+    system, user = recorded[0]
+    assert system['role'] == 'system'
+    assert json.loads(system['content']) == {
+        'instructions': 'Classify the tone.',
+        'criteria': {'neutral': 'plain', 'harmful': 'abusive'},
+    }
+    assert user['role'] == 'user'
+    assert json.loads(user['content']) == 'the reply'
 
 
 @pytest.mark.asyncio
@@ -368,7 +410,9 @@ async def test_a_reply_without_usage_stays_unpriced_and_unrecorded(
 ):
     """Zeros on the span would read as a genuinely free call; unknown must stay unknown."""
     recorded: list[Any] = []
-    monkeypatch.setattr(llm_call, 'record_token_usage', lambda span, **kw: recorded.append(kw))  # noqa: ARG005
+    # Patched on `tracing`, not `llm_call`: the executor records usage through
+    # `record_llm_response`, which reads this name off its own module.
+    monkeypatch.setattr(tracing, 'record_token_usage', lambda span, **kw: recorded.append(kw))  # noqa: ARG005
     client = _client({'answers': {'verdict': {'type': 'noul', 'noul': 0.9}}, 'model': 'jev-latest'})
 
     with caplog.at_level(logging.WARNING, logger='evaluatorq.common.llm_call'):
