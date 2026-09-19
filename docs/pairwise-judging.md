@@ -79,7 +79,24 @@ Both orderings run concurrently, so swapping does not add wall-clock latency, on
 | `assignment` | `"all"` | `"cyclic"` gives each comparison exactly one judge, rotating through the panel ([CyclicJudge](cyclic-judge.md)). Judge bias cancels in expectation across the run at single-judge cost; the assigned judge still runs both orderings when `swap` is on. Rotation is over the deduplicated panel, `repetitions` still applies to the one assigned judge, and the cursor lives on the comparator: a reused comparator continues where the previous run stopped. |
 | `replacement_judges` | `None` | Stand-ins for judges that fail mechanically. Promoted per pair and run in **both** orderings, so a stand-in casts a real reconciled vote. |
 | `min_successful_judges` | `1` | Minimum decisive reconciled votes, otherwise the comparison is **inconclusive**. Must not exceed the panel size. |
+| `state_fields` | `None` | Classify judges only: which template paths are handed to the judge as the material to compare. Defaults to every placeholder the template renders, minus `criteria`. |
 | `max_concurrency` | `None` | Cap on total in-flight judge LLM calls across all concurrently running `compare()` calls (each pair fans out judges × orderings × repetitions). Unbounded when unset. |
+
+### Jev on a pairwise panel
+
+A classify judge — `typesafe/jev-latest` — takes a pairwise seat the same way it takes a pointwise one, described in full under [Jev as a judge](llm-as-a-jury.md#jev-as-a-judge). It is not prompted: it answers a three-option **choice** question, `A` / `B` / `tie`, whose question is your `criteria` and whose options carry fixed descriptions ("Response A is better", "Response B is better", "Neither is clearly better").
+
+```python
+comparator = llm_jury_pairwise(
+    criteria="The answer is accurate, complete, and directly addresses the question.",
+    judges=["anthropic/claude-sonnet-4-6", "typesafe/jev-latest"],
+    state_fields=["response_a.output.response", "response_b.output.response"],
+)
+```
+
+The material it compares is every placeholder the template renders except `criteria` itself — for the built-in template that is the question and both responses. `state_fields` narrows it to the paths you name, which is how you keep a long shared preamble out of a comparison that only turns on the two answers.
+
+Position-bias swapping is unchanged. The question is rebuilt per ordering, so each call states which response sits in which seat, and the two verdicts reconcile exactly as a prompted judge's do.
 
 ## Reading a comparison
 
