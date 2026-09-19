@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 
 import pytest
 
+from typing import Any
+
 from evaluatorq.contracts import AgentTarget, Message, TokenUsage
 from evaluatorq.redteam import get_category_info, list_categories, red_team
 from evaluatorq.redteam.contracts import AgentResponse, Pipeline, RedTeamReport, ReportSummary, parse_target
@@ -869,3 +871,48 @@ class TestPostProcessingTokenUsage:
 
         assert result.summary.token_usage_total == attack_only_usage
         assert result.summary.post_processing_token_usage is None
+
+
+class TestSaveDeprecation:
+    """`save=True`/`save=False` still works, still warns, and still blames the caller."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize('legacy_value', [True, False])
+    async def test_bool_save_warns_and_blames_the_callers_frame(self, legacy_value: bool) -> None:
+        """The warning must name this test's frame, not a frame inside `red_team`.
+
+        `warnings.warn` lives in `_resolve_save_mode`, one frame deeper than the
+        `red_team` body it was raised from before the phase extraction, so it
+        carries `stacklevel=3`. Asserting only that a `DeprecationWarning` fires
+        would pass with the old `stacklevel=2` and point every user at runner.py.
+        """
+        import pathlib
+
+        with (
+            pytest.warns(DeprecationWarning, match='save=True/False is deprecated') as recorded,
+            pytest.raises(ValueError, match='requires at least one target'),
+        ):
+            # `red_team`'s public annotation is `save: SaveMode`, but the deprecated
+            # bool is still accepted at runtime — that mismatch is what this test pins.
+            await red_team([], save=legacy_value)  # pyright: ignore[reportArgumentType]
+
+        assert pathlib.Path(recorded[0].filename).name == pathlib.Path(__file__).name
+
+
+class TestResolveBackendLabel:
+    """The `orq.redteam.backend` span attribute, per target mix."""
+
+    @pytest.mark.parametrize(
+        ('targets', 'agent_targets', 'expected'),
+        [
+            (['agent:a', 'agent:b'], [], 'openresponses'),
+            (['deployment:a'], [], 'orq'),
+            (['agent:a', 'deployment:b'], [], 'mixed'),
+            ([], [_FakeTarget('t')], 'direct'),
+            ([], [], 'orq'),
+        ],
+    )
+    def test_label(self, targets: list[str], agent_targets: list[Any], expected: str) -> None:
+        from evaluatorq.redteam.runner import _resolve_backend_label
+
+        assert _resolve_backend_label(targets=targets, resolved_agent_targets=agent_targets) == expected

@@ -103,6 +103,7 @@ from evaluatorq.tracing import tracing_session
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
+    from evaluatorq.common.run_manifest import ManifestWriter
     from evaluatorq.types import DataPointResult
 
 
@@ -483,6 +484,690 @@ async def _redteam_root_scope(run_id: str, attributes: AttrMap, parent_context: 
             yield pipeline_span
 
 
+def _resolve_save_mode(*, save: SaveMode | bool) -> SaveMode:
+    if isinstance(save, bool):
+        warnings.warn(
+            'Passing save=True/False is deprecated. Use SaveMode.FINAL / SaveMode.NONE instead.',
+            DeprecationWarning,
+            # 3, not 2: this helper is one frame deeper than red_team, where the
+            # warning used to be raised. The user's call site is the target.
+            stacklevel=3,
+        )
+        save = SaveMode.FINAL if save else SaveMode.NONE
+    elif save not in SaveMode.__members__.values():
+        msg = f'Invalid save value {save!r}. Must be one of: {", ".join(SaveMode.__members__.values())}.'
+        raise ValueError(msg)
+    return save
+
+
+@dataclass(frozen=True)
+class _ReplayResolutionInputs:
+    previous_run: str | None
+    mode: Pipeline | str | None
+    dataset: Path | str | None
+    categories: list[str] | None
+    vulnerabilities: list[str] | None
+    strategies: list[str] | None
+    delivery_methods: list[DeliveryMethod | str] | None
+    max_per_category: int | None
+    max_dynamic_datapoints: int | None
+    max_static_datapoints: int | None
+    max_turns: int | None
+    attacker_instructions: str | None
+
+
+@dataclass(frozen=True)
+class _ResolvedReplay:
+    replay: RedTeamReplay | None
+    mode: Pipeline | str | None
+    max_turns: int | None
+    attacker_instructions: str | None
+
+
+def _resolve_replay(*, inputs: _ReplayResolutionInputs) -> _ResolvedReplay:
+    previous_run = inputs.previous_run
+    mode = inputs.mode
+    dataset = inputs.dataset
+    categories = inputs.categories
+    vulnerabilities = inputs.vulnerabilities
+    strategies = inputs.strategies
+    delivery_methods = inputs.delivery_methods
+    max_per_category = inputs.max_per_category
+    max_dynamic_datapoints = inputs.max_dynamic_datapoints
+    max_static_datapoints = inputs.max_static_datapoints
+    max_turns = inputs.max_turns
+    attacker_instructions = inputs.attacker_instructions
+
+    # Replay short-circuits every data-selection input: the cases are already
+    # decided by the run being replayed, so accepting a conflicting selector
+    # would silently ignore it. Reject the combination instead.
+    replay: RedTeamReplay | None = None
+    if previous_run is not None:
+        conflicting = [
+            label
+            for label, supplied in (
+                ('mode', mode is not None),
+                ('dataset', dataset is not None),
+                ('categories', categories is not None),
+                ('vulnerabilities', vulnerabilities is not None),
+                ('strategies', strategies is not None),
+                ('delivery_methods', delivery_methods is not None),
+                ('max_per_category', max_per_category is not None),
+                ('max_dynamic_datapoints', max_dynamic_datapoints is not None),
+                ('max_static_datapoints', max_static_datapoints is not None),
+            )
+            if supplied
+        ]
+        if conflicting:
+            msg = (
+                f'previous_run= replays a stored run and cannot be combined with data-selection '
+                f'arguments: {", ".join(conflicting)}. Drop them, or drop previous_run.'
+            )
+            raise ValueError(msg)
+        replay = load_redteam_replay(previous_run, get_runs_dir())
+        mode = replay.pipeline
+        # Restore the knobs the datapoints don't encode. An explicit argument
+        # still wins — replaying at a different turn budget is a legitimate ask,
+        # silently changing it behind the user's back is not.
+        if max_turns is None:
+            max_turns = replay.max_turns
+        if attacker_instructions is None:
+            attacker_instructions = replay.attacker_instructions
+        logger.info(
+            f'Replaying {len(replay.datapoints)} datapoints from {replay.path.name} ({replay.pipeline.value} pipeline).'
+        )
+    elif mode is None:
+        mode = Pipeline.DYNAMIC
+
+    return _ResolvedReplay(replay, mode, max_turns, attacker_instructions)
+
+
+@dataclass(frozen=True)
+class _ResolvedOutputDirs:
+    """Two `Path | None` slots that mean different things — named so they cannot be transposed.
+
+    `user_output_dir` is whatever the caller passed as `artifacts_dir`, used for the
+    final summary write and the `on_complete` payload. `pipeline_output_dir` is the
+    one handed to the inner pipeline, and is `None` unless `save='detail'`.
+    """
+
+    user_output_dir: Path | None
+    pipeline_output_dir: Path | None
+
+
+def _resolve_output_dirs(*, save: SaveMode, artifacts_dir: Path | str | None) -> _ResolvedOutputDirs:
+    user_output_dir = Path(artifacts_dir) if artifacts_dir is not None else None
+    # Inner pipelines (_run_dynamic, _run_static) only write 01/02/03 to their
+    # output_dir parameter, so we gate it on save='detail'. For 'final' the
+    # caller's `_persist_and_index_run` does the single summary write after the
+    # inner pipeline returns.
+    resolved_output_dir: Path | None = None
+    if save == 'detail':
+        if user_output_dir is None:
+            msg = "save='detail' requires artifacts_dir to be set."
+            raise ValueError(msg)
+        resolved_output_dir = user_output_dir
+    return _ResolvedOutputDirs(user_output_dir=user_output_dir, pipeline_output_dir=resolved_output_dir)
+
+
+def _split_and_dedupe_targets(
+    *, target: str | AgentTarget | list[str | AgentTarget]
+) -> tuple[list[str], list[AgentTarget]]:
+    if isinstance(target, list):
+        raw_targets: list[str | AgentTarget] = list(target)
+    elif isinstance(target, (str, AgentTarget)):
+        raw_targets = [target]
+    else:
+        raise TypeError(f'Invalid target type: {type(target).__name__}. Expected str or AgentTarget.')
+
+    if not raw_targets:
+        msg = 'red_team() requires at least one target'
+        raise ValueError(msg)
+
+    # Separate string targets from AgentTarget objects
+    string_targets: list[str] = []
+    agent_targets: list[AgentTarget] = []
+    for t in raw_targets:
+        if isinstance(t, str):
+            string_targets.append(t)
+        elif isinstance(t, AgentTarget):
+            agent_targets.append(t)
+        else:
+            raise TypeError(f'Invalid target type: {type(t).__name__}. Expected str or AgentTarget.')
+
+    # Deduplicate string targets (preserve order, warn on duplicates)
+    seen_str: set[str] = set()
+    deduped_str: list[str] = []
+    for s in string_targets:
+        if s in seen_str:
+            logger.warning(f'Duplicate target {s!r} — ignoring repeated occurrence.')
+        else:
+            seen_str.add(s)
+            deduped_str.append(s)
+    return deduped_str, agent_targets
+
+
+def _validate_credentials_and_deps(
+    *,
+    config: LLMConfig,
+    llm_client: AsyncOpenAI | None,
+    replay: RedTeamReplay | None,
+    resolved_mode: Pipeline,
+    dataset: Path | str | None,
+) -> None:
+    # Early credential validation — fail fast with a clear message.
+    # Also check per-role clients: if either role has a pre-configured client,
+    # we don't need global credentials.
+    has_role_client = config.attacker.client is not None or config.evaluator.client is not None
+    if llm_client is None and not has_role_client and not os.getenv('OPENAI_API_KEY') and not os.getenv('ORQ_API_KEY'):
+        raise CredentialError(
+            'Missing LLM credentials for attack/evaluation models. '
+            'Set OPENAI_API_KEY for direct OpenAI access, or ORQ_API_KEY to use the ORQ router.'
+        )
+
+    # Fail fast: static/hybrid runs that pull static datapoints from HuggingFace
+    # need huggingface-hub. Check now rather than deep in the static leg — in
+    # hybrid mode that leg runs only after the entire dynamic leg, so a missing
+    # dependency would otherwise surface after minutes of (now wasted) work.
+    if replay is None and resolved_mode in (Pipeline.STATIC, Pipeline.HYBRID):
+        from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import (
+            ensure_huggingface_available,
+            is_huggingface_source,
+        )
+
+        if is_huggingface_source(dataset):
+            ensure_huggingface_available()
+
+
+@dataclass(frozen=True)
+class _ResolvedFilters:
+    strategy_names: set[str] | None
+    delivery_methods: set[DeliveryMethod | str] | None
+    filter_selection: tuple[str, list[str]] | None
+
+
+def _resolve_filter_sets(
+    *,
+    strategies: list[str] | None,
+    delivery_methods: list[DeliveryMethod | str] | None,
+    vulnerabilities: list[str] | None,
+    categories: list[str] | None,
+) -> _ResolvedFilters:
+    # Convert filter inputs to sets for the planner. Unknown registry names are
+    # rejected at the CLI boundary; here we pass through verbatim and detect
+    # empty/unmatched intersections post-filter from the actually-matched set.
+    resolved_strategy_names: set[str] | None = set(strategies) if strategies is not None else None
+    # Resolve through the registry so known values (enum plus registered) become
+    # canonical DeliveryMethod objects and unknown ones stay raw strings. The
+    # objects then flow through the planner, loader filter, and reporting as-is —
+    # no enum→string→enum conversion (DeliveryMethod is a StrEnum, so a set of
+    # them matches the dataset's string delivery_method directly).
+    resolved_delivery_methods: set[DeliveryMethod | str] | None = (
+        set(resolve_delivery_methods(list(delivery_methods))) if delivery_methods is not None else None
+    )
+    # An unknown/misspelled delivery method stays a raw string here and silently
+    # narrows the run. The CLI already warns up front via typer.echo; programmatic
+    # callers get a loguru warning from _check_filter_results (post-filter, against
+    # the actual dataset), plus a hard RedTeamError if the selection is fully empty.
+
+    # Snapshot the caller's raw category/vulnerability selection for the empty-run
+    # guard, before `_resolve_vulns_and_categories` defaults an unfiltered run to
+    # the full category sweep. Reading it off resolved_categories instead would make
+    # every default run look like a filter that selected all 36 categories, and a
+    # run that came back empty for an unrelated reason would be blamed on a filter
+    # the caller never set.
+    filter_selection: tuple[str, list[str]] | None = None
+    if vulnerabilities is not None:
+        filter_selection = ('vulnerabilities', sorted(vulnerabilities))
+    elif categories is not None:
+        filter_selection = ('categories', sorted(categories))
+
+    return _ResolvedFilters(resolved_strategy_names, resolved_delivery_methods, filter_selection)
+
+
+def _resolve_vulns_and_categories(
+    *,
+    replay: RedTeamReplay | None,
+    vulnerabilities: list[str] | None,
+    categories: list[str] | None,
+) -> tuple[list[Vulnerability] | None, list[str]]:
+    resolved_vulns: list[Vulnerability] | None
+    if replay is not None:
+        # A replay's scope is whatever it recorded. Resolving vulnerabilities
+        # (and running `_apply_evaluability_gate` on the result) would re-derive a
+        # selection the stored datapoints have already made.
+        resolved_categories = replay.categories
+        resolved_vulns = None
+    elif vulnerabilities is not None:
+        resolved_vulns = resolve_vulnerabilities(vulnerabilities)
+        resolved_categories = [get_primary_category(v) for v in resolved_vulns]
+    elif categories is not None:
+        # Surface unrecognized codes instead of silently swallowing the ValueError and
+        # proceeding with resolved_vulns=None — that skips the evaluability gate and runs
+        # a meaningless attack with no scoring.
+        try:
+            resolved_vulns = resolve_vulnerabilities(categories)
+        except ValueError:
+            # Mirror resolve_vulnerabilities, which accepts BOTH vulnerability IDs and
+            # category codes — a code is unknown only when it is neither. Using
+            # resolve_category_safe alone would mislabel a valid vulnerability ID (e.g.
+            # 'goal_hijacking') as unrecognized in a mixed list.
+            valid_vuln_ids = {v.value for v in Vulnerability}
+            unknown = [c for c in categories if c not in valid_vuln_ids and resolve_category_safe(c) is None]
+            raise ValueError(
+                f'Unrecognized categor{"y" if len(unknown) == 1 else "ies"}: '
+                f'{", ".join(unknown)}. Valid categories: {", ".join(list_available_categories())}.'
+            ) from None
+        resolved_categories = categories
+        # A cross-framework code (e.g. LLM03) resolves to a vulnerability whose canonical
+        # label lives in another framework (supply_chain → ASI04); results are reported
+        # under that label. Log the relabel so it isn't surprising in the report.
+        for c in categories:
+            v = resolve_category_safe(c)
+            primary = get_primary_category(v) if v is not None else None
+            if primary is not None and primary != c:
+                logger.info(
+                    'Category %s is scored by the %s evaluator and reported under %s.',
+                    c,
+                    v.value,  # pyright: ignore[reportOptionalMemberAccess] - v is not None here
+                    primary,
+                )
+    else:
+        resolved_categories = list_available_categories()
+        try:
+            resolved_vulns = resolve_vulnerabilities(resolved_categories)
+        except ValueError:
+            resolved_vulns = None
+
+    return resolved_vulns, resolved_categories
+
+
+def _apply_evaluability_gate(
+    *,
+    resolved_vulns: list[Vulnerability] | None,
+    resolved_categories: list[str],
+) -> tuple[list[Vulnerability] | None, list[str], list[str]]:
+    # Evaluability gate: a vulnerability with no registered evaluator can be attacked
+    # but not scored, so prune it up front (raise if none are scorable) rather than
+    # burning tokens on attacks that always read "no verdict". Currently inert — every
+    # registry vulnerability has an evaluator (the ten ASI categories plus the LLM Top 10
+    # mappings, e.g. LLM03 Supply Chain resolves to supply_chain, scored by ASI04) — but
+    # kept as the safety net against a future one shipped without one. list_available_categories()
+    # is already evaluator-backed, so this only ever prunes an explicit user selection.
+    # The static leg keeps its own datapoint-level coverage guard in _run_static().
+    unevaluable_codes: list[str] = []
+    if resolved_vulns is not None:
+        from evaluatorq.redteam.frameworks.owasp.evaluators import VULNERABILITY_EVALUATOR_REGISTRY
+
+        evaluable_vulns = [v for v in resolved_vulns if v in VULNERABILITY_EVALUATOR_REGISTRY]
+        dropped_vulns = [v for v in resolved_vulns if v not in VULNERABILITY_EVALUATOR_REGISTRY]
+        if dropped_vulns:
+            unevaluable_codes = [get_primary_category(v) for v in dropped_vulns]
+            if not evaluable_vulns:
+                raise ValueError(
+                    'None of the requested categories/vulnerabilities have an automated '
+                    f'evaluator: {", ".join(unevaluable_codes)}. They cannot be scored by '
+                    'prompt-based red teaming. Pick evaluator-backed categories '
+                    f'({", ".join(list_available_categories())}), or test these with a '
+                    'custom AgentTarget + evaluator via the SDK.'
+                )
+            dropped_set = set(dropped_vulns)
+            resolved_categories = [c for c in resolved_categories if resolve_category_safe(c) not in dropped_set]
+            resolved_vulns = evaluable_vulns
+            logger.warning(
+                'Skipping %d requested categor%s with no automated evaluator: %s. '
+                'These require live-system testing and cannot be scored by prompt-based '
+                'red teaming — they would only produce inconclusive results.',
+                len(unevaluable_codes),
+                'y' if len(unevaluable_codes) == 1 else 'ies',
+                ', '.join(unevaluable_codes),
+            )
+
+    return resolved_vulns, resolved_categories, unevaluable_codes
+
+
+def _compose_redteam_hooks(
+    *, hooks: PipelineHooks | None, name: str | None, save: SaveMode
+) -> tuple[Any, ManifestWriter | None]:
+    # Persist run state alongside the report.  Compose user hooks with the
+    # manifest hook only after argument validation, so bad input creates no
+    # misleading in-progress manifest.
+    from evaluatorq.common.hook_compose import compose_run_hooks
+    from evaluatorq.common.run_manifest import start_manifest
+
+    def _make_manifest() -> ManifestWriter:
+        return start_manifest(
+            run_id=uuid.uuid4().hex,
+            surface='redteam',
+            run_name=name or 'red-team',
+            runs_dir=get_runs_dir(),
+        )
+
+    return compose_run_hooks(
+        hooks,
+        method_names=('on_stage_start', 'on_stage_end', 'on_confirm', 'on_complete'),
+        composite_cls=CompositePipelineHooks,
+        default_hooks_factory=DefaultHooks,
+        manifest_factory=_make_manifest if save != 'none' else None,
+        manifest_hook_factory=ManifestStageHooks,
+    )
+
+
+def _resolve_backend_label(*, targets: list[str], resolved_agent_targets: list[AgentTarget]) -> str:
+    if targets:
+        target_kinds = {parse_target(t)[0] for t in targets}
+        if target_kinds == {TargetKind.AGENT}:
+            backend_label = 'openresponses'
+        elif TargetKind.AGENT not in target_kinds:
+            backend_label = 'orq'
+        else:
+            backend_label = 'mixed'
+    else:
+        backend_label = 'direct' if resolved_agent_targets else 'orq'
+    return backend_label
+
+
+@dataclass(frozen=True)
+class _PipelineDispatchInputs:
+    targets: list[str]
+    filter_selection: tuple[str, list[str]] | None
+    agent_targets: list[AgentTarget]
+    resolved_mode: Pipeline
+    mode: Pipeline | str | None
+    name: str | None
+    categories: list[str]
+    resolved_vulns: list[Vulnerability] | None
+    max_turns: int
+    max_per_category: int | None
+    attack_model: str
+    evaluator_model: str
+    datapoint_parallelism: int
+    generate_strategies: bool
+    generated_strategy_count: int
+    max_dynamic_datapoints: int | None
+    max_static_datapoints: int | None
+    cleanup_memory: bool
+    llm_client: AsyncOpenAI | None
+    description: str | None
+    dataset: Path | str | None
+    hooks: PipelineHooks
+    output_dir: Path | None
+    target_config: TargetConfig | None
+    attacker_instructions: str | None
+    verbosity: int
+    pipeline_config: LLMConfig
+    resolved_strategy_names: set[str] | None
+    resolved_delivery_methods: set[DeliveryMethod | str] | None
+    run_id: str
+    replay: RedTeamReplay | None
+
+
+async def _dispatch_pipeline(*, inputs: _PipelineDispatchInputs) -> tuple[RedTeamReport, RedTeamRunMetrics]:
+    targets = inputs.targets
+    filter_selection = inputs.filter_selection
+    agent_targets = inputs.agent_targets
+    resolved_mode = inputs.resolved_mode
+    mode = inputs.mode
+    name = inputs.name
+    categories = inputs.categories
+    resolved_vulns = inputs.resolved_vulns
+    max_turns = inputs.max_turns
+    max_per_category = inputs.max_per_category
+    attack_model = inputs.attack_model
+    evaluator_model = inputs.evaluator_model
+    datapoint_parallelism = inputs.datapoint_parallelism
+    generate_strategies = inputs.generate_strategies
+    generated_strategy_count = inputs.generated_strategy_count
+    max_dynamic_datapoints = inputs.max_dynamic_datapoints
+    max_static_datapoints = inputs.max_static_datapoints
+    cleanup_memory = inputs.cleanup_memory
+    llm_client = inputs.llm_client
+    description = inputs.description
+    dataset = inputs.dataset
+    hooks = inputs.hooks
+    output_dir = inputs.output_dir
+    target_config = inputs.target_config
+    attacker_instructions = inputs.attacker_instructions
+    verbosity = inputs.verbosity
+    pipeline_config = inputs.pipeline_config
+    resolved_strategy_names = inputs.resolved_strategy_names
+    resolved_delivery_methods = inputs.resolved_delivery_methods
+    run_id = inputs.run_id
+    replay = inputs.replay
+
+    if resolved_mode in (Pipeline.DYNAMIC, Pipeline.HYBRID):
+        run_result = await _run_dynamic_or_hybrid(
+            targets=targets,
+            filter_selection=filter_selection,
+            agent_targets=agent_targets,
+            mode=resolved_mode,
+            name=name,
+            categories=categories,
+            resolved_vulns=resolved_vulns,
+            max_turns=max_turns,
+            max_per_category=max_per_category,
+            attack_model=attack_model,
+            evaluator_model=evaluator_model,
+            datapoint_parallelism=datapoint_parallelism,
+            generate_strategies=generate_strategies,
+            generated_strategy_count=generated_strategy_count,
+            max_dynamic_datapoints=max_dynamic_datapoints,
+            max_static_datapoints=max_static_datapoints,
+            cleanup_memory=cleanup_memory,
+            llm_client=llm_client,
+            description=description,
+            dataset=dataset,
+            hooks=hooks,
+            output_dir=output_dir,
+            target_config=target_config,
+            attacker_instructions=attacker_instructions,
+            verbosity=verbosity,
+            pipeline_config=pipeline_config,
+            resolved_strategy_names=resolved_strategy_names,
+            resolved_delivery_methods=resolved_delivery_methods,
+            run_id=run_id,
+            replay_datapoints=replay.datapoints if replay is not None else None,
+            replay_of=replay.path.name if replay is not None else None,
+        )
+        report, metrics = _coerce_run_result(run_result)
+    elif resolved_mode == Pipeline.STATIC:
+        run_result = await _run_static(
+            targets=targets,
+            filter_selection=filter_selection,
+            agent_targets=agent_targets,
+            name=name,
+            categories=categories,
+            evaluator_model=evaluator_model,
+            datapoint_parallelism=datapoint_parallelism,
+            max_static_datapoints=max_static_datapoints,
+            dataset=dataset,
+            description=description,
+            llm_client=llm_client,
+            hooks=hooks,
+            output_dir=output_dir,
+            target_config=target_config,
+            pipeline_config=pipeline_config,
+            resolved_strategy_names=resolved_strategy_names,
+            resolved_delivery_methods=resolved_delivery_methods,
+            run_id=run_id,
+            prefetched_data=replay.datapoints if replay is not None else None,
+            replay_of=replay.path.name if replay is not None else None,
+        )
+        report, metrics = _coerce_run_result(run_result)
+    else:
+        msg = f'Invalid mode {mode!r}. Must be "dynamic", "static", or "hybrid".'
+        raise ValueError(msg)
+
+    return report, metrics
+
+
+@dataclass(frozen=True)
+class _PostProcessingOutcome:
+    recorded: bool
+    usage: TokenUsage | None
+
+
+async def _generate_recommendations(
+    *,
+    report: RedTeamReport,
+    llm_client: AsyncOpenAI | None,
+    config: LLMConfig,
+    recommendation_config: RedTeamRecommendationConfig,
+    evaluator_model: str,
+) -> _PostProcessingOutcome:
+    # Generate LLM-based recommendations for focus areas (on by default)
+    recorded = False
+    usage: TokenUsage | None = None
+    try:
+        rec_client = llm_client or config.evaluator.client
+        if rec_client is None:
+            rec_client = create_async_llm_client(
+                role_config=config.evaluator.as_call_config(), max_retries=config.retry_count
+            )
+
+        async with with_redteam_span(
+            'orq.redteam.recommendations',
+            {'orq.redteam.model': evaluator_model},
+        ):
+            focus_area_recommendations, rec_usage = await generate_focus_area_recommendations(
+                report=report,
+                llm_client=rec_client,
+                model=evaluator_model,
+                recommendations=recommendation_config,
+                cfg=config,
+            )
+            report.focus_area_recommendations = focus_area_recommendations
+            usage = rec_usage
+            recorded = True
+    except (TypeError, AttributeError, ImportError, NameError, KeyError):
+        raise
+    except Exception:
+        logger.warning('Failed to generate focus area recommendations', exc_info=True)
+        report.pipeline_warnings.append(
+            'Failed to generate focus area recommendations. Check LLM credentials and model configuration.'
+        )
+    return _PostProcessingOutcome(recorded=recorded, usage=usage)
+
+
+async def _generate_executive_summary_section(
+    *,
+    report: RedTeamReport,
+    llm_client: AsyncOpenAI | None,
+    config: LLMConfig,
+    evaluator_model: str,
+) -> _PostProcessingOutcome:
+    # Generate the LLM narrative executive summary (on by default; silent skip
+    # when no LLM credentials are configured).
+    from evaluatorq.common.reports.executive_summary import (
+        generate_executive_summary as _gen_exec_summary,
+    )
+    from evaluatorq.redteam.reports.executive_summary import build_redteam_facts
+
+    recorded = False
+    usage: TokenUsage | None = None
+    try:
+        es_client = llm_client or config.evaluator.client
+        if es_client is None:
+            es_client = create_async_llm_client(
+                role_config=config.evaluator.as_call_config(), max_retries=config.retry_count
+            )
+        async with with_redteam_span(
+            'orq.redteam.executive_summary',
+            {'orq.redteam.model': evaluator_model},
+        ):
+            executive_summary_result = await _gen_exec_summary(
+                build_redteam_facts(report),
+                llm_client=es_client,
+                model=evaluator_model,
+                config=_executive_summary_config(config, model=evaluator_model, client=es_client),
+            )
+            report.executive_summary = executive_summary_result.text
+            usage = executive_summary_result.usage
+            recorded = True
+    except (TypeError, AttributeError, ImportError, NameError, KeyError):
+        raise
+    except Exception:
+        logger.warning('Failed to generate executive summary', exc_info=True)
+        report.pipeline_warnings.append(
+            'Failed to generate executive summary. Check LLM credentials and model configuration.'
+        )
+    return _PostProcessingOutcome(recorded=recorded, usage=usage)
+
+
+def _fold_post_processing_usage(*, report: RedTeamReport, post_processing_usages: list[TokenUsage | None]) -> None:
+    from evaluatorq.common.structured_output import sum_structured_usage
+
+    # Fold post-processing spend into the run total now that both post-processing
+    # steps have run in the caller (or been skipped/failed) —
+    # `report.summary.token_usage_total` up to this point only covers attack
+    # results (see `_aggregate_token_usage`).
+    post_processing_usage = sum_structured_usage(post_processing_usages)
+    if post_processing_usage is not None:
+        report.summary.post_processing_token_usage = post_processing_usage
+        report.summary.token_usage_total = sum_structured_usage([
+            report.summary.token_usage_total,
+            post_processing_usage,
+        ])
+
+
+@dataclass(frozen=True)
+class _PersistedRun:
+    """Two `Path | None` slots that mean different things — named so they cannot be transposed.
+
+    `auto_save_path` is what `on_complete` reports to the caller. `run_path` is the
+    `.evaluatorq/runs/` index entry the manifest records as its report path, and is
+    `None` when indexing was skipped or failed.
+    """
+
+    auto_save_path: Path | None
+    run_path: Path | None
+
+
+def _persist_and_index_run(
+    *,
+    report: RedTeamReport,
+    save: SaveMode,
+    user_output_dir: Path | None,
+    resolved_output_dir: Path | None,
+    name: str | None,
+    metrics: RedTeamRunMetrics,
+    resolved_max_turns: int,
+    attacker_instructions: str | None,
+) -> _PersistedRun:
+    # Persist report according to the save mode. 'detail' mode already had
+    # the inner pipeline write 01/02/03 to resolved_output_dir, so here we
+    # only handle 'final' (single summary file) and record the saved path.
+    auto_save_path: Path | None = None
+    run_path: Path | None = None
+    if save == 'final':
+        if user_output_dir is not None:
+            _save_report(user_output_dir, '03_summary_report.json', report)
+            auto_save_path = user_output_dir / '03_summary_report.json'
+    elif save == 'detail':
+        if resolved_output_dir is not None:
+            auto_save_path = resolved_output_dir / '03_summary_report.json'
+
+    # Index in .evaluatorq/runs/ so the run appears in `evaluatorq redteam runs`.
+    if save != 'none':
+        run_path = _auto_save_run(
+            report,
+            name=name,
+            datapoints=metrics.datapoint_inputs,
+            run_config={
+                'max_turns': resolved_max_turns,
+                'attacker_instructions': attacker_instructions,
+            },
+        )
+        if auto_save_path is None:
+            auto_save_path = run_path
+        if run_path is None:
+            report.pipeline_warnings.append(
+                'Failed to auto-save run report. The run will not appear in `evaluatorq redteam runs`.'
+            )
+
+    return _PersistedRun(auto_save_path=auto_save_path, run_path=run_path)
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -689,103 +1374,36 @@ async def red_team(
     # generation site downstream only has to check for None.
     recommendation_config = resolve_recommendations(recommendations, RedTeamRecommendationConfig)
 
-    if isinstance(save, bool):
-        warnings.warn(
-            'Passing save=True/False is deprecated. Use SaveMode.FINAL / SaveMode.NONE instead.',
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        save = SaveMode.FINAL if save else SaveMode.NONE
-    elif save not in SaveMode.__members__.values():
-        msg = f'Invalid save value {save!r}. Must be one of: {", ".join(SaveMode.__members__.values())}.'
-        raise ValueError(msg)
+    save = _resolve_save_mode(save=save)
 
-    # Replay short-circuits every data-selection input: the cases are already
-    # decided by the run being replayed, so accepting a conflicting selector
-    # would silently ignore it. Reject the combination instead.
-    replay: RedTeamReplay | None = None
-    if previous_run is not None:
-        conflicting = [
-            label
-            for label, supplied in (
-                ('mode', mode is not None),
-                ('dataset', dataset is not None),
-                ('categories', categories is not None),
-                ('vulnerabilities', vulnerabilities is not None),
-                ('strategies', strategies is not None),
-                ('delivery_methods', delivery_methods is not None),
-                ('max_per_category', max_per_category is not None),
-                ('max_dynamic_datapoints', max_dynamic_datapoints is not None),
-                ('max_static_datapoints', max_static_datapoints is not None),
-            )
-            if supplied
-        ]
-        if conflicting:
-            msg = (
-                f'previous_run= replays a stored run and cannot be combined with data-selection '
-                f'arguments: {", ".join(conflicting)}. Drop them, or drop previous_run.'
-            )
-            raise ValueError(msg)
-        replay = load_redteam_replay(previous_run, get_runs_dir())
-        mode = replay.pipeline
-        # Restore the knobs the datapoints don't encode. An explicit argument
-        # still wins — replaying at a different turn budget is a legitimate ask,
-        # silently changing it behind the user's back is not.
-        if max_turns is None:
-            max_turns = replay.max_turns
-        if attacker_instructions is None:
-            attacker_instructions = replay.attacker_instructions
-        logger.info(
-            f'Replaying {len(replay.datapoints)} datapoints from {replay.path.name} ({replay.pipeline.value} pipeline).'
+    replay_resolution = _resolve_replay(
+        inputs=_ReplayResolutionInputs(
+            previous_run=previous_run,
+            mode=mode,
+            dataset=dataset,
+            categories=categories,
+            vulnerabilities=vulnerabilities,
+            strategies=strategies,
+            delivery_methods=delivery_methods,
+            max_per_category=max_per_category,
+            max_dynamic_datapoints=max_dynamic_datapoints,
+            max_static_datapoints=max_static_datapoints,
+            max_turns=max_turns,
+            attacker_instructions=attacker_instructions,
         )
-    elif mode is None:
-        mode = Pipeline.DYNAMIC
+    )
+    replay = replay_resolution.replay
+    mode = replay_resolution.mode
+    max_turns = replay_resolution.max_turns
+    attacker_instructions = replay_resolution.attacker_instructions
 
     resolved_max_turns = max_turns if max_turns is not None else DEFAULT_MAX_TURNS
 
-    user_output_dir = Path(artifacts_dir) if artifacts_dir is not None else None
-    # Inner pipelines (_run_dynamic, _run_static) only write 01/02/03 to their
-    # output_dir parameter, so we gate it on save='detail'. For 'final' the
-    # outer red_team() does the single summary write after inner returns.
-    resolved_output_dir: Path | None = None
-    if save == 'detail':
-        if user_output_dir is None:
-            msg = "save='detail' requires artifacts_dir to be set."
-            raise ValueError(msg)
-        resolved_output_dir = user_output_dir
+    output_dirs = _resolve_output_dirs(save=save, artifacts_dir=artifacts_dir)
+    user_output_dir = output_dirs.user_output_dir
+    resolved_output_dir = output_dirs.pipeline_output_dir
 
-    if isinstance(target, list):
-        raw_targets: list[str | AgentTarget] = list(target)
-    elif isinstance(target, (str, AgentTarget)):
-        raw_targets = [target]
-    else:
-        raise TypeError(f'Invalid target type: {type(target).__name__}. Expected str or AgentTarget.')
-
-    if not raw_targets:
-        msg = 'red_team() requires at least one target'
-        raise ValueError(msg)
-
-    # Separate string targets from AgentTarget objects
-    string_targets: list[str] = []
-    agent_targets: list[AgentTarget] = []
-    for t in raw_targets:
-        if isinstance(t, str):
-            string_targets.append(t)
-        elif isinstance(t, AgentTarget):
-            agent_targets.append(t)
-        else:
-            raise TypeError(f'Invalid target type: {type(t).__name__}. Expected str or AgentTarget.')
-
-    # Deduplicate string targets (preserve order, warn on duplicates)
-    seen_str: set[str] = set()
-    deduped_str: list[str] = []
-    for s in string_targets:
-        if s in seen_str:
-            logger.warning(f'Duplicate target {s!r} — ignoring repeated occurrence.')
-        else:
-            seen_str.add(s)
-            deduped_str.append(s)
-    targets = deduped_str  # existing code uses 'targets' as list[str]
+    targets, agent_targets = _split_and_dedupe_targets(target=target)
 
     # Build or merge config -------------------------------------------------
     # When ``llm_config`` is provided it is the source of truth for models and
@@ -798,164 +1416,35 @@ async def red_team(
     attack_model = config.attacker.model
     evaluator_model = config.evaluator.model or config.evaluator.judges[0]
 
-    # Early credential validation — fail fast with a clear message.
-    # Also check per-role clients: if either role has a pre-configured client,
-    # we don't need global credentials.
-    has_role_client = config.attacker.client is not None or config.evaluator.client is not None
-    if llm_client is None and not has_role_client and not os.getenv('OPENAI_API_KEY') and not os.getenv('ORQ_API_KEY'):
-        raise CredentialError(
-            'Missing LLM credentials for attack/evaluation models. '
-            'Set OPENAI_API_KEY for direct OpenAI access, or ORQ_API_KEY to use the ORQ router.'
-        )
-
-    # Fail fast: static/hybrid runs that pull static datapoints from HuggingFace
-    # need huggingface-hub. Check now rather than deep in the static leg — in
-    # hybrid mode that leg runs only after the entire dynamic leg, so a missing
-    # dependency would otherwise surface after minutes of (now wasted) work.
-    if replay is None and resolved_mode in (Pipeline.STATIC, Pipeline.HYBRID):
-        from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import (
-            ensure_huggingface_available,
-            is_huggingface_source,
-        )
-
-        if is_huggingface_source(dataset):
-            ensure_huggingface_available()
-
-    # Convert filter inputs to sets for the planner. Unknown registry names are
-    # rejected at the CLI boundary; here we pass through verbatim and detect
-    # empty/unmatched intersections post-filter from the actually-matched set.
-    resolved_strategy_names: set[str] | None = set(strategies) if strategies is not None else None
-    # Resolve through the registry so known values (enum plus registered) become
-    # canonical DeliveryMethod objects and unknown ones stay raw strings. The
-    # objects then flow through the planner, loader filter, and reporting as-is —
-    # no enum→string→enum conversion (DeliveryMethod is a StrEnum, so a set of
-    # them matches the dataset's string delivery_method directly).
-    resolved_delivery_methods: set[DeliveryMethod | str] | None = (
-        set(resolve_delivery_methods(list(delivery_methods))) if delivery_methods is not None else None
+    _validate_credentials_and_deps(
+        config=config,
+        llm_client=llm_client,
+        replay=replay,
+        resolved_mode=resolved_mode,
+        dataset=dataset,
     )
-    # An unknown/misspelled delivery method stays a raw string here and silently
-    # narrows the run. The CLI already warns up front via typer.echo; programmatic
-    # callers get a loguru warning from _check_filter_results (post-filter, against
-    # the actual dataset), plus a hard RedTeamError if the selection is fully empty.
 
-    # Snapshot the caller's raw category/vulnerability selection for the empty-run
-    # guard, before the resolution chain below defaults an unfiltered run to the
-    # full category sweep. Reading it off resolved_categories instead would make
-    # every default run look like a filter that selected all 36 categories, and a
-    # run that came back empty for an unrelated reason would be blamed on a filter
-    # the caller never set.
-    filter_selection: tuple[str, list[str]] | None = None
-    if vulnerabilities is not None:
-        filter_selection = ('vulnerabilities', sorted(vulnerabilities))
-    elif categories is not None:
-        filter_selection = ('categories', sorted(categories))
-
-    resolved_vulns: list[Vulnerability] | None
-    if replay is not None:
-        # A replay's scope is whatever it recorded. Resolving vulnerabilities
-        # (and running the evaluability gate below) would re-derive a selection
-        # the stored datapoints have already made.
-        resolved_categories = replay.categories
-        resolved_vulns = None
-    elif vulnerabilities is not None:
-        resolved_vulns = resolve_vulnerabilities(vulnerabilities)
-        resolved_categories = [get_primary_category(v) for v in resolved_vulns]
-    elif categories is not None:
-        # Surface unrecognized codes instead of silently swallowing the ValueError and
-        # proceeding with resolved_vulns=None — that skips the evaluability gate and runs
-        # a meaningless attack with no scoring.
-        try:
-            resolved_vulns = resolve_vulnerabilities(categories)
-        except ValueError:
-            # Mirror resolve_vulnerabilities, which accepts BOTH vulnerability IDs and
-            # category codes — a code is unknown only when it is neither. Using
-            # resolve_category_safe alone would mislabel a valid vulnerability ID (e.g.
-            # 'goal_hijacking') as unrecognized in a mixed list.
-            valid_vuln_ids = {v.value for v in Vulnerability}
-            unknown = [c for c in categories if c not in valid_vuln_ids and resolve_category_safe(c) is None]
-            raise ValueError(
-                f'Unrecognized categor{"y" if len(unknown) == 1 else "ies"}: '
-                f'{", ".join(unknown)}. Valid categories: {", ".join(list_available_categories())}.'
-            ) from None
-        resolved_categories = categories
-        # A cross-framework code (e.g. LLM03) resolves to a vulnerability whose canonical
-        # label lives in another framework (supply_chain → ASI04); results are reported
-        # under that label. Log the relabel so it isn't surprising in the report.
-        for c in categories:
-            v = resolve_category_safe(c)
-            primary = get_primary_category(v) if v is not None else None
-            if primary is not None and primary != c:
-                logger.info(
-                    'Category %s is scored by the %s evaluator and reported under %s.',
-                    c,
-                    v.value,  # pyright: ignore[reportOptionalMemberAccess] - v is not None here
-                    primary,
-                )
-    else:
-        resolved_categories = list_available_categories()
-        try:
-            resolved_vulns = resolve_vulnerabilities(resolved_categories)
-        except ValueError:
-            resolved_vulns = None
-
-    # Evaluability gate: a vulnerability with no registered evaluator can be attacked
-    # but not scored, so prune it up front (raise if none are scorable) rather than
-    # burning tokens on attacks that always read "no verdict". Currently inert — every
-    # registry vulnerability has an evaluator (the ten ASI categories plus the LLM Top 10
-    # mappings, e.g. LLM03 Supply Chain resolves to supply_chain, scored by ASI04) — but
-    # kept as the safety net against a future one shipped without one. list_available_categories()
-    # is already evaluator-backed, so this only ever prunes an explicit user selection.
-    # The static leg keeps its own datapoint-level coverage guard in _run_static().
-    unevaluable_codes: list[str] = []
-    if resolved_vulns is not None:
-        from evaluatorq.redteam.frameworks.owasp.evaluators import VULNERABILITY_EVALUATOR_REGISTRY
-
-        evaluable_vulns = [v for v in resolved_vulns if v in VULNERABILITY_EVALUATOR_REGISTRY]
-        dropped_vulns = [v for v in resolved_vulns if v not in VULNERABILITY_EVALUATOR_REGISTRY]
-        if dropped_vulns:
-            unevaluable_codes = [get_primary_category(v) for v in dropped_vulns]
-            if not evaluable_vulns:
-                raise ValueError(
-                    'None of the requested categories/vulnerabilities have an automated '
-                    f'evaluator: {", ".join(unevaluable_codes)}. They cannot be scored by '
-                    'prompt-based red teaming. Pick evaluator-backed categories '
-                    f'({", ".join(list_available_categories())}), or test these with a '
-                    'custom AgentTarget + evaluator via the SDK.'
-                )
-            dropped_set = set(dropped_vulns)
-            resolved_categories = [c for c in resolved_categories if resolve_category_safe(c) not in dropped_set]
-            resolved_vulns = evaluable_vulns
-            logger.warning(
-                'Skipping %d requested categor%s with no automated evaluator: %s. '
-                'These require live-system testing and cannot be scored by prompt-based '
-                'red teaming — they would only produce inconclusive results.',
-                len(unevaluable_codes),
-                'y' if len(unevaluable_codes) == 1 else 'ies',
-                ', '.join(unevaluable_codes),
-            )
-
-    # Persist run state alongside the report.  Compose user hooks with the
-    # manifest hook only after argument validation, so bad input creates no
-    # misleading in-progress manifest.
-    from evaluatorq.common.hook_compose import compose_run_hooks
-    from evaluatorq.common.run_manifest import start_manifest
-
-    def _make_manifest() -> Any:
-        return start_manifest(
-            run_id=uuid.uuid4().hex,
-            surface='redteam',
-            run_name=name or 'red-team',
-            runs_dir=get_runs_dir(),
-        )
-
-    _resolved_hooks_typed, manifest_writer = compose_run_hooks(
-        hooks,
-        method_names=('on_stage_start', 'on_stage_end', 'on_confirm', 'on_complete'),
-        composite_cls=CompositePipelineHooks,
-        default_hooks_factory=DefaultHooks,
-        manifest_factory=_make_manifest if save != 'none' else None,
-        manifest_hook_factory=ManifestStageHooks,
+    resolved_filters = _resolve_filter_sets(
+        strategies=strategies,
+        delivery_methods=delivery_methods,
+        vulnerabilities=vulnerabilities,
+        categories=categories,
     )
+    resolved_strategy_names = resolved_filters.strategy_names
+    resolved_delivery_methods = resolved_filters.delivery_methods
+    filter_selection = resolved_filters.filter_selection
+
+    resolved_vulns, resolved_categories = _resolve_vulns_and_categories(
+        replay=replay,
+        vulnerabilities=vulnerabilities,
+        categories=categories,
+    )
+    resolved_vulns, resolved_categories, unevaluable_codes = _apply_evaluability_gate(
+        resolved_vulns=resolved_vulns,
+        resolved_categories=resolved_categories,
+    )
+
+    _resolved_hooks_typed, manifest_writer = _compose_redteam_hooks(hooks=hooks, name=name, save=save)
     # The composite records manifest stages for normal runner calls. Preserve the
     # caller's hook object for the inner runners as well: integrations may call
     # legacy synchronous hooks directly while substituting a runner.
@@ -963,16 +1452,7 @@ async def red_team(
 
     resolved_agent_targets = agent_targets or []
     all_target_labels, _ = _deduplicate_target_labels(targets, resolved_agent_targets)
-    if targets:
-        target_kinds = {parse_target(t)[0] for t in targets}
-        if target_kinds == {TargetKind.AGENT}:
-            backend_label = 'openresponses'
-        elif TargetKind.AGENT not in target_kinds:
-            backend_label = 'orq'
-        else:
-            backend_label = 'mixed'
-    else:
-        backend_label = 'direct' if resolved_agent_targets else 'orq'
+    backend_label = _resolve_backend_label(targets=targets, resolved_agent_targets=resolved_agent_targets)
     pipeline_attributes = {
         'orq.trace_type': 'redteam',
         'orq.redteam.targets': ', '.join(all_target_labels),
@@ -992,12 +1472,13 @@ async def red_team(
             pipeline_attributes,
             tracing_context.parent_context,
         ) as pipeline_span:
-            if resolved_mode in (Pipeline.DYNAMIC, Pipeline.HYBRID):
-                run_result = await _run_dynamic_or_hybrid(
+            report, metrics = await _dispatch_pipeline(
+                inputs=_PipelineDispatchInputs(
                     targets=targets,
                     filter_selection=filter_selection,
                     agent_targets=agent_targets,
-                    mode=resolved_mode,
+                    resolved_mode=resolved_mode,
+                    mode=mode,
                     name=name,
                     categories=resolved_categories,
                     resolved_vulns=resolved_vulns,
@@ -1023,37 +1504,9 @@ async def red_team(
                     resolved_strategy_names=resolved_strategy_names,
                     resolved_delivery_methods=resolved_delivery_methods,
                     run_id=tracing_context.run_id,
-                    replay_datapoints=replay.datapoints if replay is not None else None,
-                    replay_of=replay.path.name if replay is not None else None,
+                    replay=replay,
                 )
-                report, metrics = _coerce_run_result(run_result)
-            elif resolved_mode == Pipeline.STATIC:
-                run_result = await _run_static(
-                    targets=targets,
-                    filter_selection=filter_selection,
-                    agent_targets=agent_targets,
-                    name=name,
-                    categories=resolved_categories,
-                    evaluator_model=evaluator_model,
-                    datapoint_parallelism=datapoint_parallelism,
-                    max_static_datapoints=max_static_datapoints,
-                    dataset=dataset,
-                    description=description,
-                    llm_client=llm_client,
-                    hooks=resolved_hooks,
-                    output_dir=resolved_output_dir,
-                    target_config=target_config,
-                    pipeline_config=config,
-                    resolved_strategy_names=resolved_strategy_names,
-                    resolved_delivery_methods=resolved_delivery_methods,
-                    run_id=tracing_context.run_id,
-                    prefetched_data=replay.datapoints if replay is not None else None,
-                    replay_of=replay.path.name if replay is not None else None,
-                )
-                report, metrics = _coerce_run_result(run_result)
-            else:
-                msg = f'Invalid mode {mode!r}. Must be "dynamic", "static", or "hybrid".'
-                raise ValueError(msg)
+            )
 
             set_span_attrs(
                 pipeline_span,
@@ -1078,126 +1531,53 @@ async def red_team(
             # Folded into `report.summary.token_usage_total` once both steps have run.
             # A skipped or failed step contributes None, never a zero.
             post_processing_usages: list[TokenUsage | None] = []
-            from evaluatorq.common.structured_output import sum_structured_usage
 
-            # Generate LLM-based recommendations for focus areas (on by default)
             if recommendation_config is not None:
-                try:
-                    rec_client = llm_client or config.evaluator.client
-                    if rec_client is None:
-                        rec_client = create_async_llm_client(
-                            role_config=config.evaluator.as_call_config(), max_retries=config.retry_count
-                        )
+                rec_outcome = await _generate_recommendations(
+                    report=report,
+                    llm_client=llm_client,
+                    config=config,
+                    recommendation_config=recommendation_config,
+                    evaluator_model=evaluator_model,
+                )
+                if rec_outcome.recorded:
+                    post_processing_usages.append(rec_outcome.usage)
 
-                    async with with_redteam_span(
-                        'orq.redteam.recommendations',
-                        {'orq.redteam.model': evaluator_model},
-                    ):
-                        focus_area_recommendations, rec_usage = await generate_focus_area_recommendations(
-                            report=report,
-                            llm_client=rec_client,
-                            model=evaluator_model,
-                            recommendations=recommendation_config,
-                            cfg=config,
-                        )
-                        report.focus_area_recommendations = focus_area_recommendations
-                        post_processing_usages.append(rec_usage)
-                except (TypeError, AttributeError, ImportError, NameError, KeyError):
-                    raise
-                except Exception:
-                    logger.warning('Failed to generate focus area recommendations', exc_info=True)
-                    report.pipeline_warnings.append(
-                        'Failed to generate focus area recommendations. Check LLM credentials and model configuration.'
-                    )
-
-            # Generate the LLM narrative executive summary (on by default; silent skip
-            # when no LLM credentials are configured).
             if generate_executive_summary:
-                from evaluatorq.common.reports.executive_summary import (
-                    generate_executive_summary as _gen_exec_summary,
+                executive_summary_outcome = await _generate_executive_summary_section(
+                    report=report,
+                    llm_client=llm_client,
+                    config=config,
+                    evaluator_model=evaluator_model,
                 )
-                from evaluatorq.redteam.reports.executive_summary import build_redteam_facts
+                if executive_summary_outcome.recorded:
+                    post_processing_usages.append(executive_summary_outcome.usage)
 
-                try:
-                    es_client = llm_client or config.evaluator.client
-                    if es_client is None:
-                        es_client = create_async_llm_client(
-                            role_config=config.evaluator.as_call_config(), max_retries=config.retry_count
-                        )
-                    async with with_redteam_span(
-                        'orq.redteam.executive_summary',
-                        {'orq.redteam.model': evaluator_model},
-                    ):
-                        executive_summary_result = await _gen_exec_summary(
-                            build_redteam_facts(report),
-                            llm_client=es_client,
-                            model=evaluator_model,
-                            config=_executive_summary_config(config, model=evaluator_model, client=es_client),
-                        )
-                        report.executive_summary = executive_summary_result.text
-                        post_processing_usages.append(executive_summary_result.usage)
-                except (TypeError, AttributeError, ImportError, NameError, KeyError):
-                    raise
-                except Exception:
-                    logger.warning('Failed to generate executive summary', exc_info=True)
-                    report.pipeline_warnings.append(
-                        'Failed to generate executive summary. Check LLM credentials and model configuration.'
-                    )
+            _fold_post_processing_usage(report=report, post_processing_usages=post_processing_usages)
 
-            # Fold post-processing spend into the run total now that both steps above
-            # have run (or been skipped/failed) — `report.summary.token_usage_total` up
-            # to this point only covers attack results (see `_aggregate_token_usage`).
-            post_processing_usage = sum_structured_usage(post_processing_usages)
-            if post_processing_usage is not None:
-                report.summary.post_processing_token_usage = post_processing_usage
-                report.summary.token_usage_total = sum_structured_usage([
-                    report.summary.token_usage_total,
-                    post_processing_usage,
-                ])
-
-            # Persist report according to the save mode. 'detail' mode already had
-            # the inner pipeline write 01/02/03 to resolved_output_dir, so here we
-            # only handle 'final' (single summary file) and record the saved path.
-            auto_save_path: Path | None = None
-            run_path: Path | None = None
-            if save == 'final':
-                if user_output_dir is not None:
-                    _save_report(user_output_dir, '03_summary_report.json', report)
-                    auto_save_path = user_output_dir / '03_summary_report.json'
-            elif save == 'detail':
-                if resolved_output_dir is not None:
-                    auto_save_path = resolved_output_dir / '03_summary_report.json'
-
-            # Index in .evaluatorq/runs/ so the run appears in `evaluatorq redteam runs`.
-            if save != 'none':
-                run_path = _auto_save_run(
-                    report,
-                    name=name,
-                    datapoints=metrics.datapoint_inputs,
-                    run_config={
-                        'max_turns': resolved_max_turns,
-                        'attacker_instructions': attacker_instructions,
-                    },
-                )
-                if auto_save_path is None:
-                    auto_save_path = run_path
-                if run_path is None:
-                    report.pipeline_warnings.append(
-                        'Failed to auto-save run report. The run will not appear in `evaluatorq redteam runs`.'
-                    )
+            persisted = _persist_and_index_run(
+                report=report,
+                save=save,
+                user_output_dir=user_output_dir,
+                resolved_output_dir=resolved_output_dir,
+                name=name,
+                metrics=metrics,
+                resolved_max_turns=resolved_max_turns,
+                attacker_instructions=attacker_instructions,
+            )
 
             await await_maybe(
                 resolved_hooks.on_complete(
                     report,
                     output_dir=str(user_output_dir) if user_output_dir and save != 'none' else None,
-                    auto_save_path=str(auto_save_path) if auto_save_path else None,
+                    auto_save_path=str(persisted.auto_save_path) if persisted.auto_save_path else None,
                 )
             )
 
             # Only mark completion after the user completion hook succeeds.  If
             # it raises, the lifecycle context above records the surfaced error.
             if manifest_writer is not None:
-                manifest_writer.complete(report_path=run_path, summary=report.manifest_summary())
+                manifest_writer.complete(report_path=persisted.run_path, summary=report.manifest_summary())
 
             return report
 
