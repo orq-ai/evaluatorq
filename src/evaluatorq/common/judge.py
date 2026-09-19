@@ -17,7 +17,6 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError, BadReque
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, model_validator
 
 from evaluatorq.common.llm_call import (
-    ClassifyResponseError,
     execute_chat_completion,
     execute_chat_parse,
     execute_classify,
@@ -635,26 +634,35 @@ async def _classify_judge(
     payload every other judge leg returns. A classify answer never abstains — an
     answer that cannot be read at all is a `JudgeError.PARSE`, not an abstention,
     so a broken verdict is never counted as a judge declining to call it.
+
+    `execute_classify` hands back the decoded wire payload untouched — it owns the
+    call, not the result shape — so validating it against `ClassifyResponse` is this
+    leg's job. A payload that does not validate keeps its raw body on the outcome:
+    the caller's ``raw_content`` still holds the placeholder it was initialised with,
+    so reporting the failure without the body would name a reply nobody saw.
     """
+    payload, usage = await execute_classify(
+        client=client,
+        model=model,
+        question=question,
+        span=span,
+        timeout_s=cfg.timeout_ms / 1000.0,
+    )
     try:
-        response, usage = await execute_classify(
-            client=client,
-            model=model,
-            question=question,
-            span=span,
-            timeout_s=cfg.timeout_ms / 1000.0,
-        )
-    except ClassifyResponseError as e:
+        response = ClassifyResponse.model_validate(payload)
+    except ValidationError as e:
+        raw_payload = json.dumps(payload, default=str)
         logger.error(
             'Judge [{}] classify reply did not validate ({}) | raw (truncated): {}',
             model,
-            e.__cause__ or e,
-            e.raw[:500],
+            e,
+            raw_payload[:500],
         )
         return JudgeOutcome(
             error_kind=JudgeError.PARSE,
-            error_message=str(e.__cause__ or e),
-            raw_content=e.raw,
+            error_message=f'classify reply from {model} did not validate: {e}',
+            token_usage=usage,
+            raw_content=raw_payload,
             endpoint='classify',
         )
     raw = response.model_dump_json()
@@ -689,7 +697,9 @@ async def _classify_judge(
         span,
         {
             'judge.confidence': answer.confidence,
-            'judge.probabilities': json.dumps(answer.probabilities) if answer.probabilities else None,
+            # `is not None`, not truthiness: an empty distribution is something the
+            # model said, and recording it as absent would read as "never reported".
+            'judge.probabilities': json.dumps(answer.probabilities) if answer.probabilities is not None else None,
         },
     )
     return JudgeOutcome(
@@ -752,8 +762,6 @@ async def run_judge(
     pass ``None`` explicitly to omit the param (e.g. for reasoning models).
     """
     temp: float | None = cfg.temperature if isinstance(temperature, _UseCfg) else temperature
-    user_prompt = render_template(prompt_template, replacements)
-
     client = without_client_retries(client)
     raw_content = '{}'
     # Decided before the endpoint resolution below, and independently of `cfg.api`:
@@ -762,16 +770,18 @@ async def run_judge(
     use_classify = client_routes_through_orq(client) and await supports_classify(model, client)
     if use_classify and classify is None:
         logger.error(
-            'Judge [{}] is a classify model but no classify question was supplied; `llm_jury` builds one only '
-            'for a model listed in KNOWN_CLASSIFY_MODELS (evaluatorq.common.model_catalogue)',
+            'Judge [{}] is a classify model but the caller built no classify question for it; from `llm_jury`, '
+            'register the model with register_model(..., ModelInfo(supports_classify=True)) or use '
+            'typesafe/jev-latest',
             model,
         )
         return JudgeOutcome(
             error_kind=JudgeError.UNKNOWN,
             error_message=(
-                f'{model} is a classify model but the caller passed no classify question; a model the catalogue '
-                f'marks classify must also be listed in KNOWN_CLASSIFY_MODELS '
-                f'(evaluatorq.common.model_catalogue) for llm_jury to build its question'
+                f'{model} is a classify model but the caller passed no classify question. From llm_jury, that '
+                f'means the panel did not seat it as a classify judge: register the model with '
+                f'register_model(..., ModelInfo(supports_classify=True)) '
+                f'(evaluatorq.common.model_catalogue), or use typesafe/jev-latest'
             ),
             endpoint=None,
         )
@@ -782,6 +792,9 @@ async def run_judge(
             read=frozenset({'model', 'timeout_ms', 'retry_count'}),
             caller='run_judge[classify]',
         )
+    # Rendered only where it is sent: a classify call carries no prompt, and rendering
+    # one would re-log every rejected-placeholder warning for a string nobody reads.
+    user_prompt = '' if use_classify else render_template(prompt_template, replacements)
     # Resolved before the span opens so the span carries the operation and the model
     # id this call actually sends — `responses openai/gpt-5-mini`, not `chat gpt-5-mini`
     # — the way every other inference path in the codebase labels its own.
