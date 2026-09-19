@@ -10,3 +10,4 @@ Outcomes: `prepared` (work committed, PR not yet created) · `opened` · `blocke
 | 2026-08-24 | `tier 1: env var (ORQ_OTEL_MAX_QUEUE_SIZE, ORQ_OTEL_MAX_BATCH_SIZE, ORQ_OTEL_SCHEDULE_DELAY_MS, ORQ_OTEL_FLUSH_TIMEOUT_MS)` | docs/autofill-otel-batching | opened |
 | 2026-08-31 | `entry point (wrap_simulation_agent()) × surface (Python API)` | docs/autofill-wrap-simulation-agent | opened |
 | 2026-09-07 | `entry point (red_team()) × target kind (CallableTarget)` | docs/autofill-callable-target | opened |
+| 2026-09-14 | `tier 1: env var contract (empty/invalid/out-of-range handling shared by ORQ_DISABLE_TRACING, the four ORQ_OTEL_*, EVALUATORQ_CAPTURE_MESSAGE_CONTENT, EVALUATORQ_PROPAGATE_TRACE_CONTEXT, EVALUATORQ_CATALOGUE_TIMEOUT_S, EVALUATORQ_LLM_TIMEOUT_S, EVALUATORQ_LLM_MAX_TOKENS)` | docs/autofill-env-var-contract | opened |
