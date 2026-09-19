@@ -1,0 +1,76 @@
+# Sole AI reviewer for PRs. Copied from orq-ai/research, where it replaced the
+# Claude PR reviewer.
+# Requires repo secret ORQ_REVIEW_API_KEY: an orq gateway key with router access,
+# scoped to the evaluatorq-cicd project. It is this workflow's alone — ORQ_API_KEY
+# is a separate key for examples-weekly.yml and jury-rates-monthly.yml, so a
+# rotation on either side cannot take the other down.
+
+name: OpenCodeReview
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: ocr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  open-code-review:
+    # A dependabot-triggered run reads the Dependabot secret store, where
+    # ORQ_API_KEY does not exist.
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # Fork of alibaba/open-code-review, based on upstream main at
+      # 6e5cd8cf2578768b6c6d1fafa1d14f66801d5f2b (after v1.11.1); the fork diff
+      # is three commits, `git log 6e5cd8c..5e93bee`. Upstream caps code_search
+      # by match count, never by size, so one match in a generated report — one in
+      # orq-ai/research is a 10.7 MB single line — filled the whole context window
+      # and the review stopped on "context compression exceeded its threshold". The fork
+      # bounds a single tool result and spills the rest to a handle the model can
+      # page through. To be upstreamed; drop the fork once it lands.
+      #
+      # The SHA below is also tagged v1.12.1+orq.1 in the fork, so it stays
+      # reachable if the feat/ branch is rebased away. Pin stays on the SHA: a
+      # tag can be moved, a SHA cannot.
+      - uses: orq-ai/open-code-review@5e93beee978171f8d0b6a2ff30beb6796534d944 # v1.12.1+orq.1
+        with:
+          # Anthropic Messages, not Chat Completions: the CLI appends /v1/messages
+          # to this base URL. Non-Claude models route through it fine and their
+          # reasoning comes back as native thinking blocks, which the protocol
+          # carries across tool turns — chat completions drops reasoning between
+          # turns, and OCR reviews are a multi-turn tool loop.
+          #
+          # api.orq.ai is the documented front door for the v3 gateway: it is what
+          # `orq launch claude` exports as ANTHROPIC_BASE_URL. my.orq.ai/v3 serves
+          # the same gateway and is what research's first runs used, but there is
+          # no reason to route CI through the less documented host.
+          llm_url: https://api.orq.ai/v3/anthropic
+          llm_auth_token: ${{ secrets.ORQ_REVIEW_API_KEY }}
+          # Verified live, not by catalog lookup: the gateway echoes
+          # "model": "deepseek/deepseek-flash" back in gen_ai.response.model on
+          # every trace this workflow produces. A catalog lookup will report the
+          # id missing; the catalog is the thing to fix (orq-ai/research RES-1583).
+          llm_model: deepseek/deepseek-flash
+          # Without this, every synchronize push re-reviews merge-base..head and
+          # re-posts findings it already made — PR #214 collected the same comment
+          # three times. true appends only comments whose (path, line range) does
+          # not overlap one the bot already left; it deletes nothing.
+          incremental: 'true'
+          llm_use_anthropic: 'true'
+          # Required, not cosmetic: the action's default extra_body is
+          # {"thinking": {"type": "disabled"}}, which would silently switch the
+          # reasoning off again. Budget stays under the CLI's 16384 max_tokens.
+          llm_extra_body: '{"thinking": {"type": "enabled", "budget_tokens": 4000}}'
+          # No ocr_version: the fork builds the CLI from its own checkout with
+          # `go build ./cmd/opencodereview` and never installs the npm package,
+          # so there is nothing left to pin and nothing floats to latest. Build
+          # step: https://github.com/orq-ai/open-code-review/blob/5e93beee978171f8d0b6a2ff30beb6796534d944/action.yml#L455-L470
+          # Router is billed per token; over budget the action publishes partial results and exits 0.
+          max_tokens_budget: '500000'
