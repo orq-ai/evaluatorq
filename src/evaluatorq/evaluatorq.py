@@ -226,6 +226,20 @@ class _ResolvedEvaluationInputs:
 
 
 def _normalise_params(inputs: _EvaluationInputs) -> _ResolvedEvaluationInputs:
+    """Validate ``evaluatorq``'s two calling conventions into one settled shape.
+
+    The first phase of a run: either a ``params`` object (validated when handed a
+    dict) or the loose keyword arguments, never a mix, and one of the two is
+    required. Under ``inference=False`` any caller-supplied ``jobs`` is dropped
+    with a warning and replaced by the recorded-response replay job, because that
+    mode reads answers from the dataset rather than generating them.
+
+    Returns:
+        The resolved inputs every later phase reads, with ``jobs`` non-empty.
+
+    Raises:
+        ValueError: Neither ``params`` nor the ``data``/``jobs`` pair was given.
+    """
     params = inputs.params
     data = inputs.data
     jobs = inputs.jobs
@@ -303,6 +317,20 @@ async def _enter_single_trace(
     name: str,
     trace_type: str,
 ) -> None:
+    """Open the one run span that all of a single-trace run's rows hang under.
+
+    Enters the span on ``span_stack`` so it closes with the caller's exit stack,
+    then writes the span's context back onto ``tracing_context.parent_context``:
+    ``tracing_session`` captured the ambient context before this span existed,
+    and the per-row job spans pass ``parent_context`` explicitly rather than
+    reading the ambient one, so without that write they would parent elsewhere.
+
+    Args:
+        span_stack: Exit stack owning the span for the rest of the run.
+        tracing_context: Context whose ``parent_context`` this rebinds in place.
+        name: Run name recorded on the span.
+        trace_type: Trace type recorded on the span.
+    """
     from .tracing.spans import RunSpanOptions, with_run_span
 
     run_span = await span_stack.enter_async_context(
@@ -327,6 +355,18 @@ async def _resolve_experiment_input(
     orq_api_key: str | None,
     base_url: str | None,
 ) -> DatasetIdInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None:
+    """Turn an experiment reference into the rows it recorded, before the data phase.
+
+    Only ``ExperimentInput`` is touched; every other source is returned unchanged
+    so the caller can keep dispatching on its type. The validator already
+    guarantees ``inference=False`` whenever this substitution happens.
+
+    Returns:
+        The experiment's recorded datapoints, or ``data`` untouched.
+
+    Raises:
+        ValueError: An experiment was requested without ``orq_api_key``.
+    """
     # Experiment source (no-inference only): replace the input with the experiment's
     # recorded responses, then fall through to the in-memory data path below. The
     # validator already guarantees inference=False here.
@@ -348,6 +388,18 @@ def _resolve_streaming_inputs(
     *,
     inference: bool,
 ) -> tuple['Orq', str, bool]:
+    """Build the Orq client and fetch settings the streaming data phase needs.
+
+    ``include_messages`` is forced on under ``inference=False`` regardless of what
+    the dataset input asked for, since that mode replays the recorded responses
+    and they arrive only in the ``messages`` column; the override is logged.
+
+    Returns:
+        The client, the dataset id, and the ``include_messages`` flag to fetch with.
+
+    Raises:
+        ValueError: No ``orq_api_key``, so no client could be built.
+    """
     orq_client: Orq | None = None
 
     if orq_api_key:
@@ -383,6 +435,15 @@ class _EvaluationFinishInputs:
 
 
 async def _finish_evaluation(inputs: _EvaluationFinishInputs) -> None:
+    """Display and upload a finished run's results, the last phase of ``evaluatorq``.
+
+    Prints the table when asked, then uploads to Orq only when both an API key and
+    ``send_results`` are present. Callers that opted in by passing a sink list get
+    the created experiment's URL appended to ``inputs.experiment_url_out`` — that
+    list is the only value this writes back, since simulation persists the URL on
+    its ``SimulationRun`` report. A run with no sink, no key or no URL writes
+    nothing and is not an error.
+    """
     print_results = inputs.print_results
     orq_api_key = inputs.orq_api_key
     send_results = inputs.send_results
@@ -419,6 +480,22 @@ async def _finish_evaluation(inputs: _EvaluationFinishInputs) -> None:
 
 
 async def _run_streaming_evaluation(inputs: _StreamingInputs) -> EvaluatorqResult:
+    """Run the processing phase against a dataset fetched batch by batch.
+
+    Each datapoint starts as soon as its batch arrives rather than after the
+    fetch completes, so a ``_StreamingProgress`` carries the counters between the
+    fetch loop, the workers and the polling task, and the total is only final
+    once the fetch ends. A fetch failure cancels the in-flight datapoints; those
+    cancellations are ours and are not reported, whereas a caller's cancellation
+    wins outright and the task errors it raced are logged and discarded.
+
+    Returns:
+        Every row's results, flattened in datapoint order.
+
+    Raises:
+        BaseException: The single fetch or task error, re-raised as it arrived.
+        _StreamingEvaluationError: Several failures, collected together.
+    """
     progress = inputs.progress
     datapoint_parallelism = inputs.datapoint_parallelism
     orq_client = inputs.orq_client
@@ -541,6 +618,16 @@ async def _run_in_memory_evaluation(
     evaluators_list: list[Evaluator],
     tracing_context: 'TracingContext',
 ) -> EvaluatorqResult:
+    """Run the processing phase against datapoints already held in memory.
+
+    The non-streaming counterpart: the total is known up front, so the progress
+    service is updated directly by each row instead of by a polling task, and the
+    rows are gathered in one call rather than accumulated batch by batch. A row
+    that raises propagates immediately; there is no error collection here.
+
+    Returns:
+        Every row's results, flattened in datapoint order.
+    """
     # Initialize progress
     await safe_update_progress(
         progress,
