@@ -778,6 +778,24 @@ def test_is_known_classify_model_matches_the_exact_id():
     assert not pricing.is_known_classify_model('openai/gpt-5-mini')
 
 
+def test_a_registered_classify_model_is_known_at_construction():
+    """Otherwise `llm_jury` seats it as a prompted judge and `run_judge` then errors on it."""
+    try:
+        pricing.register_model('acme/sorter', ModelInfo(0.0, 0.0, 'acme', False, supports_classify=True))  # noqa: FBT003
+        assert pricing.is_known_classify_model('acme/sorter')
+        assert pricing.is_known_classify_model('sorter')
+    finally:
+        pricing.clear_model_overrides()
+
+
+def test_a_registered_override_outranks_the_built_in_classify_list():
+    try:
+        pricing.register_model('typesafe/jev-latest', ModelInfo(0.0, 0.0, 'typesafe', False, supports_classify=False))  # noqa: FBT003
+        assert not pricing.is_known_classify_model('typesafe/jev-latest')
+    finally:
+        pricing.clear_model_overrides()
+
+
 @pytest.fixture
 def _classify_catalogue(monkeypatch: pytest.MonkeyPatch):
     async def fake_load(client=None):  # noqa: ANN001, ARG001

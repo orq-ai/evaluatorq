@@ -433,10 +433,21 @@ def is_known_classify_model(model: str) -> bool:
     """Whether ``model`` is a built-in classify id, without touching the catalogue.
 
     The synchronous counterpart of `supports_classify`, for callers that decide how
-    to seat a judge before any await is available. It answers only for
-    `KNOWN_CLASSIFY_MODELS`, so a classify model Orq lists but this package does not
-    know reads as ``False`` here and ``True`` there.
+    to seat a judge before any await is available. `register_model` overrides answer
+    first — keyed on the bare id, exactly as `_lookup` reads them — and an override
+    that says ``supports_classify=False`` is believed even for a model in
+    `KNOWN_CLASSIFY_MODELS`, since a caller correcting an entry outranks this
+    package's built-in list. `KNOWN_CLASSIFY_MODELS` answers when there is no
+    override.
+
+    The residual gap: a model the *fetched* catalogue marks classify that the caller
+    neither registered nor this package lists reads as ``False`` here and ``True``
+    from `supports_classify`. Register it with `register_model(...,
+    ModelInfo(supports_classify=True))` to close it.
     """
+    override = _overrides.get(model.split('/', 1)[-1])
+    if override is not None:
+        return override.supports_classify
     return model in KNOWN_CLASSIFY_MODELS
 
 
