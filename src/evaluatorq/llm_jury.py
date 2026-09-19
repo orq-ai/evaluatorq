@@ -88,6 +88,8 @@ def _build_verdict_model(
         label_descriptions: What each label means, for the ``value`` field
             description. Omitted from the schema when no label carries a
             description, so plain list labels keep their original schema.
+            ``labels`` alone decides the ``Literal`` the verdict must match;
+            this argument only supplies description text alongside it.
         levels: Ordered level descriptions for a numeric verdict, likewise
             omitted from the schema when absent.
 
@@ -193,18 +195,25 @@ def _build_classify_state(
     an LLM judge on the same panel gets to read. ``criteria`` is always left out: a
     classify question carries it as ``instructions``, and repeating it inside the
     material to judge would ask the model to classify its own rubric. A path with no
-    value in ``replacements`` is skipped with a debug log rather than sent as null.
+    value in ``replacements`` is skipped with a debug log rather than sent as null, and a
+    request whose paths all resolve to nothing warns: an empty state hands the judge no
+    material at all.
     """
     paths = state_fields if state_fields is not None else extract_template_paths(template)
+    requested = [path for path in paths if path != 'criteria']
     state: dict[str, Any] = {}
-    for path in paths:
-        if path == 'criteria':
-            continue
+    for path in requested:
         found, value = resolve_template_path(replacements, path)
         if not found:
             logger.debug('classify state: no value for template path {!r}, skipping it', path)
             continue
         state[path] = value
+    if requested and not state:
+        logger.warning(
+            'classify state is empty: none of {} resolved against the available values, so the '
+            'judge is handed no material to judge',
+            requested,
+        )
     return state
 
 
@@ -784,10 +793,18 @@ def llm_jury(
                 'A classify judge scoring numerically needs `levels`: 2-10 ordered level '
                 'descriptions the score is a weighted mean over.'
             )
-        if tuple(score_range) != (0.0, 1.0):
+        if verdict_kind == 'numeric' and tuple(score_range) != (0.0, 1.0):
             raise ValueError(
                 f'A classify judge returns a score scaled into (0.0, 1.0), so score_range '
                 f'{score_range} cannot be honoured. Drop the override or drop the classify judge.'
+            )
+        if verdict_kind == 'categorical' and not label_names and not 0.0 <= threshold <= 1.0:
+            # Boolean mode: the classify judge answers with a probability, and
+            # `threshold` is compared against it, so anything outside [0, 1] makes
+            # every verdict fall the same way.
+            raise ValueError(
+                f'A classify judge compares `threshold` against a probability, so threshold '
+                f'({threshold}) must lie in [0.0, 1.0].'
             )
         if repetitions > 1:
             logger.warning(
@@ -1072,8 +1089,8 @@ class PairwiseComparator:
             replacements: dict[str, Any] = {'question': question, 'criteria': self._criteria}
             replacements.update(_side_to_namespace('response_a', first))
             replacements.update(_side_to_namespace('response_b', second))
-            # Rebuilt per ordering: with swap on, the two calls hand the judge the
-            # same pair in opposite seats, and the state has to say which is which.
+            # Built per judge call, because the state carries the two responses and
+            # with swap on the same pair reaches the judge in opposite seats.
             classify_question = ClassifyQuestion(
                 kind='choice',
                 instructions=self._criteria,

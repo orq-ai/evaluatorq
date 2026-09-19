@@ -9,11 +9,13 @@ verdict schema and system prompt it produced before.
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import BaseModel
 
 from evaluatorq.common.judge import ClassifyQuestion, EvaluatorResponsePayload, JudgeOutcome
 from evaluatorq.llm_jury import (
@@ -108,6 +110,18 @@ async def _run_and_capture(evaluator: Evaluator, sink: list[Any]) -> None:
     with patch.object(llm_jury_mod, 'run_judge', side_effect=fake_run_judge):
         await evaluator['scorer'](_params())
 
+
+async def _capture_verdict_model(evaluator: Evaluator) -> type[BaseModel]:
+    """Run the evaluator once and return the ``response_model`` handed to `run_judge`."""
+    sink: list[Any] = []
+
+    async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
+        sink.append(kwargs.get('response_model'))
+        return JudgeOutcome(payload=EvaluatorResponsePayload(value='a', explanation='ok'))
+
+    with patch.object(llm_jury_mod, 'run_judge', side_effect=fake_run_judge):
+        await evaluator['scorer'](_params())
+    return cast('type[BaseModel]', sink[0])
 
 # ---------------------------------------------------------------------------
 # Verdict model and system prompt
@@ -209,6 +223,21 @@ def test_classify_panel_requires_the_default_score_range() -> None:
         )
 
 
+def test_classify_panel_allows_a_score_range_override_outside_numeric_mode() -> None:
+    """`score_range` is meaningless on a categorical panel, so the classify check skips it."""
+    evaluator = llm_jury(
+        name='x', criteria='c', labels=['a', 'b'], score_range=(1.0, 5.0), judges=[JEV], client=MagicMock()
+    )
+    assert evaluator['name'] == 'x'
+
+
+def test_classify_boolean_panel_requires_a_probability_threshold() -> None:
+    with pytest.raises(ValueError, match='threshold'):
+        llm_jury(name='x', criteria='c', judges=[JEV], threshold=5)
+    evaluator = llm_jury(name='x', criteria='c', judges=[JEV], threshold=0.7, client=MagicMock())
+    assert evaluator['name'] == 'x'
+
+
 def test_a_replacement_classify_judge_seats_the_same_rules() -> None:
     with pytest.raises(ValueError, match='criteria'):
         llm_jury(name='x', prompt='p', judges=['gpt-5-mini'], replacement_judges=[JEV])
@@ -275,6 +304,23 @@ async def test_a_missing_state_path_is_skipped() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_state_that_resolves_to_nothing_warns() -> None:
+    sink: list[Any] = []
+    evaluator = llm_jury(
+        name='x',
+        criteria='c',
+        judges=[JEV],
+        state_fields=['ouput.response'],  # typo on purpose: nothing resolves
+        client=MagicMock(),
+    )
+    with patch.object(llm_jury_mod.logger, 'warning') as warn:
+        await _run_and_capture(evaluator, sink)
+    messages = [call.args[0] for call in warn.call_args_list]
+    assert sum('classify state is empty' in message for message in messages) == 1
+    assert cast(dict[str, Any], sink[0].state) == {}
+
+
+@pytest.mark.asyncio
 async def test_labeled_panel_builds_a_choice_question_carrying_the_descriptions() -> None:
     sink: list[Any] = []
     evaluator = llm_jury(
@@ -315,10 +361,18 @@ async def test_every_judge_on_a_mixed_panel_gets_the_question() -> None:
     assert all(isinstance(question, ClassifyQuestion) for question in sink)
 
 
-def test_labels_as_a_list_and_as_a_dict_build_the_same_verdict_literal() -> None:
-    from_list = llm_jury(name='x', criteria='c', labels=['a', 'b'], client=MagicMock())
-    from_dict = llm_jury(name='x', criteria='c', labels={'a': None, 'b': None}, client=MagicMock())
-    assert from_list['name'] == from_dict['name']
+@pytest.mark.asyncio
+async def test_labels_as_a_list_and_as_a_dict_build_the_same_verdict_literal() -> None:
+    """Both label shapes must constrain ``value`` to the same enum, described or not."""
+    from_list = await _capture_verdict_model(llm_jury(name='x', criteria='c', labels=['a', 'b'], client=MagicMock()))
+    from_dict = await _capture_verdict_model(
+        llm_jury(name='x', criteria='c', labels={'a': 'the good one', 'b': None}, client=MagicMock())
+    )
+    list_value = from_list.model_json_schema()['properties']['value']
+    dict_value = from_dict.model_json_schema()['properties']['value']
+    assert list_value['enum'] == dict_value['enum'] == ['a', 'b']
+    assert 'description' not in list_value
+    assert dict_value['description'] == 'One of: a: the good one; b'
     plain = _build_verdict_model('categorical', ['a', 'b'], (0.0, 1.0), label_descriptions={'a': None, 'b': None})
     assert plain.model_json_schema() == LIST_LABELS_SCHEMA
 
@@ -398,4 +452,13 @@ def test_pairwise_comparator_accepts_state_fields_directly() -> None:
         client=MagicMock(),
         state_fields=['question'],
     )
-    assert isinstance(comparator, PairwiseComparator)
+    sink: list[Any] = []
+
+    async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
+        sink.append(kwargs.get('classify'))
+        return JudgeOutcome(payload=EvaluatorResponsePayload(value='tie', explanation='ok'))
+
+    with patch.object(llm_jury_mod, 'run_judge', side_effect=fake_run_judge):
+        asyncio.run(comparator.compare(question='q?', response_a='alpha', response_b='beta'))
+
+    assert list(cast(dict[str, Any], sink[0].state)) == ['question']
