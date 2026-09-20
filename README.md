@@ -140,14 +140,14 @@
 | src/evaluatorq/redteam/backends/openresponses.py                         |       44 |        0 |    100% |           |
 | src/evaluatorq/redteam/backends/orq.py                                   |      305 |       42 |     86% |27-28, 115-130, 325-326, 492, 497, 572-582, 586-598, 628-629, 639, 643, 679, 702, 714-725 |
 | src/evaluatorq/redteam/backends/registry.py                              |       53 |        5 |     91% |61-65, 89, 142-143 |
-| src/evaluatorq/redteam/cli.py                                            |      336 |      119 |     65% |79, 85, 99-100, 166-168, 180, 194-196, 208, 235, 513, 536, 626-627, 629-630, 637-641, 644-646, 649-651, 654-656, 696-795, 818-822, 836-837, 865, 868-869, 940-959 |
+| src/evaluatorq/redteam/cli.py                                            |      351 |       56 |     84% |80, 86, 100-101, 167-169, 181, 195-197, 209, 236, 297, 632, 697-698, 700-701, 708-712, 715-717, 720-722, 725-727, 779, 783, 887, 890-891, 939-943, 956-957, 1005-1024 |
 | src/evaluatorq/redteam/contracts.py                                      |      824 |       44 |     95% |96, 136-138, 306, 485, 498-499, 512, 538, 690, 694, 714, 1316, 1358-1378, 1384, 1478-1480, 1489, 1575-1581, 1658-1660, 1986, 2185-2194 |
 | src/evaluatorq/redteam/delivery\_method\_registry.py                     |       59 |        1 |     98% |       106 |
 | src/evaluatorq/redteam/exceptions.py                                     |        5 |        0 |    100% |           |
 | src/evaluatorq/redteam/frameworks/\_\_init\_\_.py                        |        0 |        0 |    100% |           |
 | src/evaluatorq/redteam/frameworks/owasp/\_\_init\_\_.py                  |        0 |        0 |    100% |           |
 | src/evaluatorq/redteam/frameworks/owasp/agent\_evaluators.py             |       44 |        1 |     98% |       963 |
-| src/evaluatorq/redteam/frameworks/owasp/evaluatorq\_bridge.py            |      224 |       60 |     73% |86, 115, 131-132, 141-151, 156, 167-175, 230, 235-237, 270-271, 430-431, 451-455, 460-464, 469-507 |
+| src/evaluatorq/redteam/frameworks/owasp/evaluatorq\_bridge.py            |      224 |       56 |     75% |86, 115, 131-132, 141-151, 156, 169, 175, 230, 235-237, 270-271, 430-431, 451-455, 460-464, 469-507 |
 | src/evaluatorq/redteam/frameworks/owasp/evaluators.py                    |       67 |       25 |     63% |138-151, 169, 188, 198-211, 220 |
 | src/evaluatorq/redteam/frameworks/owasp/llm\_evaluators.py               |       36 |       19 |     47% |178-374, 548-655, 677-796, 818-936, 957-1075, 1096-1213, 1233 |
 | src/evaluatorq/redteam/frameworks/owasp/models.py                        |       41 |        3 |     93% | 11-13, 73 |
@@ -184,7 +184,7 @@
 | src/evaluatorq/simulation/agents/judge.py                                |      297 |       14 |     95% |208, 229-235, 247, 260, 266, 274, 441-446, 465-471, 856-861 |
 | src/evaluatorq/simulation/agents/user\_simulator.py                      |       36 |       10 |     72% |83, 93-100, 108-114 |
 | src/evaluatorq/simulation/api.py                                         |      716 |       54 |     92% |607, 870, 1165, 1225, 1298, 1362, 1428, 1456, 1559-1561, 1675, 1692, 1720, 1736-1737, 1807, 1810, 1898, 1924, 1976-1977, 1987, 1991, 1996, 2061, 2068-2085, 2161, 2238-2244, 2247-2250, 2518-2521, 2528-2531, 2707 |
-| src/evaluatorq/simulation/cli.py                                         |      643 |      103 |     84% |96-103, 112-113, 142, 146, 148, 157, 161, 166, 169-171, 175, 185, 212, 222, 238-239, 250-270, 275, 709, 746, 748, 777-778, 780-781, 802, 840, 843, 1085, 1136-1137, 1139-1140, 1152, 1369-1370, 1372-1373, 1375, 1524, 1544-1546, 1553, 1577-1588, 1591-1592, 1702-1703, 1719, 1750-1751, 1795, 1843, 1854-1855, 1857, 1910-1911, 1925-1929, 1956, 2046-2051, 2085-2086, 2164 |
+| src/evaluatorq/simulation/cli.py                                         |      651 |      103 |     84% |97-104, 113-114, 143, 147, 149, 158, 162, 167, 170-172, 176, 186, 213, 223, 239-240, 251-271, 276, 530, 567, 569, 827-828, 830-831, 852, 890, 893, 1135, 1186-1187, 1189-1190, 1202, 1419-1420, 1422-1423, 1425, 1574, 1594-1596, 1603, 1627-1638, 1641-1642, 1752-1753, 1769, 1800-1801, 1845, 1893, 1904-1905, 1907, 1961, 2010-2011, 2024-2028, 2097-2102, 2136-2137, 2215 |
 | src/evaluatorq/simulation/convert.py                                     |       52 |        0 |    100% |           |
 | src/evaluatorq/simulation/evaluators/\_\_init\_\_.py                     |        3 |        0 |    100% |           |
 | src/evaluatorq/simulation/evaluators/scorers.py                          |      143 |        3 |     98% |149, 155, 193 |
@@ -225,10 +225,10 @@
 | src/evaluatorq/table\_display.py                                         |      148 |       65 |     56% |31, 43, 68, 70, 100, 106, 147, 158, 175-209, 214-232, 242-280 |
 | src/evaluatorq/tracing/\_\_init\_\_.py                                   |        4 |        0 |    100% |           |
 | src/evaluatorq/tracing/context.py                                        |       34 |        2 |     94% |     50-51 |
-| src/evaluatorq/tracing/setup.py                                          |      129 |       39 |     70% |87-97, 118-121, 126, 155, 161-167, 175-185, 226-234, 299-300, 321 |
+| src/evaluatorq/tracing/setup.py                                          |      140 |       12 |     91% |97, 184-187, 253, 255-258, 323-324, 345 |
 | src/evaluatorq/tracing/spans.py                                          |       84 |        1 |     99% |       130 |
 | src/evaluatorq/types.py                                                  |       86 |        2 |     98% |   32, 288 |
-| **TOTAL**                                                                | **26614** | **2550** | **90%** |           |
+| **TOTAL**                                                                | **26648** | **2456** | **91%** |           |
 
 
 ## Setup coverage badge
