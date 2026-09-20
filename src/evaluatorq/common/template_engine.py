@@ -111,17 +111,30 @@ def extract_template_paths(template: str) -> list[str]:
     return paths
 
 
-def resolve_template_path(replacements: dict[str, Any], path: str) -> tuple[bool, Any]:
+def resolve_template_path(replacements: dict[str, Any], path: str, *, prefer_nested: bool = False) -> tuple[bool, Any]:
     """Look ``path`` up in ``replacements``: ``(found, value)``.
 
     Flat exact match first (``{'a.b': ...}`` beats ``{'a': {'b': ...}}``), then
     nested traversal with ``[0]`` / ``[-1]`` indices. ``found`` is separate from
     the value so a stored ``None`` reads as found, not as missing.
+
+    ``prefer_nested=True`` reverses the two, for a caller that wants the value
+    rather than its rendering: `evaluatorq.common.judge.build_eval_replacements`
+    stores a few paths (``input.all_messages``, ``output.messages``,
+    ``output.tools_called``, ``log.messages``) twice — nested as the live list,
+    flat as the ``json.dumps`` string a prompt template interpolates. Template
+    rendering keeps the flat-first default; a classify judge, which ships the
+    state as JSON, asks for the nested one so the transcript does not arrive as
+    an escaped string inside JSON.
     """
-    if path in replacements:
+    if not prefer_nested and path in replacements:
         return True, replacements[path]
     value = _resolve_nested(replacements, path)
-    return (False, None) if value is _NOT_FOUND else (True, value)
+    if value is not _NOT_FOUND:
+        return True, value
+    if prefer_nested and path in replacements:
+        return True, replacements[path]
+    return False, None
 
 
 def render_template(template: str, replacements: dict[str, Any]) -> str:

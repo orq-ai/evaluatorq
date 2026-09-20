@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from evaluatorq.common import model_catalogue, structured_output
 from evaluatorq.common.judge import ClassifyQuestion, EvaluatorResponsePayload, JudgeOutcome
+from evaluatorq.contracts import AgentResponse, ToolCallOutputItem
 from evaluatorq.llm_jury import (
     DEFAULT_TEMPLATE,
     PairwiseComparator,
@@ -678,3 +679,120 @@ def test_pairwise_comparator_accepts_state_fields_directly() -> None:
         asyncio.run(comparator.compare(question='q?', response_a='alpha', response_b='beta'))
 
     assert list(cast(dict[str, Any], sink[0].state)) == ['question']
+
+
+# ---------------------------------------------------------------------------
+# Classify state carries values, not their prompt rendering
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_default_state_carries_the_transcript_as_messages_not_as_a_json_string() -> None:
+    """The state is serialised as JSON; a pre-serialised value would arrive escaped inside it."""
+    sink: list[Any] = []
+    await _run_and_capture(llm_jury(name='x', criteria='c', judges=[JEV], client=MagicMock()), sink)
+
+    state = cast(dict[str, Any], sink[0].state)
+    assert state['input.all_messages'] == [{'role': 'user', 'content': 'q'}]
+    # `output.response` has only one spelling and is unchanged by the nested-first read.
+    assert state['output.response'] == 'the answer'
+
+
+@pytest.mark.asyncio
+async def test_a_tool_call_state_field_is_the_list_of_calls() -> None:
+    sink: list[Any] = []
+    evaluator = llm_jury(
+        name='x', criteria='c', judges=[JEV], state_fields=['output.tools_called'], client=MagicMock()
+    )
+    output = AgentResponse(
+        output=[ToolCallOutputItem(id='t1', name='search', arguments='{"q": "x"}', result='hit')]
+    )
+
+    async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
+        sink.append(kwargs.get('classify'))
+        return JudgeOutcome(payload=EvaluatorResponsePayload(value=True, explanation='ok'))
+
+    with patch.object(llm_jury_mod, 'run_judge', side_effect=fake_run_judge):
+        await evaluator['scorer'](_params(output))
+
+    calls = cast(dict[str, Any], sink[0].state)['output.tools_called']
+    assert isinstance(calls, list)
+    assert calls[0]['name'] == 'search'
+    assert calls[0]['arguments'] == {'q': 'x'}
+
+
+@pytest.mark.asyncio
+async def test_a_pairwise_state_field_with_both_spellings_resolves_to_the_value() -> None:
+    """`response_a.output.messages` exists nested (a list) and flat (a JSON string)."""
+    sink: list[Any] = []
+    comparator = llm_jury_pairwise(
+        criteria='c',
+        judges=[JEV],
+        swap=False,
+        state_fields=['response_a.output.messages', 'response_a.output.response'],
+        client=MagicMock(),
+    )
+
+    async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
+        sink.append(kwargs.get('classify'))
+        return JudgeOutcome(payload=EvaluatorResponsePayload(value='A', explanation='ok'))
+
+    with patch.object(llm_jury_mod, 'run_judge', side_effect=fake_run_judge):
+        await comparator.compare(question='q?', response_a='alpha', response_b='beta')
+
+    state = cast(dict[str, Any], sink[0].state)
+    assert state['response_a.output.messages'] == [{'role': 'assistant', 'content': 'alpha'}]
+    assert state['response_a.output.response'] == 'alpha'
+
+
+@pytest.mark.asyncio
+async def test_the_empty_state_warning_fires_once_per_evaluator_not_once_per_datapoint() -> None:
+    sink: list[Any] = []
+    evaluator = llm_jury(
+        name='x',
+        criteria='c',
+        judges=[JEV],
+        state_fields=['ouput.response'],  # typo on purpose: nothing resolves
+        client=MagicMock(),
+    )
+
+    async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
+        sink.append(kwargs.get('classify'))
+        return JudgeOutcome(payload=EvaluatorResponsePayload(value=True, explanation='ok'))
+
+    with patch.object(llm_jury_mod.logger, 'warning') as warn, patch.object(
+        llm_jury_mod, 'run_judge', side_effect=fake_run_judge
+    ):
+        await evaluator['scorer'](_params())
+        await evaluator['scorer'](_params('a second answer'))
+
+    messages = [call.args[0] for call in warn.call_args_list]
+    assert sum('classify state is empty' in message for message in messages) == 1
+    assert len(sink) == 2
+    assert all(cast(dict[str, Any], question.state) == {} for question in sink)
+
+
+@pytest.mark.asyncio
+async def test_the_pairwise_empty_state_warning_fires_once_per_comparator() -> None:
+    sink: list[Any] = []
+    comparator = llm_jury_pairwise(
+        criteria='c',
+        judges=[JEV],
+        swap=False,
+        state_fields=['respones_a.output.response'],  # typo on purpose: nothing resolves
+        client=MagicMock(),
+    )
+
+    async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
+        sink.append(kwargs.get('classify'))
+        return JudgeOutcome(payload=EvaluatorResponsePayload(value='A', explanation='ok'))
+
+    with patch.object(llm_jury_mod.logger, 'warning') as warn, patch.object(
+        llm_jury_mod, 'run_judge', side_effect=fake_run_judge
+    ):
+        await comparator.compare(question='q?', response_a='alpha', response_b='beta')
+        await comparator.compare(question='q2?', response_a='gamma', response_b='delta')
+
+    messages = [call.args[0] for call in warn.call_args_list]
+    assert sum('classify state is empty' in message for message in messages) == 1
+    assert len(sink) == 2

@@ -186,7 +186,9 @@ DEFAULT_TEMPLATE = (
 )
 
 
-def _build_classify_state(*, paths: list[str], replacements: dict[str, Any]) -> dict[str, Any]:
+def _build_classify_state(
+    *, paths: list[str], replacements: dict[str, Any], empty_warned: list[bool]
+) -> dict[str, Any]:
     """Collect the material a classify judge is handed instead of a rendered prompt.
 
     ``paths`` is resolved once at construction — the caller's ``state_fields`` when it
@@ -204,16 +206,26 @@ def _build_classify_state(*, paths: list[str], replacements: dict[str, Any]) -> 
     the classify judge sees the criteria and no material to judge. Only called for a panel
     that seats a classify judge, so the warning describes a judge that really is about to
     be asked.
+
+    Values are resolved nested-first (``prefer_nested=True``): the state is serialised as
+    JSON, so the live list behind ``input.all_messages`` is what Jev should read, not the
+    ``json.dumps`` string the same path carries flat for prompt interpolation. A path that
+    exists only flat still resolves.
+
+    ``empty_warned`` is a one-element mutable flag owned by the evaluator, not by this
+    call: the state is rebuilt per datapoint, so a per-call warning would repeat the same
+    sentence once per row of the dataset.
     """
     requested = [path for path in paths if path != 'criteria']
     state: dict[str, Any] = {}
     for path in requested:
-        found, value = resolve_template_path(replacements, path)
+        found, value = resolve_template_path(replacements, path, prefer_nested=True)
         if not found:
             logger.debug('classify state: no value for template path {!r}, skipping it', path)
             continue
         state[path] = value
-    if not state:
+    if not state and not empty_warned[0]:
+        empty_warned[0] = True
         logger.warning(
             'classify state is empty: none of {} resolved against the available values, so the classify '
             'judge sees the criteria and no material to judge. Name the paths that do resolve with '
@@ -953,6 +965,9 @@ def llm_jury(
     classify_state_paths = (
         (state_fields if state_fields is not None else extract_template_paths(template)) if classify_seated else []
     )
+    # One flag per evaluator, not per datapoint: the state is rebuilt for every row, and
+    # an empty one is a property of the panel's configuration, so it is worth one line.
+    classify_empty_warned = [False]
     sys_prompt = (
         system_prompt
         if system_prompt is not None
@@ -992,7 +1007,11 @@ def llm_jury(
                 label_descriptions=label_descriptions,
                 levels=levels,
                 threshold=threshold,
-                state=_build_classify_state(paths=classify_state_paths, replacements=replacements),
+                state=_build_classify_state(
+                    paths=classify_state_paths,
+                    replacements=replacements,
+                    empty_warned=classify_empty_warned,
+                ),
             )
             if classify_seated
             else None
@@ -1173,6 +1192,9 @@ class PairwiseComparator:
             if self._classify_seated
             else []
         )
+        # One flag per comparator, not per pair: an empty state is a property of the
+        # panel's configuration, so it is worth one line however many pairs are compared.
+        self._classify_empty_warned = [False]
 
     def _current_semaphore(self) -> asyncio.Semaphore | None:
         """The shared concurrency budget, bound to the running event loop.
@@ -1216,7 +1238,11 @@ class PairwiseComparator:
                     kind='choice',
                     instructions=self._criteria,
                     criteria=dict(PAIRWISE_CLASSIFY_CRITERIA),
-                    state=_build_classify_state(paths=self._classify_state_paths, replacements=replacements),
+                    state=_build_classify_state(
+                        paths=self._classify_state_paths,
+                        replacements=replacements,
+                        empty_warned=self._classify_empty_warned,
+                    ),
                 )
                 if self._classify_seated
                 else None

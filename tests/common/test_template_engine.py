@@ -153,3 +153,16 @@ class TestResolveTemplatePath:
 
     def test_a_real_none_value_is_found(self) -> None:
         assert resolve_template_path({'a': {'b': None}}, 'a.b') == (True, None)
+
+    def test_prefer_nested_reverses_the_precedence(self) -> None:
+        reps = {'a.b': 'FLAT', 'a': {'b': 'NESTED'}}
+        assert resolve_template_path(reps, 'a.b', prefer_nested=True) == (True, 'NESTED')
+
+    def test_prefer_nested_still_falls_back_to_a_flat_only_key(self) -> None:
+        assert resolve_template_path({'a.b': 'FLAT'}, 'a.b', prefer_nested=True) == (True, 'FLAT')
+
+    def test_prefer_nested_reports_a_missing_path_as_missing(self) -> None:
+        assert resolve_template_path({'a': {'b': 1}}, 'a.c', prefer_nested=True) == (False, None)
+
+    def test_prefer_nested_finds_a_real_none_stored_flat(self) -> None:
+        assert resolve_template_path({'a.b': None}, 'a.b', prefer_nested=True) == (True, None)
