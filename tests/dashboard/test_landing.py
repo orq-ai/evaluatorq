@@ -4,6 +4,7 @@ metrics aggregation that feeds them (RES-974)."""
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -639,6 +640,31 @@ class TestAvgCost:
         assert tiles.stats.cost == pytest.approx(math.fsum(raw_costs))
         assert tiles.stats.cost == pytest.approx(1.0)
         assert tiles.stats.cost != 0.0
+
+    def test_landing_input_output_cost_totals_use_fsum_over_pairwise(self, tmp_path: Path) -> None:
+        # Same precision trap as the redteam tile test, on the pairwise leg of
+        # ``landing()``: folded left-to-right with a plain ``sum`` the 1.0
+        # disappears and both totals come back 0.0.
+        raw = [1e16, 1.0, -1e16]
+        pw = tmp_path / 'pairwise-runs'
+        pw.mkdir()
+        (pw / 'pw_fsum.json').write_text(
+            json.dumps({
+                'judging': {},
+                'created_at': '2026-06-24T10:15:00',
+                'run_name': 'pw fsum',
+                'entries': [
+                    {'comparison': {'token_usage': {'input_cost': c, 'output_cost': c}}} for c in raw
+                ],
+            })
+        )
+
+        data = metrics.landing([pw])
+
+        assert data.total_input_cost == pytest.approx(math.fsum(raw))
+        assert data.total_output_cost == pytest.approx(math.fsum(raw))
+        assert data.total_input_cost == pytest.approx(1.0)
+        assert data.total_output_cost == pytest.approx(1.0)
 
     def test_avg_cost_averages_over_costed_runs_only(self) -> None:
         data = metrics.Landing(

@@ -61,10 +61,11 @@ def test_unhashable_dict_message_type_is_skipped(caplog: pytest.LogCaptureFixtur
     assert "['custom']" in caplog.text
 
 
-def test_unhashable_str_subclass_message_type_is_skipped(caplog: pytest.LogCaptureFixture):
-    """A ``str`` subclass with ``__hash__`` disabled passes the ``isinstance`` guard
-    but still can't be used as a dict key. It must take the same warn-and-skip
-    path as any other unrecognised type, not raise ``TypeError``.
+def test_unhashable_str_subclass_message_type_is_converted(caplog: pytest.LogCaptureFixture):
+    """A ``str`` subclass with ``__hash__`` disabled can't be used as a dict key,
+    but it still names a known message type. The lookup normalises it with
+    ``str(...)``, so it converts exactly like a plain ``'human'`` type instead of
+    raising ``TypeError`` or being reported as unrecognised.
     """
 
     class UnhashableStr(str):
@@ -72,8 +73,14 @@ def test_unhashable_str_subclass_message_type_is_skipped(caplog: pytest.LogCaptu
 
     logger_name = 'evaluatorq.integrations.langchain_integration.convert'
     with caplog.at_level(logging.WARNING, logger=logger_name):
-        result = convert_to_open_responses([{'type': UnhashableStr('human')}])
+        result = convert_to_open_responses([{'type': UnhashableStr('human'), 'data': {'content': 'hi'}}])
 
-    assert result.get('output') == []
-    assert result.get('input') == []
-    assert 'Skipping unknown LangChain message type' in caplog.text
+    plain = convert_to_open_responses([{'type': 'human', 'data': {'content': 'hi'}}])
+
+    def _without_ids(items: object) -> list[dict[str, object]]:
+        # Message ids are random per call, so compare everything else.
+        return [{k: v for k, v in item.items() if k != 'id'} for item in items or []]  # pyright: ignore[reportAttributeAccessIssue, reportGeneralTypeIssues]
+
+    assert _without_ids(result.get('input')) == _without_ids(plain.get('input'))
+    assert result.get('input')
+    assert 'Skipping unknown LangChain message type' not in caplog.text

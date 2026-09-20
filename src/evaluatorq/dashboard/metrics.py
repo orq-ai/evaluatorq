@@ -590,8 +590,8 @@ def landing(roots: list[Path] | None = None) -> Landing:
     costed_runs = rt.costed_runs + sim_tiles.costed_runs
     pw_tokens = 0
     pw_costs: list[float] = []
-    input_cost_total = rt.input_cost + sim_tiles.input_cost
-    output_cost_total = rt.output_cost + sim_tiles.output_cost
+    pw_input_costs: list[float] = []
+    pw_output_costs: list[float] = []
     priced_calls_total = rt.priced_calls + sim_tiles.priced_calls
     cost_calls_total = rt.cost_calls + sim_tiles.cost_calls
     unknown_calls_total = rt.unknown_calls + sim_tiles.unknown_calls
@@ -610,18 +610,23 @@ def landing(roots: list[Path] | None = None) -> Landing:
             costed_runs += 1
         inputs = [c for c in (_input_cost(u) for u in usages) if c is not None]
         if inputs:
-            input_cost_total += sum(inputs)
+            pw_input_costs.extend(inputs)
             has_input_cost = True
         outputs = [c for c in (_output_cost(u) for u in usages) if c is not None]
         if outputs:
-            output_cost_total += sum(outputs)
+            pw_output_costs.extend(outputs)
             has_output_cost = True
         for u in usages:
             res_priced, res_calls, res_unknown = _cost_calls(u)
             priced_calls_total += res_priced
             cost_calls_total += res_calls
             unknown_calls_total += res_unknown
+    # Every cost total is folded with ``math.fsum`` for the same reason the tile
+    # totals are: a plain ``sum`` makes the result depend on how the per-run
+    # values happen to be grouped, so two views of the same workspace disagree.
     pw_cost = math.fsum(pw_costs)
+    input_cost_total = math.fsum([rt.input_cost, sim_tiles.input_cost, *pw_input_costs])
+    output_cost_total = math.fsum([rt.output_cost, sim_tiles.output_cost, *pw_output_costs])
 
     # Unknown sorts last, after the real scale, and only appears when non-zero.
     severity = [(sev, severity_counts[sev]) for sev in (*SEVERITY_ORDER, UNKNOWN_SEVERITY) if severity_counts.get(sev)]
