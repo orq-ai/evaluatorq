@@ -89,6 +89,8 @@ helpfulness = llm_jury(
 
 `typesafe/jev-latest` (Jev) is a **classify model**: it is never prompted. It is handed the material to judge and one question about it, and answers with a probability distribution instead of prose. On a panel it takes a seat beside prompted LLM judges and casts an ordinary vote.
 
+See [Classify judges](classify-judges.md) for the task-focused guide to question shapes, state selection, routing, warnings and failure modes.
+
 A Jev call costs about **$0.042 per million input tokens**, with free output, and answers in **under a second** — a three-question probe took 0.7 s. Use it for a cheap third vote on yes/no, fixed-label, or ordered-scale verdicts. Its explanation is synthesised from numbers, so use a prompted judge when you need reasoning.
 
 Seat it by naming it in `judges` alongside anything else, and give the panel `criteria`:
