@@ -7,7 +7,10 @@ adapter, and the rendered sections.
 from __future__ import annotations
 
 import json
+from copy import deepcopy
+from html import escape
 from pathlib import Path
+from typing import Any
 
 import pytest
 from starlette.testclient import TestClient
@@ -16,7 +19,7 @@ from evaluatorq.dashboard import metrics
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.library import report_id, scan, sniff_kind
 from evaluatorq.dashboard.surfaces import ADAPTERS
-from evaluatorq.pairwise import PairwiseComparison, PairwiseVote
+from evaluatorq.pairwise import PairwiseComparison, PairwiseVote, RepetitionObservation
 from evaluatorq.pairwise_reports.export_html import render_report_body
 from evaluatorq.pairwise_reports.sections import build_report_sections
 from evaluatorq.pairwise_run import PairwiseRun, new_run
@@ -247,6 +250,149 @@ def test_adapter_body_from_results_rescopes_the_rollup(run: PairwiseRun) -> None
 def test_sections_are_built_in_display_order(run: PairwiseRun) -> None:
     kinds = [s.kind for s in build_report_sections(run)]
     assert kinds == ['pairwise_consensus', 'pairwise_judges', 'pairwise_comparisons']
+
+
+def _classify_run(
+    raw: dict[str, Any], *, label_a: str = 'candidate', label_b: str = 'baseline',
+    model: str = 'typesafe/jev-latest',
+) -> PairwiseRun:
+    run = new_run(run_name='classify detail', label_a=label_a, label_b=label_b, judges=[model])
+    vote = PairwiseVote(model=model, vote='A', observations=[
+        RepetitionObservation(ordering='ab', repetition=0, verdict='A', raw_output=raw),
+    ])
+    run.add(PairwiseComparison(winner='A', votes=[vote]), question='q', response_a='a', response_b='b')
+    return run
+
+
+@pytest.fixture
+def classify_run() -> PairwiseRun:
+    run = _classify_run({
+        'type': 'choice', 'choice': 'A', 'confidence': 0.8,
+        'probabilities': {'A': 0.8, 'B': 0.1, 'tie': 0.1},
+    })
+    run.entries[0].comparison.votes[0].observations.extend([
+        RepetitionObservation(ordering='ba', repetition=0, verdict='A', raw_output={
+            'type': 'choice', 'choice': 'B', 'confidence': 0.9,
+            'probabilities': {'A': 0.05, 'B': 0.9, 'tie': 0.05},
+        }),
+        RepetitionObservation(ordering='ba', repetition=1, verdict='tie', raw_output={
+            'type': 'choice', 'choice': 'tie', 'probabilities': {'tie': 0.7, 'other': 0.3},
+        }),
+    ])
+    return run
+
+
+def test_classify_section_normalizes_each_ordering_without_mutating_storage(classify_run: PairwiseRun) -> None:
+    observations = classify_run.entries[0].comparison.votes[0].observations
+    before = deepcopy([observation.raw_output for observation in observations])
+    section = next(s for s in build_report_sections(classify_run) if s.kind == 'pairwise_comparisons')
+    details = section.data['rows'][0]['votes'][0]['classify_observations']
+    assert details == [
+        {'ordering': 'ab', 'repetition': 0, 'choice': 'candidate', 'confidence': 0.8,
+         'probabilities': {'candidate': 0.8, 'baseline': 0.1, 'tie': 0.1}},
+        {'ordering': 'ba', 'repetition': 0, 'choice': 'candidate', 'confidence': 0.9,
+         'probabilities': {'baseline': 0.05, 'candidate': 0.9, 'tie': 0.05}},
+        {'ordering': 'ba', 'repetition': 1, 'choice': 'tie', 'confidence': None,
+         'probabilities': {'tie': 0.7, 'other': 0.3}},
+    ]
+    render_report_body(classify_run)
+    details[0]['probabilities']['candidate'] = 0
+    assert [observation.raw_output for observation in observations] == before
+
+
+def test_classify_html_shows_each_call_and_full_distribution(classify_run: PairwiseRun) -> None:
+    html = render_report_body(classify_run)
+    assert '<summary>Classifier details</summary>' in html
+    for text in ('original order', 'swapped order', 'pass 1', 'pass 2', 'choice candidate',
+                 'choice tie', 'confidence 80%', 'confidence 90%', 'candidate 80%',
+                 'baseline 10%', 'tie 10%', 'baseline 5%', 'candidate 90%', 'tie 5%',
+                 'tie 70%', 'other 30%'):
+        assert text in html
+
+
+def test_prompted_and_absent_votes_have_no_empty_classifier_detail(run: PairwiseRun) -> None:
+    run.judges.append('absent-judge')
+    section = next(s for s in build_report_sections(run) if s.kind == 'pairwise_comparisons')
+    assert all(v['classify_observations'] == [] for row in section.data['rows'] for v in row['votes'])
+    assert '<summary>Classifier details</summary>' not in render_report_body(run)
+
+
+def test_non_choice_answers_do_not_get_classifier_detail() -> None:
+    run = _classify_run({'type': 'score', 'score': 0.8, 'confidence': 0.9})
+    section = next(s for s in build_report_sections(run) if s.kind == 'pairwise_comparisons')
+    assert section.data['rows'][0]['votes'][0]['classify_observations'] == []
+    assert '<summary>Classifier details</summary>' not in render_report_body(run)
+
+
+@pytest.mark.parametrize('optional', [{}, {'probabilities': {'A': 1.0}}])
+def test_missing_classify_confidence_is_omitted(optional: dict[str, Any]) -> None:
+    html = render_report_body(_classify_run({'type': 'choice', 'choice': 'A', **optional}))
+    assert '<summary>Classifier details</summary>' in html
+    assert 'confidence' not in html
+    if not optional:
+        assert '<div class="pw-classify__probabilities">' not in html
+
+
+@pytest.mark.parametrize(('probability', 'expected'), [
+    (0, '0%'), (0.5, '50%'), (0.50001, '50.001%'), (0.49999, '49.999%'),
+    (0.50002, '50.002%'), (0.500000000000001, '50.0000000000001%'),
+    (0.123456, '12.35%'), (1e-12, '1e-10%'), (5e-324, '5e-322%'),
+])
+def test_classify_percentages_keep_near_ties_and_tiny_values_visible(probability: float, expected: str) -> None:
+    html = render_report_body(_classify_run({
+        'type': 'choice', 'choice': 'A', 'confidence': probability,
+        'probabilities': {'precision-probe': probability},
+    }))
+    assert f'precision-probe {expected}</span>' in html
+    assert f'confidence {expected}' in html
+
+
+def test_classify_html_omits_invalid_probability_entries() -> None:
+    html = render_report_body(_classify_run({
+        'type': 'choice', 'choice': 'A', 'confidence': False,
+        'probabilities': {'valid': 0.9, 'boolean': True, 'string': '0.1', 'missing': None,
+                          'negative': -0.1, 'too-large': 1.1, 'infinite': float('inf'), 'nan': float('nan')},
+    }))
+    assert 'valid 90%</span>' in html
+    assert 'confidence' not in html
+    for key in ('boolean', 'string', 'missing', 'negative', 'too-large', 'infinite', 'nan'):
+        assert f'<span>{key} ' not in html
+
+
+def test_classify_html_escapes_external_labels_and_keys() -> None:
+    hostile = '<img src=x onerror="alert(1)">'
+    model = '<script>alert("model")</script>'
+    key = '<svg onload="alert(2)">'
+    run = _classify_run({
+        'type': 'choice', 'choice': 'A', 'confidence': 0.9,
+        'probabilities': {'A': 0.8, 'B': 0.1, key: 0.1},
+    }, label_a=hostile, label_b='baseline & "reference"', model=model)
+    run.entries[0].comparison.votes[0].observations.append(
+        RepetitionObservation(ordering='ba', repetition=1, raw_output={'type': 'choice', 'choice': key}),
+    )
+    html = render_report_body(run)
+    for text in (hostile, model, key, 'baseline & "reference"'):
+        assert text not in html
+        assert escape(text) in html
+    assert f'choice {escape(hostile)}' in html
+    assert f'choice {escape(key)}' in html
+    assert f'{escape(key)} 10%</span>' in html
+
+
+@pytest.mark.parametrize(('label_a', 'label_b'), [('same', 'same'), ('other', 'baseline'), ('tie', 'baseline')])
+def test_classify_display_label_collisions_preserve_every_probability(label_a: str, label_b: str) -> None:
+    run = _classify_run({
+        'type': 'choice', 'choice': 'A',
+        'probabilities': {'A': 0.6, 'B': 0.2, 'tie': 0.15, 'other': 0.05},
+    }, label_a=label_a, label_b=label_b)
+    section = next(s for s in build_report_sections(run) if s.kind == 'pairwise_comparisons')
+    detail = section.data['rows'][0]['votes'][0]['classify_observations'][0]
+    assert sorted(detail['probabilities'].values()) == [0.05, 0.15, 0.2, 0.6]
+    assert detail['probabilities']['other'] == 0.05
+    assert detail['probabilities'][detail['choice']] == 0.6
+    html = render_report_body(run)
+    for percentage in ('60%', '20%', '15%', '5%'):
+        assert f' {percentage}</span>' in html
 
 
 def test_consensus_reports_the_decided_count_not_the_total(run: PairwiseRun) -> None:
