@@ -140,6 +140,16 @@ KNOWN_CLASSIFY_MODELS = frozenset({'typesafe/jev-latest'})
 _classify_fallback_warned: set[str] = set()
 
 
+def _bare_id(model: str) -> str:
+    """``model`` without its ``provider/`` prefix.
+
+    One spelling rule in one place: ``_overrides`` is keyed on the bare id, so
+    `register_model` (write), `_lookup` and `is_known_classify_model` (read) must
+    strip the prefix identically or an override becomes a silent no-op.
+    """
+    return model.split('/', 1)[-1]
+
+
 def _catalogue_lock() -> asyncio.Lock:
     global _lock
     if _lock is None:
@@ -192,7 +202,7 @@ def register_model(model_id: str, info: ModelInfo) -> None:
     )
     ```
     """
-    _overrides[model_id.split('/', 1)[-1]] = info
+    _overrides[_bare_id(model_id)] = info
 
 
 def clear_model_overrides() -> None:
@@ -315,7 +325,8 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
     if isinstance(payload, list) and payload and not models:
         logger.warning(
             'Model catalogue returned {} entries but none parsed (payload shape change?); '
-            'judges will run unpriced on chat completions',
+            'catalogue-based endpoint qualification and local pricing are unavailable, '
+            'though the built-in classify fallback still applies',
             len(payload),
         )
     return models
@@ -369,7 +380,8 @@ async def _load_catalogue(client: AsyncOpenAI | None = None) -> dict[str, ModelI
             give_up = failures >= _MAX_FETCH_FAILURES
             logger.warning(
                 'Orq model catalogue unavailable ({}: {}) at {}/v2/models (attempt {} of {}) — '
-                'judges will run on chat completions and report no cost {}',
+                'catalogue-based endpoint qualification and local pricing are unavailable {} '
+                '(the built-in classify fallback still applies)',
                 type(exc).__name__,
                 exc,
                 host,
@@ -402,7 +414,7 @@ async def _lookup(model: str, client: AsyncOpenAI | None = None) -> ModelInfo | 
 
     Caller `register_model` overrides win over the fetched catalogue.
     """
-    bare = model.split('/', 1)[-1]
+    bare = _bare_id(model)
     # One probe, not two: `register_model` normalizes to the bare id on write, so
     # the override key space has a single canonical spelling.
     override = _overrides.get(bare)
@@ -445,7 +457,7 @@ def is_known_classify_model(model: str) -> bool:
     from `supports_classify`. Register it with `register_model(...,
     ModelInfo(supports_classify=True))` to close it.
     """
-    override = _overrides.get(model.split('/', 1)[-1])
+    override = _overrides.get(_bare_id(model))
     if override is not None:
         return override.supports_classify
     return model in KNOWN_CLASSIFY_MODELS
