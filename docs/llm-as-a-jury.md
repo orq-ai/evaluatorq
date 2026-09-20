@@ -133,7 +133,7 @@ The classify path follows these rules:
 - **Labeled mode returns the chosen label**, exactly as an LLM judge does, so `passing_labels` works unchanged.
 - **Numeric mode requires `levels`** and normalises the raw level-index score as `score / (len(levels) - 1)`, clamped to `[0.0, 1.0]`. The resulting verdict always uses that range, so `score_range` has to stay at its default `(0.0, 1.0)`; an override is rejected.
 - **The explanation is synthesised** from the numbers that decided the verdict — `noul=0.92 (threshold 0.5)`, `choice='neutral' (confidence 0.96)`, `score=2.30/4 → 0.57 (confidence 0.81)`. Values close to a decision boundary retain enough decimal places to show which side they fall on. There is no model-written rationale to report.
-- **The full distribution lands on the judge span**, as `judge.confidence` and `judge.probabilities` (a JSON string). It is not in the explanation and not on the vote.
+- **Each repetition keeps the complete validated classify answer** in `JuryRepetition.raw_output`, including confidence and probabilities when reported. It survives in returned and local saved results; `send_results_to_orq()` strips `raw_output`, so the hosted Orq experiment view does not receive it. The judge span also records `judge.confidence` and `judge.probabilities` (a JSON string) when reported. See [Reading the output](#reading-the-output) for the typed path.
 - **Settings a classify judge cannot use are named in a warning.** The literal `prompt` is not sent, but its placeholders still select the default state fields. `system_prompt`, `temperature`, `structured_output`, `max_tokens`, `reasoning_effort`, `extra_kwargs` and `extra_body` have no role on this path. `llm_jury()` names the non-default settings you set in one warning: at construction for known classify ids, or on the first call for a model discovered through the fetched catalogue. If another seat may be prompted, the warning says those settings still apply to any prompted judges.
 - **`repetitions > 1` warns.** A classify verdict is deterministic, so the extra calls are billed for identical answers.
 
@@ -220,17 +220,19 @@ jury = JuryResult.model_validate(score.score.raw_output[JURY_RAW_OUTPUT_KEY])
 for vote in jury.votes:
     print(vote.model, vote.value, vote.explanation)
     for rep in vote.repetitions:
-        print("   ", rep.value, rep.explanation)
+        print("   ", rep.value, rep.explanation, rep.raw_output)
 print(jury.raw_agreement, jury.stats)
 ```
 
-Each entry in `vote.repetitions` is a `JuryRepetition` with a `value` (`None` where the pass abstained or failed) and an `explanation` (`None` where the pass produced no text). Reports saved before the field existed stored bare verdicts; they still load, with `explanation` set to `None`.
+Each entry in `vote.repetitions` is a `JuryRepetition` with a `value` (`None` where the pass abstained or failed), an `explanation` (`None` where the pass produced no text), and optional `raw_output`. A successful classify pass stores its complete validated answer in `raw_output`, including provider-added fields and omitting fields the provider did not report. Prompted judges leave it `None`. Each repetition retains its own dictionary; distributions are not averaged into the final verdict. Older reports without `raw_output` still load with `None`; legacy bare verdicts also load with `explanation=None`.
+
+`send_results_to_orq()` strips `raw_output` before upload, so the hosted Orq experiment view does not receive these details. They remain available in returned results and local saved result artifacts.
 
 A datapoint whose **target** errored is never judged: it returns `inconclusive` with `raw_output` still `None`, because no panel ran. Reach for `.get(JURY_RAW_OUTPUT_KEY)` if your code walks every result rather than only the judged ones.
 
 When the panel *did* run but reached no verdict, the result is `inconclusive` and `raw_output` carries a second key, `EVAL_ERROR_RAW_OUTPUT_KEY` (`"evaluation_error"`), naming why: the last judge error, the full list of judge errors, and how many judges failed. It is written only when a judge actually recorded a failure — a panel where every judge abstained cleanly, or where too few of them agreed, produced a non-verdict rather than an outage and gets no error payload. A single shared writer keeps this key beside `"jury"`; in a direct `llm_jury()` result, the payload stays in `raw_output` for your code to read, while the red-team report converter additionally promotes it to `result.evaluation_error` for the run's error rollup.
 
-The record is kept in local result dumps and is deliberately stripped from the Orq platform upload — judge internals stay on your machine (see `evaluatorq.send_results`).
+The judge span separately records reported classify confidence and probabilities; stripping the experiment upload does not remove those trace attributes.
 
 ## In red teaming
 

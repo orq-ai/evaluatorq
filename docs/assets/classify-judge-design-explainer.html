@@ -366,10 +366,7 @@
 
     <div class="callout">
       <span class="ico">★</span>
-      <div>Jev returns no text and never abstains. <code>explanation</code> is the empty string; the numbers
-        (<code>noul</code>, <code>choice</code>/<code>score</code>, <code>probabilities</code>, <code>confidence</code>,
-        <code>legend</code>) go to per-repetition <code>raw_output</code> and to <code>judge.confidence</code> /
-        <code>judge.probabilities</code> span attributes. Low confidence is <b>not</b> mapped to an abstention in this ticket.</div>
+      <div>Jev returns no text and never abstains. evaluatorq synthesises <code>explanation</code> from the returned numbers. The complete validated answer travels through <code>EvaluationResult.raw_output["jury"]</code> → <code>votes</code> → <code>repetitions</code> → <code>raw_output</code>; reported confidence and probabilities also become <code>judge.confidence</code> / <code>judge.probabilities</code> span attributes. Low confidence is <b>not</b> mapped to an abstention. <code>send_results_to_orq()</code> strips <code>raw_output</code>, so the hosted Orq experiment view does not receive these details.</div>
     </div>
 
     <!-- ───────────────────────── 3 · state ───────────────────────── -->
@@ -477,8 +474,7 @@
     </div>
 
     <h3 id="llm-delta">What changes for an LLM judge on the same panel</h3>
-    <p>The output shape does not change: still <code>{explanation, value, abstain}</code>, still one <code>JuryVote</code>
-      per judge, still the same <code>raw_output["jury"]</code> record. Three inputs change, all additive.</p>
+    <p>The prompted verdict shape stays <code>{explanation, value, abstain}</code>, with one <code>JuryVote</code> per judge. The local <code>EvaluationResult.raw_output["jury"]</code> record now adds optional <code>raw_output</code> on each repetition: the complete validated answer for a classify judge, <code>None</code> for a prompted judge. Three inputs change, all additive.</p>
     <table>
       <thead><tr><th>Surface</th><th>Today</th><th class="new">New</th></tr></thead>
       <tbody>
@@ -561,12 +557,13 @@
       <p><code>value: Literal[labels]</code> already enforces the set (<code>llm_jury.py:45</code>); this adds <code>Field(description=…)</code> with the descriptions, mirroring the orquesta-web evaluator runner's <code>create_model</code> approach.</p>
     </div>
     <div class="dec p2">
-      <div class="t"><span class="n">D6</span> Empty explanation; numbers go to raw_output and spans <span class="pill p2">P2</span></div>
-      <div class="alt">Rejected: a synthesised one-liner such as <code>"choice=neutral (confidence 0.96)"</code>.</div>
+      <div class="t"><span class="n">D6</span> Synthesised explanation; structured answers go to repetitions and spans <span class="pill p2">P2</span></div>
+      <p>The implemented explanation is a one-liner such as <code>"choice='neutral' (confidence 0.96)"</code>. Read complete validated answers through <code>EvaluationResult.raw_output["jury"]</code> → <code>votes</code> → <code>repetitions</code> → <code>raw_output</code>; reported confidence and probabilities also remain on judge spans. Fields the provider did not report are omitted.</p>
+      <div class="alt">Rejected: an empty explanation or keeping structured details only on spans. Returned and local saved results retain the answers; <code>send_results_to_orq()</code> still strips <code>raw_output</code> from the hosted experiment upload.</div>
     </div>
     <div class="dec p2">
       <div class="t"><span class="n">D7</span> No confidence-to-abstain mapping, no new knobs <span class="pill p2">P2</span></div>
-      <p>Confidence is recorded everywhere so a threshold can be added once there is calibration data.</p>
+      <p>Reported confidence is retained per repetition in local results and on judge spans. It does not change the verdict or reach the hosted experiment upload.</p>
     </div>
     <div class="dec p1">
       <div class="t"><span class="n">D9</span> Catalogue outage falls back to a hardcoded classify set <span class="pill p1">P1</span></div>

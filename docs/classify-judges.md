@@ -75,7 +75,43 @@ Classify verdicts are deterministic for the same state and question. `repetition
 
 The classifier's vote has the same public shape as any other jury vote. evaluatorq synthesises a compact explanation such as `noul=0.5000001 (threshold 0.5)`, `choice='correct' (confidence 0.96)` or `score=1.70/2 → 0.85 (confidence 0.81)`. Values near a decision boundary retain enough decimal places to show which side produced the verdict.
 
-The full probability distribution and confidence are recorded on the judge span as `judge.probabilities` and `judge.confidence`; they are not copied into the vote. Token usage and provider-reported cost contribute to the jury total. When the response has no readable usage block, evaluatorq records one unpriced call instead of making the call disappear from coverage.
+Each successful classify repetition keeps its complete validated answer in `JuryRepetition.raw_output`, including provider-added fields. Fields the provider did not report are omitted; prompted judges have `raw_output=None`. These dictionaries survive in returned results and local saved result artifacts, separately for every repetition.
+
+Continue the `correctness` example above to score one answer and read the typed result. This scoring call needs an Orq client as described under [Configure a classify seat](#configure-a-classify-seat):
+
+```python
+import asyncio
+
+from evaluatorq import DataPoint
+from evaluatorq.contracts import JURY_RAW_OUTPUT_KEY, JuryResult
+from evaluatorq.types import ScorerParameter
+
+
+async def main() -> None:
+    result = await correctness["scorer"](
+        ScorerParameter(
+            data=DataPoint(
+                inputs={"question": "What is the capital of France?"},
+                expected_output="Paris",
+            ),
+            output="Paris is the capital of France.",
+        )
+    )
+    assert result.raw_output is not None
+    jury = JuryResult.model_validate(result.raw_output[JURY_RAW_OUTPUT_KEY])
+    for vote in jury.votes:
+        for repetition in vote.repetitions:
+            classify_answer = repetition.raw_output
+            if classify_answer is not None:
+                print(vote.model, classify_answer)
+
+
+asyncio.run(main())
+```
+
+`send_results_to_orq()` strips `raw_output` before upload. The hosted Orq experiment view does not receive these classifier details; read them from the returned result or a local saved artifact.
+
+Tracing is a second observability surface: the judge span records `judge.confidence` and `judge.probabilities` (a JSON string) when reported. Token usage and provider-reported cost contribute to the jury total. When the response has no readable usage block, evaluatorq records one unpriced call instead of making the call disappear from coverage.
 
 ## Failure modes
 

@@ -119,6 +119,8 @@ for vote in comparison.votes:
     vote.explanation  # rationale from the ordering that produced the vote
 ```
 
+`vote.observations` keeps every repetition with its `ordering` (`"ab"` or `"ba"`), zero-based `repetition`, canonical `verdict`, and `explanation`. For a successful classify call, `observation.raw_output` holds the complete validated answer in the original ordering sent to the provider, including provider-added fields and omitting fields it did not report. A swapped-order choice of `"B"` therefore remains `"B"` in `raw_output`, even when the observation's canonical verdict is `"A"`. Prompted judges and older saved observations have `raw_output=None`.
+
 ## Rolling up many comparisons
 
 `build_report()` aggregates a list of comparisons into a `PairwiseReport`:
@@ -189,7 +191,7 @@ Two things must be true, and if either is missing the run falls back to the two-
 - **Both orderings must run (`swap=True`, the default).** Self-agreement is measured inside one ordering, so a single-ordering run (`swap=False`) never reaches this path, even at `repetitions=2`.
 - **At least two judges must have repeated decisive passes.** With only one, the fallback weight for every other judge is just that one judge's number, so we do not use it.
 
-Every pass is kept on `PairwiseVote.observations`, normalized so a swapped-order 'B' is stored as 'A' and the two orderings line up; abstained and failed passes are kept as `None`.
+Every pass is kept on `PairwiseVote.observations`. Its `verdict` is normalized so a swapped-order `"B"` becomes `"A"` and the two orderings line up; abstained and failed verdicts are `None`. Its classifier `raw_output` stays in the provider's ordering, as described under [Reading a comparison](#reading-a-comparison).
 
 **Why self-agreement, not the global fit.** With one pass per judge, the two-item fit cannot tell a noisy judge apart from a hard batch of questions. Repeating the *same* prompt removes the ambiguity: any disagreement is the judge being inconsistent, nothing else. So a judge's consistency is scored on each prompt, counted once per judge per datapoint, then averaged. Because of that:
 
@@ -236,6 +238,10 @@ run.save()  # -> .evaluatorq/pairwise-runs/<timestamp>_prompt-v2-vs-prompt-v3.js
 A run also records `swap`. Position bias is only meaningful when both orderings ran, so a run saved with `swap=False` shows that column as unavailable rather than as a flattering `0.00`.
 
 The dashboard renders the run as three sections: the consensus win rates for each side, a per-judge table (win rates, tie rate, position bias, and consistency when measurable), and the comparison list, where each row expands to show the two responses side by side with every judge's vote and rationale.
+
+For classify votes, open **Classifier details** inside an expanded comparison in the dashboard or standalone HTML report. Each ordering and repetition shows its choice, confidence and probability distribution when reported. The display converts swapped A/B choices and probability keys back to the run's original A/B frame and uses `label_a` / `label_b`; `tie` is unchanged. Missing confidence or probabilities are omitted, never rendered as zero. Percentages near 50% retain enough precision to show which side they fall on and distinguish close values.
+
+Saved `PairwiseRun` JSON preserves each observation's provider-order `raw_output`; display conversion does not rewrite it. This is local report data. `send_results_to_orq()` strips evaluator `raw_output`, so the hosted Orq experiment view does not receive these classifier details.
 
 ## The lower-level core
 
