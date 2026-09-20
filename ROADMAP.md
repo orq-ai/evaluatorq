@@ -13,7 +13,7 @@ The v1 red teaming engine is shipped. It covers:
 - **Static mode** — load pre-built attack datasets from HuggingFace or the orq.ai platform
 - **Hybrid mode** — combine static datasets with dynamic generation
 - **Multi-agent comparison** — run the same attacks against multiple agents, compare results side-by-side with disagreement analysis
-- **Reporting** — Rich terminal, Markdown, HTML, JSON auto-save, Streamlit dashboard
+- **Reporting** — Rich terminal, Markdown, HTML, JSON auto-save, the `eq dashboard` web UI
 - **Backends** — ORQ agents (via platform API) and any OpenAI-compatible model
 - **CLI** — `eq redteam run`, `eq redteam runs` for history
 - **Observability** — OpenTelemetry tracing, pipeline hooks
@@ -86,7 +86,7 @@ Deeper agentic-specific attack coverage.
 
 Make red teaming actionable over time.
 
-- **Interactive report design** — 4-tab Streamlit dashboard
+- **Interactive report design** — tabbed report bodies in the `eq dashboard` web UI
 - **Historical comparison** — compare current run vs. previous runs with up to 4 comparison columns
 - **Regression detection** — detect regressions and track improvement over time
 - **DataFrame export** — `.to_df()` on results for data science workflows
@@ -131,7 +131,7 @@ Make red teaming actionable over time.
 | **Runtime guardrails** | Guardrails are a runtime concern, not a testing concern. |
 | **RAG-specific plugins** | May revisit based on demand. |
 | **CI/CD native integration** | The CLI can be called from any CI pipeline already. |
-| **Web UI for results** | Streamlit dashboard + HTML export cover the local use case. |
+| **Web UI for results** | The local `eq dashboard` + HTML export cover the local use case; a hosted one is out of scope. |
 | **Recursive hijacking / autonomous agent drift** | Low real-world prevalence with current agent architectures. |
 
 ---

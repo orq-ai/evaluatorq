@@ -10,7 +10,6 @@ from evaluatorq.simulation.convert import to_open_responses
 from evaluatorq.simulation.reports import export_html, export_markdown
 from evaluatorq.simulation.reports.sections import build_report_sections
 from evaluatorq.simulation.types import SimulationResult, TerminatedBy, TurnMetrics
-from evaluatorq.simulation.ui.token_display import token_metric_specs, token_overview_caption
 
 
 def _result(token_usage: TokenUsage) -> SimulationResult:
@@ -201,30 +200,3 @@ def test_token_usage_exports_use_canonical_names_and_optional_details() -> None:
         assert 'Prompt Tokens (total)' not in rendered
         assert 'Completion Tokens (total)' not in rendered
 
-
-def test_token_display_uses_canonical_names_with_optional_details() -> None:
-    data = {
-        'input_tokens': 10,
-        'output_tokens': 5,
-        'total_tokens': 15,
-        'cached_tokens': 3,
-        'reasoning_tokens': 2,
-        'avg_total_per_conversation': 15,
-    }
-
-    assert token_metric_specs(data) == [
-        ('Input', '10'),
-        ('Output', '5'),
-        ('Total', '15'),
-        ('Cached (retrieved)', '3'),
-        ('Reasoning', '2'),
-    ]
-    assert token_overview_caption(data) == 'Input 10 · Output 5 · Cached (retrieved) 3 · Reasoning 2 · Avg 15/conv'
-
-
-def test_token_display_reads_legacy_saved_run_keys() -> None:
-    assert token_metric_specs({'prompt_tokens': 10, 'completion_tokens': 5, 'total_tokens': 15}) == [
-        ('Input', '10'),
-        ('Output', '5'),
-        ('Total', '15'),
-    ]

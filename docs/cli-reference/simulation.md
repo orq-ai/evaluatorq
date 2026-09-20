@@ -1,11 +1,11 @@
 # Simulation (`eq sim`)
 
-Agent simulation subcommand group. Registered only when `evaluatorq[simulation]` is installed. `sim` is shorthand for convenience — the feature is **agent simulation**.
+Agent simulation subcommand group. Always registered; the `simulation` extra (`evaluatorq[simulation]`) supplies the optional dependencies some of its commands need at runtime. `sim` is shorthand for convenience — the feature is **agent simulation**.
 
 Three main verbs: `generate` (datapoints only), `simulate` (run against pre-built datapoints), `run` (generate then simulate in one shot).
 
-!!! note "Primary UI — `eq dashboard`"
-    The recommended way to browse saved simulation runs is the multi-run FastHTML dashboard, `eq dashboard .evaluatorq/sim-runs` (scopes to simulation) or `eq dashboard` (both stores). Passing a single JSON report file is an optional direct deep-link.
+!!! note "The UI — `eq dashboard`"
+    The way to browse saved simulation runs is the multi-run FastHTML dashboard, `eq dashboard .evaluatorq/sim-runs` (scopes to simulation) or `eq dashboard` (both stores). Passing a single JSON report file is an optional direct deep-link.
 
 --8<-- "docs/_snippets/openai-direct-model.md"
 

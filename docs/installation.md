@@ -51,7 +51,7 @@ if __name__ == "__main__":
 uv run install_check.py
 ```
 
-Red teaming and simulation run from this same base install — they live in subpackages, `from evaluatorq.redteam import red_team` and `from evaluatorq.simulation import simulate`. What the extras add is around them: the datasets they read, the charts in their reports, and the viewers you browse the results in.
+Red teaming and simulation run from this same base install — they live in subpackages, `from evaluatorq.redteam import red_team` and `from evaluatorq.simulation import simulate`. What the extras add is around them: the datasets they read, the charts in their reports, and the dashboard you browse the results in.
 
 ## Extras
 
@@ -63,8 +63,8 @@ uv add "evaluatorq[all]"                   # every extra below
 
 | Extra | Adds | Add it when |
 |---|---|---|
-| `redteam` | `huggingface-hub`, chart rendering (`vl-convert-python`), the retired Streamlit viewer | You run static or hybrid red teaming against the default attack dataset, which is hosted on HuggingFace. A static run against a local dataset file needs no extra |
-| `simulation` | Chart rendering and the retired Streamlit viewer | You want charts in a simulation report |
+| `redteam` | `huggingface-hub`, chart rendering (`vl-convert-python`) | You run static or hybrid red teaming against the default attack dataset, which is hosted on HuggingFace. A static run against a local dataset file needs no extra |
+| `simulation` | Chart rendering (`vl-convert-python`) | You want charts in a simulation report |
 | `dashboard` | `python-fasthtml`, `uvicorn`, chart rendering | You run `eq dashboard` to browse saved runs |
 | `otel` | The OpenTelemetry SDK and its OTLP exporter | You want [traces](tracing.md) |
 | `langchain`, `langgraph`, `openai-agents`, `pydantic-ai`, `crewai` | The framework itself | Your agent under test is built on that framework. See [Framework integrations](framework-integrations.md) |

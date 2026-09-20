@@ -1,9 +1,8 @@
 """Tabbed report bodies for the combined dashboard.
 
 The standalone HTML exports render every section as one long scroll. The
-dashboard instead groups those same sections into tabs that mirror the Streamlit
-dashboards (``redteam/ui/dashboard.py`` and ``simulation/ui/dashboard.py``), so
-the in-app report reads like the Streamlit UI rather than the export.
+dashboard instead groups those same sections into tabs, so the in-app report
+reads like an interactive UI rather than the export.
 
 Each surface already computes its sections via ``build_report_sections`` and
 renders them with a ``_SECTION_RENDERERS`` dispatch table; this module reuses
@@ -53,7 +52,7 @@ def _tabs(group: str, items: list[tuple[str, str] | tuple[str, str, str]]) -> st
     (the caller is responsible for escaping it), which lets a surface inject
     e.g. a count pill next to the label. Tabs whose panel is empty are dropped
     so a surface that lacks (say) error or comparison data simply shows fewer
-    tabs, matching the Streamlit conditional-tab behaviour. The first
+    tabs. The first
     surviving tab is checked. Switching is pure CSS (see ``styles.py``
     ``_TAB_RULES``): the Nth radio toggles the Nth label and Nth panel.
     """
@@ -100,7 +99,7 @@ def _stable_entries(run: SimulationRun, rows: list[Any]) -> list[Any]:
 
 
 def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = None, compare_html: str = '') -> str:
-    """Render the Agent Sim report body as Streamlit-aligned tabs.
+    """Render the Agent Sim report body as tabs.
 
     Tabs: Overview · Breakdown · Recommendations · Transcripts · Turn quality · Config — each
     populated from the precomputed report sections (empty tabs drop out; Turn
@@ -1476,7 +1475,7 @@ _DONUT_SEGMENTS = (
 
 def _sim_outcomes_donut(rows: list[Any]) -> str:
     """Three-segment outcomes donut (achieved / not achieved / errors) for the
-    sim report Overview tab. Parity with the Streamlit dashboard (RES-1022).
+    sim report Overview tab (RES-1022).
 
     Self-contained SVG (no vl-convert dependency), mirroring the landing donut.
     Returns '' for an empty run so the Overview section renders unchanged.
@@ -2471,7 +2470,7 @@ def _rt_breakdowns(by_kind: dict[str, Any]) -> str:
 
 
 def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
-    """Render the Red Team report body as Streamlit-aligned tabs.
+    """Render the Red Team report body as tabs.
 
     7 tabs: Overview, Agents (N), Focus areas (N), Breakdowns, Attacks (N),
     Usage, Config — each populated from the precomputed report sections plus

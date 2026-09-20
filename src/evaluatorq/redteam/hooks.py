@@ -359,6 +359,36 @@ class ManifestStageHooks:
 # ---------------------------------------------------------------------------
 
 
+def _tool_resource(item: Any) -> tuple[str, str, str]:
+    name = item.get('name') if isinstance(item, dict) else str(item)
+    display = name or 'unknown'
+    return display, 'tool', display
+
+
+def _memory_resource(item: Any) -> tuple[str, str, str]:
+    ident = (item.get('key') or item.get('id') or 'unknown') if isinstance(item, dict) else str(item)
+    return f'memory:{ident}', 'memory', str(ident)
+
+
+def _knowledge_resource(item: Any) -> tuple[str, str, str]:
+    ident = (
+        (item.get('key') or item.get('name') or item.get('id') or 'unknown') if isinstance(item, dict) else str(item)
+    )
+    return f'knowledge:{ident}', 'knowledge', str(ident)
+
+
+def _collect_agent_resources(agent_context: dict[str, Any]) -> list[tuple[str, str, str]]:
+    resource_fields = [
+        ('tools', _tool_resource),
+        ('memory_stores', _memory_resource),
+        ('knowledge_bases', _knowledge_resource),
+    ]
+    resources: list[tuple[str, str, str]] = []
+    for field, getter in resource_fields:
+        resources.extend(getter(item) for item in agent_context.get(field) or [])
+    return resources
+
+
 class RichHooks:
     """Rich terminal hook implementation for the evaluatorq CLI.
 
@@ -559,23 +589,9 @@ class RichHooks:
         from rich.table import Table
         from rich.text import Text
 
-        tools = agent_context.get('tools') or []
-        memory_stores = agent_context.get('memory_stores') or []
-        knowledge_bases = agent_context.get('knowledge_bases') or []
-
         # Build (resource_key, resource_type, display_name) triples in a stable
         # order so the table layout is deterministic across runs.
-        resources: list[tuple[str, str, str]] = []
-        for t in tools:
-            name = t.get('name') if isinstance(t, dict) else str(t)
-            display = name or 'unknown'
-            resources.append((display, 'tool', display))
-        for m in memory_stores:
-            ident = (m.get('key') or m.get('id') or 'unknown') if isinstance(m, dict) else str(m)
-            resources.append((f'memory:{ident}', 'memory', str(ident)))
-        for kb in knowledge_bases:
-            ident = (kb.get('key') or kb.get('name') or kb.get('id') or 'unknown') if isinstance(kb, dict) else str(kb)
-            resources.append((f'knowledge:{ident}', 'knowledge', str(ident)))
+        resources = _collect_agent_resources(agent_context)
 
         panel_title = (
             f'[bold cyan]{target_label}[/bold cyan]' if target_label else '[bold cyan]Capabilities[/bold cyan]'

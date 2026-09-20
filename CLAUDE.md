@@ -216,7 +216,7 @@ These tests use fakes and do not require API credentials. The repository does no
 ### Dependencies
 
 - `uv` (not pip), `hatchling` build. Runtime deps and extras are listed in `pyproject.toml` — read it there.
-- Only `pydantic`/`httpx`/`rich`/`loguru`/`typer`/`openai` are always installed. Everything else is behind an extra: a module that imports one at module scope must itself only be imported behind that extra (that is why `redteam/ui/`, `dashboard/` and the integrations can import `streamlit`/`fasthtml`/`langchain` at the top). Anywhere else, import inside the function.
+- Only `pydantic`/`httpx`/`rich`/`loguru`/`typer`/`openai` are always installed. Everything else is behind an extra: a module that imports one at module scope must itself only be imported behind that extra (that is why `dashboard/` and the integrations can import `fasthtml`/`langchain` at the top). Anywhere else, import inside the function.
 - Adding a new dependency needs a reason a few lines of stdlib cannot cover.
 
 ### Environment Variables

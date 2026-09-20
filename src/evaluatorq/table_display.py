@@ -26,6 +26,53 @@ class EvaluatorAverages(TypedDict):
     averages: dict[str, dict[str, tuple[str, str]]]
 
 
+def _coerce_score(value: ScoreValue) -> float | None:
+    """Return numeric scores as floats, excluding booleans and other values."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return None
+
+
+def _format_evaluator_scores(scores: list[ScoreValue]) -> tuple[str, str]:
+    """Format scores for one evaluator and job."""
+    if not scores:
+        return ('-', 'dim')
+
+    first_score = scores[0]
+
+    if isinstance(first_score, EvaluationResultCell):
+        # Structured result cell, show placeholder
+        return ('[structured]', 'dim')
+
+    if isinstance(first_score, bool):
+        # Calculate pass rate for boolean scores
+        pass_count = sum(1 for s in scores if s is True)
+        pass_rate = (pass_count / len(scores)) * 100
+
+        if pass_rate == 100:
+            style = 'green'
+        elif pass_rate >= 50:
+            style = 'yellow'
+        else:
+            style = 'red'
+
+        return (f'{pass_rate:.1f}%', style)
+
+    # A string score ('inconclusive') must not dilute or mask the numeric mean.
+    numeric = [coerced for score in scores if (coerced := _coerce_score(score)) is not None]
+    if numeric:
+        # Calculate average over the numeric scores only
+        avg = sum(numeric) / len(numeric)
+        return (f'{avg:.2f}', 'yellow')
+
+    if isinstance(first_score, dict):
+        # For dict scores, show placeholder
+        return ('[dict]', 'dim')
+
+    # For strings, show placeholder
+    return ('[string]', 'dim')
+
+
 def get_terminal_width() -> int:
     """Get terminal width with fallback"""
     return shutil.get_terminal_size(fallback=(80, 24)).columns
@@ -122,44 +169,7 @@ def calculate_evaluator_averages(
 
         for job_name in job_names:
             scores = scores_by_evaluator_and_job[evaluator_name].get(job_name, [])
-
-            if not scores:
-                evaluator_averages[job_name] = ('-', 'dim')
-            else:
-                first_score = scores[0]
-                # A string score ('inconclusive') must not dilute or mask the numeric mean.
-                numeric = [s for s in scores if isinstance(s, (int, float)) and not isinstance(s, bool)]
-
-                if isinstance(first_score, EvaluationResultCell):
-                    # Structured result cell, show placeholder
-                    evaluator_averages[job_name] = ('[structured]', 'dim')
-
-                elif isinstance(first_score, bool):
-                    # Calculate pass rate for boolean scores
-                    pass_count = sum(1 for s in scores if s is True)
-                    pass_rate = (pass_count / len(scores)) * 100
-
-                    if pass_rate == 100:
-                        style = 'green'
-                    elif pass_rate >= 50:
-                        style = 'yellow'
-                    else:
-                        style = 'red'
-
-                    evaluator_averages[job_name] = (f'{pass_rate:.1f}%', style)
-
-                elif numeric:
-                    # Calculate average over the numeric scores only
-                    avg = sum(float(s) for s in numeric) / len(numeric)
-                    evaluator_averages[job_name] = (f'{avg:.2f}', 'yellow')
-
-                elif isinstance(first_score, dict):
-                    # For dict scores, show placeholder
-                    evaluator_averages[job_name] = ('[dict]', 'dim')
-
-                else:
-                    # For strings, show placeholder
-                    evaluator_averages[job_name] = ('[string]', 'dim')
+            evaluator_averages[job_name] = _format_evaluator_scores(scores)
 
         averages[evaluator_name] = evaluator_averages
 

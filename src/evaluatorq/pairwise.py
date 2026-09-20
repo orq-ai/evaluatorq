@@ -12,6 +12,8 @@ import asyncio
 import math
 import statistics
 from collections import Counter
+from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from loguru import logger
@@ -438,6 +440,37 @@ _SHRINKAGE_PSEUDO_OBS = 1.0
 _MIN_MEASURED_JUDGES = 2
 
 
+def _tally_pairwise_outcomes(comparisons: Sequence[PairwiseComparison]) -> dict[str, Counter[str]]:
+    """Count decisive pairwise votes by judge and outcome."""
+    vote_counts: dict[str, Counter[str]] = {}
+    for c in comparisons:
+        for v in c.votes:
+            if v.vote is not None:
+                vote_counts.setdefault(v.model, Counter())[v.vote] += 1
+    return vote_counts
+
+
+def _weighted_pairwise_winners(comparisons: Sequence[PairwiseComparison], weights: dict[str, float]) -> list[str]:
+    winners: list[str] = []
+    for c in comparisons:
+        w: dict[str, float] = {'A': 0.0, 'B': 0.0, 'tie': 0.0}
+        for v in c.votes:
+            if v.vote is None:
+                continue
+            w[v.vote] += weights.get(v.model, 1.0)
+        if not any(w.values()):
+            winners.append('inconclusive')
+            continue
+        top = max(w.values())
+        # isclose, not ==: mathematically equal weights can differ in the last
+        # bits (asymmetric comparison counts), and a genuine tie must stay a
+        # tie rather than crown whichever side rounded up.
+        leaders = [k for k, val in w.items() if math.isclose(val, top, rel_tol=1e-9)]
+        # Mirrors plurality semantics: a unique leader wins, a split is inconclusive.
+        winners.append(leaders[0] if len(leaders) == 1 else 'inconclusive')
+    return winners
+
+
 def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAggregation:
     """Fit hard BT-sigma over a run's reconciled votes and re-derive winners.
 
@@ -468,11 +501,7 @@ def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAg
     # judge -> vote -> count. Collapsing keeps the optimum identical (the
     # likelihood is additive over identical records) while the per-iteration
     # cost drops from O(votes) to O(judges x 3).
-    vote_counts: dict[str, Counter[str]] = {}
-    for c in comparisons:
-        for v in c.votes:
-            if v.vote is not None:
-                vote_counts.setdefault(v.model, Counter())[v.vote] += 1
+    vote_counts = _tally_pairwise_outcomes(comparisons)
     records = [
         JudgedComparison(judge=judge, item_a='A', item_b='B', p_a=_VOTE_TO_P[vote], weight=float(n))
         for judge, counts in sorted(vote_counts.items())
@@ -593,23 +622,7 @@ def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAg
             f'({len(rep_consistency)} judge(s), {n_dp} datapoint(s) with repeats)'
         )
 
-    winners: list[str] = []
-    for c in comparisons:
-        w: dict[str, float] = {'A': 0.0, 'B': 0.0, 'tie': 0.0}
-        for v in c.votes:
-            if v.vote is None:
-                continue
-            w[v.vote] += weights.get(v.model, 1.0)
-        if not any(w.values()):
-            winners.append('inconclusive')
-            continue
-        top = max(w.values())
-        # isclose, not ==: mathematically equal weights can differ in the last
-        # bits (asymmetric comparison counts), and a genuine tie must stay a
-        # tie rather than crown whichever side rounded up.
-        leaders = [k for k, val in w.items() if math.isclose(val, top, rel_tol=1e-9)]
-        # Mirrors plurality semantics: a unique leader wins, a split is inconclusive.
-        winners.append(leaders[0] if len(leaders) == 1 else 'inconclusive')
+    winners = _weighted_pairwise_winners(comparisons, weights)
 
     counts = Counter(winners)
     decisive = counts['A'] + counts['B']
@@ -734,6 +747,155 @@ def _reconciled_explanation(
     return (first_vote.explanation if first_vote else '') or (second_vote.explanation if second_vote else '')
 
 
+async def _pairwise_prediction(
+    judge_fn: PairwiseJudgeFn,
+    response_a: Any,
+    response_b: Any,
+    model: str,
+    *,
+    swapped: bool,
+) -> Prediction:
+    return await (judge_fn(response_b, response_a, model) if swapped else judge_fn(response_a, response_b, model))
+
+
+@dataclass(frozen=True)
+class _PairwiseCall:
+    """The per-comparison inputs every ordering and stand-in round shares.
+
+    Bundled rather than threaded: these seven are identical at all five call
+    sites, and repeating them keyword by keyword is how one of them silently
+    stops matching the others. ``jury_ctx`` is the comparison-level OTel context,
+    so an instance must be built *after* ``current_otel_context()`` has been
+    captured inside the ``orq.pairwise_jury`` span.
+    """
+
+    judge_fn: PairwiseJudgeFn
+    response_a: Any
+    response_b: Any
+    repetitions: int
+    propagate_errors: bool
+    semaphore: asyncio.Semaphore | None
+    jury_ctx: object | None
+
+
+async def _run_pairwise_ordering(
+    models: Sequence[str],
+    call: _PairwiseCall,
+    *,
+    swapped: bool,
+    replacement: bool,
+) -> tuple[dict[str, JuryVote], TokenUsage | None]:
+    # _run_jury_core, not run_jury: this comparison owns ONE orq.pairwise_jury span
+    # across both orderings, and run_jury would open a second one per
+    # ordering. Everything below the span (fan-out, per-judge spans,
+    # repetition collapse) is identical.
+    #
+    # Replacements are handled here at the pair level, not inside the core,
+    # so a stand-in gets a fair shot in both orderings rather than being
+    # promoted independently per ordering (and then silently dropped in
+    # reconciliation).
+    deliberation = await _run_jury_core(
+        judge_fn=partial(_pairwise_prediction, call.judge_fn, call.response_a, call.response_b, swapped=swapped),
+        panel=models,
+        repetitions=call.repetitions,
+        replacement_judges=None,
+        min_successful_judges=1,
+        propagate_errors=call.propagate_errors,
+        max_concurrency=call.semaphore,
+        label_swapped=swapped,
+        parent_context=call.jury_ctx,
+        replacement=replacement,
+    )
+    return {v.model: v for v in deliberation.jury.votes}, deliberation.token_usage
+
+
+async def _run_pairwise_both(
+    models: Sequence[str],
+    call: _PairwiseCall,
+    *,
+    swap: bool,
+    replacement: bool = False,
+) -> tuple[dict[str, JuryVote], dict[str, JuryVote], list[TokenUsage]]:
+    if not swap:
+        first_votes, first_usage = await _run_pairwise_ordering(models, call, swapped=False, replacement=replacement)
+        return first_votes, {}, [u for u in (first_usage,) if u]
+    (first_votes, first_usage), (second_votes, second_usage) = await asyncio.gather(
+        _run_pairwise_ordering(models, call, swapped=False, replacement=replacement),
+        _run_pairwise_ordering(models, call, swapped=True, replacement=replacement),
+    )
+    return first_votes, second_votes, [u for u in (first_usage, second_usage) if u]
+
+
+def _pairwise_failed(
+    model: str,
+    first_votes: dict[str, JuryVote],
+    second_votes: dict[str, JuryVote],
+    *,
+    swap: bool,
+) -> bool:
+    first = first_votes.get(model)
+    if first is None or not first.success:
+        return True
+    if swap:
+        second = second_votes.get(model)
+        return second is None or not second.success
+    return False
+
+
+def _pairwise_observations(
+    model: str,
+    first_votes: dict[str, JuryVote],
+    second_votes: dict[str, JuryVote],
+) -> tuple[list[RepetitionObservation], int]:
+    """Canonicalized per-repetition votes from both orderings' JuryVotes.
+
+    The jury already retains raw per-repetition verdicts; this keeps
+    them on the PairwiseVote (swapped-ordering entries un-swapped) so
+    reliability estimation can use repeated observations instead of
+    only the collapsed vote (RES-1251)."""
+    out: list[RepetitionObservation] = []
+    failures = 0
+    for ordering, jv, swapped in (
+        ('ab', first_votes.get(model), False),
+        ('ba', second_votes.get(model), True),
+    ):
+        if jv is None:
+            continue
+        failures += jv.repetitions_failed
+        for i, rep in enumerate(jv.repetitions):
+            value = rep.value if not swapped else _unswap(rep.value)
+            if value is None:
+                verdict: Literal['A', 'B', 'tie'] | None = None  # genuine abstention: a valid no-decision pass
+            elif str(value) in _PAIRWISE_VALUES:
+                verdict = cast("Literal['A', 'B', 'tie']", str(value))
+            else:
+                # Decisive-looking but off-contract (RES-1251 review): a
+                # malformed pass, not a silently dropped None. Count it
+                # like an error so it lowers reliability rather than
+                # passing as a free abstention, and name it (review item 7)
+                # so a user who sees consistency drop can find the cause.
+                logger.warning(
+                    'pairwise judge {} returned an off-contract repetition value {!r} on the {} '
+                    'ordering (repetition {}); counting it as a failure, not an abstention',
+                    model,
+                    value,
+                    ordering,
+                    i,
+                )
+                verdict = None
+                failures += 1
+            out.append(
+                RepetitionObservation(
+                    ordering=cast("Literal['ab', 'ba']", ordering),
+                    repetition=i,
+                    verdict=verdict,
+                    explanation=rep.explanation,
+                    raw_output=rep.raw_output,
+                )
+            )
+    return out, failures
+
+
 async def run_pairwise(
     *,
     judge_fn: PairwiseJudgeFn,
@@ -777,65 +939,22 @@ async def run_pairwise(
     resolved_panel = resolve_panel(panel)
     jury_ctx: object | None = None
 
-    async def _ordering(
-        models: Sequence[str], *, swapped: bool, replacement: bool
-    ) -> tuple[dict[str, JuryVote], TokenUsage | None]:
-        async def _fn(model: str) -> Prediction:
-            return await (
-                judge_fn(response_b, response_a, model) if swapped else judge_fn(response_a, response_b, model)
-            )
-
-        # _run_jury_core, not run_jury: this comparison owns ONE orq.pairwise_jury span
-        # across both orderings, and run_jury would open a second one per
-        # ordering. Everything below the span (fan-out, per-judge spans,
-        # repetition collapse) is identical.
-        #
-        # Replacements are handled here at the pair level, not inside the core,
-        # so a stand-in gets a fair shot in both orderings rather than being
-        # promoted independently per ordering (and then silently dropped in
-        # reconciliation).
-        deliberation = await _run_jury_core(
-            judge_fn=_fn,
-            panel=models,
-            repetitions=repetitions,
-            replacement_judges=None,
-            min_successful_judges=1,
-            propagate_errors=propagate_errors,
-            max_concurrency=semaphore,
-            label_swapped=swapped,
-            parent_context=jury_ctx,
-            replacement=replacement,
-        )
-        return {v.model: v for v in deliberation.jury.votes}, deliberation.token_usage
-
-    async def _both(
-        models: Sequence[str], *, replacement: bool = False
-    ) -> tuple[dict[str, JuryVote], dict[str, JuryVote], list[TokenUsage]]:
-        if not swap:
-            first_votes, first_usage = await _ordering(models, swapped=False, replacement=replacement)
-            return first_votes, {}, [u for u in (first_usage,) if u]
-        (first_votes, first_usage), (second_votes, second_usage) = await asyncio.gather(
-            _ordering(models, swapped=False, replacement=replacement),
-            _ordering(models, swapped=True, replacement=replacement),
-        )
-        return first_votes, second_votes, [u for u in (first_usage, second_usage) if u]
-
     async with with_span('orq.pairwise_jury') as jury_span:
         # Captured before any judge runs so every judge span (both orderings,
         # replacements included) parents to this one comparison-level span.
         jury_ctx = current_otel_context()
-        first_votes, second_votes, usages = await _both(resolved_panel)
+        call = _PairwiseCall(
+            judge_fn=judge_fn,
+            response_a=response_a,
+            response_b=response_b,
+            repetitions=repetitions,
+            propagate_errors=propagate_errors,
+            semaphore=semaphore,
+            jury_ctx=jury_ctx,
+        )
+        first_votes, second_votes, usages = await _run_pairwise_both(resolved_panel, call, swap=swap)
 
-        def _failed(model: str) -> bool:
-            first = first_votes.get(model)
-            if first is None or not first.success:
-                return True
-            if swap:
-                second = second_votes.get(model)
-                return second is None or not second.success
-            return False
-
-        num_failed = sum(1 for model in resolved_panel if _failed(model))
+        num_failed = sum(1 for model in resolved_panel if _pairwise_failed(model, first_votes, second_votes, swap=swap))
         seen = set(resolved_panel)
         stand_ins: list[str] = []
         for candidate in replacement_judges or []:
@@ -846,59 +965,10 @@ async def run_pairwise(
 
         stand_in_set = set(stand_ins)
         if stand_ins:
-            rep_first, rep_second, rep_usages = await _both(stand_ins, replacement=True)
+            rep_first, rep_second, rep_usages = await _run_pairwise_both(stand_ins, call, swap=swap, replacement=True)
             first_votes.update(rep_first)
             second_votes.update(rep_second)
             usages.extend(rep_usages)
-
-        def _observations(model: str) -> tuple[list[RepetitionObservation], int]:
-            """Canonicalized per-repetition votes from both orderings' JuryVotes.
-
-            The jury already retains raw per-repetition verdicts; this keeps
-            them on the PairwiseVote (swapped-ordering entries un-swapped) so
-            reliability estimation can use repeated observations instead of
-            only the collapsed vote (RES-1251)."""
-            out: list[RepetitionObservation] = []
-            failures = 0
-            for ordering, jv, swapped in (
-                ('ab', first_votes.get(model), False),
-                ('ba', second_votes.get(model), True),
-            ):
-                if jv is None:
-                    continue
-                failures += jv.repetitions_failed
-                for i, rep in enumerate(jv.repetitions):
-                    value = rep.value if not swapped else _unswap(rep.value)
-                    if value is None:
-                        verdict: Literal['A', 'B', 'tie'] | None = None  # genuine abstention: a valid no-decision pass
-                    elif str(value) in _PAIRWISE_VALUES:
-                        verdict = cast("Literal['A', 'B', 'tie']", str(value))
-                    else:
-                        # Decisive-looking but off-contract (RES-1251 review): a
-                        # malformed pass, not a silently dropped None. Count it
-                        # like an error so it lowers reliability rather than
-                        # passing as a free abstention, and name it (review item 7)
-                        # so a user who sees consistency drop can find the cause.
-                        logger.warning(
-                            'pairwise judge {} returned an off-contract repetition value {!r} on the {} '
-                            'ordering (repetition {}); counting it as a failure, not an abstention',
-                            model,
-                            value,
-                            ordering,
-                            i,
-                        )
-                        verdict = None
-                        failures += 1
-                    out.append(
-                        RepetitionObservation(
-                            ordering=cast("Literal['ab', 'ba']", ordering),
-                            repetition=i,
-                            verdict=verdict,
-                            explanation=rep.explanation,
-                            raw_output=rep.raw_output,
-                        )
-                    )
-            return out, failures
 
         votes: list[PairwiseVote] = []
         for model in (*resolved_panel, *stand_ins):
@@ -911,7 +981,7 @@ async def run_pairwise(
                 completed = first_value is not None and second_value is not None
             else:
                 vote, flipped, completed = first_value, False, False
-            observations, repetition_failures = _observations(model)
+            observations, repetition_failures = _pairwise_observations(model, first_votes, second_votes)
             votes.append(
                 PairwiseVote(
                     model=model,

@@ -35,18 +35,6 @@ from evaluatorq.redteam.contracts import (
 runner = CliRunner()
 
 
-def test_ui_warns_that_dashboard_is_deprecated(tmp_path: Path) -> None:
-    report = tmp_path / 'report.json'
-    report.write_text('{}', encoding='utf-8')
-
-    with patch('evaluatorq.common.ui.launch.launch_streamlit'):
-        result = runner.invoke(app, ['ui', str(report)])
-
-    assert result.exit_code == 0, result.output
-    assert 'deprecated' in result.stderr.lower()
-    assert 'eq dashboard' in result.stderr
-
-
 def test_runs_suggests_dashboard_directory(tmp_path: Path) -> None:
     report = tmp_path / 'run.json'
     report.write_text(

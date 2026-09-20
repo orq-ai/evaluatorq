@@ -114,7 +114,7 @@ def _rt_full_options(report: Any) -> dict[str, list[str]]:
 
 
 def _rt_apply(report: Any, selections: dict[str, list[str]]) -> list[Any]:
-    """Apply all redteam filter dimensions independently (parity with Streamlit)."""
+    """Apply all redteam filter dimensions independently."""
     results: list[Any] = list(report.results)
     full_opts = _rt_full_options(report)
 

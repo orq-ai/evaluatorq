@@ -131,14 +131,12 @@ def test_log_bridge_respects_env_override(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 # ---------------------------------------------------------------------------
-# CLI help smoke-tests (eq dashboard plus deprecated legacy UI aliases)
+# CLI help smoke-test
 # ---------------------------------------------------------------------------
 
 
 def test_eq_dashboard_help() -> None:
     """eq dashboard --help names all three stores scanned with no path."""
-    # The FastHTML dashboard is the primary multi-run UI; the ``ui`` commands
-    # remain callable as deprecated Streamlit compatibility aliases.
     from evaluatorq.cli import app
 
     runner = CliRunner()
@@ -146,24 +144,6 @@ def test_eq_dashboard_help() -> None:
     assert result.exit_code == 0
     for store in ('.evaluatorq/runs/', '.evaluatorq/sim-runs/', '.evaluatorq/pairwise-runs/'):
         assert store in result.output
-
-
-def test_redteam_ui_help() -> None:
-    """redteam ui --help exits 0."""
-    from evaluatorq.redteam.cli import app
-
-    runner = CliRunner()
-    result = runner.invoke(app, ['ui', '--help'])
-    assert result.exit_code == 0
-
-
-def test_sim_ui_help() -> None:
-    """sim ui --help exits 0."""
-    from evaluatorq.simulation.cli import app
-
-    runner = CliRunner()
-    result = runner.invoke(app, ['ui', '--help'])
-    assert result.exit_code == 0
 
 
 # ---------------------------------------------------------------------------
