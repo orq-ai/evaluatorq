@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import os
 from collections.abc import Awaitable, Sequence
 from contextlib import AsyncExitStack
@@ -23,7 +24,9 @@ from .table_display import display_results_table
 from .tracing import capture_parent_context, tracing_session
 from .types import (
     DataPoint,
+    DatapointComplete,
     DataPointInput,
+    DataPointResult,
     DatasetIdInput,
     Evaluator,
     EvaluatorParams,
@@ -40,6 +43,18 @@ class _StreamingEvaluationError(RuntimeError):
         self.errors = errors
         details = '; '.join(f'{type(error).__name__}: {error}' for error in errors)
         super().__init__(f'Streaming evaluation failed with {len(errors)} errors: {details}')
+
+
+async def _notify_datapoint_complete(
+    callback: DatapointComplete | None,
+    results: list[DataPointResult],
+) -> None:
+    if callback is None:
+        return
+    for result in results:
+        returned = callback(result)
+        if inspect.isawaitable(returned):
+            await returned
 
 
 def check_pass_failures(results: EvaluatorqResult, *, treat_errors_as_failure: bool = False) -> bool:
@@ -128,6 +143,7 @@ async def evaluatorq(
     path: str | None = None,
     inference: bool = True,
     single_trace: bool = False,
+    on_datapoint_complete: DatapointComplete | None = None,
     _send_results: bool = True,
     _base_url: str | None = None,
     _trace_type: str = 'evaluatorq',
@@ -181,6 +197,8 @@ async def evaluatorq(
         single_trace: Group every row under one ``evaluatorq.run`` span so the whole
               evaluation is a single trace. Defaults to False, which leaves each row's
               ``orq.job`` as its own root — an N-row run is then N separate traces.
+        on_datapoint_complete: Optional sync or async callback invoked exactly once after each
+              DataPointResult reaches a terminal state. Exceptions propagate and abort the run.
 
     Returns:
         List of DataPointResult objects
@@ -228,6 +246,7 @@ async def evaluatorq(
             path=path,
             inference=inference,
             single_trace=single_trace,
+            on_datapoint_complete=on_datapoint_complete,
         )
     else:
         raise ValueError(
@@ -255,6 +274,7 @@ async def evaluatorq(
     description = validated.description
     path = validated.path
     single_trace = validated.single_trace
+    on_datapoint_complete = validated.on_datapoint_complete
 
     async with (
         tracing_session(name, trace_type=_trace_type) as tracing_context,
@@ -348,6 +368,7 @@ async def evaluatorq(
                             None,  # Don't pass progress in streaming mode - use polling instead
                             tracing_context,
                         )
+                        await _notify_datapoint_complete(on_datapoint_complete, result)
                         progress_ref['processed'] += 1
                         return result
 
@@ -477,7 +498,7 @@ async def evaluatorq(
                     index: int, data_promise: Awaitable[DataPoint] | DataPoint
                 ) -> list[Any]:
                     async with data_point_semaphore:
-                        return await process_data_point(
+                        result = await process_data_point(
                             data_promise,
                             index,
                             jobs,
@@ -486,6 +507,8 @@ async def evaluatorq(
                             progress,
                             tracing_context,
                         )
+                        await _notify_datapoint_complete(on_datapoint_complete, result)
+                        return result
 
                 tasks = list(starmap(process_with_semaphore, enumerate(data_promises)))
 
