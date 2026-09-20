@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 import pytest
-
-from typing import Any
 
 from evaluatorq.contracts import AgentTarget, Message, TokenUsage
 from evaluatorq.redteam import get_category_info, list_categories, red_team
