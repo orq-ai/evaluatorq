@@ -438,7 +438,6 @@ def _report_export_csv(rid: str, req: Request) -> Response:
 
     surface, _raw = library.load_surface(path)
     adapter = ADAPTERS.get(surface or '')
-    filter_def = FILTERS.get(surface or '')
     if adapter is None:
         return Response('404 Not Found', status_code=404, media_type='text/plain')
 
@@ -502,7 +501,6 @@ def _report_export_json(rid: str, req: Request) -> Response:
 
     surface, _raw = library.load_surface(path)
     adapter = ADAPTERS.get(surface or '')
-    filter_def = FILTERS.get(surface or '')
     if adapter is None:
         return Response('404 Not Found', status_code=404, media_type='text/plain')
 
