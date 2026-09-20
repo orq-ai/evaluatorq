@@ -279,6 +279,19 @@ def test_classify_boolean_panel_requires_a_probability_threshold() -> None:
     assert evaluator['name'] == 'x'
 
 
+@pytest.mark.asyncio
+async def test_prompted_panel_keeps_accepting_a_threshold_outside_the_classify_range() -> None:
+    """Prompted judges have always ignored the probability threshold until result mapping."""
+    evaluator = llm_jury(
+        name='x', criteria='c', judges=['gpt-5-mini'], threshold=5, client=MagicMock()
+    )
+    sink: list[Any] = []
+
+    await _run_and_capture(evaluator, sink)
+
+    assert sink == [None]
+
+
 def test_a_replacement_classify_judge_seats_the_same_rules() -> None:
     with pytest.raises(ValueError, match='criteria'):
         llm_jury(name='x', prompt='p', judges=['gpt-5-mini'], replacement_judges=[JEV])
@@ -714,6 +727,55 @@ async def test_a_catalogue_only_numeric_classify_model_rejects_a_custom_score_ra
         await evaluator['scorer'](_params())
 
     run_judge.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_catalogue_only_boolean_classify_model_rejects_an_invalid_threshold_at_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = 'acme/sorter'
+    info = model_catalogue.ModelInfo(0.0, 0.0, 'acme', False, supports_classify=True)  # noqa: FBT003
+
+    async def fake_load(client=None):  # noqa: ANN001, ARG001
+        return {model: info, 'sorter': info}
+
+    monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
+    model_catalogue.reset_catalogue_cache()
+    evaluator = llm_jury(name='x', criteria='classify it', judges=[model], threshold=5, client=MagicMock())
+    run_judge = AsyncMock(return_value=JudgeOutcome(error_message='should not run'))
+    with (
+        patch.object(llm_jury_mod, 'run_judge', run_judge),
+        pytest.raises(ValueError, match='compares `threshold` against a probability'),
+    ):
+        await evaluator['scorer'](_params())
+
+    run_judge.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_catalogue_only_classify_model_is_validated_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = 'acme/sorter'
+    info = model_catalogue.ModelInfo(0.0, 0.0, 'acme', False, supports_classify=True)  # noqa: FBT003
+
+    async def fake_load(client=None):  # noqa: ANN001, ARG001
+        return {model: info, 'sorter': info}
+
+    monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
+    model_catalogue.reset_catalogue_cache()
+    evaluator = llm_jury(name='x', criteria='classify it', judges=[model], client=MagicMock())
+    validation = MagicMock(wraps=llm_jury_mod._validate_classify_configuration)
+    outcome = JudgeOutcome(payload=EvaluatorResponsePayload(value=True, explanation='ok'))
+
+    with (
+        patch.object(llm_jury_mod, '_validate_classify_configuration', validation),
+        patch.object(llm_jury_mod, 'run_judge', AsyncMock(return_value=outcome)),
+    ):
+        await evaluator['scorer'](_params())
+        await evaluator['scorer'](_params('another answer'))
+
+    validation.assert_called_once()
 
 
 @pytest.mark.asyncio

@@ -257,10 +257,10 @@ def _build_classify_question(
     question and `run_judge` ignores it for models it judges by prompt.
 
     ``None`` means the configuration cannot express a classify question — no
-    ``criteria`` to ask, or a numeric panel with no ``levels`` to score against. A
-    classify model reached with ``None`` fails loudly inside `run_judge`, which is
-    the point: guessing an empty rubric would bill a call and return a verdict about
-    nothing.
+    ``criteria`` to ask, a numeric panel with no ``levels`` to score against, or a
+    boolean threshold outside the probability range. A runtime-discovered classify
+    model validates that configuration before calling `run_judge`; prompted judges
+    continue to ignore the candidate question.
     """
     if not criteria:
         return None
@@ -270,6 +270,8 @@ def _build_classify_question(
         return ClassifyQuestion(kind='score', instructions=criteria, criteria=list(levels), state=state)
     if label_descriptions:
         return ClassifyQuestion(kind='choice', instructions=criteria, criteria=dict(label_descriptions), state=state)
+    if not 0.0 <= threshold <= 1.0:
+        return None
     return ClassifyQuestion(kind='noul', instructions=criteria, state=state, noul_threshold=threshold)
 
 
@@ -364,18 +366,19 @@ def _warn_unread_criteria(*, prompt: str | None, criteria: str | None, classify_
 
     ``criteria`` reaches a judge one of two ways: a classify judge takes it as the
     question it answers, and a prompted judge sees it only where the template renders
-    ``{{criteria}}``. A custom ``prompt`` that never names the placeholder, on a panel
-    seating no classify judge, therefore drops it entirely — a rubric the caller wrote
-    and no judge was ever shown. Shared by `llm_jury` and `llm_jury_pairwise` so the two
-    cannot disagree about when that is worth saying.
+    ``{{criteria}}``. Catalogue-only classify models are not known synchronously, so
+    the warning hedges that case instead of claiming the panel has no classify seat.
+    Shared by `llm_jury` and `llm_jury_pairwise` so the two cannot disagree about when
+    that is worth saying.
     """
     if classify_seated or not prompt or not criteria:
         return
     if 'criteria' in extract_template_paths(prompt):
         return
     logger.warning(
-        'criteria is set but no judge reads it: the panel seats no classify judge and '
-        'the prompt never renders {{criteria}}. Add the placeholder or drop `criteria`.'
+        'criteria is set but no judge reads it synchronously: no classify judge is known yet and '
+        'the prompt never renders {{criteria}}. A classify seat discovered from the '
+        'catalogue still reads it as its question; otherwise add the placeholder or drop `criteria`.'
     )
 
 
@@ -1012,6 +1015,9 @@ def llm_jury(
     runtime_classify_warned = set(classify_judges)
 
     def _warn_runtime_classify(model: str) -> None:
+        if model in runtime_classify_warned:
+            return
+        runtime_classify_warned.add(model)
         _validate_classify_configuration(
             criteria=criteria,
             verdict_kind=verdict_kind,
@@ -1020,9 +1026,6 @@ def llm_jury(
             label_names=label_names,
             threshold=threshold,
         )
-        if model in runtime_classify_warned:
-            return
-        runtime_classify_warned.add(model)
         _warn_classify_repetitions(repetitions, pairwise=False)
         _warn_classify_ignored_settings(
             all_judges=panel + (replacement_judges or []),
@@ -1235,14 +1238,8 @@ class PairwiseComparator:
         self._extra_body = extra_body
         self._reasoning_effort = reasoning_effort
         self._client = client
+        # `classify_seated=None` means the comparator was constructed by hand.
         direct_construction = classify_seated is None
-        # ``None`` derives it here, which is what a comparator built by hand wants;
-        # `llm_jury_pairwise` passes the flag it already computed for early validation.
-        self._classify_seated = (
-            classify_seated
-            if classify_seated is not None
-            else any(is_known_classify_model(judge) for judge in panel + (replacement_judges or []))
-        )
         if max_concurrency is not None and max_concurrency < 1:
             raise ValueError(f'max_concurrency ({max_concurrency}) must be >= 1.')
         self._max_concurrency = max_concurrency

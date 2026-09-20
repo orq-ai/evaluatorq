@@ -819,7 +819,7 @@ async def run_judge(
     if use_classify:
         warn_unread_config_fields(
             cfg,
-            read=frozenset({'model', 'timeout_ms', 'retry_count'}),
+            read=frozenset({'timeout_ms', 'retry_count'}),
             caller='run_judge[classify]',
         )
     # Rendered only where it is sent: a classify call carries no prompt, and rendering
@@ -848,11 +848,7 @@ async def run_judge(
                 operation='classify',
                 attributes=span_attributes or {},
             ) as span:
-                outcome = await _classify_judge(
-                    client=client, model=model, cfg=cfg, question=classify_question, span=span
-                )
-            raw_content = outcome.raw_content or raw_content
-            return outcome
+                return await _classify_judge(client=client, model=model, cfg=cfg, question=classify_question, span=span)
         # Default for judges: the Responses endpoint is the one the Orq router
         # prices, so a judge call records cost like a target call does (RES-1295).
         # Set `api='chat_completions'` on the evaluator config to opt out.
