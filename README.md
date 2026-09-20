@@ -129,7 +129,7 @@
 | src/evaluatorq/redteam/adaptive/capability\_classifier.py                |      107 |        4 |     96% |254, 257, 326, 338 |
 | src/evaluatorq/redteam/adaptive/evaluator.py                             |       87 |        1 |     99% |       119 |
 | src/evaluatorq/redteam/adaptive/objective\_generator.py                  |      142 |       21 |     85% |55, 176, 315-316, 433-447, 490-494, 509, 559-560, 562-563, 666-700 |
-| src/evaluatorq/redteam/adaptive/orchestrator.py                          |      389 |       70 |     82% |99-126, 132-139, 148-161, 167-168, 174-188, 193-197, 202, 393-394, 459-465, 620-621, 913, 1003, 1023, 1061-1071 |
+| src/evaluatorq/redteam/adaptive/orchestrator.py                          |      449 |       72 |     84% |101-128, 134-141, 150-163, 169-170, 176-190, 195-199, 204, 315-316, 354, 473-474, 539-545, 696-707, 1004, 1089, 1304 |
 | src/evaluatorq/redteam/adaptive/pipeline.py                              |      210 |       29 |     86% |84, 235-239, 268, 272-311, 390, 627-628, 672-673, 758, 766-770 |
 | src/evaluatorq/redteam/adaptive/strategy\_planner.py                     |       99 |        3 |     97% |   177-181 |
 | src/evaluatorq/redteam/adaptive/strategy\_registry.py                    |      101 |        2 |     98% |  259, 263 |
@@ -237,7 +237,7 @@
 | src/evaluatorq/tracing/setup.py                                          |      129 |       39 |     70% |87-97, 118-121, 126, 155, 161-167, 175-185, 226-234, 299-300, 321 |
 | src/evaluatorq/tracing/spans.py                                          |       84 |        1 |     99% |       130 |
 | src/evaluatorq/types.py                                                  |       86 |        2 |     98% |   32, 288 |
-| **TOTAL**                                                                | **27981** | **4167** | **85%** |           |
+| **TOTAL**                                                                | **28041** | **4169** | **85%** |           |
 
 
 ## Setup coverage badge
