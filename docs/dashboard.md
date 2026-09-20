@@ -1,9 +1,9 @@
 # Dashboard
 
 !!! note "Primary UI — FastHTML `eq dashboard`"
-    The combined `eq dashboard` documented here is the primary way to browse saved runs. Its canonical invocation scans a run directory and opens the multi-run FastHTML UI — `eq dashboard` (no path) browses both default stores, and `eq dashboard .evaluatorq/sim-runs` scopes to simulation. Passing a single JSON report file is an optional direct deep-link to that report.
+    The combined `eq dashboard` documented here is the primary way to browse saved runs. Its canonical invocation scans a run directory and opens the multi-run FastHTML UI — `eq dashboard` (no path) browses the default red-team, simulation and pairwise stores, and `eq dashboard .evaluatorq/sim-runs` scopes to simulation. Passing a single JSON report file is an optional direct deep-link to that report.
 
-evaluatorq ships a built-in web dashboard for browsing red team and simulation reports.  It is powered by **FastHTML** (a lightweight Python web framework) and served locally via **uvicorn**.  There is no external service dependency — everything runs on your machine.
+evaluatorq ships a built-in web dashboard for browsing red-team, simulation and pairwise reports.  It is powered by **FastHTML** (a lightweight Python web framework) and served locally via **uvicorn**.  There is no external service dependency — everything runs on your machine.
 
 ![The evaluatorq combined dashboard — stat band, runs by type, attack-resistance, findings by severity, token usage, and recent runs.](assets/dashboard-index.png){ .dashboard-shot }
 
@@ -24,7 +24,7 @@ Prefer pip? Use `python -m pip install "evaluatorq[dashboard]"`, which installs 
 Launch it with `eq dashboard` (the `evaluatorq` and `eq` entry points are interchangeable):
 
 ```bash
-# Canonical — browse both default stores at once (red team + simulation)
+# Canonical — browse all default stores (red team + simulation + pairwise)
 eq dashboard
 
 # Canonical — scope to the simulation run store
@@ -46,7 +46,7 @@ ORQ_WORKSPACE=orq-research eq dashboard
 
 | Invocation | What it scans |
 |---|---|
-| `eq dashboard` | Both default stores: `.evaluatorq/runs` (red team) and `.evaluatorq/sim-runs` (simulation) |
+| `eq dashboard` | All three default stores: `.evaluatorq/runs` (red team), `.evaluatorq/sim-runs` (simulation), and `.evaluatorq/pairwise-runs` (pairwise) |
 | `eq dashboard <dir>` | Only that directory (e.g. `eq dashboard .evaluatorq/sim-runs`) |
 | `eq dashboard <file>.json` | Optional direct deep-link; prints that report's direct URL so you land straight on it |
 

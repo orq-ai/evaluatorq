@@ -136,7 +136,7 @@ def test_log_bridge_respects_env_override(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_eq_dashboard_help() -> None:
-    """eq dashboard --help exits 0 and lists the FastHTML dashboard command."""
+    """eq dashboard --help names all three stores scanned with no path."""
     # The FastHTML dashboard is the primary multi-run UI; the ``ui`` commands
     # remain callable as deprecated Streamlit compatibility aliases.
     from evaluatorq.cli import app
@@ -144,6 +144,8 @@ def test_eq_dashboard_help() -> None:
     runner = CliRunner()
     result = runner.invoke(app, ['dashboard', '--help'])
     assert result.exit_code == 0
+    for store in ('.evaluatorq/runs/', '.evaluatorq/sim-runs/', '.evaluatorq/pairwise-runs/'):
+        assert store in result.output
 
 
 def test_redteam_ui_help() -> None:

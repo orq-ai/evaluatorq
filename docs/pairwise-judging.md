@@ -1,6 +1,6 @@
 # Pairwise (Preference) Judging
 
-Some questions are easier to answer by comparison than in isolation. Instead of asking "is this answer good?" you ask "is A better than B?". Pairwise judging runs a panel of judges over two responses and reconciles their picks into one winner, correcting for the position bias that makes a judge favour whichever response it happens to see first.
+**Pairwise judging** is a comparison of two responses by a panel of judge models that reconciles their picks into one winner. Instead of asking "is this answer good?" you ask "is A better than B?". It corrects for the position bias that makes a judge favour whichever response it happens to see first.
 
 It is a sibling of [LLM as a Jury](llm-as-a-jury.md): same panel machinery, same judge models, but the verdict is a preference (`A` / `B` / `tie`) rather than a pass or a score.
 
@@ -232,6 +232,14 @@ run.save()  # -> .evaluatorq/pairwise-runs/<timestamp>_prompt-v2-vs-prompt-v3.js
 ```
 
 `save()` rolls the comparisons up with `build_report()` and stores the result on the run, so the dashboard never recomputes it. Pass a path to choose the file yourself; the default lands in the pairwise run store, where `eq dashboard` discovers it.
+
+From the project where you saved the run, launch the [dashboard](dashboard.md#install) with:
+
+```bash
+eq dashboard
+```
+
+With no path, this scans all three default stores: `.evaluatorq/runs` (red team), `.evaluatorq/sim-runs` (simulation), and `.evaluatorq/pairwise-runs` (pairwise). Open the local URL printed by the command.
 
 `label_a` and `label_b` name the two systems being compared. They default to `"A"` and `"B"`, but nothing in the judging data records what was in each slot, so a reader of the dashboard cannot tell what "A won" means. Set them.
 

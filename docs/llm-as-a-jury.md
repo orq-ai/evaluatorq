@@ -1,6 +1,6 @@
 # LLM as a Jury
 
-A single judge model is a single point of failure. It can be noisy from one call to the next, and it can be biased toward outputs from its own provider family. The jury (or panel of judges) replaces that one judge with several, runs them together, aggregates their verdicts into one decision, and reports how much they agreed.
+A **jury** is a panel of judge models that runs together, aggregates its verdicts into one decision, and reports how much the judges agreed. A single judge can be noisy from one call to the next or biased toward outputs from its own provider family; a jury spreads that decision across several models.
 
 You can use a jury two ways: as a general evaluator in `evaluatorq()` through `llm_jury()`, or inside red teaming through `EvaluatorConfig`. Both share the same panel machinery.
 

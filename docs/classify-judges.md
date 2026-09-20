@@ -77,14 +77,26 @@ The classifier's vote has the same public shape as any other jury vote. evaluato
 
 Each successful classify repetition keeps its complete validated answer in `JuryRepetition.raw_output`, including provider-added fields. Fields the provider did not report are omitted; prompted judges have `raw_output=None`. These dictionaries survive in returned results and local saved result artifacts, separately for every repetition.
 
-Continue the `correctness` example above to score one answer and read the typed result. This scoring call needs an Orq client as described under [Configure a classify seat](#configure-a-classify-seat):
+This complete example scores one answer and reads the typed result. The default client needs `ORQ_API_KEY` because the classify endpoint is on the Orq router:
 
 ```python
 import asyncio
 
-from evaluatorq import DataPoint
+from evaluatorq import DataPoint, llm_jury
 from evaluatorq.contracts import JURY_RAW_OUTPUT_KEY, JuryResult
 from evaluatorq.types import ScorerParameter
+
+correctness = llm_jury(
+    name="correctness",
+    criteria="The answer is factually correct and directly answers the question.",
+    judges=["openai/gpt-5.6-luna", "typesafe/jev-latest"],
+    labels={
+        "correct": "every claim is accurate and relevant",
+        "incorrect": "at least one claim is wrong, unsupported, or irrelevant",
+    },
+    passing_labels=["correct"],
+    state_fields=["input.all_messages", "output.response", "input.expected_output"],
+)
 
 
 async def main() -> None:
