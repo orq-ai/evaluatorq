@@ -13,6 +13,7 @@ from loguru import logger
 from openai import RateLimitError
 from pydantic import ValidationError
 
+import evaluatorq
 from evaluatorq.common import judge as judge_mod
 from evaluatorq.common import llm_call
 from evaluatorq.common import model_catalogue
@@ -22,6 +23,10 @@ from evaluatorq.contracts import LLMCallConfig
 
 ORQ_URL = 'https://my.orq.ai/v3/router'
 JEV = 'typesafe/jev-latest'
+
+
+def test_classify_question_is_a_public_contract() -> None:
+    assert evaluatorq.ClassifyQuestion is ClassifyQuestion
 
 
 def _jev_entry() -> model_catalogue.ModelInfo:
@@ -175,28 +180,37 @@ async def test_choice_verdict_is_the_label_and_records_confidence(monkeypatch: p
     client = _client(
         _reply({
             'type': 'choice',
-            'choice': 'neutral',
-            'probabilities': {'neutral': 0.96, 'harmful': 0.04},
-            'confidence': 0.96,
+            'choice': 'frustrated',
+            'probabilities': {'frustrated': 0.86, 'neutral': 0.14},
+            'confidence': 0.86,
         })
     )
     question = ClassifyQuestion(
         kind='choice',
         instructions='Classify the tone.',
-        criteria={'neutral': 'plain', 'harmful': 'abusive'},
+        criteria={'frustrated': 'upset', 'neutral': 'plain'},
         state='the reply',
     )
 
     outcome = await _judge(client, question)
 
     assert outcome.payload is not None
-    assert outcome.payload.value == 'neutral'
-    assert 'confidence 0.96' in outcome.payload.explanation
+    assert outcome.payload.value == 'frustrated'
+    assert 'confidence 0.86' in outcome.payload.explanation
+    assert outcome.raw_output == {
+        'type': 'choice',
+        'noul': None,
+        'choice': 'frustrated',
+        'score': None,
+        'legend': None,
+        'probabilities': {'frustrated': 0.86, 'neutral': 0.14},
+        'confidence': 0.86,
+    }
     attrs = {k: v for entry in recorded for k, v in entry.items()}
-    assert attrs['judge.confidence'] == 0.96
-    assert '"neutral": 0.96' in attrs['judge.probabilities']
+    assert attrs['judge.confidence'] == 0.86
+    assert '"frustrated": 0.86' in attrs['judge.probabilities']
     body = client.post.await_args.kwargs['body']
-    assert body['questions']['verdict']['criteria'] == {'neutral': 'plain', 'harmful': 'abusive'}
+    assert body['questions']['verdict']['criteria'] == {'frustrated': 'upset', 'neutral': 'plain'}
 
 
 @pytest.mark.asyncio

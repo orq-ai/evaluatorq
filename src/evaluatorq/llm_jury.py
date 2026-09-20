@@ -411,6 +411,7 @@ def _outcome_to_prediction(outcome: JudgeOutcome) -> Prediction:
         value=payload.value,
         explanation=payload.explanation,
         token_usage=outcome.token_usage,
+        raw_output=outcome.raw_output,
     )
 
 

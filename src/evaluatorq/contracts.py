@@ -957,6 +957,7 @@ class JuryRepetition(BaseModel):
     explanation: str | None = Field(
         default=None, description="This pass's own reasoning; None when it produced no text"
     )
+    raw_output: dict[str, Any] | None = None
 
 
 class JuryVote(BaseModel):

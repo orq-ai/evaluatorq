@@ -644,6 +644,41 @@ async def test_a_vanilla_classify_panel_warns_about_no_unread_config_field(
 
 
 @pytest.mark.asyncio
+async def test_classify_detail_survives_in_the_serialized_jury_result() -> None:
+    client = MagicMock()
+    client.base_url = 'https://my.orq.ai/v3/router'
+    client.post = AsyncMock(
+        return_value={
+            'answers': {
+                'verdict': {
+                    'type': 'choice',
+                    'choice': 'frustrated',
+                    'probabilities': {'frustrated': 0.86, 'neutral': 0.14},
+                    'confidence': 0.86,
+                }
+            },
+            'usage': {'input_tokens': 10, 'output_tokens': 1},
+            'model': 'jev-latest',
+        }
+    )
+    evaluator = llm_jury(
+        name='x',
+        criteria='classify the tone',
+        labels=['frustrated', 'neutral'],
+        passing_labels=['frustrated'],
+        judges=[JEV],
+        client=client,
+    )
+
+    score = cast('Any', await evaluator['scorer'](_params()))
+
+    repetition = score.raw_output['jury']['votes'][0]['repetitions'][0]
+    assert repetition['raw_output']['choice'] == 'frustrated'
+    assert repetition['raw_output']['confidence'] == 0.86
+    assert repetition['raw_output']['probabilities'] == {'frustrated': 0.86, 'neutral': 0.14}
+
+
+@pytest.mark.asyncio
 async def test_a_catalogue_only_classify_model_is_seated_without_manual_registration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

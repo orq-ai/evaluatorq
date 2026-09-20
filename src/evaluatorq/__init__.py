@@ -30,6 +30,7 @@ try:  # noqa: RUF067
 except importlib.metadata.PackageNotFoundError:  # ponytail: source checkout, not installed
     __version__ = '0.0.0.dev0'
 
+from .common.judge import ClassifyQuestion
 from .contracts import AgentResponse
 from .deployment import (
     DeploymentResponse,
@@ -90,6 +91,7 @@ __all__ = [
     # Types
     'BTFit',
     'BTSigmaAggregation',
+    'ClassifyQuestion',
     'DataPoint',
     'DataPointDict',
     'DataPointInput',

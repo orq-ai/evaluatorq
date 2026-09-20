@@ -64,6 +64,16 @@ async def test_repetitions_failed_zero_when_all_succeed() -> None:
 
 
 @pytest.mark.asyncio
+async def test_repetition_preserves_prediction_raw_output() -> None:
+    async def judge_fn(_model: str) -> Prediction:
+        return Prediction(value='frustrated', raw_output={'confidence': 0.86})
+
+    result = await run_jury(judge_fn=judge_fn, panel=['jev'])
+
+    assert result.jury.votes[0].repetitions[0].raw_output == {'confidence': 0.86}
+
+
+@pytest.mark.asyncio
 async def test_categorical_tie_uses_caller_tie_break() -> None:
     values = {'a': True, 'b': False}
 
