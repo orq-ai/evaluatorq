@@ -199,10 +199,7 @@ async def test_choice_verdict_is_the_label_and_records_confidence(monkeypatch: p
     assert 'confidence 0.86' in outcome.payload.explanation
     assert outcome.raw_output == {
         'type': 'choice',
-        'noul': None,
         'choice': 'frustrated',
-        'score': None,
-        'legend': None,
         'probabilities': {'frustrated': 0.86, 'neutral': 0.14},
         'confidence': 0.86,
     }
@@ -211,6 +208,21 @@ async def test_choice_verdict_is_the_label_and_records_confidence(monkeypatch: p
     assert '"frustrated": 0.86' in attrs['judge.probabilities']
     body = client.post.await_args.kwargs['body']
     assert body['questions']['verdict']['criteria'] == {'frustrated': 'upset', 'neutral': 'plain'}
+
+
+@pytest.mark.asyncio
+async def test_classify_raw_output_excludes_absent_answer_fields() -> None:
+    client = _client(_reply({'type': 'choice', 'choice': 'neutral'}))
+    question = ClassifyQuestion(
+        kind='choice',
+        instructions='Classify the tone.',
+        criteria={'neutral': 'plain', 'harmful': 'abusive'},
+        state='the reply',
+    )
+
+    outcome = await _judge(client, question)
+
+    assert outcome.raw_output == {'type': 'choice', 'choice': 'neutral'}
 
 
 @pytest.mark.asyncio

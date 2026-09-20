@@ -225,7 +225,10 @@ class JudgeOutcome(BaseModel):
     payload: EvaluatorResponsePayload | None = None
     token_usage: TokenUsage | None = None
     raw_content: str = ''
-    raw_output: dict[str, Any] | None = None
+    raw_output: dict[str, Any] | None = Field(
+        default=None,
+        description='Validated structured provider output for result reporting; classify success only.',
+    )
     error_kind: JudgeError | None = None
     error_message: str | None = None
     error_exc: Exception | None = None
@@ -735,11 +738,12 @@ async def _classify_judge(
             'judge.probabilities': json.dumps(answer.probabilities) if answer.probabilities is not None else None,
         },
     )
+    answer_output = answer.model_dump(mode='json', exclude_none=True)
     return JudgeOutcome(
         payload=EvaluatorResponsePayload(value=value, explanation=explanation, abstain=False),
         token_usage=usage,
-        raw_content=answer.model_dump_json(),
-        raw_output=answer.model_dump(mode='json'),
+        raw_content=json.dumps(answer_output),
+        raw_output=answer_output,
         endpoint='classify',
     )
 
