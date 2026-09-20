@@ -738,7 +738,7 @@ async def test_alias_without_a_served_model_stays_unpriced():
     assert priced.priced_calls == 0
 
 
-# --- classify models (RES-1600) -----------------------------------------------
+# --- classify models ----------------------------------------------------------
 
 
 def _jev_entry() -> dict[str, object]:
@@ -774,6 +774,18 @@ def test_parse_catalogue_leaves_supports_classify_false_without_the_flag():
         [{'model_id': 'plain', 'provider': 'openai', 'input_cost': 0.1, 'output_cost': 0.2}]
     )
     assert prices['plain'].supports_classify is False
+
+
+@pytest.mark.parametrize('flag', ['false', 'true', 0, 1, {}, {'enabled': True}])
+def test_parse_catalogue_does_not_treat_non_boolean_classify_metadata_as_support(flag: object):
+    entry = _jev_entry()
+    metadata = entry['metadata']
+    assert isinstance(metadata, dict)
+    metadata['supports_classify'] = flag
+
+    prices = pricing._parse_catalogue([entry])  # pyright: ignore[reportPrivateUsage]
+
+    assert prices['typesafe/jev-latest'].supports_classify is False
 
 
 def test_is_known_classify_model_matches_the_exact_id():

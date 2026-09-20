@@ -481,9 +481,10 @@ async def execute_classify(
 
     Usage is read off ``payload['usage']`` when the payload is a mapping; anything
     else — including a ``usage`` block present but unreadable — is a reply shape this
-    executor cannot price, and it warns and returns ``None`` while leaving **no**
-    ``gen_ai.usage.*`` attribute on the span. Zeros there read as a genuinely free
-    call, which is why this leg passes ``record_usage=False`` to
+    executor cannot price. It warns and returns a zero-token usage marker with one
+    unpriced call while leaving **no** ``gen_ai.usage.*`` attribute on the span. The
+    marker keeps aggregate cost coverage honest; zeros on the span would instead read
+    as a genuinely free call. This leg therefore passes ``record_usage=False`` to
     `record_llm_response` and records usage itself only when it parsed.
 
     **Retry.** None here. The single retry layer on this path is ``run_judge``'s
@@ -542,9 +543,12 @@ async def execute_classify(
     if usage is None:
         # Not recorded at all: a call with no readable usage is unpriced, and
         # `gen_ai.usage.*` zeros on the span would read as a genuinely free call.
-        logger.warning('Classify %s reply carried no usage block; the call stays unpriced and unrecorded', model)
-    else:
-        record_token_usage(span, usage=usage, calls=0)
+        logger.warning(
+            'Classify %s reply carried no readable usage block; the call stays unpriced and its span records no usage',
+            model,
+        )
+        return payload, TokenUsage(calls=1, priced_calls=0)
+    record_token_usage(span, usage=usage, calls=0)
     served = payload.get('model') if isinstance(payload, dict) else None
     # Priced by the router; price_usage is a no-op unless it came back unpriced.
     return payload, await price_usage(usage, model, client, served_model=served)

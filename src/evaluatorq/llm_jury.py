@@ -20,8 +20,8 @@ from evaluatorq.common.jury import (
     run_jury,
     validate_aggregator,
 )
-from evaluatorq.common.llm_client import resolve_llm_client
-from evaluatorq.common.model_catalogue import is_known_classify_model
+from evaluatorq.common.llm_client import client_routes_through_orq, resolve_llm_client
+from evaluatorq.common.model_catalogue import is_known_classify_model, supports_classify
 from evaluatorq.common.output_adapters import (
     inputs_to_messages,
     output_error_text,
@@ -36,6 +36,8 @@ from evaluatorq.types import DataPoint, EvaluationResult, Evaluator, Output, Sco
 
 DEFAULT_JUDGE_MODEL = DEFAULT_PIPELINE_MODEL
 """Judge model when the caller names neither ``model=`` nor ``judges=``."""
+
+DEFAULT_JURY_MAX_TOKENS = 8000
 
 PAIRWISE_LABELS = ['A', 'B', 'tie']
 PAIRWISE_CLASSIFY_CRITERIA = {
@@ -67,7 +69,8 @@ def _levels_description(levels: list[str] | None, score_range: tuple[float, floa
     if not levels:
         return None
     lo, hi = score_range
-    joined = '; '.join(f'{index}={level}' for index, level in enumerate(levels))
+    step = (hi - lo) / (len(levels) - 1)
+    joined = '; '.join(f'{lo + index * step}={level}' for index, level in enumerate(levels))
     return f'Scale from {lo} to {hi}. Levels: {joined}'
 
 
@@ -186,9 +189,7 @@ DEFAULT_TEMPLATE = (
 )
 
 
-def _build_classify_state(
-    *, paths: list[str], replacements: dict[str, Any], empty_warned: list[bool]
-) -> dict[str, Any]:
+def _build_classify_state(*, paths: list[str], replacements: dict[str, Any]) -> dict[str, Any]:
     """Collect the material a classify judge is handed instead of a rendered prompt.
 
     ``paths`` is resolved once at construction — the caller's ``state_fields`` when it
@@ -201,20 +202,14 @@ def _build_classify_state(
     ``criteria`` is always left out: a classify question carries it as ``instructions``,
     and repeating it inside the material to judge would ask the model to classify its own
     rubric. A path with no value in ``replacements`` is skipped with a debug log rather
-    than sent as null, and an empty result warns — including when the caller passed an
-    explicit ``state_fields=[]``, because the fact that matters is the same either way:
-    the classify judge sees the criteria and no material to judge. Only called for a panel
-    that seats a classify judge, so the warning describes a judge that really is about to
-    be asked.
+    than sent as null. `_run_single_judge` warns about an empty result only after the
+    catalogue confirms that this model really uses the classify endpoint.
 
     Values are resolved nested-first (``prefer_nested=True``): the state is serialised as
     JSON, so the live list behind ``input.all_messages`` is what Jev should read, not the
     ``json.dumps`` string the same path carries flat for prompt interpolation. A path that
     exists only flat still resolves.
 
-    ``empty_warned`` is a one-element mutable flag owned by the evaluator, not by this
-    call: the state is rebuilt per datapoint, so a per-call warning would repeat the same
-    sentence once per row of the dataset.
     """
     requested = [path for path in paths if path != 'criteria']
     state: dict[str, Any] = {}
@@ -224,15 +219,26 @@ def _build_classify_state(
             logger.debug('classify state: no value for template path {!r}, skipping it', path)
             continue
         state[path] = value
-    if not state and not empty_warned[0]:
-        empty_warned[0] = True
-        logger.warning(
-            'classify state is empty: none of {} resolved against the available values, so the classify '
-            'judge sees the criteria and no material to judge. Name the paths that do resolve with '
-            'state_fields=[...], or add the placeholders to the prompt template.',
-            requested,
-        )
     return state
+
+
+def _warn_classify_repetitions(repetitions: int, *, pairwise: bool) -> None:
+    """Name deterministic duplicate calls while preserving pairwise swap semantics."""
+    if repetitions <= 1:
+        return
+    if pairwise:
+        logger.warning(
+            'repetitions={} on a pairwise panel seating a classify judge: each A/B ordering is '
+            'deterministic, so repetitions bill extra calls for identical answers; `swap` still '
+            'runs the two distinct orderings as intended',
+            repetitions,
+        )
+        return
+    logger.warning(
+        'repetitions={} on a panel seating a classify judge: a classify verdict is '
+        'deterministic, so the extra calls are billed for identical answers',
+        repetitions,
+    )
 
 
 def _build_classify_question(
@@ -246,9 +252,9 @@ def _build_classify_question(
 ) -> ClassifyQuestion | None:
     """Build the question a classify judge answers, or ``None`` when the panel cannot pose one.
 
-    Built only for a panel `is_known_classify_model` recognises a judge on, and
-    handed to every judge on it; `run_judge` ignores it for a model it judges by
-    prompt.
+    Built whenever the panel fields can express one. The fetched catalogue can reveal
+    a classify model only after construction, so every judge receives the candidate
+    question and `run_judge` ignores it for models it judges by prompt.
 
     ``None`` means the configuration cannot express a classify question — no
     ``criteria`` to ask, or a numeric panel with no ``levels`` to score against. A
@@ -267,6 +273,37 @@ def _build_classify_question(
     return ClassifyQuestion(kind='noul', instructions=criteria, state=state, noul_threshold=threshold)
 
 
+def _validate_classify_configuration(
+    *,
+    criteria: str | None,
+    verdict_kind: str,
+    levels: list[str] | None,
+    score_range: tuple[float, float],
+    label_names: list[str] | None,
+    threshold: float,
+) -> None:
+    """Reject panel settings that a runtime classify seat cannot honour."""
+    if not criteria:
+        raise ValueError(
+            'A classify judge needs `criteria` to ask about; `prompt` alone does not build a classify question.'
+        )
+    if verdict_kind == 'numeric' and not levels:
+        raise ValueError(
+            'A classify judge scoring numerically needs `levels`: 2-10 ordered level '
+            'descriptions the score is a weighted mean over.'
+        )
+    if verdict_kind == 'numeric' and tuple(score_range) != (0.0, 1.0):
+        raise ValueError(
+            f'A classify judge returns a score scaled into (0.0, 1.0), so score_range '
+            f'{score_range} cannot be honoured. Drop the override or drop the classify judge.'
+        )
+    if verdict_kind == 'categorical' and not label_names and not 0.0 <= threshold <= 1.0:
+        raise ValueError(
+            f'A classify judge compares `threshold` against a probability, so threshold '
+            f'({threshold}) must lie in [0.0, 1.0].'
+        )
+
+
 def _warn_classify_ignored_settings(
     *,
     all_judges: list[str],
@@ -275,24 +312,25 @@ def _warn_classify_ignored_settings(
     prompt: str | None,
     temperature: float | None,
     structured_output: bool,
+    max_tokens: int,
     reasoning_effort: str | None,
     extra_kwargs: dict[str, Any] | None,
     extra_body: dict[str, Any] | None,
 ) -> None:
-    """Warn once, at construction, about the settings a classify judge cannot read.
+    """Warn once when a classify seat is known about settings it cannot read.
 
     ``system_prompt``/``prompt``/``temperature``/``structured_output`` are `llm_jury`
     keywords rather than `LLMCallConfig` fields, so the per-call
-    `warn_unread_config_fields` inside `run_judge` never sees them. The other three are
-    config fields, but `_run_single_judge` keeps them off the config it builds for a
+    `warn_unread_config_fields` inside `run_judge` never sees them. The other four
+    configure the call; `_run_single_judge` keeps them off the config it builds for a
     classify judge, so nothing downstream reports them either. Without this line all
-    seven would be dropped in silence. Only the ones actually set are named, so a panel
-    that set none of them says nothing.
+    eight would be dropped in silence. Only values detectably different from their
+    defaults are named, so a panel using the defaults says nothing.
 
     ``all_judges`` is the whole panel, replacements included, so the warning can say
-    whether anything still reads the ignored settings. On a mixed panel every prompted
-    judge does, and the line says so; on a panel of nothing but classify judges the
-    settings reach no one at all, and it does not claim otherwise.
+    whether another seat may still read the ignored settings. Catalogue-only classify
+    models are not known synchronously, so that qualification deliberately says "any"
+    prompted judges instead of claiming an unresolved seat is prompted.
     """
     ignored = [
         name
@@ -301,6 +339,7 @@ def _warn_classify_ignored_settings(
             ('prompt', prompt is not None),
             ('temperature', temperature is not None),
             ('structured_output', structured_output is False),
+            ('max_tokens', max_tokens != DEFAULT_JURY_MAX_TOKENS),
             ('reasoning_effort', reasoning_effort is not None),
             ('extra_kwargs', bool(extra_kwargs)),
             ('extra_body', bool(extra_body)),
@@ -309,10 +348,11 @@ def _warn_classify_ignored_settings(
     ]
     if not ignored:
         return
-    prompted = [judge for judge in all_judges if not is_known_classify_model(judge)]
-    still_apply = ' (they still apply to the prompted judges)' if prompted else ''
+    runtime_classify = set(classify_judges)
+    prompted = [judge for judge in all_judges if judge not in runtime_classify and not is_known_classify_model(judge)]
+    still_apply = ' (they still apply to any prompted judges)' if prompted else ''
     logger.warning(
-        'Panel seats a classify judge ({}); it is not prompted, so {} do not reach it{}.',
+        'Panel seats a classify judge ({}); it is not prompted, so these settings do not reach it: {}{}.',
         ', '.join(classify_judges),
         ', '.join(ignored),
         still_apply,
@@ -387,6 +427,9 @@ async def _run_single_judge(
     extra_body: dict[str, Any] | None = None,
     reasoning_effort: str | None = None,
     classify: ClassifyQuestion | None = None,
+    classify_state_paths: list[str] | None = None,
+    classify_empty_warned: list[bool] | None = None,
+    on_classify: typing.Callable[[str], None] | None = None,
 ) -> Prediction:
     """Run one judge call and map its outcome to a `Prediction`.
 
@@ -395,20 +438,37 @@ async def _run_single_judge(
     and the ``classify`` question differ between them, so keeping one path
     stops the two from drifting.
 
-    ``classify`` is the panel's question, built only when the panel seats a
-    classify judge and then passed for every judge on it; `run_judge` reads it
-    only for a model that serves the router's ``/classify`` endpoint and ignores
-    it for every prompted judge. It is ``None`` on a panel of prompted judges.
+    ``classify`` is a candidate question built whenever the panel fields can express
+    one. The fetched catalogue is the runtime authority: `run_judge` reads the question
+    only for a model that serves the router's ``/classify`` endpoint and ignores it for
+    every prompted judge.
 
     A judge that will be served by ``/classify`` gets a config carrying only the two
     fields that leg reads. Passing the prompted judges' sampling settings would mark
     them as explicitly set on a config nothing reads them from, and `run_judge`'s
     `warn_unread_config_fields` guard would then warn about settings the caller never
     chose — on every datapoint. The prompted judges on the same panel keep the full
-    config; what those settings do and do not reach is said once at construction by
-    `_warn_classify_ignored_settings`.
+    config; what those settings do and do not reach is said once by
+    `_warn_classify_ignored_settings`, at construction for known ids or on the first
+    call for a model discovered through the fetched catalogue.
     """
-    if classify is not None and is_known_classify_model(model):
+    runtime_classify = client_routes_through_orq(client) and await supports_classify(model, client)
+    if runtime_classify:
+        if on_classify is not None:
+            on_classify(model)
+        if (
+            classify is not None
+            and not classify.state
+            and classify_empty_warned is not None
+            and not classify_empty_warned[0]
+        ):
+            classify_empty_warned[0] = True
+            logger.warning(
+                'classify state is empty: none of {} resolved against the available values, so the classify '
+                'judge sees the criteria and no material to judge. Name the paths that do resolve with '
+                'state_fields=[...], or add the placeholders to the prompt template.',
+                [path for path in (classify_state_paths or []) if path != 'criteria'],
+            )
         cfg = LLMCallConfig(model=model, timeout_ms=timeout_ms)
     else:
         # api='responses': the priced endpoint on the Orq router, so a jury verdict
@@ -436,7 +496,7 @@ async def _run_single_judge(
         # Cross-domain purpose tag (same key redteam/simulation use) so the
         # platform can query every judge call in a run, not just walk the tree.
         span_attributes={'orq.llm.purpose': 'judge'},
-        classify=classify,
+        classify=classify if runtime_classify else None,
     )
     return _outcome_to_prediction(outcome=outcome)
 
@@ -661,7 +721,7 @@ def llm_jury(
     tie_break: TieBreak | None = None,
     structured_output: bool = True,
     temperature: float | None = None,
-    max_tokens: int = 8000,
+    max_tokens: int = DEFAULT_JURY_MAX_TOKENS,
     timeout_ms: int = 90000,
     extra_kwargs: dict[str, Any] | None = None,
     extra_body: dict[str, Any] | None = None,
@@ -886,35 +946,15 @@ def llm_jury(
     classify_judges = [judge for judge in panel + (replacement_judges or []) if is_known_classify_model(judge)]
     classify_seated = bool(classify_judges)
     if classify_seated:
-        if not criteria:
-            raise ValueError(
-                'A classify judge is not prompted, so it needs `criteria` to ask about; '
-                '`prompt` alone reaches it as nothing.'
-            )
-        if verdict_kind == 'numeric' and not levels:
-            raise ValueError(
-                'A classify judge scoring numerically needs `levels`: 2-10 ordered level '
-                'descriptions the score is a weighted mean over.'
-            )
-        if verdict_kind == 'numeric' and tuple(score_range) != (0.0, 1.0):
-            raise ValueError(
-                f'A classify judge returns a score scaled into (0.0, 1.0), so score_range '
-                f'{score_range} cannot be honoured. Drop the override or drop the classify judge.'
-            )
-        if verdict_kind == 'categorical' and not label_names and not 0.0 <= threshold <= 1.0:
-            # Boolean mode: the classify judge answers with a probability, and
-            # `threshold` is compared against it, so anything outside [0, 1] makes
-            # every verdict fall the same way.
-            raise ValueError(
-                f'A classify judge compares `threshold` against a probability, so threshold '
-                f'({threshold}) must lie in [0.0, 1.0].'
-            )
-        if repetitions > 1:
-            logger.warning(
-                'repetitions={} on a panel seating a classify judge: a classify verdict is '
-                'deterministic, so the extra calls are billed for identical answers',
-                repetitions,
-            )
+        _validate_classify_configuration(
+            criteria=criteria,
+            verdict_kind=verdict_kind,
+            levels=levels,
+            score_range=score_range,
+            label_names=label_names,
+            threshold=threshold,
+        )
+        _warn_classify_repetitions(repetitions, pairwise=False)
         _warn_classify_ignored_settings(
             all_judges=panel + (replacement_judges or []),
             classify_judges=classify_judges,
@@ -922,6 +962,7 @@ def llm_jury(
             prompt=prompt,
             temperature=temperature,
             structured_output=structured_output,
+            max_tokens=max_tokens,
             reasoning_effort=reasoning_effort,
             extra_kwargs=extra_kwargs,
             extra_body=extra_body,
@@ -960,14 +1001,42 @@ def llm_jury(
     template = prompt if prompt is not None else DEFAULT_TEMPLATE
     # Resolved once, here, rather than per datapoint: `extract_template_paths` warns
     # about every placeholder it rejects, and deriving the paths inside the scorer
-    # would repeat those warnings for every row. Skipped entirely when no classify
-    # judge is seated, so a prompted panel never pays for paths nobody reads.
+    # would repeat those warnings for every row. This candidate state is also prepared
+    # for models discovered through the fetched catalogue after construction.
     classify_state_paths = (
-        (state_fields if state_fields is not None else extract_template_paths(template)) if classify_seated else []
+        (state_fields if state_fields is not None else extract_template_paths(template)) if criteria else []
     )
     # One flag per evaluator, not per datapoint: the state is rebuilt for every row, and
     # an empty one is a property of the panel's configuration, so it is worth one line.
     classify_empty_warned = [False]
+    runtime_classify_warned = set(classify_judges)
+
+    def _warn_runtime_classify(model: str) -> None:
+        _validate_classify_configuration(
+            criteria=criteria,
+            verdict_kind=verdict_kind,
+            levels=levels,
+            score_range=score_range,
+            label_names=label_names,
+            threshold=threshold,
+        )
+        if model in runtime_classify_warned:
+            return
+        runtime_classify_warned.add(model)
+        _warn_classify_repetitions(repetitions, pairwise=False)
+        _warn_classify_ignored_settings(
+            all_judges=panel + (replacement_judges or []),
+            classify_judges=[model],
+            system_prompt=system_prompt,
+            prompt=prompt,
+            temperature=temperature,
+            structured_output=structured_output,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
+            extra_kwargs=extra_kwargs,
+            extra_body=extra_body,
+        )
+
     sys_prompt = (
         system_prompt
         if system_prompt is not None
@@ -1000,21 +1069,16 @@ def llm_jury(
         if resolved_client is None:
             resolved_client = resolve_llm_client(config_client=None, max_retries=0).client
         replacements = _build_replacements(data=data, output=output, criteria=criteria or '')
-        question = (
-            _build_classify_question(
-                verdict_kind=verdict_kind,
-                criteria=criteria,
-                label_descriptions=label_descriptions,
-                levels=levels,
-                threshold=threshold,
-                state=_build_classify_state(
-                    paths=classify_state_paths,
-                    replacements=replacements,
-                    empty_warned=classify_empty_warned,
-                ),
-            )
-            if classify_seated
-            else None
+        question = _build_classify_question(
+            verdict_kind=verdict_kind,
+            criteria=criteria,
+            label_descriptions=label_descriptions,
+            levels=levels,
+            threshold=threshold,
+            state=_build_classify_state(
+                paths=classify_state_paths,
+                replacements=replacements,
+            ),
         )
 
         async def judge_fn(judge_model: str) -> Prediction:
@@ -1033,6 +1097,9 @@ def llm_jury(
                 extra_body=extra_body,
                 reasoning_effort=reasoning_effort,
                 classify=question,
+                classify_state_paths=classify_state_paths,
+                classify_empty_warned=classify_empty_warned,
+                on_classify=_warn_runtime_classify,
             )
 
         if assignment == 'cyclic':
@@ -1131,7 +1198,7 @@ class PairwiseComparator:
         panel: list[str],
         criteria: str,
         template: str | None = None,
-        system_prompt: str,
+        system_prompt: str | None,
         swap: bool,
         repetitions: int,
         assignment: Literal['all', 'cyclic'] = 'all',
@@ -1151,7 +1218,7 @@ class PairwiseComparator:
     ) -> None:
         self._panel = panel
         self._criteria = criteria
-        self._system_prompt = system_prompt
+        self._system_prompt = system_prompt if system_prompt is not None else _pairwise_system_prompt()
         self._swap = swap
         self._repetitions = repetitions
         self._assignment = assignment
@@ -1168,8 +1235,9 @@ class PairwiseComparator:
         self._extra_body = extra_body
         self._reasoning_effort = reasoning_effort
         self._client = client
+        direct_construction = classify_seated is None
         # ``None`` derives it here, which is what a comparator built by hand wants;
-        # `llm_jury_pairwise` passes the flag it already computed for its own warning.
+        # `llm_jury_pairwise` passes the flag it already computed for early validation.
         self._classify_seated = (
             classify_seated
             if classify_seated is not None
@@ -1184,17 +1252,45 @@ class PairwiseComparator:
             verdict_kind='categorical', labels=PAIRWISE_LABELS, score_range=(0.0, 1.0)
         )
         self._template = template if template is not None else DEFAULT_PAIRWISE_TEMPLATE
-        # Resolved once, here, for the same reason `llm_jury` does it at construction:
-        # `extract_template_paths` warns about the placeholders it rejects, and deriving
-        # the paths inside `compare` would repeat those warnings for every pair.
+        # A fetched catalogue entry can reveal a classify model only after construction.
+        # Prepare the paths now so that model can receive a question without requiring
+        # a redundant register_model call. Prompted judges ignore the question.
         self._classify_state_paths = (
-            (state_fields if state_fields is not None else extract_template_paths(self._template))
-            if self._classify_seated
-            else []
+            state_fields if state_fields is not None else extract_template_paths(self._template)
         )
         # One flag per comparator, not per pair: an empty state is a property of the
         # panel's configuration, so it is worth one line however many pairs are compared.
         self._classify_empty_warned = [False]
+        self._classify_warned = {
+            judge
+            for judge in panel + (replacement_judges or [])
+            if is_known_classify_model(judge) and not direct_construction
+        }
+        self._system_prompt_was_set = system_prompt is not None
+        self._prompt_was_set = template is not None
+        if direct_construction:
+            for judge in panel + (replacement_judges or []):
+                if is_known_classify_model(judge):
+                    self._warn_runtime_classify(judge)
+
+    def _warn_runtime_classify(self, model: str) -> None:
+        """Warn once when the authoritative catalogue reveals a classify seat."""
+        if model in self._classify_warned:
+            return
+        self._classify_warned.add(model)
+        _warn_classify_repetitions(self._repetitions, pairwise=True)
+        _warn_classify_ignored_settings(
+            all_judges=self._panel + (self._replacement_judges or []),
+            classify_judges=[model],
+            system_prompt=self._system_prompt if self._system_prompt_was_set else None,
+            prompt=self._template if self._prompt_was_set else None,
+            temperature=self._temperature,
+            structured_output=self._structured_output,
+            max_tokens=self._max_tokens,
+            reasoning_effort=self._reasoning_effort,
+            extra_kwargs=self._extra_kwargs,
+            extra_body=self._extra_body,
+        )
 
     def _current_semaphore(self) -> asyncio.Semaphore | None:
         """The shared concurrency budget, bound to the running event loop.
@@ -1233,19 +1329,14 @@ class PairwiseComparator:
             replacements: dict[str, Any] = {'question': question, 'criteria': self._criteria}
             replacements.update(_side_to_namespace('response_a', first))
             replacements.update(_side_to_namespace('response_b', second))
-            classify_question = (
-                ClassifyQuestion(
-                    kind='choice',
-                    instructions=self._criteria,
-                    criteria=dict(PAIRWISE_CLASSIFY_CRITERIA),
-                    state=_build_classify_state(
-                        paths=self._classify_state_paths,
-                        replacements=replacements,
-                        empty_warned=self._classify_empty_warned,
-                    ),
-                )
-                if self._classify_seated
-                else None
+            classify_question = ClassifyQuestion(
+                kind='choice',
+                instructions=self._criteria,
+                criteria=dict(PAIRWISE_CLASSIFY_CRITERIA),
+                state=_build_classify_state(
+                    paths=self._classify_state_paths,
+                    replacements=replacements,
+                ),
             )
             return await _run_single_judge(
                 client=self._client,
@@ -1262,6 +1353,9 @@ class PairwiseComparator:
                 extra_body=self._extra_body,
                 reasoning_effort=self._reasoning_effort,
                 classify=classify_question,
+                classify_state_paths=self._classify_state_paths,
+                classify_empty_warned=self._classify_empty_warned,
+                on_classify=self._warn_runtime_classify,
             )
 
         # CyclicJudge: one judge per comparison, cycling through the panel.
@@ -1294,7 +1388,7 @@ def llm_jury_pairwise(
     assignment: Literal['all', 'cyclic'] = 'all',
     replacement_judges: list[str] | None = None,
     min_successful_judges: int = 1,
-    max_tokens: int = 8000,
+    max_tokens: int = DEFAULT_JURY_MAX_TOKENS,
     timeout_ms: int = 90000,
     temperature: float | None = None,
     structured_output: bool = True,
@@ -1369,6 +1463,7 @@ def llm_jury_pairwise(
     # catalogue per call and decides which endpoint serves each judge.
     classify_judges = [judge for judge in deduped + (replacement_judges or []) if is_known_classify_model(judge)]
     if classify_judges:
+        _warn_classify_repetitions(repetitions, pairwise=True)
         _warn_classify_ignored_settings(
             all_judges=deduped + (replacement_judges or []),
             classify_judges=classify_judges,
@@ -1376,6 +1471,7 @@ def llm_jury_pairwise(
             prompt=prompt,
             temperature=temperature,
             structured_output=structured_output,
+            max_tokens=max_tokens,
             reasoning_effort=reasoning_effort,
             extra_kwargs=extra_kwargs,
             extra_body=extra_body,
@@ -1388,7 +1484,7 @@ def llm_jury_pairwise(
         panel=deduped,
         criteria=resolved_criteria,
         template=prompt,  # None -> DEFAULT_PAIRWISE_TEMPLATE
-        system_prompt=system_prompt if system_prompt is not None else _pairwise_system_prompt(),
+        system_prompt=system_prompt,
         swap=swap,
         repetitions=repetitions,
         assignment=assignment,

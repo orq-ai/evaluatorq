@@ -1,4 +1,4 @@
-"""A classify model is judged on the Orq router's /classify endpoint (RES-1600)."""
+"""A classify model is judged on the Orq router's /classify endpoint."""
 
 from __future__ import annotations
 
@@ -98,6 +98,12 @@ def _noul_question(threshold: float = 0.5) -> ClassifyQuestion:
     )
 
 
+@pytest.mark.parametrize('threshold', [-0.1, 1.1, float('nan'), float('inf')])
+def test_noul_question_rejects_an_invalid_probability_threshold(threshold: float) -> None:
+    with pytest.raises(ValidationError):
+        _noul_question(threshold)
+
+
 @pytest.mark.asyncio
 async def test_noul_above_threshold_is_a_true_verdict():
     client = _client(_reply({'type': 'noul', 'noul': 0.92}))
@@ -109,7 +115,7 @@ async def test_noul_above_threshold_is_a_true_verdict():
     assert outcome.payload is not None
     assert outcome.payload.value is True
     assert outcome.payload.abstain is False
-    assert 'noul=0.92' in outcome.payload.explanation
+    assert outcome.payload.explanation == 'noul=0.92 (threshold 0.5)'
     path, kwargs = client.post.await_args.args, client.post.await_args.kwargs
     assert path == ('/classify',)
     assert kwargs['body']['model'] == JEV
@@ -128,6 +134,38 @@ async def test_noul_below_threshold_is_a_false_verdict():
 
     assert outcome.payload is not None
     assert outcome.payload.value is False
+
+
+@pytest.mark.parametrize(
+    ('noul', 'rendered'),
+    [
+        pytest.param(0.499, '0.499', id='three-decimals'),
+        pytest.param(0.499999999, '0.499999999', id='nine-decimals'),
+    ],
+)
+@pytest.mark.asyncio
+async def test_noul_explanation_keeps_enough_precision_to_show_which_side_of_threshold_won(
+    noul: float,
+    rendered: str,
+):
+    client = _client(_reply({'type': 'noul', 'noul': noul}))
+
+    outcome = await _judge(client, _noul_question())
+
+    assert outcome.payload is not None
+    assert outcome.payload.value is False
+    assert outcome.payload.explanation == f'noul={rendered} (threshold 0.5)'
+
+
+@pytest.mark.asyncio
+async def test_noul_explanation_formats_a_close_custom_threshold_at_matching_precision() -> None:
+    client = _client(_reply({'type': 'noul', 'noul': 0.50000005}))
+
+    outcome = await _judge(client, _noul_question(0.5000001))
+
+    assert outcome.payload is not None
+    assert outcome.payload.value is False
+    assert outcome.payload.explanation == 'noul=0.50000005 (threshold 0.5000001)'
 
 
 @pytest.mark.asyncio
@@ -224,6 +262,23 @@ async def test_score_verdict_maps_onto_the_unit_interval():
     assert outcome.payload is not None
     assert outcome.payload.value == pytest.approx(0.575)
     assert outcome.payload.explanation == 'score=2.30/4 → 0.57 (confidence 0.81)'
+
+
+@pytest.mark.asyncio
+async def test_score_explanation_keeps_precision_near_the_halfway_boundary():
+    client = _client(_reply({'type': 'score', 'score': 1.999}))
+    question = ClassifyQuestion(
+        kind='score',
+        instructions='Rate the helpfulness.',
+        criteria=['useless', 'poor', 'fair', 'good', 'excellent'],
+        state='the reply',
+    )
+
+    outcome = await _judge(client, question)
+
+    assert outcome.payload is not None
+    assert outcome.payload.value == pytest.approx(0.49975)
+    assert outcome.payload.explanation == 'score=1.999/4 → 0.4998'
 
 
 @pytest.mark.asyncio
@@ -371,6 +426,58 @@ async def test_a_probability_outside_the_unit_interval_is_a_parse_error():
     assert '1.5' in outcome.raw_content
 
 
+@pytest.mark.parametrize(
+    ('question', 'answer'),
+    [
+        pytest.param(_noul_question(), {'type': 'noul', 'noul': True}, id='noul-boolean'),
+        pytest.param(_noul_question(), {'type': 'noul', 'noul': '0.9'}, id='noul-numeric-string'),
+        pytest.param(
+            ClassifyQuestion(kind='score', instructions='rate it', criteria=['bad', 'ok', 'good'], state='x'),
+            {'type': 'score', 'score': True},
+            id='score-boolean',
+        ),
+        pytest.param(
+            ClassifyQuestion(kind='score', instructions='rate it', criteria=['bad', 'ok', 'good'], state='x'),
+            {'type': 'score', 'score': '1.5'},
+            id='score-numeric-string',
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_non_numeric_wire_value_is_a_parse_error(question: ClassifyQuestion, answer: dict[str, Any]):
+    client = _client(_reply(answer))
+
+    outcome = await _judge(client, question)
+
+    assert outcome.error_kind is JudgeError.PARSE
+    assert outcome.payload is None
+
+
+@pytest.mark.parametrize(
+    'answer',
+    [
+        pytest.param({'type': 'choice', 'choice': 'A', 'confidence': '0.9'}, id='confidence-string'),
+        pytest.param({'type': 'choice', 'choice': 'A', 'confidence': 1.1}, id='confidence-out-of-range'),
+        pytest.param({'type': 'choice', 'choice': 'A', 'probabilities': {'A': '0.9'}}, id='probability-string'),
+        pytest.param({'type': 'choice', 'choice': 'A', 'probabilities': {'A': -0.1}}, id='probability-out-of-range'),
+    ],
+)
+@pytest.mark.asyncio
+async def test_invalid_distribution_metadata_is_a_parse_error(answer: dict[str, Any]):
+    question = ClassifyQuestion(
+        kind='choice',
+        instructions='pick one',
+        criteria={'A': 'first', 'B': 'second'},
+        state='x',
+    )
+    client = _client(_reply(answer))
+
+    outcome = await _judge(client, question)
+
+    assert outcome.error_kind is JudgeError.PARSE
+    assert outcome.payload is None
+
+
 @pytest.mark.asyncio
 async def test_a_score_off_the_level_scale_is_a_parse_error():
     question = ClassifyQuestion(
@@ -421,9 +528,12 @@ async def test_a_reply_without_usage_stays_unpriced_and_unrecorded(
         outcome = await _judge(client, _noul_question())
 
     assert outcome.error_kind is None
-    assert outcome.token_usage is None
+    assert outcome.token_usage is not None
+    assert outcome.token_usage.calls == 1
+    assert outcome.token_usage.priced_calls == 0
+    assert outcome.token_usage.total_cost is None
     assert recorded == []
-    assert 'no usage block' in caplog.text
+    assert 'no readable usage block' in caplog.text
     assert JEV in caplog.text
 
 
@@ -458,8 +568,11 @@ async def test_a_usage_block_that_does_not_parse_leaves_no_usage_attribute_on_th
             inject_trace_headers=False,
         )
 
-    assert usage is None, case
-    assert 'no usage block' in caplog.text
+    assert usage is not None, case
+    assert usage.calls == 1
+    assert usage.priced_calls == 0
+    assert usage.total_cost is None
+    assert 'no readable usage block' in caplog.text
     set_attrs = [call.args[0] for call in span.set_attribute.call_args_list]
     assert not [name for name in set_attrs if name.startswith('gen_ai.usage.')]
     # The rest of the response recording still happens — only usage is withheld.

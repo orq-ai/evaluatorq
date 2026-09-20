@@ -84,7 +84,7 @@ Both orderings run concurrently, so swapping does not add wall-clock latency, on
 
 ### Jev on a pairwise panel
 
-A classify judge — `typesafe/jev-latest` — takes a pairwise seat the same way it takes a pointwise one, described in full under [Jev as a judge](llm-as-a-jury.md#jev-as-a-judge). It is not prompted: it answers a three-option **choice** question, `A` / `B` / `tie`, whose question is your `criteria` and whose options carry fixed descriptions ("Response A is better", "Response B is better", "Neither is clearly better").
+`typesafe/jev-latest` can also sit on a pairwise panel. It receives a three-option **choice** question, `A` / `B` / `tie`, whose question is your `criteria` and whose options carry fixed descriptions ("Response A is better", "Response B is better", "Neither is clearly better"). See [Jev as a judge](llm-as-a-jury.md#jev-as-a-judge) for the full classify contract.
 
 ```python
 comparator = llm_jury_pairwise(
@@ -94,11 +94,13 @@ comparator = llm_jury_pairwise(
 )
 ```
 
-The material it compares is every placeholder the template renders except `criteria` itself — for the built-in template that is the question and both responses. `state_fields` narrows it to the paths you name, which is how you keep a long shared preamble out of a comparison that only turns on the two answers.
+The material it compares is every placeholder the template renders except `criteria` itself — for the built-in template that is the question and both responses. Use `state_fields` to exclude a shared preamble when only the answers matter.
 
-Position-bias swapping is unchanged. The question is rebuilt per ordering, so each call states which response sits in which seat, and the two verdicts reconcile exactly as a prompted judge's do.
+Each ordering rebuilds the question to identify the current A/B seats, then reconciles the verdicts exactly as a prompted judge does.
 
-A classify judge is not prompted, so `system_prompt`, `prompt`, `temperature` and `structured_output` never reach it. `llm_jury_pairwise()` names the ones you set in a single warning when it builds the comparator; on a mixed panel they still apply in full to the prompted judges.
+The literal `prompt` does not reach a classify judge, but its placeholders still select the default comparison state. `system_prompt`, `temperature`, `structured_output`, `max_tokens`, `reasoning_effort`, `extra_kwargs` and `extra_body` do not reach it. `llm_jury_pairwise()` names the non-default settings you set in one warning: when it builds the comparator for known classify ids, or on the first call for a model discovered through the fetched catalogue. They still apply to any prompted judges on the panel.
+
+Because classify verdicts are deterministic, `repetitions > 1` warns. Swapping still runs two distinct A/B orderings; repetitions duplicate each ordering and bill for identical answers.
 
 ## Reading a comparison
 

@@ -296,15 +296,24 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
         currencies = {str(entry.get('input_currency') or ''), str(entry.get('output_currency') or '')}
         if currencies - {'', 'usd'}:
             continue
+        metadata = _entry_metadata(entry)
+        classify_flag = metadata.get('supports_classify')
+        if classify_flag is not None and not isinstance(classify_flag, bool):
+            logger.warning(
+                'Model catalogue entry {}/{} has non-boolean supports_classify={!r}; treating it as unsupported',
+                provider,
+                model_id,
+                classify_flag,
+            )
         info = ModelInfo(
             input_cost_per_1k=float(inp),
             output_cost_per_1k=float(out),
             provider=provider,
             # `metadata` is provider-shaped and has arrived as a list; `.get` on a
             # non-mapping took the whole catalogue down rather than one model.
-            supports_responses=bool(_entry_metadata(entry).get('supports_responses_api')),
+            supports_responses=bool(metadata.get('supports_responses_api')),
             reasoning_efforts=_parse_reasoning_efforts(entry),
-            supports_classify=bool(_entry_metadata(entry).get('supports_classify')),
+            supports_classify=classify_flag is True,
         )
         models[f'{provider}/{model_id}'] = info
         existing = models.get(model_id)
@@ -452,10 +461,10 @@ def is_known_classify_model(model: str) -> bool:
     package's built-in list. `KNOWN_CLASSIFY_MODELS` answers when there is no
     override.
 
-    The residual gap: a model the *fetched* catalogue marks classify that the caller
-    neither registered nor this package lists reads as ``False`` here and ``True``
-    from `supports_classify`. Register it with `register_model(...,
-    ModelInfo(supports_classify=True))` to close it.
+    A model known only to the fetched catalogue reads as ``False`` here and ``True``
+    from `supports_classify`. Jury construction treats this function as an early hint
+    for validation and warnings; runtime routing still follows the catalogue, so no
+    registration is required for that model to work.
     """
     override = _overrides.get(_bare_id(model))
     if override is not None:

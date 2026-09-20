@@ -9,8 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from loguru import logger
 from openai import APIConnectionError, APIStatusError, APITimeoutError, BadRequestError
@@ -157,7 +156,7 @@ class ClassifyQuestion(BaseModel):
     instructions: str
     criteria: dict[str, str | None] | list[str] | None = None
     state: dict[str, Any] | str | list[Any]
-    noul_threshold: float = 0.5
+    noul_threshold: Annotated[float, Field(strict=True, ge=0.0, le=1.0, allow_inf_nan=False)] = 0.5
 
     @model_validator(mode='after')
     def _check_criteria_matches_kind(self) -> ClassifyQuestion:
@@ -185,13 +184,19 @@ class ClassifyAnswer(BaseModel):
     model_config = ConfigDict(extra='allow')
 
     type: str
-    noul: float | None = None
+    noul: Annotated[float, Field(strict=True, ge=0.0, le=1.0, allow_inf_nan=False)] | None = None
     choice: str | None = None
-    score: float | None = None
+    score: Annotated[float, Field(strict=True, allow_inf_nan=False)] | None = None
     # The live router keys the legend by level index (``{"0": "useless", ...}``), not a list.
     legend: dict[str, str] | list[str] | None = None
-    probabilities: dict[str, float] | None = None
-    confidence: float | None = None
+    probabilities: (
+        dict[
+            str,
+            Annotated[float, Field(strict=True, ge=0.0, le=1.0, allow_inf_nan=False)],
+        ]
+        | None
+    ) = None
+    confidence: Annotated[float, Field(strict=True, ge=0.0, le=1.0, allow_inf_nan=False)] | None = None
 
 
 class ClassifyResponse(BaseModel):
@@ -583,6 +588,27 @@ async def _json_object_judge(
     return EvaluatorResponsePayload.model_validate_json(cleaned), usage, raw
 
 
+def _boundary_precision(value: float, boundary: float, *, minimum: int = 2, maximum: int = 17) -> int:
+    """Decimal places that keep ``value`` visibly on its side of ``boundary``."""
+    if value == boundary:
+        return minimum
+    for places in range(minimum, maximum + 1):
+        if round(value, places) != round(boundary, places):
+            return places
+    return maximum
+
+
+def _format_classify_number(value: float, places: int) -> str:
+    """Fixed-point output, retaining the established two decimals away from a boundary."""
+    rendered = f'{value:.{places}f}'
+    return rendered.rstrip('0').rstrip('.') if places > 2 else rendered
+
+
+def _format_classify_boundary(value: float, places: int) -> str:
+    """Render a decision boundary precisely without padding its familiar short form."""
+    return f'{value:.{places}f}'.rstrip('0').rstrip('.')
+
+
 def _classify_verdict(question: ClassifyQuestion, answer: ClassifyAnswer) -> tuple[bool | float | str, str] | None:
     """Turn one classify answer into ``(value, explanation)``, or None when it is unreadable.
 
@@ -599,10 +625,12 @@ def _classify_verdict(question: ClassifyQuestion, answer: ClassifyAnswer) -> tup
     if answer.type != question.kind:
         return None
     if question.kind == 'noul':
-        if answer.noul is None or not math.isfinite(answer.noul) or not 0.0 <= answer.noul <= 1.0:
+        if answer.noul is None:
             return None
+        places = _boundary_precision(answer.noul, question.noul_threshold)
         return answer.noul >= question.noul_threshold, (
-            f'noul={answer.noul:.2f} (threshold {question.noul_threshold:g})'
+            f'noul={_format_classify_number(answer.noul, places)} '
+            f'(threshold {_format_classify_boundary(question.noul_threshold, places)})'
         )
     if question.kind == 'choice':
         if answer.choice is None or not isinstance(question.criteria, dict) or answer.choice not in question.criteria:
@@ -612,11 +640,15 @@ def _classify_verdict(question: ClassifyQuestion, answer: ClassifyAnswer) -> tup
     if answer.score is None or not isinstance(question.criteria, list):
         return None
     top = len(question.criteria) - 1
-    if not math.isfinite(answer.score) or not 0.0 <= answer.score <= top:
+    if not 0.0 <= answer.score <= top:
         return None
     value = min(1.0, max(0.0, answer.score / top))
+    places = _boundary_precision(value, 0.5)
     confidence = '' if answer.confidence is None else f' (confidence {answer.confidence:.2f})'
-    return value, f'score={answer.score:.2f}/{top} → {value:.2f}{confidence}'
+    return value, (
+        f'score={_format_classify_number(answer.score, places)}/{top} '
+        f'→ {_format_classify_number(value, places)}{confidence}'
+    )
 
 
 async def _classify_judge(
@@ -770,18 +802,16 @@ async def run_judge(
     use_classify = client_routes_through_orq(client) and await supports_classify(model, client)
     if use_classify and classify is None:
         logger.error(
-            'Judge [{}] is a classify model but the caller built no classify question for it; from `llm_jury`, '
-            'register the model with register_model(..., ModelInfo(supports_classify=True)) or use '
-            'typesafe/jev-latest',
+            'Judge [{}] is a classify model but the caller built no classify question for it; '
+            'from `llm_jury`, pass `criteria` and, for numeric verdicts, `levels`',
             model,
         )
         return JudgeOutcome(
             error_kind=JudgeError.UNKNOWN,
             error_message=(
-                f'{model} is a classify model but the caller passed no classify question. From llm_jury, that '
-                f'means the panel did not seat it as a classify judge: register the model with '
-                f'register_model(..., ModelInfo(supports_classify=True)) '
-                f'(evaluatorq.common.model_catalogue), or use typesafe/jev-latest'
+                f'{model} is a classify model but the caller passed no classify question. '
+                f'From llm_jury, pass `criteria` and, for numeric verdicts, `levels`; '
+                f'direct run_judge callers must pass `classify`.'
             ),
             endpoint=None,
         )
