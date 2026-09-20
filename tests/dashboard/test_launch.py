@@ -196,6 +196,8 @@ def test_eq_dashboard_accepts_multiple_paths(tmp_path: Path) -> None:
     assert b in roots
     assert a / '.evaluatorq' / 'runs' in roots
     assert b / '.evaluatorq' / 'sim-runs' in roots
+    assert a / 'pairwise-runs' in roots
+    assert b / '.evaluatorq' / 'pairwise-runs' in roots
 
 
 def test_eq_dashboard_rejects_nonexistent_path(tmp_path: Path) -> None:

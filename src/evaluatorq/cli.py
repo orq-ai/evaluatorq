@@ -129,8 +129,10 @@ def dashboard(
                     path,
                     path / 'runs',
                     path / 'sim-runs',
+                    path / 'pairwise-runs',
                     path / '.evaluatorq' / 'runs',
                     path / '.evaluatorq' / 'sim-runs',
+                    path / '.evaluatorq' / 'pairwise-runs',
                 ]
             elif path.is_file():
                 # Scan the parent so the report resolves, but surface the direct link.

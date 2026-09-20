@@ -64,7 +64,7 @@ from .pairwise import (
 from .ranking import BTFit, JudgedComparison, fit_bt
 from .types import (
     DataPoint,
-    DatapointComplete,
+    DataPointComplete,
     DataPointDict,
     DataPointInput,
     DataPointResult,
@@ -94,10 +94,10 @@ __all__ = [
     'BTSigmaAggregation',
     'ClassifyQuestion',
     'DataPoint',
+    'DataPointComplete',
     'DataPointDict',
     'DataPointInput',
     'DataPointResult',
-    'DatapointComplete',
     'DatasetIdInput',
     'DeploymentResponse',
     'EvaluationResult',

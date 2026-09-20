@@ -23,7 +23,7 @@ from .table_display import display_results_table
 from .tracing import capture_parent_context, tracing_session
 from .types import (
     DataPoint,
-    DatapointComplete,
+    DataPointComplete,
     DataPointInput,
     DataPointResult,
     DatasetIdInput,
@@ -45,7 +45,7 @@ class _StreamingEvaluationError(RuntimeError):
 
 
 async def _notify_datapoint_complete(
-    callback: DatapointComplete | None,
+    callback: DataPointComplete | None,
     results: list[DataPointResult],
 ) -> None:
     if callback is None:
@@ -142,7 +142,7 @@ async def evaluatorq(
     path: str | None = None,
     inference: bool = True,
     single_trace: bool = False,
-    on_datapoint_complete: DatapointComplete | None = None,
+    on_datapoint_complete: DataPointComplete | None = None,
     _send_results: bool = True,
     _base_url: str | None = None,
     _trace_type: str = 'evaluatorq',
