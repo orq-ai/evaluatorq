@@ -1,4 +1,4 @@
-"""Tabbed report bodies — both surfaces render Streamlit-aligned tabs, and
+"""Tabbed report bodies — both surfaces render tabbed bodies, and
 empty tabs (no data) drop out (RES-974)."""
 
 from __future__ import annotations

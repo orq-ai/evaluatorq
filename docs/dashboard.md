@@ -1,7 +1,7 @@
 # Dashboard
 
-!!! note "Primary UI — FastHTML `eq dashboard`"
-    The combined `eq dashboard` documented here is the primary way to browse saved runs. Its canonical invocation scans a run directory and opens the multi-run FastHTML UI — `eq dashboard` (no path) browses both default stores, and `eq dashboard .evaluatorq/sim-runs` scopes to simulation. Passing a single JSON report file is an optional direct deep-link to that report.
+!!! note "The UI — FastHTML `eq dashboard`"
+    The combined `eq dashboard` documented here is the only way to browse saved runs interactively. Its canonical invocation scans a run directory and opens the multi-run FastHTML UI — `eq dashboard` (no path) browses both default stores, and `eq dashboard .evaluatorq/sim-runs` scopes to simulation. Passing a single JSON report file is an optional direct deep-link to that report.
 
 evaluatorq ships a built-in web dashboard for browsing red team and simulation reports.  It is powered by **FastHTML** (a lightweight Python web framework) and served locally via **uvicorn**.  There is no external service dependency — everything runs on your machine.
 

@@ -7,9 +7,6 @@ Routes (all return HTML fragments, no full page shell):
 
 The row list is rendered inline in the report page body (not via HTMX) but
 each row carries an ``hx-get`` link to this transcript endpoint.
-
-Parity source: src/evaluatorq/simulation/ui/dashboard.py lines 316-390
-(``_render_transcripts``  / row-click drill-down).
 """
 
 from __future__ import annotations
@@ -33,7 +30,7 @@ if TYPE_CHECKING:
     from evaluatorq.simulation.types import SimulationEntry
 
 # ---------------------------------------------------------------------------
-# Role label mapping (parity: dashboard.py:385)
+# Role label mapping
 # ---------------------------------------------------------------------------
 
 _ROLE_LABELS: dict[str, str] = {
@@ -540,9 +537,8 @@ def render_transcript_fragment(
         error_html = f'<div class="sim-transcript-error"><strong>Error:</strong> {esc(str(error))}</div>'
         return f'<div class="sim-transcript-detail">{summary_html}{criteria_col}{error_html}</div>'
 
-    # Transcript (parity: dashboard.py:384-390). Normalise content via
-    # coerce_content_text (handles OpenAI content blocks) before handing off
-    # to the shared renderer. The '(empty)' fallback is sim-specific so we
+    # Transcript. Normalise content via coerce_content_text (handles OpenAI
+    # content blocks) before handing off to the shared renderer. The '(empty)' fallback is sim-specific so we
     # apply it here rather than inside render_message_list.
     transcript = entry.transcript or []
     normalised_msgs: list[dict[str, Any]] = []

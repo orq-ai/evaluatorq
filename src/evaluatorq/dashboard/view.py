@@ -1503,7 +1503,6 @@ def sim_interactive_panels(rid: str, entries: list[Any]) -> str:
     """Render the interactive sim panel section (conversation list).
 
     Embeds the sim row list with lazy drawer-trigger conversation rows.
-    Parity: Streamlit ``_render_transcripts`` (dashboard.py:316-390).
 
     The row-list itself is a static container: it is refreshed wholesale by
     the ``POST /r/{rid}/filter`` response body swap (see

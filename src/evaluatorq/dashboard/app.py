@@ -280,8 +280,8 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
             not_found_html = page('Not found', report_not_found(rid))
             return Response(not_found_html, status_code=404, media_type='text/html')
 
-        # Tabbed body for the known surfaces (Streamlit-aligned); the interactive
-        # panels live inside their tabs, so they are no longer appended separately.
+        # Tabbed body for the known surfaces; the interactive panels live inside
+        # their tabs, so they are no longer appended separately.
         if surface == 'sim':
             from evaluatorq.dashboard.view import sim_run_compare_control
 
