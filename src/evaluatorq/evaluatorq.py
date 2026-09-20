@@ -4,7 +4,6 @@ import os
 from collections.abc import Awaitable, Sequence
 from contextlib import AsyncExitStack
 from datetime import datetime, timezone
-from itertools import starmap
 from typing import Any, cast
 
 from loguru import logger
@@ -510,10 +509,22 @@ async def evaluatorq(
                         await _notify_datapoint_complete(on_datapoint_complete, result)
                         return result
 
-                tasks = list(starmap(process_with_semaphore, enumerate(data_promises)))
+                tasks = [
+                    asyncio.create_task(process_with_semaphore(index, data_promise))
+                    for index, data_promise in enumerate(data_promises)
+                ]
 
                 # Gather all results
-                results_nested = await asyncio.gather(*tasks)
+                try:
+                    results_nested = await asyncio.gather(*tasks)
+                except BaseException:
+                    # Keep this run's work inside its tracing/client contexts even
+                    # when a callback fails or the caller cancels the evaluation.
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    raise
 
                 # Flatten results
                 results: EvaluatorqResult = []

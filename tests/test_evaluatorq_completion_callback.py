@@ -27,7 +27,7 @@ def recorded(identifier: str) -> DataPoint:
 
 async def always_pass(_params: ScorerParameter) -> EvaluationResult:
     await asyncio.sleep(0)
-    return EvaluationResult(value=1, pass_=True)
+    return EvaluationResult.model_validate({'value': 1, 'pass': True})
 
 
 @pytest.mark.asyncio
@@ -89,6 +89,63 @@ async def test_callback_failure_aborts_the_run() -> None:
             on_datapoint_complete=fail,
             _send_results=False,
         )
+
+
+@pytest.mark.asyncio
+async def test_callback_failure_cancels_and_drains_sibling_before_raising() -> None:
+    sibling_started = asyncio.Event()
+    sibling_release = asyncio.Event()
+    sibling_cancelled = asyncio.Event()
+    sibling_drained = asyncio.Event()
+    cleanup_ready = asyncio.Event()
+    sibling_tasks: list[asyncio.Task[object]] = []
+    seen: list[str] = []
+    failure = RuntimeError('ui state unavailable')
+
+    async def score(params: ScorerParameter) -> EvaluationResult:
+        if params['data'].inputs['id'] == 'b':
+            task = asyncio.current_task()
+            assert task is not None
+            sibling_tasks.append(task)
+            sibling_started.set()
+            try:
+                await sibling_release.wait()
+            except asyncio.CancelledError:
+                sibling_cancelled.set()
+                asyncio.get_running_loop().call_soon(cleanup_ready.set)
+                await cleanup_ready.wait()
+                sibling_drained.set()
+                raise
+        return await always_pass(params)
+
+    async def complete(result: DataPointResult) -> None:
+        identifier = str(result.data_point.inputs['id'])
+        seen.append(identifier)
+        if identifier == 'a':
+            await sibling_started.wait()
+            raise failure
+
+    try:
+        with pytest.raises(RuntimeError) as caught:
+            await evaluatorq(
+                'callback-test',
+                data=[recorded('a'), recorded('b')],
+                evaluators=[{'name': 'blocked-sibling', 'scorer': score}],
+                inference=False,
+                datapoint_parallelism=2,
+                print_results=False,
+                on_datapoint_complete=complete,
+                _send_results=False,
+            )
+
+        assert caught.value is failure
+        assert sibling_cancelled.is_set()
+        assert sibling_drained.is_set()
+        assert all(task.done() for task in sibling_tasks)
+        assert seen == ['a']
+    finally:
+        sibling_release.set()
+        await asyncio.gather(*sibling_tasks, return_exceptions=True)
 
 
 @pytest.mark.asyncio
