@@ -181,13 +181,17 @@ def _fake_tracing_sdk(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
 def _capture_tracing_construction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> dict[str, dict[str, object]]:
-    """Patch the SDK classes and capture exporter and processor options."""
+    """Patch the SDK classes and capture exporter construction kwargs.
+
+    Processor kwargs are not captured here — the batching knobs they carry are
+    covered separately via ``_fake_tracing_sdk``.
+    """
     from opentelemetry import trace
     from opentelemetry.exporter.otlp.proto.http import trace_exporter
     from opentelemetry.sdk import trace as sdk_trace
     from opentelemetry.sdk.trace import export as trace_export
 
-    construction: dict[str, dict[str, object]] = {'exporter': {}, 'processor': {}}
+    construction: dict[str, dict[str, object]] = {'exporter': {}}
 
     class FakeExporter:
         def __init__(self, **kwargs: object) -> None:
@@ -196,7 +200,7 @@ def _capture_tracing_construction(
     class FakeSpanProcessor:
         def __init__(self, exporter: object, **kwargs: object) -> None:
             del exporter
-            construction['processor'].update(kwargs)
+            del kwargs
 
     class FakeProvider:
         def __init__(self, **kwargs: object) -> None:

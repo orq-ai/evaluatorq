@@ -795,7 +795,6 @@ def simulate(
         yes=yes,
         executive_summary=executive_summary,
     )
-    verbose = options.verbose
     hooks = options.hooks
 
     try:
