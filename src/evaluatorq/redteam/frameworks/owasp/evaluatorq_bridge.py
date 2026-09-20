@@ -222,6 +222,14 @@ async def _owasp_judge_fn(
     replacements: dict[str, Any],
     last_error: dict[str, JudgeOutcome | None],
 ) -> Prediction:
+    """Run one panel judge and return its prediction.
+
+    ``last_error`` is a single-slot cell owned by ``create_owasp_evaluator`` and WRITTEN
+    THROUGH here on every failure, so a quorum miss can name a cause instead of reporting
+    a bare "quorum not met". Passing a fresh dict loses the cause. Judges fail
+    independently and the panel keeps only the most recent one, which is the same
+    last-writer-wins behaviour this had before the hoist.
+    """
     outcome = await run_judge(
         client=client,
         model=model,

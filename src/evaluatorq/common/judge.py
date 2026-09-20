@@ -762,7 +762,12 @@ async def _chat_verdict(
     structured_output: bool,
     raw_content: list[str],
 ) -> JudgeOutcome:
-    """The Chat Completions half: tier-1 `.parse`, then the json_object paths."""
+    """The Chat Completions half: tier-1 `.parse`, then the json_object paths.
+
+    ``raw_content`` is a single-slot cell owned by ``run_judge`` and written through here,
+    so its error handler can report the body that actually failed. Passing a fresh list
+    loses that.
+    """
     if structured_output and response_model is not None:
         messages = [
             {'role': 'system', 'content': system_prompt},
@@ -887,11 +892,23 @@ async def _attempt(
     responses_model: list[str | None],
     raw_content: list[str],
 ) -> JudgeOutcome:
+    """One judge attempt: the Responses endpoint when available, else chat completions.
+
+    Retry lives entirely in the caller — ``run_judge`` wraps this in ``with_retry`` after
+    stripping the SDK's own retries with ``without_client_retries``, so this function never
+    retries anything itself.
+
+    ``responses_model`` and ``raw_content`` are single-slot cells the caller owns and this
+    function WRITES THROUGH: ``raw_content[0]`` carries the last response body out to
+    ``run_judge``'s ``ValidationError`` handler, and ``responses_model[0]`` is set to
+    ``None`` when the Responses endpoint rejects the model, so a retried attempt does not
+    pay the same rejection twice. Passing a fresh list per attempt silently loses both.
+    """
     responses_model_value = responses_model[0]
-    # Each attempt starts from a clean slate: `raw_content` is the caller's one-slot
-    # cell, read by run_judge's ValidationError handler, so without this reset a failure
-    # on attempt 3 gets logged and returned with attempt 2's body — the "raw
-    # (truncated)" line would describe a different call than the one that failed.
+    # Each attempt starts from a clean slate: `raw_content` is a caller-owned cell
+    # read by the ValidationError handler in `run_judge`, so without this reset a
+    # failure on attempt 3 gets logged and returned with attempt 2's body — the
+    # "raw (truncated)" line would describe a different call than the one that failed.
     raw_content[0] = '{}'
     if classify_question is not None:
         async with with_llm_span(
