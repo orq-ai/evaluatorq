@@ -338,6 +338,7 @@ def record_llm_response(
     response: Any,
     *,
     output_content: str | None = None,
+    record_usage: bool = True,
 ) -> None:
     """Record LLM response attributes on a span.
 
@@ -345,6 +346,12 @@ def record_llm_response(
     handles Chat Completions and Responses API shapes, honors the PII capture
     gate, accepts an optional output_content override for backward compat with
     redteam callers that pass the output string explicitly.
+
+    ``record_usage=False`` records everything except the ``gen_ai.usage.*``
+    attributes, for a caller that parses ``usage`` itself and wants its own
+    reading — including "unreadable, therefore nothing" — to be the only one on
+    the span. With the default ``True`` an unparseable ``usage`` block still
+    records zeros, which the chat and Responses callers rely on.
     """
     if span is None:
         return
@@ -356,7 +363,7 @@ def record_llm_response(
     if response_model:
         span.set_attribute('gen_ai.response.model', response_model)
 
-    usage = _field(response, 'usage')
+    usage = _field(response, 'usage') if record_usage else None
     if usage is not None:
         # Lazy import: contracts transitively imports openresponses, which this
         # module must not pull in at import time.

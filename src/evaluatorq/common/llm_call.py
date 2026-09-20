@@ -30,6 +30,7 @@ from evaluatorq.common.tracing import (
     get_trace_context_headers,
     record_llm_input,
     record_llm_response,
+    record_token_usage,
 )
 from evaluatorq.contracts import (
     _RESERVED_COMPLETION_KEYS,
@@ -479,9 +480,11 @@ async def execute_classify(
     answers as raw dicts.
 
     Usage is read off ``payload['usage']`` when the payload is a mapping; anything
-    else is a reply shape this executor cannot price, and it warns and returns
-    ``None`` rather than recording zeros — zeros on the span read as a genuinely
-    free call.
+    else — including a ``usage`` block present but unreadable — is a reply shape this
+    executor cannot price, and it warns and returns ``None`` while leaving **no**
+    ``gen_ai.usage.*`` attribute on the span. Zeros there read as a genuinely free
+    call, which is why this leg passes ``record_usage=False`` to
+    `record_llm_response` and records usage itself only when it parsed.
 
     **Retry.** None here. The single retry layer on this path is ``run_judge``'s
     ``with_retry``, which is why the client arrives with ``max_retries=0``.
@@ -527,17 +530,21 @@ async def execute_classify(
         timeout_s,
     )
     # `record_llm_response` is duck-typed (its `_field` helper reads dicts as well as
-    # objects), so the decoded payload records `gen_ai.response.model`/id and the
-    # usage attributes exactly as the chat and Responses executors do. The classify
-    # reply has neither `choices` nor `output`, so the body is passed as
-    # `output_content` — nothing else would record it.
-    record_llm_response(span, payload, output_content=json.dumps(payload, default=str))
+    # objects), so the decoded payload records `gen_ai.response.model`/id exactly as
+    # the chat and Responses executors do. The classify reply has neither `choices`
+    # nor `output`, so the body is passed as `output_content` — nothing else would
+    # record it. Usage is recorded separately, below: with `record_usage=True` an
+    # unreadable `usage` block records zeros, which on this path would contradict the
+    # unpriced reading the executor returns.
+    record_llm_response(span, payload, output_content=json.dumps(payload, default=str), record_usage=False)
     usage_block = payload.get('usage') if isinstance(payload, dict) else None
     usage = TokenUsage.extract(usage_block, calls=1)
     if usage is None:
-        # Not recorded as zeros: a call with no readable usage is unpriced, and
+        # Not recorded at all: a call with no readable usage is unpriced, and
         # `gen_ai.usage.*` zeros on the span would read as a genuinely free call.
         logger.warning('Classify %s reply carried no usage block; the call stays unpriced and unrecorded', model)
+    else:
+        record_token_usage(span, usage=usage, calls=0)
     served = payload.get('model') if isinstance(payload, dict) else None
     # Priced by the router; price_usage is a no-op unless it came back unpriced.
     return payload, await price_usage(usage, model, client, served_model=served)

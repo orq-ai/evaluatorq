@@ -410,9 +410,11 @@ async def test_a_reply_without_usage_stays_unpriced_and_unrecorded(
 ):
     """Zeros on the span would read as a genuinely free call; unknown must stay unknown."""
     recorded: list[Any] = []
-    # Patched on `tracing`, not `llm_call`: the executor records usage through
-    # `record_llm_response`, which reads this name off its own module.
+    # Patched on both modules: `record_llm_response` reads the name off `tracing`,
+    # and the classify executor — which records usage itself, so that an unreadable
+    # block records nothing rather than zeros — reads its own import.
     monkeypatch.setattr(tracing, 'record_token_usage', lambda span, **kw: recorded.append(kw))  # noqa: ARG005
+    monkeypatch.setattr(llm_call, 'record_token_usage', lambda span, **kw: recorded.append(kw))  # noqa: ARG005
     client = _client({'answers': {'verdict': {'type': 'noul', 'noul': 0.9}}, 'model': 'jev-latest'})
 
     with caplog.at_level(logging.WARNING, logger='evaluatorq.common.llm_call'):
@@ -423,6 +425,66 @@ async def test_a_reply_without_usage_stays_unpriced_and_unrecorded(
     assert recorded == []
     assert 'no usage block' in caplog.text
     assert JEV in caplog.text
+
+
+@pytest.mark.parametrize(
+    ('usage_block', 'case'),
+    [
+        pytest.param({}, 'empty', id='usage-empty'),
+        pytest.param({'garbage': 1}, 'unreadable', id='usage-unreadable'),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_usage_block_that_does_not_parse_leaves_no_usage_attribute_on_the_span(
+    usage_block: dict[str, Any],
+    case: str,
+    caplog: pytest.LogCaptureFixture,
+):
+    """Present-but-unreadable must read the same as absent: unpriced, not free."""
+    span = MagicMock()
+    client = _client({
+        'answers': {'verdict': {'type': 'noul', 'noul': 0.9}},
+        'model': 'jev-latest',
+        'usage': usage_block,
+    })
+
+    with caplog.at_level(logging.WARNING, logger='evaluatorq.common.llm_call'):
+        _payload, usage = await llm_call.execute_classify(
+            client=client,
+            model=JEV,
+            question=_noul_question(),
+            span=span,
+            timeout_s=30.0,
+            inject_trace_headers=False,
+        )
+
+    assert usage is None, case
+    assert 'no usage block' in caplog.text
+    set_attrs = [call.args[0] for call in span.set_attribute.call_args_list]
+    assert not [name for name in set_attrs if name.startswith('gen_ai.usage.')]
+    # The rest of the response recording still happens — only usage is withheld.
+    assert 'gen_ai.response.model' in set_attrs
+
+
+@pytest.mark.asyncio
+async def test_a_readable_usage_block_still_lands_on_the_span():
+    """The withholding above is about unreadable usage, not about classify calls."""
+    span = MagicMock()
+    client = _client(_reply({'type': 'noul', 'noul': 0.9}, total_cost=0.004))
+
+    _payload, usage = await llm_call.execute_classify(
+        client=client,
+        model=JEV,
+        question=_noul_question(),
+        span=span,
+        timeout_s=30.0,
+        inject_trace_headers=False,
+    )
+
+    assert usage is not None
+    set_attrs = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert set_attrs['gen_ai.usage.input_tokens'] == 120
+    assert set_attrs['gen_ai.usage.total_cost'] == 0.004
 
 
 @pytest.mark.parametrize(
