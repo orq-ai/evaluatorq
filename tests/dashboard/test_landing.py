@@ -4,6 +4,7 @@ metrics aggregation that feeds them (RES-974)."""
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -587,6 +588,83 @@ class TestAvgCost:
         # Only the redteam fixture records cost_usd; the sim results carry tokens only.
         assert data.costed_runs == 1
         assert data.total_cost == pytest.approx(0.0048)
+
+    def test_redteam_tile_cost_uses_fsum_so_order_cannot_lose_precision(self, tmp_path: Path) -> None:
+        # Three cards whose costs are [1e16, 1.0, -1e16]: a naive left-to-right
+        # float ``sum`` in this order rounds the 1.0 away (1e16 + 1.0 == 1e16
+        # at float precision) and the total comes back 0.0 instead of 1.0.
+        # ``math.fsum`` tracks the loss and returns the exact 1.0 regardless of
+        # the order the cards are folded in — see the fsum comment in
+        # ``_redteam_tiles``.
+        from datetime import datetime, timezone
+
+        from evaluatorq.dashboard import library
+
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        raw_costs = [1e16, 1.0, -1e16]
+        cards = []
+        for i, raw_cost in enumerate(raw_costs):
+            report = rt / f'card_{i}.json'
+            report.write_text(
+                json.dumps(
+                    _redteam_payload(
+                        f'card {i}',
+                        created='2026-06-24T10:15:00',
+                        resistance=1.0,
+                        vulns=0,
+                        evaluated=1,
+                        tokens=1,
+                        severity={},
+                    )
+                    | {'summary': {'resistance_rate': 1.0, 'vulnerabilities_found': 0, 'evaluated_attacks': 1}}
+                )
+            )
+            data = json.loads(report.read_text())
+            data['summary']['token_usage_total'] = {'total_tokens': 1, 'cost_usd': raw_cost}
+            report.write_text(json.dumps(data))
+            cards.append(
+                library.ReportCard(
+                    id=f'card_{i}',
+                    surface='redteam',
+                    name=f'card {i}',
+                    created_at=datetime.fromisoformat(data['created_at']).replace(tzinfo=timezone.utc),
+                    headline='',
+                    path=report,
+                )
+            )
+
+        tiles = metrics._redteam_tiles(cards)
+        import math
+
+        assert tiles.stats.cost == pytest.approx(math.fsum(raw_costs))
+        assert tiles.stats.cost == pytest.approx(1.0)
+        assert tiles.stats.cost != 0.0
+
+    def test_landing_input_output_cost_totals_use_fsum_over_pairwise(self, tmp_path: Path) -> None:
+        # Same precision trap as the redteam tile test, on the pairwise leg of
+        # ``landing()``: folded left-to-right with a plain ``sum`` the 1.0
+        # disappears and both totals come back 0.0.
+        raw = [1e16, 1.0, -1e16]
+        pw = tmp_path / 'pairwise-runs'
+        pw.mkdir()
+        (pw / 'pw_fsum.json').write_text(
+            json.dumps({
+                'judging': {},
+                'created_at': '2026-06-24T10:15:00',
+                'run_name': 'pw fsum',
+                'entries': [
+                    {'comparison': {'token_usage': {'input_cost': c, 'output_cost': c}}} for c in raw
+                ],
+            })
+        )
+
+        data = metrics.landing([pw])
+
+        assert data.total_input_cost == pytest.approx(math.fsum(raw))
+        assert data.total_output_cost == pytest.approx(math.fsum(raw))
+        assert data.total_input_cost == pytest.approx(1.0)
+        assert data.total_output_cost == pytest.approx(1.0)
 
     def test_avg_cost_averages_over_costed_runs_only(self) -> None:
         data = metrics.Landing(
