@@ -192,7 +192,9 @@ def _aggregate_panel_verdict(
     plain decisive-votes -> verdict reduction (no tie concept). Extracted from
     ``_run_jury_core`` for its complexity budget, not because the two branches
     generalise: a dispatch table over the aggregator keywords would be five
-    aliases for this one ``else``.
+    aliases for this one ``else``. Having no table is also what keeps the
+    keyword set from drifting: an unrecognised keyword is rejected by the
+    ``_AGGREGATORS`` lookup that resolves ``agg_fn``, never defaulted here.
     """
     if aggregator == 'mode':
         verdict, tie = _plurality_vote(decisive_values)

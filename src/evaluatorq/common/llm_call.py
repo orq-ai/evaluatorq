@@ -376,9 +376,10 @@ def _build_response_params(
     out of the result. The reserved-key guard the config exists to enforce is
     called directly here instead, on the same ``_RESERVED_RESPONSES_KEYS`` set.
 
-    ``extra_kwargs`` is applied last, so caller-supplied values win. A caller
-    that puts ``temperature: None`` there gets an explicit null on the wire,
-    which is the pre-existing contract of this path.
+    ``extra_kwargs`` is applied last, so caller-supplied values win. The one
+    value that cannot win is ``temperature: None``, which is dropped rather
+    than sent as an explicit null — the rule ``request_params`` owns, restated
+    here because this helper does not call it.
     """
     params: dict[str, Any] = {'model': model, 'input': messages}
     if instructions is not None:
@@ -396,6 +397,12 @@ def _build_response_params(
     if extra_kwargs:
         check_reserved_keys(extra_kwargs, _RESERVED_RESPONSES_KEYS)
         params.update(extra_kwargs)
+    if 'temperature' in params and params['temperature'] is None:
+        # Same rule `LLMCallConfig.request_params` applies, restated because
+        # this helper does not route through it: temperature=None means "leave
+        # it unset", not "send null" — the provider rejects an explicit null,
+        # and reasoning models reject the parameter at all.
+        del params['temperature']
 
     if response_model is not None and response_text_format is not None:
         raise ValueError('response_model and response_text_format are mutually exclusive')
