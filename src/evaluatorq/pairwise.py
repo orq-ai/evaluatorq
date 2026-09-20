@@ -12,7 +12,7 @@ import asyncio
 import math
 import statistics
 from collections import Counter
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -33,7 +33,6 @@ from evaluatorq.contracts import TokenUsage  # noqa: TC001  # runtime-needed: py
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
-    from typing import Any
 
     from opentelemetry.trace import Span
 
@@ -95,6 +94,10 @@ class RepetitionObservation(BaseModel):
     )
     explanation: str | None = Field(
         default=None, description="This pass's own reasoning; None when it produced no text"
+    )
+    raw_output: dict[str, Any] | None = Field(
+        default=None,
+        description='Validated structured judge output in the ordering sent to the provider.',
     )
 
 
@@ -892,6 +895,7 @@ async def run_pairwise(
                             repetition=i,
                             verdict=verdict,
                             explanation=rep.explanation,
+                            raw_output=rep.raw_output,
                         )
                     )
             return out, failures
