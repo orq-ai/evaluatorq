@@ -115,7 +115,10 @@ async def main() -> None:
         for repetition in vote.repetitions:
             classify_answer = repetition.raw_output
             if classify_answer is not None:
-                print(vote.model, classify_answer)
+                print(vote.model, classify_answer)  # complete answer, including provider-added fields
+                for field in ("choice", "confidence", "probabilities"):
+                    if field in classify_answer:
+                        print(field, classify_answer[field])
 
 
 asyncio.run(main())
