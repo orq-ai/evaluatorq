@@ -1017,7 +1017,6 @@ def llm_jury(
     def _warn_runtime_classify(model: str) -> None:
         if model in runtime_classify_warned:
             return
-        runtime_classify_warned.add(model)
         _validate_classify_configuration(
             criteria=criteria,
             verdict_kind=verdict_kind,
@@ -1026,6 +1025,7 @@ def llm_jury(
             label_names=label_names,
             threshold=threshold,
         )
+        runtime_classify_warned.add(model)
         _warn_classify_repetitions(repetitions, pairwise=False)
         _warn_classify_ignored_settings(
             all_judges=panel + (replacement_judges or []),

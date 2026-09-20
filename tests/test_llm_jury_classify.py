@@ -720,11 +720,10 @@ async def test_a_catalogue_only_numeric_classify_model_rejects_a_custom_score_ra
         client=MagicMock(),
     )
     run_judge = AsyncMock(return_value=JudgeOutcome(error_message='should not run'))
-    with (
-        patch.object(llm_jury_mod, 'run_judge', run_judge),
-        pytest.raises(ValueError, match='cannot be honoured'),
-    ):
-        await evaluator['scorer'](_params())
+    with patch.object(llm_jury_mod, 'run_judge', run_judge):
+        for output in ('the answer', 'another answer'):
+            with pytest.raises(ValueError, match='cannot be honoured'):
+                await evaluator['scorer'](_params(output))
 
     run_judge.assert_not_awaited()
 
