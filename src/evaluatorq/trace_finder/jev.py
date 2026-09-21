@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
+
 from evaluatorq.common.judge import JudgeOutcome, judge_error_payload, run_judge
 from evaluatorq.contracts import JuryRepetition, JuryResult, JuryVote, LLMCallConfig
 from evaluatorq.evaluatorq import evaluatorq
@@ -55,30 +57,33 @@ def _outcome_result(outcome: JudgeOutcome, *, model: str) -> EvaluationResult:
     payload = outcome.payload
     payload_value = payload.value if payload is not None else None
     payload_explanation = payload.explanation if payload is not None else None
-    success = outcome.error_kind is None and payload is not None and not payload.abstain and payload_value is not None
+    mechanical_success = outcome.error_kind is None and payload is not None
+    abstained = mechanical_success and bool(payload and payload.abstain)
+    decisive = mechanical_success and not abstained and payload_value is not None
+    success = decisive or abstained
     message = outcome.error_message or (None if success else 'JEV returned no verdict')
     repetition = JuryRepetition(
-        value=payload_value if success else None,
+        value=payload_value if decisive else None,
         explanation=payload_explanation,
         raw_output=outcome.raw_output,
     )
     vote = JuryVote(
         model=model,
         success=success,
-        abstained=bool(payload and payload.abstain),
-        value=payload_value if success else None,
+        abstained=abstained,
+        value=payload_value if decisive else None,
         explanation=payload_explanation or '',
-        error=message,
+        error=message if not success else None,
         repetitions=[repetition],
         repetitions_failed=0 if success else 1,
     )
     jury = JuryResult(
         judges_configured=1,
-        judges_succeeded=1 if success else 0,
+        judges_succeeded=1 if decisive else 0,
         judges_failed=0 if success else 1,
-        inconclusive=not success,
+        inconclusive=not decisive,
         votes=[vote],
-        raw_agreement=1.0 if success else None,
+        raw_agreement=1.0 if decisive else None,
     )
     raw_output: dict[str, Any] = {'jury': jury.model_dump(mode='json')}
     if not success:
@@ -153,6 +158,12 @@ def parse_datapoint_result(result: DataPointResult, compiled: CompiledQuery) -> 
             raw_result=raw_result,
         )
     except Exception as error:  # noqa: BLE001 - every malformed evaluator tree becomes a terminal classification
+        logger.warning(
+            'JEV result parsing failed for trace_id={} span_id={}: {}',
+            trace_id,
+            span_id,
+            error,
+        )
         return TraceClassification(
             trace_id=trace_id,
             span_id=span_id,
@@ -175,6 +186,8 @@ def _validate_verdict(value: object, compiled: CompiledQuery, raw_output: dict[s
             if isinstance(votes, list):
                 for vote in votes:
                     if isinstance(vote, Mapping):
+                        if vote.get('abstained') is True:
+                            raise _TerminalResultError('judge abstained')
                         error = vote.get('error')
                         if isinstance(error, str) and error:
                             errors.append(error)

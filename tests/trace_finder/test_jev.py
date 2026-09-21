@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, cast
 
 import pytest
+from loguru import logger
 
 from evaluatorq import DataPoint, DataPointResult, EvaluationResult, EvaluatorScore, JobResult
 from evaluatorq.common.judge import EvaluatorResponsePayload, JudgeOutcome
@@ -165,6 +166,45 @@ def _result(
     )
 
 
+def _result_from_evaluation(evaluation: EvaluationResult) -> DataPointResult:
+    return DataPointResult(
+        data_point=build_datapoint(_trace(), _projection()),
+        job_results=[
+            JobResult(
+                job_name='replay',
+                output='JEV state prepared',
+                evaluator_scores=[EvaluatorScore(evaluator_name='jev', score=evaluation)],
+            )
+        ],
+    )
+
+
+def test_outcome_result_maps_clean_abstention_to_an_inconclusive_classification() -> None:
+    evaluation = jev._outcome_result(
+        JudgeOutcome(
+            payload=EvaluatorResponsePayload(value=None, explanation='Unable to classify.', abstain=True),
+            raw_output={'abstain': True},
+            endpoint='classify',
+        ),
+        model='typesafe/jev-latest',
+    )
+
+    jury = cast(dict[str, Any], evaluation.raw_output)['jury']
+    vote = jury['votes'][0]
+    assert vote['success'] is True
+    assert vote['abstained'] is True
+    assert vote['value'] is None
+    assert vote['error'] is None
+    assert vote['repetitions_failed'] == 0
+    assert jury['judges_succeeded'] == 0
+    assert jury['judges_failed'] == 0
+    assert jury['inconclusive'] is True
+
+    classification = parse_datapoint_result(_result_from_evaluation(evaluation), _compiled())
+    assert classification.matched is False
+    assert classification.error == 'judge abstained'
+
+
 def test_parse_datapoint_result_extracts_label_confidence_probabilities_and_raw_result() -> None:
     result = _result(
         raw_answer={'choice': 'frustrated', 'confidence': 0.86, 'probabilities': {'frustrated': 0.86, 'neutral': 0.14}}
@@ -193,12 +233,20 @@ def test_parse_datapoint_result_returns_terminal_classification_for_malformed_tr
     assert result.job_results[0].evaluator_scores is not None
     result.job_results[0].evaluator_scores[0].score.raw_output = {'jury': {'votes': []}}
 
-    classification = parse_datapoint_result(result, _compiled())
+    messages: list[str] = []
+    sink_id = logger.add(lambda message: messages.append(message.record['message']), level='WARNING')
+    try:
+        classification = parse_datapoint_result(result, _compiled())
+    finally:
+        logger.remove(sink_id)
 
     assert classification.value is None
     assert not classification.matched
     assert classification.error == 'malformed JEV result tree'
     assert classification.raw_result == result.model_dump(mode='json', by_alias=True)
+    assert any(
+        'trace-1' in message and 'span-1' in message and 'malformed JEV result tree' in message for message in messages
+    )
 
 
 @pytest.mark.parametrize(
