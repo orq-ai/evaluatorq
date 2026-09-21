@@ -136,16 +136,12 @@ src = [ "src" ]
 ]
 
     [tool.ruff.lint.mccabe]
-    # Cyclomatic complexity ceiling. 15 is the knee of this repo's distribution:
-    # 53 functions in 33 files exceed it (registered below), the worst at 108.
-    # Lower it as that list shrinks — a new function over 15 should be split, not
-    # exempted.
+    # Cyclomatic complexity ceiling. When the rule landed, 53 functions in 33
+    # files exceeded 15 (the worst at 108); the C901 burn-down (RES-1298, PRs
+    # #201-#225) split every one of them, so the ceiling holds repo-wide with no
+    # per-file exemptions. A new function over 15 is split, not exempted.
     max-complexity = 15
 
-    # C901 debt register: files whose existing functions exceed max-complexity.
-    # Per-file, so a NEW over-limit function in a listed file is also exempt —
-    # split it anyway. Shrink this list, never grow it.
-    #
     # BLE001 debt register: blind `except Exception` swallowing real errors is a
     # documented silent-failure source (PR #96 — a TypeError made every evaluation
     # return passed=None). The rule is on repo-wide; these files predate it. Shrink
