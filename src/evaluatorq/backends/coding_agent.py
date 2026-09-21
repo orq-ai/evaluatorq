@@ -263,7 +263,7 @@ def _tool_call(
 
 
 def _parse_claude_usage(usage_block: Any) -> Usage | None:
-    if not usage_block:
+    if usage_block is None:
         return None
     missing_fields = [field for field in ('input_tokens', 'output_tokens') if field not in usage_block]
     if missing_fields:
