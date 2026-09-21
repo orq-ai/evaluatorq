@@ -59,7 +59,9 @@ async def test_orq_skill_cleanup_leaves_our_links() -> None:
         target = CodingAgentTarget('claude', launcher='orq', skills=[skill], permission_mode='plan', timeout_ms=120_000)
         await target.respond([Message(role='user', content='Reply with: ok')])
         assert target.workdir is not None
-        assert (target.workdir / '.claude' / 'skills' / 'probe-skill').is_symlink()
+        skills_dir = target.workdir / '.claude' / 'skills'
+        assert (skills_dir / 'probe-skill').is_symlink()
+        assert sorted(p.name for p in skills_dir.iterdir()) == ['probe-skill'], 'orq left its own skill links behind'
         await target.close()
 
 
