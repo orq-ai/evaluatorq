@@ -248,8 +248,11 @@ def _looks_like_otel(value: Any) -> bool:
 
 def _looks_like_responses(value: Any) -> bool:
     decoded = _decode_json(value)
-    if isinstance(decoded, dict) and isinstance(decoded.get('output'), list):
-        decoded = decoded['output']
+    if isinstance(decoded, dict):
+        for key in ('output', 'input'):
+            if isinstance(decoded.get(key), list):
+                decoded = decoded[key]
+                break
     return isinstance(decoded, list) and any(
         isinstance(item, dict)
         and item.get('type') in {'message', 'function_call', 'function_call_output', 'reasoning', 'custom_tool_call'}
@@ -258,7 +261,7 @@ def _looks_like_responses(value: Any) -> bool:
 
 
 def _parse_messages(
-    value: Any, *, hinted: _MESSAGE_FORMAT | None, default_role: _ROLE
+    value: Any, *, hinted: _MESSAGE_FORMAT | None = None, default_role: _ROLE
 ) -> tuple[list[Message], _MESSAGE_FORMAT]:
     detected: _MESSAGE_FORMAT
     if hinted is not None:

@@ -10,8 +10,8 @@ import httpx
 import pytest
 
 from evaluatorq import Trace, TraceInput, fetch_traces
+from evaluatorq.common.trace_input import _parse_messages, _trace_from_spans
 from evaluatorq.contracts import Message
-from evaluatorq.common.trace_input import _trace_from_spans
 
 
 def _span(
@@ -171,6 +171,24 @@ def test_responses_items_preserve_function_call_trajectory() -> None:
     assert imported.messages[1].tool_calls is not None
     assert imported.messages[1].tool_calls[0].item_id == 'fc_1'
     assert imported.tools_called == ['weather']
+
+
+def test_top_level_responses_input_object_is_detected() -> None:
+    messages, detected = _parse_messages(
+        {
+            'input': [
+                {
+                    'type': 'message',
+                    'role': 'user',
+                    'content': [{'type': 'input_text', 'text': 'check weather'}],
+                }
+            ]
+        },
+        default_role='user',
+    )
+
+    assert detected == 'responses'
+    assert [message.content for message in messages] == ['check weather']
 
 
 @pytest.mark.parametrize("tool_result_key", ["response", "result"])
