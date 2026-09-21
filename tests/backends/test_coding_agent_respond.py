@@ -104,6 +104,31 @@ async def test_garbage_stdout_is_parse_error(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_parser_failure_is_parse_error(tmp_path: Path) -> None:
+    fx = tmp_path / 'parser-error.jsonl'
+    fx.write_text(
+        '{"type":"assistant","message":null}\n'
+        '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"s"}\n'
+    )
+    path = _install(tmp_path, 'claude', _ECHO)
+    target = CodingAgentTarget('claude', env={'PATH': path, 'FAKE_STDOUT': str(fx)})
+    with pytest.raises(CodingAgentError) as info:
+        await target.respond([Message(role='user', content='x')])
+    assert info.value.code == 'cli.parse_error'
+
+
+@pytest.mark.asyncio
+async def test_empty_agent_message_is_no_result(tmp_path: Path) -> None:
+    fx = tmp_path / 'empty.jsonl'
+    fx.write_text('{"type":"item.completed","item":{"id":"a","type":"agent_message","text":""}}\n')
+    path = _install(tmp_path, 'codex', _ECHO)
+    target = CodingAgentTarget('codex', env={'PATH': path, 'FAKE_STDOUT': str(fx)})
+    with pytest.raises(CodingAgentError) as info:
+        await target.respond([Message(role='user', content='x')])
+    assert info.value.code == 'cli.no_result'
+
+
+@pytest.mark.asyncio
 async def test_is_error_result_is_agent_error(tmp_path: Path) -> None:
     fx = tmp_path / 'err.jsonl'
     fx.write_text('{"type":"result","subtype":"error_during_execution","is_error":true,"result":"boom","session_id":"s"}\n')

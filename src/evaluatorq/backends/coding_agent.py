@@ -672,10 +672,13 @@ class CodingAgentTarget(AgentTarget):
             events = _parse_jsonl(stdout)
             if stdout.strip() and not events:
                 raise CodingAgentError('cli.parse_error', f'no JSON events in stdout: {stdout[:_STDERR_EXCERPT_CHARS]}')
-            turn = parse_events(self._agent, events)
+            try:
+                turn = parse_events(self._agent, events)
+            except Exception as exc:  # Any parser crash is a parse error, not a target crash.
+                raise CodingAgentError('cli.parse_error', f'could not parse {self._agent} output: {exc!r}') from exc
             if turn.agent_error is not None:
                 raise CodingAgentError('cli.agent_error', f'{turn.agent_error} {stderr_excerpt}'.strip())
-            if turn.text is None:
+            if turn.text is None or not turn.text.strip():
                 raise CodingAgentError('cli.no_result', f'exit 0 but no final assistant message: {stderr_excerpt}')
             if turn.usage is None:
                 logger.warning(f'CodingAgentTarget({self._agent}): no usage in output; usage is None')
