@@ -483,3 +483,24 @@ async def test_record_input_false_leaves_the_span_input_alone(monkeypatch: pytes
         record_input=False,
     )
     record_input.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_none_temperature_in_extra_kwargs_is_not_sent(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `temperature=None` means "leave it unset", not "send null" — the provider
+    # rejects an explicit null and reasoning models reject the parameter at all.
+    # `LLMCallConfig.request_params` owns that rule; the Responses path must not
+    # re-insert the key it strips.
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    client = _client()
+
+    await execute_response(
+        client=client,
+        model='gpt-x',
+        messages=[{'role': 'user', 'content': 'hi'}],
+        span=None,
+        timeout_s=5.0,
+        extra_kwargs={'temperature': None},
+    )
+
+    assert 'temperature' not in client.responses.create.call_args.kwargs

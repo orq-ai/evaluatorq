@@ -354,6 +354,63 @@ async def execute_chat_parse(
     )
 
 
+def _build_response_params(
+    *,
+    model: str,
+    messages: list[dict[str, Any]],
+    response_model: type[BaseModel] | None,
+    response_text_format: type[BaseModel] | None,
+    temperature: float | None,
+    max_output_tokens: int | None,
+    reasoning_effort: str | None,
+    instructions: str | None,
+    tools: list[dict[str, Any]] | None,
+    extra_body: dict[str, Any] | None,
+    extra_kwargs: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Assemble the Responses API call parameters for `execute_response`.
+
+    Not routed through `LLMCallConfig.request_params`: this helper takes loose
+    scalars rather than a config, and the only way to borrow that builder would
+    be to fabricate a config whose ``max_tokens`` sentinel is then popped back
+    out of the result. The reserved-key guard the config exists to enforce is
+    called directly here instead, on the same ``_RESERVED_RESPONSES_KEYS`` set.
+
+    ``extra_kwargs`` is applied last, so caller-supplied values win. The one
+    value that cannot win is ``temperature: None``, which is dropped rather
+    than sent as an explicit null — the rule ``request_params`` owns, restated
+    here because this helper does not call it.
+    """
+    params: dict[str, Any] = {'model': model, 'input': messages}
+    if instructions is not None:
+        params['instructions'] = instructions
+    if tools:
+        params['tools'] = tools
+    if temperature is not None:
+        params['temperature'] = temperature
+    if max_output_tokens is not None:
+        params['max_output_tokens'] = max_output_tokens
+    if reasoning_effort:
+        params['reasoning'] = {'effort': reasoning_effort}
+    if extra_body:
+        params['extra_body'] = extra_body
+    if extra_kwargs:
+        check_reserved_keys(extra_kwargs, _RESERVED_RESPONSES_KEYS)
+        params.update(extra_kwargs)
+    if 'temperature' in params and params['temperature'] is None:
+        # Same rule `LLMCallConfig.request_params` applies, restated because
+        # this helper does not route through it: temperature=None means "leave
+        # it unset", not "send null" — the provider rejects an explicit null,
+        # and reasoning models reject the parameter at all.
+        del params['temperature']
+
+    if response_model is not None and response_text_format is not None:
+        raise ValueError('response_model and response_text_format are mutually exclusive')
+    if response_text_format is not None:
+        params['text'] = responses_text_config(response_text_format)
+    return params
+
+
 async def execute_response(
     *,
     client: AsyncOpenAI,
@@ -397,27 +454,19 @@ async def execute_response(
     there, where the wire payload's ``output_text`` parts would `str()` into a
     Python repr (see CLAUDE.md's ``content_to_text`` row).
     """
-    params: dict[str, Any] = {'model': model, 'input': messages}
-    if instructions is not None:
-        params['instructions'] = instructions
-    if tools:
-        params['tools'] = tools
-    if temperature is not None:
-        params['temperature'] = temperature
-    if max_output_tokens is not None:
-        params['max_output_tokens'] = max_output_tokens
-    if reasoning_effort:
-        params['reasoning'] = {'effort': reasoning_effort}
-    if extra_body:
-        params['extra_body'] = extra_body
-    if extra_kwargs:
-        check_reserved_keys(extra_kwargs, _RESERVED_RESPONSES_KEYS)
-        params.update(extra_kwargs)
-
-    if response_model is not None and response_text_format is not None:
-        raise ValueError('response_model and response_text_format are mutually exclusive')
-    if response_text_format is not None:
-        params['text'] = responses_text_config(response_text_format)
+    params = _build_response_params(
+        model=model,
+        messages=messages,
+        response_model=response_model,
+        response_text_format=response_text_format,
+        temperature=temperature,
+        max_output_tokens=max_output_tokens,
+        reasoning_effort=reasoning_effort,
+        instructions=instructions,
+        tools=tools,
+        extra_body=extra_body,
+        extra_kwargs=extra_kwargs,
+    )
 
     strip_known_rejected_responses_reasoning(model, params)
     apply_pipeline_metadata(params)
