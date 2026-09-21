@@ -6,6 +6,7 @@ import asyncio
 import json
 from collections import defaultdict, deque
 from collections.abc import Mapping
+from contextlib import suppress
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
@@ -39,6 +40,8 @@ CONVERSATION_SPAN_TYPES = frozenset({
     'span.responses',
 })
 EVALUATOR_SPAN_TYPES = frozenset({'span.evaluation_engine', 'span.evaluator'})
+_MAX_CAPTURED_RESPONSES = 128
+_CAPTURE_REGISTRATION_ATTR = '_evaluatorq_trace_finder_capture_registration'
 
 
 class OrqSourceError(ValueError):
@@ -51,7 +54,7 @@ class _RawResponseCapture:
     _OPERATIONS = frozenset({'TracesGetSpan', 'TracesQueryOql'})
 
     def __init__(self) -> None:
-        self._responses: dict[str, deque[dict[str, Any]]] = defaultdict(deque)
+        self._responses: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=_MAX_CAPTURED_RESPONSES))
 
     def after_success(self, hook_context: Any, response: Any) -> Any:
         """Capture supported JSON responses while leaving the SDK response unchanged."""
@@ -73,6 +76,18 @@ class _RawResponseCapture:
         responses = self._responses.get(path)
         return responses.popleft() if responses else None
 
+    def clear(self) -> None:
+        """Discard captured responses that were not consumed by the current load."""
+
+        self._responses.clear()
+
+
+class _CaptureRegistration:
+    def __init__(self) -> None:
+        self.capture = _RawResponseCapture()
+        self.sources = 0
+        self.registered = False
+
 
 class OrqTraceSource:
     """Load recent live traces once, returning the immutable local snapshot contract."""
@@ -84,10 +99,54 @@ class OrqTraceSource:
         self._hydration_concurrency = hydration_concurrency
         self._owns_client = owns_client
         self._capture = _RawResponseCapture()
+        self._hooks: Any | None = None
+        self._registration: _CaptureRegistration | None = None
+        self._closed = False
         configuration = getattr(client, 'sdk_configuration', None)
         hooks = getattr(configuration, '_hooks', None)
-        if hooks is not None:
-            hooks.register_after_success_hook(self._capture)
+        register = getattr(hooks, 'register_after_success_hook', None)
+        if callable(register):
+            registration = getattr(hooks, _CAPTURE_REGISTRATION_ATTR, None)
+            if not isinstance(registration, _CaptureRegistration):
+                registration = _CaptureRegistration()
+                try:
+                    setattr(hooks, _CAPTURE_REGISTRATION_ATTR, registration)
+                except (AttributeError, TypeError):
+                    registration = None
+            if registration is not None:
+                if not registration.registered:
+                    register(registration.capture)
+                    registration.registered = True
+                registration.sources += 1
+                self._capture = registration.capture
+                self._hooks = hooks
+                self._registration = registration
+
+    def close(self) -> None:
+        """Release this source's capture registration without closing the caller's client."""
+
+        if self._closed:
+            return
+        self._closed = True
+        registration = self._registration
+        if registration is None:
+            self._capture.clear()
+            return
+        registration.sources = max(0, registration.sources - 1)
+        if registration.sources:
+            return
+        self._capture.clear()
+        unregister = getattr(self._hooks, 'unregister_after_success_hook', None)
+        if callable(unregister):
+            unregister(self._capture)
+            registration.registered = False
+            with suppress(AttributeError):
+                delattr(self._hooks, _CAPTURE_REGISTRATION_ATTR)
+
+    async def aclose(self) -> None:
+        """Async alias for ``close`` for callers that manage async SDK resources."""
+
+        self.close()
 
     async def load_async(
         self,
@@ -106,6 +165,8 @@ class OrqTraceSource:
             raise
         except Exception as error:
             raise OrqSourceError(f'live Orq trace loading failed: {error}') from error
+        finally:
+            self._capture.clear()
 
     async def _load_with_lifecycle(
         self,
@@ -151,6 +212,7 @@ class OrqTraceSource:
         seen_trace_ids: set[str] = set()
         used_tokens: set[str] = set()
         dropped_count = 0
+        fallback_count = 0
         page_token: str | None = None
 
         while len(records) < limit:
@@ -176,22 +238,35 @@ class OrqTraceSource:
                 for payload in raw_summaries
                 if (trace_id := _field(payload, 'trace_id') or _field(payload, 'id'))
             }
-            unique_summaries: list[tuple[Any, Any]] = []
+            unique_summaries: list[tuple[Any, Any, bool]] = []
             for summary in summaries:
                 trace_id = _field(summary, 'trace_id') or _field(summary, 'id')
                 if not trace_id or str(trace_id) in seen_trace_ids:
                     continue
                 seen_trace_ids.add(str(trace_id))
-                unique_summaries.append((summary, raw_by_id.get(str(trace_id), _plain(summary))))
+                raw_summary = raw_by_id.get(str(trace_id))
+                raw_capture_fallback = raw_summary is None
+                unique_summaries.append((
+                    summary,
+                    raw_summary if raw_summary is not None else _plain(summary),
+                    raw_capture_fallback,
+                ))
 
             hydrated = await asyncio.gather(
                 *(
-                    self._hydrate_trace(summary, raw_summary, project_names, semaphore)
-                    for summary, raw_summary in unique_summaries
+                    self._hydrate_trace(
+                        summary,
+                        raw_summary,
+                        project_names,
+                        semaphore,
+                        raw_capture_fallback=raw_capture_fallback,
+                    )
+                    for summary, raw_summary, raw_capture_fallback in unique_summaries
                 )
             )
-            dropped_count += sum(record is None for record in hydrated)
-            records.extend(record for record in hydrated if record is not None)
+            fallback_count += sum(result[1] for result in hydrated)
+            dropped_count += sum(record is None for record, _ in hydrated)
+            records.extend(record for record, _ in hydrated if record is not None)
             if len(records) >= limit:
                 break
 
@@ -205,6 +280,13 @@ class OrqTraceSource:
                 raise OrqSourceError(f'repeated OQL page token {next_token!r}')
             page_token = str(next_token)
 
+        if fallback_count:
+            logger.warning(
+                'used SDK-model fallback for {} trace response(s) because raw-response capture was unavailable; '
+                'generated SDK models may omit conversation messages, agent_name, tool_name, total_tokens, and '
+                'duration_ms',
+                fallback_count,
+            )
         if dropped_count:
             logger.warning('dropped {} trace(s) because no usable messages were found', dropped_count)
         records.sort(key=lambda record: (record.timestamp, record.trace_id), reverse=True)
@@ -223,14 +305,17 @@ class OrqTraceSource:
         raw_summary: Any,
         project_names: Mapping[str, str],
         semaphore: asyncio.Semaphore,
-    ) -> TraceRecord | None:
+        *,
+        raw_capture_fallback: bool,
+    ) -> tuple[TraceRecord | None, int]:
+        fallback_count = int(raw_capture_fallback)
         messages = _conversation_messages(raw_summary)
         if _usable(messages):
-            return _record(summary, raw_summary, summary, raw_summary, messages, project_names)
+            return _record(summary, raw_summary, summary, raw_summary, messages, project_names), fallback_count
 
         trace_id = str(_field(summary, 'trace_id') or _field(summary, 'id') or '')
         if not trace_id:
-            return None
+            return None, fallback_count
         spans = await self._list_spans(trace_id, semaphore)
         for span in _eligible_spans(spans):
             span_id = str(_field(span, 'span_id') or _field(span, 'id') or '')
@@ -244,11 +329,15 @@ class OrqTraceSource:
                 )
             raw_response = self._capture.pop(f'/v2/traces/{trace_id}/spans/{span_id}')
             detail = _field(response, 'span') or response
-            raw_detail = _field(raw_response, 'span') if raw_response else _plain(detail)
+            raw_detail = _field(raw_response, 'span') if raw_response else None
+            detail_fallback = raw_detail is None
+            if detail_fallback:
+                raw_detail = _plain(detail)
+            fallback_count += int(detail_fallback)
             messages = _conversation_messages(raw_detail)
             if _usable(messages):
-                return _record(summary, raw_summary, detail, raw_detail, messages, project_names)
-        return None
+                return _record(summary, raw_summary, detail, raw_detail, messages, project_names), fallback_count
+        return None, fallback_count
 
     async def _list_spans(self, trace_id: str, semaphore: asyncio.Semaphore) -> list[Any]:
         spans: list[Any] = []

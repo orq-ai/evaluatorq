@@ -14,6 +14,7 @@ from evaluatorq.trace_finder.orq_source import (
     OrqSourceError,
     OrqTraceSource,
     _RawResponseCapture,
+    _conversation_messages,
     build_oql,
 )
 
@@ -67,6 +68,7 @@ class FakeOrq:
         self.projects = projects or FakeProjects()
         self.enter_calls = 0
         self.exit_calls: list[tuple[Any, Any, Any]] = []
+        self.sdk_configuration: Any = None
 
     async def __aenter__(self) -> 'FakeOrq':
         self.enter_calls += 1
@@ -79,6 +81,19 @@ class FakeOrq:
         traceback: TracebackType | None,
     ) -> None:
         self.exit_calls.append((exc_type, exc_value, traceback))
+
+
+class FakeHooks:
+    def __init__(self) -> None:
+        self.after_success_hooks: list[Any] = []
+
+    def register_after_success_hook(self, hook: Any) -> None:
+        self.after_success_hooks.append(hook)
+
+
+def with_hooks(client: FakeOrq) -> FakeOrq:
+    client.sdk_configuration = namespace(_hooks=FakeHooks())
+    return client
 
 
 def test_build_oql_includes_categorical_and_numeric_filters() -> None:
@@ -212,15 +227,15 @@ async def test_hydrates_latest_eligible_span_and_maps_project_metadata() -> None
             'trace': [
                 span('conversation', minute=2),
                 span('evaluator', minute=4, span_type='span.evaluator'),
-                span('evaluator-child', minute=5, parent_span_id='evaluator'),
-                span('latest', minute=6, span_type='span.responses'),
+                span('eligible', minute=5, span_type='span.responses'),
+                span('evaluator-child', minute=6, parent_span_id='evaluator'),
             ]
         },
         details={
-            ('trace', 'latest'): detail(
-                'latest',
-                'latest conversation',
-                minute=6,
+            ('trace', 'eligible'): detail(
+                'eligible',
+                'eligible conversation',
+                minute=5,
                 provider='span-provider',
                 model='span-model',
                 agent_name='span-agent',
@@ -241,8 +256,8 @@ async def test_hydrates_latest_eligible_span_and_maps_project_metadata() -> None
     )
 
     record = snapshot.traces[0]
-    assert record.span_id == 'latest'
-    assert record.messages == ({'role': 'user', 'content': 'latest conversation'},)
+    assert record.span_id == 'eligible'
+    assert record.messages == ({'role': 'user', 'content': 'eligible conversation'},)
     assert record.project == 'Customer Support'
     assert record.model == 'span-model'
     assert record.provider == 'span-provider'
@@ -250,12 +265,14 @@ async def test_hydrates_latest_eligible_span_and_maps_project_metadata() -> None
     assert record.tool_names == ('lookup', 'search')
     assert record.total_tokens == 999
     assert record.duration_ms == 88
-    assert [call['span_id'] for call in traces.get_span_calls] == ['latest']
+    assert [call['span_id'] for call in traces.get_span_calls] == ['eligible']
 
 
 @pytest.mark.asyncio
-async def test_logs_one_warning_for_all_traces_dropped_without_usable_messages(monkeypatch: pytest.MonkeyPatch) -> None:
-    traces = FakeTraces({None: ([summary('empty', messages=[])], False, None)})
+async def test_warns_when_raw_capture_is_unavailable_and_sdk_fallback_is_used(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    traces = FakeTraces({None: ([summary('fallback')], False, None)})
     warnings: list[str] = []
     monkeypatch.setattr(
         'evaluatorq.trace_finder.orq_source.logger.warning',
@@ -270,9 +287,48 @@ async def test_logs_one_warning_for_all_traces_dropped_without_usable_messages(m
         numeric=NumericFilters(),
     )
 
-    assert snapshot.traces == ()
+    assert snapshot.traces[0].messages == ({'role': 'user', 'content': 'fallback'},)
     assert len(warnings) == 1
-    assert 'dropped 1 trace' in warnings[0]
+    assert 'raw-response capture was unavailable' in warnings[0]
+    assert 'generated SDK models may omit conversation messages, agent_name, tool_name, total_tokens, and duration_ms' in warnings[0]
+
+
+@pytest.mark.asyncio
+async def test_two_sources_on_one_client_register_one_shared_capture() -> None:
+    client = with_hooks(FakeOrq(FakeTraces({None: ([summary('trace')], False, None)})))
+
+    first = make_source(client)
+    second = make_source(client)
+
+    hooks = client.sdk_configuration._hooks
+    assert len(hooks.after_success_hooks) == 1
+    assert first._capture is second._capture
+
+    first.close()
+    await second.aclose()
+
+
+@pytest.mark.asyncio
+async def test_logs_one_warning_for_all_traces_dropped_without_usable_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    traces = FakeTraces({None: ([summary('empty-1', messages=[]), summary('empty-2', messages=[])], False, None)})
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        'evaluatorq.trace_finder.orq_source.logger.warning',
+        lambda message, *args: warnings.append(message.format(*args)),
+    )
+
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START,
+        END,
+        2,
+        facets=FacetSelection(),
+        numeric=NumericFilters(),
+    )
+
+    assert snapshot.traces == ()
+    dropped_warnings = [warning for warning in warnings if 'dropped' in warning]
+    assert len(dropped_warnings) == 1
+    assert 'dropped 2 trace(s)' in dropped_warnings[0]
 
 
 @pytest.mark.asyncio
@@ -329,6 +385,53 @@ def test_raw_response_capture_retains_only_supported_operations() -> None:
 
     assert capture.pop('/v2/traces/query') == {'search': {'data': [{'trace_id': 'trace'}]}}
     assert capture.pop('/v2/traces/query') is None
+
+
+def test_conversation_messages_accepts_direct_messages() -> None:
+    assert _conversation_messages({'messages': [{'role': 'user', 'content': 'direct'}]}) == [
+        {'role': 'user', 'content': 'direct'}
+    ]
+
+
+def test_conversation_messages_decodes_json_conversation_strings() -> None:
+    assert _conversation_messages({'input': '{"messages": [{"role": "user", "content": "json"}]}'}) == [
+        {'role': 'user', 'content': 'json'}
+    ]
+
+
+def test_conversation_messages_extracts_prompt_and_output() -> None:
+    assert _conversation_messages({'input': {'prompt': 'prompt'}, 'output': 'output'}) == [
+        {'role': 'user', 'content': 'prompt'},
+        {'role': 'assistant', 'content': 'output'},
+    ]
+
+
+def test_conversation_messages_extracts_completion_choices() -> None:
+    assert _conversation_messages({
+        'output': {
+            'choices': [
+                {'message': {'role': 'assistant', 'content': 'choice message'}},
+                {'text': 'choice text'},
+            ]
+        }
+    }) == [
+        {'role': 'assistant', 'content': 'choice message'},
+        {'content': 'choice text', 'role': 'assistant'},
+    ]
+
+
+def test_conversation_messages_preserves_tool_calls() -> None:
+    tool_calls = [{'id': 'call-1', 'type': 'function', 'function': {'name': 'search'}}]
+    assert _conversation_messages({'messages': [{'role': 'assistant', 'tool_calls': tool_calls}]}) == [
+        {'role': 'assistant', 'tool_calls': tool_calls}
+    ]
+
+
+def test_conversation_messages_preserves_content_parts() -> None:
+    parts = [{'type': 'text', 'text': 'part'}]
+    assert _conversation_messages({'messages': [{'role': 'user', 'parts': parts}]}) == [
+        {'role': 'user', 'parts': parts}
+    ]
 
 
 def namespace(**values: Any) -> SimpleNamespace:
