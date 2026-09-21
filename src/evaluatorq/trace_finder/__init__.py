@@ -3,6 +3,20 @@
 from __future__ import annotations
 
 from .compiler import CompiledPlan, CompileError, classification_legend, compile_query
+from .export import (
+    ExportCounts,
+    ExportFilters,
+    ExportNumericFilters,
+    ExportSelection,
+    ExportTask,
+    ExportThresholdSelection,
+    ExportTimes,
+    ExportTrace,
+    ExportValuesSelection,
+    RunExport,
+    build_export,
+    export_json,
+)
 from .facets import load_facet_catalogue
 from .filter_selector import NO_FILTER_LABEL, FilterSelectionError, select_filters
 from .jev import build_datapoint, build_jev_evaluator, matches_selection, parse_datapoint_result, run_jev
@@ -31,6 +45,7 @@ from .models import (
 )
 from .orq_source import OrqTraceSource, build_oql
 from .projection import MAX_TOKEN_BUDGET, OMISSION_MARKER, estimate_tokens, project_trace, serialize_projection
+from .run_store import RunStore
 
 __all__ = [
     'FACET_NAMES',
@@ -40,6 +55,15 @@ __all__ = [
     'CompileError',
     'CompiledPlan',
     'CompiledQuery',
+    'ExportCounts',
+    'ExportFilters',
+    'ExportNumericFilters',
+    'ExportSelection',
+    'ExportTask',
+    'ExportThresholdSelection',
+    'ExportTimes',
+    'ExportTrace',
+    'ExportValuesSelection',
     'FacetCatalogue',
     'FacetName',
     'FacetOption',
@@ -50,9 +74,11 @@ __all__ = [
     'NumericFilters',
     'OrqTraceSource',
     'PopulationRequest',
+    'RunExport',
     'RunRequest',
     'RunSnapshot',
     'RunState',
+    'RunStore',
     'SelectionRule',
     'Snapshot',
     'ThresholdSelection',
@@ -61,11 +87,13 @@ __all__ = [
     'TraceRecord',
     'ValueSelection',
     'build_datapoint',
+    'build_export',
     'build_jev_evaluator',
     'build_oql',
     'classification_legend',
     'compile_query',
     'estimate_tokens',
+    'export_json',
     'load_facet_catalogue',
     'matches_selection',
     'parse_datapoint_result',

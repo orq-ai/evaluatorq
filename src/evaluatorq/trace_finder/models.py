@@ -261,6 +261,7 @@ class RunSnapshot:
     request: RunRequest | None = None
     compiled: CompiledQuery | None = None
     generated_filters: FacetSelection = field(default_factory=FacetSelection)
+    generated_numeric: NumericFilters = field(default_factory=NumericFilters)
     trace_ids: tuple[str, ...] = ()
     traces: tuple[TraceRecord, ...] = ()
     results: Mapping[str, TraceClassification] = field(default_factory=lambda: MappingProxyType({}))
