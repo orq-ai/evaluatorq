@@ -210,7 +210,7 @@
 | src/evaluatorq/simulation/reports/sections.py                            |      287 |        7 |     98% |109, 500-505 |
 | src/evaluatorq/simulation/reports/token\_usage.py                        |       37 |        5 |     86% |     66-79 |
 | src/evaluatorq/simulation/runner/\_\_init\_\_.py                         |        3 |        0 |    100% |           |
-| src/evaluatorq/simulation/runner/simulation.py                           |      466 |       21 |     95% |247, 640, 642, 653, 661, 921, 1041, 1192-1200, 1218-1219, 1221-1222, 1366, 1388 |
+| src/evaluatorq/simulation/runner/simulation.py                           |      475 |       21 |     96% |276, 669, 671, 682, 690, 949, 1037, 1283-1291, 1309-1310, 1312-1313, 1457, 1479 |
 | src/evaluatorq/simulation/token\_usage.py                                |        7 |        0 |    100% |           |
 | src/evaluatorq/simulation/traces.py                                      |      324 |       13 |     96% |342, 389, 398, 464, 467, 486, 584, 694, 771, 853, 863, 922, 926 |
 | src/evaluatorq/simulation/tracing.py                                     |       45 |        6 |     87% |     84-90 |
@@ -228,7 +228,7 @@
 | src/evaluatorq/tracing/setup.py                                          |      140 |       12 |     91% |97, 184-187, 253, 255-258, 323-324, 345 |
 | src/evaluatorq/tracing/spans.py                                          |       84 |        1 |     99% |       130 |
 | src/evaluatorq/types.py                                                  |       88 |        2 |     98% |   32, 292 |
-| **TOTAL**                                                                | **27437** | **2413** | **91%** |           |
+| **TOTAL**                                                                | **27446** | **2413** | **91%** |           |
 
 
 ## Setup coverage badge
