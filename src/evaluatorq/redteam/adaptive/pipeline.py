@@ -116,12 +116,12 @@ def expand_trace_seed_datapoints(seeds: list[DataPoint] | None, dynamic_datapoin
     if seeds is None:
         return dynamic_datapoints
     expanded: list[DataPoint] = []
-    for seed in seeds:
+    for seed_index, seed in enumerate(seeds):
         for attack in dynamic_datapoints:
             inputs = {**seed.inputs, **attack.inputs}
-            seed_id = seed.inputs.get('source_trace_id', seed.inputs.get('id', 'trace'))
+            seed_id = seed.inputs.get('source_trace_id') or seed.inputs.get('id') or 'seed'
             attack_id = attack.inputs.get('id', 'attack')
-            inputs['id'] = f'trace_{seed_id}_{attack_id}'
+            inputs['id'] = f'trace_{seed_id}_{seed_index}_{attack_id}'
             expanded.append(DataPoint(inputs=inputs, expected_output=attack.expected_output))
     return expanded
 
@@ -143,7 +143,7 @@ async def generate_dynamic_datapoints_for_vulnerabilities(
     agent_capabilities: AgentCapabilities | None = None,
     strategy_names: set[str] | None = None,
     delivery_methods: set[DeliveryMethod | str] | None = None,
-    attack_techniques: set[AttackTechnique | str] | None = None,
+    attack_techniques: set[AttackTechnique] | None = None,
 ) -> tuple[list[DataPoint], dict[str, Any]]:
     """Generate evaluatorq DataPoints for dynamic red teaming, keyed by Vulnerability enum.
 
@@ -224,7 +224,7 @@ async def generate_dynamic_datapoints(
     agent_capabilities: AgentCapabilities | None = None,
     strategy_names: set[str] | None = None,
     delivery_methods: set[DeliveryMethod | str] | None = None,
-    attack_techniques: set[AttackTechnique | str] | None = None,
+    attack_techniques: set[AttackTechnique] | None = None,
 ) -> tuple[list[DataPoint], dict[str, Any]]:
     """Generate evaluatorq DataPoints for dynamic red teaming.
 

@@ -13,3 +13,7 @@ Verification: `uv run ruff format --check src` passes; changed-source Ruff check
 Concern: full `uv run ruff check src` still reports a pre-existing unsorted `__all__` in `src/evaluatorq/contracts.py`; that unrelated file was not changed.
 
 The strategy planner is included because attack-technique filtering must be applied to both registry and generated strategies before the existing per-category cap.
+
+Review fixes are included in the follow-up commit `fix: validate red-team trace seeds`: attack techniques are resolved once to canonical enum values and rejected when unknown; static-only technique filters are rejected while hybrid runs keep the filter on the dynamic leg; expanded seed IDs include a deterministic supplied-row index; and every seed message is checked at the public boundary as a non-empty, parseable `Message` mapping.
+
+Follow-up verification: 68 focused tests pass, full `uv run ruff check src` passes, `uv run ruff format --check src` passes, and `uv run basedpyright` passes with 0 errors, 0 warnings, and 0 notes.

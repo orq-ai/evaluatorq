@@ -10,6 +10,7 @@ import re
 import uuid
 import warnings
 from collections import Counter, defaultdict
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
+from pydantic import ValidationError
 
 from evaluatorq import DataPoint, EvaluationResult, job
 from evaluatorq.common.async_utils import await_maybe
@@ -149,6 +151,36 @@ DEFAULT_MAX_TURNS = 5
 """Turn budget when the caller names none. ``max_turns`` defaults to ``None``
 rather than to this value so a replay can tell "unset" from "explicitly 5" and
 restore the replayed run's budget only in the former case."""
+
+
+def _resolve_attack_techniques(
+    values: list[AttackTechnique | str] | None,
+) -> set[AttackTechnique] | None:
+    """Resolve the public attack-technique filter once at the API boundary."""
+    if values is None:
+        return None
+    try:
+        raw_values = set(values)
+        return {AttackTechnique(value) for value in raw_values}
+    except (TypeError, ValueError) as exc:
+        valid = ', '.join(technique.value for technique in AttackTechnique)
+        raise ValueError(f'Unknown attack technique(s) {values!r}; expected one of: {valid}.') from exc
+
+
+def _validate_trace_seed_messages(datapoint: DataPoint, index: int) -> None:
+    """Validate the replay messages carried by one trace seed row."""
+    messages = datapoint.inputs.get('trace_seed_messages')
+    if not isinstance(messages, list) or not messages:
+        raise ValueError(f'datapoints[{index}].trace_seed_messages must be a non-empty list of Message mappings.')
+    for message_index, message in enumerate(messages):
+        if not isinstance(message, Mapping):
+            raise TypeError(f'datapoints[{index}].trace_seed_messages[{message_index}] must be a Message mapping.')
+        try:
+            Message.model_validate(message)
+        except ValidationError as exc:
+            raise ValueError(
+                f'datapoints[{index}].trace_seed_messages[{message_index}] is not parseable as a Message: {exc}'
+            ) from exc
 
 
 def get_runs_dir() -> Path:
@@ -692,7 +724,7 @@ def _validate_credentials_and_deps(
 @dataclass(frozen=True)
 class _ResolvedFilters:
     strategy_names: set[str] | None
-    attack_techniques: set[AttackTechnique | str] | None
+    attack_techniques: set[AttackTechnique] | None
     delivery_methods: set[DeliveryMethod | str] | None
     filter_selection: tuple[str, list[str]] | None
 
@@ -709,9 +741,7 @@ def _resolve_filter_sets(
     # rejected at the CLI boundary; here we pass through verbatim and detect
     # empty/unmatched intersections post-filter from the actually-matched set.
     resolved_strategy_names: set[str] | None = set(strategies) if strategies is not None else None
-    resolved_attack_techniques: set[AttackTechnique | str] | None = (
-        set(attack_techniques) if attack_techniques is not None else None
-    )
+    resolved_attack_techniques = _resolve_attack_techniques(attack_techniques)
     # Resolve through the registry so known values (enum plus registered) become
     # canonical DeliveryMethod objects and unknown ones stay raw strings. The
     # objects then flow through the planner, loader filter, and reporting as-is —
@@ -917,7 +947,7 @@ class _PipelineDispatchInputs:
     verbosity: int
     pipeline_config: LLMConfig
     resolved_strategy_names: set[str] | None
-    resolved_attack_techniques: set[AttackTechnique | str] | None
+    resolved_attack_techniques: set[AttackTechnique] | None
     resolved_delivery_methods: set[DeliveryMethod | str] | None
     trace_datapoints: list[DataPoint] | None
     run_id: str
@@ -1267,7 +1297,9 @@ async def red_team(
             require this target and use the dynamic pipeline; they cannot be
             combined with ``dataset`` or ``previous_run``.
         attack_techniques: Restrict dynamic strategies to the supplied attack
-            techniques. ``None`` disables the filter; an empty list selects nothing.
+            techniques. In hybrid mode, it applies only to the dynamic leg; static-only
+            runs reject it because static rows have no attack technique. ``None`` disables
+            the filter; an empty list selects nothing.
         delivery_methods: Restrict the run to attacks whose delivery method
             overlaps the supplied selection. Applies to dynamic strategies
             (``AttackStrategy.delivery_methods``) and to static datapoints
@@ -1409,6 +1441,13 @@ async def red_team(
 
     save = _resolve_save_mode(save=save)
 
+    # Replay short-circuits every data-selection input: the cases are already
+    # decided by the run being replayed, so accepting a conflicting selector
+    # would silently ignore it. Reject the combination instead.
+    resolved_attack_techniques = _resolve_attack_techniques(attack_techniques)
+    if mode is not None and Pipeline(mode) is Pipeline.STATIC and attack_techniques is not None:
+        raise ValueError('attack_techniques applies to dynamic strategies and cannot be used in static mode.')
+
     trace_datapoints: list[DataPoint] | None = None
     if datapoints is not None:
         if dataset is not None:
@@ -1421,6 +1460,7 @@ async def red_team(
                     f'datapoints[{index}] is missing trace seed metadata: '
                     "expected 'trace_seed_messages' and 'trace_start_from'."
                 )
+            _validate_trace_seed_messages(datapoint, index)
             try:
                 TraceStart(datapoint.inputs['trace_start_from'])
             except ValueError as exc:
@@ -1953,7 +1993,7 @@ def _check_filter_results(
     datapoints: list[DataPoint],
     strategy_names: set[str] | None,
     delivery_methods: set[DeliveryMethod | str] | None,
-    attack_techniques: set[AttackTechnique | str] | None = None,
+    attack_techniques: set[AttackTechnique] | None = None,
     *,
     names_apply: bool = True,
     present_methods: list[str] | None = None,
@@ -2026,10 +2066,7 @@ def _check_filter_results(
                 msg += f' Present: {sorted(matched_methods)}.'
             logger.warning(msg)
     if attack_techniques is not None:
-        requested = {
-            technique.value if isinstance(technique, AttackTechnique) else str(technique)
-            for technique in attack_techniques
-        }
+        requested = {technique.value for technique in attack_techniques}
         unmatched = sorted(requested - matched_techniques)
         if unmatched:
             logger.warning(f'Unmatched attack technique(s): {unmatched} — no datapoints matched.')
@@ -2116,7 +2153,7 @@ async def _prepare_target(
     verbosity: int = 0,
     pipeline_config: LLMConfig | None = None,
     resolved_strategy_names: set[str] | None = None,
-    resolved_attack_techniques: set[AttackTechnique | str] | None = None,
+    resolved_attack_techniques: set[AttackTechnique] | None = None,
     resolved_delivery_methods: set[DeliveryMethod | str] | None = None,
     run_id: str | None = None,
 ) -> PreparedTarget:
@@ -2650,7 +2687,7 @@ class _DynamicEstimationInputs:
     generated_strategy_count: int
     generate_strategies: bool
     max_per_category: int | None
-    resolved_attack_techniques: set[AttackTechnique | str] | None
+    resolved_attack_techniques: set[AttackTechnique] | None
 
 
 def _estimate_dynamic_datapoints(*, inputs: _DynamicEstimationInputs) -> tuple[int, dict[str, Any]]:
@@ -2794,7 +2831,7 @@ class _TargetPrepInputs:
     verbosity: int
     pipeline_config: LLMConfig | None
     resolved_strategy_names: set[str] | None
-    resolved_attack_techniques: set[AttackTechnique | str] | None
+    resolved_attack_techniques: set[AttackTechnique] | None
     resolved_delivery_methods: set[DeliveryMethod | str] | None
     trace_datapoints: list[DataPoint] | None
     run_id: str
@@ -2940,7 +2977,7 @@ class _AgentTargetDatapointInputs:
     at_caps: dict[int, AgentCapabilities]
     at: AgentTarget
     resolved_strategy_names: set[str] | None
-    resolved_attack_techniques: set[AttackTechnique | str] | None
+    resolved_attack_techniques: set[AttackTechnique] | None
     resolved_delivery_methods: set[DeliveryMethod | str] | None
     trace_datapoints: list[DataPoint] | None
     max_dynamic_datapoints: int | None
@@ -3202,7 +3239,7 @@ async def _run_dynamic_or_hybrid(
     verbosity: int = 0,
     pipeline_config: LLMConfig | None = None,
     resolved_strategy_names: set[str] | None = None,
-    resolved_attack_techniques: set[AttackTechnique | str] | None = None,
+    resolved_attack_techniques: set[AttackTechnique] | None = None,
     resolved_delivery_methods: set[DeliveryMethod | str] | None = None,
     trace_datapoints: list[DataPoint] | None = None,
     run_id: str | None = None,

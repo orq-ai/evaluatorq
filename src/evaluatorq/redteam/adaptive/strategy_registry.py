@@ -201,7 +201,7 @@ def _filter_by_method(
     strategies: list[AttackStrategy],
     names: set[str] | None,
     delivery_methods: set[DeliveryMethod | str] | None,
-    attack_techniques: set[AttackTechnique | str] | None = None,
+    attack_techniques: set[AttackTechnique] | None = None,
 ) -> list[AttackStrategy]:
     """Filter strategies by name and/or delivery method.
 
@@ -231,8 +231,7 @@ def _filter_by_method(
         if delivery_methods is not None and not (set(strategy.delivery_methods) & delivery_methods):
             continue
         if attack_techniques is not None:
-            allowed = {value.value if isinstance(value, AttackTechnique) else str(value) for value in attack_techniques}
-            if strategy.attack_technique.value not in allowed:
+            if strategy.attack_technique not in attack_techniques:
                 continue
         kept.append(strategy)
     return kept

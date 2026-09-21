@@ -15,6 +15,7 @@ from evaluatorq.redteam.contracts import (
     DeliveryMethod,
     Severity,
     SaveMode,
+    Pipeline,
     TurnType,
     Vulnerability,
 )
@@ -112,12 +113,57 @@ def _seed() -> DataPoint:
     )
 
 
+def _seed_without_identity() -> DataPoint:
+    return DataPoint(
+        inputs={
+            'trace_seed_messages': [FIRST_USER],
+            'trace_start_from': 'first_user',
+        }
+    )
+
+
 @pytest.mark.asyncio
 async def test_trace_seed_validation_rejects_non_trace_datapoints() -> None:
     from evaluatorq.redteam.runner import red_team
 
     with pytest.raises(ValueError, match='trace seed'):
         await red_team(_Target(), datapoints=[DataPoint(inputs={'query': 'not a trace'})], save=SaveMode.NONE)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'messages',
+    [None, [], [{'role': 'not-a-message-role', 'content': 'bad'}], ['not a mapping']],
+)
+async def test_trace_seed_validation_rejects_invalid_messages(messages: Any) -> None:
+    from evaluatorq.redteam.runner import red_team
+
+    seed = _seed()
+    seed.inputs['trace_seed_messages'] = messages
+
+    with pytest.raises((TypeError, ValueError), match=r'datapoints\[0\].*trace_seed_messages'):
+        await red_team(_Target(), datapoints=[seed], save=SaveMode.NONE)
+
+
+@pytest.mark.asyncio
+async def test_red_team_rejects_unknown_attack_technique_at_boundary() -> None:
+    from evaluatorq.redteam.runner import red_team
+
+    with pytest.raises(ValueError, match='attack technique'):
+        await red_team(_Target(), attack_techniques=['not-a-technique'], save=SaveMode.NONE)
+
+
+@pytest.mark.asyncio
+async def test_attack_technique_filter_is_rejected_for_static_only_runs() -> None:
+    from evaluatorq.redteam.runner import red_team
+
+    with pytest.raises(ValueError, match='static'):
+        await red_team(
+            _Target(),
+            mode=Pipeline.STATIC,
+            attack_techniques=[AttackTechnique.DIRECT_INJECTION],
+            save=SaveMode.NONE,
+        )
 
 
 @pytest.mark.asyncio
@@ -159,6 +205,21 @@ def test_trace_seeds_cross_product_with_selected_attack_strategies() -> None:
     assert len(rows) == 1
     assert rows[0].inputs['trace_seed_messages'] == [FIRST_USER]
     assert rows[0].inputs['strategy']['attack_technique'] == 'direct-injection'
+
+
+def test_trace_seed_ids_are_unique_for_duplicate_and_missing_source_identity() -> None:
+    from evaluatorq.redteam.adaptive.pipeline import expand_trace_seed_datapoints
+
+    strategy = DataPoint(inputs={'id': 'attack-1', 'category': 'ASI01', 'strategy': {}})
+    seeds = [_seed(), _seed(), _seed_without_identity()]
+
+    rows = expand_trace_seed_datapoints(seeds, [strategy])
+
+    ids = [row.inputs['id'] for row in rows]
+    assert len(set(ids)) == 3
+    assert ids[0] == 'trace_trace-1_0_attack-1'
+    assert ids[1] == 'trace_trace-1_1_attack-1'
+    assert ids[2] == 'trace_seed_2_attack-1'
 
 
 @pytest.mark.asyncio
