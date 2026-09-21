@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 from evaluatorq import Trace, TraceInput, fetch_traces
-from evaluatorq.common.trace_input import _parse_messages, _trace_from_spans
+from evaluatorq.common.trace_input import _message_candidates, _parse_messages, _trace_from_spans
 from evaluatorq.contracts import Message
 
 
@@ -189,6 +189,115 @@ def test_top_level_responses_input_object_is_detected() -> None:
 
     assert detected == 'responses'
     assert [message.content for message in messages] == ['check weather']
+
+
+@pytest.mark.parametrize(
+    ('payload', 'expected_format'),
+    [
+        ({'messages': [{'role': 'user', 'content': 'hi'}]}, 'chat_completions'),
+        (
+            {
+                'input': [
+                    {
+                        'type': 'message',
+                        'role': 'user',
+                        'content': [{'type': 'input_text', 'text': 'hi'}],
+                    }
+                ]
+            },
+            'responses',
+        ),
+        ([{'role': 'user', 'parts': [{'type': 'text', 'content': 'hi'}]}], 'otel_genai'),
+    ],
+)
+def test_message_formats_normalize(payload: object, expected_format: str) -> None:
+    messages, message_format = _parse_messages(payload, default_role='user')
+    assert messages[0].content == 'hi'
+    assert message_format == expected_format
+
+
+def test_message_candidates_follow_format_precedence_and_include_events() -> None:
+    span = {
+        'attributes': {
+            'gen_ai.input.messages': '[{"role":"user","content":"flat"}]',
+            'gen_ai': {'input': {'messages': [{'role': 'user', 'content': 'nested'}]}},
+            'openresponses.input': [{'type': 'message', 'role': 'user', 'content': 'responses'}],
+            'input': {'messages': [{'role': 'user', 'content': 'generic'}]},
+        },
+        'events': [
+            {
+                'attributes': {
+                    'gen_ai.input.messages': [{'role': 'user', 'content': 'event'}],
+                }
+            }
+        ],
+        'input': {'messages': [{'role': 'user', 'content': 'top-level'}]},
+    }
+
+    candidates = _message_candidates(span, 'input')
+
+    assert candidates[0] == ('otel_genai', '[{"role":"user","content":"flat"}]')
+    assert candidates[1] == ('otel_genai', [{'role': 'user', 'content': 'nested'}])
+    assert candidates[-2:] == [
+        ('otel_genai', [{'role': 'user', 'content': 'event'}]),
+        (None, {'messages': [{'role': 'user', 'content': 'top-level'}]}),
+    ]
+
+
+def test_responses_full_envelopes_and_top_level_strings_are_normalized() -> None:
+    span = {
+        'attributes': {
+            'orq.openresponses.request': json.dumps({'input': 'question'}),
+            'orq.openresponses.response': json.dumps({'output': 'answer'}),
+        }
+    }
+
+    imported = _trace_from_spans('trace-envelopes', [{**_span('s', parent_id=None, started_at='2026-01-01T00:00:00Z'), **span}])
+
+    assert [message.content for message in imported.input_messages] == ['question']
+    assert [message.content for message in imported.output_messages] == ['answer']
+    assert imported.message_format == 'responses'
+
+
+def test_otel_unknown_and_multimodal_parts_remain_visible() -> None:
+    messages, detected = _parse_messages(
+        [
+            {
+                'role': 'user',
+                'parts': [
+                    {'type': 'text', 'content': 'look'},
+                    {'type': 'image', 'url': 'https://example.test/a.png'},
+                    {'type': 'unrecognized', 'value': 3},
+                    'bad-part',
+                ],
+            }
+        ],
+        default_role='user',
+    )
+
+    assert detected == 'otel_genai'
+    assert messages[0].content == 'look\n[image]\n{"type":"unrecognized","value":3}'
+
+
+def test_flat_otel_prompt_and_untyped_parts_are_supported() -> None:
+    messages, detected = _parse_messages(
+        [{'role': 'user', 'parts': [{'content': 'prompt'}]}],
+        default_role='user',
+    )
+    assert detected == 'otel_genai'
+    assert messages[0].content == 'prompt'
+
+    spans = [
+        _span(
+            'flat-prompt',
+            parent_id=None,
+            started_at='2026-01-01T00:00:00Z',
+            attributes={'gen_ai.input.prompt': 'flat prompt', 'gen_ai.output.completion': 'flat completion'},
+        )
+    ]
+    imported = _trace_from_spans('trace-flat-prompt', spans)
+    assert [message.content for message in imported.messages] == ['flat prompt', 'flat completion']
+    assert imported.message_format == 'otel_genai'
 
 
 @pytest.mark.parametrize("tool_result_key", ["response", "result"])

@@ -75,7 +75,7 @@ def _content_text(value: Any) -> str | None:
             if isinstance(content, str):
                 text.append(content)
             continue
-        if part_type in {'image_url', 'input_image', 'input_file', 'file'}:
+        if part_type in {'image', 'image_url', 'input_image', 'input_file', 'file', 'audio', 'input_audio'}:
             logger.warning(
                 'Trace message contains a {} part that cannot be scored as text; preserving a marker.', part_type
             )
@@ -174,7 +174,7 @@ def _otel_messages(value: Any, *, default_role: _ROLE) -> list[Message]:
                 logger.warning('Unknown OTel GenAI part shape {}; dropping it.', type(part).__name__)
                 continue
             part_type = part.get('type')
-            if part_type in {'text', 'refusal'}:
+            if part_type in {None, 'text', 'refusal'}:
                 content = part.get('content') or part.get('text') or part.get('refusal')
                 if isinstance(content, str):
                     text.append(content)
@@ -194,10 +194,16 @@ def _otel_messages(value: Any, *, default_role: _ROLE) -> list[Message]:
                     )
                 else:
                     logger.warning('OTel GenAI tool response has no call ID; dropping it.')
+            elif part_type in {'image', 'image_url', 'input_image', 'input_file', 'file', 'audio', 'input_audio'}:
+                logger.warning(
+                    'Trace message contains a {} part that cannot be scored as text; preserving a marker.', part_type
+                )
+                text.append(f'[{part_type}]')
             elif part_type == 'reasoning':
                 logger.debug('Dropping an OTel GenAI reasoning part from the imported transcript.')
             else:
-                logger.warning('Unknown OTel GenAI part type {!r}; dropping it.', part_type)
+                logger.warning('Unknown OTel GenAI part type {!r}; preserving JSON text.', part_type)
+                text.append(_json_text(part))
         if role == 'tool' and tool_responses:
             messages.extend(tool_responses)
         elif role in {'user', 'assistant', 'tool', 'system', 'developer'} and (text or tool_calls):
@@ -218,6 +224,13 @@ def _responses_messages(value: Any, *, default_role: _ROLE) -> list[Message]:
     value = _decode_json(value)
     if isinstance(value, dict):
         value = value.get('input') if default_role == 'user' else value.get('output')
+    if isinstance(value, str):
+        return [Message(role=default_role, content=value)]
+    if isinstance(value, dict):
+        if isinstance(value.get('messages'), list):
+            return _chat_messages(value, default_role=default_role)
+        if 'role' in value or 'content' in value:
+            return _chat_messages([value], default_role=default_role)
     item_ids = (
         {
             item['call_id']: item['id']
@@ -250,7 +263,7 @@ def _looks_like_responses(value: Any) -> bool:
     decoded = _decode_json(value)
     if isinstance(decoded, dict):
         for key in ('output', 'input'):
-            if isinstance(decoded.get(key), list):
+            if key in decoded and decoded.get(key) is not None:
                 decoded = decoded[key]
                 break
     return isinstance(decoded, list) and any(
@@ -296,6 +309,11 @@ def _attribute_side_candidates(attributes: dict[str, Any], side: str) -> list[tu
     openresponses_key = f'openresponses.{side}'
     candidates: list[tuple[_MESSAGE_FORMAT | None, Any]] = [
         ('otel_genai', attributes.get(f'gen_ai.{side}.messages')),
+        ('otel_genai', attributes.get(f'gen_ai.{side}')),
+        (
+            'otel_genai',
+            attributes.get('gen_ai.input.prompt' if side == 'input' else 'gen_ai.output.completion'),
+        ),
         ('otel_genai', _nested(gen_ai, side, 'messages')),
         ('responses', attributes.get(openresponses_key)),
         ('responses', openresponses.get(side)),
@@ -313,7 +331,8 @@ def _attribute_side_candidates(attributes: dict[str, Any], side: str) -> list[tu
     return [(hint, value) for hint, value in candidates if value is not None]
 
 
-def _side_candidates(span: dict[str, Any], side: str) -> list[tuple[_MESSAGE_FORMAT | None, Any]]:
+def _message_candidates(span: dict[str, Any], side: str) -> list[tuple[_MESSAGE_FORMAT | None, Any]]:
+    """Return message payloads in the documented span-location precedence order."""
     candidates = _attribute_side_candidates(_mapping(span.get('attributes')), side)
     events = span.get('events')
     if isinstance(events, list):
@@ -325,6 +344,11 @@ def _side_candidates(span: dict[str, Any], side: str) -> list[tuple[_MESSAGE_FOR
     return candidates
 
 
+def _side_candidates(span: dict[str, Any], side: str) -> list[tuple[_MESSAGE_FORMAT | None, Any]]:
+    """Compatibility alias for callers of the pre-canonical private helper."""
+    return _message_candidates(span, side)
+
+
 def _parse_exchange(
     span: dict[str, Any],
 ) -> tuple[list[Message], list[Message], _TRACE_MESSAGE_FORMAT | None]:
@@ -332,7 +356,7 @@ def _parse_exchange(
     side_roles: tuple[tuple[str, _ROLE], ...] = (('input', 'user'), ('output', 'assistant'))
     for side, default_role in side_roles:
         parsed: tuple[list[Message], _MESSAGE_FORMAT] | None = None
-        for hinted, value in _side_candidates(span, side):
+        for hinted, value in _message_candidates(span, side):
             messages, detected = _parse_messages(value, hinted=hinted, default_role=default_role)
             if messages:
                 parsed = messages, detected
