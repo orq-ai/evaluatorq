@@ -313,7 +313,8 @@ def _normalise_params(inputs: _EvaluationInputs) -> _ResolvedEvaluationInputs:
         # No-inference mode: skip generation and replay each row's recorded response.
         if validated.jobs:
             logger.warning(
-                "inference=False: ignoring the provided 'jobs'; responses are replayed from the 'messages' column."
+                "inference=False: ignoring the provided 'jobs'; responses are replayed from recorded output when "
+                "available, otherwise from the 'messages' column."
             )
         jobs = [_replay_recorded_response]
     evaluators_list = validated.evaluators or []
@@ -776,8 +777,9 @@ async def evaluatorq(
         path: Optional path (e.g. "MyProject/MyFolder") to place the experiment
               in a specific project and folder on the Orq platform.
         inference: When True (default) jobs run to generate responses. When False,
-              generation is skipped and evaluators score the pre-recorded response in
-              each row's ``messages`` column; ``jobs`` is then optional and ignored.
+              generation is skipped and evaluators score each row's recorded output
+              when present, falling back to its ``messages`` column; ``jobs`` is then
+              optional and ignored.
         single_trace: Group every row under one ``evaluatorq.run`` span so the whole
               evaluation is a single trace. Defaults to False, which leaves each row's
               ``orq.job`` as its own root — an N-row run is then N separate traces.

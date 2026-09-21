@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from evaluatorq.common.output_adapters import (
     inputs_to_messages,
     output_error_text,
@@ -9,10 +11,13 @@ from evaluatorq.common.output_adapters import (
 from evaluatorq.contracts import (
     AgentResponse,
     AgentResponseError,
+    Message,
     ReasoningOutputItem,
     TextOutputItem,
     ToolCallOutputItem,
 )
+from evaluatorq.evaluators import exact_match_evaluator
+from evaluatorq.types import DataPoint, EvaluationResult
 
 
 def test_output_to_text_agentresponse_returns_text():
@@ -21,6 +26,20 @@ def test_output_to_text_agentresponse_returns_text():
 
 def test_output_to_text_str_passthrough():
     assert output_to_text('plain') == 'plain'
+
+
+@pytest.mark.asyncio
+async def test_output_to_text_message_list_supports_exact_match():
+    output = [Message(role='assistant', content='answer')]
+
+    assert output_to_text(output) == 'answer'
+
+    result = await exact_match_evaluator()['scorer']({
+        'data': DataPoint(inputs={}, expected_output='answer'),
+        'output': output,
+    })
+    score = result if isinstance(result, EvaluationResult) else EvaluationResult.model_validate(result)
+    assert score.pass_ is True
 
 
 def test_output_to_text_none_is_empty():

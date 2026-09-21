@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq.common.messages import coerce_content_text
-from evaluatorq.contracts import AgentResponse, OutputMessage, TextOutputItem, ToolCallOutputItem
+from evaluatorq.contracts import AgentResponse, Message, OutputMessage, TextOutputItem, ToolCallOutputItem
 
 if TYPE_CHECKING:
     from evaluatorq.types import Output
@@ -26,6 +26,11 @@ def output_to_text(output: Any) -> str:
         return output.text
     if isinstance(output, str):
         return output
+    if isinstance(output, list) and (not output or all(isinstance(message, (Message, dict)) for message in output)):
+        return ''.join(
+            coerce_content_text(message.content if isinstance(message, Message) else message.get('content'))
+            for message in output
+        )
     if isinstance(output, dict):
         if output.get('object') == 'response':
             try:
