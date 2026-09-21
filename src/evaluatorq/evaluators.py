@@ -8,10 +8,123 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.common.output_adapters import output_to_text
+from evaluatorq.contracts import Message
+from evaluatorq.types import EvaluationResult
 
 if TYPE_CHECKING:
     from .types import Evaluator, ScorerParameter
+
+
+_ORQ_EVALUATOR_RESPONSE_TYPES = frozenset({
+    'boolean',
+    'string',
+    'number',
+    'string_array',
+    'rouge_n',
+    'bert_score',
+    'llm_evaluator',
+    'http_eval',
+    'structured',
+})
+
+
+def _orq_response_payload(response: Any) -> dict[str, Any]:
+    if isinstance(response, dict):
+        return response
+    model_dump = getattr(response, 'model_dump', None)
+    if callable(model_dump):
+        payload = model_dump(mode='json')
+        if isinstance(payload, dict):
+            return payload
+    raise ValueError(f'Orq evaluator returned unsupported response shape {type(response).__name__}.')
+
+
+def _orq_response_result(response: Any) -> EvaluationResult:
+    payload = _orq_response_payload(response)
+    response_type = payload.get('type')
+    if not isinstance(response_type, str) or response_type not in _ORQ_EVALUATOR_RESPONSE_TYPES:
+        raise ValueError(f'Orq evaluator returned unsupported response shape {response_type!r}.')
+    raw_value = payload.get('values') if response_type == 'string_array' else payload.get('value')
+    explanation: str | None = None
+    if response_type in {'llm_evaluator', 'http_eval'} and isinstance(raw_value, dict):
+        explanation_value = raw_value.get('explanation')
+        explanation = explanation_value if isinstance(explanation_value, str) else None
+        raw_value = raw_value.get('value')
+    if response_type == 'string_array':
+        raw_value = {'values': raw_value}
+    if raw_value is None or not isinstance(raw_value, (str, int, float, bool, dict)):
+        raise ValueError(f'Orq evaluator returned unsupported response shape for {response_type!r}.')
+    return EvaluationResult.model_validate({
+        'value': raw_value,
+        'explanation': explanation,
+        'pass': raw_value if isinstance(raw_value, bool) else None,
+        'raw_output': payload,
+    })
+
+
+def orq_evaluator(
+    evaluator_id: str,
+    *,
+    name: str | None = None,
+    model: str | None = None,
+    client: Any | None = None,
+) -> Evaluator:
+    """Create an evaluatorq scorer backed by an Orq evaluator.
+
+    ``evaluator_id`` identifies an evaluator that already exists in Orq. The
+    optional ``model`` is an invocation-time override for LLM-based
+    evaluators; it is not needed for deterministic built-in evaluators, and a
+    configured LLM evaluator can use its Orq model when this is omitted. When
+    omitted, ``model`` is not sent to the SDK at all.
+
+    The scorer sends the latest user turn as ``query``, evaluatorq's job output
+    as ``output``, ``expected_output`` as the optional human/reference answer,
+    and preserves prior assistant/tool trajectory messages. Orq invocation trace
+    IDs remain in ``EvaluationResult.raw_output`` for local use; evaluatorq's
+    Experiment uploader intentionally strips raw evaluator output. The Orq SDK
+    owns retries for this call; evaluatorq does not add another retry layer.
+    """
+
+    async def scorer(params: ScorerParameter) -> EvaluationResult:
+        data = params['data']
+        raw_messages = data.inputs.get('messages') or []
+        messages = [
+            message if isinstance(message, Message) else Message.model_validate(message) for message in raw_messages
+        ]
+        query = data.inputs.get('query')
+        if not isinstance(query, str) or not query:
+            query = next(
+                (
+                    message.content
+                    for message in reversed(messages)
+                    if message.role == 'user' and isinstance(message.content, str) and message.content.strip()
+                ),
+                None,
+            )
+        history = messages[:-1] if messages and messages[-1].role == 'assistant' else list(messages)
+        for index in range(len(history) - 1, -1, -1):
+            if history[index].role == 'user' and history[index].content == query:
+                del history[index]
+                break
+        retrievals_value = data.inputs.get('retrievals')
+        retrievals = [str(item) for item in retrievals_value] if isinstance(retrievals_value, list) else None
+        invoke_params: dict[str, Any] = {
+            'id': evaluator_id,
+            'query': query,
+            'output': output_to_text(params['output']),
+            'reference': output_to_text(data.expected_output) or None,
+            'retrievals': retrievals,
+            'messages': [message.to_chat_completion() for message in history],
+        }
+        if model is not None:
+            invoke_params['model'] = model
+        resolved_client = client if client is not None else resolve_orq_client()
+        response = await resolved_client.evals.invoke_async(**invoke_params)
+        return _orq_response_result(response)
+
+    return {'name': name or f'orq:{evaluator_id}', 'scorer': scorer}
 
 
 def string_contains_evaluator(

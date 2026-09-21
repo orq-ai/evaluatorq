@@ -43,6 +43,7 @@ from .deployment import (
 from .evaluatorq import evaluatorq
 from .evaluators import (
     exact_match_evaluator,
+    orq_evaluator,
     string_contains_evaluator,
 )
 from .job_helper import job
@@ -148,6 +149,7 @@ __all__ = [
     # LLM jury evaluator
     'llm_jury',
     'llm_jury_pairwise',
+    'orq_evaluator',
     'repetition_consistency',
     'repetition_consistency_raw',
     'run_pairwise',
