@@ -14,12 +14,26 @@ Retry lives in ``common.target_call.call_target_with_retry`` only. ``respond()``
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from typing import Any, Literal
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Literal
+
+from loguru import logger
 
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.target_call import NonRetryableTargetError
-from evaluatorq.contracts import AgentResponse, AgentTarget, Message, content_to_text
+from evaluatorq.contracts import (
+    AgentResponse,
+    AgentTarget,
+    Message,
+    ToolCallOutputItem,
+    Usage,
+    content_to_text,
+    tool_result_to_text,
+)
+from evaluatorq.openresponses.convert_models import FunctionCallStatus
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 AgentName = Literal['claude', 'codex', 'opencode']
 Launcher = Literal['direct', 'orq']
@@ -200,6 +214,252 @@ def render_prompt(messages: list[Message], *, system_prompt: str | None, inline_
     entries += [_message_to_dict(m) for m in messages]
     block = delimit(json.dumps(entries, ensure_ascii=False, indent=None), tag='conversation')
     return f'{_PROMPT_INSTRUCTION}\n{block}'
+
+
+@dataclass
+class ParsedTurn:
+    """What one agent run said, before the exit-code and error-order checks in ``respond()``."""
+
+    text: str | None = None
+    tool_calls: list[ToolCallOutputItem] = field(default_factory=list)
+    usage: Usage | None = None
+    session_id: str | None = None
+    model: str | None = None
+    cost_usd: float | None = None
+    agent_error: str | None = None
+
+
+def _tool_call(
+    *,
+    call_id: str,
+    name: str,
+    arguments: Any,
+    result: str | None,
+    status: Literal['in_progress', 'completed', 'incomplete'],
+) -> ToolCallOutputItem:
+    return ToolCallOutputItem(
+        id=call_id,
+        call_id=call_id,
+        name=name,
+        arguments=arguments if isinstance(arguments, str) else json.dumps(arguments, ensure_ascii=False),
+        status=FunctionCallStatus(status),
+        result=result,
+    )
+
+
+def _parse_claude(events: list[dict[str, Any]]) -> ParsedTurn:
+    turn = ParsedTurn()
+    calls: dict[str, ToolCallOutputItem] = {}
+    order: list[str] = []
+    last_text: list[str] = []
+    for event in events:
+        kind = event.get('type')
+        if kind == 'assistant':
+            last_text = []
+            for block in event.get('message', {}).get('content', []) or []:
+                if block.get('type') == 'tool_use':
+                    call_id = str(block.get('id'))
+                    calls[call_id] = _tool_call(
+                        call_id=call_id,
+                        name=str(block.get('name')),
+                        arguments=block.get('input', {}),
+                        result=None,
+                        status='in_progress',
+                    )
+                    order.append(call_id)
+                elif block.get('type') == 'text':
+                    last_text.append(str(block.get('text', '')))
+        elif kind == 'user':
+            for block in event.get('message', {}).get('content', []) or []:
+                if isinstance(block, dict) and block.get('type') == 'tool_result':
+                    call_id = str(block.get('tool_use_id'))
+                    if call_id in calls:
+                        status: Literal['completed', 'incomplete'] = (
+                            'incomplete' if block.get('is_error') else 'completed'
+                        )
+                        calls[call_id] = calls[call_id].model_copy(
+                            update={
+                                'result': tool_result_to_text(block.get('content')),
+                                'status': FunctionCallStatus(status),
+                            }
+                        )
+        elif kind == 'result':
+            turn.session_id = event.get('session_id')
+            turn.cost_usd = event.get('total_cost_usd')
+            result_text = event.get('result')
+            turn.text = result_text if isinstance(result_text, str) else (''.join(last_text) or None)
+            if event.get('is_error'):
+                turn.agent_error = result_text if isinstance(result_text, str) else str(event.get('subtype'))
+            usage_block = event.get('usage')
+            turn.usage = Usage.extract(usage_block, calls=1) if usage_block else None
+            model_usage = event.get('modelUsage') or {}
+            turn.model = next(iter(model_usage), None)
+            for denial in event.get('permission_denials') or []:
+                call_id = str(denial.get('tool_use_id') or f'denied-{len(order)}')
+                denied = _tool_call(
+                    call_id=call_id,
+                    name=str(denial.get('tool_name')),
+                    arguments=denial.get('tool_input', {}),
+                    result='[denied by claude]',
+                    status='incomplete',
+                )
+                if call_id not in calls:
+                    order.append(call_id)
+                calls[call_id] = denied
+        else:
+            logger.warning(f'claude skipped unknown event type: {kind}')
+    if turn.text is None and last_text:
+        turn.text = ''.join(last_text)
+    turn.tool_calls = [calls[c] for c in order]
+    return turn
+
+
+def _codex_status(item: dict[str, Any]) -> Literal['in_progress', 'completed', 'incomplete']:
+    status = item.get('status')
+    if status == 'completed' and (item.get('exit_code') in (None, 0)):
+        return 'completed'
+    if status in ('in_progress', None):
+        return 'in_progress'
+    return 'incomplete'
+
+
+def _parse_codex(events: list[dict[str, Any]]) -> ParsedTurn:
+    turn = ParsedTurn()
+    calls: dict[str, ToolCallOutputItem] = {}
+    order: list[str] = []
+    for event in events:
+        kind = event.get('type')
+        if kind == 'thread.started':
+            turn.session_id = event.get('thread_id')
+        elif kind == 'turn.failed':
+            turn.agent_error = str((event.get('error') or {}).get('message') or 'turn.failed')
+        elif kind == 'turn.completed':
+            usage = event.get('usage') or {}
+            if usage:
+                turn.usage = Usage(
+                    input_tokens=int(usage.get('input_tokens', 0)),
+                    output_tokens=int(usage.get('output_tokens', 0)),
+                    total_tokens=int(usage.get('input_tokens', 0)) + int(usage.get('output_tokens', 0)),
+                    cached_tokens=int(usage.get('cached_input_tokens', 0)),
+                    cache_creation_tokens=int(usage.get('cache_write_input_tokens', 0)),
+                    reasoning_tokens=int(usage.get('reasoning_output_tokens', 0)),
+                    calls=1,
+                )
+        elif kind in ('item.started', 'item.completed'):
+            item = event.get('item') or {}
+            item_id = str(item.get('id'))
+            item_type = item.get('type')
+            if item_type == 'agent_message':
+                turn.text = str(item.get('text', ''))
+            elif item_type == 'error':
+                logger.warning(f'codex reported: {item.get("message")}')
+            elif item_type == 'command_execution':
+                calls[item_id] = _tool_call(
+                    call_id=item_id,
+                    name='shell',
+                    arguments={'command': item.get('command')},
+                    result=item.get('aggregated_output') if kind == 'item.completed' else None,
+                    status=_codex_status(item),
+                )
+            elif item_type == 'file_change':
+                calls[item_id] = _tool_call(
+                    call_id=item_id,
+                    name='apply_patch',
+                    arguments={'changes': item.get('changes', [])},
+                    result='applied' if item.get('status') == 'completed' else None,
+                    status=_codex_status(item),
+                )
+            elif item_type == 'mcp_tool_call':
+                error = item.get('error') or {}
+                calls[item_id] = _tool_call(
+                    call_id=item_id,
+                    name=f'{item.get("server")}.{item.get("tool")}',
+                    arguments=item.get('arguments', {}),
+                    result=error.get('message') if error else tool_result_to_text(item.get('result')),
+                    status='incomplete' if error else _codex_status(item),
+                )
+            else:
+                logger.warning(f'codex skipped unknown item type: {item_type}')
+                continue
+            if item_id in calls and item_id not in order:
+                order.append(item_id)
+        else:
+            logger.warning(f'codex skipped unknown event type: {kind}')
+    turn.tool_calls = [calls[c] for c in order]
+    return turn
+
+
+def _parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
+    turn = ParsedTurn()
+    texts: list[str] = []
+    totals = {'input': 0, 'output': 0, 'reasoning': 0, 'read': 0, 'write': 0}
+    cost = 0.0
+    saw_usage = False
+    for event in events:
+        turn.session_id = turn.session_id or event.get('sessionID')
+        part = event.get('part') or {}
+        kind = event.get('type')
+        if kind == 'text':
+            texts.append(str(part.get('text', '')))
+        elif kind == 'tool_use':
+            state = part.get('state') or {}
+            status_raw = state.get('status')
+            status: Literal['in_progress', 'completed', 'incomplete'] = (
+                'completed' if status_raw == 'completed' else 'incomplete' if status_raw == 'error' else 'in_progress'
+            )
+            call_id = str(part.get('callID') or part.get('id'))
+            turn.tool_calls.append(
+                _tool_call(
+                    call_id=call_id,
+                    name=str(part.get('tool')),
+                    arguments=state.get('input', {}),
+                    result=tool_result_to_text(state.get('output'))
+                    if state.get('output') is not None
+                    else state.get('error'),
+                    status=status,
+                )
+            )
+        elif kind == 'step_finish':
+            tokens = part.get('tokens') or {}
+            if tokens:
+                saw_usage = True
+                totals['input'] += int(tokens.get('input', 0))
+                totals['output'] += int(tokens.get('output', 0))
+                totals['reasoning'] += int(tokens.get('reasoning', 0))
+                cache = tokens.get('cache') or {}
+                totals['read'] += int(cache.get('read', 0))
+                totals['write'] += int(cache.get('write', 0))
+            cost += float(part.get('cost') or 0)
+        elif kind == 'error':
+            turn.agent_error = str((part.get('error') or event.get('error') or {}).get('message') or 'error')
+        else:
+            logger.warning(f'opencode skipped unknown event type: {kind}')
+    if texts:
+        turn.text = '\n'.join(texts)
+    if saw_usage:
+        turn.usage = Usage(
+            input_tokens=totals['input'],
+            output_tokens=totals['output'],
+            total_tokens=totals['input'] + totals['output'],
+            cached_tokens=totals['read'],
+            cache_creation_tokens=totals['write'],
+            reasoning_tokens=totals['reasoning'],
+            calls=1,
+        )
+        turn.cost_usd = cost
+    return turn
+
+
+_PARSERS: dict[str, Callable[[list[dict[str, Any]]], ParsedTurn]] = {
+    'claude': _parse_claude,
+    'codex': _parse_codex,
+    'opencode': _parse_opencode,
+}
+
+
+def parse_events(agent: AgentName, events: list[dict[str, Any]]) -> ParsedTurn:
+    """Pure: one agent's JSONL events to a `ParsedTurn`. Unknown event types are skipped."""
+    return _PARSERS[agent](events)
 
 
 class CodingAgentTarget(AgentTarget):  # placeholder, replaced in Task 6
