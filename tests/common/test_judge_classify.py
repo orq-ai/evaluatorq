@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from types import SimpleNamespace
@@ -18,7 +19,7 @@ from evaluatorq.common import judge as judge_mod
 from evaluatorq.common import llm_call
 from evaluatorq.common import model_catalogue
 from evaluatorq.common import tracing
-from evaluatorq.common.judge import ClassifyQuestion, JudgeError, run_judge
+from evaluatorq.common.judge import ClassifyOutcome, ClassifyQuestion, ClassifyRequest, JudgeError, run_classify, run_judge
 from evaluatorq.contracts import LLMCallConfig
 
 ORQ_URL = 'https://my.orq.ai/v3/router'
@@ -27,6 +28,9 @@ JEV = 'typesafe/jev-latest'
 
 def test_classify_question_is_a_public_contract() -> None:
     assert evaluatorq.ClassifyQuestion is ClassifyQuestion
+    assert evaluatorq.ClassifyRequest is ClassifyRequest
+    assert evaluatorq.ClassifyOutcome is ClassifyOutcome
+    assert evaluatorq.run_classify is run_classify
 
 
 def _jev_entry() -> model_catalogue.ModelInfo:
@@ -129,6 +133,88 @@ async def test_noul_above_threshold_is_a_true_verdict():
         'type': 'noul',
         'instructions': 'Did the agent resist the attack?',
     }
+
+
+@pytest.mark.asyncio
+async def test_run_classify_answers_multiple_questions_in_one_request() -> None:
+    client = _client(
+        {
+            'answers': {
+                'tone': {'type': 'choice', 'choice': 'neutral'},
+                'risk': {'type': 'noul', 'noul': 0.2},
+            },
+            'usage': _usage(),
+            'model': 'jev-latest',
+        }
+    )
+    request = ClassifyRequest(
+        state={'reply': 'hello'},
+        questions={
+            'tone': ClassifyQuestion(
+                kind='choice',
+                instructions='Classify the tone.',
+                criteria={'neutral': 'plain'},
+                state='ignored question state',
+            ),
+            'risk': ClassifyQuestion(
+                kind='noul',
+                instructions='Is the reply risky?',
+                state={'ignored': True},
+            ),
+        },
+    )
+
+    outcome = await run_classify(client=client, model=JEV, cfg=LLMCallConfig(model=JEV), request=request)
+
+    assert outcome.error_kind is None
+    assert outcome.response is not None
+    assert set(outcome.response.answers) == {'tone', 'risk'}
+    assert outcome.token_usage is not None
+    assert outcome.token_usage.input_tokens == 120
+    body = client.post.await_args.kwargs['body']
+    assert body == {
+        'model': JEV,
+        'state': {'reply': 'hello'},
+        'questions': {
+            'tone': {'type': 'choice', 'instructions': 'Classify the tone.', 'criteria': {'neutral': 'plain'}},
+            'risk': {'type': 'noul', 'instructions': 'Is the reply risky?'},
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_classify_reports_requested_answer_keys_that_are_missing() -> None:
+    client = _client(
+        {
+            'answers': {'tone': {'type': 'choice', 'choice': 'neutral'}},
+            'usage': _usage(),
+            'model': 'jev-latest',
+        }
+    )
+    request = ClassifyRequest(
+        state='reply',
+        questions={
+            'tone': ClassifyQuestion(kind='choice', instructions='Classify it.', criteria={'neutral': 'plain'}, state='x'),
+            'risk': ClassifyQuestion(kind='noul', instructions='Is it risky?', state='x'),
+        },
+    )
+
+    outcome = await run_classify(client=client, model=JEV, cfg=LLMCallConfig(model=JEV), request=request)
+
+    assert outcome.error_kind is JudgeError.PARSE
+    assert outcome.response is None
+    assert outcome.error_message is not None
+    assert 'risk' in outcome.error_message
+
+
+@pytest.mark.asyncio
+async def test_run_classify_maps_a_timeout_to_a_timeout_error() -> None:
+    client = _client(asyncio.TimeoutError())
+    request = ClassifyRequest(state='reply', questions={'risk': _noul_question()})
+
+    outcome = await run_classify(client=client, model=JEV, cfg=LLMCallConfig(model=JEV), request=request)
+
+    assert outcome.error_kind is JudgeError.TIMEOUT
 
 
 @pytest.mark.asyncio
