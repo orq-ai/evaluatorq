@@ -7,7 +7,7 @@ from typing import Any, cast
 import pytest
 
 from evaluatorq import DataPoint, EvaluationResult, Trace, orq_evaluator
-from evaluatorq.contracts import Message
+from evaluatorq.contracts import FunctionCall, Message, StrategyToolCall
 
 
 class _Response:
@@ -82,6 +82,76 @@ async def test_orq_evaluator_maps_trace_row_to_invoke_request() -> None:
             {'role': 'assistant', 'content': 'earlier answer'},
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_orq_evaluator_history_stops_before_user_turn_with_tool_output() -> None:
+    client = _Client({'type': 'number', 'value': 1.0})
+    evaluator = orq_evaluator('eval-history', client=client)
+    tool_call = StrategyToolCall(
+        id='call-1',
+        function=FunctionCall(name='lookup', arguments='{}'),
+    )
+    trace = Trace(
+        trace_id='trace-tools',
+        input_messages=[
+            Message(role='system', content='Be accurate.'),
+            Message(role='user', content='earlier question'),
+            Message(role='assistant', content='earlier answer'),
+            Message(role='user', content='latest question'),
+        ],
+        output_messages=[
+            Message(role='assistant', tool_calls=[tool_call]),
+            Message(role='tool', tool_call_id='call-1', name='lookup', content='tool result'),
+            Message(role='assistant', content='recorded answer'),
+        ],
+    )
+
+    await evaluator['scorer']({'data': trace.to_datapoint(), 'output': trace.output_messages})
+
+    assert client.evals.calls[0]['query'] == 'latest question'
+    assert client.evals.calls[0]['messages'] == [
+        {'role': 'system', 'content': 'Be accurate.'},
+        {'role': 'user', 'content': 'earlier question'},
+        {'role': 'assistant', 'content': 'earlier answer'},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_orq_evaluator_derives_query_from_multimodal_latest_user_turn() -> None:
+    client = _Client({'type': 'number', 'value': 1.0})
+    evaluator = orq_evaluator('eval-multimodal', client=client)
+    datapoint = DataPoint(
+        inputs={
+            'messages': [
+                {'role': 'user', 'content': 'earlier question'},
+                {'role': 'assistant', 'content': 'earlier answer'},
+                {
+                    'role': 'user',
+                    'content': [{'type': 'input_text', 'text': 'latest question'}],
+                },
+            ]
+        }
+    )
+
+    await evaluator['scorer']({'data': datapoint, 'output': 'recorded answer'})
+
+    assert client.evals.calls[0]['query'] == 'latest question'
+    assert client.evals.calls[0]['messages'] == [
+        {'role': 'user', 'content': 'earlier question'},
+        {'role': 'assistant', 'content': 'earlier answer'},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_orq_evaluator_forwards_empty_reference() -> None:
+    client = _Client({'type': 'number', 'value': 1.0})
+    evaluator = orq_evaluator('eval-empty-reference', client=client)
+    datapoint = DataPoint(inputs={'messages': [{'role': 'user', 'content': 'question'}]}, expected_output='')
+
+    await evaluator['scorer']({'data': datapoint, 'output': 'answer'})
+
+    assert client.evals.calls[0]['reference'] == ''
 
 
 @pytest.mark.asyncio

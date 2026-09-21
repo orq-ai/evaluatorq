@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.common.output_adapters import output_to_text
-from evaluatorq.contracts import Message
+from evaluatorq.contracts import Message, content_to_text
 from evaluatorq.types import EvaluationResult
 
 if TYPE_CHECKING:
@@ -93,28 +93,22 @@ def orq_evaluator(
         messages = [
             message if isinstance(message, Message) else Message.model_validate(message) for message in raw_messages
         ]
-        query = data.inputs.get('query')
-        if not isinstance(query, str) or not query:
-            query = next(
-                (
-                    message.content
-                    for message in reversed(messages)
-                    if message.role == 'user' and isinstance(message.content, str) and message.content.strip()
-                ),
-                None,
-            )
-        history = messages[:-1] if messages and messages[-1].role == 'assistant' else list(messages)
-        for index in range(len(history) - 1, -1, -1):
-            if history[index].role == 'user' and history[index].content == query:
-                del history[index]
-                break
+        explicit_query = data.inputs.get('query')
+        query = explicit_query if isinstance(explicit_query, str) else None
+        latest_user_index = next(
+            (index for index in range(len(messages) - 1, -1, -1) if messages[index].role == 'user'),
+            None,
+        )
+        if query is None and latest_user_index is not None:
+            query = content_to_text(messages[latest_user_index].content)
+        history = messages[:latest_user_index] if latest_user_index is not None else list(messages)
         retrievals_value = data.inputs.get('retrievals')
         retrievals = [str(item) for item in retrievals_value] if isinstance(retrievals_value, list) else None
         invoke_params: dict[str, Any] = {
             'id': evaluator_id,
             'query': query,
             'output': output_to_text(params['output']),
-            'reference': output_to_text(data.expected_output) or None,
+            'reference': None if data.expected_output is None else output_to_text(data.expected_output),
             'retrievals': retrievals,
             'messages': [message.to_chat_completion() for message in history],
         }
