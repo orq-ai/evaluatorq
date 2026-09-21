@@ -186,6 +186,22 @@ async def test_billed_target_error_keeps_response_usage() -> None:
     assert result.token_usage.total_tokens == 9
 
 
+def test_usage_known_recovers_after_transient_getter_failure() -> None:
+    from evaluatorq.simulation.runner.simulation import RunSinks, _refresh_token_usage
+
+    sinks = RunSinks()
+    user_simulator = MagicMock()
+    user_simulator.get_usage = MagicMock(side_effect=[RuntimeError('usage endpoint unavailable'), TokenUsage()])
+    judge = MagicMock()
+    judge.get_usage = MagicMock(return_value=TokenUsage())
+
+    _refresh_token_usage(sinks, user_simulator, judge)
+    assert sinks.token_usage_known is False
+
+    _refresh_token_usage(sinks, user_simulator, judge)
+    assert sinks.token_usage_known is True
+
+
 async def test_usage_collection_failure_is_unknown_not_zero(caplog: pytest.LogCaptureFixture) -> None:
     user_simulator = _make_mock_user_simulator()
     user_simulator.get_usage = MagicMock(side_effect=RuntimeError('usage endpoint unavailable'))

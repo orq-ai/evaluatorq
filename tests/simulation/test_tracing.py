@@ -651,6 +651,15 @@ async def test_end_to_end_simulation_produces_full_span_tree(
     for tc in [s for s in span_collector.spans if s.name == 'orq.simulation.target_call']:
         assert any(tc.parent.span_id == t.context.span_id for t in turn_spans)  # pyright: ignore[reportOptionalMemberAccess]
 
+    # Each turn span carries its own judgment's verdict, in turn order. The
+    # judge returns terminate=False then terminate=True, so a turn span that
+    # read the wrong turn's judgment (or the run-level fold instead of the
+    # per-turn one) would swap these two rows.
+    turn_attrs = [_attrs(t) for t in sorted(turn_spans, key=lambda s: _attrs(s)['orq.simulation.turn'])]  # pyright: ignore[reportArgumentType]
+    assert [a['orq.simulation.should_terminate'] for a in turn_attrs] == [False, True]
+    assert [a['orq.simulation.goal_achieved'] for a in turn_attrs] == [False, True]
+    assert [a['orq.simulation.goal_completion_score'] for a in turn_attrs] == [0.5, 1.0]
+
     # Run span carries termination attrs but NO token usage: usage lives on the
     # per-call LLM spans, and the sink aggregates. Emitting a rolled-up total here
     # too would double-count it against the children it was summed from.
