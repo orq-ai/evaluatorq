@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace, TracebackType
 from typing import Any, cast
@@ -50,6 +51,30 @@ class FakeTraces:
     async def get_span_async(self, *, trace_id: str, span_id: str, **kwargs: Any) -> Any:
         self.get_span_calls.append({'trace_id': trace_id, 'span_id': span_id, **kwargs})
         return namespace(span=self.details[trace_id, span_id])
+
+
+class YieldingRawQueryTraces(FakeTraces):
+    def __init__(self) -> None:
+        super().__init__({})
+        self.query_hook: Any | None = None
+        self.query_number = 0
+
+    async def query_async(self, **kwargs: Any) -> Any:
+        self.query_calls.append(kwargs)
+        self.query_number += 1
+        query_number = self.query_number
+        trace_id = f'trace-{query_number}'
+        raw_marker = f'raw-{query_number}'
+        raw_response = namespace(
+            request=namespace(url=namespace(path='/v2/traces/query')),
+            json=lambda: {'search': {'data': [{'trace_id': trace_id, 'messages': user_messages(raw_marker)}]}},
+        )
+        assert self.query_hook is not None
+        self.query_hook.after_success(namespace(operation_id='TracesQueryOql'), raw_response)
+        await asyncio.sleep(0)
+        if query_number == 1:
+            await asyncio.sleep(0)
+        return namespace(search=namespace(data=[summary(trace_id, messages=[])], has_more=False, next_page_token=None))
 
 
 class FakeProjects:
@@ -306,6 +331,33 @@ async def test_two_sources_on_one_client_register_one_shared_capture() -> None:
 
     first.close()
     await second.aclose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_sources_pop_their_own_shared_raw_query_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    traces = YieldingRawQueryTraces()
+    client = with_hooks(FakeOrq(traces))
+    first = make_source(client)
+    second = make_source(client)
+    traces.query_hook = client.sdk_configuration._hooks.after_success_hooks[0]
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        'evaluatorq.trace_finder.orq_source.logger.warning',
+        lambda message, *args: warnings.append(message.format(*args)),
+    )
+
+    first_snapshot, second_snapshot = await asyncio.gather(
+        first.load_async(START, END, 1, facets=FacetSelection(), numeric=NumericFilters()),
+        second.load_async(START, END, 1, facets=FacetSelection(), numeric=NumericFilters()),
+    )
+
+    assert first_snapshot.traces[0].messages == ({'role': 'user', 'content': 'raw-1'},)
+    assert second_snapshot.traces[0].messages == ({'role': 'user', 'content': 'raw-2'},)
+    assert warnings == []
+    first.close()
+    second.close()
 
 
 @pytest.mark.asyncio

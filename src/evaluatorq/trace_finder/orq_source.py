@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import weakref
 from collections import defaultdict, deque
 from collections.abc import Mapping
 from contextlib import suppress
@@ -77,16 +78,33 @@ class _RawResponseCapture:
         return responses.popleft() if responses else None
 
     def clear(self) -> None:
-        """Discard captured responses that were not consumed by the current load."""
+        """Discard all captured responses."""
 
         self._responses.clear()
 
 
 class _CaptureRegistration:
+    """Share raw capture state and per-event-loop locks across client sources.
+
+    An asyncio lock is tied to the event loop that first waits on it, so locks
+    are kept per running loop while the response queue remains shared per SDK
+    client.
+    """
+
     def __init__(self) -> None:
         self.capture = _RawResponseCapture()
         self.sources = 0
         self.registered = False
+        self.locks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = weakref.WeakKeyDictionary()
+
+    def lock_for(self, loop: asyncio.AbstractEventLoop) -> asyncio.Lock:
+        """Return the capture lock associated with ``loop``."""
+
+        lock = self.locks.get(loop)
+        if lock is None:
+            lock = asyncio.Lock()
+            self.locks[loop] = lock
+        return lock
 
 
 class OrqTraceSource:
@@ -165,8 +183,6 @@ class OrqTraceSource:
             raise
         except Exception as error:
             raise OrqSourceError(f'live Orq trace loading failed: {error}') from error
-        finally:
-            self._capture.clear()
 
     async def _load_with_lifecycle(
         self,
@@ -221,15 +237,28 @@ class OrqTraceSource:
                     raise OrqSourceError(f'repeated OQL page token {page_token!r}')
                 used_tokens.add(page_token)
             page_limit = min(PAGE_SIZE, limit - len(records))
-            response = await self._client.traces.query_async(
-                from_=start,
-                to=end,
-                oql=oql,
-                limit=page_limit,
-                page_token=page_token,
-                timeout_ms=SDK_TIMEOUT_MS,
-            )
-            raw_page = self._capture.pop('/v2/traces/query')
+            registration = self._registration
+            if registration is None:
+                response = await self._client.traces.query_async(
+                    from_=start,
+                    to=end,
+                    oql=oql,
+                    limit=page_limit,
+                    page_token=page_token,
+                    timeout_ms=SDK_TIMEOUT_MS,
+                )
+                raw_page = self._capture.pop('/v2/traces/query')
+            else:
+                async with registration.lock_for(asyncio.get_running_loop()):
+                    response = await self._client.traces.query_async(
+                        from_=start,
+                        to=end,
+                        oql=oql,
+                        limit=page_limit,
+                        page_token=page_token,
+                        timeout_ms=SDK_TIMEOUT_MS,
+                    )
+                    raw_page = self._capture.pop('/v2/traces/query')
             search = _field(response, 'search') or response
             summaries = _as_list(_field(search, 'data'))
             raw_summaries = _raw_trace_summaries(raw_page)
@@ -322,12 +351,22 @@ class OrqTraceSource:
             if not span_id:
                 continue
             async with semaphore:
-                response = await self._client.traces.get_span_async(
-                    trace_id=trace_id,
-                    span_id=span_id,
-                    timeout_ms=SDK_TIMEOUT_MS,
-                )
-            raw_response = self._capture.pop(f'/v2/traces/{trace_id}/spans/{span_id}')
+                registration = self._registration
+                if registration is None:
+                    response = await self._client.traces.get_span_async(
+                        trace_id=trace_id,
+                        span_id=span_id,
+                        timeout_ms=SDK_TIMEOUT_MS,
+                    )
+                    raw_response = self._capture.pop(f'/v2/traces/{trace_id}/spans/{span_id}')
+                else:
+                    async with registration.lock_for(asyncio.get_running_loop()):
+                        response = await self._client.traces.get_span_async(
+                            trace_id=trace_id,
+                            span_id=span_id,
+                            timeout_ms=SDK_TIMEOUT_MS,
+                        )
+                        raw_response = self._capture.pop(f'/v2/traces/{trace_id}/spans/{span_id}')
             detail = _field(response, 'span') or response
             raw_detail = _field(raw_response, 'span') if raw_response else None
             detail_fallback = raw_detail is None
