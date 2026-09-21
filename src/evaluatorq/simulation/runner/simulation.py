@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from evaluatorq.common.async_utils import await_maybe
-from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry, default_map_error
+from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry
 from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pipeline
 from evaluatorq.common.tracing import record_llm_input, record_llm_output, set_span_attrs
 from evaluatorq.contracts import (
@@ -1382,6 +1382,7 @@ class SimulationRunner:
         model the target reports (``None`` for plain callbacks, which may call any
         provider); NEVER substitute ``self._model`` — that is the user-simulator /
         judge model, not the evaluated target.
+        The target's own ``map_error`` is passed through; ``None`` from it falls back to ``default_map_error`` inside the helper, so backend-specific codes (``cli.*`` from ``CodingAgentTarget``) reach simulation results.
         """
         effective = target if target is not None else self._effective_target
         if effective is None:
@@ -1391,7 +1392,7 @@ class SimulationRunner:
             messages,
             target_agent_timeout_ms=self._target_agent_timeout_ms,
             max_target_retries=self._max_target_retries,
-            map_error=default_map_error,
+            map_error=effective.map_error,
         )
 
     @staticmethod
