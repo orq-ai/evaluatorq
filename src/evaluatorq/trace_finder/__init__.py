@@ -29,6 +29,7 @@ from .models import (
     ValueSelection,
     validate_compiled_query,
 )
+from .orq_source import OrqTraceSource, build_oql
 from .projection import MAX_TOKEN_BUDGET, OMISSION_MARKER, estimate_tokens, project_trace, serialize_projection
 
 __all__ = [
@@ -47,6 +48,7 @@ __all__ = [
     'JevProjection',
     'LegendItem',
     'NumericFilters',
+    'OrqTraceSource',
     'PopulationRequest',
     'RunRequest',
     'RunSnapshot',
@@ -60,6 +62,7 @@ __all__ = [
     'ValueSelection',
     'build_datapoint',
     'build_jev_evaluator',
+    'build_oql',
     'classification_legend',
     'compile_query',
     'estimate_tokens',
