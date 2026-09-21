@@ -40,6 +40,7 @@ from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
     AttackOutput,
     AttackStrategy,
+    AttackTechnique,
     DeliveryMethod,
     EvaluatorConfig,
     EvaluatorqEvaluatorConfig,
@@ -110,6 +111,21 @@ def _error_codes(turns: list[Turn]) -> str:
     return ', '.join(sorted({t.target.error.code for t in turns if t.target.error and t.target.error.code})) or 'none'
 
 
+def expand_trace_seed_datapoints(seeds: list[DataPoint] | None, dynamic_datapoints: list[DataPoint]) -> list[DataPoint]:
+    """Cross each trace seed with the already-selected attack strategies."""
+    if seeds is None:
+        return dynamic_datapoints
+    expanded: list[DataPoint] = []
+    for seed in seeds:
+        for attack in dynamic_datapoints:
+            inputs = {**seed.inputs, **attack.inputs}
+            seed_id = seed.inputs.get('source_trace_id', seed.inputs.get('id', 'trace'))
+            attack_id = attack.inputs.get('id', 'attack')
+            inputs['id'] = f'trace_{seed_id}_{attack_id}'
+            expanded.append(DataPoint(inputs=inputs, expected_output=attack.expected_output))
+    return expanded
+
+
 async def generate_dynamic_datapoints_for_vulnerabilities(
     agent_context: AgentContext,
     vulnerabilities: list[Vulnerability],
@@ -127,6 +143,7 @@ async def generate_dynamic_datapoints_for_vulnerabilities(
     agent_capabilities: AgentCapabilities | None = None,
     strategy_names: set[str] | None = None,
     delivery_methods: set[DeliveryMethod | str] | None = None,
+    attack_techniques: set[AttackTechnique | str] | None = None,
 ) -> tuple[list[DataPoint], dict[str, Any]]:
     """Generate evaluatorq DataPoints for dynamic red teaming, keyed by Vulnerability enum.
 
@@ -163,6 +180,7 @@ async def generate_dynamic_datapoints_for_vulnerabilities(
         agent_capabilities=agent_capabilities,
         strategy_names=strategy_names,
         delivery_methods=delivery_methods,
+        attack_techniques=attack_techniques,
     )
 
     # Convert Vulnerability-keyed metadata to string keys for external consumption
@@ -206,6 +224,7 @@ async def generate_dynamic_datapoints(
     agent_capabilities: AgentCapabilities | None = None,
     strategy_names: set[str] | None = None,
     delivery_methods: set[DeliveryMethod | str] | None = None,
+    attack_techniques: set[AttackTechnique | str] | None = None,
 ) -> tuple[list[DataPoint], dict[str, Any]]:
     """Generate evaluatorq DataPoints for dynamic red teaming.
 
@@ -256,6 +275,7 @@ async def generate_dynamic_datapoints(
             agent_capabilities=agent_capabilities,
             strategy_names=strategy_names,
             delivery_methods=delivery_methods,
+            attack_techniques=attack_techniques,
         )
         # Remap metadata keys from vulnerability IDs back to original category strings
         # so callers that expect category-keyed metadata continue to work.
@@ -285,6 +305,7 @@ async def generate_dynamic_datapoints(
         agent_capabilities=agent_capabilities,
         strategy_names=strategy_names,
         delivery_methods=delivery_methods,
+        attack_techniques=attack_techniques,
     )
 
     datapoints = []

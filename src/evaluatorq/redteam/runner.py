@@ -45,10 +45,12 @@ from evaluatorq.redteam.adaptive.pipeline import (
     cleanup_memory_entities,
     create_dynamic_evaluator,
     create_dynamic_redteam_job,
+    expand_trace_seed_datapoints,
     generate_dynamic_datapoints,
     generate_dynamic_datapoints_for_vulnerabilities,
 )
 from evaluatorq.redteam.adaptive.strategy_registry import (
+    _filter_by_method,
     get_strategies_for_category,
     get_strategies_for_vulnerability,
     list_available_categories,
@@ -64,6 +66,7 @@ from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
     SUPPORTED_TARGET_KINDS,
     AgentContext,
+    AttackTechnique,
     DeliveryMethod,
     LLMConfig,
     Pipeline,
@@ -91,6 +94,7 @@ from evaluatorq.redteam.replay import RUN_CONFIG_KEY as REPLAY_RUN_CONFIG_KEY
 from evaluatorq.redteam.replay import RedTeamReplay, load_redteam_replay
 from evaluatorq.redteam.reports.recommendations import generate_focus_area_recommendations
 from evaluatorq.redteam.runtime.jobs import _build_messages, _sanitize_job_name, create_deployment_job
+from evaluatorq.redteam.traces import TraceStart
 from evaluatorq.redteam.tracing import with_redteam_span
 from evaluatorq.redteam.vulnerability_registry import (
     get_primary_category,
@@ -508,6 +512,8 @@ class _ReplayResolutionInputs:
     categories: list[str] | None
     vulnerabilities: list[str] | None
     strategies: list[str] | None
+    datapoints: list[DataPoint] | None
+    attack_techniques: list[AttackTechnique | str] | None
     delivery_methods: list[DeliveryMethod | str] | None
     max_per_category: int | None
     max_dynamic_datapoints: int | None
@@ -531,6 +537,8 @@ def _resolve_replay(*, inputs: _ReplayResolutionInputs) -> _ResolvedReplay:
     categories = inputs.categories
     vulnerabilities = inputs.vulnerabilities
     strategies = inputs.strategies
+    datapoints = inputs.datapoints
+    attack_techniques = inputs.attack_techniques
     delivery_methods = inputs.delivery_methods
     max_per_category = inputs.max_per_category
     max_dynamic_datapoints = inputs.max_dynamic_datapoints
@@ -551,6 +559,8 @@ def _resolve_replay(*, inputs: _ReplayResolutionInputs) -> _ResolvedReplay:
                 ('categories', categories is not None),
                 ('vulnerabilities', vulnerabilities is not None),
                 ('strategies', strategies is not None),
+                ('datapoints', datapoints is not None),
+                ('attack_techniques', attack_techniques is not None),
                 ('delivery_methods', delivery_methods is not None),
                 ('max_per_category', max_per_category is not None),
                 ('max_dynamic_datapoints', max_dynamic_datapoints is not None),
@@ -682,6 +692,7 @@ def _validate_credentials_and_deps(
 @dataclass(frozen=True)
 class _ResolvedFilters:
     strategy_names: set[str] | None
+    attack_techniques: set[AttackTechnique | str] | None
     delivery_methods: set[DeliveryMethod | str] | None
     filter_selection: tuple[str, list[str]] | None
 
@@ -689,6 +700,7 @@ class _ResolvedFilters:
 def _resolve_filter_sets(
     *,
     strategies: list[str] | None,
+    attack_techniques: list[AttackTechnique | str] | None,
     delivery_methods: list[DeliveryMethod | str] | None,
     vulnerabilities: list[str] | None,
     categories: list[str] | None,
@@ -697,6 +709,9 @@ def _resolve_filter_sets(
     # rejected at the CLI boundary; here we pass through verbatim and detect
     # empty/unmatched intersections post-filter from the actually-matched set.
     resolved_strategy_names: set[str] | None = set(strategies) if strategies is not None else None
+    resolved_attack_techniques: set[AttackTechnique | str] | None = (
+        set(attack_techniques) if attack_techniques is not None else None
+    )
     # Resolve through the registry so known values (enum plus registered) become
     # canonical DeliveryMethod objects and unknown ones stay raw strings. The
     # objects then flow through the planner, loader filter, and reporting as-is —
@@ -722,7 +737,12 @@ def _resolve_filter_sets(
     elif categories is not None:
         filter_selection = ('categories', sorted(categories))
 
-    return _ResolvedFilters(resolved_strategy_names, resolved_delivery_methods, filter_selection)
+    return _ResolvedFilters(
+        resolved_strategy_names,
+        resolved_attack_techniques,
+        resolved_delivery_methods,
+        filter_selection,
+    )
 
 
 def _resolve_vulns_and_categories(
@@ -897,7 +917,9 @@ class _PipelineDispatchInputs:
     verbosity: int
     pipeline_config: LLMConfig
     resolved_strategy_names: set[str] | None
+    resolved_attack_techniques: set[AttackTechnique | str] | None
     resolved_delivery_methods: set[DeliveryMethod | str] | None
+    trace_datapoints: list[DataPoint] | None
     run_id: str
     replay: RedTeamReplay | None
 
@@ -931,7 +953,9 @@ async def _dispatch_pipeline(*, inputs: _PipelineDispatchInputs) -> tuple[RedTea
     verbosity = inputs.verbosity
     pipeline_config = inputs.pipeline_config
     resolved_strategy_names = inputs.resolved_strategy_names
+    resolved_attack_techniques = inputs.resolved_attack_techniques
     resolved_delivery_methods = inputs.resolved_delivery_methods
+    trace_datapoints = inputs.trace_datapoints
     run_id = inputs.run_id
     replay = inputs.replay
 
@@ -964,7 +988,9 @@ async def _dispatch_pipeline(*, inputs: _PipelineDispatchInputs) -> tuple[RedTea
             verbosity=verbosity,
             pipeline_config=pipeline_config,
             resolved_strategy_names=resolved_strategy_names,
+            resolved_attack_techniques=resolved_attack_techniques,
             resolved_delivery_methods=resolved_delivery_methods,
+            trace_datapoints=trace_datapoints,
             run_id=run_id,
             replay_datapoints=replay.datapoints if replay is not None else None,
             replay_of=replay.path.name if replay is not None else None,
@@ -1181,6 +1207,8 @@ async def red_team(
     categories: list[str] | None = None,
     vulnerabilities: list[str] | None = None,
     strategies: list[str] | None = None,
+    datapoints: list[DataPoint] | None = None,
+    attack_techniques: list[AttackTechnique | str] | None = None,
     delivery_methods: list[DeliveryMethod | str] | None = None,
     max_turns: int | None = None,
     max_per_category: int | None = None,
@@ -1235,6 +1263,11 @@ async def red_team(
             apply to static (dataset) datapoints, which carry no strategy name —
             a warning is emitted if combined with ``static`` mode. ``None``
             disables the filter; an empty list selects nothing (see below).
+        datapoints: Trace seed rows produced by ``datapoints_from_traces``. They
+            require this target and use the dynamic pipeline; they cannot be
+            combined with ``dataset`` or ``previous_run``.
+        attack_techniques: Restrict dynamic strategies to the supplied attack
+            techniques. ``None`` disables the filter; an empty list selects nothing.
         delivery_methods: Restrict the run to attacks whose delivery method
             overlaps the supplied selection. Applies to dynamic strategies
             (``AttackStrategy.delivery_methods``) and to static datapoints
@@ -1376,6 +1409,24 @@ async def red_team(
 
     save = _resolve_save_mode(save=save)
 
+    trace_datapoints: list[DataPoint] | None = None
+    if datapoints is not None:
+        if dataset is not None:
+            raise ValueError('datapoints= trace seeds cannot be combined with dataset=.')
+        if mode is not None and Pipeline(mode) is not Pipeline.DYNAMIC:
+            raise ValueError('Trace seed datapoints require the dynamic red-team pipeline.')
+        for index, datapoint in enumerate(datapoints):
+            if 'trace_seed_messages' not in datapoint.inputs or 'trace_start_from' not in datapoint.inputs:
+                raise ValueError(
+                    f'datapoints[{index}] is missing trace seed metadata: '
+                    "expected 'trace_seed_messages' and 'trace_start_from'."
+                )
+            try:
+                TraceStart(datapoint.inputs['trace_start_from'])
+            except ValueError as exc:
+                raise ValueError(f'datapoints[{index}] has an invalid trace_start_from value.') from exc
+        trace_datapoints = list(datapoints)
+
     replay_resolution = _resolve_replay(
         inputs=_ReplayResolutionInputs(
             previous_run=previous_run,
@@ -1384,6 +1435,8 @@ async def red_team(
             categories=categories,
             vulnerabilities=vulnerabilities,
             strategies=strategies,
+            datapoints=datapoints,
+            attack_techniques=attack_techniques,
             delivery_methods=delivery_methods,
             max_per_category=max_per_category,
             max_dynamic_datapoints=max_dynamic_datapoints,
@@ -1426,11 +1479,13 @@ async def red_team(
 
     resolved_filters = _resolve_filter_sets(
         strategies=strategies,
+        attack_techniques=attack_techniques,
         delivery_methods=delivery_methods,
         vulnerabilities=vulnerabilities,
         categories=categories,
     )
     resolved_strategy_names = resolved_filters.strategy_names
+    resolved_attack_techniques = resolved_filters.attack_techniques
     resolved_delivery_methods = resolved_filters.delivery_methods
     filter_selection = resolved_filters.filter_selection
 
@@ -1502,8 +1557,10 @@ async def red_team(
                     verbosity=verbosity,
                     pipeline_config=config,
                     resolved_strategy_names=resolved_strategy_names,
+                    resolved_attack_techniques=resolved_attack_techniques,
                     resolved_delivery_methods=resolved_delivery_methods,
                     run_id=tracing_context.run_id,
+                    trace_datapoints=trace_datapoints,
                     replay=replay,
                 )
             )
@@ -1896,6 +1953,7 @@ def _check_filter_results(
     datapoints: list[DataPoint],
     strategy_names: set[str] | None,
     delivery_methods: set[DeliveryMethod | str] | None,
+    attack_techniques: set[AttackTechnique | str] | None = None,
     *,
     names_apply: bool = True,
     present_methods: list[str] | None = None,
@@ -1929,11 +1987,12 @@ def _check_filter_results(
     would make every no-filter run look like a filter that selected everything
     and blame it for an empty run the caller never narrowed.
     """
-    if strategy_names is None and delivery_methods is None and filter_selection is None:
+    if strategy_names is None and delivery_methods is None and attack_techniques is None and filter_selection is None:
         return
 
     matched_names: set[str] = set()
     matched_methods: set[str] = set()
+    matched_techniques: set[str] = set()
     for dp in datapoints:
         strategy = dp.inputs.get('strategy')
         if isinstance(strategy, dict):
@@ -1941,6 +2000,9 @@ def _check_filter_results(
             if name:
                 matched_names.add(name)
             matched_methods.update(strategy.get('delivery_methods') or [])
+            technique = strategy.get('attack_technique')
+            if technique:
+                matched_techniques.add(str(technique))
         single = dp.inputs.get('delivery_method')  # static datapoint shape (singular)
         if single:
             matched_methods.add(single)
@@ -1963,6 +2025,14 @@ def _check_filter_results(
             if matched_methods:
                 msg += f' Present: {sorted(matched_methods)}.'
             logger.warning(msg)
+    if attack_techniques is not None:
+        requested = {
+            technique.value if isinstance(technique, AttackTechnique) else str(technique)
+            for technique in attack_techniques
+        }
+        unmatched = sorted(requested - matched_techniques)
+        if unmatched:
+            logger.warning(f'Unmatched attack technique(s): {unmatched} — no datapoints matched.')
 
     if not datapoints:
         # `is not None`, not truthiness: an empty selection is exactly the case
@@ -1978,7 +2048,8 @@ def _check_filter_results(
         selection_repr = f'{filter_selection[0]}={filter_selection[1]}, ' if filter_selection is not None else ''
         msg = (
             'Filter selection produced zero datapoints — nothing to run. '
-            f'({selection_repr}strategies={names_repr}, delivery_methods={methods_repr})'
+            f'({selection_repr}strategies={names_repr}, delivery_methods={methods_repr}, '
+            f'attack_techniques={sorted(attack_techniques) if attack_techniques is not None else None})'
         )
         if present_methods:
             msg += f' Delivery methods present in the dataset: {present_methods}.'
@@ -2037,6 +2108,7 @@ async def _prepare_target(
     target_config: TargetConfig | None,
     resolved_categories: list[str],
     shared_datapoints: list[Any] | None = None,
+    trace_datapoints: list[DataPoint] | None = None,
     attacker_instructions: str | None = None,
     prefetched_agent_context: AgentContext | None = None,
     prefetched_agent_capabilities: AgentCapabilities | None = None,
@@ -2044,6 +2116,7 @@ async def _prepare_target(
     verbosity: int = 0,
     pipeline_config: LLMConfig | None = None,
     resolved_strategy_names: set[str] | None = None,
+    resolved_attack_techniques: set[AttackTechnique | str] | None = None,
     resolved_delivery_methods: set[DeliveryMethod | str] | None = None,
     run_id: str | None = None,
 ) -> PreparedTarget:
@@ -2133,6 +2206,7 @@ async def _prepare_target(
                 pipeline_config=pipeline_config,
                 agent_capabilities=prefetched_agent_capabilities,
                 strategy_names=resolved_strategy_names,
+                attack_techniques=resolved_attack_techniques,
                 delivery_methods=resolved_delivery_methods,
             )
         else:
@@ -2151,8 +2225,12 @@ async def _prepare_target(
                 pipeline_config=pipeline_config,
                 agent_capabilities=prefetched_agent_capabilities,
                 strategy_names=resolved_strategy_names,
+                attack_techniques=resolved_attack_techniques,
                 delivery_methods=resolved_delivery_methods,
             )
+
+        if trace_datapoints is not None:
+            dynamic_datapoints = expand_trace_seed_datapoints(trace_datapoints, dynamic_datapoints)
 
         if (
             max_dynamic_datapoints is not None
@@ -2229,6 +2307,7 @@ async def _prepare_target(
                 all_datapoints,
                 resolved_strategy_names,
                 resolved_delivery_methods,
+                resolved_attack_techniques,
                 filter_selection=filter_selection,
             )
 
@@ -2271,6 +2350,7 @@ async def _prepare_target(
                 all_datapoints,
                 resolved_strategy_names,
                 resolved_delivery_methods,
+                resolved_attack_techniques,
                 filter_selection=filter_selection,
             )
 
@@ -2562,6 +2642,7 @@ def _ctx_end_meta(
 @dataclass(frozen=True)
 class _DynamicEstimationInputs:
     replay_datapoints: list[DataPoint] | None
+    trace_datapoints: list[DataPoint] | None
     resolved_vulns: list[Vulnerability] | None
     resolved_categories: list[str]
     first_agent_context: AgentContext
@@ -2569,10 +2650,12 @@ class _DynamicEstimationInputs:
     generated_strategy_count: int
     generate_strategies: bool
     max_per_category: int | None
+    resolved_attack_techniques: set[AttackTechnique | str] | None
 
 
 def _estimate_dynamic_datapoints(*, inputs: _DynamicEstimationInputs) -> tuple[int, dict[str, Any]]:
     replay_datapoints = inputs.replay_datapoints
+    trace_datapoints = inputs.trace_datapoints
     resolved_vulns = inputs.resolved_vulns
     resolved_categories = inputs.resolved_categories
     first_agent_context = inputs.first_agent_context
@@ -2580,6 +2663,7 @@ def _estimate_dynamic_datapoints(*, inputs: _DynamicEstimationInputs) -> tuple[i
     generated_strategy_count = inputs.generated_strategy_count
     generate_strategies = inputs.generate_strategies
     max_per_category = inputs.max_per_category
+    resolved_attack_techniques = inputs.resolved_attack_techniques
 
     est_dynamic = 0
     strategy_breakdown: dict[str, Any] = {}
@@ -2594,6 +2678,7 @@ def _estimate_dynamic_datapoints(*, inputs: _DynamicEstimationInputs) -> tuple[i
                 first_agent_context,
                 agent_capabilities=first_caps_for_estimate,
             )
+            applicable = _filter_by_method(applicable, None, None, resolved_attack_techniques)
             n_generated = generated_strategy_count if generate_strategies else 0
             n = len(applicable) + n_generated
             if max_per_category is not None:
@@ -2614,6 +2699,7 @@ def _estimate_dynamic_datapoints(*, inputs: _DynamicEstimationInputs) -> tuple[i
                 first_agent_context,
                 agent_capabilities=first_caps_for_estimate,
             )
+            applicable = _filter_by_method(applicable, None, None, resolved_attack_techniques)
             n_generated = generated_strategy_count if generate_strategies else 0
             n = len(applicable) + n_generated
             if max_per_category is not None:
@@ -2626,6 +2712,8 @@ def _estimate_dynamic_datapoints(*, inputs: _DynamicEstimationInputs) -> tuple[i
                 'generated': n_generated,
                 'selected': n,
             }
+    if trace_datapoints is not None:
+        est_dynamic *= len(trace_datapoints)
 
     return est_dynamic, strategy_breakdown
 
@@ -2706,7 +2794,9 @@ class _TargetPrepInputs:
     verbosity: int
     pipeline_config: LLMConfig | None
     resolved_strategy_names: set[str] | None
+    resolved_attack_techniques: set[AttackTechnique | str] | None
     resolved_delivery_methods: set[DeliveryMethod | str] | None
+    trace_datapoints: list[DataPoint] | None
     run_id: str
     targets: list[str]
     all_agent_contexts: dict[str, AgentContext]
@@ -2740,7 +2830,9 @@ async def _prepare_string_targets(*, inputs: _TargetPrepInputs) -> list[Prepared
     verbosity = inputs.verbosity
     pipeline_config = inputs.pipeline_config
     resolved_strategy_names = inputs.resolved_strategy_names
+    resolved_attack_techniques = inputs.resolved_attack_techniques
     resolved_delivery_methods = inputs.resolved_delivery_methods
+    trace_datapoints = inputs.trace_datapoints
     run_id = inputs.run_id
     targets = inputs.targets
     all_agent_contexts = inputs.all_agent_contexts
@@ -2772,7 +2864,9 @@ async def _prepare_string_targets(*, inputs: _TargetPrepInputs) -> list[Prepared
         verbosity=verbosity,
         pipeline_config=pipeline_config,
         resolved_strategy_names=resolved_strategy_names,
+        resolved_attack_techniques=resolved_attack_techniques,
         resolved_delivery_methods=resolved_delivery_methods,
+        trace_datapoints=trace_datapoints,
         run_id=run_id,
     )
 
@@ -2846,7 +2940,9 @@ class _AgentTargetDatapointInputs:
     at_caps: dict[int, AgentCapabilities]
     at: AgentTarget
     resolved_strategy_names: set[str] | None
+    resolved_attack_techniques: set[AttackTechnique | str] | None
     resolved_delivery_methods: set[DeliveryMethod | str] | None
+    trace_datapoints: list[DataPoint] | None
     max_dynamic_datapoints: int | None
 
 
@@ -2870,7 +2966,9 @@ async def _generate_agent_target_datapoints(
     at_caps = inputs.at_caps
     at = inputs.at
     resolved_strategy_names = inputs.resolved_strategy_names
+    resolved_attack_techniques = inputs.resolved_attack_techniques
     resolved_delivery_methods = inputs.resolved_delivery_methods
+    trace_datapoints = inputs.trace_datapoints
     max_dynamic_datapoints = inputs.max_dynamic_datapoints
 
     # This is the first target overall — generate datapoints
@@ -2899,6 +2997,7 @@ async def _generate_agent_target_datapoints(
             pipeline_config=pipeline_config,
             agent_capabilities=at_pref_caps,
             strategy_names=resolved_strategy_names,
+            attack_techniques=resolved_attack_techniques,
             delivery_methods=resolved_delivery_methods,
         )
     else:
@@ -2916,8 +3015,11 @@ async def _generate_agent_target_datapoints(
             pipeline_config=pipeline_config,
             agent_capabilities=at_pref_caps,
             strategy_names=resolved_strategy_names,
+            attack_techniques=resolved_attack_techniques,
             delivery_methods=resolved_delivery_methods,
         )
+    if trace_datapoints is not None:
+        at_dps = expand_trace_seed_datapoints(trace_datapoints, at_dps)
     if max_dynamic_datapoints is not None and max_dynamic_datapoints > 0 and len(at_dps) > max_dynamic_datapoints:
         at_dps = _cap_datapoints_balanced(at_dps, max_dynamic_datapoints)
     await await_maybe(resolved_hooks.on_stage_end(PipelineStage.DATAPOINT_GENERATION, {'num_datapoints': len(at_dps)}))
@@ -3100,7 +3202,9 @@ async def _run_dynamic_or_hybrid(
     verbosity: int = 0,
     pipeline_config: LLMConfig | None = None,
     resolved_strategy_names: set[str] | None = None,
+    resolved_attack_techniques: set[AttackTechnique | str] | None = None,
     resolved_delivery_methods: set[DeliveryMethod | str] | None = None,
+    trace_datapoints: list[DataPoint] | None = None,
     run_id: str | None = None,
     replay_datapoints: list[DataPoint] | None = None,
     replay_of: str | None = None,
@@ -3235,6 +3339,7 @@ async def _run_dynamic_or_hybrid(
     est_dynamic, strategy_breakdown = _estimate_dynamic_datapoints(
         inputs=_DynamicEstimationInputs(
             replay_datapoints=replay_datapoints,
+            trace_datapoints=trace_datapoints,
             resolved_vulns=resolved_vulns,
             resolved_categories=resolved_categories,
             first_agent_context=first_agent_context,
@@ -3242,6 +3347,7 @@ async def _run_dynamic_or_hybrid(
             generated_strategy_count=generated_strategy_count,
             generate_strategies=generate_strategies,
             max_per_category=max_per_category,
+            resolved_attack_techniques=resolved_attack_techniques,
         )
     )
     if max_dynamic_datapoints is not None and est_dynamic > max_dynamic_datapoints:
@@ -3316,7 +3422,9 @@ async def _run_dynamic_or_hybrid(
             verbosity=verbosity,
             pipeline_config=pipeline_config,
             resolved_strategy_names=resolved_strategy_names,
+            resolved_attack_techniques=resolved_attack_techniques,
             resolved_delivery_methods=resolved_delivery_methods,
+            trace_datapoints=trace_datapoints,
             run_id=run_id,
             targets=targets,
             all_agent_contexts=all_agent_contexts,
@@ -3385,7 +3493,9 @@ async def _run_dynamic_or_hybrid(
                         at_caps=at_caps,
                         at=at,
                         resolved_strategy_names=resolved_strategy_names,
+                        resolved_attack_techniques=resolved_attack_techniques,
                         resolved_delivery_methods=resolved_delivery_methods,
+                        trace_datapoints=trace_datapoints,
                         max_dynamic_datapoints=max_dynamic_datapoints,
                     )
                 )
@@ -3413,6 +3523,7 @@ async def _run_dynamic_or_hybrid(
                     at_all_dps,
                     resolved_strategy_names,
                     resolved_delivery_methods,
+                    resolved_attack_techniques,
                     filter_selection=filter_selection,
                 )
 
