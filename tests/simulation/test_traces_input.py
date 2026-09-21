@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 
 from evaluatorq.common.structured_output import StructuredResult
+from evaluatorq.contracts import Message
+from evaluatorq.simulation import traces as traces_module
 from evaluatorq.simulation.traces import (
     TraceConversation,
     _content_to_text,
@@ -23,6 +25,7 @@ from evaluatorq.simulation.traces import (
     summarize_conversations,
 )
 from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario
+from evaluatorq.types import Trace, TraceInput
 
 
 def _make_persona(name: str = "Test Persona") -> Persona:
@@ -51,19 +54,27 @@ def _make_conversation(trace_id: str = "t1") -> TraceConversation:
     )
 
 
+def _make_trace(trace_id: str = "t1") -> Trace:
+    return Trace(
+        trace_id=trace_id,
+        input_messages=[Message(role="user", content="Where is my order?")],
+        output_messages=[Message(role="assistant", content="Let me check.")],
+    )
+
+
 # ---------------------------------------------------------------------------
 # Message extraction
 # ---------------------------------------------------------------------------
 
 
 def test_content_to_text_json_encodes_unknown_wire_dict(caplog: pytest.LogCaptureFixture) -> None:
-    content = {'kind': 'structured', 'value': 3}
+    content = {"kind": "structured", "value": 3}
 
-    with caplog.at_level(logging.WARNING, logger='evaluatorq.simulation.traces'):
+    with caplog.at_level(logging.WARNING, logger="evaluatorq.common.trace_input"):
         result = _content_to_text(content)
 
-    assert result == json.dumps(content, default=str)
-    assert any('unknown wire content shape' in record.message.lower() for record in caplog.records)
+    assert result == json.dumps(content, separators=(",", ":"), sort_keys=True, default=str)
+    assert any("unknown trace message content shape" in record.message.lower() for record in caplog.records)
 
 
 def test_messages_from_dict_with_messages() -> None:
@@ -250,20 +261,24 @@ def test_conversation_gen_ai_output_single_message() -> None:
     ]
 
 
-def test_conversation_top_level_wins_over_gen_ai() -> None:
+def test_conversation_prefers_standard_gen_ai_messages_over_generic_top_level() -> None:
     spans = [
         {
             "parent_id": None,
             "type": "Trace",
             "input": {"messages": [{"role": "user", "content": "top-level"}]},
+            "output": {"role": "assistant", "content": "top-level answer"},
             "attributes": {
-                "gen_ai": {"input": {"messages": [{"role": "user", "content": "gen_ai"}]}}
+                "gen_ai": {
+                    "input": {"messages": [{"role": "user", "content": "gen_ai"}]},
+                    "output": {"role": "assistant", "content": "gen_ai answer"},
+                }
             },
         }
     ]
     conversation = _conversation_from_spans("t1", spans)
     assert conversation is not None
-    assert conversation.first_user_message == "top-level"
+    assert conversation.first_user_message == "gen_ai"
 
 
 def test_messages_from_prompt_and_completion() -> None:
@@ -475,6 +490,31 @@ async def test_datapoints_from_traces(monkeypatch: pytest.MonkeyPatch) -> None:
     assert dp.first_message == "Hi, chasing an order."
     assert dp.persona.name == "Test Persona"
     assert dp.user_system_prompt  # built from persona + scenario
+
+
+@pytest.mark.asyncio
+async def test_simulation_datapoints_accept_trace_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    parsed = traces_module._InferredPersonaScenario(persona=_make_persona(), scenario=_make_scenario())
+    _stub_structured(monkeypatch, parsed)
+    _stub_first_message(monkeypatch, "Hi, chasing an order.")
+    fetch = AsyncMock(return_value=[_make_trace("trace-1")])
+    monkeypatch.setattr(traces_module, "fetch_traces", fetch)
+
+    datapoints = await datapoints_from_traces(TraceInput(trace_id="trace-1"), client=MagicMock())
+
+    fetch.assert_awaited_once()
+    assert len(datapoints) == 1
+
+
+@pytest.mark.asyncio
+async def test_simulation_datapoints_accept_loaded_traces(monkeypatch: pytest.MonkeyPatch) -> None:
+    parsed = traces_module._InferredPersonaScenario(persona=_make_persona(), scenario=_make_scenario())
+    _stub_structured(monkeypatch, parsed)
+    _stub_first_message(monkeypatch, "Hi, chasing an order.")
+
+    datapoints = await datapoints_from_traces([_make_trace("trace-1")], client=MagicMock())
+
+    assert len(datapoints) == 1
 
 
 def _stub_first_message(monkeypatch: pytest.MonkeyPatch, message: str) -> None:

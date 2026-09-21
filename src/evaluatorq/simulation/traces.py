@@ -25,13 +25,11 @@ trace list, ``GET /v2/traces/{trace_id}/v3spans`` for span content).
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import math
-import os
-from typing import TYPE_CHECKING, Any
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Literal, cast
 
-import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from evaluatorq.common.sanitize import delimit
@@ -40,23 +38,27 @@ from evaluatorq.common.structured_output import (
     sum_structured_usage,
     usage_from_exception,
 )
+from evaluatorq.common.trace_input import _content_text as _trace_content_text
+from evaluatorq.common.trace_input import _json_text as _trace_json_text
+from evaluatorq.common.trace_input import _parse_messages as _parse_trace_messages
+from evaluatorq.common.trace_input import _resolve_orq_credentials as _resolve_trace_credentials
+from evaluatorq.common.trace_input import _trace_datapoint_from_spans, fetch_traces
 from evaluatorq.simulation.types import DEFAULT_MODEL, Persona, Scenario, SimulationDatapoint
 from evaluatorq.simulation.utils.prompt_builders import generate_datapoint
 from evaluatorq.simulation.utils.structured_output import generate_structured
+from evaluatorq.types import Trace, TraceInput
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
 
+    import httpx
     from openai import AsyncOpenAI
 
     from evaluatorq.contracts import LLMCallConfig, TokenUsage
 
 logger = logging.getLogger(__name__)
 
-_SPAN_FETCH_CONCURRENCY = 5
 _INFER_CONCURRENCY = 5
-# The traces list endpoint caps `limit` at 200 per page.
-_API_PAGE_LIMIT = 200
 
 
 class TraceAnalysisConfig(BaseModel):
@@ -351,145 +353,45 @@ async def summarize_conversations(
 
 
 def _resolve_orq_credentials(api_key: str | None, base_url: str | None) -> tuple[str, str]:
-    key = api_key or os.environ.get('ORQ_API_KEY')
-    if not key:
-        raise ValueError('Missing Orq API key: set ORQ_API_KEY or pass api_key=.')
-    host = (base_url or os.environ.get('ORQ_BASE_URL') or 'https://my.orq.ai').rstrip('/')
-    return key, host
+    """Compatibility wrapper over the shared credential resolver."""
+    return _resolve_trace_credentials(api_key, base_url)
 
 
 def _content_to_text(content: Any) -> str:
-    """Flatten a message content field (string or list of typed parts) to text.
-
-    Parts with a non-text ``type`` (``tool_call``, ``blob``, ``uri``, ...) are
-    skipped so tool payloads and base64 blobs never leak into the transcript.
-    """
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for part in content:
-            if isinstance(part, str):
-                parts.append(part)
-            elif isinstance(part, dict):
-                if part.get('type') not in (None, 'text'):
-                    continue
-                text = part.get('text') or part.get('content')
-                if isinstance(text, str):
-                    parts.append(text)
-        return '\n'.join(parts)
+    """Compatibility wrapper over the shared trace content adapter."""
+    text = _trace_content_text(content)
+    if text is not None:
+        return text
     if content is None:
         return ''
-    logger.warning('Unknown wire content shape %s; JSON-encoding it for trace text', type(content).__name__)
-    return json.dumps(content, default=str)
-
-
-def _normalize_message(raw: Any) -> dict[str, str] | None:
-    if not isinstance(raw, dict):
-        return None
-    role = raw.get('role')
-    if not isinstance(role, str):
-        return None
-    # Classic messages carry `content`; OTel gen_ai messages carry `parts`.
-    content = _content_to_text(raw.get('content'))
-    if not content:
-        content = _content_to_text(raw.get('parts'))
-    if not content:
-        return None
-    # Roles come verbatim from producer payloads; normalize case so a
-    # "User"/"USER" producer doesn't make first_user_message come up empty.
-    return {'role': role.strip().lower(), 'content': content}
+    return _trace_json_text(content)
 
 
 def _messages_from_value(value: Any, *, default_role: str = 'user') -> list[dict[str, str]]:
-    """Extract chat messages from a span ``input``/``output``-shaped value.
-
-    ``default_role`` is the role assigned to bare-string values, which carry no
-    role of their own: a span's plain-string ``input`` is the user's prompt,
-    but a plain-string ``output`` is the assistant's reply.
-    """
-    if isinstance(value, dict):
-        for key in ('messages', 'input', 'choices'):
-            inner = value.get(key)
-            if isinstance(inner, list):
-                if key == 'choices':
-                    inner = [c.get('message') for c in inner if isinstance(c, dict)]
-                return [m for m in (_normalize_message(i) for i in inner) if m]
-        single = _normalize_message(value)
-        if single:
-            return [single]
-        # gen_ai.input.prompt / gen_ai.output.completion (Completion models).
-        for key in ('prompt', 'completion'):
-            text = value.get(key)
-            if isinstance(text, str) and text.strip():
-                return [{'role': default_role, 'content': text}]
-        return []
-    if isinstance(value, list):
-        return [m for m in (_normalize_message(i) for i in value) if m]
-    if isinstance(value, str) and value.strip():
-        decoded = _decode_json_string(value)
-        if decoded is not None:
-            return _messages_from_value(decoded, default_role=default_role)
-        return [{'role': default_role, 'content': value}]
-    return []
-
-
-def _decode_json_string(value: str) -> Any | None:
-    """Decode a JSON-encoded payload string, or return None if it isn't one.
-
-    Live ``gen_ai`` attributes often carry input/output JSON-encoded as a
-    string (e.g. ``'{"role":"assistant",...}'`` or ``'"Hi!"'``); without
-    decoding, the quotes and ``\\n`` escapes leak verbatim into message content.
-    """
-    stripped = value.strip()
-    if stripped[:1] not in ('{', '[', '"'):
-        return None
-    try:
-        return json.loads(stripped)
-    except json.JSONDecodeError:
-        return None
-
-
-def _span_io(span: dict[str, Any], field: str) -> Any:
-    """A span's input/output: top-level field, else ``attributes.gen_ai.<field>``.
-
-    On real ``/v2/traces/{id}/v3spans`` payloads top-level ``input``/``output``
-    are null — the conversation lives under the OTel ``gen_ai`` attributes.
-    """
-    value = span.get(field)
-    if value is not None:
-        return value
-    attributes = span.get('attributes')
-    if not isinstance(attributes, dict):
-        return None
-    gen_ai = attributes.get('gen_ai')
-    if not isinstance(gen_ai, dict):
-        return None
-    return gen_ai.get(field)
+    """Compatibility wrapper over the shared Chat/Responses/OTel adapters."""
+    role = default_role.strip().lower()
+    if role not in {'user', 'assistant', 'tool', 'system', 'developer'}:
+        role = 'user'
+    normalized_role = cast('Literal["user", "assistant", "tool", "system", "developer"]', role)
+    messages, _message_format = _parse_trace_messages(value, hinted=None, default_role=normalized_role)
+    return [
+        {'role': message.role, 'content': message.content}
+        for message in messages
+        if isinstance(message.content, str) and message.content
+    ]
 
 
 def _conversation_from_spans(trace_id: str, spans: list[dict[str, Any]]) -> TraceConversation | None:
-    """Reconstruct the conversation from a trace's spans.
-
-    Prefers the root span (no ``parent_id``, or type ``Trace``); falls back to
-    the first span that yields any messages.
-    """
-    ordered = sorted(
-        spans,
-        key=lambda s: (bool(s.get('parent_id')), s.get('type') != 'Trace'),
-    )
-    for span in ordered:
-        messages = _messages_from_value(_span_io(span, 'input'), default_role='user')
-        output_messages = _messages_from_value(_span_io(span, 'output'), default_role='assistant')
-        for overlap in range(min(len(messages), len(output_messages)), 0, -1):
-            if messages[-overlap:] == output_messages[:overlap]:
-                break
-        else:
-            overlap = 0
-        messages.extend(output_messages[overlap:])
-        if messages:
-            return TraceConversation(trace_id=trace_id, messages=messages)
-    return None
+    """Reconstruct simulation text from the shared trace importer."""
+    imported = _trace_datapoint_from_spans(trace_id, spans)
+    if imported.import_error:
+        return None
+    messages = [
+        {'role': message.role, 'content': message.content}
+        for message in imported.messages
+        if isinstance(message.content, str) and message.content.strip()
+    ]
+    return TraceConversation(trace_id=trace_id, messages=messages) if messages else None
 
 
 async def fetch_trace_conversations(
@@ -510,81 +412,34 @@ async def fetch_trace_conversations(
     ``/v2/traces/v3oql`` API). Traces without any extractable user message are
     skipped.
     """
-    key, host = _resolve_orq_credentials(api_key, base_url)
-    headers = {'Authorization': f'Bearer {key}'}
-    owned = http_client is None
-    client = http_client or httpx.AsyncClient(timeout=60.0)
-    try:
-        rows: list[dict[str, Any]] = []
-        page = 1
-        while len(rows) < limit:
-            before = len(rows)
-            try:
-                response = await client.post(
-                    f'{host}/v2/traces/v3oql',
-                    headers=headers,
-                    json={
-                        'filters': {'operator': 'and', 'filters': filters or [], 'search': search},
-                        'limit': min(limit - len(rows), _API_PAGE_LIMIT),
-                        'page': page,
-                        'fields': [],
-                        **({'start_date': start_date_ms} if start_date_ms is not None else {}),
-                        **({'end_date': end_date_ms} if end_date_ms is not None else {}),
-                    },
-                )
-                response.raise_for_status()
-            except httpx.HTTPError as exc:
-                raise RuntimeError(f'Failed to list Orq traces: {exc}') from exc
-            payload = response.json()
-            data = payload.get('data', [])
-            rows.extend(r for r in data if isinstance(r, dict) and r.get('trace_id'))
-            if not data or not payload.get('has_more'):
-                break
-            if len(rows) == before:
-                # No usable row on a page the API says has more behind it: every
-                # row lacked a `trace_id` (schema drift, partial outage). Looping
-                # would never grow `rows`, so stop on lack of progress rather than
-                # on an arbitrary page count — that way `limit` is honoured for as
-                # many pages as it genuinely takes.
-                logger.warning(
-                    'Stopped paginating traces at page %d: it returned %d row(s), none with a trace_id (%d/%d collected)',
-                    page,
-                    len(data),
-                    len(rows),
-                    limit,
-                )
-                break
-            page += 1
-
-        semaphore = asyncio.Semaphore(_SPAN_FETCH_CONCURRENCY)
-
-        async def fetch_one(trace_id: str) -> TraceConversation | None:
-            async with semaphore:
-                try:
-                    resp = await client.get(f'{host}/v2/traces/{trace_id}/v3spans', headers=headers)
-                    resp.raise_for_status()
-                    spans = resp.json()
-                except (httpx.HTTPError, json.JSONDecodeError) as exc:
-                    # Per-trace resilience: one failed or malformed response
-                    # drops that trace, never the whole batch.
-                    logger.warning('Failed to fetch spans for trace %s: %s', trace_id, exc)
-                    return None
-                if not isinstance(spans, list):
-                    logger.warning(
-                        'Spans payload for trace %s is %s, expected a list — skipping',
-                        trace_id,
-                        type(spans).__name__,
-                    )
-                    return None
-                return _conversation_from_spans(trace_id, spans)
-
-        conversations = await asyncio.gather(*(fetch_one(str(row['trace_id'])) for row in rows[:limit]))
-    finally:
-        if owned:
-            await client.aclose()
-
-    fetched = len(rows[:limit])
-    usable = [c for c in conversations if c is not None and c.first_user_message]
+    start_time = datetime.fromtimestamp(start_date_ms / 1000, tz=timezone.utc) if start_date_ms is not None else None
+    end_time = datetime.fromtimestamp(end_date_ms / 1000, tz=timezone.utc) if end_date_ms is not None else None
+    imported = await fetch_traces(
+        TraceInput(
+            limit=limit,
+            start_time=start_time,
+            end_time=end_time,
+            search=search,
+            filters=filters or [],
+        ),
+        api_key=api_key,
+        base_url=base_url,
+        http_client=http_client,
+    )
+    conversations = [
+        TraceConversation(
+            trace_id=row.trace_id,
+            messages=[
+                {'role': message.role, 'content': message.content}
+                for message in row.messages
+                if isinstance(message.content, str) and message.content.strip()
+            ],
+        )
+        for row in imported
+        if row.import_error is None
+    ]
+    fetched = len(imported)
+    usable = [conversation for conversation in conversations if conversation.first_user_message]
     if len(usable) < fetched:
         # The only signal that traces were dropped — keep it visible at the
         # default WARNING level, not buried at INFO.
@@ -596,6 +451,33 @@ async def fetch_trace_conversations(
     else:
         logger.info('Fetched %d trace(s), %d with a usable conversation', fetched, len(usable))
     return usable
+
+
+def _trace_failed(value: Trace | TraceConversation) -> bool:
+    """Return whether a canonical trace failed while being imported."""
+    return isinstance(value, Trace) and value.import_error is not None
+
+
+def _to_trace_conversation(value: Trace | TraceConversation) -> TraceConversation:
+    """Adapt a canonical trace or retain an existing compatibility conversation."""
+    if isinstance(value, TraceConversation):
+        return value
+    return TraceConversation(
+        trace_id=value.trace_id,
+        messages=[
+            {'role': message.role, 'content': message.content}
+            for message in value.messages
+            if isinstance(message.content, str) and message.content.strip()
+        ],
+    )
+
+
+async def _resolve_trace_conversations(
+    source: TraceInput | Sequence[Trace | TraceConversation],
+) -> list[TraceConversation]:
+    """Resolve a trace source into the conversation shape used by simulation."""
+    values = await fetch_traces(source) if isinstance(source, TraceInput) else list(source)
+    return [_to_trace_conversation(value) for value in values if not _trace_failed(value)]
 
 
 # ---------------------------------------------------------------------------
@@ -638,7 +520,7 @@ class _InferredPersonaScenario(BaseModel):
 
 
 async def datapoints_from_traces(
-    conversations: list[TraceConversation],
+    source: TraceInput | Sequence[Trace | TraceConversation],
     *,
     model: str = DEFAULT_MODEL,
     llm_config: LLMCallConfig | None = None,
@@ -648,6 +530,9 @@ async def datapoints_from_traces(
     summaries: Mapping[str, str] | None = None,
 ) -> list[SimulationDatapoint]:
     """Direct mode: build one datapoint per trace conversation.
+
+    ``source`` may be a ``TraceInput`` to fetch canonical traces, a sequence of
+    already-loaded ``Trace`` objects, or the legacy ``TraceConversation`` values.
 
     Every conversation is summarized first, then persona and scenario are inferred
     from that summary. The opening message is written fresh from them; set
@@ -668,6 +553,7 @@ async def datapoints_from_traces(
     so an unset ``temperature`` still omits the parameter from the request. When both name a model,
     ``llm_config.model`` wins and the contradiction is logged.
     """
+    conversations = await _resolve_trace_conversations(source)
     from evaluatorq.openresponses.client import build_simulation_client
     from evaluatorq.simulation._config import resolve_sim_llm_config
     from evaluatorq.simulation.generators.first_message_generator import FirstMessageGenerator
