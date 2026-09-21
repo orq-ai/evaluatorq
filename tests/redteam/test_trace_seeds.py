@@ -204,6 +204,8 @@ def test_trace_seeds_cross_product_with_selected_attack_strategies() -> None:
 
     assert len(rows) == 1
     assert rows[0].inputs['trace_seed_messages'] == [FIRST_USER]
+    assert rows[0].inputs['trace_start_from'] == 'first_user'
+    assert rows[0].inputs['source_trace_id'] == 'trace-1'
     assert rows[0].inputs['strategy']['attack_technique'] == 'direct-injection'
 
 

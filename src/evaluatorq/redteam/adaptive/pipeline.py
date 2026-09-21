@@ -54,6 +54,7 @@ from evaluatorq.redteam.contracts import (
     TurnType,
     Vulnerability,
 )
+from evaluatorq.redteam.traces import TraceStart
 from evaluatorq.redteam.tracing import annotate_current_span, set_jury_span_attrs, with_redteam_span
 from evaluatorq.redteam.vulnerability_registry import (
     get_primary_category,
@@ -507,16 +508,31 @@ def create_dynamic_redteam_job(
                 pipeline_config=cfg,
             )
 
+            seed_payload = inputs.get('trace_seed_messages')
+            seed_messages = None
+            trace_start_from = None
+            if seed_payload is not None:
+                if not isinstance(seed_payload, list):
+                    raise TypeError('trace_seed_messages must be a list of messages')
+                seed_messages = [Message.model_validate(message) for message in seed_payload]
+                trace_start_from = TraceStart(inputs.get('trace_start_from', TraceStart.FIRST_USER.value))
+
             try:
                 # One Orq thread per attack groups all its turns in observability.
                 with conversation_thread(thread_id) as thread_id:
-                    result = await orchestrator.run_attack(
-                        target=target,
-                        strategy=strategy,
-                        objective=objective,
-                        agent_context=agent_context,
-                        max_turns=effective_max_turns,
-                    )
+                    run_kwargs: dict[str, Any] = {
+                        'target': target,
+                        'strategy': strategy,
+                        'objective': objective,
+                        'agent_context': agent_context,
+                        'max_turns': effective_max_turns,
+                    }
+                    if seed_messages is not None:
+                        run_kwargs.update(
+                            seed_messages=seed_messages,
+                            trace_start_from=trace_start_from,
+                        )
+                    result = await orchestrator.run_attack(**run_kwargs)
             except asyncio.TimeoutError as e:
                 tb = traceback.format_exc(limit=8)
                 mapped_code, mapped_msg = resolved_backend.map_error(e)

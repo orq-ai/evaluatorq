@@ -1291,6 +1291,14 @@ class OrchestratorResult(BaseModel):
         default=None, description='Token usage for adversarial LLM calls only'
     )
     token_usage_target: TokenUsage | None = Field(default=None, description='Token usage for target agent calls only')
+    token_usage_bootstrap: TokenUsage | None = Field(
+        default=None,
+        description='Token usage for the optional trace replay bootstrap call, kept separate from attack turns',
+    )
+    seed_context: list[Message] = Field(
+        default_factory=list,
+        description='Trace replay context sent before generated attack turns',
+    )
     system_prompt: str | None = Field(default=None, description='Rendered adversarial system prompt')
     max_turns: int = Field(default=0, description='Turn budget configured for this attack (>= n_turns)')
     error: str | None = Field(default=None, description='Error message if attack was aborted')
@@ -1557,6 +1565,8 @@ class JobOutputPayload(BaseModel):
     token_usage: TokenUsage | None = None
     token_usage_adversarial: TokenUsage | None = None
     token_usage_target: TokenUsage | None = None
+    token_usage_bootstrap: TokenUsage | None = None
+    seed_context: list[Message] = Field(default_factory=list)
     system_prompt: str | None = None
     error: str | None = None
     error_type: str | None = None
