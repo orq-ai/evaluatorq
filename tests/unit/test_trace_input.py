@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 import pytest
@@ -189,6 +189,34 @@ def test_top_level_responses_input_object_is_detected() -> None:
 
     assert detected == 'responses'
     assert [message.content for message in messages] == ['check weather']
+
+
+@pytest.mark.parametrize(
+    ('payload', 'default_role', 'expected_content'),
+    [
+        ({'input': 'question'}, 'user', 'question'),
+        ({'output': 'answer'}, 'assistant', 'answer'),
+        ({'input': [{'role': 'user', 'content': 'question'}]}, 'user', 'question'),
+        ({'output': [{'role': 'assistant', 'content': 'answer'}]}, 'assistant', 'answer'),
+    ],
+)
+def test_responses_envelopes_preserve_scalar_and_untyped_messages(
+    payload: object, default_role: Literal['user', 'assistant'], expected_content: str
+) -> None:
+    messages, detected = _parse_messages(payload, default_role=default_role)
+
+    assert detected == 'responses'
+    assert [message.content for message in messages] == [expected_content]
+
+
+def test_responses_input_is_not_shadowed_by_scalar_output() -> None:
+    messages, detected = _parse_messages(
+        {'output': 'answer', 'input': [{'role': 'user', 'content': 'question'}]},
+        default_role='user',
+    )
+
+    assert detected == 'responses'
+    assert [message.content for message in messages] == ['question']
 
 
 @pytest.mark.parametrize(

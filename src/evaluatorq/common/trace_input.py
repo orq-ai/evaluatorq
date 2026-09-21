@@ -262,10 +262,11 @@ def _looks_like_otel(value: Any) -> bool:
 def _looks_like_responses(value: Any) -> bool:
     decoded = _decode_json(value)
     if isinstance(decoded, dict):
-        for key in ('output', 'input'):
-            if key in decoded and decoded.get(key) is not None:
-                decoded = decoded[key]
-                break
+        # ``input`` and ``output`` are the Responses envelope boundary. The
+        # selected side may be a scalar or a Chat-style shorthand list, so
+        # inspecting only typed Responses items would misclassify it.
+        if 'input' in decoded or 'output' in decoded:
+            return True
     return isinstance(decoded, list) and any(
         isinstance(item, dict)
         and item.get('type') in {'message', 'function_call', 'function_call_output', 'reasoning', 'custom_tool_call'}
