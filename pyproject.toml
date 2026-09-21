@@ -192,6 +192,7 @@ src = [ "src" ]
     "src/evaluatorq/simulation/runner/simulation.py" = ["BLE001", "C901"]
     "src/evaluatorq/simulation/traces.py" = ["BLE001"]
     "src/evaluatorq/simulation/utils/run_store.py" = ["BLE001"]
+    "src/evaluatorq/tracing/setup.py" = ["BLE001"]
 
     # Keep competing stacks out. Call-site rules (which module may build a client or
     # call the API) live in tests/test_reuse_guardrails.py — banning the imports here
