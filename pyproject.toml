@@ -137,8 +137,8 @@ src = [ "src" ]
 
     [tool.ruff.lint.mccabe]
     # Cyclomatic complexity ceiling. When the rule landed, 53 functions in 33
-    # files exceeded 15 (the worst at 108); the C901 burn-down (RES-1298, PRs
-    # #201-#225) split every one of them, so the ceiling holds repo-wide with no
+    # files exceeded 15 (the worst at 108); the C901 burn-down (PRs #201-#225)
+    # split every one of them, so the ceiling holds repo-wide with no
     # per-file exemptions. A new function over 15 is split, not exempted.
     max-complexity = 15
 
