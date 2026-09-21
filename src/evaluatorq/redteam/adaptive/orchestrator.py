@@ -308,6 +308,12 @@ def _progress_label(category: str, strategy_name: str) -> str:
 async def _start_attack_progress(
     progress: 'ProgressDisplay | None', strategy: AttackStrategy, max_turns: int
 ) -> TaskID | None:
+    """Open a progress row for this attack, returning ``None`` if there is none.
+
+    A progress display is cosmetic, so a failure to open the row is swallowed
+    to a debug log rather than failing the attack; the caller then runs with
+    ``task_id=None`` and skips every later update.
+    """
     task_id: TaskID | None = None
     if progress is not None:
         try:
@@ -319,6 +325,14 @@ async def _start_attack_progress(
 
 @asynccontextmanager
 async def _target_attempt_span(attempt_index: int, *, prompt: str, turn: int, strategy_name: str) -> AsyncIterator[Any]:
+    """Open one ``orq.redteam.target_call`` span per target attempt.
+
+    Passed to ``call_target_with_retry`` as its ``on_attempt`` hook, so it runs
+    once per retry attempt rather than once per turn.
+
+    Yields:
+        The attempt span, for the caller to record the response on.
+    """
     async with with_redteam_span(
         'orq.redteam.target_call',
         {
@@ -333,6 +347,7 @@ async def _target_attempt_span(attempt_index: int, *, prompt: str, turn: int, st
 
 
 def _record_attempt_response(span: Any, response: AgentResponse) -> None:
+    """Write a target attempt's output onto its own per-attempt span."""
     response_text = truncate_for_span(response.text or '')
     set_span_attrs(
         span,
@@ -344,8 +359,11 @@ def _record_attempt_response(span: Any, response: AgentResponse) -> None:
 
 
 def _accumulate_target_usage(acc: TokenUsage, turn_usage: TokenUsage | None) -> TokenUsage:
-    # Accumulate token usage outside the target call, so arithmetic bugs
-    # are never misattributed to the target.
+    """Return ``acc`` plus one turn's target usage. Pure — ``acc`` is not mutated.
+
+    Deliberately computed outside the target call so an arithmetic bug here is
+    never misattributed to the target.
+    """
     if turn_usage is None:
         return acc
     # Targets report their own call count (orq sums tool-continuation
@@ -408,26 +426,62 @@ def _merge_usage(*usages: TokenUsage | None) -> TokenUsage | None:
 
 
 @dataclass(frozen=True)
+class _AttackError:
+    """The six error fields an aborted turn reports on ``OrchestratorResult``.
+
+    Named rather than positional: four of the six are ``str``, so a tuple would
+    let a transposition at any construction site swap two of them with no type
+    error and no test failure. ``error_turn`` is optional because the
+    end-of-run unresolved-timeout path leaves it unset, as the inline code did.
+    """
+
+    error: str
+    error_type: str
+    error_stage: str
+    error_code: str
+    error_details: dict[str, Any]
+    error_turn: int | None = None
+
+
+@dataclass(frozen=True)
 class _AttackerTurn:
     """Outcome of one adversarial generation phase.
 
-    ``error_fields`` set means the turn loop breaks; ``retry`` means it
-    continues. ``attacker``/``attack_prompt``/``usage``/``truncated`` are only
-    meaningful when both are absent.
+    ``failure`` set means the turn loop breaks; ``retry`` means it continues.
+    The two are mutually exclusive and ``__post_init__`` enforces that.
+
+    ``truncated`` is independent of both and is always meaningful: a turn cut
+    off at ``max_tokens`` is recorded in ``OrchestratorResult.truncated_turns``
+    even when that same turn then aborts, so the caller reads it before it
+    branches on ``failure``. ``attacker``/``attack_prompt``/``usage`` are only
+    meaningful when neither ``failure`` nor ``retry`` is set.
     """
 
     usage_delta: TokenUsage
     consecutive_adversarial_timeouts: int
-    error_fields: tuple[str, str, str, str, dict[str, Any], int] | None = None
+    failure: _AttackError | None = None
     retry: bool = False
     truncated: bool = False
     usage: TokenUsage | None = None
     attack_prompt: str = ''
     attacker: AgentResponse = field(default_factory=AgentResponse)
 
+    def __post_init__(self) -> None:
+        if self.failure is not None and self.retry:
+            raise ValueError('_AttackerTurn cannot both abort the loop (failure) and continue it (retry)')
+
 
 @dataclass(frozen=True)
 class _MarkerPhase:
+    """Outcome of the objective-marker check on one attacker prompt.
+
+    ``stop=True`` means the turn loop breaks without calling the target; the
+    marker phase has already logged, updated progress and closed out the turn
+    span itself. The other four fields are always populated and are written
+    back onto the caller's state either way — ``attack_prompt`` and
+    ``attacker`` are the marker-stripped forms when a marker was present.
+    """
+
     attack_prompt: str
     attacker: AgentResponse
     objective_achieved: bool
@@ -634,10 +688,14 @@ class MultiTurnOrchestrator:
         timeout_s: float,
         record_usage: Callable[[TokenUsage], None],
     ) -> tuple[Any, TokenUsage | None, str]:
-        # One adversarial generation. Owns its span + per-attempt token
-        # accounting (every attempt counts, including content-filtered
-        # retries, so the call total isn't undercounted). The shared
-        # regenerate_on_content_filter helper decides whether to retry.
+        """Run one adversarial generation attempt and return its raw response.
+
+        This is a single attempt with no retry logic of its own; the caller's
+        ``regenerate_on_content_filter`` wrapper decides whether to call it
+        again. ``record_usage`` therefore fires once per *attempt*, not once
+        per turn, and is called before the response body is read so a
+        malformed response still counts the call that was billed for it.
+        """
         async with (
             with_redteam_span(
                 'orq.redteam.adversarial_generation',
@@ -691,7 +749,15 @@ class MultiTurnOrchestrator:
         error: str | None,
         strategy: AttackStrategy,
         turns_record: list[Turn],
-    ) -> tuple[str, str, str, str, dict[str, Any]] | None:
+    ) -> _AttackError | None:
+        """Classify a timeout that was still outstanding when the loop ended.
+
+        Returns an error only when no turn completed at all. With turns on
+        record the dropped turn is reported as a warning and ``None`` is
+        returned, so the run keeps the turns it did collect — the inline code
+        this replaces behaved the same way, including leaving ``error_turn``
+        unset.
+        """
         if consecutive_adversarial_timeouts > 0 and error is None:
             logger.warning(
                 f'Conversation for {strategy.name} ended with an unresolved adversarial timeout '
@@ -699,12 +765,13 @@ class MultiTurnOrchestrator:
             )
             if not turns_record:
                 timeout_s = self._cfg.attacker.timeout_ms / 1000.0
-                error = f'Adversarial LLM timed out after {timeout_s:.0f}s with no turns completed'
-                error_type = 'llm_error'
-                error_stage = 'adversarial_generation'
-                error_code = 'adversarial.timeout'
-                error_details = {'timeout_ms': self._cfg.attacker.timeout_ms}
-                return error, error_type, error_stage, error_code, error_details
+                return _AttackError(
+                    error=f'Adversarial LLM timed out after {timeout_s:.0f}s with no turns completed',
+                    error_type='llm_error',
+                    error_stage='adversarial_generation',
+                    error_code='adversarial.timeout',
+                    error_details={'timeout_ms': self._cfg.attacker.timeout_ms},
+                )
         return None
 
     async def _attacker_turn(
@@ -717,7 +784,13 @@ class MultiTurnOrchestrator:
         consecutive_adversarial_timeouts: int,
         turn_span: Any,
     ) -> _AttackerTurn:
-        # Generate attack prompt from adversarial LLM. Retry when the provider
+        """Generate one attacker prompt and classify the outcome for the loop.
+
+        ``regenerate_on_content_filter`` is the only retry layer on this call
+        path; neither this method nor ``_adversarial_generation`` adds a second
+        one. Writes error attributes onto ``turn_span`` on every failing path.
+        """
+        # Retry when the provider
         # content-filters the attacker turn (finish_reason='content_filter');
         # after retries are exhausted the turn is stopped cleanly below rather
         # than forwarded to the target. Natural-language self-censorship is not
@@ -796,22 +869,23 @@ class MultiTurnOrchestrator:
                 },
             )
             if consecutive_adversarial_timeouts >= self._cfg.max_consecutive_adversarial_timeouts:
-                error = (
-                    f'Adversarial LLM timed out {consecutive_adversarial_timeouts} consecutive turns '
-                    f'after {llm_timeout_s:.0f}s each'
-                )
-                error_type = 'llm_error'
-                error_stage = 'adversarial_generation'
-                error_code = 'adversarial.timeout'
-                error_details = {
-                    'timeout_ms': self._cfg.attacker.timeout_ms,
-                    'consecutive_timeouts': consecutive_adversarial_timeouts,
-                }
-                error_turn = turn + 1
                 return _AttackerTurn(
                     usage_delta=adversarial_usage_acc,
                     consecutive_adversarial_timeouts=consecutive_adversarial_timeouts,
-                    error_fields=(error, error_type, error_stage, error_code, error_details, error_turn),
+                    failure=_AttackError(
+                        error=(
+                            f'Adversarial LLM timed out {consecutive_adversarial_timeouts} consecutive turns '
+                            f'after {llm_timeout_s:.0f}s each'
+                        ),
+                        error_type='llm_error',
+                        error_stage='adversarial_generation',
+                        error_code='adversarial.timeout',
+                        error_details={
+                            'timeout_ms': self._cfg.attacker.timeout_ms,
+                            'consecutive_timeouts': consecutive_adversarial_timeouts,
+                        },
+                        error_turn=turn + 1,
+                    ),
                 )
             return _AttackerTurn(
                 usage_delta=adversarial_usage_acc,
@@ -825,15 +899,7 @@ class MultiTurnOrchestrator:
             # content filter, not a generic LLM error, so it's detected the same
             # way as the 200-response form.
             is_filter = is_content_filter_error(e)
-            error = f'Adversarial LLM exception: {e}'
             error_type = 'content_filter' if is_filter else 'llm_error'
-            error_stage = 'adversarial_generation'
-            error_code = 'adversarial.content_filter' if is_filter else 'adversarial.llm_exception'
-            error_details = {
-                'exception_type': type(e).__name__,
-                'raw_message': str(e),
-            }
-            error_turn = turn + 1
             logger.warning(f'Adversarial LLM failed for {strategy.name}: {e}')
             set_span_attrs(
                 turn_span,
@@ -845,14 +911,21 @@ class MultiTurnOrchestrator:
             return _AttackerTurn(
                 usage_delta=adversarial_usage_acc,
                 consecutive_adversarial_timeouts=consecutive_adversarial_timeouts,
-                error_fields=(error, error_type, error_stage, error_code, error_details, error_turn),
+                failure=_AttackError(
+                    error=f'Adversarial LLM exception: {e}',
+                    error_type=error_type,
+                    error_stage='adversarial_generation',
+                    error_code='adversarial.content_filter' if is_filter else 'adversarial.llm_exception',
+                    error_details={
+                        'exception_type': type(e).__name__,
+                        'raw_message': str(e),
+                    },
+                    error_turn=turn + 1,
+                ),
             )
 
         # Reset adversarial timeout counter on a successful LLM call
         consecutive_adversarial_timeouts = 0
-
-        # finish_reason / unusable_kind were computed in the generation
-        # retry loop above.
 
         # Track max_tokens truncation (even when content is non-empty)
         truncated = finish_reason == 'length'
@@ -873,14 +946,6 @@ class MultiTurnOrchestrator:
                 'length': 'max_tokens',
             }
             error_type = reason_to_type.get(finish_reason or '', 'empty_response')
-            error_stage = 'adversarial_generation'
-            error_code = f'adversarial.{error_type}'
-            error_details = {
-                'finish_reason': finish_reason,
-                'model': model_used,
-                'turn': turn + 1,
-            }
-            error_turn = turn + 1
             error = (
                 f'Empty adversarial prompt: finish_reason={finish_reason}, '
                 f'model={model_used}, turn={turn + 1}/{max_turns}'
@@ -897,7 +962,18 @@ class MultiTurnOrchestrator:
             return _AttackerTurn(
                 usage_delta=adversarial_usage_acc,
                 consecutive_adversarial_timeouts=consecutive_adversarial_timeouts,
-                error_fields=(error, error_type, error_stage, error_code, error_details, error_turn),
+                failure=_AttackError(
+                    error=error,
+                    error_type=error_type,
+                    error_stage='adversarial_generation',
+                    error_code=f'adversarial.{error_type}',
+                    error_details={
+                        'finish_reason': finish_reason,
+                        'model': model_used,
+                        'turn': turn + 1,
+                    },
+                    error_turn=turn + 1,
+                ),
                 truncated=truncated,
             )
 
@@ -907,15 +983,6 @@ class MultiTurnOrchestrator:
         # so would silently corrupt this datapoint with a benign reply scored as
         # if it answered a real attack.
         if unusable_kind is not None:
-            error_type = unusable_kind
-            error_stage = 'adversarial_generation'
-            error_code = f'adversarial.{unusable_kind}'
-            error_details = {
-                'finish_reason': finish_reason,
-                'turn': turn + 1,
-                'attempts': max_attempts,
-            }
-            error_turn = turn + 1
             error = (
                 f'Attack model {unusable_kind} after {max_attempts} attempt(s): '
                 f'finish_reason={finish_reason}, turn={turn + 1}/{max_turns}'
@@ -924,14 +991,25 @@ class MultiTurnOrchestrator:
             set_span_attrs(
                 turn_span,
                 {
-                    'orq.redteam.error_type': error_type,
+                    'orq.redteam.error_type': unusable_kind,
                     'orq.redteam.finish_reason': unusable_kind,
                 },
             )
             return _AttackerTurn(
                 usage_delta=adversarial_usage_acc,
                 consecutive_adversarial_timeouts=consecutive_adversarial_timeouts,
-                error_fields=(error, error_type, error_stage, error_code, error_details, error_turn),
+                failure=_AttackError(
+                    error=error,
+                    error_type=unusable_kind,
+                    error_stage='adversarial_generation',
+                    error_code=f'adversarial.{unusable_kind}',
+                    error_details={
+                        'finish_reason': finish_reason,
+                        'turn': turn + 1,
+                        'attempts': max_attempts,
+                    },
+                    error_turn=turn + 1,
+                ),
                 truncated=truncated,
             )
 
@@ -958,6 +1036,12 @@ class MultiTurnOrchestrator:
         progress: 'ProgressDisplay | None',
         task_id: 'TaskID | None',
     ) -> _MarkerPhase:
+        """Strip an OBJECTIVE_ACHIEVED marker off the attacker prompt and decide whether to stop.
+
+        When the marker leaves nothing to send this closes the turn out itself
+        (progress update plus span attributes) and returns ``stop=True``, so
+        the caller must not repeat that work.
+        """
         marker_present, marker_rationale, marker_prompt = _parse_objective_marker(attack_prompt)
         if not marker_present:
             return _MarkerPhase(
@@ -1036,7 +1120,13 @@ class MultiTurnOrchestrator:
         strategy: AttackStrategy,
         turn_span: Any,
     ) -> TargetCallResult:
-        # Send attack to target agent. The transcript is derived from
+        """Send one attack prompt to the target and record its output on the span.
+
+        Retries live entirely in ``call_target_with_retry``; this method adds no
+        retry layer of its own. The turn span is written only on success — the
+        failure attributes are `_record_target_failure`'s job.
+        """
+        # The transcript is derived from
         # the recorded turns BEFORE the call: it is a pure local op, so a
         # bug here must not be misattributed to the target by the retry helper.
         # A failed target exchange is retried with the exact same prompt and
@@ -1085,6 +1175,7 @@ class MultiTurnOrchestrator:
         progress: 'ProgressDisplay | None',
         task_id: 'TaskID | None',
     ) -> None:
+        """Close out a turn whose target call failed: advance progress, mark the span."""
         if progress is not None and task_id is not None:
             await progress.update_attack(task_id, completed=turn + 1)
         finish_reason = 'target_timeout' if error_type == 'timeout' else 'target_error'
@@ -1193,10 +1284,17 @@ class MultiTurnOrchestrator:
                     )
                     adversarial_usage_acc = adversarial_usage_acc + gen.usage_delta
                     consecutive_adversarial_timeouts = gen.consecutive_adversarial_timeouts
+                    # Read before the failure branch on purpose: a turn cut off
+                    # at max_tokens is recorded even when it then aborts.
                     if gen.truncated:
                         truncation_warnings.append(turn + 1)
-                    if gen.error_fields is not None:
-                        error, error_type, error_stage, error_code, error_details, error_turn = gen.error_fields
+                    if gen.failure is not None:
+                        error = gen.failure.error
+                        error_type = gen.failure.error_type
+                        error_stage = gen.failure.error_stage
+                        error_code = gen.failure.error_code
+                        error_details = gen.failure.error_details
+                        error_turn = gen.failure.error_turn
                         break
                     if gen.retry:
                         continue
@@ -1294,14 +1392,20 @@ class MultiTurnOrchestrator:
             if progress is not None:
                 await progress.finish_attack(task_id)
 
-        timeout_fields = self._unresolved_timeout_error(
+        timeout_failure = self._unresolved_timeout_error(
             consecutive_adversarial_timeouts=consecutive_adversarial_timeouts,
             error=error,
             strategy=strategy,
             turns_record=turns_record,
         )
-        if timeout_fields is not None:
-            error, error_type, error_stage, error_code, error_details = timeout_fields
+        if timeout_failure is not None:
+            # error_turn is deliberately left as-is: this path fires only when
+            # no turn was recorded, so there is no turn to point at.
+            error = timeout_failure.error
+            error_type = timeout_failure.error_type
+            error_stage = timeout_failure.error_stage
+            error_code = timeout_failure.error_code
+            error_details = timeout_failure.error_details
 
         duration = time.time() - start_time
         logger.debug(

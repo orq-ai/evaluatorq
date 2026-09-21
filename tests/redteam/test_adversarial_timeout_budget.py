@@ -198,3 +198,46 @@ async def test_timeouts_below_the_budget_do_not_end_the_attack():
     assert result.error is None
     assert result.error_code is None
     assert len(result.turns) == 2
+
+
+@pytest.mark.asyncio
+async def test_unresolved_timeout_with_no_turns_reports_an_error():
+    """A run that ends on an outstanding timeout, with nothing recorded, is not a clean run.
+
+    One timeout under a budget of 2 never trips the give-up branch, so with a
+    single turn available the loop simply runs out. Nothing reached the target,
+    so the result must carry the timeout as its error rather than coming back
+    as an empty, successful-looking attack.
+    """
+    result, calls = await _run([TIMEOUT], max_consecutive=2, max_turns=1)
+
+    assert calls == [TIMEOUT]
+    assert result.turns == []
+    assert result.error_code == 'adversarial.timeout'
+    assert result.error_type == 'llm_error'
+    assert result.error_stage == 'adversarial_generation'
+    assert result.error is not None
+    assert 'no turns completed' in result.error
+    assert result.error_details is not None
+    assert result.error_details['timeout_ms'] == TIMEOUT_MS
+    # No turn to point at — the give-up branch is what sets error_turn.
+    assert result.error_turn is None
+
+
+@pytest.mark.asyncio
+async def test_unresolved_timeout_after_a_turn_warns_but_keeps_the_transcript(caplog):
+    """The mirror case: with a turn on record the dropped turn is a warning, not an error.
+
+    The turns that did complete are still scorable, so the run keeps them and
+    reports no error — but the silently dropped final turn has to announce
+    itself in the log (CLAUDE.md: a degraded path announces itself).
+    """
+    with caplog.at_level('WARNING'):
+        result, calls = await _run([OK, TIMEOUT], max_consecutive=2, max_turns=2)
+
+    assert calls == [OK, TIMEOUT]
+    assert len(result.turns) == 1
+    assert result.error is None
+    assert result.error_code is None
+    dropped = [r.getMessage() for r in caplog.records if 'dropped silently' in r.getMessage()]
+    assert len(dropped) == 1
