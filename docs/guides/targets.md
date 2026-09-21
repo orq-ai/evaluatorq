@@ -17,6 +17,7 @@ The CLI only accepts the string form — an object target is constructed in Pyth
 | `"deployment:<key>"` | You are testing an Orq deployment (prompt + model) | Model and prompt |
 | `OpenAIModelTarget` | You want to test a raw model behind a system prompt, over chat completions | Minimal — the model id |
 | `OrqResponsesTarget` | You want the Responses API through the Orq router, with full per-call config | Self-described: model, instructions, the tools you passed |
+| `CodingAgentTarget` | Your system under test is a coding-agent CLI (Claude Code, Codex, OpenCode) on this machine, run directly or via `orq launch` | Static: the agent's tool names plus the skills you injected. See [Coding agents as targets](../coding-agent-targets.md) |
 | `LangGraphTarget`, `OpenAIAgentTarget`, `PydanticAITarget`, `CrewAITarget` | Your agent is built in that framework | Whatever the wrapper can extract |
 | `CallableTarget` | Your agent is already a Python function | The function's name, or an `AgentContext` you pass |
 | Your own `AgentTarget` subclass | Anything else — an HTTP endpoint, a local pipeline, a bespoke tool loop | Whatever your `get_agent_context()` returns |
