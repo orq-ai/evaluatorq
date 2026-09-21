@@ -113,6 +113,24 @@ class Runner:
             raise
 
 
+class RaisingRunner(Runner):
+    async def __call__(
+        self,
+        traces: tuple[TraceRecord, ...],
+        projections: dict[str, JevProjection],
+        compiled: CompiledQuery,
+        *,
+        parallelism: int,
+        on_complete: Any,
+    ) -> list[TraceClassification]:
+        del projections, compiled, parallelism
+        self.calls += 1
+        self.on_complete = on_complete
+        self.entered.set()
+        await on_complete(classification(int(traces[0].trace_id.removeprefix('trace-'))))
+        raise RuntimeError('JEV runner exploded')
+
+
 class Planner:
     def __init__(self) -> None:
         self.calls: list[str] = []
@@ -126,6 +144,29 @@ class Planner:
         return self.plan
 
 
+class RaisingPlanner(Planner):
+    async def __call__(self, query: str) -> CompiledPlan:
+        del query
+        raise RuntimeError('compiler exploded')
+
+
+class SwallowingCancellationPlanner(Planner):
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = asyncio.Event()
+        self.swallowed = asyncio.Event()
+
+    async def __call__(self, query: str) -> CompiledPlan:
+        del query
+        self.entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.swallowed.set()
+            return self.plan
+        raise AssertionError('compiler cancellation was not swallowed')
+
+
 class Loader:
     def __init__(self) -> None:
         self.calls: list[PopulationRequest] = []
@@ -134,6 +175,24 @@ class Loader:
     async def __call__(self, request: PopulationRequest) -> Snapshot:
         self.calls.append(request)
         return self.snapshot
+
+
+class RaisingLoader(Loader):
+    async def __call__(self, request: PopulationRequest) -> Snapshot:
+        del request
+        raise RuntimeError('population loader exploded')
+
+
+class PendingLoader(Loader):
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = asyncio.Event()
+
+    async def __call__(self, request: PopulationRequest) -> Snapshot:
+        self.calls.append(request)
+        self.entered.set()
+        await asyncio.Event().wait()
+        raise AssertionError('pending population loader unexpectedly completed')
 
 
 def make_store(
@@ -191,6 +250,79 @@ async def test_compile_merges_generated_filters_and_numeric_constraints_with_man
     assert store._task is not None
     await asyncio.wait_for(store._task, timeout=1)
     assert (await store.snapshot()).state == 'completed'
+
+
+@pytest.mark.asyncio
+async def test_compiler_failure_sets_failed_state_with_error_text() -> None:
+    store, _, loader, runner, _ = make_store(planner=RaisingPlanner())
+
+    failed = await store.compile(request())
+
+    assert failed.state == 'failed'
+    assert failed.error == 'compiler exploded'
+    assert not loader.calls
+    assert runner.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_population_loader_failure_sets_failed_state_with_error_text() -> None:
+    store, _, _, runner, _ = make_store(loader=RaisingLoader())
+
+    failed = await store.compile(request())
+
+    assert failed.state == 'failed'
+    assert failed.error == 'population loader exploded'
+    assert runner.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_jev_runner_failure_mid_run_sets_failed_state_with_error_text() -> None:
+    runner = RaisingRunner()
+    store, _, _, _, _ = make_store(runner=runner)
+
+    started = await store.compile(request())
+    assert started.state == 'classifying'
+    await runner.entered.wait()
+    assert store._task is not None
+    await asyncio.wait_for(store._task, timeout=1)
+
+    failed = await store.snapshot()
+    assert failed.state == 'failed'
+    assert failed.error == 'JEV runner exploded'
+    assert failed.completed == 1
+
+
+@pytest.mark.asyncio
+async def test_cancel_finishes_when_compiler_swallows_cancellation() -> None:
+    planner = SwallowingCancellationPlanner()
+    store, _, loader, runner, _ = make_store(planner=planner)
+    compiling = asyncio.create_task(store.compile(request()))
+    await planner.entered.wait()
+
+    cancelled = await store.cancel()
+
+    assert cancelled.state == 'cancelled'
+    assert planner.swallowed.is_set()
+    assert not loader.calls
+    assert runner.calls == 0
+    with pytest.raises(asyncio.CancelledError):
+        await compiling
+
+
+@pytest.mark.asyncio
+async def test_cancelling_start_propagates_and_sets_cancelled_state() -> None:
+    loader = PendingLoader()
+    store, _, _, runner, _ = make_store(loader=loader)
+    starting = asyncio.create_task(store.start(request(), compiled_query()))
+    await loader.entered.wait()
+
+    starting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await starting
+
+    cancelled = await store.snapshot()
+    assert cancelled.state == 'cancelled'
+    assert runner.calls == 0
 
 
 @pytest.mark.asyncio

@@ -30,12 +30,6 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
 
-class FilterSelector(Protocol):
-    """A facet planner with its model and client already bound."""
-
-    def __call__(self, query: str) -> Awaitable[FacetSelection]: ...
-
-
 class PopulationLoader(Protocol):
     """Load the bounded trace population after planning has completed."""
 
@@ -73,7 +67,7 @@ class RunStore:
         compiler: Callable[[str], Awaitable[CompiledPlan]],
         population_loader: Callable[[PopulationRequest], Awaitable[Snapshot]],
         run_jev: JevRunner,
-        filter_selector: FilterSelector | None = None,
+        filter_selector: Callable[[str], Awaitable[FacetSelection]],
         project_trace: Callable[[TraceRecord], JevProjection] = default_project_trace,
         monotonic: Callable[[], float] = time.monotonic,
         now_utc: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
@@ -240,25 +234,23 @@ class RunStore:
         return await task
 
     async def _plan(self, query: str) -> tuple[CompiledPlan, FacetSelection]:
-        """Run semantic and optional facet planning concurrently and clean up both."""
+        """Run semantic and facet planning concurrently and clean up both."""
 
         async def compile_plan() -> object:
             return await self._compiler(query)
 
         async def select_filters() -> object:
-            if self._filter_selector is None:
-                return FacetSelection()
             return await self._filter_selector(query)
 
         compiler = asyncio.create_task(compile_plan())
-        filters = asyncio.create_task(select_filters()) if self._filter_selector else None
-        tasks: tuple[asyncio.Task[object], ...] = (compiler, filters) if filters is not None else (compiler,)
+        filters = asyncio.create_task(select_filters())
+        tasks: tuple[asyncio.Task[object], ...] = (compiler, filters)
         try:
             values = await asyncio.gather(*tasks)
             plan = values[0]
             if not isinstance(plan, CompiledPlan):
                 plan = CompiledPlan.model_validate(plan)
-            selected = values[1] if filters is not None else FacetSelection()
+            selected = values[1]
             if not isinstance(selected, FacetSelection):
                 selected = FacetSelection.model_validate(selected)
             return plan, selected
