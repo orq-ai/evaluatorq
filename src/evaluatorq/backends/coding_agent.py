@@ -13,8 +13,15 @@ Retry lives in ``common.target_call.call_target_with_retry`` only. ``respond()``
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import shutil
+import signal
+import tempfile
+import weakref
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
@@ -22,10 +29,13 @@ from loguru import logger
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.target_call import NonRetryableTargetError
 from evaluatorq.contracts import (
+    DEFAULT_TARGET_TIMEOUT_MS,
+    AgentContext,
     AgentResponse,
     AgentTarget,
     Message,
     ToolCallOutputItem,
+    ToolInfo,
     Usage,
     content_to_text,
     tool_result_to_text,
@@ -33,6 +43,7 @@ from evaluatorq.contracts import (
 from evaluatorq.openresponses.convert_models import FunctionCallStatus
 
 if TYPE_CHECKING:
+    import asyncio
     from collections.abc import Callable
 
 AgentName = Literal['claude', 'codex', 'opencode']
@@ -477,9 +488,161 @@ def parse_events(agent: AgentName, events: list[dict[str, Any]]) -> ParsedTurn:
     return _PARSERS[agent](events)
 
 
-class CodingAgentTarget(AgentTarget):  # placeholder, replaced in Task 6
-    async def respond(self, messages: list[Message]) -> AgentResponse:
-        raise NotImplementedError
+def _remove_tree(path: Path) -> None:
+    shutil.rmtree(path, ignore_errors=True)
+
+
+class CodingAgentTarget(AgentTarget):
+    """Run a local coding-agent CLI as the system under test.
+
+    Each ``respond()`` spawns a fresh process (no session resume), in a working directory that is
+    private to this instance: an empty temp dir, or a copy of ``workdir``. ``new()`` clones carry
+    the same configuration and get their own copy, so concurrent jobs never share a tree. ``close()``
+    kills a live process group and removes the temp dir unless ``keep_workdir`` is set; the runner
+    calls it through ``common.target_call.close_target``. A ``weakref.finalize`` is the leak backstop.
+
+    Privilege is expressed in each agent's own vocabulary and defaults to the agent's own default:
+
+    - ``permission_mode``: claude ``--permission-mode`` (``default``, ``acceptEdits``, ``plan``,
+      ``bypassPermissions``, ``dontAsk``); codex ``--sandbox`` (``read-only``, ``workspace-write``,
+      ``danger-full-access``); opencode has no such flag and raises ``ValueError``.
+    - ``extra_args``: appended to the agent argv untouched. OpenCode blocks on its first permission
+      prompt when run headless; pass ``extra_args=['--auto']`` to auto-approve.
+
+    ``system_prompt`` is claude's ``--append-system-prompt``; codex and opencode have no equivalent, so
+    it is prepended to the rendered conversation as a ``system`` entry and a warning says so.
+
+    ``launcher='orq'`` runs ``orq launch <agent>`` so model calls route through the Orq gateway with
+    the workspace skills and MCP server attached; ``orq`` tunes its flags and is ignored (with a warning)
+    under ``direct``. ``model`` is the agent's own flag under ``direct`` and ``orq launch --model
+    provider/id`` under ``orq``.
+
+    ``env`` overlays ``os.environ``; caller-supplied values win. ``timeout_ms`` is the per-turn ceiling
+    and defaults to the same value the outer retry helper uses.
+    """
+
+    def __init__(
+        self,
+        agent: AgentName,
+        *,
+        launcher: Launcher = 'direct',
+        orq: OrqLaunchOptions | None = None,
+        model: str | None = None,
+        system_prompt: str | None = None,
+        permission_mode: str | None = None,
+        extra_args: list[str] | None = None,
+        workdir: Path | None = None,
+        keep_workdir: bool = False,
+        skills: list[Path] | None = None,
+        timeout_ms: int = DEFAULT_TARGET_TIMEOUT_MS,
+        env: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__()
+        if agent not in _AGENTS:
+            raise ValueError(f'Unknown coding agent {agent!r}; expected one of {sorted(_AGENTS)}')
+        if launcher not in ('direct', 'orq'):
+            raise ValueError(f'Unknown launcher {launcher!r}; expected "direct" or "orq"')
+        self._spec = _AGENTS[agent]
+        if permission_mode is not None and self._spec.permission_flag is None:
+            raise ValueError(f'{agent} has no permission-mode flag; pass its own flags through extra_args instead')
+        if orq is not None and launcher == 'direct':
+            logger.warning(f'CodingAgentTarget({agent}): orq options given but launcher is "direct"; ignoring them')
+        if system_prompt and self._spec.system_prompt_flag is None:
+            logger.warning(
+                f'CodingAgentTarget({agent}): no system-prompt flag; prepending system_prompt to the conversation instead'
+            )
+        self._kwargs: dict[str, Any] = {
+            'launcher': launcher,
+            'orq': orq,
+            'model': model,
+            'system_prompt': system_prompt,
+            'permission_mode': permission_mode,
+            'extra_args': list(extra_args) if extra_args else None,
+            'workdir': workdir,
+            'keep_workdir': keep_workdir,
+            'skills': list(skills) if skills else None,
+            'timeout_ms': timeout_ms,
+            'env': dict(env) if env else None,
+        }
+        self._agent: AgentName = agent
+        self._launcher: Launcher = launcher
+        self._orq = orq
+        self._model = model
+        self._system_prompt = system_prompt
+        self._permission_mode = permission_mode
+        self._extra_args = list(extra_args or [])
+        self._source_workdir = Path(workdir) if workdir is not None else None
+        self._keep_workdir = keep_workdir
+        self._skills = [Path(s) for s in skills or []]
+        self._timeout_ms = timeout_ms
+        self._env = dict(env or {})
+        self._workdir: Path | None = None
+        self._finalizer: weakref.finalize | None = None  # pyright: ignore[reportMissingTypeArgument]
+        self._proc: asyncio.subprocess.Process | None = None
+
+    @property
+    def workdir(self) -> Path | None:
+        """The private working directory, ``None`` until the first turn creates it."""
+        return self._workdir
+
+    def _ensure_workdir(self) -> Path:
+        if self._workdir is not None:
+            return self._workdir
+        dst = Path(tempfile.mkdtemp(prefix=f'evaluatorq-{self._agent}-'))
+        if self._source_workdir is not None:
+            shutil.copytree(self._source_workdir, dst, symlinks=True, dirs_exist_ok=True)
+        skills_dir = dst / self._spec.skills_dir
+        skills_dir.mkdir(parents=True, exist_ok=True)
+        for skill in self._skills:
+            link = skills_dir / skill.name
+            if link.exists() or link.is_symlink():
+                raise FileExistsError(f'skill {skill.name!r} already exists in {skills_dir}; refusing to shadow it')
+            link.symlink_to(skill.resolve(), target_is_directory=True)
+        if not self._keep_workdir:
+            self._finalizer = weakref.finalize(self, _remove_tree, dst)
+        self._workdir = dst
+        return dst
 
     def new(self) -> CodingAgentTarget:
-        return type(self)()
+        return type(self)(self._agent, **self._kwargs)
+
+    async def close(self) -> None:
+        """Kill a live process group and release the temp workdir. Idempotent."""
+        proc = self._proc
+        if proc is not None:
+            _kill_group(proc)
+            self._proc = None
+        if self._workdir is None:
+            return
+        if self._keep_workdir:
+            logger.info(f'CodingAgentTarget({self._agent}): keeping workdir {self._workdir}')
+        else:
+            _remove_tree(self._workdir)
+            if self._finalizer is not None:
+                self._finalizer.detach()
+        self._workdir = None
+
+    async def get_agent_context(self) -> AgentContext:
+        tools = [ToolInfo(name=name) for name in self._spec.tools]
+        tools += [ToolInfo(name=skill.name, action_type='skill') for skill in self._skills]
+        return AgentContext(
+            key=f'coding-agent:{self._agent}',
+            system_prompt=self._system_prompt or '',
+            tools=tools,
+            model=self._model,
+        )
+
+    def map_error(self, exc: Exception) -> tuple[str, str] | None:
+        if isinstance(exc, CodingAgentError):
+            return exc.code, exc.message
+        return None
+
+    async def respond(self, messages: list[Message]) -> AgentResponse:
+        raise NotImplementedError  # Task 6
+
+
+def _kill_group(proc: asyncio.subprocess.Process) -> None:
+    if proc.returncode is not None:
+        return
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(proc.pid, signal.SIGKILL)
