@@ -93,6 +93,7 @@ def _refresh_token_usage(sinks: RunSinks, user_simulator: UserSimulatorAgent, ju
     """Refresh aggregate usage, retaining partial spend if a getter fails."""
     try:
         sinks.token_usage = user_simulator.get_usage() + judge.get_usage() + sinks.target_token_usage
+        sinks.token_usage_known = True  # getters are cumulative, so one success after a failure is complete again
     except Exception as usage_err:
         sinks.token_usage_known = False
         logger.warning(
