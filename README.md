@@ -79,7 +79,7 @@
 | src/evaluatorq/dashboard/trace\_links.py                                 |       38 |        0 |    100% |           |
 | src/evaluatorq/dashboard/view.py                                         |      439 |       33 |     92% |104, 148-149, 331, 542, 549, 624, 681, 878, 919-920, 950-951, 1299-1339 |
 | src/evaluatorq/deployment.py                                             |       72 |        9 |     88% |79-81, 134, 170, 188, 194, 252-260 |
-| src/evaluatorq/evaluatorq.py                                             |      204 |        5 |     98% |84, 94, 305, 406, 587 |
+| src/evaluatorq/evaluatorq.py                                             |      268 |        5 |     98% |86, 96, 278, 432, 484 |
 | src/evaluatorq/evaluators.py                                             |       37 |       18 |     51% |54, 75, 113-148 |
 | src/evaluatorq/fetch\_data.py                                            |      142 |       17 |     88% |48, 82-84, 122, 183-184, 188-191, 221, 224-225, 282, 290, 324, 345 |
 | src/evaluatorq/integrations/\_\_init\_\_.py                              |        6 |        3 |     50% |     39-41 |
@@ -228,7 +228,7 @@
 | src/evaluatorq/tracing/setup.py                                          |      140 |       12 |     91% |97, 184-187, 253, 255-258, 323-324, 345 |
 | src/evaluatorq/tracing/spans.py                                          |       84 |        1 |     99% |       130 |
 | src/evaluatorq/types.py                                                  |       88 |        2 |     98% |   32, 292 |
-| **TOTAL**                                                                | **27351** | **2419** | **91%** |           |
+| **TOTAL**                                                                | **27415** | **2419** | **91%** |           |
 
 
 ## Setup coverage badge
