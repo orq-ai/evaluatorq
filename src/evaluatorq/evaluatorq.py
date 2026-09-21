@@ -12,6 +12,7 @@ from loguru import logger
 from .common.llm_limit import llm_concurrency_limit
 from .common.messages import coerce_content_text
 from .common.parallelism import resolve_datapoint_parallelism
+from .common.trace_input import fetch_traces
 from .fetch_data import (
     fetch_dataset_batches,
     fetch_experiment_datapoints,
@@ -33,6 +34,7 @@ from .types import (
     EvaluatorqResult,
     ExperimentInput,
     Job,
+    TraceInput,
 )
 
 if TYPE_CHECKING:
@@ -129,6 +131,10 @@ def extract_recorded_response(messages: Any) -> str:
 # though replaying a recorded response involves no awaiting.
 async def _replay_recorded_response(data_point: DataPoint, _row_index: int) -> dict[str, Any]:  # noqa: RUF029
     """Synthetic job for the no-inference path: replays the pre-recorded response."""
+    if import_error := data_point.inputs.get('trace_import_error'):
+        raise ValueError(f'The source trace could not be imported: {import_error}')
+    if 'recorded_output' in data_point.inputs:
+        return {'name': 'recorded', 'output': data_point.inputs['recorded_output']}
     response = extract_recorded_response(data_point.inputs.get('messages'))
     return {'name': 'recorded', 'output': response}
 
@@ -709,7 +715,7 @@ async def evaluatorq(
     name: str,
     params: EvaluatorParams | dict[str, Any] | None = None,
     *,
-    data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None = None,
+    data: DatasetIdInput | ExperimentInput | TraceInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None = None,
     jobs: list[Job] | None = None,
     evaluators: list[Evaluator] | None = None,
     datapoint_parallelism: int | None = None,
@@ -747,7 +753,8 @@ async def evaluatorq(
         params: Optional EvaluatorParams instance or dict with all parameters.
         data: The data to evaluate. A DatasetIdInput to fetch from Orq platform, an
               ExperimentInput to replay an experiment's recorded responses (requires
-              inference=False), or a list of DataPoint instances/awaitables.
+              inference=False), a TraceInput to import recorded trace conversations
+              (requires inference=False), or a list of DataPoint instances/awaitables.
         jobs: The jobs to run on the data.
         evaluators: The evaluators to use. If not provided, only jobs will run.
         datapoint_parallelism: Task concurrency, applied at two levels: datapoints run
@@ -850,6 +857,14 @@ async def evaluatorq(
         dataset_id: str | None = None
 
         data = await _resolve_experiment_input(data, orq_api_key, _base_url)
+
+        if isinstance(data, TraceInput):
+            traces = await fetch_traces(
+                data,
+                api_key=orq_api_key,
+                base_url=_base_url,
+            )
+            data = [trace.to_datapoint() for trace in traces]
 
         # Create progress service
         progress = ProgressService()

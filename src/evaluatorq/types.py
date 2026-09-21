@@ -10,7 +10,7 @@ from evaluatorq.contracts import AgentResponse, Message, TokenUsage
 
 # Keep output permissive: OpenResponses payloads are dict-shaped and should
 # pass through unchanged alongside arbitrary job payloads.
-Output = str | int | float | bool | dict[str, Any] | AgentResponse | None
+Output = str | int | float | bool | dict[str, Any] | list[Message] | AgentResponse | None
 """Output type alias"""
 
 

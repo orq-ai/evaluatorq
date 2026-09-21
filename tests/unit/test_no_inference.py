@@ -1,8 +1,12 @@
 """RES-993: no-inference mode replays pre-recorded responses to the evaluators."""
 
+import importlib
+from unittest.mock import AsyncMock
+
 import pytest
 
-from evaluatorq import evaluatorq
+from evaluatorq import Trace, TraceInput, evaluatorq
+from evaluatorq.contracts import Message
 from evaluatorq.evaluatorq import check_pass_failures, extract_recorded_response
 from evaluatorq.types import DataPoint, EvaluationResult, ScorerParameter
 
@@ -136,3 +140,58 @@ async def test_inference_true_without_jobs_raises():
             print_results=False,
             _send_results=False,
         )
+
+
+TRACE = Trace(
+    trace_id='trace-1',
+    input_messages=[Message(role='user', content='question')],
+    output_messages=[Message(role='assistant', content='recorded answer')],
+)
+
+
+@pytest.mark.asyncio
+async def test_trace_input_fetches_once_and_scores_recorded_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
+    fetch = AsyncMock(return_value=[TRACE])
+    captured: list[object] = []
+
+    async def capture(params: ScorerParameter) -> EvaluationResult:
+        captured.append(params['output'])
+        return EvaluationResult(value=1)
+
+    monkeypatch.setattr(evaluatorq_module, 'fetch_traces', fetch)
+
+    results = await evaluatorq(
+        'trace-eval',
+        data=TraceInput(trace_id='trace-1'),
+        inference=False,
+        evaluators=[{'name': 'capture', 'scorer': capture}],
+        print_results=False,
+        _send_results=False,
+    )
+
+    fetch.assert_awaited_once()
+    assert captured == [TRACE.to_datapoint().inputs['recorded_output']]
+    assert results[0].job_results is not None
+    assert results[0].job_results[0].output == TRACE.output_messages
+
+
+@pytest.mark.asyncio
+async def test_trace_input_requires_no_inference(monkeypatch: pytest.MonkeyPatch):
+    evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
+    fetch = AsyncMock()
+    monkeypatch.setattr(evaluatorq_module, 'fetch_traces', fetch)
+
+    async def unused_job(_data: DataPoint, _row: int) -> dict[str, object]:
+        return {"name": "unused", "output": None}
+
+    with pytest.raises(ValueError, match="TraceInput"):
+        await evaluatorq(
+            "trace-eval",
+            data=TraceInput(trace_id='trace-1'),
+            jobs=[unused_job],
+            print_results=False,
+            _send_results=False,
+        )
+
+    fetch.assert_not_awaited()
