@@ -11,6 +11,7 @@ from evaluatorq import evaluatorq
 from evaluatorq.common.parallelism import resolve_datapoint_parallelism
 from evaluatorq.evaluatorq import check_pass_failures
 from evaluatorq.fetch_data import DataPointBatch
+from evaluatorq.send_results import OrqResponse
 from evaluatorq.types import (
     DataPoint,
     DatasetIdInput,
@@ -652,3 +653,60 @@ def test_check_pass_failures_counts_evaluator_errors():
 
     assert check_pass_failures(results) is False
     assert check_pass_failures(results, treat_errors_as_failure=True) is True
+
+
+@pytest.mark.asyncio
+async def test_streaming_run_uploads_with_its_dataset_id_and_feeds_the_sink(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A DatasetIdInput run hands its dataset id and experiment URL to the upload.
+
+    ``dataset_id`` is resolved inside the streaming branch but read after it, at upload
+    time, so it is the one value in ``evaluatorq()`` that crosses a branch boundary.
+    Every other streaming test runs with ``_send_results=False``, which leaves that
+    hand-off unguarded: a refactor that stopped propagating it would upload every
+    streaming run as ``dataset_id=None`` with no test failing. So would dropping the
+    ``_experiment_url_out`` append, which is only covered on the in-memory path.
+    """
+    evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
+    upload_calls: list[tuple[object, ...]] = []
+
+    async def fetch_one_batch(*_args: object, **_kwargs: object):
+        yield DataPointBatch(
+            datapoints=[DataPoint(inputs={'row': 0})],
+            has_more=False,
+            batch_number=1,
+        )
+
+    async def job(_data: DataPoint, _row: int):
+        return {'name': 'job', 'output': 'output'}
+
+    async def fake_upload(*args: object, **kwargs: object):
+        upload_calls.append(args)
+        return OrqResponse(
+            sheet_id='s1',
+            manifest_id='m1',
+            experiment_name='streaming-upload',
+            rows_created=1,
+            experiment_url='https://my.orq.ai/e/streamed',
+        )
+
+    monkeypatch.setattr(evaluatorq_module, 'setup_orq_client', lambda _api_key: object())
+    monkeypatch.setattr(evaluatorq_module, 'fetch_dataset_batches', fetch_one_batch)
+    monkeypatch.setattr(evaluatorq_module, 'send_results_to_orq', fake_upload)
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+
+    sink: list[str] = []
+    results = await evaluatorq_module.evaluatorq(
+        'streaming-upload',
+        data=DatasetIdInput(dataset_id='ds_42'),
+        jobs=[job],
+        print_results=False,
+        _experiment_url_out=sink,
+    )
+
+    assert len(results) == 1
+    assert len(upload_calls) == 1
+    # send_results_to_orq(api_key, name, description, dataset_id, results, start, end)
+    assert upload_calls[0][3] == 'ds_42'
+    assert sink == ['https://my.orq.ai/e/streamed']
