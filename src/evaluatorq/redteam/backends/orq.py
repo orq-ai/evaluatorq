@@ -50,7 +50,7 @@ from evaluatorq.common.tracing import (
     set_span_attrs,
     truncate_for_span,
 )
-from evaluatorq.contracts import AgentTarget, Message, content_to_text
+from evaluatorq.contracts import AgentTarget, ConversationHistoryMode, Message, content_to_text
 from evaluatorq.redteam.backends._errors import extract_provider_error_code, extract_status_code
 from evaluatorq.redteam.backends._retry import warn_ignored_target_retries
 from evaluatorq.redteam.backends.base import Backend
@@ -222,6 +222,8 @@ class ORQAgentTarget(AgentTarget):
 
     Wraps the ORQ SDK to satisfy the ``AgentTarget`` ABC.
     """
+
+    history_mode = ConversationHistoryMode.TARGET
 
     def __init__(
         self,

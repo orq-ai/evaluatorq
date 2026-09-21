@@ -567,6 +567,56 @@ def test_new_hardcoded_class_detector_actually_fires() -> None:
     ]
 
 
+# Conversation-history ownership is a capability of AgentTarget, not a list of
+# concrete adapters for red-team code to identify. Keep the adapter names here
+# only as AST sentinels: a future isinstance ladder is exactly the drift this
+# guardrail is meant to catch.
+_TARGET_ADAPTER_NAMES = frozenset(
+    {
+        'ORQAgentTarget',
+        'OrqResponsesTarget',
+        'LangGraphTarget',
+        'PydanticAITarget',
+        'CrewAITarget',
+    }
+)
+
+
+def _target_history_ladder_lines(source: str, path: str) -> list[str]:
+    """Return lines that branch on concrete AgentTarget adapter classes."""
+    tree = ast.parse(source)
+    hits: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or _dotted(node.func) != 'isinstance' or len(node.args) < 2:
+            continue
+        classes = node.args[1]
+        if not isinstance(classes, ast.Tuple):
+            continue
+        if any(isinstance(item, ast.Name) and item.id in _TARGET_ADAPTER_NAMES for item in classes.elts):
+            hits.append(f'{path}:{node.lineno}')
+    return hits
+
+
+def test_redteam_reads_history_mode_instead_of_adapter_type_ladders() -> None:
+    hits = [
+        hit
+        for path in sorted((SRC / 'redteam').rglob('*.py'))
+        for hit in _target_history_ladder_lines(path.read_text(encoding='utf-8'), str(path.relative_to(SRC)))
+    ]
+    assert not hits, (
+        'Red-team code branches on concrete AgentTarget adapters: '
+        + ', '.join(hits)
+        + '. Read AgentTarget.history_mode (ConversationHistoryMode) instead; the capability contract '
+        'keeps new adapters from requiring another isinstance ladder.'
+    )
+
+
+def test_target_history_ladder_detector_actually_fires() -> None:
+    source = 'if isinstance(target, (ORQAgentTarget, OrqResponsesTarget)):\n    pass\n'
+    assert _target_history_ladder_lines(source, 'x.py') == ['x.py:1']
+    assert _target_history_ladder_lines('if isinstance(target, AgentTarget):\n    pass\n', 'x.py') == []
+
+
 # --- an llm_config consumed in part, silently --------------------------------
 # `FirstMessageGenerator` dropped a caller's `max_tokens` for as long as it existed, because it never went through `generate_structured`.
 _SIM_GENERATORS = SRC / 'simulation' / 'generators'

@@ -137,6 +137,13 @@ else:
         """String enum compatible with Python 3.10."""
 
 
+class ConversationHistoryMode(StrEnum):
+    """Declare which side owns conversation history for an agent target."""
+
+    CALLER = 'caller'
+    TARGET = 'target'
+
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
@@ -1514,8 +1521,9 @@ class AgentTarget(ABC):
     """Abstract base class for agent targets that can receive messages.
 
     Subclasses implement ``respond`` (the canonical message-based interface)
-    and ``new``. ``respond`` is the sole response method; callers own the
-    conversation transcript.
+    and ``new``. ``respond`` is the sole response method. ``history_mode`` declares
+    whether the caller or target owns conversation continuity; caller-owned history
+    is the safe default for new targets.
     Targets that back a server-side memory store override ``get_agent_context``
     (self-describing), ``cleanup_memory`` (release created entities), and
     ``map_error`` (provider-specific error codes); stateless targets inherit
@@ -1532,6 +1540,8 @@ class AgentTarget(ABC):
     ``max_retries=0`` (or clone an injected one via
     ``common.retry.without_client_retries``) for the same reason.
     """
+
+    history_mode: ClassVar[ConversationHistoryMode] = ConversationHistoryMode.CALLER
 
     def __init__(self, memory_entity_id: str | None = None) -> None:
         self.memory_entity_id = memory_entity_id
@@ -1803,6 +1813,7 @@ __all__ = [
     'AgentResponse',
     'AgentResponseError',
     'AgentTarget',
+    'ConversationHistoryMode',
     'ContentPart',
     'FunctionCall',
     'JuryRepetition',
