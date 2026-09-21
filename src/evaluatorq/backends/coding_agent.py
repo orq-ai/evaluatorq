@@ -13,11 +13,13 @@ Retry lives in ``common.target_call.call_target_with_retry`` only. ``respond()``
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
+from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.target_call import NonRetryableTargetError
-from evaluatorq.contracts import AgentResponse, AgentTarget, Message
+from evaluatorq.contracts import AgentResponse, AgentTarget, Message, content_to_text
 
 AgentName = Literal['claude', 'codex', 'opencode']
 Launcher = Literal['direct', 'orq']
@@ -158,6 +160,46 @@ def build_argv(
     # ``orq launch`` already invokes the agent's subcommand (``codex exec`` / ``opencode run``), so
     # the leading entry of ``output_args`` is dropped here to avoid passing it twice.
     return ['orq', 'launch', agent, *orq_flags, '-p', prompt, '--', *agent_args[1:]], None
+
+
+_PROMPT_INSTRUCTION = (
+    'You are continuing the conversation below. It is a JSON array of chat messages in order; '
+    '"tool" entries are the results of your own earlier tool calls. Reply to the last "user" message. '
+    'Do not restate the transcript.'
+)
+
+
+def _message_to_dict(message: Message) -> dict[str, Any]:
+    if message.role == 'tool':
+        return {
+            'role': 'tool',
+            'tool_call_id': message.tool_call_id or '',
+            'name': message.name,
+            'content': content_to_text(message.content),
+        }
+    out: dict[str, Any] = {
+        'role': message.role,
+        'content': None if message.content is None else content_to_text(message.content),
+    }
+    if message.tool_calls:
+        out['tool_calls'] = [
+            {'id': tc.id, 'name': tc.function.name, 'arguments': tc.function.arguments} for tc in message.tool_calls
+        ]
+    return out
+
+
+def render_prompt(messages: list[Message], *, system_prompt: str | None, inline_system: bool) -> str:
+    """Render the transcript as a delimited JSON conversation followed by the reply instruction.
+
+    ``inline_system`` prepends ``system_prompt`` as a ``system`` entry for agents without a
+    system-prompt flag (codex, opencode). Claude receives it via ``--append-system-prompt`` instead.
+    """
+    entries: list[dict[str, Any]] = []
+    if inline_system and system_prompt:
+        entries.append({'role': 'system', 'content': system_prompt})
+    entries += [_message_to_dict(m) for m in messages]
+    block = delimit(json.dumps(entries, ensure_ascii=False, indent=None), tag='conversation')
+    return f'{_PROMPT_INSTRUCTION}\n{block}'
 
 
 class CodingAgentTarget(AgentTarget):  # placeholder, replaced in Task 6
