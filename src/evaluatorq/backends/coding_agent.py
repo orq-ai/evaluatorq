@@ -334,17 +334,22 @@ def _parse_codex(events: list[dict[str, Any]]) -> ParsedTurn:
         elif kind == 'turn.failed':
             turn.agent_error = str((event.get('error') or {}).get('message') or 'turn.failed')
         elif kind == 'turn.completed':
-            usage = event.get('usage') or {}
-            if usage:
-                turn.usage = Usage(
-                    input_tokens=int(usage.get('input_tokens', 0)),
-                    output_tokens=int(usage.get('output_tokens', 0)),
-                    total_tokens=int(usage.get('input_tokens', 0)) + int(usage.get('output_tokens', 0)),
-                    cached_tokens=int(usage.get('cached_input_tokens', 0)),
-                    cache_creation_tokens=int(usage.get('cache_write_input_tokens', 0)),
-                    reasoning_tokens=int(usage.get('reasoning_output_tokens', 0)),
-                    calls=1,
-                )
+            usage = event.get('usage')
+            if usage is not None:
+                missing_fields = [field for field in ('input_tokens', 'output_tokens') if field not in usage]
+                if missing_fields:
+                    for field in missing_fields:
+                        logger.warning(f'codex turn.completed usage missing required field: {field}')
+                else:
+                    turn.usage = Usage(
+                        input_tokens=int(usage['input_tokens']),
+                        output_tokens=int(usage['output_tokens']),
+                        total_tokens=int(usage['input_tokens']) + int(usage['output_tokens']),
+                        cached_tokens=int(usage.get('cached_input_tokens', 0)),
+                        cache_creation_tokens=int(usage.get('cache_write_input_tokens', 0)),
+                        reasoning_tokens=int(usage.get('reasoning_output_tokens', 0)),
+                        calls=1,
+                    )
         elif kind in ('item.started', 'item.completed'):
             item = event.get('item') or {}
             item_id = str(item.get('id'))
@@ -394,7 +399,9 @@ def _parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
     texts: list[str] = []
     totals = {'input': 0, 'output': 0, 'reasoning': 0, 'read': 0, 'write': 0}
     cost = 0.0
-    saw_usage = False
+    saw_valid_usage = False
+    saw_step_finish = False
+    saw_cost = False
     for event in events:
         turn.session_id = turn.session_id or event.get('sessionID')
         part = event.get('part') or {}
@@ -415,28 +422,33 @@ def _parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
                     arguments=state.get('input', {}),
                     result=tool_result_to_text(state.get('output'))
                     if state.get('output') is not None
-                    else state.get('error'),
+                    else tool_result_to_text(state.get('error'))
+                    if 'error' in state
+                    else None,
                     status=status,
                 )
             )
         elif kind == 'step_finish':
+            saw_step_finish = True
             tokens = part.get('tokens') or {}
-            if tokens:
-                saw_usage = True
-                totals['input'] += int(tokens.get('input', 0))
-                totals['output'] += int(tokens.get('output', 0))
+            if 'input' in tokens and 'output' in tokens:
+                saw_valid_usage = True
+                totals['input'] += int(tokens['input'])
+                totals['output'] += int(tokens['output'])
                 totals['reasoning'] += int(tokens.get('reasoning', 0))
                 cache = tokens.get('cache') or {}
                 totals['read'] += int(cache.get('read', 0))
                 totals['write'] += int(cache.get('write', 0))
-            cost += float(part.get('cost') or 0)
+            if 'cost' in part:
+                saw_cost = True
+                cost += float(part['cost'] or 0)
         elif kind == 'error':
             turn.agent_error = str((part.get('error') or event.get('error') or {}).get('message') or 'error')
         else:
             logger.warning(f'opencode skipped unknown event type: {kind}')
     if texts:
         turn.text = '\n'.join(texts)
-    if saw_usage:
+    if saw_valid_usage:
         turn.usage = Usage(
             input_tokens=totals['input'],
             output_tokens=totals['output'],
@@ -446,6 +458,9 @@ def _parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
             reasoning_tokens=totals['reasoning'],
             calls=1,
         )
+    elif saw_step_finish:
+        logger.warning('opencode step_finish usage missing input and output token fields; usage is unknown')
+    if saw_cost:
         turn.cost_usd = cost
     return turn
 

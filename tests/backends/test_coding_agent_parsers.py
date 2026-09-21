@@ -93,6 +93,11 @@ def test_codex_turn_failed_sets_agent_error() -> None:
     assert parse_events('codex', events).agent_error == 'quota'
 
 
+def test_codex_missing_primary_usage_is_none() -> None:
+    events = [{'type': 'turn.completed', 'usage': {'output_tokens': 5}}]
+    assert parse_events('codex', events).usage is None
+
+
 def test_codex_file_change_and_mcp_items() -> None:
     events = [
         {'type': 'item.completed', 'item': {'id': 'i1', 'type': 'file_change', 'status': 'completed', 'changes': [{'path': 'a.py', 'kind': 'add'}]}},
@@ -127,6 +132,27 @@ def test_opencode_text_fixture_parses() -> None:
     turn = parse_events('opencode', _events('opencode_text'))
     assert turn.text
     assert turn.agent_error is None
+
+
+def test_opencode_structured_tool_error_is_text() -> None:
+    events = [
+        {
+            'type': 'tool_use',
+            'part': {
+                'callID': 'call-error',
+                'tool': 'bash',
+                'state': {'status': 'error', 'error': {'message': 'command failed', 'code': 2}},
+            },
+        }
+    ]
+    [call] = parse_events('opencode', events).tool_calls
+    assert call.result == '{"message": "command failed", "code": 2}'
+
+
+def test_opencode_missing_cost_is_none() -> None:
+    events = [{'type': 'step_finish', 'part': {'tokens': {'input': 3, 'output': 2}}}]
+    turn = parse_events('opencode', events)
+    assert turn.cost_usd is None
 
 
 def test_unknown_event_types_are_skipped() -> None:
