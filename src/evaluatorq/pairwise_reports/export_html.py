@@ -7,6 +7,7 @@ as the simulation and red-team renderers do.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.reports import (
@@ -226,6 +227,53 @@ def _detail_html(row: dict[str, Any], labels: tuple[str, str]) -> str:
 _FLIP_TAG = '<span class="pw-tag pw-tag--flip">flipped</span>'
 
 
+def _percentage(value: Any) -> str | None:
+    """Format valid probabilities without hiding near-tie or tiny nonzero values.
+
+    Within 0.1 percentage points of 50%, retain the available decimal precision.
+    Below 0.01%, use four significant digits; elsewhere use two decimal places.
+    Decimal conversion avoids exposing binary multiplication artifacts.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 1:
+        return None
+    percent = Decimal(str(value)) * 100
+    if percent == 0:
+        return '0%'
+    if abs(percent - 50) <= Decimal('0.1'):
+        return format(percent, 'f').rstrip('0').rstrip('.') + '%'
+    if percent < Decimal('0.01'):
+        return f'{percent.normalize():.4g}%'
+    return f'{percent:.2f}'.rstrip('0').rstrip('.') + '%'
+
+
+def _classify_details(vote: dict[str, Any]) -> str:
+    observations = vote.get('classify_observations') or []
+    if not observations:
+        return ''
+    rows: list[str] = []
+    for observation in observations:
+        order = 'original order' if observation['ordering'] == 'ab' else 'swapped order'
+        facts = [f'<strong>{order}, pass {observation["repetition"] + 1}</strong>']
+        choice = observation.get('choice')
+        if choice is not None:
+            facts.append(f'choice {_esc(str(choice))}')
+        confidence = _percentage(observation.get('confidence'))
+        if confidence is not None:
+            facts.append(f'confidence {_esc(confidence)}')
+        probabilities = observation.get('probabilities')
+        probability_html = ''
+        if isinstance(probabilities, dict):
+            items = []
+            for label, value in probabilities.items():
+                rendered = _percentage(value)
+                if rendered is not None:
+                    items.append(f'<span>{_esc(str(label))} {_esc(rendered)}</span>')
+            if items:
+                probability_html = f'<div class="pw-classify__probabilities">{"".join(items)}</div>'
+        rows.append(f'<div class="pw-classify__observation">{" · ".join(facts)}{probability_html}</div>')
+    return '<details class="pw-classify"><summary>Classifier details</summary>' + ''.join(rows) + '</details>'
+
+
 def _vote_row(vote: dict[str, Any]) -> str:
     flip = _FLIP_TAG if vote.get('flipped') else ''
     return (
@@ -233,6 +281,7 @@ def _vote_row(vote: dict[str, Any]) -> str:
         f'<span class="pw-vote__model">{_esc(vote["model"])}</span>'
         f'{_vote_chip(vote)}{flip}'
         f'<span class="pw-vote__why">{_esc(vote.get("explanation") or "")}</span>'
+        f'{_classify_details(vote)}'
         '</li>'
     )
 
@@ -308,10 +357,15 @@ _PAIRWISE_CSS = """
 .pw-response pre{white-space:pre-wrap;word-break:break-word;background:rgba(127,127,127,.08);
  padding:8px;border-radius:4px;margin:4px 0 0}
 .pw-votes{list-style:none;padding:0;margin:8px 0 4px}
-.pw-vote{display:flex;align-items:baseline;gap:10px;padding:6px 0;border-top:1px solid rgba(127,127,127,.15)}
+.pw-vote{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px;padding:6px 0;border-top:1px solid rgba(127,127,127,.15)}
 .pw-vote__model{width:200px;font-weight:600;flex:none}
 .pw-vote__why{flex:1;opacity:.85}
-@media (max-width:720px){.pw-responses{grid-template-columns:1fr}.pw-side__label{width:100px}}
+.pw-classify{flex-basis:100%;min-width:0;margin-left:210px;font-size:.9em;overflow-wrap:anywhere}
+.pw-cmp .pw-classify>summary{display:list-item;cursor:pointer}
+.pw-classify__observation{padding:6px 0}
+.pw-classify__probabilities{display:flex;flex-wrap:wrap;gap:4px 16px;font-variant-numeric:tabular-nums}
+@media (max-width:720px){.pw-responses{grid-template-columns:1fr}.pw-side__label{width:100px}
+ .pw-classify{margin-left:0}.pw-classify__probabilities{flex-direction:column}}
 """
 
 

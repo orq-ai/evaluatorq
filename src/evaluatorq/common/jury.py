@@ -79,6 +79,7 @@ class Prediction(BaseModel):
     value: VerdictValue | None = None
     explanation: str = ''
     token_usage: TokenUsage | None = None
+    raw_output: dict[str, Any] | None = None
     error: str | None = None
     abstained: bool = False
 
@@ -438,7 +439,12 @@ async def _compute_judge_vote(
     decisive = [p for p in predictions if p.decisive]
     abstained = bool(predictions) and not decisive and any(p.abstained for p in predictions)
     repetitions_raw = [
-        JuryRepetition(value=p.value if p.decisive else None, explanation=p.explanation or None) for p in predictions
+        JuryRepetition(
+            value=p.value if p.decisive else None,
+            explanation=p.explanation or None,
+            raw_output=p.raw_output,
+        )
+        for p in predictions
     ]
     # A pass has failed if it is neither decisive nor a CLEAN abstention: an error, or a
     # mechanically-unusable value=None / abstained=False pass. Counting only p.error let the

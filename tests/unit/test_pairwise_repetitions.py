@@ -80,6 +80,58 @@ def test_run_pairwise_captures_and_canonicalizes_repetitions() -> None:
     assert vote.vote is None
 
 
+def test_run_pairwise_preserves_classifier_details_in_each_provider_ordering() -> None:
+    """Each ordering retains its own provider-frame classifier answer."""
+
+    async def judge(a: object, b: object, model: str) -> Prediction:
+        if a == 'x':
+            return Prediction(
+                value='A',
+                raw_output={
+                    'type': 'choice',
+                    'choice': 'A',
+                    'probabilities': {'A': 0.8, 'B': 0.1, 'tie': 0.1},
+                    'confidence': 0.8,
+                },
+            )
+        return Prediction(
+            value='B',
+            raw_output={
+                'type': 'choice',
+                'choice': 'B',
+                'probabilities': {'A': 0.05, 'B': 0.9, 'tie': 0.05},
+                'confidence': 0.9,
+            },
+        )
+
+    comparison = asyncio.run(run_pairwise(judge_fn=judge, panel=['classify'], response_a='x', response_b='y'))
+    (vote,) = comparison.votes
+
+    assert vote.observations[0].ordering == 'ab'
+    assert vote.observations[0].verdict == 'A'
+    assert vote.observations[0].raw_output == {
+        'type': 'choice',
+        'choice': 'A',
+        'probabilities': {'A': 0.8, 'B': 0.1, 'tie': 0.1},
+        'confidence': 0.8,
+    }
+    assert vote.observations[1].ordering == 'ba'
+    assert vote.observations[1].verdict == 'A'
+    assert vote.observations[1].raw_output == {
+        'type': 'choice',
+        'choice': 'B',
+        'probabilities': {'A': 0.05, 'B': 0.9, 'tie': 0.05},
+        'confidence': 0.9,
+    }
+
+    restored = PairwiseComparison.model_validate_json(comparison.model_dump_json())
+    assert restored.votes[0].observations[0].raw_output != restored.votes[0].observations[1].raw_output
+
+
+def test_repetition_observation_without_classifier_detail_defaults_to_none() -> None:
+    assert RepetitionObservation(ordering='ab', repetition=0, verdict='A').raw_output is None
+
+
 def test_failed_and_abstained_repetitions_are_recorded_as_none() -> None:
     calls = {'n': 0}
 

@@ -1,6 +1,6 @@
 # LLM as a Jury
 
-A single judge model is a single point of failure. It can be noisy from one call to the next, and it can be biased toward outputs from its own provider family. The jury (or panel of judges) replaces that one judge with several, runs them together, aggregates their verdicts into one decision, and reports how much they agreed.
+A **jury** is a panel of judge models that runs together, aggregates its verdicts into one decision, and reports how much the judges agreed. A single judge can be noisy from one call to the next or biased toward outputs from its own provider family; a jury spreads that decision across several models.
 
 You can use a jury two ways: as a general evaluator in `evaluatorq()` through `llm_jury()`, or inside red teaming through `EvaluatorConfig`. Both share the same panel machinery.
 
@@ -85,6 +85,65 @@ helpfulness = llm_jury(
 
 `labels`/`passing_labels` are valid only for `categorical`; passing them with `numeric` raises `ValueError`. In labeled mode `passing_labels` must be a subset of `labels`; omit it and the verdict is still recorded but `passed` is `None`.
 
+## Jev as a judge
+
+`typesafe/jev-latest` (Jev) is a **classify model**: it is never prompted. It is handed the material to judge and one question about it, and answers with a probability distribution instead of prose. On a panel it takes a seat beside prompted LLM judges and casts an ordinary vote.
+
+See [Classify judges](classify-judges.md) for the task-focused guide to question shapes, state selection, routing, warnings and failure modes.
+
+A Jev call costs about **$0.042 per million input tokens**, with free output, and answers in **under a second** — a three-question probe took 0.7 s. Use it for a cheap third vote on yes/no, fixed-label, or ordered-scale verdicts. Its explanation is synthesised from numbers, so use a prompted judge when you need reasoning.
+
+Seat it by naming it in `judges` alongside anything else, and give the panel `criteria`:
+
+```python
+from evaluatorq import llm_jury
+
+correctness = llm_jury(
+    name="correctness",
+    criteria="The answer is factually correct and directly answers the question.",
+    judges=["openai/gpt-5.4-mini", "typesafe/jev-latest"],
+    labels={
+        "correct": "every claim in the answer is accurate",
+        "incorrect": "at least one claim is wrong or unsupported",
+    },
+    passing_labels=["correct"],
+)
+```
+
+`labels` as a `{label: description}` dict is what a classify judge needs — the descriptions are the options it picks between. The LLM judge on the same panel gets the same descriptions through its verdict schema and system prompt. `labels=["correct", "incorrect"]` (a plain list) stays valid and describes nothing.
+
+Numeric mode needs `levels` instead — 2 to 10 ordered level descriptions, lowest first:
+
+```python
+helpfulness = llm_jury(
+    name="helpfulness",
+    criteria="How helpful is the answer to the person who asked the question?",
+    judges=["anthropic/claude-sonnet-4-6", "typesafe/jev-latest"],
+    verdict_kind="numeric",
+    levels=["no help at all", "partially helpful", "fully helpful"],
+    threshold=0.7,
+)
+```
+
+The classify path follows these rules:
+
+- **`criteria` is the question, and it is required.** A known classify id with only `prompt` raises `ValueError` at construction. A classify id first discovered through the fetched catalogue fails its first scoring call instead of falling back to prompting. Other panels require at least one of `criteria` or `prompt`, and may set both.
+- **The material is the state.** A classify judge is handed every placeholder the prompt template renders, minus `criteria` itself (which is the question, not the material). `state_fields=["output.response"]` narrows it to the paths you name. A path with no value is skipped with a debug log, and a state where nothing at all resolves logs a warning once per evaluator. Values keep their types, so `input.all_messages` remains a message list.
+- **Boolean mode compares against `threshold`.** The judge answers with a probability and the verdict is `probability >= threshold` (default `0.5`), so `threshold` must lie in `[0.0, 1.0]`. An LLM judge on the same panel returns a boolean directly and ignores it.
+- **Labeled mode returns the chosen label**, exactly as an LLM judge does, so `passing_labels` works unchanged.
+- **Numeric mode requires `levels`** and normalises the raw level-index score as `score / (len(levels) - 1)`, clamped to `[0.0, 1.0]`. The resulting verdict always uses that range, so `score_range` has to stay at its default `(0.0, 1.0)`; an override is rejected.
+- **The explanation is synthesised** from the numbers that decided the verdict — `noul=0.92 (threshold 0.5)`, `choice='neutral' (confidence 0.96)`, `score=2.30/4 → 0.57 (confidence 0.81)`. Values close to a decision boundary retain enough decimal places to show which side they fall on. There is no model-written rationale to report.
+- **Each repetition keeps the complete validated classify answer** in `JuryRepetition.raw_output`, including confidence and probabilities when reported. It survives in returned and local saved results; `send_results_to_orq()` strips `raw_output`, so the hosted Orq experiment view does not receive it. The judge span also records `judge.confidence` and `judge.probabilities` (a JSON string) when reported. See [Reading the output](#reading-the-output) for the typed path.
+- **Settings a classify judge cannot use are named in a warning.** The literal `prompt` is not sent, but its placeholders still select the default state fields. `system_prompt`, `temperature`, `structured_output`, `max_tokens`, `reasoning_effort`, `extra_kwargs` and `extra_body` have no role on this path. `llm_jury()` names the non-default settings you set in one warning: at construction for known classify ids, or on the first call for a model discovered through the fetched catalogue. If another seat may be prompted, the warning says those settings still apply to any prompted judges.
+- **`repetitions > 1` warns.** A classify verdict is deterministic, so the extra calls are billed for identical answers.
+
+At runtime, the Orq catalogue's `supports_classify` flag is authoritative. When a model has no catalogue entry, the built-in fallback covers `typesafe/jev-latest` and warns once. Before the first call, `llm_jury()` uses that fallback and any `register_model()` overrides only for early validation; models discovered through the catalogue receive ignored-setting and repetition warnings on their first call.
+
+!!! warning "A classify judge only works through the Orq router"
+    The classify endpoint lives on the Orq router, so a client that does not route through it never reaches that path. `typesafe/jev-latest` is then sent as an ordinary chat model, the provider rejects the id, and the panel records a failed judge rather than raising — the symptom is a seat that never votes and a verdict decided by the rest of the panel. Give the run an `ORQ_API_KEY` (see [Configuration](configuration.md)), or leave Jev off the panel.
+
+Red teaming and simulation do not seat classify judges. `EvaluatorConfig` panels are prompted judges only.
+
 ## Panel configuration
 
 | Argument | Default | What it does |
@@ -92,11 +151,15 @@ helpfulness = llm_jury(
 | `preset` | `None` | Name of a ready-made panel from [Jury Presets](jury-presets.md), such as `"Balanced Trio"`. Seats the judges, the aggregation rule and a majority quorum (two of three, three of five). Mutually exclusive with `judges` and `model`. |
 | `judges` | — | Judge model IDs. Two or more makes it a jury. Mutually exclusive with `model`. |
 | `model` | — | Single-judge shorthand for `judges=[model]`. |
+| `criteria` / `prompt` | — | What the judges go on. Pass at least one; both together is allowed. An LLM judge reads the rendered `prompt` and can pull the rubric in with a `{{criteria}}` placeholder; a [classify judge](#jev-as-a-judge) is handed `criteria` as its question and never sees the prompt. Setting both on a panel that seats no classify judge and whose prompt never renders `{{criteria}}` logs one warning, because nothing then reads the rubric. |
+| `labels` | `None` | Categorical labels, either as a list (`["rude", "neutral", "friendly"]`) or as a `{label: description}` dict. The dict form describes each option: an LLM judge reads the descriptions through its verdict schema and system prompt, a classify judge takes them as the options of its choice question. |
+| `levels` | `None` | Numeric mode only: 2 to 10 ordered level descriptions, lowest first. Required when the panel seats a classify judge, whose score comes back scaled into `(0.0, 1.0)` — so `score_range` must stay at its default there. |
+| `state_fields` | `None` | Classify judges only: which template paths are handed over as the material to judge. Defaults to every placeholder the prompt template renders, minus `criteria`. |
 | `repetitions` | `1` | How many times each judge is asked. The judge takes its own majority before the panel votes, which smooths per-call noise. |
 | `assignment` | `"all"` | How judges are allocated across datapoints. `"all"` runs every judge on every datapoint. `"cyclic"` runs exactly one judge per datapoint, rotating through the panel (see below). |
 | `replacement_judges` | `None` | Stand-in models called only when a configured judge fails mechanically. |
 | `min_successful_judges` | `None` | Minimum decisive judges required, otherwise the verdict is **inconclusive**. Must not exceed the panel size. `None` means 1 for a hand-listed panel, and a majority of the seats under a `preset` (two of three, three of five). It is a floor on how many judges must answer, not the threshold the aggregator applies. |
-| `threshold` | `0.5` | Numeric mode: `passed` when `score >= threshold`. |
+| `threshold` | `0.5` | Numeric mode: `passed` when `score >= threshold`. In boolean mode it is the cutoff a classify judge's probability must clear to read as `true`; an LLM judge returns a boolean and ignores it. |
 | `structured_output` | `True` | Use the provider's structured-output API; falls back to a schema-injected `json_object` call for models that reject it. |
 
 ### Cyclic assignment (CyclicJudge)
@@ -157,17 +220,19 @@ jury = JuryResult.model_validate(score.score.raw_output[JURY_RAW_OUTPUT_KEY])
 for vote in jury.votes:
     print(vote.model, vote.value, vote.explanation)
     for rep in vote.repetitions:
-        print("   ", rep.value, rep.explanation)
+        print("   ", rep.value, rep.explanation, rep.raw_output)
 print(jury.raw_agreement, jury.stats)
 ```
 
-Each entry in `vote.repetitions` is a `JuryRepetition` with a `value` (`None` where the pass abstained or failed) and an `explanation` (`None` where the pass produced no text). Reports saved before the field existed stored bare verdicts; they still load, with `explanation` set to `None`.
+Each entry in `vote.repetitions` is a `JuryRepetition` with a `value` (`None` where the pass abstained or failed), an `explanation` (`None` where the pass produced no text), and optional `raw_output`. A successful classify pass stores its complete validated answer in `raw_output`, including provider-added fields and omitting fields the provider did not report. Prompted judges leave it `None`. Each repetition retains its own dictionary; distributions are not averaged into the final verdict. Older reports without `raw_output` still load with `None`; legacy bare verdicts also load with `explanation=None`.
+
+`send_results_to_orq()` strips `raw_output` before upload, so the hosted Orq experiment view does not receive these details. They remain available in returned results and local saved result artifacts.
 
 A datapoint whose **target** errored is never judged: it returns `inconclusive` with `raw_output` still `None`, because no panel ran. Reach for `.get(JURY_RAW_OUTPUT_KEY)` if your code walks every result rather than only the judged ones.
 
 When the panel *did* run but reached no verdict, the result is `inconclusive` and `raw_output` carries a second key, `EVAL_ERROR_RAW_OUTPUT_KEY` (`"evaluation_error"`), naming why: the last judge error, the full list of judge errors, and how many judges failed. It is written only when a judge actually recorded a failure — a panel where every judge abstained cleanly, or where too few of them agreed, produced a non-verdict rather than an outage and gets no error payload. A single shared writer keeps this key beside `"jury"`; in a direct `llm_jury()` result, the payload stays in `raw_output` for your code to read, while the red-team report converter additionally promotes it to `result.evaluation_error` for the run's error rollup.
 
-The record is kept in local result dumps and is deliberately stripped from the Orq platform upload — judge internals stay on your machine (see `evaluatorq.send_results`).
+The judge span separately records reported classify confidence and probabilities; stripping the experiment upload does not remove those trace attributes.
 
 ## In red teaming
 
@@ -231,6 +296,8 @@ It is `None` when undefined, for example a single-judge run or fewer than two mu
 
 `llm_jury()` and `PairwiseComparator` always send judge calls to the Orq router's `responses` endpoint (`api='responses'`) — the endpoint the router prices, so a jury verdict records cost the same way the call it judges does. There is no config knob to opt out; `run_judge` handles the cases that cannot use it on its own, falling back to Chat Completions for a client that does not route through the Orq router, a model the catalogue does not qualify for Responses, or a model that 400s on the endpoint.
 
+A [classify judge](#jev-as-a-judge) is the exception: it serves neither endpoint, so `api='responses'` says nothing about it and it goes to the router's `classify` endpoint instead. Which of the three served a verdict is recorded on `JudgeOutcome.endpoint`.
+
 Retries happen at the `run_judge` layer, not the SDK's: with a default budget of one retry (`LLMCallConfig.retry_count=1`, i.e. up to two requests per judge call), `run_judge` disarms the SDK-level retry budget (`max_retries=0`) on whichever client it is given — the one either helper builds for itself when no `client=` is passed in, or a client you pass in yourself — so the two retry layers never stack. There is no way to keep an injected client's own SDK retries active alongside `run_judge`'s.
 
 ## Reasoning effort on a jury
@@ -248,7 +315,7 @@ jury = llm_jury(
 )
 ```
 
-Because these judges send to the `responses` endpoint, the effort renders as a `reasoning` block — unless `run_judge` falls back to Chat Completions for one of the reasons above, in which case it renders as a flat `reasoning_effort` field. Either way the provider is the authority on which values it accepts.
+Because these judges send to the `responses` endpoint, the effort renders as a `reasoning` block — unless `run_judge` falls back to Chat Completions for one of the reasons above, in which case it renders as a flat `reasoning_effort` field. Either way the provider is the authority on which values it accepts. A [classify judge](#jev-as-a-judge) on the panel ignores the effort and says so in a warning — it takes no sampling settings at all.
 
 This is a distinct knob from red teaming's `target_reasoning_effort` (the agent *under test*), from `LLMCallConfig.reasoning_effort` on red teaming's own `attacker=` / `evaluator=` roles, and from `EVALUATORQ_REASONING_EFFORT` (the simulator's user-simulator and judge). See [Tuning](tuning.md) for the full disambiguation.
 
@@ -266,7 +333,7 @@ jury = llm_jury(
 )
 ```
 
-`extra_kwargs` sets arguments on the SDK call and **replaces** the key. `extra_body` adds fields to the request body and is **merged** per key, so router-owned body fields survive alongside yours.
+`extra_kwargs` sets arguments on the SDK call and **replaces** the key. `extra_body` adds fields to the request body and is **merged** per key, so router-owned body fields survive alongside yours. Both reach prompted judges only — a [classify judge](#jev-as-a-judge) ignores them and names them in a warning.
 
 !!! warning "`extra_body` inside `extra_kwargs` is rejected"
     `extra_body` is one of the structural fields the call site owns, so passing it through `extra_kwargs` raises — and because a judge failure is caught and turned into a verdict, the symptom is a judge that always fails rather than a crash. Use the `extra_body=` parameter.

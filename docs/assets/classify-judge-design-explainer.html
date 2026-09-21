@@ -1,0 +1,647 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Archived design explainer · Jev as a classify judge in evaluatorq</title>
+<meta name="robots" content="noindex, follow">
+<style>
+  :root {
+    --ivory:   #FAF9F5;
+    --slate:   #141413;
+    --clay:    #D97757;
+    --clay-text:#A84428;
+    --oat:     #E3DACC;
+    --olive:   #788C5D;
+    --olive-text:#596D3F;
+    --gray-150:#F0EEE6;
+    --gray-300:#D1CFC5;
+    --gray-500:#6B6A63;
+    --gray-700:#3D3D3A;
+    --serif: ui-serif, Georgia, "Times New Roman", serif;
+    --sans:  system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono:  ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--ivory);
+    color: var(--gray-700);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    padding: 56px 24px 120px;
+  }
+  .page {
+    max-width: 1180px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 200px minmax(0, 1fr);
+    gap: 48px;
+  }
+  @media (max-width: 920px) { .page { grid-template-columns: 1fr; } nav { display: none; } }
+
+  nav { position: sticky; top: 32px; align-self: start; font-size: 13px; }
+  nav .label {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--gray-500); margin-bottom: 12px;
+  }
+  nav a {
+    display: block; padding: 5px 0 5px 12px; border-left: 2px solid var(--gray-300);
+    color: var(--gray-700); text-decoration: none;
+  }
+  nav a:hover { color: var(--slate); border-color: var(--slate); }
+  nav a.l2 { padding-left: 24px; font-size: 12.5px; color: var(--gray-500); }
+  nav .files { margin-top: 28px; border-top: 1px solid var(--gray-300); padding-top: 16px; }
+  nav .files code { display: block; font-family: var(--mono); font-size: 11px; color: var(--gray-500); padding: 3px 0; }
+
+  header { margin-bottom: 12px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--gray-500); margin-bottom: 10px;
+  }
+  h1 {
+    font-family: var(--serif); font-weight: 500; font-size: 32px; color: var(--slate);
+    letter-spacing: -0.01em; margin-bottom: 14px;
+  }
+  .tldr {
+    border: 1.5px solid var(--gray-300); border-left: 3px solid var(--clay);
+    border-radius: 10px; background: #fff; padding: 16px 18px; margin-bottom: 8px;
+  }
+  .tldr b { color: var(--slate); }
+  h2 {
+    font-family: var(--serif); font-weight: 500; font-size: 22px; color: var(--slate);
+    margin: 40px 0 14px; scroll-margin-top: 24px;
+  }
+  h3 { font-family: var(--serif); font-weight: 500; font-size: 17px; color: var(--slate); margin: 22px 0 8px; }
+  p { margin-bottom: 12px; max-width: 720px; }
+  code { font-family: var(--mono); font-size: 13px; }
+
+  /* priority pills */
+  .pill {
+    display: inline-block; font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.06em;
+    text-transform: uppercase; padding: 2px 8px; border-radius: 999px; vertical-align: middle;
+    border: 1px solid var(--gray-300); color: var(--gray-500); background: #fff;
+  }
+  .pill.p1 { border-color: var(--clay); color: var(--clay-text); }
+  .pill.p2 { border-color: var(--olive); color: var(--olive-text); }
+
+  /* diagrams */
+  .diagrams { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 14px 0 6px; }
+  @media (max-width: 920px) { .diagrams { grid-template-columns: 1fr; } }
+  .diag {
+    border: 1.5px solid var(--gray-300); border-radius: 10px; background: #fff; padding: 14px 14px 10px;
+  }
+  .diag .cap {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--gray-500); margin-bottom: 8px;
+  }
+  .diag.new { border-color: var(--clay); }
+  .diag svg { width: 100%; height: auto; display: block; }
+  .diag text { font-family: var(--sans); font-size: 12px; fill: var(--gray-700); }
+  .diag text.m { font-family: var(--mono); font-size: 11px; }
+  .diag text.small { font-size: 10.5px; fill: var(--gray-500); }
+  .diag .box { fill: #fff; stroke: var(--gray-300); stroke-width: 1.5; rx: 6; }
+  .diag .box.clay { stroke: var(--clay); }
+  .diag .box.olive { stroke: var(--olive); }
+  .diag .box.dead { stroke: var(--gray-300); stroke-dasharray: 4 3; }
+  .diag .box.oat { fill: rgba(227,218,204,0.45); stroke: var(--oat); }
+  .diag .edge { stroke: var(--gray-500); stroke-width: 1.3; fill: none; marker-end: url(#arr); }
+  .diag .edge.clay { stroke: var(--clay); }
+  .diag .edge.dead { stroke: var(--clay); stroke-dasharray: 4 3; }
+  .wide { margin: 14px 0 6px; }
+
+  /* tables */
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; margin: 12px 0 8px; background: #fff;
+    border: 1.5px solid var(--gray-300); border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--gray-300); vertical-align: top; }
+  th { font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--gray-500); background: var(--gray-150); font-weight: 500; }
+  tr:last-child td { border-bottom: none; }
+  td.new { background: rgba(217,119,87,0.06); }
+
+  /* decisions */
+  .dec { border: 1.5px solid var(--gray-300); border-radius: 10px; background: #fff; padding: 12px 16px; margin: 10px 0; }
+  .dec .t { font-family: var(--serif); font-size: 16px; color: var(--slate); display: flex; gap: 10px; align-items: baseline; }
+  .dec .t .n { font-family: var(--mono); font-size: 11px; color: var(--gray-500); }
+  .dec p { font-size: 14px; margin: 6px 0 0; max-width: 760px; }
+  .dec .alt { font-size: 13px; color: var(--gray-500); margin-top: 4px; }
+  .dec.p1 { border-left: 3px solid var(--clay); }
+  .dec.p2 { border-left: 3px solid var(--olive); }
+
+  /* collapsible */
+  details { border: 1.5px solid var(--gray-300); border-radius: 10px; background: #fff; margin: 14px 0; overflow: hidden; }
+  summary { list-style: none; cursor: pointer; padding: 14px 16px; font-family: var(--serif); font-size: 16px;
+    color: var(--slate); display: flex; align-items: baseline; gap: 10px; }
+  summary::-webkit-details-marker { display: none; }
+  summary::before { content: "▸"; color: var(--clay-text); font-family: var(--sans); font-size: 12px; transition: transform 120ms; }
+  details[open] summary::before { transform: rotate(90deg); }
+  summary .where { font-family: var(--mono); font-size: 11px; color: var(--gray-500); margin-left: auto; }
+  details .body { padding: 0 16px 16px; }
+  details .body p { font-size: 14px; }
+
+  /* tabs */
+  .tabs { border: 1.5px solid var(--gray-300); border-radius: 10px; background: #fff; margin: 16px 0 8px; overflow: hidden; }
+  .tabbar { display: flex; flex-wrap: wrap; border-bottom: 1px solid var(--gray-300); background: var(--gray-150); }
+  .tabbar button { appearance: none; border: none; background: none; font-family: var(--mono); font-size: 12px;
+    color: var(--gray-500); padding: 10px 16px; cursor: pointer; border-right: 1px solid var(--gray-300); }
+  .tabbar button.on { background: #fff; color: var(--slate); border-bottom: 2px solid var(--clay); margin-bottom: -1px; }
+  .tabs pre { display: none; margin: 0; padding: 16px 18px; font-family: var(--mono); font-size: 12.5px;
+    line-height: 1.6; color: var(--slate); overflow-x: auto; }
+  .tabs pre.on { display: block; }
+  .hl { color: var(--clay-text); }
+  .cm { color: var(--gray-500); }
+
+  .callout { display: flex; gap: 12px; border: 1.5px solid var(--oat); background: rgba(227,218,204,0.35);
+    border-radius: 10px; padding: 14px 16px; margin: 18px 0; font-size: 14px; }
+  .callout .ico { color: var(--clay-text); font-weight: 600; }
+  ul.plain { padding-left: 20px; max-width: 720px; }
+  ul.plain li { margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <nav>
+    <div class="label">On this page</div>
+    <a href="#tldr">TL;DR</a>
+    <a href="#route">1 · Endpoint routing</a>
+    <a href="#modes">2 · Verdict modes</a>
+    <a href="#state">3 · Prompt vs state</a>
+    <a href="#llm-delta" class="l2">What changes for an LLM judge</a>
+    <a href="#api">4 · What llm_jury gains</a>
+    <a href="#decisions">5 · Decisions to validate</a>
+    <a href="#scope">6 · Out of scope</a>
+    <a href="#files">7 · Files touched</a>
+    <div class="files">
+      <div class="label">Files read</div>
+      <code>common/judge.py</code>
+      <code>common/jury.py</code>
+      <code>common/model_catalogue.py</code>
+      <code>common/structured_output.py</code>
+      <code>llm_jury.py</code>
+      <code>pairwise.py</code>
+      <code>docs/llm-as-a-jury.md</code>
+    </div>
+  </nav>
+
+  <main>
+    <header>
+      <div class="eyebrow">Archived design for validation · 2026-09-19</div>
+      <h1>Seating Jev (orq classify) as a judge in <code>evaluatorq</code></h1>
+      <div class="callout">
+        <span class="ico">Archive</span>
+        <div>This visual captures the design before implementation. Its “Current” and “New” labels, file line numbers and rejected alternatives are historical. For current behavior, use the <a href="../classify-judges/">Classify judges guide</a>.</div>
+      </div>
+      <div class="tldr" id="tldr">
+        <b>TL;DR</b> — The Orq router now serves <code>POST /v3/router/classify</code> with <code>typesafe/jev-latest</code>: typed
+        questions (yes/no, choice, score) over a state, returning probabilities and a priced usage block in ~0.7&nbsp;s at
+        $0.042 per million input tokens. Today that model id 400s as a judge, because <code>run_judge</code> only knows
+        Chat Completions and Responses. The change adds a third endpoint inside <code>run_judge</code>, chosen from the
+        model catalogue, and lets <code>llm_jury</code> build the classify question from the panel-level fields it already
+        has. A judge stays a string id, so Jev seats next to LLM judges on the same panel with no schema change to
+        <code>judges</code>, presets, replacements or cyclic rotation.
+      </div>
+      <p style="margin-top:10px; font-size:13.5px; color:var(--gray-500);">
+        <span class="pill p1">P1</span> must be right before code is written &nbsp;
+        <span class="pill p2">P2</span> defaults chosen, cheap to change later
+      </p>
+    </header>
+
+    <!-- ───────────────────────── 1 · routing ───────────────────────── -->
+    <h2 id="route">1 · Endpoint routing inside <code>run_judge</code> <span class="pill p1">P1</span></h2>
+    <p>The one shared seam every judge caller goes through (<code>common/judge.py:510</code>). It already picks
+      Responses vs Chat from the catalogue. Jev becomes a third branch keyed on the catalogue's
+      <code>metadata.supports_classify</code>, and only when the client routes through the Orq router. When the catalogue is
+      empty or its fetch failed, a hardcoded set holding <code>typesafe/jev-latest</code> answers instead and warns once, so an
+      outage never sends Jev to chat.</p>
+
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
+      <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="var(--gray-500)"/></marker>
+    </defs></svg>
+
+    <div class="diagrams">
+      <div class="diag">
+        <div class="cap">Current</div>
+        <svg viewBox="0 0 520 300" role="img" aria-labelledby="current-routing-title">
+          <title id="current-routing-title">Current judge routing sends Responses-capable models to Responses, other prompted models to Chat Completions, and incorrectly sends Jev to Chat Completions.</title>
+          <rect class="box" x="20" y="20" width="200" height="40"/>
+          <text x="30" y="37" class="m">run_judge(model, cfg, …)</text>
+          <text x="30" y="52" class="small">llm_jury · pairwise · redteam</text>
+
+          <rect class="box oat" x="20" y="92" width="200" height="46"/>
+          <text x="30" y="110">model catalogue lookup</text>
+          <text x="30" y="126" class="m small">qualified_model → supports_responses?</text>
+          <path class="edge" d="M120,60 L120,92"/>
+
+          <rect class="box olive" x="20" y="176" width="130" height="40"/>
+          <text x="30" y="193">Responses</text>
+          <text x="30" y="207" class="small">schema-enforced, priced</text>
+          <path class="edge" d="M80,138 L80,176"/>
+          <text x="86" y="160" class="small">yes</text>
+
+          <rect class="box olive" x="180" y="176" width="130" height="40"/>
+          <text x="190" y="193">Chat Completions</text>
+          <text x="190" y="207" class="small">.parse → json_object</text>
+          <path class="edge" d="M180,138 L240,176"/>
+          <text x="214" y="160" class="small">no / 400</text>
+
+          <!-- jev path -->
+          <rect class="box clay" x="330" y="20" width="170" height="40"/>
+          <text x="340" y="37" class="m">typesafe/jev-latest</text>
+          <text x="340" y="52" class="small">model_type "classify"</text>
+          <path class="edge dead" d="M415,60 L415,92"/>
+          <rect class="box dead" x="330" y="92" width="170" height="46"/>
+          <text x="340" y="110">no supports_responses</text>
+          <text x="340" y="126" class="small">→ falls to Chat Completions</text>
+          <path class="edge dead" d="M415,138 L415,176"/>
+          <rect class="box dead" x="330" y="176" width="170" height="40"/>
+          <text x="340" y="193" style="fill:var(--clay-text)">HTTP 400</text>
+          <text x="340" y="207" class="small">chat has no classify model</text>
+
+          <rect class="box" x="20" y="246" width="290" height="36"/>
+          <text x="30" y="262" class="m">EvaluatorResponsePayload{value, explanation, abstain}</text>
+          <text x="30" y="276" class="small">parsed from model text</text>
+          <path class="edge" d="M85,216 L85,246"/>
+          <path class="edge" d="M245,216 L245,246"/>
+        </svg>
+      </div>
+
+      <div class="diag new">
+        <div class="cap">New</div>
+        <svg viewBox="0 0 520 300" role="img" aria-labelledby="new-routing-title">
+          <title id="new-routing-title">New judge routing sends classify models to the classify endpoint, Responses-capable models to Responses, and other prompted models to Chat Completions.</title>
+          <rect class="box" x="20" y="20" width="250" height="40"/>
+          <text x="30" y="37" class="m">run_judge(model, cfg, classify=…)</text>
+          <text x="30" y="52" class="small">new keyword: ClassifyQuestion | None</text>
+
+          <rect class="box oat" x="20" y="92" width="250" height="46"/>
+          <text x="30" y="110">model catalogue lookup</text>
+          <text x="30" y="126" class="m small">supports_classify? → supports_responses?</text>
+          <path class="edge" d="M130,60 L130,92"/>
+
+          <rect class="box clay" x="20" y="176" width="130" height="40"/>
+          <text x="30" y="193">Classify</text>
+          <text x="30" y="207" class="small">POST /v3/router/classify</text>
+          <path class="edge clay" d="M60,138 L60,176"/>
+          <text x="66" y="160" class="small">classify</text>
+
+          <rect class="box olive" x="170" y="176" width="110" height="40"/>
+          <text x="180" y="193">Responses</text>
+          <text x="180" y="207" class="small">unchanged</text>
+          <path class="edge" d="M160,138 L215,176"/>
+
+          <rect class="box olive" x="300" y="176" width="120" height="40"/>
+          <text x="310" y="193">Chat Completions</text>
+          <text x="310" y="207" class="small">unchanged</text>
+          <path class="edge" d="M230,138 L350,176"/>
+
+          <rect class="box" x="300" y="92" width="210" height="46"/>
+          <text x="310" y="110">classify model, no question?</text>
+          <text x="310" y="126" class="small">JudgeOutcome error, no silent fallback</text>
+
+          <rect class="box" x="20" y="246" width="400" height="36"/>
+          <text x="30" y="262" class="m">value · explanation (synthesised) · abstain=False</text>
+          <text x="30" y="276" class="small">value derived in code from noul / choice / score · endpoint="classify" · span op "classify"</text>
+          <path class="edge clay" d="M85,216 L85,246"/>
+          <path class="edge" d="M225,216 L225,246"/>
+          <path class="edge" d="M360,216 L360,246"/>
+        </svg>
+      </div>
+    </div>
+
+    <details>
+      <summary>Why this seam and not a separate <code>run_classify_judge</code> or <code>llm_classify()</code> <span class="where">judge.py:353, :510</span></summary>
+      <div class="body">
+        <p>Endpoint choice already lives here (<code>_resolve_responses_model</code> at <code>judge.py:353</code> gates on the
+          catalogue and the router). All five <code>run_judge</code> call sites (jury, pairwise, two redteam paths) get Jev
+          by naming the model. A separate function would have needed every parameter the parent already takes, and a
+          separate evaluator factory would have made a mixed panel impossible.</p>
+        <p>Retry stays <code>with_retry</code> around the whole attempt, same as today: 429 and 529 back off, everything
+          else classifies to <code>JudgeError</code>. <code>timeout_ms</code> applies. SDK retries stay off at this boundary.</p>
+      </div>
+    </details>
+
+    <!-- ───────────────────────── 2 · modes ───────────────────────── -->
+    <h2 id="modes">2 · Verdict modes map one-to-one onto Jev question types <span class="pill p1">P1</span></h2>
+    <p>Nothing about the jury contract changes. Each existing <code>llm_jury</code> mode is one Jev primitive; the
+      derivation of <code>value</code> is code, never a model opinion.</p>
+
+    <table>
+      <thead><tr>
+        <th>llm_jury mode</th><th>Jev question</th><th>Jev answer</th><th class="new">value (new)</th><th>passed (unchanged)</th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td><b>Boolean</b><br><code>categorical</code>, no labels</td>
+          <td><code>noul</code><br>instructions = criteria</td>
+          <td><code>{"noul": 0.99}</code><br>probability, no confidence</td>
+          <td class="new"><code>noul &gt;= threshold</code><br>threshold default 0.5, now meaningful in boolean mode for Jev</td>
+          <td>the boolean</td>
+        </tr>
+        <tr>
+          <td><b>Labeled</b><br><code>categorical</code> + labels</td>
+          <td><code>choice</code><br>criteria = <code>{label: description | null}</code></td>
+          <td><code>{"choice": "neutral", "probabilities": {…}, "confidence": 0.96}</code></td>
+          <td class="new">the <code>choice</code> string</td>
+          <td><code>value in passing_labels</code></td>
+        </tr>
+        <tr>
+          <td><b>Numeric</b><br><code>numeric</code></td>
+          <td><code>score</code><br>criteria = <code>levels</code> (2 to 10 ordered descriptions)</td>
+          <td><code>{"score": 1.97, "legend": {…}, "probabilities": {…}, "confidence": 0.96}</code><br>score is a probability-weighted mean over level index 0…n-1</td>
+          <td class="new"><code>score / (n - 1)</code> into <code>(0, 1)</code><br><code>score_range</code> must stay at its default</td>
+          <td><code>value &gt;= threshold</code></td>
+        </tr>
+        <tr>
+          <td><b>Pairwise</b><br><code>llm_jury_pairwise</code></td>
+          <td><code>choice</code> over <code>A / B / tie</code></td>
+          <td>as labeled</td>
+          <td class="new">the choice, un-swapped as today</td>
+          <td>n/a (winner)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout">
+      <span class="ico">★</span>
+      <div>Jev returns no text and never abstains. evaluatorq synthesises <code>explanation</code> from the returned numbers. The complete validated answer travels through <code>EvaluationResult.raw_output["jury"]</code> → <code>votes</code> → <code>repetitions</code> → <code>raw_output</code>; reported confidence and probabilities also become <code>judge.confidence</code> / <code>judge.probabilities</code> span attributes. Low confidence is <b>not</b> mapped to an abstention. <code>send_results_to_orq()</code> strips <code>raw_output</code>, so the hosted Orq experiment view does not receive these details.</div>
+    </div>
+
+    <!-- ───────────────────────── 3 · state ───────────────────────── -->
+    <h2 id="state">3 · Prompt vs state: what each judge kind sees <span class="pill p1">P1</span></h2>
+    <p>An LLM judge gets a rendered prompt. Jev gets <code>instructions</code> (the criteria) plus a
+      <code>state</code> object. The state is built from the template's <code>{{…}}</code> placeholders, resolved
+      through the same template engine and keyed by dotted path, with <code>criteria</code> excluded. An explicit
+      <code>state_fields</code> list replaces the placeholder scan.</p>
+
+    <div class="diag wide">
+      <div class="cap">One panel, two renderings of the same replacements</div>
+      <svg viewBox="0 0 1000 260" role="img" aria-labelledby="judge-inputs-title">
+        <title id="judge-inputs-title">The same panel fields become a rendered prompt for an LLM judge and structured instructions, criteria, and state for a classify judge before both results enter jury aggregation.</title>
+        <rect class="box oat" x="20" y="20" width="260" height="88"/>
+        <text x="30" y="40">panel-level fields</text>
+        <text x="30" y="58" class="m small">criteria = "Is the reply polite?"</text>
+        <text x="30" y="72" class="m small">labels = {rude: "hostile…", neutral: None}</text>
+        <text x="30" y="86" class="m small">prompt = DEFAULT_TEMPLATE (or custom)</text>
+        <text x="30" y="100" class="m small">replacements = build_eval_replacements(…)</text>
+
+        <!-- LLM branch -->
+        <path class="edge" d="M280,50 L340,50"/>
+        <rect class="box olive" x="340" y="20" width="330" height="88"/>
+        <text x="350" y="40">LLM judge · openai/gpt-5.4-mini · unchanged path</text>
+        <text x="350" y="58" class="m small">system: "value must be one of: rude (hostile…), …"</text>
+        <text x="350" y="72" class="m small">user:   render_template(prompt, replacements)</text>
+        <text x="350" y="86" class="m small">schema: value: Literal[labels] + Field(description)</text>
+        <text x="350" y="100" class="small">gains: label descriptions in schema and system prompt</text>
+
+        <!-- Jev branch -->
+        <path class="edge clay" d="M280,160 L340,160"/>
+        <rect class="box clay" x="340" y="130" width="330" height="110"/>
+        <text x="350" y="150">Jev · typesafe/jev-latest · new path</text>
+        <text x="350" y="168" class="m small">instructions: criteria</text>
+        <text x="350" y="182" class="m small">criteria:     {rude: "hostile…", neutral: null}</text>
+        <text x="350" y="196" class="m small">state: {"input.all_messages": …,</text>
+        <text x="400" y="210" class="m small">"output.response": …,</text>
+        <text x="400" y="224" class="m small">"input.expected_output": …}</text>
+        <text x="350" y="236" class="small">state keys = the template's {{…}} placeholders, minus criteria</text>
+
+        <path class="edge" d="M150,108 L150,160 L280,160" style="marker-end:none"/>
+
+        <!-- outputs -->
+        <path class="edge" d="M670,64 L730,64"/>
+        <rect class="box" x="730" y="40" width="250" height="46"/>
+        <text x="740" y="58" class="m small">{explanation: "…", value: "neutral"}</text>
+        <text x="740" y="74" class="small">parsed from model text</text>
+
+        <path class="edge clay" d="M670,185 L730,185"/>
+        <rect class="box" x="730" y="160" width="250" height="50"/>
+        <text x="740" y="178" class="m small">{choice: "neutral", confidence: 0.96}</text>
+        <text x="740" y="194" class="small">value = choice · synthesised explanation</text>
+
+        <path class="edge" d="M855,86 L855,112"/>
+        <path class="edge" d="M855,160 L855,136" style="marker-end:none"/>
+        <text x="745" y="128" class="small">same JuryVote → run_jury aggregates</text>
+      </svg>
+    </div>
+
+    <div class="tabs" data-tabs>
+      <div class="tabbar" role="tablist" aria-label="Classify judge examples">
+        <button class="on" id="tab-0" role="tab" aria-selected="true" aria-controls="pane-0" tabindex="0">mixed panel, default template</button>
+        <button id="tab-1" role="tab" aria-selected="false" aria-controls="pane-1" tabindex="-1">custom prompt + criteria</button>
+        <button id="tab-2" role="tab" aria-selected="false" aria-controls="pane-2" tabindex="-1">numeric with levels</button>
+        <button id="tab-3" role="tab" aria-selected="false" aria-controls="pane-3" tabindex="-1">wire request (verified)</button>
+      </div>
+<pre class="on" id="pane-0" role="tabpanel" aria-labelledby="tab-0" tabindex="0">tone = llm_jury(
+    name="tone",
+    criteria="Is the reply polite and on-topic?",
+    judges=["openai/gpt-5.4-mini", "anthropic/claude-sonnet-4-6", <span class="hl">"typesafe/jev-latest"</span>],
+    <span class="hl">labels={"rude": "hostile or dismissive", "neutral": None, "friendly": "warm and helpful"}</span>,
+    passing_labels=["neutral", "friendly"],
+)
+<span class="cm"># LLM judges: DEFAULT_TEMPLATE rendered, labels + descriptions in schema and system prompt.</span>
+<span class="cm"># Jev: instructions=criteria, criteria=labels, state = the template's placeholders minus criteria.</span></pre>
+<pre id="pane-1" role="tabpanel" aria-labelledby="tab-1" tabindex="-1">tone = llm_jury(
+    name="tone",
+    <span class="hl">prompt</span>="# Reply\n{{output.response}}\n\n# Conversation\n{{input.all_messages}}\n\nRate the tone.",
+    <span class="hl">criteria</span>="Is the reply polite and on-topic?",   <span class="cm"># both allowed only when a Jev judge is seated</span>
+    judges=["openai/gpt-5.4-mini", "typesafe/jev-latest"],
+    labels={"rude": "hostile or dismissive", "neutral": None, "friendly": "warm and helpful"},
+    <span class="hl">state_fields=["output.response"]</span>,             <span class="cm"># optional: override the placeholder scan</span>
+)
+<span class="cm"># LLM judges render `prompt` exactly as before. Jev never sees the prompt.</span></pre>
+<pre id="pane-2" role="tabpanel" aria-labelledby="tab-2" tabindex="-1">helpfulness = llm_jury(
+    name="helpfulness",
+    criteria="How helpful is the answer?",
+    judges=["openai/gpt-5.4-mini", "typesafe/jev-latest"],
+    verdict_kind="numeric",
+    <span class="hl">levels=["does not address the question", "partially addresses it", "fully answers it"]</span>,
+    threshold=0.7,                     <span class="cm"># score_range stays (0, 1) — non-default raises at construction</span>
+)
+<span class="cm"># Jev: score in [0, 2] → value = score / 2. LLM judges: levels go into the value field description.</span></pre>
+<pre id="pane-3" role="tabpanel" aria-labelledby="tab-3" tabindex="-1"><span class="cm">POST https://my.orq.ai/v3/router/classify      (0.7 s, 2026-09-19)</span>
+{"model": "typesafe/jev-latest",
+ "state": {"input.all_messages": "...", "output.response": "Paris."},
+ "questions": {"verdict": {"type": "choice", "instructions": "Grade the answer",
+                           "criteria": {"correct": "fully correct", "partial": "partly", "wrong": "incorrect"}}}}
+
+{"model": "jev-latest",
+ "answers": {"verdict": {"type": "choice", "choice": "correct",
+                         "probabilities": {"correct": 1, "partial": 0, "wrong": 0}, "confidence": 1}},
+ "usage": {"input_tokens": 379, "output_tokens": 68,
+           "input_cost": 0.00001592, "output_cost": 0, "total_cost": 0.00001592}}</pre>
+    </div>
+
+    <h3 id="llm-delta">What changes for an LLM judge on the same panel</h3>
+    <p>The prompted verdict shape stays <code>{explanation, value, abstain}</code>, with one <code>JuryVote</code> per judge. The local <code>EvaluationResult.raw_output["jury"]</code> record now adds optional <code>raw_output</code> on each repetition: the complete validated answer for a classify judge, <code>None</code> for a prompted judge. Three inputs change, all additive.</p>
+    <table>
+      <thead><tr><th>Surface</th><th>Today</th><th class="new">New</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Verdict schema, labeled mode</td>
+          <td><code>value: Literal["rude", "neutral", "friendly"]</code></td>
+          <td class="new">same <code>Literal</code>, plus <code>Field(description="rude: hostile or dismissive; neutral; friendly: warm and helpful")</code>. The enum is still enforced by the provider; the description is what the model reads.</td>
+        </tr>
+        <tr>
+          <td>Verdict schema, numeric mode</td>
+          <td><code>value: float</code>, prompt says "between 0 and 1"</td>
+          <td class="new"><code>value: float</code> with <code>Field(description="0.0 = does not address the question; 0.5 = partially addresses it; 1.0 = fully answers it")</code> when <code>levels</code> is set. Without <code>levels</code>, unchanged.</td>
+        </tr>
+        <tr>
+          <td>Default system prompt</td>
+          <td>"value must be exactly one of: rude, neutral, friendly"</td>
+          <td class="new">"value must be exactly one of: rude (hostile or dismissive), neutral, friendly (warm and helpful)". A caller-supplied <code>system_prompt</code> is untouched.</td>
+        </tr>
+        <tr>
+          <td>User prompt</td>
+          <td><code>render_template(prompt or DEFAULT_TEMPLATE, replacements)</code></td>
+          <td class="new">identical. When <code>prompt</code> and <code>criteria</code> are both set, the LLM judge renders <code>prompt</code>; <code>criteria</code> only reaches it if the template references <code>{{criteria}}</code>.</td>
+        </tr>
+        <tr>
+          <td>Output, cost, tracing</td>
+          <td>Responses or Chat, priced by the router</td>
+          <td class="new">identical. No new span attributes on LLM judge spans; <code>judge.confidence</code> / <code>judge.probabilities</code> appear only on Jev spans.</td>
+        </tr>
+      </tbody>
+    </table>
+    <p style="font-size:13.5px;">A panel without a Jev judge and without <code>levels</code> or dict labels produces byte-identical requests to today.</p>
+
+    <!-- ───────────────────────── 4 · api ───────────────────────── -->
+    <h2 id="api">4 · What <code>llm_jury</code> gains, field by field <span class="pill p2">P2</span></h2>
+    <table>
+      <thead><tr><th>Field</th><th>Today</th><th class="new">New</th><th>Who reads it</th></tr></thead>
+      <tbody>
+        <tr><td><code>judges</code></td><td><code>list[str]</code></td><td class="new">unchanged; a Jev id is just another string</td><td>both</td></tr>
+        <tr><td><code>criteria</code></td><td>substituted into <code>{{criteria}}</code></td><td class="new">also Jev <code>instructions</code></td><td>both</td></tr>
+        <tr><td><code>prompt</code></td><td>exclusive with <code>criteria</code></td><td class="new">may coexist with <code>criteria</code> when a Jev judge is seated</td><td>LLM only</td></tr>
+        <tr><td><code>labels</code></td><td><code>list[str]</code></td><td class="new">also <code>dict[str, str | None]</code> (a list still works, no descriptions; not breaking); descriptions land in the <code>Literal</code> field's <code>description</code> and the system prompt, and in Jev <code>criteria</code></td><td>both</td></tr>
+        <tr><td><code>levels</code></td><td>—</td><td class="new">new, <code>list[str]</code> of 2 to 10 ordered descriptions; required for a Jev judge in numeric mode; feeds the LLM <code>value</code> description too</td><td>both</td></tr>
+        <tr><td><code>state_fields</code></td><td>—</td><td class="new">new, <code>list[str]</code> of dotted paths; replaces the placeholder scan</td><td>Jev only</td></tr>
+        <tr><td><code>score_range</code></td><td>any increasing pair</td><td class="new">must be default <code>(0, 1)</code> when a Jev judge is seated</td><td>both</td></tr>
+        <tr><td><code>threshold</code></td><td>numeric mode</td><td class="new">also boolean mode on Jev (<code>noul &gt;= threshold</code>)</td><td>both</td></tr>
+        <tr><td><code>temperature, max_tokens, reasoning_effort, structured_output, extra_kwargs, extra_body, system_prompt, api</code></td><td>sent</td><td class="new">ignored by Jev, one warning via <code>warn_unread_config_fields</code>; still sent to LLM judges on the panel</td><td>LLM only</td></tr>
+        <tr><td><code>repetitions</code></td><td>N calls per judge</td><td class="new">works; warns once on a Jev judge (near-deterministic, pays for the same answer)</td><td>both</td></tr>
+      </tbody>
+    </table>
+    <p style="font-size:13.5px;">Construction-time checks use the same hardcoded classify set (the catalogue is async, so a
+      constructor cannot consult it): <code>prompt</code> without <code>criteria</code>, numeric without <code>levels</code>,
+      non-default <code>score_range</code>. Run time uses the catalogue first, the set as fallback.</p>
+
+    <!-- ───────────────────────── 5 · decisions ───────────────────────── -->
+    <h2 id="decisions">5 · Decisions to validate, most consequential first</h2>
+    <p>These were settled in the grill. Each names the alternative that was rejected, so a disagreement is one line to state.</p>
+
+    <div class="dec p1">
+      <div class="t"><span class="n">D1</span> Branch lives in <code>run_judge</code>, keyed on the catalogue <span class="pill p1">P1</span></div>
+      <p>Every caller gets Jev by naming the model. Redteam and simulation inherit the seam without changes.</p>
+      <div class="alt">Rejected: a separate <code>run_classify_judge</code> (would need every parent parameter anyway); an <code>llm_classify()</code> factory (no mixed panels).</div>
+    </div>
+    <div class="dec p1">
+      <div class="t"><span class="n">D2</span> Judges stay string ids; no typed judge entries <span class="pill p1">P1</span></div>
+      <p>Panel-level fields serve both judge kinds. Per-judge settings remain a separate design problem, and a later per-judge spec covers Jev like any other judge.</p>
+      <div class="alt">Rejected: <code>judges=[…, ClassifyJudge(model, instructions, state_fields)]</code>.</div>
+    </div>
+    <div class="dec p1">
+      <div class="t"><span class="n">D3</span> State = template placeholders as dotted keys, criteria as instructions <span class="pill p1">P1</span></div>
+      <p>Only what the template references reaches Jev, keeping the 32k state limit in view and matching how the model is meant to be used. <code>state_fields</code> is the explicit override.</p>
+      <div class="alt">Rejected: sending the rendered prompt string as state (duplicates criteria inside the state); a fixed <code>{input, output, expected_output}</code> object.</div>
+    </div>
+    <div class="dec p1">
+      <div class="t"><span class="n">D4</span> Values derived in code: noul vs threshold, score rescaled to (0, 1) <span class="pill p1">P1</span></div>
+      <p>Jev's score spans level index 0…n-1; dividing by n-1 puts it on the same scale as an LLM judge asked for a 0 to 1 float, so mean/median aggregation across a mixed panel is meaningful.</p>
+      <div class="alt">Rejected: hardcoded 0.5 for noul (threshold exists); allowing any <code>score_range</code> and rescaling into it.</div>
+    </div>
+    <div class="dec p2">
+      <div class="t"><span class="n">D5</span> Labels and levels become part of the LLM verdict schema, not only the prompt <span class="pill p2">P2</span></div>
+      <p><code>value: Literal[labels]</code> already enforces the set (<code>llm_jury.py:45</code>); this adds <code>Field(description=…)</code> with the descriptions, mirroring the orquesta-web evaluator runner's <code>create_model</code> approach.</p>
+    </div>
+    <div class="dec p2">
+      <div class="t"><span class="n">D6</span> Synthesised explanation; structured answers go to repetitions and spans <span class="pill p2">P2</span></div>
+      <p>The implemented explanation is a one-liner such as <code>"choice='neutral' (confidence 0.96)"</code>. Read complete validated answers through <code>EvaluationResult.raw_output["jury"]</code> → <code>votes</code> → <code>repetitions</code> → <code>raw_output</code>; reported confidence and probabilities also remain on judge spans. Fields the provider did not report are omitted.</p>
+      <div class="alt">Rejected: an empty explanation or keeping structured details only on spans. Returned and local saved results retain the answers; <code>send_results_to_orq()</code> still strips <code>raw_output</code> from the hosted experiment upload.</div>
+    </div>
+    <div class="dec p2">
+      <div class="t"><span class="n">D7</span> No confidence-to-abstain mapping, no new knobs <span class="pill p2">P2</span></div>
+      <p>Reported confidence is retained per repetition in local results and on judge spans. It does not change the verdict or reach the hosted experiment upload.</p>
+    </div>
+    <div class="dec p1">
+      <div class="t"><span class="n">D9</span> Catalogue outage falls back to a hardcoded classify set <span class="pill p1">P1</span></div>
+      <p>Today only <code>typesafe/jev-latest</code> is a classify model. <code>supports_classify(model)</code> reads the catalogue entry on the qualified id and, when the catalogue is empty or failed, answers from that set with one warning. The same set drives the construction-time checks, so there is one detector, not a prefix test plus a catalogue.</p>
+      <div class="alt">Rejected: a <code>typesafe/</code> prefix test (provider-prefix detection had already routed models incorrectly); raising when the catalogue is unavailable (the motivating 400 stays reachable during an outage).</div>
+    </div>
+    <div class="dec p2">
+      <div class="t"><span class="n">D8</span> Ignored config fields warn once instead of raising <span class="pill p2">P2</span></div>
+      <p>A preset seating Jev next to GPT judges sets <code>reasoning_effort</code> for the panel; rejecting would break that seating.</p>
+    </div>
+
+    <!-- ───────────────────────── 6 · scope ───────────────────────── -->
+    <h2 id="scope">6 · Out of scope, and gotchas already known</h2>
+    <ul class="plain">
+      <li><b>Red teaming and agent simulation</b> are not adapted in this ticket. They call <code>run_judge</code> with freeform templates and no verdict spec, so they need their own <code>ClassifyQuestion</code> construction later. The seam is ready.</li>
+      <li><b>Presets do not seat Jev.</b> <code>jury_presets.py</code> is untouched; a user lists <code>typesafe/jev-latest</code> in <code>judges</code> by hand.</li>
+      <li><b>Only on the Orq router.</b> Classify is gated on <code>client_routes_through_orq</code>; an injected OpenAI client never sends it.</li>
+      <li><b>Catalogue shape.</b> <code>ModelInfo</code> gains <code>supports_classify</code> from <code>metadata.supports_classify</code>; the entry has no <code>supports_responses_api</code>, so today's routing legitimately falls to chat and 400s.</li>
+      <li><b>Response model id comes back bare</b> (<code>"jev-latest"</code>, no <code>typesafe/</code> prefix), same pattern <code>price_usage</code> already tolerates. Cost is router-priced, so <code>price_usage</code> is a no-op.</li>
+      <li><b>Limits.</b> 64k context; state plus the longest question must fit in 32k tokens. A too-large state is a provider 400, surfaced as <code>JudgeError.API_STATUS</code>.</li>
+      <li><b>Empty choice criteria is a 400</b> (<code>"criteria must contain at least one option"</code>); construction already requires two or more labels.</li>
+    </ul>
+
+    <!-- ───────────────────────── 7 · files ───────────────────────── -->
+    <h2 id="files">7 · Files touched</h2>
+    <table>
+      <thead><tr><th>File</th><th>Change</th></tr></thead>
+      <tbody>
+        <tr><td><code>common/judge.py</code></td><td><code>ClassifyQuestion</code> model, <code>classify=</code> keyword on <code>run_judge</code>, <code>_classify_judge</code> leg, <code>endpoint</code> literal gains <code>'classify'</code>, <code>EvaluatorResponsePayload</code> design note names both producers</td></tr>
+        <tr><td><code>common/llm_call.py</code></td><td><code>execute_classify</code>: <code>AsyncOpenAI.post('/v3/router/classify', ...)</code> so 429/529 raise SDK error types and <code>with_retry</code> plus <code>_classify</code> work unchanged; usage + cost onto the span, trace headers</td></tr>
+        <tr><td><code>common/model_catalogue.py</code></td><td><code>ModelInfo.supports_classify: bool = False</code> appended last (positional constructors keep working), parsed from <code>metadata.supports_classify</code>; <code>supports_classify(model)</code> lookup on the qualified id with the hardcoded fallback set</td></tr>
+        <tr><td><code>common/template_engine.py</code></td><td><code>extract_template_paths(template)</code> and a per-path resolver, used by <code>render_template</code> and the state builder</td></tr>
+        <tr><td><code>common/tracing.py</code></td><td>span attributes <code>judge.confidence</code>, <code>judge.probabilities</code>; operation <code>classify</code></td></tr>
+        <tr><td><code>llm_jury.py</code></td><td><code>labels</code> dict form, <code>levels</code>, <code>state_fields</code>, prompt+criteria rule, question building, value derivation, construction checks, warnings</td></tr>
+        <tr><td><code>tests/</code></td><td>fake classify transport; per-mode value derivation; error branches (no question, 400, timeout); guardrail allowlist for the new call site</td></tr>
+        <tr><td><code>docs/llm-as-a-jury.md</code>, <code>docs/pairwise-judging.md</code>, <code>CHANGELOG.md</code></td><td>"Jev as a judge" section, pairwise note, changelog entry</td></tr>
+      </tbody>
+    </table>
+  </main>
+</div>
+
+<script>
+document.querySelectorAll("[data-tabs]").forEach(box => {
+  const tabs = [...box.querySelectorAll('[role="tab"]')];
+  const panes = [...box.querySelectorAll('[role="tabpanel"]')];
+  const activate = (tab, moveFocus = false) => {
+    const pane = panes.find(item => item.id === tab.getAttribute("aria-controls"));
+    if (!pane) return;
+    tabs.forEach(item => {
+      item.classList.remove("on");
+      item.setAttribute("aria-selected", "false");
+      item.tabIndex = -1;
+    });
+    panes.forEach(item => {
+      item.classList.remove("on");
+      item.tabIndex = -1;
+    });
+    tab.classList.add("on");
+    tab.setAttribute("aria-selected", "true");
+    tab.tabIndex = 0;
+    pane.classList.add("on");
+    pane.tabIndex = 0;
+    if (moveFocus) tab.focus();
+  };
+  tabs.forEach((tab, index) => {
+    tab.addEventListener("click", () => activate(tab));
+    tab.addEventListener("keydown", event => {
+      let next = null;
+      if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
+      if (event.key === "ArrowLeft") next = (index - 1 + tabs.length) % tabs.length;
+      if (event.key === "Home") next = 0;
+      if (event.key === "End") next = tabs.length - 1;
+      if (next === null) return;
+      event.preventDefault();
+      activate(tabs[next], true);
+    });
+  });
+});
+</script>
+</body>
+</html>

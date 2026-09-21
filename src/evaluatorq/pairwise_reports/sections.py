@@ -174,6 +174,59 @@ def _build_judges_section(run: PairwiseRun) -> ReportSection:
     )
 
 
+def _classify_observations(vote: PairwiseVote, run: PairwiseRun) -> list[dict[str, Any]]:
+    """Resolve each classify call into display labels without changing stored answers."""
+
+    def display_label(label: Any, ordering: str, *, disambiguate: bool = False) -> Any:
+        if ordering == 'ba':
+            if label == 'A':
+                label = 'B'
+            elif label == 'B':
+                label = 'A'
+        if label in ('A', 'B'):
+            suffix = f' ({label})' if disambiguate else ''
+            return vote_label(label, run) + suffix
+        return label
+
+    rendered: list[dict[str, Any]] = []
+    for observation in vote.observations:
+        raw = observation.raw_output
+        if not isinstance(raw, dict) or raw.get('type') != 'choice':
+            continue
+
+        probabilities = raw.get('probabilities')
+        choice = display_label(raw.get('choice'), observation.ordering)
+        displayed_probabilities = None
+        if isinstance(probabilities, dict):
+            labels = {key: display_label(key, observation.ordering) for key in probabilities}
+            original_labels = list(labels.values())
+            occupied = set(original_labels)
+            # Side names can collide with each other, "tie", or provider-added keys.
+            # Disambiguate only A/B; arbitrary provider labels stay verbatim.
+            for key in ('A', 'B'):
+                if key not in labels or original_labels.count(labels[key]) < 2:
+                    continue
+                base = display_label(key, observation.ordering, disambiguate=True)
+                unique = base
+                suffix = 2
+                while unique in occupied:
+                    unique = f'{base} {suffix}'
+                    suffix += 1
+                labels[key] = unique
+                occupied.add(unique)
+            if isinstance(raw.get('choice'), str):
+                choice = labels.get(raw['choice'], choice)
+            displayed_probabilities = {labels[key]: value for key, value in probabilities.items()}
+        rendered.append({
+            'ordering': observation.ordering,
+            'repetition': observation.repetition,
+            'choice': choice,
+            'confidence': raw.get('confidence'),
+            'probabilities': displayed_probabilities,
+        })
+    return rendered
+
+
 def _vote_cell(vote: PairwiseVote | None, model: str, run: PairwiseRun) -> dict[str, Any]:
     """One judge's cell for a comparison row.
 
@@ -189,6 +242,7 @@ def _vote_cell(vote: PairwiseVote | None, model: str, run: PairwiseRun) -> dict[
             'flipped': False,
             'explanation': '',
             'present': False,
+            'classify_observations': [],
         }
     return {
         'model': model,
@@ -197,6 +251,7 @@ def _vote_cell(vote: PairwiseVote | None, model: str, run: PairwiseRun) -> dict[
         'flipped': bool(vote.flipped),
         'explanation': vote.explanation,
         'present': True,
+        'classify_observations': _classify_observations(vote, run),
     }
 
 

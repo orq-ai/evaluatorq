@@ -16,6 +16,7 @@ Pass the call-site body as ``extra_body=`` and user options as ``extra_kwargs=``
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -29,6 +30,7 @@ from evaluatorq.common.tracing import (
     get_trace_context_headers,
     record_llm_input,
     record_llm_response,
+    record_token_usage,
 )
 from evaluatorq.contracts import (
     _RESERVED_COMPLETION_KEYS,
@@ -44,6 +46,8 @@ if TYPE_CHECKING:
     from openai.types.chat import ChatCompletion, ParsedChatCompletion
     from opentelemetry.trace import Span
     from pydantic import BaseModel
+
+    from evaluatorq.common.judge import ClassifyQuestion
 
 logger = logging.getLogger(__name__)
 
@@ -449,3 +453,102 @@ async def execute_response(
         client,
         served_model=getattr(response, 'model', None),
     )
+
+
+async def execute_classify(
+    *,
+    client: AsyncOpenAI,
+    model: str,
+    question: ClassifyQuestion,
+    span: Span | None,
+    timeout_s: float,
+    inject_trace_headers: bool = True,
+) -> tuple[Any, TokenUsage | None]:
+    """Execute one Orq router ``/classify`` call and return the decoded reply plus its usage.
+
+    The classify endpoint has no SDK method, so this is the one sanctioned
+    ``client.post`` in the package — it owns the same things the chat and
+    Responses executors own and nothing more: the bounded call, trace-header
+    injection, span input/output recording and usage extraction. The reply is
+    returned as the decoded wire payload, unvalidated; shaping it into
+    `ClassifyResponse` belongs to the caller, the same way this module hands the
+    chat and Responses executors' replies back unparsed.
+
+    ``cast_to=object`` rather than a pydantic model: the SDK refuses a plain
+    pydantic model (``TypeError: Pydantic models must subclass our base model
+    type``) and would only ``model_construct`` it anyway, leaving the nested
+    answers as raw dicts.
+
+    Usage is read off ``payload['usage']`` when the payload is a mapping; anything
+    else — including a ``usage`` block present but unreadable — is a reply shape this
+    executor cannot price. It warns and returns a zero-token usage marker with one
+    unpriced call while leaving **no** ``gen_ai.usage.*`` attribute on the span. The
+    marker keeps aggregate cost coverage honest; zeros on the span would instead read
+    as a genuinely free call. This leg therefore passes ``record_usage=False`` to
+    `record_llm_response` and records usage itself only when it parsed.
+
+    **Retry.** None here. The single retry layer on this path is ``run_judge``'s
+    ``with_retry``, which is why the client arrives with ``max_retries=0``.
+    """
+    # No `apply_pipeline_metadata` here: the /classify wire contract accepts only
+    # model, state and questions, so a metadata block is an unknown key on a body
+    # the router validates strictly.
+    body: dict[str, Any] = {
+        'model': model,
+        'state': question.state,
+        'questions': {'verdict': {'type': question.kind, 'instructions': question.instructions}},
+    }
+    if question.criteria is not None:
+        body['questions']['verdict']['criteria'] = question.criteria
+
+    # `apply_trace_headers` merges into `params['extra_headers']`, the SDK's
+    # per-method spelling; `post` takes the same headers under `options`.
+    params: dict[str, Any] = {}
+    if inject_trace_headers:
+        await apply_trace_headers(params)
+    options: dict[str, Any] = {}
+    trace_headers = params.get('extra_headers')
+    if trace_headers:
+        options['headers'] = trace_headers
+
+    # The rubric rides on the span as a system message, mirroring what the prompted
+    # legs record: a trace reader who sees only the state cannot tell what Jev was
+    # asked, and the question is the half of the call the caller authored.
+    record_llm_input(
+        span,
+        [
+            {
+                'role': 'system',
+                'content': json.dumps(
+                    {'instructions': question.instructions, 'criteria': question.criteria}, default=str
+                ),
+            },
+            {'role': 'user', 'content': json.dumps(question.state, default=str)},
+        ],
+    )
+    payload = await _bounded_call(
+        client.post('/classify', cast_to=object, body=body, options=options),  # pyright: ignore[reportArgumentType]
+        timeout_s,
+    )
+    # `record_llm_response` is duck-typed (its `_field` helper reads dicts as well as
+    # objects), so the decoded payload records `gen_ai.response.model`/id exactly as
+    # the chat and Responses executors do. The classify reply has neither `choices`
+    # nor `output`, so the body is passed as `output_content` — nothing else would
+    # record it. Usage is recorded separately, below: with `record_usage=True` an
+    # unreadable `usage` block records zeros, which on this path would contradict the
+    # unpriced reading the executor returns.
+    record_llm_response(span, payload, output_content=json.dumps(payload, default=str), record_usage=False)
+    usage_block = payload.get('usage') if isinstance(payload, dict) else None
+    usage = TokenUsage.extract(usage_block, calls=1)
+    if usage is None:
+        # Not recorded at all: a call with no readable usage is unpriced, and
+        # `gen_ai.usage.*` zeros on the span would read as a genuinely free call.
+        logger.warning(
+            'Classify %s reply carried no readable usage block; the call stays unpriced and its span records no usage',
+            model,
+        )
+        return payload, TokenUsage(calls=1, priced_calls=0)
+    record_token_usage(span, usage=usage, calls=0)
+    served = payload.get('model') if isinstance(payload, dict) else None
+    # Priced by the router; price_usage is a no-op unless it came back unpriced.
+    return payload, await price_usage(usage, model, client, served_model=served)

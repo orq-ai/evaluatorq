@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from evaluatorq.common.template_engine import is_valid_template_path, render_template
+from evaluatorq.common.template_engine import (
+    extract_template_paths,
+    is_valid_template_path,
+    render_template,
+    resolve_template_path,
+)
 
 
 class TestRenderBasics:
@@ -119,3 +124,45 @@ class TestReservedBareKeys:
 
     def test_non_reserved_bare_key_still_resolves(self) -> None:
         assert render_template('{{question}}', {'question': 'Q?'}) == 'Q?'
+
+
+class TestExtractTemplatePaths:
+    def test_unique_in_order_of_first_appearance(self) -> None:
+        template = '{{input.all_messages}} {{ criteria }} {{output.response}} {{input.all_messages}}'
+        assert extract_template_paths(template) == ['input.all_messages', 'criteria', 'output.response']
+
+    def test_invalid_and_reserved_bare_keys_excluded(self) -> None:
+        assert extract_template_paths('{{eval(x)}} {{a b}} {{input}} {{ok}}') == ['ok']
+
+    def test_no_placeholders(self) -> None:
+        assert extract_template_paths('plain text') == []
+
+
+class TestResolveTemplatePath:
+    def test_flat_exact_match_wins(self) -> None:
+        assert resolve_template_path({'a.b': 'FLAT', 'a': {'b': 'NESTED'}}, 'a.b') == (True, 'FLAT')
+
+    def test_nested(self) -> None:
+        assert resolve_template_path({'a': {'b': 'NESTED'}}, 'a.b') == (True, 'NESTED')
+
+    def test_index(self) -> None:
+        assert resolve_template_path({'a': ['x', 'y']}, 'a[-1]') == (True, 'y')
+
+    def test_missing(self) -> None:
+        assert resolve_template_path({}, 'missing.key') == (False, None)
+
+    def test_a_real_none_value_is_found(self) -> None:
+        assert resolve_template_path({'a': {'b': None}}, 'a.b') == (True, None)
+
+    def test_prefer_nested_reverses_the_precedence(self) -> None:
+        reps = {'a.b': 'FLAT', 'a': {'b': 'NESTED'}}
+        assert resolve_template_path(reps, 'a.b', prefer_nested=True) == (True, 'NESTED')
+
+    def test_prefer_nested_still_falls_back_to_a_flat_only_key(self) -> None:
+        assert resolve_template_path({'a.b': 'FLAT'}, 'a.b', prefer_nested=True) == (True, 'FLAT')
+
+    def test_prefer_nested_reports_a_missing_path_as_missing(self) -> None:
+        assert resolve_template_path({'a': {'b': 1}}, 'a.c', prefer_nested=True) == (False, None)
+
+    def test_prefer_nested_finds_a_real_none_stored_flat(self) -> None:
+        assert resolve_template_path({'a.b': None}, 'a.b', prefer_nested=True) == (True, None)

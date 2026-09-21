@@ -45,38 +45,109 @@ def is_valid_template_path(path: str) -> bool:
     return bool(re.match(VALID_PATH_PATTERN, path))
 
 
+def _resolve_nested(data: dict[str, Any], path: str) -> Any:
+    current: Any = data
+    for segment in path.split('.'):
+        bracket_at = segment.find('[')
+        if bracket_at == -1:
+            if not isinstance(current, dict) or segment not in current:
+                return _NOT_FOUND
+            current = current[segment]
+            continue
+        key = segment[:bracket_at]
+        if key:
+            if not isinstance(current, dict) or key not in current:
+                return _NOT_FOUND
+            current = current[key]
+        for match in _BRACKET_INDEX.finditer(segment):
+            if not isinstance(current, list):
+                return _NOT_FOUND
+            idx = int(match.group(1))
+            if idx < 0:
+                idx += len(current)
+            if idx < 0 or idx >= len(current):
+                return _NOT_FOUND
+            current = current[idx]
+    return current
+
+
+def _placeholder_path(body: str) -> str | None:
+    """The resolvable path inside one ``{{...}}`` body, or ``None`` to leave it intact.
+
+    Holds the strip / internal-whitespace / whitelist / reserved-bare-key rules in
+    one place, so `render_template` and `extract_template_paths` cannot drift on
+    which placeholders count.
+    """
+    path = body.strip()
+    # \n unreachable (no re.DOTALL) but kept for parity with upstream
+    if ' ' in path or '\t' in path or '\n' in path or '\r' in path:
+        return None
+    if not is_valid_template_path(path):
+        logger.warning('Rejected template path: {!r}', path)
+        return None
+    if path in _RESERVED_BARE_KEYS:
+        logger.warning(
+            'Bare reserved template key {!r} left unresolved — use a dotted path instead (e.g. {!r}).',
+            path,
+            f'{path}.<field>',
+        )
+        return None
+    return path
+
+
+def extract_template_paths(template: str) -> list[str]:
+    """Every path `render_template` would try to resolve in ``template``, in order.
+
+    Unique, in order of first appearance. Placeholders `render_template` leaves
+    intact — internal whitespace, a non-whitelisted path, a bare reserved key — are
+    excluded, so the list is what a caller must be able to supply, not every
+    ``{{...}}`` in the string.
+    """
+    paths: list[str] = []
+    for match in _CURLY.finditer(template):
+        path = _placeholder_path(match.group(1))
+        if path is not None and path not in paths:
+            paths.append(path)
+    return paths
+
+
+def resolve_template_path(replacements: dict[str, Any], path: str, *, prefer_nested: bool = False) -> tuple[bool, Any]:
+    """Look ``path`` up in ``replacements``: ``(found, value)``.
+
+    Flat exact match first (``{'a.b': ...}`` beats ``{'a': {'b': ...}}``), then
+    nested traversal with ``[0]`` / ``[-1]`` indices. ``found`` is separate from
+    the value so a stored ``None`` reads as found, not as missing.
+
+    ``prefer_nested=True`` reverses the two, for a caller that wants the value
+    rather than its rendering: `evaluatorq.common.judge.build_eval_replacements`
+    stores a few paths (``input.all_messages``, ``output.messages``,
+    ``output.tools_called``, ``log.messages``) twice — nested as the live list,
+    flat as the ``json.dumps`` string a prompt template interpolates. Template
+    rendering keeps the flat-first default; a classify judge, which ships the
+    state as JSON, asks for the nested one so the transcript does not arrive as
+    an escaped string inside JSON.
+    """
+    if not prefer_nested and path in replacements:
+        return True, replacements[path]
+    value = _resolve_nested(replacements, path)
+    if value is not _NOT_FOUND:
+        return True, value
+    if prefer_nested and path in replacements:
+        return True, replacements[path]
+    return False, None
+
+
 def render_template(template: str, replacements: dict[str, Any]) -> str:
     """Substitute every ``{{key}}`` / ``{{key.nested[0].path}}`` in ``template``.
 
     Resolution order: strip whitespace (tolerate ``{{ key }}``); reject internal
     whitespace and non-whitelisted paths (placeholder left intact); flat exact-match
     against ``replacements`` first; then nested traversal; unresolved → intact.
-    """
 
-    def _resolve_nested(data: dict[str, Any], path: str) -> Any:
-        current: Any = data
-        for segment in path.split('.'):
-            bracket_at = segment.find('[')
-            if bracket_at == -1:
-                if not isinstance(current, dict) or segment not in current:
-                    return _NOT_FOUND
-                current = current[segment]
-                continue
-            key = segment[:bracket_at]
-            if key:
-                if not isinstance(current, dict) or key not in current:
-                    return _NOT_FOUND
-                current = current[key]
-            for match in _BRACKET_INDEX.finditer(segment):
-                if not isinstance(current, list):
-                    return _NOT_FOUND
-                idx = int(match.group(1))
-                if idx < 0:
-                    idx += len(current)
-                if idx < 0 or idx >= len(current):
-                    return _NOT_FOUND
-                current = current[idx]
-        return current
+    Substitution runs through one ``re.sub`` pass rather than looping over
+    `extract_template_paths`, because replacing resolved text placeholder by
+    placeholder would re-expand a ``{{...}}`` string that a value itself contains.
+    """
 
     def _format(value: Any) -> str:
         if isinstance(value, (dict, list)):
@@ -88,25 +159,10 @@ def render_template(template: str, replacements: dict[str, Any]) -> str:
         return str(value)
 
     def _replacer(match: re.Match[str]) -> str:
-        key = match.group(1).strip()
-        # \n unreachable (no re.DOTALL) but kept for parity with upstream
-        if ' ' in key or '\t' in key or '\n' in key or '\r' in key:
+        path = _placeholder_path(match.group(1))
+        if path is None:
             return match.group(0)
-        if not is_valid_template_path(key):
-            logger.warning('Rejected template path: {!r}', key)
-            return match.group(0)
-        if key in _RESERVED_BARE_KEYS:
-            logger.warning(
-                'Bare reserved template key {!r} left unresolved — use a dotted path instead (e.g. {!r}).',
-                key,
-                f'{key}.<field>',
-            )
-            return match.group(0)
-        if key in replacements:
-            return _format(replacements[key])
-        value = _resolve_nested(replacements, key)
-        if value is _NOT_FOUND:
-            return match.group(0)
-        return _format(value)
+        found, value = resolve_template_path(replacements, path)
+        return _format(value) if found else match.group(0)
 
     return _CURLY.sub(_replacer, template)

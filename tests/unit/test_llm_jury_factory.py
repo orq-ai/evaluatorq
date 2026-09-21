@@ -20,11 +20,12 @@ from evaluatorq.types import DataPoint
 llm_jury_mod = importlib.import_module("evaluatorq.llm_jury")
 
 
-def test_validation_requires_exactly_one_of_criteria_prompt():
+def test_validation_requires_criteria_or_prompt():
+    # Both together is allowed — a classify judge reads `criteria`, an LLM judge
+    # renders the prompt, and a mixed panel needs each. Neither is the error.
     with pytest.raises(ValueError):
-        llm_jury(name="x")  # neither
-    with pytest.raises(ValueError):
-        llm_jury(name="x", criteria="a", prompt="b")  # both
+        llm_jury(name="x")
+    assert llm_jury(name="x", criteria="a", prompt="judge {{criteria}}")["name"] == "x"
 
 
 def test_validation_rejects_empty_judge_panel():

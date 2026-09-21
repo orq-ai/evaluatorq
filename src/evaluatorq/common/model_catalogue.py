@@ -1,6 +1,6 @@
 """Orq's model catalogue: per-model prices, provider ids, and endpoint support.
 
-Fetched once per process (per host) from ``GET /v2/models`` and used for three things:
+Fetched once per process (per host) from ``GET /v2/models`` and used for four things:
 
 * **Pricing calls the router does not price.** ``/v3/router/responses`` returns
   ``usage.input_cost``/``output_cost``/``total_cost``; ``/v3/router/chat/completions``
@@ -13,6 +13,9 @@ Fetched once per process (per host) from ``GET /v2/models`` and used for three t
 * **Knowing which models serve Responses at all.** Entries carry
   ``metadata.supports_responses_api``, so a caller can ask before it calls
   instead of discovering it from a 400.
+* **Knowing which models serve ``/classify``.** Entries carry
+  ``metadata.supports_classify``, which is how a judge is seated on the classify
+  endpoint instead of a chat one (`supports_classify`).
 
 A model absent from the catalogue stays unpriced — ``total_cost`` ``None``,
 ``priced_calls`` 0 — which the dashboard already renders as "no cost data"
@@ -55,6 +58,9 @@ class _ModelInfoFields(NamedTuple):
     # Accepted ``reasoning.effort`` values. ``None`` means the catalogue does not say
     # — absence is "unknown", never "empty".
     reasoning_efforts: frozenset[str] | None = None
+    # Whether the model serves the router's ``/classify`` endpoint rather than a
+    # chat/responses one. Last and defaulted so the positional call sites keep working.
+    supports_classify: bool = False
 
 
 class ModelInfo(_ModelInfoFields):
@@ -78,6 +84,7 @@ class ModelInfo(_ModelInfoFields):
         provider: str,
         supports_responses: bool,  # noqa: FBT001 — positional to match the tuple field order
         reasoning_efforts: frozenset[str] | None = None,
+        supports_classify: bool = False,  # noqa: FBT001, FBT002 — positional to match the tuple field order
     ) -> ModelInfo:
         """Normalize an empty ``reasoning_efforts`` to ``None``.
 
@@ -97,6 +104,7 @@ class ModelInfo(_ModelInfoFields):
             provider,
             supports_responses,
             reasoning_efforts or None,
+            supports_classify,
         )
 
 
@@ -122,6 +130,25 @@ _MAX_FETCH_FAILURES = 3
 # with no config object to thread.
 _CATALOGUE_TIMEOUT_S = env_float('EVALUATORQ_CATALOGUE_TIMEOUT_S', 30.0, min_value=0.1)
 
+# Classify models by their fully qualified id, for the case where the catalogue is
+# empty or its fetch failed. Seating a judge is a construction-time decision, so
+# without this a catalogue outage would quietly demote a classify judge to a chat
+# call the model cannot serve. Exact ids only — no ``typesafe/`` prefix matching.
+KNOWN_CLASSIFY_MODELS = frozenset({'typesafe/jev-latest'})
+# Models already warned about falling back to KNOWN_CLASSIFY_MODELS: the same judge
+# is constructed once per datapoint, and one line per run is the useful volume.
+_classify_fallback_warned: set[str] = set()
+
+
+def _bare_id(model: str) -> str:
+    """``model`` without its ``provider/`` prefix.
+
+    One spelling rule in one place: ``_overrides`` is keyed on the bare id, so
+    `register_model` (write), `_lookup` and `is_known_classify_model` (read) must
+    strip the prefix identically or an override becomes a silent no-op.
+    """
+    return model.split('/', 1)[-1]
+
 
 def _catalogue_lock() -> asyncio.Lock:
     global _lock
@@ -139,6 +166,7 @@ def reset_catalogue_cache() -> None:
     global _lock
     _catalogues.clear()
     _fetch_failures.clear()
+    _classify_fallback_warned.clear()
     _lock = None
 
 
@@ -174,7 +202,7 @@ def register_model(model_id: str, info: ModelInfo) -> None:
     )
     ```
     """
-    _overrides[model_id.split('/', 1)[-1]] = info
+    _overrides[_bare_id(model_id)] = info
 
 
 def clear_model_overrides() -> None:
@@ -268,14 +296,24 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
         currencies = {str(entry.get('input_currency') or ''), str(entry.get('output_currency') or '')}
         if currencies - {'', 'usd'}:
             continue
+        metadata = _entry_metadata(entry)
+        classify_flag = metadata.get('supports_classify')
+        if classify_flag is not None and not isinstance(classify_flag, bool):
+            logger.warning(
+                'Model catalogue entry {}/{} has non-boolean supports_classify={!r}; treating it as unsupported',
+                provider,
+                model_id,
+                classify_flag,
+            )
         info = ModelInfo(
             input_cost_per_1k=float(inp),
             output_cost_per_1k=float(out),
             provider=provider,
             # `metadata` is provider-shaped and has arrived as a list; `.get` on a
             # non-mapping took the whole catalogue down rather than one model.
-            supports_responses=bool(_entry_metadata(entry).get('supports_responses_api')),
+            supports_responses=bool(metadata.get('supports_responses_api')),
             reasoning_efforts=_parse_reasoning_efforts(entry),
+            supports_classify=classify_flag is True,
         )
         models[f'{provider}/{model_id}'] = info
         existing = models.get(model_id)
@@ -296,7 +334,8 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
     if isinstance(payload, list) and payload and not models:
         logger.warning(
             'Model catalogue returned {} entries but none parsed (payload shape change?); '
-            'judges will run unpriced on chat completions',
+            'catalogue-based endpoint qualification and local pricing are unavailable, '
+            'though the built-in classify fallback still applies',
             len(payload),
         )
     return models
@@ -350,7 +389,8 @@ async def _load_catalogue(client: AsyncOpenAI | None = None) -> dict[str, ModelI
             give_up = failures >= _MAX_FETCH_FAILURES
             logger.warning(
                 'Orq model catalogue unavailable ({}: {}) at {}/v2/models (attempt {} of {}) — '
-                'judges will run on chat completions and report no cost {}',
+                'catalogue-based endpoint qualification and local pricing are unavailable {} '
+                '(the built-in classify fallback still applies)',
                 type(exc).__name__,
                 exc,
                 host,
@@ -383,7 +423,7 @@ async def _lookup(model: str, client: AsyncOpenAI | None = None) -> ModelInfo | 
 
     Caller `register_model` overrides win over the fetched catalogue.
     """
-    bare = model.split('/', 1)[-1]
+    bare = _bare_id(model)
     # One probe, not two: `register_model` normalizes to the bare id on write, so
     # the override key space has a single canonical spelling.
     override = _overrides.get(bare)
@@ -408,6 +448,48 @@ async def qualified_model(model: str, client: AsyncOpenAI | None = None) -> str 
     if info is None or not info.supports_responses:
         return None
     return f'{info.provider}/{model}'
+
+
+def is_known_classify_model(model: str) -> bool:
+    """Whether ``model`` is a built-in classify id, without touching the catalogue.
+
+    The synchronous counterpart of `supports_classify`, for callers that decide how
+    to seat a judge before any await is available. `register_model` overrides answer
+    first — keyed on the bare id, exactly as `_lookup` reads them — and an override
+    that says ``supports_classify=False`` is believed even for a model in
+    `KNOWN_CLASSIFY_MODELS`, since a caller correcting an entry outranks this
+    package's built-in list. `KNOWN_CLASSIFY_MODELS` answers when there is no
+    override.
+
+    A model known only to the fetched catalogue reads as ``False`` here and ``True``
+    from `supports_classify`. Jury construction treats this function as an early hint
+    for validation and warnings; runtime routing still follows the catalogue, so no
+    registration is required for that model to work.
+    """
+    override = _overrides.get(_bare_id(model))
+    if override is not None:
+        return override.supports_classify
+    return model in KNOWN_CLASSIFY_MODELS
+
+
+async def supports_classify(model: str, client: AsyncOpenAI | None = None) -> bool:
+    """Whether ``model`` serves the router's ``/classify`` endpoint.
+
+    The catalogue is the authority: an entry answers for itself, including saying
+    ``False``. `KNOWN_CLASSIFY_MODELS` answers only when there is no entry at all —
+    an empty or failed catalogue — and logs once per model when it does, because a
+    fallback that decided the endpoint silently is indistinguishable from a
+    catalogue that said so.
+    """
+    info = await _lookup(model, client)
+    if info is not None:
+        return info.supports_classify
+    if model in KNOWN_CLASSIFY_MODELS:
+        if model not in _classify_fallback_warned:
+            _classify_fallback_warned.add(model)
+            logger.warning('Model catalogue has no entry for {}; routing it to classify from the built-in list', model)
+        return True
+    return False
 
 
 async def validate_reasoning_effort(effort: str, model: str, client: AsyncOpenAI | None = None) -> None:
@@ -510,12 +592,15 @@ async def price_usage(
 
 
 __all__ = [
+    'KNOWN_CLASSIFY_MODELS',
     'ModelInfo',
     'clear_model_overrides',
     'get_model_info',
+    'is_known_classify_model',
     'price_usage',
     'qualified_model',
     'register_model',
     'reset_catalogue_cache',
+    'supports_classify',
     'validate_reasoning_effort',
 ]

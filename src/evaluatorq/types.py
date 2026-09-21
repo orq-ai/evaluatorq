@@ -133,6 +133,9 @@ class DataPointResult(BaseModel):
     job_results: list[JobResult] | None = Field(default=None, serialization_alias='jobResults')
 
 
+DataPointComplete = Callable[[DataPointResult], Awaitable[None] | None]
+
+
 EvaluatorqResult = list[DataPointResult]
 """Type alias for evaluation results"""
 
@@ -279,6 +282,7 @@ class EvaluatorParams(BaseModel):
     single_trace: bool = False
     """When True, open one ``evaluatorq.run`` span for the whole run so every row
     shares a trace. Default False keeps each row's ``orq.job`` as its own root."""
+    on_datapoint_complete: DataPointComplete | None = None
 
     @model_validator(mode='after')
     def _require_jobs_when_inferring(self) -> 'EvaluatorParams':

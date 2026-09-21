@@ -302,6 +302,10 @@ def test_parse_catalogue_warns_when_nonempty_payload_yields_zero_entries(monkeyp
     prices = pricing._parse_catalogue([{'model_id': 'a', 'provider': 'openai'}])  # missing costs  # pyright: ignore[reportPrivateUsage]
     assert prices == {}
     assert any('none parsed' in w for w in warnings)
+    # The consequence named is the catalogue's own, not "everything falls back to chat":
+    # a classify model still routes to /classify off the built-in list.
+    assert any('endpoint qualification and local pricing are unavailable' in w for w in warnings)
+    assert any('classify fallback still applies' in w for w in warnings)
 
 
 # --- price_usage aggregate guard / qualified_model responses gate -----------
@@ -732,3 +736,122 @@ async def test_alias_without_a_served_model_stays_unpriced():
     assert priced is not None
     assert priced.total_cost is None
     assert priced.priced_calls == 0
+
+
+# --- classify models ----------------------------------------------------------
+
+
+def _jev_entry() -> dict[str, object]:
+    """A live-shaped ``/v2/models`` entry for the Jev classify model."""
+    return {
+        'model_id': 'jev-latest',
+        'provider': 'typesafe',
+        'model_developer': 'typesafe',
+        'model_type': 'classify',
+        'input_cost': 0.0001,
+        'output_cost': 0.0003,
+        'input_currency': 'usd',
+        'output_currency': 'usd',
+        'metadata': {'supports_classify': True},
+    }
+
+
+def test_model_info_still_constructs_positionally():
+    info = ModelInfo(0.1, 0.2, 'openai', True)  # noqa: FBT003 — the positional call sites this guards
+    assert info.reasoning_efforts is None
+    assert info.supports_classify is False
+
+
+def test_parse_catalogue_reads_supports_classify():
+    prices = pricing._parse_catalogue([_jev_entry()])  # pyright: ignore[reportPrivateUsage]
+    assert prices['typesafe/jev-latest'].supports_classify is True
+    assert prices['jev-latest'].supports_classify is True
+    assert prices['jev-latest'].supports_responses is False
+
+
+def test_parse_catalogue_leaves_supports_classify_false_without_the_flag():
+    prices = pricing._parse_catalogue(  # pyright: ignore[reportPrivateUsage]
+        [{'model_id': 'plain', 'provider': 'openai', 'input_cost': 0.1, 'output_cost': 0.2}]
+    )
+    assert prices['plain'].supports_classify is False
+
+
+@pytest.mark.parametrize('flag', ['false', 'true', 0, 1, {}, {'enabled': True}])
+def test_parse_catalogue_does_not_treat_non_boolean_classify_metadata_as_support(flag: object):
+    entry = _jev_entry()
+    metadata = entry['metadata']
+    assert isinstance(metadata, dict)
+    metadata['supports_classify'] = flag
+
+    prices = pricing._parse_catalogue([entry])  # pyright: ignore[reportPrivateUsage]
+
+    assert prices['typesafe/jev-latest'].supports_classify is False
+
+
+def test_is_known_classify_model_matches_the_exact_id():
+    assert pricing.is_known_classify_model('typesafe/jev-latest')
+    assert not pricing.is_known_classify_model('jev-latest')
+    assert not pricing.is_known_classify_model('openai/gpt-5-mini')
+
+
+def test_a_registered_classify_model_is_known_at_construction():
+    """Otherwise `llm_jury` seats it as a prompted judge and `run_judge` then errors on it."""
+    try:
+        pricing.register_model('acme/sorter', ModelInfo(0.0, 0.0, 'acme', False, supports_classify=True))  # noqa: FBT003
+        assert pricing.is_known_classify_model('acme/sorter')
+        assert pricing.is_known_classify_model('sorter')
+    finally:
+        pricing.clear_model_overrides()
+
+
+def test_a_registered_override_outranks_the_built_in_classify_list():
+    try:
+        pricing.register_model('typesafe/jev-latest', ModelInfo(0.0, 0.0, 'typesafe', False, supports_classify=False))  # noqa: FBT003
+        assert not pricing.is_known_classify_model('typesafe/jev-latest')
+    finally:
+        pricing.clear_model_overrides()
+
+
+@pytest.fixture
+def _classify_catalogue(monkeypatch: pytest.MonkeyPatch):
+    async def fake_load(client=None):  # noqa: ANN001, ARG001
+        return pricing._parse_catalogue([_jev_entry()])  # pyright: ignore[reportPrivateUsage]
+
+    monkeypatch.setattr(pricing, '_load_catalogue', fake_load)
+
+
+@pytest.fixture
+def _empty_catalogue(monkeypatch: pytest.MonkeyPatch):
+    async def fake_load(client=None):  # noqa: ANN001, ARG001
+        return {}
+
+    monkeypatch.setattr(pricing, '_load_catalogue', fake_load)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('_classify_catalogue')
+async def test_supports_classify_true_from_the_catalogue():
+    assert await pricing.supports_classify('typesafe/jev-latest') is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('_catalogue')
+async def test_supports_classify_false_for_a_chat_model():
+    assert await pricing.supports_classify('gpt-5-mini') is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('_empty_catalogue')
+async def test_supports_classify_falls_back_to_the_known_set_with_one_warning(caplog: pytest.LogCaptureFixture):
+    caplog.set_level(logging.WARNING)
+    assert await pricing.supports_classify('typesafe/jev-latest') is True
+    assert await pricing.supports_classify('typesafe/jev-latest') is True
+    assert [r.getMessage() for r in caplog.records if r.name == pricing.__name__] == [
+        'Model catalogue has no entry for typesafe/jev-latest; routing it to classify from the built-in list'
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('_empty_catalogue')
+async def test_supports_classify_false_for_an_unknown_model():
+    assert await pricing.supports_classify('someone/unlisted') is False

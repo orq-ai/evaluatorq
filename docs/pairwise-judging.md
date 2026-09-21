@@ -1,6 +1,6 @@
 # Pairwise (Preference) Judging
 
-Some questions are easier to answer by comparison than in isolation. Instead of asking "is this answer good?" you ask "is A better than B?". Pairwise judging runs a panel of judges over two responses and reconciles their picks into one winner, correcting for the position bias that makes a judge favour whichever response it happens to see first.
+**Pairwise judging** is a comparison of two responses by a panel of judge models that reconciles their picks into one winner. Instead of asking "is this answer good?" you ask "is A better than B?". It corrects for the position bias that makes a judge favour whichever response it happens to see first.
 
 It is a sibling of [LLM as a Jury](llm-as-a-jury.md): same panel machinery, same judge models, but the verdict is a preference (`A` / `B` / `tie`) rather than a pass or a score.
 
@@ -79,7 +79,28 @@ Both orderings run concurrently, so swapping does not add wall-clock latency, on
 | `assignment` | `"all"` | `"cyclic"` gives each comparison exactly one judge, rotating through the panel ([CyclicJudge](cyclic-judge.md)). Judge bias cancels in expectation across the run at single-judge cost; the assigned judge still runs both orderings when `swap` is on. Rotation is over the deduplicated panel, `repetitions` still applies to the one assigned judge, and the cursor lives on the comparator: a reused comparator continues where the previous run stopped. |
 | `replacement_judges` | `None` | Stand-ins for judges that fail mechanically. Promoted per pair and run in **both** orderings, so a stand-in casts a real reconciled vote. |
 | `min_successful_judges` | `1` | Minimum decisive reconciled votes, otherwise the comparison is **inconclusive**. Must not exceed the panel size. |
+| `state_fields` | `None` | Classify judges only: which template paths are handed to the judge as the material to compare. Defaults to every placeholder the template renders, minus `criteria`. |
 | `max_concurrency` | `None` | Cap on total in-flight judge LLM calls across all concurrently running `compare()` calls (each pair fans out judges × orderings × repetitions). Unbounded when unset. |
+
+### Jev on a pairwise panel
+
+`typesafe/jev-latest` can also sit on a pairwise panel. It receives a three-option **choice** question, `A` / `B` / `tie`, whose question is your `criteria` and whose options carry fixed descriptions ("Response A is better", "Response B is better", "Neither is clearly better"). See [Jev as a judge](llm-as-a-jury.md#jev-as-a-judge) for the full classify contract.
+
+```python
+comparator = llm_jury_pairwise(
+    criteria="The answer is accurate, complete, and directly addresses the question.",
+    judges=["anthropic/claude-sonnet-4-6", "typesafe/jev-latest"],
+    state_fields=["response_a.output.response", "response_b.output.response"],
+)
+```
+
+The material it compares is every placeholder the template renders except `criteria` itself — for the built-in template that is the question and both responses. Use `state_fields` to exclude a shared preamble when only the answers matter.
+
+Each ordering rebuilds the question to identify the current A/B seats, then reconciles the verdicts exactly as a prompted judge does.
+
+The literal `prompt` does not reach a classify judge, but its placeholders still select the default comparison state. `system_prompt`, `temperature`, `structured_output`, `max_tokens`, `reasoning_effort`, `extra_kwargs` and `extra_body` do not reach it. `llm_jury_pairwise()` names the non-default settings you set in one warning: when it builds the comparator for known classify ids, or on the first call for a model discovered through the fetched catalogue. They still apply to any prompted judges on the panel.
+
+Because classify verdicts are deterministic, `repetitions > 1` warns. Swapping still runs two distinct A/B orderings; repetitions duplicate each ordering and bill for identical answers.
 
 ## Reading a comparison
 
@@ -97,6 +118,8 @@ for vote in comparison.votes:
     vote.replacement  # True if this judge stood in for a failed one
     vote.explanation  # rationale from the ordering that produced the vote
 ```
+
+`vote.observations` keeps every repetition with its `ordering` (`"ab"` or `"ba"`), zero-based `repetition`, canonical `verdict`, and `explanation`. For a successful classify call, `observation.raw_output` holds the complete validated answer in the original ordering sent to the provider, including provider-added fields and omitting fields it did not report. A swapped-order choice of `"B"` therefore remains `"B"` in `raw_output`, even when the observation's canonical verdict is `"A"`. Prompted judges and older saved observations have `raw_output=None`.
 
 ## Rolling up many comparisons
 
@@ -168,7 +191,7 @@ Two things must be true, and if either is missing the run falls back to the two-
 - **Both orderings must run (`swap=True`, the default).** Self-agreement is measured inside one ordering, so a single-ordering run (`swap=False`) never reaches this path, even at `repetitions=2`.
 - **At least two judges must have repeated decisive passes.** With only one, the fallback weight for every other judge is just that one judge's number, so we do not use it.
 
-Every pass is kept on `PairwiseVote.observations`, normalized so a swapped-order 'B' is stored as 'A' and the two orderings line up; abstained and failed passes are kept as `None`.
+Every pass is kept on `PairwiseVote.observations`. Its `verdict` is normalized so a swapped-order `"B"` becomes `"A"` and the two orderings line up; abstained and failed verdicts are `None`. Its classifier `raw_output` stays in the provider's ordering, as described under [Reading a comparison](#reading-a-comparison).
 
 **Why self-agreement, not the global fit.** With one pass per judge, the two-item fit cannot tell a noisy judge apart from a hard batch of questions. Repeating the *same* prompt removes the ambiguity: any disagreement is the judge being inconsistent, nothing else. So a judge's consistency is scored on each prompt, counted once per judge per datapoint, then averaged. Because of that:
 
@@ -210,11 +233,23 @@ run.save()  # -> .evaluatorq/pairwise-runs/<timestamp>_prompt-v2-vs-prompt-v3.js
 
 `save()` rolls the comparisons up with `build_report()` and stores the result on the run, so the dashboard never recomputes it. Pass a path to choose the file yourself; the default lands in the pairwise run store, where `eq dashboard` discovers it.
 
+From the project where you saved the run, launch the [dashboard](dashboard.md#install) with:
+
+```bash
+eq dashboard
+```
+
+With no path, this scans all three default stores: `.evaluatorq/runs` (red team), `.evaluatorq/sim-runs` (simulation), and `.evaluatorq/pairwise-runs` (pairwise). Open the local URL printed by the command.
+
 `label_a` and `label_b` name the two systems being compared. They default to `"A"` and `"B"`, but nothing in the judging data records what was in each slot, so a reader of the dashboard cannot tell what "A won" means. Set them.
 
 A run also records `swap`. Position bias is only meaningful when both orderings ran, so a run saved with `swap=False` shows that column as unavailable rather than as a flattering `0.00`.
 
 The dashboard renders the run as three sections: the consensus win rates for each side, a per-judge table (win rates, tie rate, position bias, and consistency when measurable), and the comparison list, where each row expands to show the two responses side by side with every judge's vote and rationale.
+
+For classify votes, open **Classifier details** inside an expanded comparison in the dashboard or standalone HTML report. Each ordering and repetition shows its choice, confidence and probability distribution when reported. The display converts swapped A/B choices and probability keys back to the run's original A/B frame and uses `label_a` / `label_b`; `tie` is unchanged. Missing confidence or probabilities are omitted, never rendered as zero. Percentages near 50% retain enough precision to show which side they fall on and distinguish close values.
+
+Saved `PairwiseRun` JSON preserves each observation's provider-order `raw_output`; display conversion does not rewrite it. This is local report data. `send_results_to_orq()` strips evaluator `raw_output`, so the hosted Orq experiment view does not receive these classifier details.
 
 ## The lower-level core
 

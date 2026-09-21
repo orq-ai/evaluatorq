@@ -98,6 +98,22 @@ def test_outcome_to_prediction_success():
     assert not pred.abstained
 
 
+def test_outcome_to_prediction_retains_classify_raw_output_only():
+    classify = JudgeOutcome(
+        payload=EvaluatorResponsePayload(value='neutral', explanation="choice='neutral' (confidence 0.96)"),
+        endpoint='classify',
+        raw_output={'type': 'choice', 'choice': 'neutral', 'confidence': 0.96},
+    )
+    assert _outcome_to_prediction(classify).raw_output == classify.raw_output
+
+    chat = JudgeOutcome(
+        payload=EvaluatorResponsePayload(value=True, explanation='ok'),
+        endpoint='chat',
+        raw_content='{"value": true, "explanation": "ok"}',
+    )
+    assert _outcome_to_prediction(chat).raw_output is None
+
+
 def test_outcome_to_prediction_error():
     outcome = JudgeOutcome(error_kind=JudgeError.TIMEOUT, error_message="timed out after 5000ms")
     pred = _outcome_to_prediction(outcome)
