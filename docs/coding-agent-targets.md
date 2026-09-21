@@ -60,6 +60,8 @@ Each agent starts with its own default permission behaviour, and this target doe
 
 A tool call the harness refused still appears in the response as a tool call whose result is `[denied by claude]`, so the judge sees the attempt.
 
+Codex under `launcher='orq'` is unverified: orq 10.0.0-rc.1 launches `codex exec --full-auto`, and codex-cli 0.153.4 rejects that flag before the sandbox question is reached, so every such run ends in `cli.exit.2`. Whether a `permission_mode` sandbox survives orq's `--full-auto` once that is fixed is still open; the live check for it is marked expected-to-fail in `tests/integration/test_coding_agent_live.py`.
+
 ## What the response carries
 
 Tool calls in order, then the agent's final message as text. `response_id` is the agent's session id. Token usage comes from the agent's own usage event and is `None` with a warning when the agent reported none. Claude's reported cost lands on the target span as `evaluatorq.coding_agent.cost_usd`.
