@@ -13,6 +13,7 @@ Retry lives in ``common.target_call.call_target_with_retry`` only. ``respond()``
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import os
@@ -28,12 +29,14 @@ from loguru import logger
 
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.target_call import NonRetryableTargetError
+from evaluatorq.common.tracing import record_token_usage, set_span_attrs, with_llm_span
 from evaluatorq.contracts import (
     DEFAULT_TARGET_TIMEOUT_MS,
     AgentContext,
     AgentResponse,
     AgentTarget,
     Message,
+    TextOutputItem,
     ToolCallOutputItem,
     ToolInfo,
     Usage,
@@ -43,7 +46,6 @@ from evaluatorq.contracts import (
 from evaluatorq.openresponses.convert_models import FunctionCallStatus
 
 if TYPE_CHECKING:
-    import asyncio
     from collections.abc import Callable
 
 AgentName = Literal['claude', 'codex', 'opencode']
@@ -638,7 +640,101 @@ class CodingAgentTarget(AgentTarget):
         return None
 
     async def respond(self, messages: list[Message]) -> AgentResponse:
-        raise NotImplementedError  # Task 6
+        workdir = self._ensure_workdir()
+        prompt = render_prompt(
+            messages, system_prompt=self._system_prompt, inline_system=self._spec.system_prompt_flag is None
+        )
+        argv, stdin_text = build_argv(
+            agent=self._agent,
+            launcher=self._launcher,
+            model=self._model,
+            permission_mode=self._permission_mode,
+            system_prompt=self._system_prompt,
+            extra_args=self._extra_args,
+            orq=self._orq,
+            prompt=prompt,
+        )
+        async with with_llm_span(
+            model=self._model or self._agent,
+            operation='chat',
+            input_messages=[m.to_chat_completion() for m in messages],
+            attributes={
+                'orq.redteam.llm_purpose': 'target',
+                'evaluatorq.coding_agent.agent': self._agent,
+                'evaluatorq.coding_agent.launcher': self._launcher,
+            },
+        ) as span:
+            returncode, stdout, stderr = await self._run(argv, stdin_text, cwd=workdir)
+            set_span_attrs(span, {'evaluatorq.coding_agent.exit_code': returncode})
+            stderr_excerpt = stderr[-_STDERR_EXCERPT_CHARS:]
+            if returncode != 0:
+                raise CodingAgentError(f'cli.exit.{returncode}', f'{argv[0]} exited {returncode}: {stderr_excerpt}')
+            events = _parse_jsonl(stdout)
+            if stdout.strip() and not events:
+                raise CodingAgentError('cli.parse_error', f'no JSON events in stdout: {stdout[:_STDERR_EXCERPT_CHARS]}')
+            turn = parse_events(self._agent, events)
+            if turn.agent_error is not None:
+                raise CodingAgentError('cli.agent_error', f'{turn.agent_error} {stderr_excerpt}'.strip())
+            if turn.text is None:
+                raise CodingAgentError('cli.no_result', f'exit 0 but no final assistant message: {stderr_excerpt}')
+            if turn.usage is None:
+                logger.warning(f'CodingAgentTarget({self._agent}): no usage in output; usage is None')
+            else:
+                record_token_usage(span, usage=turn.usage, total_cost=turn.cost_usd)
+            set_span_attrs(
+                span, {'evaluatorq.coding_agent.cost_usd': turn.cost_usd, 'gen_ai.response.id': turn.session_id}
+            )
+            return AgentResponse(
+                output=[*turn.tool_calls, TextOutputItem(text=turn.text, annotations=[])],
+                usage=turn.usage,
+                model=turn.model or self._model,
+                response_id=turn.session_id,
+            )
+
+    async def _run(self, argv: list[str], stdin_text: str | None, *, cwd: Path) -> tuple[int, str, str]:
+        """Run one agent process in its own process group; kill the group on timeout, error or cancel."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *argv,
+                cwd=cwd,
+                env={**os.environ, **self._env},
+                stdin=asyncio.subprocess.PIPE if stdin_text is not None else asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
+            )
+        except FileNotFoundError as exc:
+            raise CodingAgentUnavailableError('cli.not_found', f'{argv[0]!r} not found on PATH') from exc
+        self._proc = proc
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(stdin_text.encode() if stdin_text is not None else None),
+                timeout=self._timeout_ms / 1000,
+            )
+        except asyncio.TimeoutError as exc:
+            raise CodingAgentUnavailableError(
+                'cli.timeout', f'{argv[0]} produced no result within {self._timeout_ms / 1000:.0f}s'
+            ) from exc
+        finally:
+            _kill_group(proc)
+            self._proc = None
+        return proc.returncode or 0, stdout.decode(errors='replace'), stderr.decode(errors='replace')
+
+
+def _parse_jsonl(stdout: str) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            logger.warning(f'CodingAgentTarget: skipping non-JSON stdout line: {line[:200]}')
+            continue
+        if isinstance(parsed, dict):
+            events.append(parsed)
+    return events
 
 
 def _kill_group(proc: asyncio.subprocess.Process) -> None:
