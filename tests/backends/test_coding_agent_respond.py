@@ -93,6 +93,19 @@ async def test_exit_zero_empty_stdout_is_no_result(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_non_json_banner_after_final_event_is_skipped(tmp_path: Path) -> None:
+    fx = tmp_path / 'banner.jsonl'
+    fx.write_text(
+        '{"type":"item.completed","item":{"id":"a","type":"agent_message","text":"done"}}\n'
+        'banner from fake agent\n'
+    )
+    path = _install(tmp_path, 'codex', _ECHO)
+    target = CodingAgentTarget('codex', env={'PATH': path, 'FAKE_STDOUT': str(fx)})
+    response = await target.respond([Message(role='user', content='x')])
+    assert response.text == 'done'
+
+
+@pytest.mark.asyncio
 async def test_garbage_stdout_is_parse_error(tmp_path: Path) -> None:
     garbage = tmp_path / 'garbage.txt'
     garbage.write_text('not json at all\n')

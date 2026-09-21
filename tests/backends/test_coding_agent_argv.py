@@ -13,7 +13,13 @@ PROMPT = 'reply to the user'
 
 def _argv(**kw: Any) -> tuple[list[str], str | None]:
     defaults: dict[str, Any] = dict(
-        launcher='direct', model=None, permission_mode=None, system_prompt=None, extra_args=None, orq=None, prompt=PROMPT
+        launcher='direct',
+        model=None,
+        permission_mode=None,
+        system_prompt=None,
+        extra_args=None,
+        orq=None,
+        prompt=PROMPT,
     )
     defaults.update(kw)
     return build_argv(**defaults)

@@ -66,6 +66,11 @@ def test_claude_is_error_sets_agent_error() -> None:
     assert parse_events('claude', events).agent_error == 'boom'
 
 
+def test_claude_result_with_incomplete_usage_is_none() -> None:
+    events = [{'type': 'result', 'subtype': 'success', 'is_error': False, 'result': 'done', 'usage': {'output_tokens': 2}}]
+    assert parse_events('claude', events).usage is None
+
+
 def test_codex_tool_turn() -> None:
     turn = parse_events('codex', _events('codex_tool'))
     assert turn.text == 'done'
@@ -132,6 +137,14 @@ def test_opencode_text_fixture_parses() -> None:
     turn = parse_events('opencode', _events('opencode_text'))
     assert turn.text
     assert turn.agent_error is None
+
+
+def test_opencode_uses_last_text_event() -> None:
+    events = [
+        {'type': 'text', 'part': {'text': 'first'}},
+        {'type': 'text', 'part': {'text': 'second'}},
+    ]
+    assert parse_events('opencode', events).text == 'second'
 
 
 def test_opencode_structured_tool_error_is_text() -> None:

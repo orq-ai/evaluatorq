@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -42,13 +43,34 @@ def test_skills_symlinked_into_agent_dir(tmp_path: Path) -> None:
         assert (link / 'SKILL.md').exists()
 
 
-def test_skill_name_collision_raises(tmp_path: Path) -> None:
+def test_skill_name_collision_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     src = tmp_path / 'src'
     (src / '.claude' / 'skills' / 'grill-me').mkdir(parents=True)
     skill = _skill(tmp_path, 'grill-me')
     target = CodingAgentTarget('claude', workdir=src, skills=[skill])
+    allocated = tmp_path / 'allocated-workdir'
+    monkeypatch.setattr(tempfile, 'mkdtemp', lambda prefix: str(allocated))
     with pytest.raises(FileExistsError, match='grill-me'):
         target._ensure_workdir()
+    assert not allocated.exists()
+    assert target.workdir is None
+
+
+def test_symlinked_skills_dir_outside_source_is_rejected_and_cleaned(tmp_path: Path) -> None:
+    src = tmp_path / 'src'
+    outside = tmp_path / 'outside'
+    src.mkdir()
+    outside.mkdir()
+    (src / '.claude').mkdir()
+    (src / '.claude' / 'skills').symlink_to(outside, target_is_directory=True)
+    skill = _skill(tmp_path, 'grill-me')
+    target = CodingAgentTarget('claude', workdir=src, skills=[skill])
+
+    with pytest.raises(ValueError, match='symlink that leaves the private copy'):
+        target._ensure_workdir()
+
+    assert not any(outside.iterdir())
+    assert target.workdir is None
 
 
 @pytest.mark.asyncio

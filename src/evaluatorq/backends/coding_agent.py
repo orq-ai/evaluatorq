@@ -68,7 +68,9 @@ class CodingAgentError(Exception):
         self.message = message
 
 
-class CodingAgentUnavailableError(CodingAgentError, NonRetryableTargetError):  # pyright: ignore[reportUnsafeMultipleInheritance]
+class CodingAgentUnavailableError(  # pyright: ignore[reportUnsafeMultipleInheritance]
+    CodingAgentError, NonRetryableTargetError
+):
     """``cli.not_found`` and ``cli.timeout``: a retry replays the same outcome, so the loop stops."""
 
 
@@ -260,6 +262,16 @@ def _tool_call(
     )
 
 
+def _parse_claude_usage(usage_block: Any) -> Usage | None:
+    if not usage_block:
+        return None
+    missing_fields = [field for field in ('input_tokens', 'output_tokens') if field not in usage_block]
+    if missing_fields:
+        logger.warning(f'claude result usage missing required field(s): {", ".join(missing_fields)}; usage is None')
+        return None
+    return Usage.extract(usage_block, calls=1)
+
+
 def _parse_claude(events: list[dict[str, Any]]) -> ParsedTurn:
     turn = ParsedTurn()
     calls: dict[str, ToolCallOutputItem] = {}
@@ -303,8 +315,7 @@ def _parse_claude(events: list[dict[str, Any]]) -> ParsedTurn:
             turn.text = result_text if isinstance(result_text, str) else (''.join(last_text) or None)
             if event.get('is_error'):
                 turn.agent_error = result_text if isinstance(result_text, str) else str(event.get('subtype'))
-            usage_block = event.get('usage')
-            turn.usage = Usage.extract(usage_block, calls=1) if usage_block else None
+            turn.usage = _parse_claude_usage(event.get('usage'))
             model_usage = event.get('modelUsage') or {}
             turn.model = next(iter(model_usage), None)
             for denial in event.get('permission_denials') or []:
@@ -409,7 +420,7 @@ def _parse_codex(events: list[dict[str, Any]]) -> ParsedTurn:
 
 def _parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
     turn = ParsedTurn()
-    texts: list[str] = []
+    last_text: str | None = None
     totals = {'input': 0, 'output': 0, 'reasoning': 0, 'read': 0, 'write': 0}
     cost = 0.0
     saw_valid_usage = False
@@ -420,7 +431,7 @@ def _parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
         part = event.get('part') or {}
         kind = event.get('type')
         if kind == 'text':
-            texts.append(str(part.get('text', '')))
+            last_text = str(part.get('text', ''))
         elif kind == 'tool_use':
             state = part.get('state') or {}
             status_raw = state.get('status')
@@ -459,8 +470,8 @@ def _parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
             turn.agent_error = str((part.get('error') or event.get('error') or {}).get('message') or 'error')
         else:
             logger.warning(f'opencode skipped unknown event type: {kind}')
-    if texts:
-        turn.text = '\n'.join(texts)
+    if last_text is not None:
+        turn.text = last_text
     if saw_valid_usage:
         turn.usage = Usage(
             input_tokens=totals['input'],
@@ -551,7 +562,8 @@ class CodingAgentTarget(AgentTarget):
             logger.warning(f'CodingAgentTarget({agent}): orq options given but launcher is "direct"; ignoring them')
         if system_prompt and self._spec.system_prompt_flag is None:
             logger.warning(
-                f'CodingAgentTarget({agent}): no system-prompt flag; prepending system_prompt to the conversation instead'
+                f'CodingAgentTarget({agent}): no system-prompt flag; '
+                'prepending system_prompt to the conversation instead'
             )
         self._kwargs: dict[str, Any] = {
             'launcher': launcher,
@@ -591,15 +603,24 @@ class CodingAgentTarget(AgentTarget):
         if self._workdir is not None:
             return self._workdir
         dst = Path(tempfile.mkdtemp(prefix=f'evaluatorq-{self._agent}-'))
-        if self._source_workdir is not None:
-            shutil.copytree(self._source_workdir, dst, symlinks=True, dirs_exist_ok=True)
-        skills_dir = dst / self._spec.skills_dir
-        skills_dir.mkdir(parents=True, exist_ok=True)
-        for skill in self._skills:
-            link = skills_dir / skill.name
-            if link.exists() or link.is_symlink():
-                raise FileExistsError(f'skill {skill.name!r} already exists in {skills_dir}; refusing to shadow it')
-            link.symlink_to(skill.resolve(), target_is_directory=True)
+        try:
+            if self._source_workdir is not None:
+                shutil.copytree(self._source_workdir, dst, symlinks=True, dirs_exist_ok=True)
+            skills_dir = dst / self._spec.skills_dir
+            skills_dir.mkdir(parents=True, exist_ok=True)
+            if not skills_dir.resolve().is_relative_to(dst.resolve()):
+                raise ValueError(
+                    f'{self._spec.skills_dir} in the workdir is a symlink that leaves the private copy; '
+                    'refusing to write skill links through it'
+                )
+            for skill in self._skills:
+                link = skills_dir / skill.name
+                if link.exists() or link.is_symlink():
+                    raise FileExistsError(f'skill {skill.name!r} already exists in {skills_dir}; refusing to shadow it')
+                link.symlink_to(skill.resolve(), target_is_directory=True)
+        except BaseException:
+            shutil.rmtree(dst, ignore_errors=True)
+            raise
         if not self._keep_workdir:
             self._finalizer = weakref.finalize(self, _remove_tree, dst)
         self._workdir = dst
