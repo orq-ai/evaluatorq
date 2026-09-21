@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from loguru import logger
 
 from evaluatorq.trace_finder.facets import load_facet_catalogue
 
@@ -56,7 +57,12 @@ async def test_load_facet_catalogue_gathers_all_fields_resolves_projects_and_deg
     start = datetime(2026, 9, 1, tzinfo=timezone.utc)
     end = datetime(2026, 9, 22, tzinfo=timezone.utc)
 
-    catalogue = await load_facet_catalogue(cast(Any, client), start=start, end=end)
+    messages: list[str] = []
+    sink_id = logger.add(lambda message: messages.append(message.record['message']), level='WARNING')
+    try:
+        catalogue = await load_facet_catalogue(cast(Any, client), start=start, end=end)
+    finally:
+        logger.remove(sink_id)
 
     assert catalogue.project == ('Research',)
     assert catalogue.model == ('gpt-5',)
@@ -66,6 +72,7 @@ async def test_load_facet_catalogue_gathers_all_fields_resolves_projects_and_deg
     assert catalogue.trace_type == ('span.responses',)
     assert catalogue.agent_name == ('support-agent',)
     assert catalogue.tool_name == ('lookup',)
+    assert any('status' in message for message in messages)
     assert {call['field'] for call in client.traces.calls} == {
         'project_id',
         'model',

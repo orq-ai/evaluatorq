@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
 
 from evaluatorq.common.structured_output import generate_structured
 
@@ -83,13 +83,35 @@ class WireTask(BaseModel):
     noul_threshold: float = Field(ge=0, le=1, allow_inf_nan=False)
 
 
+class WireValueSelection(BaseModel):
+    """Strict compiler wire representation of a value selection."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    kind: Literal['values']
+    values: tuple[StrictStr | StrictBool, ...] = Field(min_length=1)
+
+
+class WireThresholdSelection(BaseModel):
+    """Strict compiler wire representation of a threshold selection."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    kind: Literal['threshold']
+    operator: Literal['gte', 'lte']
+    value: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+
+
+WireSelection = Annotated[WireValueSelection | WireThresholdSelection, Field(discriminator='kind')]
+
+
 class CompilerWireQuery(BaseModel):
     """Strict response format converted into the separately validated domain models."""
 
     model_config = ConfigDict(extra='forbid')
 
     task: WireTask
-    selection: ValueSelection | ThresholdSelection
+    selection: WireSelection
     numeric: WireNumeric
 
     def to_domain(self) -> tuple[CompiledQuery, NumericFilters]:
@@ -110,6 +132,11 @@ class CompilerWireQuery(BaseModel):
         elif task.choice_criteria is not None or task.score_criteria is not None:
             raise ValueError('noul requires null choice_criteria and score_criteria')
 
+        if isinstance(self.selection, WireValueSelection):
+            selection: ValueSelection | ThresholdSelection = ValueSelection.model_validate(self.selection.model_dump())
+        else:
+            selection = ThresholdSelection.model_validate(self.selection.model_dump())
+
         compiled = CompiledQuery.model_validate({
             'task': {
                 'kind': task.kind,
@@ -118,7 +145,7 @@ class CompilerWireQuery(BaseModel):
                 'noul_threshold': task.noul_threshold,
                 'state': {},
             },
-            'selection': self.selection.model_dump(),
+            'selection': selection,
         })
         numeric = NumericFilters.model_validate(self.numeric.model_dump())
         return compiled, numeric

@@ -125,6 +125,14 @@ def test_compiler_wire_schema_forbids_extra_fields() -> None:
         CompilerWireQuery.model_validate(document)
 
 
+def test_compiler_wire_selection_schema_forbids_extra_fields() -> None:
+    document = choice_document()
+    document['selection']['unexpected'] = 1
+
+    with pytest.raises(ValidationError):
+        CompilerWireQuery.model_validate(document)
+
+
 def test_classification_legend_uses_dashboard_chart_tokens() -> None:
     compiled = CompiledQuery.model_validate({
         'task': {
