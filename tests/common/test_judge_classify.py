@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from loguru import logger
-from openai import RateLimitError
+from openai import APITimeoutError, RateLimitError
 from pydantic import ValidationError
 
 import evaluatorq
@@ -215,6 +215,32 @@ async def test_run_classify_maps_a_timeout_to_a_timeout_error() -> None:
     outcome = await run_classify(client=client, model=JEV, cfg=LLMCallConfig(model=JEV), request=request)
 
     assert outcome.error_kind is JudgeError.TIMEOUT
+
+
+@pytest.mark.asyncio
+async def test_run_classify_maps_provider_timeout_to_a_timeout_error() -> None:
+    client = _client(APITimeoutError(request=MagicMock()))
+    request = ClassifyRequest(state='reply', questions={'risk': _noul_question()})
+
+    outcome = await run_classify(client=client, model=JEV, cfg=LLMCallConfig(model=JEV), request=request)
+
+    assert outcome.error_kind is JudgeError.TIMEOUT
+
+
+@pytest.mark.asyncio
+async def test_classify_judge_reraises_provider_timeout_for_run_judge_retry() -> None:
+    timeout = APITimeoutError(request=MagicMock())
+    client = _client(timeout)
+
+    with pytest.raises(APITimeoutError) as caught:
+        await judge_mod._classify_judge(
+            client=client,
+            model=JEV,
+            cfg=LLMCallConfig(model=JEV),
+            question=_noul_question(),
+        )
+
+    assert caught.value is timeout
 
 
 @pytest.mark.asyncio

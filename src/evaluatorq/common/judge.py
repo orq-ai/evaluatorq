@@ -733,12 +733,14 @@ async def run_classify(
                     },
                 )
             return ClassifyOutcome(response=response, token_usage=usage, raw_content=response.model_dump_json())
-    except (asyncio.TimeoutError, APITimeoutError):
+    except (asyncio.TimeoutError, APITimeoutError) as exc:
         logger.error('Judge [{}] classify call timed out after {}ms', model, cfg.timeout_ms)
-        return ClassifyOutcome(
+        outcome = ClassifyOutcome(
             error_kind=JudgeError.TIMEOUT,
             error_message=f'timed out after {cfg.timeout_ms}ms',
         )
+        outcome._error_exc = exc  # noqa: SLF001
+        return outcome
     except ValidationError as exc:
         logger.error('Judge [{}] classify reply did not validate: {}', model, exc)
         return ClassifyOutcome(
