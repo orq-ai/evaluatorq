@@ -1,11 +1,12 @@
 import json
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Any, ClassVar
+from datetime import datetime
+from typing import Any, ClassVar, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_serializer, model_validator
 from typing_extensions import NotRequired, TypedDict
 
-from evaluatorq.contracts import AgentResponse, TokenUsage
+from evaluatorq.contracts import AgentResponse, Message, TokenUsage
 
 # Keep output permissive: OpenResponses payloads are dict-shaped and should
 # pass through unchanged alongside arbitrary job payloads.
@@ -232,6 +233,95 @@ class ExperimentInput(BaseModel):
     history to read its ID from the URL."""
 
 
+class TraceInput(BaseModel):
+    """Describe one exact trace/span, one trace, or a bounded trace search."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    trace_id: str | None = None
+    span_id: str | None = None
+    limit: int = Field(default=20, ge=1)
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+    search: str = ''
+    filters: list[dict[str, Any]] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _validate_source(self) -> 'TraceInput':
+        if self.span_id is not None and self.trace_id is None:
+            raise ValueError('span_id requires trace_id.')
+        if self.trace_id is not None and (self.search or self.filters or self.start_time or self.end_time):
+            raise ValueError('trace_id cannot be combined with trace search criteria.')
+        if self.start_time and self.end_time and self.start_time > self.end_time:
+            raise ValueError('start_time must be before end_time.')
+        return self
+
+
+TraceMessageFormat = Literal['chat_completions', 'responses', 'otel_genai', 'mixed']
+
+
+def _trace_messages_dump(messages: list[Message]) -> list[dict[str, Any]]:
+    return [message.model_dump(mode='json', exclude_none=True) for message in messages]
+
+
+class Trace(BaseModel):
+    """A normalized Orq trace exchange and its source metadata.
+
+    ``input_messages`` and ``output_messages`` retain their source-side
+    boundaries. ``messages`` is a derived transcript for consumers that need a
+    single conversation, with only the largest exact overlap removed.
+    """
+
+    trace_id: str
+    requested_span_id: str | None = None
+    message_span_id: str | None = None
+    message_format: TraceMessageFormat | None = None
+    input_messages: list[Message] = Field(default_factory=list)
+    output_messages: list[Message] = Field(default_factory=list)
+    query: str | None = None
+    retrievals: list[str] = Field(default_factory=list)
+    tools_called: list[str] = Field(default_factory=list)
+    session_id: str | None = None
+    actor_id: str | None = None
+    thread_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    expected_output: Output | None = None
+    import_error: str | None = None
+
+    @property
+    def messages(self) -> list[Message]:
+        """Return input followed by output without one duplicated boundary."""
+        overlap = 0
+        input_dump = _trace_messages_dump(self.input_messages)
+        output_dump = _trace_messages_dump(self.output_messages)
+        for size in range(min(len(input_dump), len(output_dump)), 0, -1):
+            if input_dump[-size:] == output_dump[:size]:
+                overlap = size
+                break
+        return [*self.input_messages, *self.output_messages[overlap:]]
+
+    def to_datapoint(self) -> DataPoint:
+        """Convert this imported trace to evaluatorq's native row shape."""
+        inputs: dict[str, Any] = {
+            'messages': _trace_messages_dump(self.messages),
+            'recorded_output': _trace_messages_dump(self.output_messages),
+            'query': self.query,
+            'source_trace_id': self.trace_id,
+            'source_requested_span_id': self.requested_span_id,
+            'source_span_id': self.message_span_id,
+            'message_format': self.message_format,
+            'retrievals': list(self.retrievals),
+            'tools_called': list(self.tools_called),
+            'session_id': self.session_id,
+            'actor_id': self.actor_id,
+            'thread_id': self.thread_id,
+            'trace_metadata': dict(self.metadata),
+        }
+        if self.import_error is not None:
+            inputs['trace_import_error'] = self.import_error
+        return DataPoint(inputs=inputs, expected_output=self.expected_output)
+
+
 class EvaluatorParams(BaseModel):
     """
     Parameters for running an evaluation.
@@ -239,7 +329,8 @@ class EvaluatorParams(BaseModel):
     Args:
         data: The data to evaluate. A DatasetIdInput to fetch from Orq platform, an
               ExperimentInput to replay an experiment's recorded responses (requires
-              inference=False), or a list of DataPoint instances/awaitables.
+              inference=False), a TraceInput to import recorded trace conversations
+              (requires inference=False), or a list of DataPoint instances/awaitables.
         jobs: The jobs to run on the data.
         evaluators: The evaluators to use. If not provided, only jobs will run.
         datapoint_parallelism: Number of datapoints to process in parallel. Defaults
@@ -264,7 +355,7 @@ class EvaluatorParams(BaseModel):
         'populate_by_name': True,
     }
 
-    data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput]
+    data: DatasetIdInput | ExperimentInput | TraceInput | Sequence[Awaitable[DataPoint] | DataPointInput]
     jobs: list[Job] | None = None
     evaluators: list[Evaluator] | None = None
     datapoint_parallelism: int = Field(
@@ -292,5 +383,9 @@ class EvaluatorParams(BaseModel):
             raise ValueError(
                 'data=ExperimentInput(...) sources pre-recorded responses from an '
                 'experiment and is only valid with inference=False.'
+            )
+        if isinstance(self.data, TraceInput) and self.inference:
+            raise ValueError(
+                'data=TraceInput(...) sources recorded responses from traces and is only valid with inference=False.'
             )
         return self
