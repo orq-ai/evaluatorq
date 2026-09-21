@@ -1382,7 +1382,8 @@ class SimulationRunner:
         model the target reports (``None`` for plain callbacks, which may call any
         provider); NEVER substitute ``self._model`` — that is the user-simulator /
         judge model, not the evaluated target.
-        The target's own ``map_error`` is passed through; ``None`` from it falls back to ``default_map_error`` inside the helper, so backend-specific codes (``cli.*`` from ``CodingAgentTarget``) reach simulation results.
+        The target's own ``map_error`` is passed through; ``None`` from it falls back to ``default_map_error`` inside the
+        helper, so backend-specific codes (``cli.*`` from ``CodingAgentTarget``) reach simulation results.
         """
         effective = target if target is not None else self._effective_target
         if effective is None:
