@@ -9,9 +9,11 @@ Three agents are supported: `claude` (Claude Code), `codex` (Codex CLI) and `ope
 | `launcher` | What runs | Use it when |
 |---|---|---|
 | `'direct'` (default) | The agent binary, with your environment and your own provider credentials | You are testing the agent as your users run it |
-| `'orq'` | `orq launch <agent>`, so every model call routes through the Orq gateway with the workspace skills and MCP server attached | You are testing the Orq launcher, skills or gateway themselves |
+| `'orq'` | `orq launch <agent>`, so every model call routes through the Orq gateway with workspace skills and MCP server attached by default | You are testing the Orq launcher, skills or gateway themselves |
 
 Under `launcher='orq'`, `model` becomes `orq launch --model provider/id` and `OrqLaunchOptions` tunes the remaining flags. Profile and workspace are not launch flags: set `ORQ_PROFILE` or `ORQ_API_KEY` through `env`.
+
+`OrqLaunchOptions` has four fields: `mcp=False` renders `--no-mcp`, `skills=False` renders `--no-skills`, `base_url` renders `--base-url <url>`, and `fetch_models=False` renders `--no-fetch-models`.
 
 ## Red-teaming Claude Code with one injected skill
 
