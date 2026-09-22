@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import stat
+import subprocess
 import time
 from pathlib import Path
 from typing import cast
@@ -165,9 +166,14 @@ async def test_missing_binary_is_not_found_and_non_retryable(tmp_path: Path) -> 
 async def test_timeout_kills_and_is_non_retryable(tmp_path: Path) -> None:
     pidfile = tmp_path / 'pid'
     path = _install(tmp_path, 'claude', _SLEEPER)
-    target = CodingAgentTarget('claude', env={'PATH': path, 'FAKE_PIDFILE': str(pidfile)}, timeout_ms=500)
+    target = CodingAgentTarget('claude', env={'PATH': path, 'FAKE_PIDFILE': str(pidfile)}, timeout_ms=1500)
+    task = asyncio.create_task(target.respond([Message(role='user', content='x')]))
+    deadline = time.time() + 10
+    while not pidfile.exists() and time.time() < deadline:
+        await asyncio.sleep(0.05)
+    assert pidfile.exists(), 'sleeper never started; the timeout fired before the script wrote its pid'
     with pytest.raises(CodingAgentUnavailableError) as info:
-        await target.respond([Message(role='user', content='x')])
+        await task
     assert info.value.code == 'cli.timeout'
     _assert_gone(int(pidfile.read_text()))
 
@@ -194,12 +200,11 @@ def _assert_gone(pid: int) -> None:
             os.kill(pid, 0)
         except ProcessLookupError:
             return
+        # The sleeper is a grandchild, so waitpid cannot reap it here; a zombie still answers kill(pid, 0).
+        stat = subprocess.run(['ps', '-o', 'stat=', '-p', str(pid)], capture_output=True, text=True).stdout.strip()
+        if not stat or stat.startswith('Z'):
+            return
         time.sleep(0.05)
-    try:
-        # A zombie answers kill(pid, 0); waitpid tells us whether it is one.
-        os.waitpid(pid, os.WNOHANG)
-    except ChildProcessError:
-        return
     raise AssertionError(f'process {pid} still alive')
 
 
@@ -227,3 +232,18 @@ async def test_env_overlay_caller_wins(tmp_path: Path) -> None:
     target = CodingAgentTarget('codex', env={'PATH': path, 'MARKER': 'from-env'})
     response = await target.respond([Message(role='user', content='x')])
     assert response.text == 'from-env'
+
+
+@pytest.mark.asyncio
+async def test_argv_too_long_is_non_retryable(monkeypatch: pytest.MonkeyPatch) -> None:
+    import errno
+
+    async def _too_big(*args: object, **kwargs: object) -> object:
+        raise OSError(errno.E2BIG, 'Argument list too long')
+
+    monkeypatch.setattr(asyncio, 'create_subprocess_exec', _too_big)
+    target = CodingAgentTarget('codex', launcher='orq')
+    with pytest.raises(CodingAgentUnavailableError) as info:
+        await target.respond([Message(role='user', content='hi')])
+    assert info.value.code == 'cli.prompt_too_long'
+    await target.close()

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import json
 import os
 import shutil
@@ -274,6 +275,13 @@ def _usage_or_none(agent: str, usage_block: Any, required: tuple[str, str]) -> U
     return Usage.extract(usage_block, calls=1)
 
 
+def _heaviest_model(model_usage: dict[str, dict[str, Any]]) -> str | None:
+    """The ``modelUsage`` entry with the most tokens; the first key is often an auxiliary model."""
+    if not model_usage:
+        return None
+    return max(model_usage, key=lambda m: model_usage[m].get('inputTokens', 0) + model_usage[m].get('outputTokens', 0))
+
+
 def _parse_claude(events: list[dict[str, Any]]) -> ParsedTurn:
     turn = ParsedTurn()
     calls: dict[str, ToolCallOutputItem] = {}
@@ -282,6 +290,7 @@ def _parse_claude(events: list[dict[str, Any]]) -> ParsedTurn:
     for event in events:
         kind = event.get('type')
         if kind == 'assistant':
+            turn.model = event.get('message', {}).get('model') or turn.model
             last_text = []
             for block in event.get('message', {}).get('content', []) or []:
                 if block.get('type') == 'tool_use':
@@ -318,8 +327,7 @@ def _parse_claude(events: list[dict[str, Any]]) -> ParsedTurn:
             if event.get('is_error'):
                 turn.agent_error = result_text if isinstance(result_text, str) else str(event.get('subtype'))
             turn.usage = _usage_or_none('claude', event.get('usage'), ('input_tokens', 'output_tokens'))
-            model_usage = event.get('modelUsage') or {}
-            turn.model = next(iter(model_usage), None)
+            turn.model = turn.model or _heaviest_model(event.get('modelUsage') or {})
             for denial in event.get('permission_denials') or []:
                 call_id = str(denial.get('tool_use_id') or f'denied-{len(order)}')
                 denied = _tool_call(
@@ -699,6 +707,12 @@ class CodingAgentTarget(AgentTarget):
             )
         except FileNotFoundError as exc:
             raise CodingAgentUnavailableError('cli.not_found', f'{argv[0]!r} not found on PATH') from exc
+        except OSError as exc:
+            if exc.errno != errno.E2BIG:
+                raise
+            raise CodingAgentUnavailableError(
+                'cli.prompt_too_long', f'{argv[0]} argv exceeds the OS limit; the rendered transcript is too long'
+            ) from exc
         self._proc = proc
         try:
             stdout, stderr = await asyncio.wait_for(

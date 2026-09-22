@@ -76,6 +76,7 @@ Failures surface as `cli.*` error codes on the result, in this order of preceden
 |---|---|---|
 | `cli.not_found` | The binary is not on `PATH` | No |
 | `cli.timeout` | No result within `timeout_ms` (default 210 s, 30 s under the retry helper's 240 s so this ceiling fires first and is not retried); the process group is killed | No |
+| `cli.prompt_too_long` | The OS refused the argv; under `launcher='orq'` codex and opencode take the rendered transcript as one argument, so a long conversation can exceed the limit | No |
 | `cli.exit.<code>` | Non-zero exit, even if a result was printed | Yes |
 | `cli.parse_error` | Stdout contained no JSON events | Yes |
 | `cli.agent_error` | Exit 0 but the agent reported failure (`is_error`, `turn.failed`) | Yes |

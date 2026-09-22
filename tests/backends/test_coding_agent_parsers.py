@@ -33,7 +33,7 @@ def test_claude_tool_turn() -> None:
     assert turn.usage.output_tokens == 83
     assert turn.usage.cached_tokens == 55631
     assert turn.usage.cache_creation_tokens == 35642
-    assert turn.model  # first key of modelUsage
+    assert turn.model == 'claude-opus-5'  # last assistant message's model, not modelUsage's first key
 
 
 def test_claude_denied_turn_has_text_and_no_tool_calls() -> None:
