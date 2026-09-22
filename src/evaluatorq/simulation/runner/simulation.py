@@ -13,6 +13,7 @@ from evaluatorq.common.target_call import TargetCallResult, call_target_with_ret
 from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pipeline
 from evaluatorq.common.tracing import record_llm_input, record_llm_output, set_span_attrs
 from evaluatorq.contracts import (
+    DEFAULT_TARGET_TIMEOUT_MS,
     AgentTarget,
     LLMCallConfig,
     ResponseTrace,
@@ -623,7 +624,7 @@ class SimulationRunner:
         target: Callable[[list[Message]], str | Awaitable[str] | Awaitable[AgentResponse]] | None = None,
         model: str = DEFAULT_MODEL,
         max_turns: int = 10,
-        target_agent_timeout_ms: int = 240_000,
+        target_agent_timeout_ms: int = DEFAULT_TARGET_TIMEOUT_MS,
         max_target_retries: int = 2,
         max_tool_result_chars: int = _MAX_TOOL_RESULT_CHARS,
         user_simulator: BaseAgent | None = None,
