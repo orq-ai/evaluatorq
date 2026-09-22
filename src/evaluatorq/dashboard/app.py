@@ -42,6 +42,7 @@ from starlette.responses import RedirectResponse, Response
 # dashboard tests use build_app()+TestClient without ever calling serve(). See
 # evaluatorq/dashboard/_compat.py.
 import evaluatorq.dashboard._compat  # noqa: F401 — side-effect import
+from evaluatorq.common.orq_client import apply_orq_profile, list_orq_profiles
 from evaluatorq.dashboard import library, metrics, report_tabs
 from evaluatorq.dashboard.apply_ui import register_apply_routes
 from evaluatorq.dashboard.filter_request import parse_selections
@@ -157,7 +158,10 @@ def _settings_config(roots: list[Path] | None) -> list[tuple[str, str | list[str
         if model != DEFAULT_APPLY_MODEL
         else 'default'
     )
-    config.append(('Apply-recommendations model', f'{model} ({source})'))
+    config.extend((
+        ('Apply-recommendations model', f'{model} ({source})'),
+        ('Orq profile', effective_settings().orq_profile or 'environment'),
+    ))
     for label, var in (('ORQ API key', 'ORQ_API_KEY'), ('OpenAI API key', 'OPENAI_API_KEY')):
         value = os.environ.get(var)
         config.append((label, _mask_key(value) if value else 'not set'))
@@ -217,6 +221,7 @@ def _settings(req: Request) -> NotStr:
         _settings_config(roots),
         effective_settings(),
         saved=req.query_params.get('saved') == '1',
+        profiles=list_orq_profiles(),
     )
     return NotStr(page('Settings', body, active_nav='settings'))
 
@@ -234,21 +239,32 @@ async def _save_settings(req: Request) -> Response | NotStr:
     # Carry them over from the saved file, not the effective view, so env overrides never get persisted.
     current = load_settings()
     values: dict[str, object] = {
-        name: form_data.get(name, '') for name in ('compiler_model', 'jev_model', 'apply_model')
+        name: form_data.get(name, '') for name in ('compiler_model', 'jev_model', 'apply_model', 'orq_profile')
     }
     values.update(window_days=current.window_days, limit=current.limit, parallelism=current.parallelism)
+    profiles = list_orq_profiles()
+    errors: dict[str, str] = {}
+    settings: DashboardSettings | None = None
     try:
         settings = DashboardSettings.model_validate(values)
     except ValidationError as exc:
-        errors: dict[str, str] = {}
         for detail in exc.errors():
             location = detail.get('loc', ())
             field = str(location[0]) if location else 'form'
             errors[field] = str(detail.get('msg', 'Invalid value'))
-        body = settings_body(_settings_config(roots), values, errors=errors)
+    if (
+        settings is not None
+        and settings.orq_profile is not None
+        and settings.orq_profile not in {p.name for p in profiles}
+    ):
+        errors['orq_profile'] = 'The orq CLI does not know this profile'
+    if settings is None or errors:
+        body = settings_body(_settings_config(roots), values, errors=errors, profiles=profiles)
         return Response(page('Settings', body, active_nav='settings'), status_code=422, media_type='text/html')
 
     save_settings(settings)
+    if settings.orq_profile is not None:
+        apply_orq_profile(settings.orq_profile, profiles)
     old_store = getattr(req.app.state, 'finder_store', None)
     if old_store is not None:
         # Retire the running finder so the next request rebuilds it from the saved settings.

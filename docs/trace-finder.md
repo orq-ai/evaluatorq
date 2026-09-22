@@ -62,7 +62,7 @@ The compiler handles the two numeric dimensions because trace-finder metadata th
 
 ## Settings and precedence
 
-The dashboard **Settings** page at `/settings` has editable fields for the compiler model, JEV model, and apply-recommendations model. Save the form to persist them in `.evaluatorq/dashboard-settings.json`, or point `EVALUATORQ_DASHBOARD_SETTINGS` at another JSON file. The window, trace limit, and parallelism are edited per run in the controls row of the Trace search page; their defaults come from the environment variables below or the saved file.
+The dashboard **Settings** page at `/settings` has editable fields for the compiler model, JEV model, and apply-recommendations model. Save the form to persist them in `.evaluatorq/dashboard-settings.json`, or point `EVALUATORQ_DASHBOARD_SETTINGS` at another JSON file. The window, trace limit, and parallelism are edited per run in the controls row of the Trace search page; their defaults come from the environment variables below or the saved file. An **Advanced** block appears when the `orq` CLI is installed with API-key profiles (`orq auth profile list`); choosing one makes the dashboard use that profile's key and host in place of `ORQ_API_KEY` and `ORQ_BASE_URL`. The `eq find` CLI ignores the saved profile and reads the environment.
 
 Settings are resolved in this order, from strongest to weakest: explicit CLI or dashboard overrides, environment variables, the saved JSON file, and built-in defaults. Invalid environment integers are ignored with a warning; invalid saved settings fall back to built-in defaults.
 

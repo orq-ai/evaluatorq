@@ -14,8 +14,13 @@ SDK, nothing else.
 
 from __future__ import annotations
 
+import json
 import os
-from typing import TYPE_CHECKING
+import shutil
+import subprocess
+from typing import TYPE_CHECKING, NamedTuple
+
+from loguru import logger
 
 if TYPE_CHECKING:
     from orq_ai_sdk import Orq
@@ -50,3 +55,68 @@ def resolve_orq_client(api_key: str | None = None) -> Orq:
         raise ImportError(_INSTALL_HINT) from e
 
     return Orq(api_key=key, server_url=orq_server_url())
+
+
+class OrqProfile(NamedTuple):
+    """One credentials profile from the ``orq`` CLI."""
+
+    name: str
+    api_key: str
+    server: str | None
+    active: bool
+
+
+def list_orq_profiles(timeout: float = 5.0) -> tuple[OrqProfile, ...]:
+    """Profiles the installed ``orq`` CLI knows, or none when it is missing, fails, or has no keys.
+
+    Runs ``orq auth profile list -o json`` so the CLI stays the only reader of its
+    credential store. Profiles without an API key (device logins) are skipped.
+    """
+    binary = shutil.which('orq')
+    if binary is None:
+        return ()
+    try:
+        result = subprocess.run(
+            [binary, 'auth', 'profile', 'list', '-o', 'json', '--no-input'],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        listing = json.loads(result.stdout) if result.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+        logger.debug('orq profile listing skipped: {}', exc)
+        return ()
+    rows = listing.get('profiles') if isinstance(listing, dict) else listing
+    if not isinstance(rows, list):
+        logger.debug('orq profile listing skipped: exit {} {}', result.returncode, result.stderr.strip()[:200])
+        return ()
+    profiles: list[OrqProfile] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name, api_key = row.get('name'), row.get('api_key')
+        if isinstance(name, str) and name and isinstance(api_key, str) and api_key:
+            server = row.get('server')
+            profiles.append(
+                OrqProfile(
+                    name, api_key, server if isinstance(server, str) and server else None, bool(row.get('active'))
+                )
+            )
+    return tuple(profiles)
+
+
+def apply_orq_profile(name: str, profiles: tuple[OrqProfile, ...] | None = None) -> bool:
+    """Point ``ORQ_API_KEY`` and ``ORQ_BASE_URL`` at the named CLI profile; False when it is unknown."""
+    # ponytail: every client in the process resolves from the environment, so the
+    # profile lands there; thread explicit credentials through if a second consumer appears.
+    for profile in profiles if profiles is not None else list_orq_profiles():
+        if profile.name == name:
+            os.environ['ORQ_API_KEY'] = profile.api_key
+            if profile.server:
+                os.environ['ORQ_BASE_URL'] = profile.server
+            else:
+                os.environ.pop('ORQ_BASE_URL', None)
+            return True
+    logger.warning('Orq profile {} is not known to the orq CLI; keeping the environment credentials', name)
+    return False

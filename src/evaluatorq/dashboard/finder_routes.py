@@ -12,7 +12,7 @@ from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this
 from starlette.responses import Response
 
 from evaluatorq.common.llm_client import resolve_llm_client
-from evaluatorq.common.orq_client import resolve_orq_client
+from evaluatorq.common.orq_client import apply_orq_profile, resolve_orq_client
 from evaluatorq.dashboard.finder_views import drawer, facet_menu, fragment, page_html
 from evaluatorq.dashboard.security import request_rejected
 from evaluatorq.trace_finder import (
@@ -62,6 +62,8 @@ def _settings(app: Any) -> Any:
     settings = getattr(app.state, 'finder_settings', None)
     if settings is None:
         settings = effective_settings()
+        if settings.orq_profile is not None:
+            apply_orq_profile(settings.orq_profile)
         app.state.finder_settings = settings
     return settings
 

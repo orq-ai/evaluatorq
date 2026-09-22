@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from itertools import starmap
 from pathlib import Path
@@ -750,8 +750,13 @@ def settings_body(
     *,
     errors: Mapping[str, str] | None = None,
     saved: bool = False,
+    profiles: Sequence[Any] = (),
 ) -> str:
-    """Render editable finder settings above the read-only runtime configuration."""
+    """Render editable finder settings above the read-only runtime configuration.
+
+    ``profiles`` are the orq CLI's credential profiles; when there are any, an
+    Advanced block offers them as the credentials the dashboard uses.
+    """
     if settings is None:
         from evaluatorq.trace_finder.settings import effective_settings
 
@@ -778,9 +783,26 @@ def settings_body(
         )
     saved_html = '<p class="settings-saved" role="status">Settings saved.</p>' if saved else ''
     form_error = f'<p class="settings-error" role="alert">{esc(errors["form"])}</p>' if 'form' in errors else ''
+    advanced = ''
+    if profiles:
+        chosen = setting_value('orq_profile')
+        options = ['<option value="">Environment (ORQ_API_KEY)</option>']
+        for profile in profiles:
+            label = profile.name + (f' ({profile.server})' if profile.server else '')
+            selected = ' selected' if profile.name == chosen else ''
+            options.append(f'<option value="{esc(profile.name)}"{selected}>{esc(label)}</option>')
+        profile_error = errors.get('orq_profile')
+        profile_error_html = f'<span class="settings-error">{esc(profile_error)}</span>' if profile_error else ''
+        advanced = (
+            f'<details class="settings-advanced"{" open" if chosen or profile_error else ""}><summary>Advanced</summary>'
+            '<div class="config-list"><div class="config-row settings-field">'
+            '<label class="config-key" for="orq_profile">Orq profile</label>'
+            f'<span class="config-val"><select id="orq_profile" name="orq_profile">{"".join(options)}</select>'
+            f'{profile_error_html}</span></div></div></details>'
+        )
     form = (
         '<form class="settings-form" method="post" action="/settings">'
-        f'{csrf_field()}{form_error}<div class="config-list">{"".join(field_rows)}</div>'
+        f'{csrf_field()}{form_error}<div class="config-list">{"".join(field_rows)}</div>{advanced}'
         '<button type="submit" class="rt-apply-btn">Save</button>'
         '</form>'
     )

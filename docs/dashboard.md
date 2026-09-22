@@ -60,7 +60,7 @@ Set `ORQ_WORKSPACE` when launching the dashboard to show **View Traces** links f
 
 ### Settings and the trace finder
 
-The **Settings** item opens `/settings`, where you can edit the trace-finder compiler model, JEV model, and apply-recommendations model. The search window, trace limit, and parallelism are set per run on the Trace search page. The page saves the models to `.evaluatorq/dashboard-settings.json` and also shows read-only runtime configuration such as scanned run stores, API-key presence, Orq host, and workspace. See the [Trace finder guide](trace-finder.md) for the precedence rules and the `eq find` CLI.
+The **Settings** item opens `/settings`, where you can edit the trace-finder compiler model, JEV model, and apply-recommendations model. The search window, trace limit, and parallelism are set per run on the Trace search page. The page saves the models to `.evaluatorq/dashboard-settings.json` and also shows read-only runtime configuration such as scanned run stores, API-key presence, Orq host, and workspace. When the `orq` CLI is installed and has API-key profiles, an **Advanced** block on the same form lets you pick one of them; the dashboard then uses that profile's key and host instead of `ORQ_API_KEY` and `ORQ_BASE_URL` for trace search. See the [Trace finder guide](trace-finder.md) for the precedence rules and the `eq find` CLI.
 
 ---
 

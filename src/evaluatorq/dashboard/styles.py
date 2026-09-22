@@ -466,6 +466,9 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .settings-field input:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
 .settings-error { color: var(--red-600, #dc2626); font-family: var(--font-sans); font-size: 12px; }
 .settings-saved { margin: 0 0 12px; color: var(--green-600, #16a34a); font-size: 13px; }
+.settings-advanced { margin: 12px 0; }
+.settings-advanced > summary { cursor: pointer; color: var(--text-muted); font-size: 13px; }
+.settings-field select { width: 100%; box-sizing: border-box; border: 1px solid var(--border-default, #d8d5cf); border-radius: 6px; padding: 7px 9px; color: var(--text-strong); background: var(--surface-card, #fff); font: inherit; }
 
 /* ==== run rows (recent + per-kind list) ============================= */
 .run-list { display: flex; flex-direction: column; }

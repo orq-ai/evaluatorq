@@ -30,6 +30,16 @@ class DashboardSettings(BaseModel):
     window_days: int = Field(7, ge=MIN_WINDOW_DAYS, le=MAX_WINDOW_DAYS)
     limit: int = Field(MAX_LIMIT, ge=MIN_LIMIT, le=MAX_LIMIT)
     parallelism: int = Field(100, ge=MIN_PARALLELISM, le=MAX_PARALLELISM)
+    orq_profile: str | None = None
+
+    @field_validator('orq_profile', mode='before')
+    @classmethod
+    def blank_profile_is_none(cls, value: object) -> object:
+        """An empty selector means the environment credentials."""
+
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
 
     @field_validator('compiler_model', 'jev_model', 'apply_model', mode='before')
     @classmethod
