@@ -65,16 +65,17 @@ def _orq_response_result(response: Any) -> EvaluationResult:
 
 
 def orq_evaluator(
-    evaluator_id: str,
     *,
-    name: str | None = None,
+    evaluator_id: str,
     model: str | None = None,
     client: Any | None = None,
 ) -> Evaluator:
     """Create an evaluatorq scorer backed by an Orq evaluator.
 
-    ``evaluator_id`` identifies an evaluator that already exists in Orq. The
-    optional ``model`` is an invocation-time override for LLM-based
+    ``evaluator_id`` is required and keyword-only. It identifies an evaluator
+    that already exists in Orq and determines the evaluatorq result name
+    (``orq:<evaluator_id>``); there is no separate name override. The optional
+    ``model`` is an invocation-time override for LLM-based
     evaluators; it is not needed for deterministic built-in evaluators, and a
     configured LLM evaluator can use its Orq model when this is omitted. When
     omitted, ``model`` is not sent to the SDK at all.
@@ -118,7 +119,7 @@ def orq_evaluator(
         response = await resolved_client.evals.invoke_async(**invoke_params)
         return _orq_response_result(response)
 
-    return {'name': name or f'orq:{evaluator_id}', 'scorer': scorer}
+    return {'name': f'orq:{evaluator_id}', 'scorer': scorer}
 
 
 def string_contains_evaluator(

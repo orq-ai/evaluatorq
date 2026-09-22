@@ -422,7 +422,7 @@ results = await evaluatorq(
     'production-quality',
     data=TraceInput(trace_id='trace_123', span_id='span_456'),
     inference=False,
-    evaluators=[orq_evaluator('eval-1', name='groundedness')],
+    evaluators=[orq_evaluator(evaluator_id='eval-1')],
 )</pre>
 <pre>from evaluatorq import TraceInput
 from evaluatorq.simulation import datapoints_from_traces, simulate

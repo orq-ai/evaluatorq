@@ -206,11 +206,11 @@ results = await evaluatorq(
     'production-quality',
     data=TraceInput(trace_id='trace_123', span_id='span_456'),
     inference=False,
-    evaluators=[orq_evaluator('eval-1', name='groundedness')],
+    evaluators=[orq_evaluator(evaluator_id='eval-1')],
 )
 ```
 
-`orq_evaluator('eval-1')` invokes an evaluator that already exists in Orq. `model=` is optional and overrides the configured model only for model-backed evaluators; deterministic built-ins do not need it. A missing trace response is an error, not a clean score, so check the returned results before trusting a rate.
+`evaluator_id` is required and keyword-only. It identifies an evaluator that already exists in Orq and determines the evaluatorq result name (`orq:eval-1` in this example); there is no separate `name=` override. `model=` is optional and overrides the configured model only for model-backed evaluators; deterministic built-ins do not need it. A missing trace response is an error, not a clean score, so check the returned results before trusting a rate.
 
 ## Built-in evaluators
 

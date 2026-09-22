@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from inspect import Parameter, signature
 from typing import Any, cast
 
 import pytest
@@ -44,7 +45,7 @@ async def test_orq_evaluator_maps_trace_row_to_invoke_request() -> None:
             'span_id': 'evaluator-span',
         },
     })
-    evaluator = orq_evaluator('eval-1', client=client)
+    evaluator = orq_evaluator(evaluator_id='eval-1', client=client)
     trace = Trace(
         trace_id='trace-1',
         query='latest question',
@@ -87,7 +88,7 @@ async def test_orq_evaluator_maps_trace_row_to_invoke_request() -> None:
 @pytest.mark.asyncio
 async def test_orq_evaluator_history_stops_before_user_turn_with_tool_output() -> None:
     client = _Client({'type': 'number', 'value': 1.0})
-    evaluator = orq_evaluator('eval-history', client=client)
+    evaluator = orq_evaluator(evaluator_id='eval-history', client=client)
     tool_call = StrategyToolCall(
         id='call-1',
         function=FunctionCall(name='lookup', arguments='{}'),
@@ -120,7 +121,7 @@ async def test_orq_evaluator_history_stops_before_user_turn_with_tool_output() -
 @pytest.mark.asyncio
 async def test_orq_evaluator_derives_query_from_multimodal_latest_user_turn() -> None:
     client = _Client({'type': 'number', 'value': 1.0})
-    evaluator = orq_evaluator('eval-multimodal', client=client)
+    evaluator = orq_evaluator(evaluator_id='eval-multimodal', client=client)
     datapoint = DataPoint(
         inputs={
             'messages': [
@@ -146,7 +147,7 @@ async def test_orq_evaluator_derives_query_from_multimodal_latest_user_turn() ->
 @pytest.mark.asyncio
 async def test_orq_evaluator_forwards_empty_reference() -> None:
     client = _Client({'type': 'number', 'value': 1.0})
-    evaluator = orq_evaluator('eval-empty-reference', client=client)
+    evaluator = orq_evaluator(evaluator_id='eval-empty-reference', client=client)
     datapoint = DataPoint(inputs={'messages': [{'role': 'user', 'content': 'question'}]}, expected_output='')
 
     await evaluator['scorer']({'data': datapoint, 'output': 'answer'})
@@ -157,7 +158,7 @@ async def test_orq_evaluator_forwards_empty_reference() -> None:
 @pytest.mark.asyncio
 async def test_orq_evaluator_forwards_explicit_model_override() -> None:
     client = _Client({'type': 'number', 'value': 0.9})
-    evaluator = orq_evaluator('eval-llm', model='openai/gpt-5.4-mini', client=client)
+    evaluator = orq_evaluator(evaluator_id='eval-llm', model='openai/gpt-5.4-mini', client=client)
     datapoint = DataPoint(inputs={'messages': [{'role': 'user', 'content': 'question'}]})
 
     await evaluator['scorer']({'data': datapoint, 'output': 'answer'})
@@ -168,7 +169,7 @@ async def test_orq_evaluator_forwards_explicit_model_override() -> None:
 @pytest.mark.asyncio
 async def test_orq_boolean_evaluator_maps_value_to_pass() -> None:
     client = _Client({'type': 'boolean', 'value': True})
-    evaluator = orq_evaluator('eval-boolean', client=client)
+    evaluator = orq_evaluator(evaluator_id='eval-boolean', client=client)
     datapoint = DataPoint(
         inputs={
             'messages': [
@@ -206,7 +207,7 @@ async def test_orq_evaluator_maps_supported_response_types(
     payload: dict[str, Any], expected_value: Any,
 ) -> None:
     client = _Client(payload)
-    evaluator = orq_evaluator('eval-supported', client=client)
+    evaluator = orq_evaluator(evaluator_id='eval-supported', client=client)
     datapoint = DataPoint(inputs={'messages': [{'role': 'user', 'content': 'question'}]})
 
     result = cast(EvaluationResult, await evaluator['scorer']({'data': datapoint, 'output': 'answer'}))
@@ -218,7 +219,7 @@ async def test_orq_evaluator_maps_supported_response_types(
 @pytest.mark.asyncio
 async def test_orq_llm_evaluator_maps_nested_value_and_explanation() -> None:
     client = _Client({'type': 'llm_evaluator', 'value': {'value': False, 'explanation': 'not grounded'}})
-    evaluator = orq_evaluator('eval-llm', client=client)
+    evaluator = orq_evaluator(evaluator_id='eval-llm', client=client)
     datapoint = DataPoint(inputs={'messages': [{'role': 'user', 'content': 'question'}]})
 
     result = cast(EvaluationResult, await evaluator['scorer']({'data': datapoint, 'output': 'answer'}))
@@ -231,7 +232,7 @@ async def test_orq_llm_evaluator_maps_nested_value_and_explanation() -> None:
 @pytest.mark.asyncio
 async def test_orq_http_evaluator_maps_nested_value_and_explanation() -> None:
     client = _Client({'type': 'http_eval', 'value': {'value': 0.4, 'explanation': 'partial'}})
-    evaluator = orq_evaluator('eval-http', client=client)
+    evaluator = orq_evaluator(evaluator_id='eval-http', client=client)
     datapoint = DataPoint(inputs={'messages': [{'role': 'user', 'content': 'question'}]})
 
     result = cast(EvaluationResult, await evaluator['scorer']({'data': datapoint, 'output': 'answer'}))
@@ -243,10 +244,17 @@ async def test_orq_http_evaluator_maps_nested_value_and_explanation() -> None:
 @pytest.mark.asyncio
 async def test_orq_evaluator_rejects_unknown_response_shape() -> None:
     client = _Client({'type': 'future_type', 'unexpected': 'value'})
-    evaluator = orq_evaluator('eval-future', client=client)
+    evaluator = orq_evaluator(evaluator_id='eval-future', client=client)
     datapoint = DataPoint(
         inputs={'messages': [{'role': 'user', 'content': 'question'}, {'role': 'assistant', 'content': 'answer'}]}
     )
 
     with pytest.raises(ValueError, match='unsupported response shape'):
         await evaluator['scorer']({'data': datapoint, 'output': 'answer'})
+
+
+def test_orq_evaluator_uses_one_keyword_identifier() -> None:
+    parameters = signature(orq_evaluator).parameters
+
+    assert parameters['evaluator_id'].kind is Parameter.KEYWORD_ONLY
+    assert 'name' not in parameters
