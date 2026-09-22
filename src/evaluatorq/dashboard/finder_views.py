@@ -210,7 +210,7 @@ def controls(snapshot: RunSnapshot, settings: DashboardSettings, catalogue: Face
     )
     return (
         '<div class="finder-controls" id="finder-controls">'
-        f'{hidden_facets}{_facet_chips(facets, numeric, removable=review)}'
+        f'{hidden_facets}{_facet_chips(facets, numeric, removable=snapshot.state not in {"compiling", "classifying"})}'
         f'<span class="addwrap"><button class="add" type="button" hx-get="/find/facets?form_id={form_id}" hx-include="#finder-controls" hx-target=".finder-facets" '
         f'hx-swap="outerHTML">+ Filter</button>{facet_menu(catalogue, numeric=numeric, form_id=form_id, selection=facets)}</span><span class="spacer"></span>'
         f'<span class="quiet"><b>Window</b><input id="finder-window" form="{form_id}" name="window_days" type="number" min="1" max="90" value="{values["window_days"]}" style="width:64px"></span>'

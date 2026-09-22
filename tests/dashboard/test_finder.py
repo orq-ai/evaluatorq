@@ -273,6 +273,12 @@ def test_find_run_passes_numeric_filter_and_renders_chip(setup_finder) -> None:
     assert '<span class="chip"><b>tokens</b><span class="v">≥ 5000</span>' in response.text
     assert 'name="tokens_min"' in response.text
 
+    store.complete()
+    poll = client.get('/find/poll').text
+    assert 'class="chip is-editable" data-chip-name="tokens_min"' in poll
+    assert 'data-chip-open="tokens"' in poll
+    assert 'data-finder-remove="tokens_min"' in poll
+
 
 def test_find_review_start_transitions_to_classification(setup_finder) -> None:
     store, client = setup_finder
