@@ -93,7 +93,18 @@ jobs:
           # {"thinking": {"type": "disabled"}}, an Anthropic-shaped field the
           # Responses API would reject. Reasoning effort rides this body as
           # reasoning.effort, the field the Responses API actually takes.
-          llm_extra_body: '{"reasoning": {"effort": "high"}}'
+          #
+          # fallbacks is the gateway's own failover chain, tried in order when
+          # the model above answers 429/500/502/503/504 — a 4xx that is not a
+          # rate limit (400, 401, 403) is not retried against anyone, so a bad
+          # request stays a bad request. One reviewer-tier model per provider,
+          # so an outage at one provider does not take the review with it.
+          # Nothing here fails over on a slow or bad review, only on a dead
+          # endpoint. Keep the chain at three: that is the documented ceiling.
+          llm_extra_body: >-
+            {"reasoning": {"effort": "high"},
+             "fallbacks": [{"model": "deepseek/deepseek-flash"},
+                           {"model": "anthropic/claude-haiku-4-5-20251001"}]}
           # No ocr_version: the fork builds the CLI from its own checkout with
           # `go build ./cmd/opencodereview` and never installs the npm package,
           # so there is nothing left to pin and nothing floats to latest. Build
