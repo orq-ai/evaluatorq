@@ -428,15 +428,19 @@ def build_oql(facets: FacetSelection, numeric: NumericFilters, project_names: Ma
         values = sorted(getattr(facets, facet_name))
         if values:
             clauses.append(f'{field} in ({_oql_values(values)})')
+    # Each numeric comparison gets its own filter stage: the OQL parser rejects a numeric
+    # comparison joined by ``and`` to any other clause ("malformed list" or "expects numeric
+    # values"), while separate stages compose correctly. Verified against the v3 traces API.
+    stages = [f'filter {" and ".join(clauses)}']
     for field, minimum, maximum in (
         ('total_tokens', numeric.tokens_min, numeric.tokens_max),
         ('duration_ms', numeric.duration_ms_min, numeric.duration_ms_max),
     ):
         if minimum is not None:
-            clauses.append(f'{field} >= {minimum}')
+            stages.append(f'filter {field} >= {minimum}')
         if maximum is not None:
-            clauses.append(f'{field} <= {maximum}')
-    return f'fetch traces | filter {" and ".join(clauses)} | sort end_time desc'
+            stages.append(f'filter {field} <= {maximum}')
+    return f'fetch traces | {" | ".join(stages)} | sort end_time desc'
 
 
 def _oql_values(values: list[str]) -> str:

@@ -144,10 +144,10 @@ def test_build_oql_includes_categorical_and_numeric_filters() -> None:
         'and attributes.orq.leading_span.span_type in ("span.responses") '
         'and agent_name in ("support-agent") '
         'and tool_name in ("search") '
-        'and total_tokens >= 500 '
-        'and total_tokens <= 5000 '
-        'and duration_ms >= 10 '
-        'and duration_ms <= 1000 '
+        '| filter total_tokens >= 500 '
+        '| filter total_tokens <= 5000 '
+        '| filter duration_ms >= 10 '
+        '| filter duration_ms <= 1000 '
         '| sort end_time desc'
     )
 
