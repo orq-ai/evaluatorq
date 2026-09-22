@@ -2560,8 +2560,8 @@ _SIM_COMPARE_CSS = """
 # Keeps the wireframe's class names; its mock state-switcher rules are omitted because HTMX fragments drive state.
 _FINDER_CSS = """
 .finder { display:flex; flex-direction:column; gap:20px; width:100%; max-width:1040px; margin:0 auto; }
-.finder-hero { position:relative; padding:34px 36px 26px; border-radius:20px; background:linear-gradient(135deg,#fff 0%,#fbf7f2 55%,#f3f6f6 100%); border:1px solid var(--border-subtle); box-shadow:0 1px 2px rgba(20,18,30,.04),0 12px 40px -18px rgba(20,18,30,.18); }
-.finder-hero-bg { position:absolute; inset:0; border-radius:20px; overflow:hidden; pointer-events:none; }
+.finder-hero { position:relative; padding:34px 36px 26px; border-radius:16px; background:linear-gradient(135deg,#fff 0%,#fbf7f2 55%,#f3f6f6 100%); border:1px solid var(--border-subtle); box-shadow:0 1px 2px rgba(20,18,30,.04); }
+.finder-hero-bg { position:absolute; inset:0; border-radius:16px; overflow:hidden; pointer-events:none; }
 .finder-hero-bg::before { content:''; position:absolute; inset:-40% -20% auto auto; width:420px; height:420px; border-radius:50%; background:radial-gradient(closest-side,rgba(255,143,52,.16),transparent 70%); }
 .finder-hero-bg::after { content:''; position:absolute; inset:auto auto -50% -10%; width:380px; height:380px; border-radius:50%; background:radial-gradient(closest-side,rgba(2,85,88,.10),transparent 70%); }
 .finder-hero > * { position:relative; }
@@ -2569,11 +2569,11 @@ _FINDER_CSS = """
 .finder-kicker::before { content:''; width:18px; height:1.5px; background:var(--teal-600); }
 .finder-title { font-family:var(--font-display); font-size:30px; font-weight:600; letter-spacing:-.02em; line-height:1.15; color:var(--text-strong); margin:0 0 18px; }
 .finder-title em { font-style:normal; color:var(--accent); }
-.finder-query { display:flex; align-items:center; gap:14px; padding:14px 18px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:16px; box-shadow:0 1px 0 rgba(255,255,255,.8) inset,0 4px 14px -8px rgba(20,18,30,.25); }
-.finder-query:focus-within { border-color:var(--accent); box-shadow:0 0 0 4px rgba(255,143,52,.14),0 4px 14px -8px rgba(20,18,30,.25); }
+.finder-query { display:flex; align-items:center; gap:14px; padding:14px 18px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:12px; box-shadow:0 1px 0 rgba(255,255,255,.8) inset; }
+.finder-query:focus-within { border-color:var(--accent); box-shadow:0 0 0 4px rgba(255,143,52,.14); }
 .finder-query svg { flex:0 0 auto; color:var(--text-faint); }
 .finder-query .col { flex:1; min-width:0; }
-.finder-query textarea { width:100%; border:0; outline:0; resize:none; background:transparent; min-height:30px; display:block; font-family:var(--font-display); font-size:22px; line-height:1.3; color:var(--text-strong); }
+.finder-query textarea { width:100%; border:0; outline:0; resize:none; background:transparent; padding:0; margin:0; display:block; field-sizing:content; max-height:7.8em; font-family:var(--font-display); font-size:22px; line-height:1.3; color:var(--text-strong); }
 .finder-query textarea::placeholder { color:var(--text-faint); }
 .finder-run { display:flex; flex-direction:column; gap:8px; align-items:flex-end; }
 .finder-run .rt-apply-btn { height:42px; padding:0 20px; font-size:14px; border-radius:10px; }
@@ -2581,7 +2581,7 @@ _FINDER_CSS = """
 .finder-key-hint { color:var(--text-faint); font-size:10.5px; white-space:nowrap; }
 .finder-below { display:flex; align-items:center; gap:14px; margin-top:14px; font-size:12px; color:var(--text-muted); }
 .finder-below .ex,.finder-controls .addwrap { position:relative; }
-.finder-below .link { color:var(--text-muted); text-decoration:underline dotted; text-underline-offset:3px; }
+.finder-below .link { border:0; background:transparent; padding:0; font:inherit; cursor:pointer; color:var(--text-muted); text-decoration:underline dotted; text-underline-offset:3px; }
 .finder-below .spacer,.finder-controls .spacer { flex:1; }
 .finder-below .hint { color:var(--text-faint); }
 .finder-below kbd { font-family:var(--font-mono); font-size:10.5px; border:1px solid var(--border-default); border-radius:4px; padding:0 5px; background:var(--surface-sunken); }
@@ -2589,9 +2589,10 @@ _FINDER_CSS = """
 .finder-mode span { color:var(--text-faint); font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
 .finder-mode select { border:0; background:transparent; color:var(--text-body); font:inherit; }
 .finder-examples { display:none; position:absolute; top:24px; left:-8px; z-index:30; min-width:460px; padding:6px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:12px; box-shadow:var(--shadow-lg); }
-.finder-below .ex:hover .finder-examples { display:block; }
+.finder-below .ex:hover .finder-examples,.finder-below .ex:focus-within .finder-examples { display:block; }
 .finder-examples .hd { font-size:10.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-faint); padding:6px 10px 4px; }
 .finder-examples button { display:block; width:100%; text-align:left; border:0; background:transparent; font:inherit; font-size:13px; color:var(--text-body); padding:7px 10px; border-radius:8px; }
+#finder-body,.finder-body-fragment { display:flex; flex-direction:column; gap:12px; }
 .finder-controls { display:flex; flex-wrap:wrap; align-items:center; gap:8px 10px; font-size:12px; color:var(--text-body); padding:0 4px; }
 .finder-controls .chip { display:inline-flex; align-items:center; gap:6px; height:28px; padding:0 6px 0 10px; border-radius:999px; background:var(--surface-card); border:1px solid var(--border-default); color:var(--text-strong); box-shadow:0 1px 2px rgba(20,18,30,.05); }
 .finder-controls .chip b { font-weight:500; color:var(--text-faint); }
@@ -2625,10 +2626,11 @@ _FINDER_CSS = """
 .finder-matrix i.failed::before { width:8px; height:8px; border-radius:2px; background:#7a3b2e; }
 .finder-matrix i.pending::before,.finder-matrix i.idle::before { background:transparent; border:1px solid #4a4957; }
 .finder-matrix.idle { min-height:360px; align-content:center; }
+.finder-matrix.idle i { cursor:default; }
 .finder-hint { position:absolute; inset:0; display:grid; place-items:center; text-align:center; padding:24px; background:radial-gradient(ellipse at center,rgba(22,21,28,.92) 30%,rgba(22,21,28,.55) 70%,transparent 100%); }
 .finder-hint .inner { max-width:820px; display:flex; flex-direction:column; align-items:center; gap:10px; }
-.finder-hint h4 { margin:0; text-transform:none; letter-spacing:-0.01em; font-family:var(--font-display); font-size:20px; font-weight:600; color:#f2f1f5; }
-.finder-hint p { margin:0; max-width:520px; font-size:13px; color:#a9a7b4; line-height:1.5; }
+.finder-hint h4 { margin:0; text-transform:none; letter-spacing:-0.01em; font-family:var(--font-display); font-size:20px; font-weight:600; color:#f2f1f5; text-wrap:balance; }
+.finder-hint p { margin:0; max-width:460px; font-size:13px; color:#a9a7b4; line-height:1.5; text-wrap:pretty; }
 .finder-legend { display:flex; flex-wrap:wrap; align-items:center; gap:6px 18px; font-size:12px; color:#b9b7c2; padding:0 20px 16px; font-family:var(--font-mono); justify-content:center; }
 .finder-legend .sw { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:7px; box-shadow:0 0 0 1px rgba(255,255,255,.18); }
 .finder-legend .sw.match { width:9px; height:9px; background:var(--chart-5); }
