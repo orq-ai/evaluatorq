@@ -104,7 +104,15 @@
     if (chipOpen) {
       var menu = document.querySelector('.finder-controls .finder-facets');
       var target = menu && menu.querySelector('.facet-item[data-facet="' + chipOpen.getAttribute('data-chip-open') + '"]');
-      if (target) { menu.classList.add('open'); showFacet(target); }
+      if (target) {
+        // Anchor the menu under the clicked chip instead of under + Filter.
+        var chip = chipOpen.closest('.chip').getBoundingClientRect();
+        var wrap = menu.parentElement.getBoundingClientRect();
+        menu.style.left = (chip.left - wrap.left) + 'px';
+        menu.style.top = (chip.bottom - wrap.top + 6) + 'px';
+        menu.classList.add('open');
+        showFacet(target);
+      }
       return;
     }
     if (!evt.target.closest('.finder-controls .addwrap') && !evt.target.closest('.chip-open')) {
