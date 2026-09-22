@@ -21,7 +21,7 @@ def test_target_history_modes_are_explicit() -> None:
     assert ORQAgentTarget.history_mode is ConversationHistoryMode.TARGET
     assert LangGraphTarget.history_mode is ConversationHistoryMode.TARGET
     assert PydanticAITarget.history_mode is ConversationHistoryMode.TARGET
-    assert CrewAITarget.history_mode is ConversationHistoryMode.TARGET
+    assert CrewAITarget.history_mode is ConversationHistoryMode.CALLER
 
 
 def test_agent_target_defaults_to_caller_owned_history() -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -285,6 +286,58 @@ def test_responses_full_envelopes_and_top_level_strings_are_normalized() -> None
     assert [message.content for message in imported.input_messages] == ['question']
     assert [message.content for message in imported.output_messages] == ['answer']
     assert imported.message_format == 'responses'
+
+
+def test_nested_responses_full_envelopes_are_normalized() -> None:
+    span = {
+        'attributes': {
+            'openresponses': {
+                'request': json.dumps({'input': 'nested question'}),
+                'response': json.dumps({'output': 'nested answer'}),
+            }
+        }
+    }
+
+    imported = _trace_from_spans(
+        'trace-nested-envelopes',
+        [{**_span('s', parent_id=None, started_at='2026-01-01T00:00:00Z'), **span}],
+    )
+
+    assert [message.content for message in imported.input_messages] == ['nested question']
+    assert [message.content for message in imported.output_messages] == ['nested answer']
+    assert imported.message_format == 'responses'
+
+
+@pytest.mark.parametrize(
+    ('item', 'expected_name'),
+    [
+        ({'type': 'function_call', 'call_id': 'call_1', 'id': 'fc_1', 'name': 'lookup', 'arguments': '{}'}, 'lookup'),
+        ({'type': 'mcp_call', 'call_id': 'call_2', 'tool_name': 'search', 'arguments': '{}'}, 'search'),
+        ({'type': 'custom_tool_call', 'call_id': 'call_3', 'name': 'custom', 'input': '{}'}, 'custom'),
+    ],
+)
+def test_direct_responses_tool_items_are_preserved(item: dict[str, object], expected_name: str) -> None:
+    messages, detected = _parse_messages(item, default_role='assistant')
+
+    assert detected == 'responses'
+    assert messages[0].tool_calls is not None
+    assert messages[0].tool_calls[0].id == item['call_id']
+    assert messages[0].tool_calls[0].function.name == expected_name
+
+
+def test_malformed_chat_identifiers_are_dropped_with_warning(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING):
+        messages, detected = _parse_messages(
+            {'role': 'tool', 'content': 'result', 'tool_call_id': 123, 'name': {'bad': 'shape'}},
+            default_role='tool',
+        )
+
+    assert detected == 'chat_completions'
+    assert messages[0].content == 'result'
+    assert messages[0].tool_call_id is None
+    assert messages[0].name is None
+    assert any('tool_call_id must be a string' in record.message for record in caplog.records)
+    assert any('name must be a string' in record.message for record in caplog.records)
 
 
 def test_otel_unknown_and_multimodal_parts_remain_visible() -> None:

@@ -42,7 +42,7 @@ from evaluatorq.common.trace_input import _content_text as _trace_content_text
 from evaluatorq.common.trace_input import _json_text as _trace_json_text
 from evaluatorq.common.trace_input import _parse_messages as _parse_trace_messages
 from evaluatorq.common.trace_input import _resolve_orq_credentials as _resolve_trace_credentials
-from evaluatorq.common.trace_input import _trace_datapoint_from_spans, fetch_traces
+from evaluatorq.common.trace_input import _trace_from_spans, fetch_traces
 from evaluatorq.simulation.types import DEFAULT_MODEL, Persona, Scenario, SimulationDatapoint
 from evaluatorq.simulation.utils.prompt_builders import generate_datapoint
 from evaluatorq.simulation.utils.structured_output import generate_structured
@@ -383,7 +383,7 @@ def _messages_from_value(value: Any, *, default_role: str = 'user') -> list[dict
 
 def _conversation_from_spans(trace_id: str, spans: list[dict[str, Any]]) -> TraceConversation | None:
     """Reconstruct simulation text from the shared trace importer."""
-    imported = _trace_datapoint_from_spans(trace_id, spans)
+    imported = _trace_from_spans(trace_id, spans)
     if imported.import_error:
         return None
     messages = [
@@ -477,6 +477,10 @@ async def _resolve_trace_conversations(
 ) -> list[TraceConversation]:
     """Resolve a trace source into the conversation shape used by simulation."""
     values = await fetch_traces(source) if isinstance(source, TraceInput) else list(source)
+    failed = [value for value in values if _trace_failed(value)]
+    if failed:
+        details = '; '.join(f'{value.trace_id}: {value.import_error}' for value in failed if isinstance(value, Trace))
+        logger.warning(f'{len(failed)} of {len(values)} imported trace(s) failed and were excluded: {details}')
     return [_to_trace_conversation(value) for value in values if not _trace_failed(value)]
 
 

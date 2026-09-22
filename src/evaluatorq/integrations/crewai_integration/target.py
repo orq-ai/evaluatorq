@@ -83,7 +83,7 @@ class CrewAITarget(AgentTarget):
     ```
     """
 
-    history_mode = ConversationHistoryMode.TARGET
+    history_mode = ConversationHistoryMode.CALLER
 
     def __init__(
         self,

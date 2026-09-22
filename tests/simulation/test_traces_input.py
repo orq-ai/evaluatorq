@@ -517,6 +517,24 @@ async def test_simulation_datapoints_accept_loaded_traces(monkeypatch: pytest.Mo
     assert len(datapoints) == 1
 
 
+@pytest.mark.asyncio
+async def test_loaded_trace_import_failures_are_reported(caplog: pytest.LogCaptureFixture) -> None:
+    source = [
+        _make_trace('usable'),
+        Trace(trace_id='broken', import_error='span payload was malformed'),
+    ]
+
+    with caplog.at_level(logging.WARNING):
+        conversations = await traces_module._resolve_trace_conversations(source)
+
+    assert [conversation.trace_id for conversation in conversations] == ['usable']
+    assert any(
+        '1 of 2 imported trace(s) failed and were excluded' in record.message
+        and 'broken: span payload was malformed' in record.message
+        for record in caplog.records
+    )
+
+
 def _stub_first_message(monkeypatch: pytest.MonkeyPatch, message: str) -> None:
     """Make FirstMessageGenerator.generate return ``message`` without an LLM call."""
     from evaluatorq.simulation.generators import first_message_generator as fmg_mod

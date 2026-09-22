@@ -20,6 +20,15 @@ _API_PAGE_LIMIT = 200
 _MESSAGE_FORMAT = Literal['chat_completions', 'responses', 'otel_genai']
 _TRACE_MESSAGE_FORMAT = Literal['chat_completions', 'responses', 'otel_genai', 'mixed']
 _ROLE = Literal['user', 'assistant', 'tool', 'system', 'developer']
+_RESPONSES_ITEM_TYPES = frozenset({
+    'message',
+    'function_call',
+    'function_call_output',
+    'custom_tool_call',
+    'custom_tool_call_output',
+    'mcp_call',
+    'reasoning',
+})
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -108,6 +117,15 @@ def _tool_call(raw: Any) -> StrategyToolCall | None:
     )
 
 
+def _optional_message_string(value: Any, *, field: str) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value or None
+    logger.warning('Trace message {} must be a string; dropping it.', field)
+    return None
+
+
 def _chat_message(raw: Any, *, default_role: _ROLE) -> Message | None:
     if isinstance(raw, str):
         return Message(role=default_role, content=raw)
@@ -124,8 +142,8 @@ def _chat_message(raw: Any, *, default_role: _ROLE) -> Message | None:
         role=cast('_ROLE', role),
         content=_content_text(raw.get('content')),
         tool_calls=tool_calls or None,
-        tool_call_id=raw.get('tool_call_id') or raw.get('call_id'),
-        name=raw.get('name'),
+        tool_call_id=_optional_message_string(raw.get('tool_call_id') or raw.get('call_id'), field='tool_call_id'),
+        name=_optional_message_string(raw.get('name'), field='name'),
     )
 
 
@@ -222,14 +240,16 @@ def _otel_messages(value: Any, *, default_role: _ROLE) -> list[Message]:
 
 def _responses_messages(value: Any, *, default_role: _ROLE) -> list[Message]:
     value = _decode_json(value)
-    if isinstance(value, dict):
+    if isinstance(value, dict) and not _is_responses_item(value) and ('input' in value or 'output' in value):
         value = value.get('input') if default_role == 'user' else value.get('output')
     if isinstance(value, str):
         return [Message(role=default_role, content=value)]
     if isinstance(value, dict):
-        if isinstance(value.get('messages'), list):
+        if _is_responses_item(value):
+            value = [value]
+        elif isinstance(value.get('messages'), list):
             return _chat_messages(value, default_role=default_role)
-        if 'role' in value or 'content' in value:
+        elif 'role' in value or 'content' in value:
             return _chat_messages([value], default_role=default_role)
     item_ids = (
         {
@@ -267,11 +287,13 @@ def _looks_like_responses(value: Any) -> bool:
         # inspecting only typed Responses items would misclassify it.
         if 'input' in decoded or 'output' in decoded:
             return True
-    return isinstance(decoded, list) and any(
-        isinstance(item, dict)
-        and item.get('type') in {'message', 'function_call', 'function_call_output', 'reasoning', 'custom_tool_call'}
-        for item in decoded
-    )
+        return _is_responses_item(decoded)
+    return isinstance(decoded, list) and any(isinstance(item, dict) and _is_responses_item(item) for item in decoded)
+
+
+def _is_responses_item(value: dict[str, Any]) -> bool:
+    item_type = value.get('type')
+    return isinstance(item_type, str) and (item_type in _RESPONSES_ITEM_TYPES or item_type.startswith('orq:'))
 
 
 def _parse_messages(
@@ -319,8 +341,18 @@ def _attribute_side_candidates(attributes: dict[str, Any], side: str) -> list[tu
         ('responses', attributes.get(openresponses_key)),
         ('responses', openresponses.get(side)),
     ]
-    full_request = _decode_json(attributes.get('orq.openresponses.request') or orq_openresponses.get('request'))
-    full_response = _decode_json(attributes.get('orq.openresponses.response') or orq_openresponses.get('response'))
+    full_request = _decode_json(
+        attributes.get('openresponses.request')
+        or openresponses.get('request')
+        or attributes.get('orq.openresponses.request')
+        or orq_openresponses.get('request')
+    )
+    full_response = _decode_json(
+        attributes.get('openresponses.response')
+        or openresponses.get('response')
+        or attributes.get('orq.openresponses.response')
+        or orq_openresponses.get('response')
+    )
     if side == 'input':
         candidates.append(('responses', _nested(full_request, 'input') if isinstance(full_request, dict) else None))
     else:
@@ -343,11 +375,6 @@ def _message_candidates(span: dict[str, Any], side: str) -> list[tuple[_MESSAGE_
     if span.get(side) is not None:
         candidates.append((None, span[side]))
     return candidates
-
-
-def _side_candidates(span: dict[str, Any], side: str) -> list[tuple[_MESSAGE_FORMAT | None, Any]]:
-    """Compatibility alias for callers of the pre-canonical private helper."""
-    return _message_candidates(span, side)
 
 
 def _parse_exchange(
@@ -373,19 +400,6 @@ def _parse_exchange(
         '_TRACE_MESSAGE_FORMAT | None', next(iter(formats)) if len(formats) == 1 else ('mixed' if formats else None)
     )
     return input_messages, output_messages, message_format
-
-
-def _span_messages(span: dict[str, Any]) -> tuple[list[Message], _TRACE_MESSAGE_FORMAT | None]:
-    """Return a span's derived transcript for legacy internal callers."""
-    input_messages, output_messages, message_format = _parse_exchange(span)
-    overlap = 0
-    comparable_input = [message.model_dump(mode='json', exclude_none=True) for message in input_messages]
-    comparable_output = [message.model_dump(mode='json', exclude_none=True) for message in output_messages]
-    for size in range(min(len(input_messages), len(output_messages)), 0, -1):
-        if comparable_input[-size:] == comparable_output[:size]:
-            overlap = size
-            break
-    return [*input_messages, *output_messages[overlap:]], message_format
 
 
 def _span_id(span: dict[str, Any], index: int) -> str:
@@ -690,10 +704,6 @@ async def fetch_traces(
     finally:
         if owned:
             await client.aclose()
-
-
-fetch_trace_datapoints = fetch_traces
-_trace_datapoint_from_spans = _trace_from_spans
 
 
 __all__ = ['fetch_traces']
