@@ -228,6 +228,12 @@ These tests use fakes and do not require API credentials. The repository does no
 - `ORQ_UI_BASE_URL` — optional Orq UI base for deep-links (defaults to `ORQ_BASE_URL` or `https://my.orq.ai`)
 - `EVALUATORQ_PROPAGATE_TRACE_CONTEXT` — `false`/`0` stops W3C `traceparent` injection on outgoing LLM/target calls (default on)
 - `EVALUATORQ_APPLY_MODEL` — model for the dashboard's apply-recommendations merge (default `openai/gpt-5.6-luna`, the shared `DEFAULT_PIPELINE_MODEL`)
+- `EVALUATORQ_DASHBOARD_SETTINGS` — path to the dashboard and trace-finder settings JSON (default `.evaluatorq/dashboard-settings.json`)
+- `EVALUATORQ_COMPILER_MODEL` — trace-finder compiler model (default `openai/gpt-5.6-luna`)
+- `EVALUATORQ_JEV_MODEL` — trace-finder JEV model (default `typesafe/jev-latest`)
+- `EVALUATORQ_FINDER_WINDOW_DAYS` — trace-finder lookback window in days (default `7`)
+- `EVALUATORQ_FINDER_LIMIT` — trace-finder population cap (default `500`)
+- `EVALUATORQ_FINDER_PARALLELISM` — concurrent trace-finder JEV classifications (default `100`)
 
 ### Code Style
 

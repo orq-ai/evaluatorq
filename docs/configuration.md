@@ -85,6 +85,12 @@ Two more worth knowing before you need them: `EQ_DEBUG=1` turns a one-line CLI e
 | `ORQ_WORKSPACE` / `ORQ_WORKSPACE_SLUG` | No | unset | Workspace slug used to build dashboard deep-links into the Orq UI. `ORQ_WORKSPACE` wins when both are set. When neither is set, the deep-link buttons are hidden. See [Dashboard](dashboard.md). |
 | `ORQ_UI_BASE_URL` | No | `ORQ_BASE_URL`, else `https://my.orq.ai` | Base URL for dashboard deep-links into the Orq UI. Set this when the UI host differs from the API host. |
 | `EVALUATORQ_APPLY_MODEL` | No | `openai/gpt-5.6-luna` | Model used by the dashboard's apply-recommendations merge. Shown in the dashboard config panel. See [Dashboard](dashboard.md). |
+| `EVALUATORQ_DASHBOARD_SETTINGS` | No | `.evaluatorq/dashboard-settings.json` | Path to the JSON file used for dashboard and trace-finder settings. |
+| `EVALUATORQ_COMPILER_MODEL` | No | `openai/gpt-5.6-luna` | Trace-finder model that compiles a natural-language query into a semantic JEV task. Explicit CLI or dashboard overrides win. See [Trace finder](trace-finder.md). |
+| `EVALUATORQ_JEV_MODEL` | No | `typesafe/jev-latest` | Trace-finder JEV model used for facet selection and per-trace classification. Explicit CLI or dashboard overrides win. See [Trace finder](trace-finder.md). |
+| `EVALUATORQ_FINDER_WINDOW_DAYS` | No | `7` | Default number of recent days searched by the trace finder. Valid values are `1` through `90`. |
+| `EVALUATORQ_FINDER_LIMIT` | No | `500` | Default maximum number of traces selected for trace-finder classification. Valid values are `1` through `500`. |
+| `EVALUATORQ_FINDER_PARALLELISM` | No | `100` | Default number of concurrent per-trace JEV classifications. Valid values are `1` through `200`. |
 | `EVALUATORQ_DASHBOARD_ROOTS` | No | unset | Internal. A JSON array of run-store roots, set by `eq dashboard` for its reloader subprocess and parsed back with `json.loads`. Pass extra stores as positional CLI paths rather than setting this by hand. |
 
 ### Tracing

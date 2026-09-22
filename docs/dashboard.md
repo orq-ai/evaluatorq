@@ -58,6 +58,10 @@ Set `ORQ_WORKSPACE` when launching the dashboard to show **View Traces** links f
 
 `ORQ_WORKSPACE_SLUG` remains supported as an alias. For a self-hosted or staging Orq UI, set `ORQ_UI_BASE_URL` as well; otherwise the dashboard uses `ORQ_BASE_URL`, then `https://my.orq.ai`.
 
+### Settings and the trace finder
+
+The **Settings** item opens `/settings`, where you can edit the trace-finder compiler model, JEV model, apply-recommendations model, search window, trace limit, and parallelism. The page saves those values to `.evaluatorq/dashboard-settings.json` and also shows read-only runtime configuration such as scanned run stores, API-key presence, Orq host, and workspace. See the [Trace finder guide](trace-finder.md) for the precedence rules and the `eq find` CLI.
+
 ---
 
 ## What the dashboard browses
