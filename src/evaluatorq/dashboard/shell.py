@@ -212,7 +212,7 @@ def page(
         '<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         f'{_favicon_link()}'
-        f'<title>{esc(title)} — evaluatorq</title>\n'
+        f'<title>{esc(title)} | evaluatorq</title>\n'
         f'<style>\n{css}\n</style>\n'
         f'<style>\n{EDITORIAL_CSS}\n</style>\n'
         f'<style>\n{DASHBOARD_CSS}\n</style>\n'
