@@ -217,9 +217,12 @@ def _filter_by_method(
             disables the delivery-method filter. A strategy passes if any of
             its `delivery_methods` overlaps the selection. Empty set filters
             out everything.
+        attack_techniques: Set of accepted `AttackTechnique` values, matched
+            against the strategy's single `attack_technique`. ``None`` disables
+            the filter. Empty set filters out everything.
 
     Returns:
-        Strategies that pass both filters (AND semantics when both supplied).
+        Strategies that pass every supplied filter (AND semantics).
     """
     if names is None and delivery_methods is None and attack_techniques is None:
         return list(strategies)
@@ -230,9 +233,8 @@ def _filter_by_method(
             continue
         if delivery_methods is not None and not (set(strategy.delivery_methods) & delivery_methods):
             continue
-        if attack_techniques is not None:
-            if strategy.attack_technique not in attack_techniques:
-                continue
+        if attack_techniques is not None and strategy.attack_technique not in attack_techniques:
+            continue
         kept.append(strategy)
     return kept
 

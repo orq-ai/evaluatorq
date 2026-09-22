@@ -28,7 +28,7 @@ import asyncio
 import logging
 import math
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -38,11 +38,7 @@ from evaluatorq.common.structured_output import (
     sum_structured_usage,
     usage_from_exception,
 )
-from evaluatorq.common.trace_input import _content_text as _trace_content_text
-from evaluatorq.common.trace_input import _json_text as _trace_json_text
-from evaluatorq.common.trace_input import _parse_messages as _parse_trace_messages
-from evaluatorq.common.trace_input import _resolve_orq_credentials as _resolve_trace_credentials
-from evaluatorq.common.trace_input import _trace_from_spans, fetch_traces
+from evaluatorq.common.trace_input import fetch_traces, partition_traces
 from evaluatorq.simulation.types import DEFAULT_MODEL, Persona, Scenario, SimulationDatapoint
 from evaluatorq.simulation.utils.prompt_builders import generate_datapoint
 from evaluatorq.simulation.utils.structured_output import generate_structured
@@ -352,46 +348,18 @@ async def summarize_conversations(
 # ---------------------------------------------------------------------------
 
 
-def _resolve_orq_credentials(api_key: str | None, base_url: str | None) -> tuple[str, str]:
-    """Compatibility wrapper over the shared credential resolver."""
-    return _resolve_trace_credentials(api_key, base_url)
-
-
-def _content_to_text(content: Any) -> str:
-    """Compatibility wrapper over the shared trace content adapter."""
-    text = _trace_content_text(content)
-    if text is not None:
-        return text
-    if content is None:
-        return ''
-    return _trace_json_text(content)
-
-
-def _messages_from_value(value: Any, *, default_role: str = 'user') -> list[dict[str, str]]:
-    """Compatibility wrapper over the shared Chat/Responses/OTel adapters."""
-    role = default_role.strip().lower()
-    if role not in {'user', 'assistant', 'tool', 'system', 'developer'}:
-        role = 'user'
-    normalized_role = cast('Literal["user", "assistant", "tool", "system", "developer"]', role)
-    messages, _message_format = _parse_trace_messages(value, hinted=None, default_role=normalized_role)
-    return [
-        {'role': message.role, 'content': message.content}
-        for message in messages
-        if isinstance(message.content, str) and message.content
-    ]
-
-
-def _conversation_from_spans(trace_id: str, spans: list[dict[str, Any]]) -> TraceConversation | None:
-    """Reconstruct simulation text from the shared trace importer."""
-    imported = _trace_from_spans(trace_id, spans)
-    if imported.import_error:
-        return None
-    messages = [
-        {'role': message.role, 'content': message.content}
-        for message in imported.messages
-        if isinstance(message.content, str) and message.content.strip()
-    ]
-    return TraceConversation(trace_id=trace_id, messages=messages) if messages else None
+def _to_trace_conversation(value: Trace | TraceConversation) -> TraceConversation:
+    """Adapt a canonical trace or retain an existing compatibility conversation."""
+    if isinstance(value, TraceConversation):
+        return value
+    return TraceConversation(
+        trace_id=value.trace_id,
+        messages=[
+            {'role': message.role, 'content': message.content}
+            for message in value.messages
+            if isinstance(message.content, str) and message.content.strip()
+        ],
+    )
 
 
 async def fetch_trace_conversations(
@@ -426,26 +394,16 @@ async def fetch_trace_conversations(
         base_url=base_url,
         http_client=http_client,
     )
-    conversations = [
-        TraceConversation(
-            trace_id=row.trace_id,
-            messages=[
-                {'role': message.role, 'content': message.content}
-                for message in row.messages
-                if isinstance(message.content, str) and message.content.strip()
-            ],
-        )
-        for row in imported
-        if row.import_error is None
-    ]
+    usable_traces, _failed = partition_traces(imported, caller='fetch_trace_conversations')
+    conversations = [_to_trace_conversation(trace) for trace in usable_traces]
     fetched = len(imported)
     usable = [conversation for conversation in conversations if conversation.first_user_message]
-    if len(usable) < fetched:
-        # The only signal that traces were dropped — keep it visible at the
-        # default WARNING level, not buried at INFO.
+    if len(usable) < len(conversations):
+        # The only signal that traces without a usable message were dropped —
+        # keep it visible at the default WARNING level, not buried at INFO.
         logger.warning(
             '%d of %d fetched trace(s) had no usable conversation and were dropped',
-            fetched - len(usable),
+            len(conversations) - len(usable),
             fetched,
         )
     else:
@@ -453,35 +411,27 @@ async def fetch_trace_conversations(
     return usable
 
 
-def _trace_failed(value: Trace | TraceConversation) -> bool:
-    """Return whether a canonical trace failed while being imported."""
-    return isinstance(value, Trace) and value.import_error is not None
-
-
-def _to_trace_conversation(value: Trace | TraceConversation) -> TraceConversation:
-    """Adapt a canonical trace or retain an existing compatibility conversation."""
-    if isinstance(value, TraceConversation):
-        return value
-    return TraceConversation(
-        trace_id=value.trace_id,
-        messages=[
-            {'role': message.role, 'content': message.content}
-            for message in value.messages
-            if isinstance(message.content, str) and message.content.strip()
-        ],
-    )
-
-
 async def _resolve_trace_conversations(
     source: TraceInput | Sequence[Trace | TraceConversation],
+    *,
+    orq_api_key: str | None = None,
+    base_url: str | None = None,
 ) -> list[TraceConversation]:
     """Resolve a trace source into the conversation shape used by simulation."""
-    values = await fetch_traces(source) if isinstance(source, TraceInput) else list(source)
-    failed = [value for value in values if _trace_failed(value)]
-    if failed:
-        details = '; '.join(f'{value.trace_id}: {value.import_error}' for value in failed if isinstance(value, Trace))
-        logger.warning(f'{len(failed)} of {len(values)} imported trace(s) failed and were excluded: {details}')
-    return [_to_trace_conversation(value) for value in values if not _trace_failed(value)]
+    if isinstance(source, TraceInput):
+        traces = await fetch_traces(source, api_key=orq_api_key, base_url=base_url)
+        usable_traces, _failed = partition_traces(traces, caller='_resolve_trace_conversations')
+        return [_to_trace_conversation(trace) for trace in usable_traces]
+    values = list(source)
+    canonical = [value for value in values if isinstance(value, Trace)]
+    if canonical:
+        # Logs the failures once; the filter below applies the same verdict.
+        partition_traces(canonical, caller='_resolve_trace_conversations')
+    return [
+        _to_trace_conversation(value)
+        for value in values
+        if not (isinstance(value, Trace) and value.import_error is not None)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -530,10 +480,19 @@ async def datapoints_from_traces(
     llm_config: LLMCallConfig | None = None,
     client: AsyncOpenAI | None = None,
     api_key: str | None = None,
+    orq_api_key: str | None = None,
+    base_url: str | None = None,
     config: TraceAnalysisConfig | None = None,
     summaries: Mapping[str, str] | None = None,
 ) -> list[SimulationDatapoint]:
     """Direct mode: build one datapoint per trace conversation.
+
+    Distinct from ``redteam.datapoints_from_traces``: that function is pure
+    (``Trace`` in, red-team datapoints out, no network or LLM call) while this
+    one fetches from Orq when ``source`` is a ``TraceInput`` and then makes a
+    summarize call plus a persona/scenario-inference call per trace, so its
+    cost and latency scale with the number of conversations, not just their
+    count as rows.
 
     ``source`` may be a ``TraceInput`` to fetch canonical traces, a sequence of
     already-loaded ``Trace`` objects, or the legacy ``TraceConversation`` values.
@@ -545,6 +504,17 @@ async def datapoints_from_traces(
     with a warning.
 
     Args:
+        api_key: The LLM-side key, forwarded to ``build_simulation_client``. This is
+            a different key from ``orq_api_key`` below — passing an Orq key here to
+            fetch traces does not work, because this parameter never reaches the
+            trace fetch.
+        orq_api_key: The Orq API key used to fetch traces when ``source`` is a
+            ``TraceInput``. Falls back to ``ORQ_API_KEY`` when unset, same as
+            ``fetch_trace_conversations``. Unused when ``source`` is already a
+            sequence of loaded traces or conversations.
+        base_url: The Orq base URL used to fetch traces when ``source`` is a
+            ``TraceInput``. Falls back to ``ORQ_BASE_URL`` / the default host
+            when unset.
         summaries: Summaries keyed by ``trace_id``, from ``summarize_conversations``.
             Pass them when a run also calls ``extend_from_traces`` so each
             conversation is summarized once rather than once per mode. When
@@ -557,7 +527,7 @@ async def datapoints_from_traces(
     so an unset ``temperature`` still omits the parameter from the request. When both name a model,
     ``llm_config.model`` wins and the contradiction is logged.
     """
-    conversations = await _resolve_trace_conversations(source)
+    conversations = await _resolve_trace_conversations(source, orq_api_key=orq_api_key, base_url=base_url)
     from evaluatorq.openresponses.client import build_simulation_client
     from evaluatorq.simulation._config import resolve_sim_llm_config
     from evaluatorq.simulation.generators.first_message_generator import FirstMessageGenerator
@@ -574,6 +544,9 @@ async def datapoints_from_traces(
     # Inference dominates wall-clock, so it runs bounded-concurrent like the
     # span-fetch phase (and DatapointGenerator, which uses the same width).
     semaphore = asyncio.Semaphore(_INFER_CONCURRENCY)
+    # Appended from concurrent tasks, but only between awaits, so this needs no
+    # lock — same convention as `extend_from_traces`'s `profile_usages`.
+    drop_reasons: list[str] = []
 
     async def infer_one(conversation: TraceConversation) -> tuple[SimulationDatapoint | None, TokenUsage | None]:
         # Usage rides back with the datapoint: this worker runs concurrently and owns
@@ -581,6 +554,8 @@ async def datapoints_from_traces(
         usages: list[TokenUsage | None] = []
         recorded_first_message = conversation.first_user_message
         if not recorded_first_message:
+            logger.warning('Trace %s has no usable first user message; dropping it', conversation.trace_id)
+            drop_reasons.append('no usable first message')
             return None, None
         async with semaphore:
             if summaries is not None:
@@ -589,6 +564,7 @@ async def datapoints_from_traces(
                     # A supplied mapping is authoritative: absence means the
                     # conversation was already attempted and already warned
                     # about — a second call here would bill and warn again.
+                    drop_reasons.append('missing from supplied summaries')
                     return None, None
             else:
                 summary, summary_usage = await _summarize_conversation(
@@ -596,6 +572,7 @@ async def datapoints_from_traces(
                 )
                 usages.append(summary_usage)
                 if summary is None:
+                    drop_reasons.append('summarize failed')
                     return None, sum_structured_usage(usages)
             messages: list[dict[str, Any]] = [
                 {'role': 'system', 'content': _INFER_SYSTEM_PROMPT.format(redaction_note=_redaction_note(config))},
@@ -625,6 +602,7 @@ async def datapoints_from_traces(
                     conversation.trace_id,
                     exc,
                 )
+                drop_reasons.append('inference failed')
                 return None, sum_structured_usage(usages)
             usages.append(result.usage)
             parsed = result.parsed
@@ -633,6 +611,7 @@ async def datapoints_from_traces(
                     'Persona/scenario inference returned no parseable output for trace %s',
                     conversation.trace_id,
                 )
+                drop_reasons.append('inference unparseable')
                 return None, sum_structured_usage(usages)
             first_message = recorded_first_message
             if first_message_generator is not None:
@@ -655,6 +634,17 @@ async def datapoints_from_traces(
             sum_structured_usage([usage for _dp, usage in results]),
             phase='Trace persona/scenario inference',
         )
+        if drop_reasons:
+            # One aggregate line, not one warning per trace repeated at the
+            # caller: a run that turns 20 traces into 3 datapoints should not
+            # have to be re-run with logging turned up to see why.
+            counts = ', '.join(f'{reason} x{drop_reasons.count(reason)}' for reason in dict.fromkeys(drop_reasons))
+            logger.warning(
+                '%d of %d trace conversation(s) produced no datapoint: %s',
+                len(drop_reasons),
+                len(conversations),
+                counts,
+            )
         return [dp for dp, _usage in results if dp is not None]
     finally:
         if owned:

@@ -55,17 +55,49 @@ async def test_trace_seed_can_continue_after_last_assistant() -> None:
 
 
 @pytest.mark.asyncio
-async def test_trace_seed_rejects_import_error() -> None:
+async def test_trace_seed_skips_import_error_but_keeps_the_rest_of_the_batch() -> None:
+    """One unreadable trace out of many is a skip, not a batch-killing raise (finding 3)."""
+    from evaluatorq.redteam.traces import datapoints_from_traces
+
+    broken = Trace(trace_id='broken', import_error='span payload was malformed')
+    good = _trace()
+
+    rows = await datapoints_from_traces([broken, good])
+
+    assert len(rows) == 1
+    assert rows[0].inputs['source_trace_id'] == 'trace-1'
+
+
+@pytest.mark.asyncio
+async def test_trace_seed_rejects_batch_when_every_trace_failed_to_import() -> None:
     from evaluatorq.redteam.traces import datapoints_from_traces
 
     trace = Trace(trace_id='broken', import_error='span payload was malformed')
 
-    with pytest.raises(ValueError, match='broken.*malformed'):
+    with pytest.raises(ValueError, match='failed to import'):
         await datapoints_from_traces([trace])
 
 
 @pytest.mark.asyncio
-async def test_trace_seed_requires_a_user_turn() -> None:
+async def test_trace_seed_skips_a_trace_with_no_user_turn() -> None:
+    """A trace with no seedable turn is a per-trace skip, not a batch kill (finding 3)."""
+    from evaluatorq.redteam.traces import datapoints_from_traces
+
+    no_user = Trace(
+        trace_id='no-user',
+        input_messages=[Message(role='system', content='system')],
+        output_messages=[Message(role='assistant', content='answer')],
+    )
+    good = _trace()
+
+    rows = await datapoints_from_traces([no_user, good])
+
+    assert len(rows) == 1
+    assert rows[0].inputs['source_trace_id'] == 'trace-1'
+
+
+@pytest.mark.asyncio
+async def test_trace_seed_rejects_batch_when_no_trace_has_a_user_turn() -> None:
     from evaluatorq.redteam.traces import datapoints_from_traces
 
     trace = Trace(
@@ -74,22 +106,25 @@ async def test_trace_seed_requires_a_user_turn() -> None:
         output_messages=[Message(role='assistant', content='answer')],
     )
 
-    with pytest.raises(ValueError, match='no-user.*user'):
+    with pytest.raises(ValueError, match='seedable turn'):
         await datapoints_from_traces([trace])
 
 
 @pytest.mark.asyncio
-async def test_last_assistant_seed_requires_an_assistant_turn() -> None:
+async def test_last_assistant_seed_skips_a_trace_with_no_assistant_turn() -> None:
     from evaluatorq.redteam.traces import datapoints_from_traces
 
-    trace = Trace(
+    no_assistant = Trace(
         trace_id='no-assistant',
         input_messages=[Message(role='user', content='question')],
         output_messages=[Message(role='tool', content='tool result')],
     )
+    good = _trace()
 
-    with pytest.raises(ValueError, match='no-assistant.*assistant'):
-        await datapoints_from_traces([trace], start_from='last_assistant')
+    rows = await datapoints_from_traces([no_assistant, good], start_from='last_assistant')
+
+    assert len(rows) == 1
+    assert rows[0].inputs['source_trace_id'] == 'trace-1'
 
 
 class _Target(AgentTarget):
@@ -196,28 +231,34 @@ async def test_last_assistant_accepts_caller_owned_direct_target() -> None:
 
 
 @pytest.mark.asyncio
-async def test_last_assistant_accepts_caller_owned_hosted_agent_target() -> None:
+async def test_last_assistant_rejects_hosted_agent_string_target() -> None:
+    """A hosted ``agent:`` target keeps history server-side; no string target can replay last_assistant.
+
+    ``ORQAgentTarget.history_mode`` is ``TARGET`` and its ``respond()`` only ever
+    sends the latest message, so this used to raise deep inside the pipeline
+    after credentials, context discovery, strategy planning and target
+    construction had all already run and billed. The rejection must happen
+    up front instead, before the pipeline is ever awaited.
+    """
     from unittest.mock import AsyncMock, patch
 
+    from evaluatorq.redteam.exceptions import RedTeamError
     from evaluatorq.redteam.runner import red_team
-    from tests.redteam.test_runner import _make_report, _run_result
 
-    report = _make_report()
-    with patch(
-        'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
-        new_callable=AsyncMock,
-        return_value=_run_result(report),
-    ) as pipeline:
-        result = await red_team(
-            'agent:test',
-            datapoints=[_last_assistant_seed()],
-            recommendations=False,
-            generate_executive_summary=False,
-            save=SaveMode.NONE,
-        )
+    with (
+        patch('evaluatorq.redteam.runner._run_dynamic_or_hybrid', new_callable=AsyncMock) as pipeline,
+        patch('evaluatorq.redteam.runner.resolve_backend', side_effect=AssertionError('backend must not resolve')),
+    ):
+        with pytest.raises(RedTeamError, match='caller-owned history'):
+            await red_team(
+                'agent:test',
+                datapoints=[_last_assistant_seed()],
+                recommendations=False,
+                generate_executive_summary=False,
+                save=SaveMode.NONE,
+            )
 
-    assert result is report
-    pipeline.assert_awaited_once()
+    pipeline.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -354,3 +395,116 @@ async def test_attack_technique_filter_is_applied_before_trace_cross_product() -
     )
 
     assert all(strategy.attack_technique is AttackTechnique.DIRECT_INJECTION for strategy in strategies[next(iter(strategies))])
+
+
+@pytest.mark.asyncio
+async def test_red_team_rejects_explicitly_empty_datapoints() -> None:
+    """``datapoints=[]`` passes ``is not None`` but selects nothing; reject it at the boundary (finding 2)."""
+    from evaluatorq.redteam.runner import red_team
+
+    with pytest.raises(ValueError, match='datapoints=\\[\\]'):
+        await red_team(_Target(), datapoints=[], save=SaveMode.NONE)
+
+
+def test_trace_seed_expansion_drops_full_trace_payload() -> None:
+    """Only the three keys anything reads back are carried; the rest of the imported
+
+    transcript (full messages, recorded_output, retrievals, trace_metadata) must not
+    be copied into every seed x strategy row (finding 4).
+    """
+    from evaluatorq.redteam.adaptive.pipeline import expand_trace_seed_datapoints
+
+    seed = DataPoint(
+        inputs={
+            'trace_seed_messages': [FIRST_USER],
+            'trace_start_from': 'first_user',
+            'source_trace_id': 'trace-1',
+            'messages': [FIRST_USER, {'role': 'assistant', 'content': 'full production transcript'}],
+            'recorded_output': [{'role': 'assistant', 'content': 'full production transcript'}],
+            'retrievals': ['doc-1', 'doc-2'],
+            'trace_metadata': {'session': 'abc'},
+        }
+    )
+    strategy = DataPoint(inputs={'id': 'attack-1', 'category': 'ASI01', 'strategy': {}})
+
+    rows = expand_trace_seed_datapoints([seed], [strategy])
+
+    assert len(rows) == 1
+    row_inputs = rows[0].inputs
+    assert row_inputs['trace_seed_messages'] == [FIRST_USER]
+    assert row_inputs['trace_start_from'] == 'first_user'
+    assert row_inputs['source_trace_id'] == 'trace-1'
+    for dropped_key in ('messages', 'recorded_output', 'retrievals', 'trace_metadata'):
+        assert dropped_key not in row_inputs
+
+
+def test_trace_seed_expansion_seed_slice_wins_over_attack_inputs() -> None:
+    """The seed identifies which trace this row replays; the seed's slice wins the merge."""
+    from evaluatorq.redteam.adaptive.pipeline import expand_trace_seed_datapoints
+
+    seed = DataPoint(
+        inputs={
+            'trace_seed_messages': [FIRST_USER],
+            'trace_start_from': 'first_user',
+            'source_trace_id': 'trace-1',
+        }
+    )
+    # An attack row that happens to carry a stray key of the same name must not win.
+    strategy = DataPoint(inputs={'id': 'attack-1', 'category': 'ASI01', 'strategy': {}, 'source_trace_id': 'wrong'})
+
+    rows = expand_trace_seed_datapoints([seed], [strategy])
+
+    assert rows[0].inputs['source_trace_id'] == 'trace-1'
+
+
+def test_pipeline_trace_seed_read_raises_on_missing_start_from() -> None:
+    """`trace_seed_messages` without `trace_start_from` must raise, never default to first_user (finding 5)."""
+    from evaluatorq.redteam.adaptive.pipeline import _trace_seed_from_inputs
+
+    with pytest.raises(ValueError, match='trace_start_from'):
+        _trace_seed_from_inputs({'trace_seed_messages': [FIRST_USER]})
+
+
+def test_pipeline_trace_seed_read_returns_none_for_a_non_trace_row() -> None:
+    """A dynamic row that never was a trace seed must not raise (pipeline's read is optional)."""
+    from evaluatorq.redteam.adaptive.pipeline import _trace_seed_from_inputs
+
+    messages, start_from = _trace_seed_from_inputs({'category': 'ASI01'})
+
+    assert messages is None
+    assert start_from is None
+
+
+@pytest.mark.asyncio
+async def test_scorer_prepends_seed_context_for_judge() -> None:
+    """The judge must see the imported transcript a last_assistant attack continues (finding 6)."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+
+    from evaluatorq.contracts import AgentResponse, TextOutputItem
+    from evaluatorq.redteam.adaptive.pipeline import create_dynamic_evaluator
+    from evaluatorq.redteam.contracts import AttackEvaluationResult, AttackOutput, Turn
+
+    output = AttackOutput(
+        vulnerability='goal_hijacking',
+        seed_context=[Message(role='assistant', content='Your order is on the way.')],
+        turns=[
+            Turn(
+                attacker=AgentResponse(output=[TextOutputItem(text='continue the order', annotations=[])]),
+                target=AgentResponse(output=[TextOutputItem(text='sure, here is the refund', annotations=[])]),
+            )
+        ],
+    )
+    judge = AsyncMock(return_value=AttackEvaluationResult(passed=True, explanation='ok', evaluator_id='x'))
+
+    with patch('evaluatorq.redteam.adaptive.pipeline.OWASPEvaluator') as cls:
+        cls.return_value.evaluate_vulnerability = judge
+        scorer = create_dynamic_evaluator(llm_client=AsyncMock())['scorer']
+        await scorer({'data': SimpleNamespace(inputs={}), 'output': output})
+
+    judge.assert_awaited_once()
+    assert judge.await_args is not None
+    passed_messages = judge.await_args.kwargs['messages']
+    assert passed_messages[0]['role'] == 'assistant'
+    assert 'Your order is on the way.' in passed_messages[0]['content']
+    assert passed_messages[-1]['content'] == 'continue the order'

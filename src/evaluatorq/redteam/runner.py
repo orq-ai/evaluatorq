@@ -10,7 +10,6 @@ import re
 import uuid
 import warnings
 from collections import Counter, defaultdict
-from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -18,7 +17,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
-from pydantic import ValidationError
 
 from evaluatorq import DataPoint, EvaluationResult, job
 from evaluatorq.common.async_utils import await_maybe
@@ -96,7 +94,7 @@ from evaluatorq.redteam.replay import RUN_CONFIG_KEY as REPLAY_RUN_CONFIG_KEY
 from evaluatorq.redteam.replay import RedTeamReplay, load_redteam_replay
 from evaluatorq.redteam.reports.recommendations import generate_focus_area_recommendations
 from evaluatorq.redteam.runtime.jobs import _build_messages, _sanitize_job_name, create_deployment_job
-from evaluatorq.redteam.traces import TraceStart
+from evaluatorq.redteam.traces import TraceStart, parse_trace_seed
 from evaluatorq.redteam.tracing import with_redteam_span
 from evaluatorq.redteam.vulnerability_registry import (
     get_primary_category,
@@ -167,20 +165,19 @@ def _resolve_attack_techniques(
         raise ValueError(f'Unknown attack technique(s) {values!r}; expected one of: {valid}.') from exc
 
 
+def _validate_attack_techniques(values: list[AttackTechnique | str] | None) -> None:
+    """Raise on an unknown attack technique; the resolved set itself is recomputed elsewhere."""
+    _resolve_attack_techniques(values)
+
+
 def _validate_trace_seed_messages(datapoint: DataPoint, index: int) -> None:
-    """Validate the replay messages carried by one trace seed row."""
-    messages = datapoint.inputs.get('trace_seed_messages')
-    if not isinstance(messages, list) or not messages:
-        raise ValueError(f'datapoints[{index}].trace_seed_messages must be a non-empty list of Message mappings.')
-    for message_index, message in enumerate(messages):
-        if not isinstance(message, Mapping):
-            raise TypeError(f'datapoints[{index}].trace_seed_messages[{message_index}] must be a Message mapping.')
-        try:
-            Message.model_validate(message)
-        except ValidationError as exc:
-            raise ValueError(
-                f'datapoints[{index}].trace_seed_messages[{message_index}] is not parseable as a Message: {exc}'
-            ) from exc
+    """Validate the replay metadata carried by one trace seed row.
+
+    Delegates to the shared `parse_trace_seed` (`redteam/traces.py`) so this
+    precheck and the pipeline's per-attack read can never disagree on what a
+    valid trace seed looks like — see finding 5.
+    """
+    parse_trace_seed(datapoint.inputs, label=f'datapoints[{index}]')
 
 
 def _validate_trace_replay_targets(targets: list[str | AgentTarget], seed_datapoints: list[DataPoint] | None) -> None:
@@ -203,12 +200,18 @@ def _validate_trace_replay_targets(targets: list[str | AgentTarget], seed_datapo
                 )
             continue
 
-        kind, _value = parse_target(target)
-        if kind is not TargetKind.AGENT:
-            raise RedTeamError(
-                'last_assistant trace replay requires caller-owned history; '
-                f'target {target!r} resolves through a target-owned execution path'
-            )
+        # `parse_target` only ever yields AGENT or DEPLOYMENT for a string target.
+        # AGENT resolves to `ORQAgentTarget`, whose `history_mode` is TARGET — the
+        # server owns history and `respond()` sends only the latest message — and
+        # DEPLOYMENT is rejected from dynamic mode entirely. So no string target
+        # can replay a last_assistant seed; reject every one of them up front,
+        # before context discovery, strategy planning or target construction run.
+        raise RedTeamError(
+            'last_assistant trace replay requires caller-owned history on the target '
+            f'(a target whose history_mode is CALLER, e.g. OpenAIModelTarget or a custom '
+            f'AgentTarget); target {target!r} is a string target and a hosted "agent:" '
+            f'target keeps conversation history server-side, which last_assistant cannot resume.'
+        )
 
 
 def get_runs_dir() -> Path:
@@ -1469,30 +1472,36 @@ async def red_team(
 
     save = _resolve_save_mode(save=save)
 
+    # Fail fast on an unknown attack technique before any other validation runs.
+    # `resolved_filters` below recomputes the resolved set for actual use (it
+    # composes with the other filters); this call is for its raising side
+    # effect only, so the API boundary rejects a typo immediately rather than
+    # deep inside filter resolution.
+    _validate_attack_techniques(attack_techniques)
+
     # Replay short-circuits every data-selection input: the cases are already
     # decided by the run being replayed, so accepting a conflicting selector
     # would silently ignore it. Reject the combination instead.
-    resolved_attack_techniques = _resolve_attack_techniques(attack_techniques)
     if mode is not None and Pipeline(mode) is Pipeline.STATIC and attack_techniques is not None:
         raise ValueError('attack_techniques applies to dynamic strategies and cannot be used in static mode.')
 
     trace_datapoints: list[DataPoint] | None = None
     if datapoints is not None:
+        if not datapoints:
+            # An empty list passes `is not None` and every downstream check on it
+            # (the validation loop iterates nothing, `expand_trace_seed_datapoints`
+            # returns `[]`), so a search that matched no traces silently runs zero
+            # attacks and exits 0 rather than surfacing that nothing was selected.
+            raise ValueError(
+                'datapoints=[] selected no trace seeds; nothing to attack. '
+                'Check the TraceInput search/filters that produced this list.'
+            )
         if dataset is not None:
             raise ValueError('datapoints= trace seeds cannot be combined with dataset=.')
         if mode is not None and Pipeline(mode) is not Pipeline.DYNAMIC:
             raise ValueError('Trace seed datapoints require the dynamic red-team pipeline.')
         for index, datapoint in enumerate(datapoints):
-            if 'trace_seed_messages' not in datapoint.inputs or 'trace_start_from' not in datapoint.inputs:
-                raise ValueError(
-                    f'datapoints[{index}] is missing trace seed metadata: '
-                    "expected 'trace_seed_messages' and 'trace_start_from'."
-                )
             _validate_trace_seed_messages(datapoint, index)
-            try:
-                TraceStart(datapoint.inputs['trace_start_from'])
-            except ValueError as exc:
-                raise ValueError(f'datapoints[{index}] has an invalid trace_start_from value.') from exc
         trace_datapoints = list(datapoints)
 
     replay_resolution = _resolve_replay(

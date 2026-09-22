@@ -5,15 +5,21 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from collections import defaultdict, deque
 from datetime import datetime
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import httpx
 from loguru import logger
 
+from evaluatorq.common.orq_client import orq_server_url
+from evaluatorq.common.retry import with_retry
 from evaluatorq.contracts import FunctionCall, Message, StrategyToolCall
 from evaluatorq.openresponses.otel_messages import items_to_input_messages, items_to_output_messages
 from evaluatorq.types import Trace, TraceInput
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 _SPAN_FETCH_CONCURRENCY = 5
 _API_PAGE_LIMIT = 200
@@ -39,7 +45,9 @@ def _resolve_orq_credentials(api_key: str | None, base_url: str | None) -> tuple
     key = api_key or os.environ.get('ORQ_API_KEY')
     if not key:
         raise ValueError('Missing Orq API key: set ORQ_API_KEY or pass api_key=.')
-    host = (base_url or os.environ.get('ORQ_BASE_URL') or 'https://my.orq.ai').rstrip('/')
+    # orq_server_url() is the single resolver for the host; re-deriving it from
+    # ORQ_BASE_URL here is how self-hosted deployments got ignored on other paths.
+    host = (base_url or orq_server_url()).rstrip('/')
     return key, host
 
 
@@ -126,11 +134,21 @@ def _optional_message_string(value: Any, *, field: str) -> str | None:
     return None
 
 
+_MESSAGE_KEYS = frozenset({'role', 'content', 'tool_calls', 'tool_call_id', 'call_id', 'name', 'refusal'})
+
+
 def _chat_message(raw: Any, *, default_role: _ROLE) -> Message | None:
     if isinstance(raw, str):
         return Message(role=default_role, content=raw)
     if not isinstance(raw, dict):
         logger.warning('Unknown trace message shape {}; dropping it.', type(raw).__name__)
+        return None
+    if not _MESSAGE_KEYS.intersection(raw):
+        # Without this, a request-parameter mapping such as ``{'model': ...,
+        # 'temperature': ...}`` parses as a content-less user turn, which counts
+        # as a successful parse and stops the candidate search before the
+        # attribute that actually holds the conversation.
+        logger.warning('Trace message mapping carries no message keys (saw {}); dropping it.', sorted(raw)[:8])
         return None
     raw_role = raw.get('role') or default_role
     role = raw_role.strip().lower() if isinstance(raw_role, str) else raw_role
@@ -393,7 +411,10 @@ def _parse_exchange(
         parsed: tuple[list[Message], _MESSAGE_FORMAT] | None = None
         for hinted, value in _message_candidates(span, side):
             messages, detected = _parse_messages(value, hinted=hinted, default_role=default_role)
-            if messages:
+            # A candidate counts as parsed only when it carries something to
+            # score. Accepting content-less messages would stop the search at a
+            # shape that merely looked like a conversation.
+            if any(message.content or message.tool_calls or message.tool_call_id for message in messages):
                 parsed = messages, detected
                 break
         if parsed is not None:
@@ -419,6 +440,16 @@ def _parent_id(span: dict[str, Any]) -> str | None:
     return str(value) if value else None
 
 
+_EVALUATOR_ATTRIBUTE_PREFIXES = ('orq.evaluator.', 'gen_ai.evaluation.')
+"""Attribute namespaces that mark a span as evaluator output.
+
+The trailing dot is load-bearing. A bare ``orq.evaluator`` prefix also matches
+``orq.evaluatorq_run_id``, the run-level attribute evaluatorq stamps on the root
+span of every run it traces — which made every evaluatorq-produced trace
+unimportable, reported as "every span belongs to an evaluator span or its subtree".
+"""
+
+
 def _is_evaluator(span: dict[str, Any]) -> bool:
     span_type = str(span.get('type') or '').lower()
     if 'evaluator' in span_type or 'evaluation' in span_type:
@@ -427,7 +458,10 @@ def _is_evaluator(span: dict[str, Any]) -> bool:
     orq_span_type = str(attributes.get('orq.span_type') or _nested(attributes, 'orq', 'span_type')).lower()
     if 'evaluator' in orq_span_type or 'evaluation' in orq_span_type:
         return True
-    return any(str(key).startswith(('orq.evaluator', 'gen_ai.evaluation')) for key in attributes)
+    return any(
+        str(key) in {'orq.evaluator', 'gen_ai.evaluation'} or str(key).startswith(_EVALUATOR_ATTRIBUTE_PREFIXES)
+        for key in attributes
+    )
 
 
 def _time_key(span: dict[str, Any], index: int) -> tuple[float, int]:
@@ -504,14 +538,16 @@ def _failed_trace(
 
 def _evaluator_subtree_ids(indexed: list[tuple[str, dict[str, Any], int]]) -> set[str]:
     """Return evaluator span IDs together with every descendant span ID."""
+    children: dict[str | None, list[str]] = defaultdict(list)
+    for span_id, span, _ in indexed:
+        children[_parent_id(span)].append(span_id)
     evaluator_ids = {span_id for span_id, span, _ in indexed if _is_evaluator(span)}
-    changed = True
-    while changed:
-        changed = False
-        for span_id, span, _ in indexed:
-            if span_id not in evaluator_ids and _parent_id(span) in evaluator_ids:
-                evaluator_ids.add(span_id)
-                changed = True
+    queue = deque(evaluator_ids)
+    while queue:
+        for child_id in children.get(queue.popleft(), ()):
+            if child_id not in evaluator_ids:
+                evaluator_ids.add(child_id)
+                queue.append(child_id)
     return evaluator_ids
 
 
@@ -654,6 +690,11 @@ async def fetch_traces(
 
     One unreadable trace becomes a ``Trace`` with ``import_error`` set;
     other traces in the batch remain available. No trace is silently discarded.
+    Partition the result with `partition_traces` rather than filtering by hand —
+    every surface is meant to report import failures the same way.
+
+    The HTTP calls retry through `common.retry.with_retry`; the shared
+    ``httpx.AsyncClient`` adds no retry layer of its own.
     """
     key, host = _resolve_orq_credentials(api_key, base_url)
     headers = {'Authorization': f'Bearer {key}'}
@@ -665,11 +706,12 @@ async def fetch_traces(
         else:
             rows: list[dict[str, Any]] = []
             page = 1
-            while len(rows) < source.limit:
+            query_limit = source.query_limit
+            while len(rows) < query_limit:
                 before = len(rows)
                 body = {
                     'filters': {'operator': 'and', 'filters': source.filters, 'search': source.search},
-                    'limit': min(source.limit - len(rows), _API_PAGE_LIMIT),
+                    'limit': min(query_limit - len(rows), _API_PAGE_LIMIT),
                     'page': page,
                     'fields': [],
                 }
@@ -678,9 +720,13 @@ async def fetch_traces(
                 if (end_date := _datetime_ms(source.end_time)) is not None:
                     body['end_date'] = end_date
                 try:
-                    response = await client.post(f'{host}/v2/traces/v3oql', headers=headers, json=body)
-                    response.raise_for_status()
-                    payload = response.json()
+
+                    async def list_page(body: dict[str, Any] = body) -> Any:
+                        response = await client.post(f'{host}/v2/traces/v3oql', headers=headers, json=body)
+                        response.raise_for_status()
+                        return response.json()
+
+                    payload = await with_retry(list_page, label='Orq trace list')
                 except (httpx.HTTPError, json.JSONDecodeError) as exc:
                     raise RuntimeError(f'Failed to list Orq traces: {exc}') from exc
                 data = payload.get('data', []) if isinstance(payload, dict) else []
@@ -697,10 +743,14 @@ async def fetch_traces(
         async def fetch_one(row: dict[str, Any]) -> Trace:
             trace_id = str(row['trace_id'])
             async with semaphore:
-                try:
+
+                async def fetch_spans(trace_id: str = trace_id) -> Any:
                     response = await client.get(f'{host}/v2/traces/{trace_id}/v3spans', headers=headers)
                     response.raise_for_status()
-                    spans = response.json()
+                    return response.json()
+
+                try:
+                    spans = await with_retry(fetch_spans, label=f'Orq trace {trace_id} spans')
                 except (httpx.HTTPError, json.JSONDecodeError) as exc:
                     return _failed_trace(trace_id, f'could not fetch its spans: {exc}')
             if not isinstance(spans, list):
@@ -712,11 +762,41 @@ async def fetch_traces(
                 trace_metadata=row,
             )
 
-        selected_rows = rows if source.trace_id is not None else rows[: source.limit]
+        selected_rows = rows if source.trace_id is not None else rows[: source.query_limit]
+        if not selected_rows and source.trace_id is None:
+            # Zero rows and zero results are indistinguishable downstream, and a
+            # green run over no datapoints reads as "everything passed".
+            logger.warning(
+                'Trace query matched no traces (limit={}, search={!r}, filters={}, start_time={}, end_time={}).',
+                source.query_limit,
+                source.search,
+                len(source.filters),
+                source.start_time,
+                source.end_time,
+            )
         return await asyncio.gather(*(fetch_one(row) for row in selected_rows if row.get('trace_id')))
     finally:
         if owned:
             await client.aclose()
 
 
-__all__ = ['fetch_traces']
+def partition_traces(traces: Sequence[Trace], *, caller: str) -> tuple[list[Trace], list[Trace]]:
+    """Split imported traces into usable and failed, logging the failures once.
+
+    Every surface that consumes `fetch_traces` reports import failures through
+    this one function. Before it, red team raised on the first failure and lost
+    the whole batch, simulation dropped them with its own message, and core
+    evaluation turned each into a row that raised — three answers to one event,
+    chosen by which entry point the caller happened to use.
+    """
+    usable = [trace for trace in traces if trace.import_error is None]
+    failed = [trace for trace in traces if trace.import_error is not None]
+    if failed:
+        details = '; '.join(f'{trace.trace_id}: {trace.import_error}' for trace in failed)
+        logger.warning(
+            '{}: {} of {} imported trace(s) failed and were excluded: {}', caller, len(failed), len(traces), details
+        )
+    return usable, failed
+
+
+__all__ = ['fetch_traces', 'partition_traces']

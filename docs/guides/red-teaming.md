@@ -36,13 +36,19 @@ report = await red_team(target=target, mode="static", dataset="hf:my-org/my-atta
 
 ## Seed a dynamic attack from a trace
 
-`datapoints_from_traces(...)` turns recorded conversations into dynamic attack seeds. The rows are not offline scores: `red_team()` sends a new attack to the target, captures a new response, and judges that new exchange.
+`datapoints_from_traces(...)` turns recorded conversations into dynamic attack seeds. The rows are not offline scores: `red_team()` sends a new attack to the target, captures a new response, and judges that new exchange. Unlike `simulation.datapoints_from_traces`, this one is pure — no summarize call, no inference call, just the trace fetch — so it costs nothing beyond that fetch regardless of how many traces you pull in.
+
+Query mode pulls a bounded recent batch, no trace ID required:
 
 ```python
+from datetime import datetime, timedelta, timezone
+
 from evaluatorq import TraceInput
 from evaluatorq.redteam import datapoints_from_traces, red_team
 
-datapoints = await datapoints_from_traces(source=TraceInput(trace_id='trace_123'))
+datapoints = await datapoints_from_traces(
+    source=TraceInput(limit=50, start_time=datetime.now(timezone.utc) - timedelta(days=1)),
+)
 report = await red_team(
     target='agent:my-support-agent',
     datapoints=datapoints,
@@ -52,9 +58,15 @@ report = await red_team(
 )
 ```
 
+Pass one `trace_id` instead once you already have a specific conversation to seed from:
+
+```python
+datapoints = await datapoints_from_traces(source=TraceInput(trace_id='trace_123'))
+```
+
 `first_user` is the default. Evaluatorq sends the opening user message to a fresh target, records its new assistant response as bootstrap context, and begins the attack after that response. Every job gets a fresh target, and production thread, task, and memory identifiers are provenance only.
 
-Use `last_assistant` only with a target that accepts caller-owned history. The current hosted `agent:<key>` path and `OpenAIModelTarget` both replay the full transcript; a custom or legacy adapter that owns opaque server-side history cannot continue from an imported assistant turn.
+Use `last_assistant` only with a target whose `history_mode` is caller-owned (`ConversationHistoryMode.CALLER`), such as `OpenAIModelTarget` or a custom `AgentTarget` you write yourself. No string target — including the hosted `agent:<key>` path — can replay `last_assistant`: it keeps conversation history server-side and only ever receives the latest message, so there is no way to hand it the imported transcript. `red_team()` rejects a string target combined with `last_assistant` before it resolves a target or plans a strategy.
 
 ```python
 from evaluatorq import TraceInput

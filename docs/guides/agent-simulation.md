@@ -514,13 +514,27 @@ Replay reruns what you already have. The other move is to generate *new* cases t
 
 The async `datapoints_from_traces(...)` helper accepts the same `TraceInput` used by core evaluation. It fetches and normalizes traces through the shared importer, then turns each usable conversation into a simulation datapoint; pass the returned rows to the existing `simulate()` runner.
 
+Query mode pulls a bounded recent batch, no trace ID required:
+
 ```python
+from datetime import datetime, timedelta, timezone
+
 from evaluatorq import TraceInput
 from evaluatorq.simulation import datapoints_from_traces, simulate
 
-datapoints = await datapoints_from_traces(source=TraceInput(trace_id='trace_123'))
+datapoints = await datapoints_from_traces(
+    source=TraceInput(limit=50, start_time=datetime.now(timezone.utc) - timedelta(days=1)),
+)
 results = await simulate(target='agent:my-support-agent', datapoints=datapoints)
 ```
+
+Pass one `trace_id` instead once you already have a specific conversation to ground a case on:
+
+```python
+datapoints = await datapoints_from_traces(source=TraceInput(trace_id='trace_123'))
+```
+
+This call bills: unlike `redteam.datapoints_from_traces`, which is pure and free, this one makes one summarize call and one persona/scenario-inference call per trace, so cost and latency scale with how many conversations you fetch. Share the summarize step with `extend_from_traces` by calling `summarize_conversations` yourself once and passing the result to both as `summaries=` — the pattern is below, under "The same thing is available from Python".
 
 The trace is source material for a new simulation, not a scored result. Simulation infers a persona and scenario from each conversation and writes a fresh opening message by default. The trace analysis and simulation calls use their own budgets; `max_turns` applies to the generated conversation and does not count trace analysis.
 

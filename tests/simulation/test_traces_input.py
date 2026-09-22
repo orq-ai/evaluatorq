@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -15,10 +14,6 @@ from evaluatorq.contracts import Message
 from evaluatorq.simulation import traces as traces_module
 from evaluatorq.simulation.traces import (
     TraceConversation,
-    _content_to_text,
-    _conversation_from_spans,
-    _messages_from_value,
-    _resolve_orq_credentials,
     datapoints_from_traces,
     extend_from_traces,
     fetch_trace_conversations,
@@ -62,298 +57,37 @@ def _make_trace(trace_id: str = "t1") -> Trace:
     )
 
 
-# ---------------------------------------------------------------------------
-# Message extraction
-# ---------------------------------------------------------------------------
-
-
-def test_content_to_text_json_encodes_unknown_wire_dict(caplog: pytest.LogCaptureFixture) -> None:
-    content = {"kind": "structured", "value": 3}
-
-    with caplog.at_level(logging.WARNING, logger="evaluatorq.common.trace_input"):
-        result = _content_to_text(content)
-
-    assert result == json.dumps(content, separators=(",", ":"), sort_keys=True, default=str)
-    assert any("unknown trace message content shape" in record.message.lower() for record in caplog.records)
-
-
-def test_messages_from_dict_with_messages() -> None:
-    value = {"messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]}
-    assert _messages_from_value(value) == [
-        {"role": "user", "content": "hi"},
-        {"role": "assistant", "content": "yo"},
-    ]
-
-
-def test_messages_from_choices_output() -> None:
-    value = {"choices": [{"message": {"role": "assistant", "content": "answer"}}]}
-    assert _messages_from_value(value) == [{"role": "assistant", "content": "answer"}]
-
-
-def test_messages_from_string_input() -> None:
-    assert _messages_from_value("plain question") == [{"role": "user", "content": "plain question"}]
-
-
-def test_messages_from_string_output_uses_default_role() -> None:
-    assert _messages_from_value("the answer", default_role="assistant") == [
-        {"role": "assistant", "content": "the answer"}
-    ]
-
-
-def test_messages_from_content_parts() -> None:
-    value = [{"role": "user", "content": [{"type": "text", "text": "part one"}, "part two"]}]
-    assert _messages_from_value(value) == [{"role": "user", "content": "part one\npart two"}]
-
-
-def test_messages_from_garbage_is_empty() -> None:
-    assert _messages_from_value(None) == []
-    assert _messages_from_value(42) == []
-    assert _messages_from_value({"foo": "bar"}) == []
-
-
-def test_conversation_prefers_root_span() -> None:
-    spans = [
-        {
-            "parent_id": "root",
-            "type": "ChatCompletion",
-            "input": {"messages": [{"role": "user", "content": "child"}]},
-        },
-        {
-            "parent_id": None,
-            "type": "Trace",
-            "input": {"messages": [{"role": "user", "content": "root question"}]},
-            "output": {"role": "assistant", "content": "root answer"},
-        },
-    ]
-    conversation = _conversation_from_spans("t1", spans)
-    assert conversation is not None
-    assert conversation.messages == [
-        {"role": "user", "content": "root question"},
-        {"role": "assistant", "content": "root answer"},
-    ]
-    assert conversation.first_user_message == "root question"
-
-
-def test_conversation_keeps_repeated_assistant_messages_in_position() -> None:
-    spans = [
-        {
-            "parent_id": None,
-            "type": "Trace",
-            "input": [{"role": "user", "content": "repeat this"}],
-            "output": [
-                {"role": "assistant", "content": "same answer"},
-                {"role": "assistant", "content": "same answer"},
-            ],
-        }
-    ]
-
-    conversation = _conversation_from_spans("t1", spans)
-
-    assert conversation is not None
-    assert conversation.messages == [
-        {"role": "user", "content": "repeat this"},
-        {"role": "assistant", "content": "same answer"},
-        {"role": "assistant", "content": "same answer"},
-    ]
-
-
-def test_conversation_none_when_no_messages() -> None:
-    assert _conversation_from_spans("t1", [{"parent_id": None, "input": {}, "output": {}}]) is None
-
-
-def test_conversation_string_output_is_assistant_not_user() -> None:
-    """A plain-string span output is the assistant's reply — it must never be
-    mistaken for the user's opening message (regression: role mislabeling)."""
-    spans = [
-        {
-            "parent_id": None,
-            "type": "Trace",
-            "input": "what is my balance?",
-            "output": "Your balance is $40.",
-        }
-    ]
-    conversation = _conversation_from_spans("t1", spans)
-    assert conversation is not None
-    assert conversation.messages == [
-        {"role": "user", "content": "what is my balance?"},
-        {"role": "assistant", "content": "Your balance is $40."},
-    ]
-    assert conversation.first_user_message == "what is my balance?"
-
-
-def test_conversation_output_only_yields_no_user_message() -> None:
-    """Empty input + string output must not produce a fake first user message."""
-    spans = [{"parent_id": None, "type": "Trace", "input": {}, "output": "assistant text"}]
-    conversation = _conversation_from_spans("t1", spans)
-    assert conversation is not None
-    assert conversation.first_user_message is None
-
-
-def test_conversation_from_gen_ai_attributes() -> None:
-    """Real ``/v2/traces/{id}/v3spans`` shape: top-level input/output are null,
-    the conversation lives under ``attributes.gen_ai`` as OTel messages whose
-    content is a list of typed ``parts``. Non-text parts (tool calls) must not
-    leak into the transcript."""
-    spans = [
-        {
-            "parent_id": None,
-            "type": "Trace",
-            "input": None,
-            "output": None,
-            "attributes": {
-                "gen_ai": {
-                    "request": {"model": "gpt-4o", "temperature": 0.7},
-                    "response": {"id": "resp_1", "model": "gpt-4o"},
-                    "input": {
-                        "messages": [
-                            {"role": "system", "parts": [{"type": "text", "content": "Be helpful."}]},
-                            {"role": "user", "parts": [{"type": "text", "content": "Where is my order?"}]},
-                        ]
-                    },
-                    "output": {
-                        "messages": [
-                            {
-                                "role": "assistant",
-                                "parts": [
-                                    {"type": "tool_call", "name": "lookup_order", "arguments": {}},
-                                    {"type": "text", "content": "It ships tomorrow."},
-                                ],
-                                "finish_reason": "stop",
-                            }
-                        ],
-                        "type": "text",
-                    },
-                },
-            },
-        }
-    ]
-    conversation = _conversation_from_spans("t1", spans)
-    assert conversation is not None
-    assert conversation.messages == [
-        {"role": "system", "content": "Be helpful."},
-        {"role": "user", "content": "Where is my order?"},
-        {"role": "assistant", "content": "It ships tomorrow."},
-    ]
-    assert conversation.first_user_message == "Where is my order?"
-
-
-def test_conversation_gen_ai_output_single_message() -> None:
-    """Live traffic also carries ``gen_ai.output`` as a single message object."""
-    spans = [
-        {
-            "parent_id": None,
-            "type": "Trace",
-            "input": None,
-            "output": None,
-            "attributes": {
-                "gen_ai": {
-                    "input": {"messages": [{"role": "user", "content": "hi"}]},
-                    "output": {"role": "assistant", "content": "hello"},
-                }
-            },
-        }
-    ]
-    conversation = _conversation_from_spans("t1", spans)
-    assert conversation is not None
-    assert conversation.messages == [
-        {"role": "user", "content": "hi"},
-        {"role": "assistant", "content": "hello"},
-    ]
-
-
-def test_conversation_prefers_standard_gen_ai_messages_over_generic_top_level() -> None:
-    spans = [
-        {
-            "parent_id": None,
-            "type": "Trace",
-            "input": {"messages": [{"role": "user", "content": "top-level"}]},
-            "output": {"role": "assistant", "content": "top-level answer"},
-            "attributes": {
-                "gen_ai": {
-                    "input": {"messages": [{"role": "user", "content": "gen_ai"}]},
-                    "output": {"role": "assistant", "content": "gen_ai answer"},
-                }
-            },
-        }
-    ]
-    conversation = _conversation_from_spans("t1", spans)
-    assert conversation is not None
-    assert conversation.first_user_message == "gen_ai"
-
-
-def test_messages_from_prompt_and_completion() -> None:
-    """Completion-model spans: ``gen_ai.input.prompt`` / ``gen_ai.output.completion``."""
-    assert _messages_from_value({"prompt": "translate this"}) == [
-        {"role": "user", "content": "translate this"}
-    ]
-    assert _messages_from_value({"completion": "voila"}, default_role="assistant") == [
-        {"role": "assistant", "content": "voila"}
-    ]
-
-
-def test_messages_from_json_encoded_strings() -> None:
-    """Live ``gen_ai`` attributes often carry input/output JSON-encoded as a
-    string; the quotes and escapes must not leak into message content."""
-    # JSON-encoded bare string (live gen_ai.input shape).
-    assert _messages_from_value('"Hi! Just saying hello."') == [
-        {"role": "user", "content": "Hi! Just saying hello."}
-    ]
-    # JSON-encoded message object (live gen_ai.output shape).
-    assert _messages_from_value(
-        '{"role":"assistant","content":"Hi! How can I help you?","refusal":null}',
-        default_role="assistant",
-    ) == [{"role": "assistant", "content": "Hi! How can I help you?"}]
-    # Escapes decode to real newlines.
-    assert _messages_from_value('"line one\\nline two"') == [
-        {"role": "user", "content": "line one\nline two"}
-    ]
-    # Plain text that merely resembles prose stays verbatim.
-    assert _messages_from_value('hello "world"') == [{"role": "user", "content": 'hello "world"'}]
-    # Malformed JSON falls back to verbatim text.
-    assert _messages_from_value('{not json') == [{"role": "user", "content": "{not json"}]
-
-
-def test_conversation_from_json_encoded_gen_ai() -> None:
-    """End-to-end: a span whose gen_ai input/output are JSON-encoded strings."""
-    spans = [
-        {
-            "parent_id": None,
-            "type": "trace",
-            "input": None,
-            "output": None,
-            "attributes": {
-                "gen_ai": {
-                    "input": '"Where is my order?"',
-                    "output": '{"role":"assistant","content":"It ships tomorrow."}',
-                }
-            },
-        }
-    ]
-    conversation = _conversation_from_spans("t1", spans)
-    assert conversation is not None
-    assert conversation.messages == [
-        {"role": "user", "content": "Where is my order?"},
-        {"role": "assistant", "content": "It ships tomorrow."},
-    ]
-    assert conversation.first_user_message == "Where is my order?"
-
 
 # ---------------------------------------------------------------------------
 # Credentials
 # ---------------------------------------------------------------------------
 
 
-def test_missing_api_key_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_missing_api_key_raises_through_fetch_trace_conversations(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Credential resolution lives in `common.trace_input`; this covers the
+    simulation entry point that depends on it, not the resolver itself
+    (covered directly in `tests/unit/test_trace_input.py`)."""
     monkeypatch.delenv("ORQ_API_KEY", raising=False)
-    with pytest.raises(ValueError, match="ORQ_API_KEY"):
-        _resolve_orq_credentials(None, None)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200))) as client:
+        with pytest.raises(ValueError, match="ORQ_API_KEY"):
+            await fetch_trace_conversations(limit=5, http_client=client)
 
 
-def test_base_url_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_base_url_env_override_through_fetch_trace_conversations(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ORQ_BASE_URL", "https://custom.orq.ai/")
-    key, host = _resolve_orq_credentials("k", None)
-    assert key == "k"
-    assert host == "https://custom.orq.ai"
+    requested_hosts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_hosts.append(f"{request.url.scheme}://{request.url.host}")
+        return httpx.Response(200, json={"object": "list", "data": [], "has_more": False})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await fetch_trace_conversations(limit=5, api_key="k", http_client=client)
+
+    assert requested_hosts == ["https://custom.orq.ai"]
 
 
 # ---------------------------------------------------------------------------
@@ -802,14 +536,6 @@ async def test_extend_from_traces(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_extend_from_traces_requires_conversations() -> None:
     with pytest.raises(ValueError, match="at least one"):
         await extend_from_traces([], num_datapoints=5, client=MagicMock())
-
-
-def test_normalize_message_role_case_insensitive() -> None:
-    """Producer payloads with 'User'/'ASSISTANT' roles still yield a usable conversation."""
-    messages = _messages_from_value({"messages": [{"role": "User", "content": "hi"}]})
-    assert messages == [{"role": "user", "content": "hi"}]
-    conversation = TraceConversation(trace_id="t", messages=messages)
-    assert conversation.first_user_message == "hi"
 
 
 @pytest.mark.asyncio

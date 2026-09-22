@@ -11,7 +11,7 @@ import httpx
 import pytest
 
 from evaluatorq import Trace, TraceInput, fetch_traces
-from evaluatorq.common.trace_input import _message_candidates, _parse_messages, _trace_from_spans
+from evaluatorq.common.trace_input import _message_candidates, _parse_messages, _trace_from_spans, partition_traces
 from evaluatorq.contracts import Message
 
 
@@ -586,3 +586,128 @@ async def test_fetch_supports_explicit_trace_and_search() -> None:
     assert [row.trace_id for row in searched] == ['searched']
     assert seen_search_body['filters']['search'] == 'agent'
     assert seen_search_body['start_date'] == 1767225600000
+
+
+def test_evaluatorq_own_run_attribute_is_not_an_evaluator_span() -> None:
+    """``orq.evaluatorq_run_id`` is a run marker, not an evaluator marker.
+
+    A bare ``orq.evaluator`` prefix matched it, so every trace evaluatorq itself
+    produced was reported as "every span belongs to an evaluator span or its
+    subtree" — its own traces were the one kind it could not import.
+    """
+    spans = [
+        _span(
+            'root',
+            parent_id=None,
+            started_at='2026-01-01T00:00:00Z',
+            attributes={'orq.evaluatorq_run_id': 'run-1'},
+        ),
+        _span(
+            'child',
+            parent_id='root',
+            started_at='2026-01-01T00:00:01Z',
+            attributes={'gen_ai.input.messages': [{'role': 'user', 'content': 'hi'}]},
+            output={'role': 'assistant', 'content': 'hello'},
+        ),
+    ]
+    imported = _trace_from_spans('trace-1', spans)
+    assert imported.import_error is None
+    assert [m.content for m in imported.messages] == ['hi', 'hello']
+
+
+def test_real_evaluator_subtree_is_still_excluded() -> None:
+    spans = [
+        _span(
+            'evaluator',
+            parent_id=None,
+            started_at='2026-01-01T00:00:02Z',
+            attributes={'orq.evaluator.id': 'faithfulness'},
+            input_={'messages': [{'role': 'user', 'content': 'judge this'}]},
+            output={'role': 'assistant', 'content': 'PASS'},
+        ),
+        _span(
+            'evaluator-child',
+            parent_id='evaluator',
+            started_at='2026-01-01T00:00:03Z',
+            input_={'messages': [{'role': 'user', 'content': 'rubric'}]},
+        ),
+        _span(
+            'agent',
+            parent_id=None,
+            started_at='2026-01-01T00:00:01Z',
+            input_={'messages': [{'role': 'user', 'content': 'hi'}]},
+            output={'role': 'assistant', 'content': 'hello'},
+        ),
+    ]
+    imported = _trace_from_spans('trace-1', spans)
+    assert [m.content for m in imported.messages] == ['hi', 'hello']
+
+
+def test_request_parameter_mapping_does_not_shadow_the_real_conversation() -> None:
+    """A non-message mapping must not parse as a content-less turn.
+
+    It used to become ``Message(role='user', content=None)``, which counted as a
+    successful parse and stopped the candidate search before the attribute
+    holding the actual conversation.
+    """
+    span = _span(
+        'span-1',
+        parent_id=None,
+        started_at='2026-01-01T00:00:00Z',
+        attributes={
+            'gen_ai.input': {'model': 'gpt-4', 'temperature': 0.2},
+            'openresponses.input': [{'role': 'user', 'content': 'what is my balance'}],
+        },
+        output={'role': 'assistant', 'content': '42'},
+    )
+    imported = _trace_from_spans('trace-1', [span])
+    assert imported.query == 'what is my balance'
+    assert [m.content for m in imported.input_messages] == ['what is my balance']
+
+
+def test_trace_input_rejects_limit_with_an_explicit_trace() -> None:
+    """``limit`` is never read in trace mode, so accepting it would silently lie."""
+    with pytest.raises(ValueError, match='cannot be combined'):
+        TraceInput(trace_id='trace-1', limit=50)
+
+
+def test_trace_input_query_limit_defaults_without_claiming_the_field_was_set() -> None:
+    assert TraceInput().limit is None
+    assert TraceInput().query_limit == 20
+    assert TraceInput(limit=5).query_limit == 5
+
+
+def test_failed_trace_cannot_also_carry_messages() -> None:
+    with pytest.raises(ValueError, match='cannot carry input or output messages'):
+        Trace(
+            trace_id='trace-1',
+            import_error='could not fetch its spans',
+            output_messages=[Message(role='assistant', content='hello')],
+        )
+
+
+def test_partition_traces_splits_and_logs_once(caplog: pytest.LogCaptureFixture) -> None:
+    traces = [
+        Trace(trace_id='ok', output_messages=[Message(role='assistant', content='hi')]),
+        Trace(trace_id='bad', import_error='the trace has no spans.'),
+    ]
+    with caplog.at_level(logging.WARNING):
+        usable, failed = partition_traces(traces, caller='test')
+    assert [t.trace_id for t in usable] == ['ok']
+    assert [t.trace_id for t in failed] == ['bad']
+    assert 'bad: the trace has no spans.' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_query_matching_no_traces_warns(caplog: pytest.LogCaptureFixture) -> None:
+    """Zero rows and zero findings are indistinguishable downstream."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={'data': [], 'has_more': False})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with caplog.at_level(logging.WARNING):
+            traces = await fetch_traces(TraceInput(search='nothing-matches'), api_key='k', http_client=client)
+
+    assert traces == []
+    assert 'matched no traces' in caplog.text

@@ -166,6 +166,47 @@ async def test_orq_evaluator_forwards_explicit_model_override() -> None:
     assert client.evals.calls[0]['model'] == 'openai/gpt-5.4-mini'
 
 
+def test_orq_evaluator_name_includes_model_override() -> None:
+    plain = orq_evaluator(evaluator_id='faithfulness', client=_Client({'type': 'number', 'value': 1.0}))
+    judged_by_gpt = orq_evaluator(
+        evaluator_id='faithfulness', model='openai/gpt-5.6-luna', client=_Client({'type': 'number', 'value': 1.0})
+    )
+    judged_by_claude = orq_evaluator(
+        evaluator_id='faithfulness',
+        model='anthropic/claude-sonnet-4-5',
+        client=_Client({'type': 'number', 'value': 1.0}),
+    )
+
+    assert plain['name'] == 'orq:faithfulness'
+    assert judged_by_gpt['name'] == 'orq:faithfulness@openai/gpt-5.6-luna'
+    assert judged_by_claude['name'] == 'orq:faithfulness@anthropic/claude-sonnet-4-5'
+    assert len({plain['name'], judged_by_gpt['name'], judged_by_claude['name']}) == 3
+
+
+@pytest.mark.asyncio
+async def test_orq_evaluator_resolves_client_lazily_once_across_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    resolve_calls: list[tuple[str | None, str | None]] = []
+    shared_client = _Client({'type': 'number', 'value': 1.0})
+
+    def fake_resolve_orq_client(api_key: str | None = None, base_url: str | None = None) -> _Client:
+        resolve_calls.append((api_key, base_url))
+        return shared_client
+
+    monkeypatch.setattr('evaluatorq.evaluators.resolve_orq_client', fake_resolve_orq_client)
+
+    evaluator = orq_evaluator(evaluator_id='eval-lazy', api_key='sk-test', base_url='https://self.hosted')
+    datapoint = DataPoint(inputs={'messages': [{'role': 'user', 'content': 'question'}]})
+
+    assert resolve_calls == []  # constructing the evaluator must not build a client
+
+    for _ in range(5):
+        await evaluator['scorer']({'data': datapoint, 'output': 'answer'})
+
+    # Resolved once, reused for every later row — with both credentials forwarded.
+    assert resolve_calls == [('sk-test', 'https://self.hosted')]
+    assert len(shared_client.evals.calls) == 5
+
+
 @pytest.mark.asyncio
 async def test_orq_boolean_evaluator_maps_value_to_pass() -> None:
     client = _Client({'type': 'boolean', 'value': True})

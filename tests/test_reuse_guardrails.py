@@ -568,18 +568,23 @@ def test_new_hardcoded_class_detector_actually_fires() -> None:
 
 
 # Conversation-history ownership is a capability of AgentTarget, not a list of
-# concrete adapters for red-team code to identify. Keep the adapter names here
-# only as AST sentinels: a future isinstance ladder is exactly the drift this
-# guardrail is meant to catch.
-_TARGET_ADAPTER_NAMES = frozenset(
-    {
-        'ORQAgentTarget',
-        'OrqResponsesTarget',
-        'LangGraphTarget',
-        'PydanticAITarget',
-        'CrewAITarget',
-    }
-)
+# concrete adapters for red-team code to identify. The adapter names are the AST
+# sentinels a future isinstance ladder would use, so they are derived from the
+# source rather than frozen here: a hand-maintained mirror leaves the sixth
+# adapter silently unguarded, which is the same drift this guardrail exists to catch.
+def _agent_target_subclass_names() -> frozenset[str]:
+    """Every class in src/ that declares AgentTarget as a base."""
+    names: set[str] = set()
+    for path in sorted(SRC.rglob('*.py')):
+        for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
+            if isinstance(node, ast.ClassDef) and any(
+                isinstance(base, ast.Name) and base.id == 'AgentTarget' for base in node.bases
+            ):
+                names.add(node.name)
+    return frozenset(names)
+
+
+_TARGET_ADAPTER_NAMES = _agent_target_subclass_names()
 
 
 def _target_history_ladder_lines(source: str, path: str) -> list[str]:
@@ -612,7 +617,11 @@ def test_redteam_reads_history_mode_instead_of_adapter_type_ladders() -> None:
 
 
 def test_target_history_ladder_detector_actually_fires() -> None:
-    source = 'if isinstance(target, (ORQAgentTarget, OrqResponsesTarget)):\n    pass\n'
+    # Built from a name the source actually declares, so the detector cannot pass
+    # against an adapter that no longer exists.
+    adapter = sorted(_TARGET_ADAPTER_NAMES)[0]
+    assert _TARGET_ADAPTER_NAMES, 'No AgentTarget subclass found in src/; the detector would match nothing.'
+    source = f'if isinstance(target, ({adapter}, SomethingElse)):\n    pass\n'
     assert _target_history_ladder_lines(source, 'x.py') == ['x.py:1']
     assert _target_history_ladder_lines('if isinstance(target, AgentTarget):\n    pass\n', 'x.py') == []
 

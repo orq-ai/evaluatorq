@@ -151,3 +151,26 @@ def test_output_error_text_none_for_healthy_outputs():
     assert output_error_text(AgentResponse(text='fine')) is None
     assert output_error_text('plain') is None
     assert output_error_text(None) is None
+
+
+def test_output_to_text_renders_a_tool_only_turn():
+    """has_meaningful_output counts a tool call, so the renderer must too.
+
+    Dropping tool calls here handed the judge an empty string for an agent that
+    acted correctly, and scored it as having said nothing.
+    """
+    recorded = [{'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'get_balance', 'arguments': '{}'}}]}]
+    assert has_meaningful_output(recorded) is True
+    assert output_to_text(recorded) == '[tool_call: get_balance({})]'
+
+
+def test_output_to_text_separates_messages_and_labels_non_assistant_turns():
+    recorded = [
+        {'role': 'tool', 'content': '{"balance": 42}'},
+        {'role': 'assistant', 'content': 'You have 42.'},
+    ]
+    assert output_to_text(recorded) == '[tool] {"balance": 42}\nYou have 42.'
+
+
+def test_output_to_text_leaves_a_single_assistant_message_bare():
+    assert output_to_text([{'role': 'assistant', 'content': 'answer'}]) == 'answer'

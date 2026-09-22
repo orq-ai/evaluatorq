@@ -23,6 +23,7 @@ from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, Job, job
 from evaluatorq.common.jury import append_jury_summary, attach_jury_raw_output
+from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.target_call import call_target_with_retry, close_target
 from evaluatorq.common.thread_context import build_thread_id, conversation_thread
 from evaluatorq.common.tracing import set_span_attrs, truncate_for_span
@@ -59,7 +60,7 @@ from evaluatorq.redteam.contracts import (
     TurnType,
     Vulnerability,
 )
-from evaluatorq.redteam.traces import TraceStart
+from evaluatorq.redteam.traces import TRACE_SEED_MESSAGES_KEY, TRACE_START_FROM_KEY, TraceStart, parse_trace_seed
 from evaluatorq.redteam.tracing import annotate_current_span, set_jury_span_attrs, with_redteam_span
 from evaluatorq.redteam.vulnerability_registry import (
     get_primary_category,
@@ -117,14 +118,32 @@ def _error_codes(turns: list[Turn]) -> str:
     return ', '.join(sorted({t.target.error.code for t in turns if t.target.error and t.target.error.code})) or 'none'
 
 
+# The only trace-derived keys anything in `redteam/` ever reads back off an
+# expanded seed x strategy row. `Trace.to_datapoint()` puts far more than this on
+# a seed (the full production transcript, `recorded_output`, `retrievals`,
+# `trace_metadata`, ...) — carrying all of it into every cross-product row
+# multiplies a handful of traces by dozens of strategies into hundreds of
+# in-memory copies of data nothing downstream reads.
+_TRACE_SEED_PROJECTED_KEYS = (TRACE_SEED_MESSAGES_KEY, TRACE_START_FROM_KEY, 'source_trace_id')
+
+
 def expand_trace_seed_datapoints(seeds: list[DataPoint] | None, dynamic_datapoints: list[DataPoint]) -> list[DataPoint]:
-    """Cross each trace seed with the already-selected attack strategies."""
+    """Cross each trace seed with the already-selected attack strategies.
+
+    Only the three keys anything downstream reads are carried from the seed
+    (see `_TRACE_SEED_PROJECTED_KEYS`); the seed's other fields (the full
+    imported transcript, recorded output, retrievals, ...) are dropped rather
+    than copied into every row. The seed slice wins the merge — caller-supplied
+    values win merges, and the seed is what identifies which trace this row
+    replays, not the strategy.
+    """
     if seeds is None:
         return dynamic_datapoints
     expanded: list[DataPoint] = []
     for seed_index, seed in enumerate(seeds):
+        seed_slice = {key: seed.inputs[key] for key in _TRACE_SEED_PROJECTED_KEYS if key in seed.inputs}
         for attack in dynamic_datapoints:
-            inputs = {**seed.inputs, **attack.inputs}
+            inputs = {**attack.inputs, **seed_slice}
             seed_id = seed.inputs.get('source_trace_id') or seed.inputs.get('id') or 'seed'
             attack_id = attack.inputs.get('id', 'attack')
             inputs['id'] = f'trace_{seed_id}_{seed_index}_{attack_id}'
@@ -339,16 +358,18 @@ async def generate_dynamic_datapoints(
 
 
 def _trace_seed_from_inputs(inputs: dict[str, Any]) -> tuple[list[Message] | None, TraceStart | None]:
-    """Validate and deserialize optional trace replay state from a datapoint."""
-    seed_payload = inputs.get('trace_seed_messages')
-    if seed_payload is None:
-        return None, None
-    if not isinstance(seed_payload, list):
-        raise TypeError('trace_seed_messages must be a list of messages')
-    return (
-        [Message.model_validate(message) for message in seed_payload],
-        TraceStart(inputs.get('trace_start_from', TraceStart.FIRST_USER.value)),
-    )
+    """Validate and deserialize optional trace replay state from a datapoint.
+
+    Delegates to the shared `parse_trace_seed` (`redteam/traces.py`) so this
+    per-attack read can never disagree with the `red_team()` API-boundary
+    precheck on what a valid trace seed looks like. `required=False`: most
+    dynamic rows are not trace seeds at all, so an absent `trace_seed_messages`
+    is `(None, None)` here rather than a raise. Once it IS present,
+    `trace_start_from` is required — never defaulted (see finding 5: a
+    silent `first_user` default here used to replay an imported
+    `last_assistant` transcript as a single opening turn with no error).
+    """
+    return parse_trace_seed(inputs, label='datapoint', required=False)
 
 
 def _register_job_target(
@@ -391,28 +412,6 @@ def _serialize_dynamic_result(
 
 def _safe_agent_key(agent_key: str) -> str:
     return ''.join(ch if ch.isalnum() or ch in {'-', '_'} else '-' for ch in agent_key).strip('-')
-
-
-def _orchestrator_run_kwargs(
-    *,
-    target: Any,
-    strategy: AttackStrategy,
-    objective: str,
-    agent_context: AgentContext,
-    max_turns: int,
-    seed_messages: list[Message] | None,
-    trace_start_from: TraceStart | None,
-) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {
-        'target': target,
-        'strategy': strategy,
-        'objective': objective,
-        'agent_context': agent_context,
-        'max_turns': max_turns,
-    }
-    if seed_messages is not None:
-        kwargs.update(seed_messages=seed_messages, trace_start_from=trace_start_from)
-    return kwargs
 
 
 def create_dynamic_redteam_job(
@@ -630,7 +629,7 @@ def create_dynamic_redteam_job(
             try:
                 # One Orq thread per attack groups all its turns in observability.
                 with conversation_thread(thread_id) as thread_id:
-                    run_kwargs = _orchestrator_run_kwargs(
+                    result = await orchestrator.run_attack(
                         target=target,
                         strategy=strategy,
                         objective=objective,
@@ -639,7 +638,6 @@ def create_dynamic_redteam_job(
                         seed_messages=seed_messages,
                         trace_start_from=trace_start_from,
                     )
-                    result = await orchestrator.run_attack(**run_kwargs)
             except asyncio.TimeoutError as e:
                 tb = traceback.format_exc(limit=8)
                 mapped_code, mapped_msg = resolved_backend.map_error(e)
@@ -810,7 +808,21 @@ def create_dynamic_evaluator(
                     f'codes: {_error_codes(output.turns)}) — nothing to evaluate'
                 ),
             )
-        input_messages = [{'role': 'user', 'content': t.attacker.text} for t in scorable_turns]
+        # For TraceStart.LAST_ASSISTANT, output.seed_context is the imported
+        # conversation the attack continues — turn 1 of scorable_turns often
+        # refers back into it. Without it in front, the judge has no way to
+        # resolve that reference, and `passed=True` means RESISTANT, so the
+        # judge's failure mode defaults to the optimistic verdict. Marked
+        # distinctly from the attacker's own turns so the rubric can tell
+        # recorded/imported content from attacker-generated content.
+        seed_context_messages = [
+            {'role': str(message.role), 'content': f'[imported trace context] {coerce_content_text(message.content)}'}
+            for message in output.seed_context
+        ]
+        input_messages = [
+            *seed_context_messages,
+            *({'role': 'user', 'content': t.attacker.text} for t in scorable_turns),
+        ]
         output_messages = [item for t in scorable_turns for item in t.target.output]
 
         # Prefer vulnerability-first path when a valid Vulnerability enum can be resolved

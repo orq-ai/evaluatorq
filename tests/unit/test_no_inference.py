@@ -303,7 +303,8 @@ async def test_trace_input_does_not_replay_earlier_assistant_when_output_is_empt
 
 
 @pytest.mark.asyncio
-async def test_trace_input_requires_no_inference(monkeypatch: pytest.MonkeyPatch):
+async def test_trace_input_rejects_explicit_inference(monkeypatch: pytest.MonkeyPatch):
+    """An explicit inference=True with a replay source is still a contradiction."""
     evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
     fetch = AsyncMock()
     monkeypatch.setattr(evaluatorq_module, 'fetch_traces', fetch)
@@ -316,8 +317,36 @@ async def test_trace_input_requires_no_inference(monkeypatch: pytest.MonkeyPatch
             "trace-eval",
             data=TraceInput(trace_id='trace-1'),
             jobs=[unused_job],
+            inference=True,
             print_results=False,
             _send_results=False,
         )
 
     fetch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_trace_input_resolves_inference_without_the_flag(monkeypatch: pytest.MonkeyPatch):
+    """TraceInput is a replay source, so omitting inference= resolves it to False."""
+    evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
+    fetch = AsyncMock(
+        return_value=[
+            Trace(
+                trace_id='trace-1',
+                input_messages=[Message(role='user', content='hi')],
+                output_messages=[Message(role='assistant', content='hello')],
+            )
+        ]
+    )
+    monkeypatch.setattr(evaluatorq_module, 'fetch_traces', fetch)
+
+    results = await evaluatorq(
+        "trace-eval",
+        data=TraceInput(trace_id='trace-1'),
+        print_results=False,
+        _send_results=False,
+    )
+
+    fetch.assert_awaited_once()
+    assert results[0].job_results is not None
+    assert results[0].job_results[0].output is not None

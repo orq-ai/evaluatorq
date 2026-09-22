@@ -233,25 +233,44 @@ class ExperimentInput(BaseModel):
     history to read its ID from the URL."""
 
 
+DEFAULT_TRACE_QUERY_LIMIT = 20
+"""How many traces a `TraceInput` query mode fetches when the caller names no limit."""
+
+
 class TraceInput(BaseModel):
-    """Describe one exact trace/span, one trace, or a bounded trace search."""
+    """Describe one exact trace/span, one trace, or a bounded trace search.
+
+    The three modes are exclusive and the validator enforces that, ``limit``
+    included: in trace mode it is never read, so accepting it would answer
+    ``limit=50`` with exactly one trace and no warning. Read the resolved count
+    off `query_limit` rather than the field.
+    """
 
     model_config = ConfigDict(extra='forbid')
 
     trace_id: str | None = None
     span_id: str | None = None
-    limit: int = Field(default=20, ge=1)
+    limit: int | None = Field(default=None, ge=1)
+    """Query mode only. ``None`` means "not set", which is what lets the validator
+    tell an explicit ``limit=`` apart from the default it would otherwise assume."""
     start_time: datetime | None = None
     end_time: datetime | None = None
     search: str = ''
     filters: list[dict[str, Any]] = Field(default_factory=list)
 
+    @property
+    def query_limit(self) -> int:
+        """The number of traces query mode fetches."""
+        return self.limit if self.limit is not None else DEFAULT_TRACE_QUERY_LIMIT
+
     @model_validator(mode='after')
     def _validate_source(self) -> 'TraceInput':
         if self.span_id is not None and self.trace_id is None:
             raise ValueError('span_id requires trace_id.')
-        if self.trace_id is not None and (self.search or self.filters or self.start_time or self.end_time):
-            raise ValueError('trace_id cannot be combined with trace search criteria.')
+        if self.trace_id is not None and (
+            self.search or self.filters or self.start_time or self.end_time or self.limit is not None
+        ):
+            raise ValueError('trace_id cannot be combined with trace search criteria or limit.')
         if self.start_time and self.end_time and self.start_time > self.end_time:
             raise ValueError('start_time must be before end_time.')
         return self
@@ -287,6 +306,19 @@ class Trace(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     expected_output: Output | None = None
     import_error: str | None = None
+
+    @model_validator(mode='after')
+    def _failed_traces_carry_no_messages(self) -> 'Trace':
+        """A failed import may not also look like a usable exchange.
+
+        ``import_error`` lives on the success type, so "check import_error first"
+        would otherwise be a convention every consumer has to remember. Forbidding
+        the mixed state makes a half-imported trace impossible to construct
+        instead of merely discouraged.
+        """
+        if self.import_error is not None and (self.input_messages or self.output_messages):
+            raise ValueError('A Trace with import_error set cannot carry input or output messages.')
+        return self
 
     @property
     def messages(self) -> list[Message]:
@@ -367,9 +399,15 @@ class EvaluatorParams(BaseModel):
     print_results: bool = Field(default=True, validation_alias='print')
     description: str | None = None
     path: str | None = None
-    inference: bool = True
+    inference: bool | None = None
     """When False, skip generation and evaluate the pre-recorded response in each
-    row's ``messages`` column instead of running ``jobs``."""
+    row's ``messages`` column instead of running ``jobs``.
+
+    ``None`` resolves from ``data``: a replay source (`ExperimentInput`,
+    `TraceInput`) is a recorded-output source by construction and resolves to
+    False, anything else to True. Passing ``inference=True`` with a replay source
+    still raises — the flag was never able to mean anything else there, and
+    requiring it taught users the mode only by making the obvious call fail."""
     single_trace: bool = False
     """When True, open one ``evaluatorq.run`` span for the whole run so every row
     shares a trace. Default False keeps each row's ``orq.job`` as its own root."""
@@ -377,15 +415,18 @@ class EvaluatorParams(BaseModel):
 
     @model_validator(mode='after')
     def _require_jobs_when_inferring(self) -> 'EvaluatorParams':
-        if self.inference and not self.jobs:
-            raise ValueError("'jobs' is required unless inference=False")
-        if isinstance(self.data, ExperimentInput) and self.inference:
+        replay_source = isinstance(self.data, (ExperimentInput, TraceInput))
+        if self.inference is True and isinstance(self.data, ExperimentInput):
             raise ValueError(
                 'data=ExperimentInput(...) sources pre-recorded responses from an '
                 'experiment and is only valid with inference=False.'
             )
-        if isinstance(self.data, TraceInput) and self.inference:
+        if self.inference is True and isinstance(self.data, TraceInput):
             raise ValueError(
                 'data=TraceInput(...) sources recorded responses from traces and is only valid with inference=False.'
             )
+        if self.inference is None:
+            self.inference = not replay_source
+        if self.inference and not self.jobs:
+            raise ValueError("'jobs' is required unless inference=False")
         return self

@@ -195,22 +195,45 @@ data=ExperimentInput(experiment_id="<experiment_id>", run_id="<run_id>")
 
 ### Evaluate recorded trace output
 
-`TraceInput` is the async request for recorded trace data. Pass query criteria such as `limit`, time bounds, search text, or filters, or pass one `trace_id` with an optional exact `span_id`; `span_id` cannot be used without its trace. The shared importer returns normalized `Trace` objects and `Trace.to_datapoint()` supplies the evaluatorq row shape.
+`TraceInput` is the async request for recorded trace data, and it has two mutually exclusive modes. **Query mode** selects a bounded batch by `limit`, time bounds (`start_time`/`end_time`), `search` text, or `filters` — the mode you reach for when you do not already have a trace ID. **Trace mode** takes one `trace_id`, with an optional exact `span_id`; `span_id` cannot be used without its trace, and `limit` cannot be combined with `trace_id` because trace mode never reads it. The shared importer returns normalized `Trace` objects and `Trace.to_datapoint()` supplies the evaluatorq row shape.
 
-Use `inference=False` when the trace already contains the response you want to score. Evaluatorq skips jobs and sends that recorded output to your evaluators. An exact span is parsed on its own; a trace or query selection starts from the latest eligible non-evaluator span and follows parents until it finds messages. Chat Completions, Responses, and OpenTelemetry GenAI messages are accepted from top-level span input/output, flat or nested span attributes, and span event attributes.
+Query mode is the common path — score whatever ran recently without looking up an ID first:
 
 ```python
+from datetime import datetime, timedelta, timezone
+
 from evaluatorq import TraceInput, evaluatorq, orq_evaluator
 
 results = await evaluatorq(
     name='production-quality',
-    data=TraceInput(trace_id='trace_123', span_id='span_456'),
-    inference=False,
+    data=TraceInput(
+        limit=50,
+        start_time=datetime.now(timezone.utc) - timedelta(days=1),
+        search='checkout',
+    ),
     evaluators=[orq_evaluator(evaluator_id='eval-1')],
 )
 ```
 
-`evaluator_id` is required and keyword-only. It identifies an evaluator that already exists in Orq and determines the evaluatorq result name (`orq:eval-1` in this example); there is no separate `name=` override. `model=` is optional and overrides the configured model only for model-backed evaluators; deterministic built-ins do not need it. A missing trace response is an error, not a clean score, so check the returned results before trusting a rate.
+`filters` is a `list[dict[str, Any]]` passed straight through to the platform's advanced trace filters — the same shape the Orq Traces UI produces. Each entry takes a `field` (the `attr.` prefix over the response's `attributes` path), an `op`, and `values` as a list of strings, even for a single value:
+
+```python
+data=TraceInput(limit=50, filters=[{"field": "attr.orq.billing.cache_read_cost", "op": "gt", "values": ["0"]}])
+```
+
+Once you have a specific trace — from the Orq UI's trace URL, or `orq traces search --from 24h --to now --query checkout -o json` — trace mode replaces the whole query:
+
+```python
+results = await evaluatorq(
+    name='production-quality',
+    data=TraceInput(trace_id='trace_123', span_id='span_456'),
+    evaluators=[orq_evaluator(evaluator_id='eval-1')],
+)
+```
+
+Evaluatorq skips jobs and sends the trace's recorded output to your evaluators — `TraceInput` resolves `inference=False` on its own, so there is no need to pass it. An exact span is parsed on its own; a trace or query selection starts from the latest eligible non-evaluator span and follows parents until it finds messages. Chat Completions, Responses, and OpenTelemetry GenAI messages are accepted from top-level span input/output, flat or nested span attributes, and span event attributes. A query that matches no traces logs a warning, and `evaluatorq()` raises rather than running a green zero-row evaluation.
+
+`orq_evaluator` needs the Orq SDK, which the `evaluatorq[orq]` extra installs (`uv add "evaluatorq[orq]"`) — a base evaluatorq install already carries it, but name the extra explicitly rather than relying on that. `evaluator_id` is required and keyword-only. It identifies an evaluator that already exists in Orq and determines the evaluatorq result name (`orq:eval-1` when `model` is omitted, `orq:eval-1@<model>` when you set one); there is no separate `name=` override. `model=` is optional and overrides the configured model only for model-backed evaluators; deterministic built-ins do not need it. A missing trace response is an error, not a clean score, so check the returned results before trusting a rate.
 
 ## Built-in evaluators
 

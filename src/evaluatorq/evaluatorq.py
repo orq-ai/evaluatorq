@@ -13,7 +13,7 @@ from .common.llm_limit import llm_concurrency_limit
 from .common.messages import coerce_content_text
 from .common.output_adapters import has_meaningful_output
 from .common.parallelism import resolve_datapoint_parallelism
-from .common.trace_input import fetch_traces
+from .common.trace_input import fetch_traces, partition_traces
 from .fetch_data import (
     fetch_dataset_batches,
     fetch_experiment_datapoints,
@@ -242,7 +242,7 @@ class _EvaluationInputs:
     print_results: bool
     description: str | None
     path: str | None
-    inference: bool
+    inference: bool | None
     single_trace: bool
     on_datapoint_complete: DataPointComplete | None
 
@@ -294,7 +294,7 @@ def _normalise_params(inputs: _EvaluationInputs) -> _ResolvedEvaluationInputs:
     if params is not None:
         # Validate params if passed as dict
         validated = EvaluatorParams.model_validate(params) if isinstance(params, dict) else params
-    elif data is not None and (jobs is not None or not inference):
+    elif data is not None and (jobs is not None or inference is not True):
         # Use kwargs ('jobs' is optional when inference=False, since responses are replayed).
         validated = EvaluatorParams(
             data=data,
@@ -317,7 +317,8 @@ def _normalise_params(inputs: _EvaluationInputs) -> _ResolvedEvaluationInputs:
 
     # Extract validated values
     data = validated.data
-    inference = validated.inference
+    # The validator resolves inference=None from the data source, so it is a bool here.
+    inference = bool(validated.inference)
     if inference:
         # The validator guarantees jobs is non-empty whenever inference=True.
         jobs = cast('list[Job]', validated.jobs)
@@ -392,22 +393,26 @@ async def _enter_single_trace(
         tracing_context.parent_context = await capture_parent_context()
 
 
-async def _resolve_experiment_input(
+async def _resolve_remote_data_input(
     data: DatasetIdInput | ExperimentInput | TraceInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None,
     orq_api_key: str | None,
     base_url: str | None,
-) -> DatasetIdInput | TraceInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None:
-    """Turn an experiment reference into the rows it recorded, before the data phase.
+) -> DatasetIdInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None:
+    """Turn a remote data reference into the rows it holds, before the data phase.
 
-    Only ``ExperimentInput`` is touched; every other source is returned unchanged
-    so the caller can keep dispatching on its type. The validator already
-    guarantees ``inference=False`` whenever this substitution happens.
+    ``ExperimentInput`` and ``TraceInput`` are both resolved here — two remote
+    sources, one resolution phase, so neither can drift into its own inline
+    shape. Every other source is returned unchanged so the caller can keep
+    dispatching on its type. The validator already guarantees ``inference=False``
+    whenever either substitution happens.
 
     Returns:
-        The experiment's recorded datapoints, or ``data`` untouched.
+        The experiment's or the traces' datapoints, or ``data`` untouched.
 
     Raises:
-        ValueError: An experiment was requested without ``orq_api_key``.
+        ValueError: An experiment was requested without ``orq_api_key``, or a
+            trace query selected nothing — a data source that resolved to zero
+            rows is a caller error, not a run that passed everything.
     """
     # Experiment source (no-inference only): replace the input with the experiment's
     # recorded responses, then fall through to the in-memory data path below. The
@@ -421,6 +426,18 @@ async def _resolve_experiment_input(
             data.run_id,
             base_url=base_url,
         )
+    if isinstance(data, TraceInput):
+        traces = await fetch_traces(data, api_key=orq_api_key, base_url=base_url)
+        usable, failed = partition_traces(traces, caller='evaluatorq')
+        if not traces:
+            raise ValueError(
+                'data=TraceInput(...) selected no traces. Widen the query (limit, search, '
+                'filters, start_time/end_time) or name a trace_id.'
+            )
+        # Failed imports stay in the row set on purpose: each becomes a row that
+        # fails on its own rather than vanishing from the denominator.
+        logger.info('Imported {} trace(s) ({} usable, {} failed).', len(traces), len(usable), len(failed))
+        return [trace.to_datapoint() for trace in traces]
     return data
 
 
@@ -737,7 +754,7 @@ async def evaluatorq(
     print_results: bool = True,
     description: str | None = None,
     path: str | None = None,
-    inference: bool = True,
+    inference: bool | None = None,
     single_trace: bool = False,
     on_datapoint_complete: DataPointComplete | None = None,
     _send_results: bool = True,
@@ -788,7 +805,9 @@ async def evaluatorq(
         description: Optional description for the evaluation run.
         path: Optional path (e.g. "MyProject/MyFolder") to place the experiment
               in a specific project and folder on the Orq platform.
-        inference: When True (default) jobs run to generate responses. When False,
+        inference: Leave unset to resolve it from ``data``: a replay source
+              (``ExperimentInput``, ``TraceInput``) means False, anything else
+              True. When True jobs run to generate responses. When False,
               generation is skipped and evaluators score each row's recorded output
               when present, falling back to its ``messages`` column; ``jobs`` is then
               optional and ignored.
@@ -870,15 +889,7 @@ async def evaluatorq(
 
         dataset_id: str | None = None
 
-        data = await _resolve_experiment_input(data, orq_api_key, _base_url)
-
-        if isinstance(data, TraceInput):
-            traces = await fetch_traces(
-                data,
-                api_key=orq_api_key,
-                base_url=_base_url,
-            )
-            data = [trace.to_datapoint() for trace in traces]
+        data = await _resolve_remote_data_input(data, orq_api_key, _base_url)
 
         # Create progress service
         progress = ProgressService()

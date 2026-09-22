@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from evaluatorq.common.messages import coerce_content_text
+from evaluatorq.common.messages import coerce_content_text, messages_to_text
 from evaluatorq.contracts import (
     AgentResponse,
     Message,
@@ -34,10 +34,10 @@ def output_to_text(output: Any) -> str:
     if isinstance(output, str):
         return output
     if isinstance(output, list) and (not output or all(isinstance(message, (Message, dict)) for message in output)):
-        return ''.join(
-            coerce_content_text(message.content if isinstance(message, Message) else message.get('content'))
-            for message in output
-        )
+        # messages_to_text, not a bare join: has_meaningful_output counts a tool
+        # call as a response, so a renderer that dropped tool calls handed the
+        # judge an empty string for an agent that acted.
+        return messages_to_text(output)
     if isinstance(output, dict):
         if output.get('object') == 'response':
             try:
@@ -93,10 +93,7 @@ def _message_has_meaningful_output(message: Message | dict[str, Any]) -> bool:
         if content is None:
             return any(key not in {'role', 'content'} for key in message)
         return bool(coerce_content_text(content).strip())
-    if role == 'assistant':
-        return any(key not in {'role', 'name'} for key in message)
-    if message.get('tool_call_id'):
-        return True
+    # The role-specific branches that used to sit here computed exactly this.
     return any(key not in {'role', 'name'} for key in message)
 
 
