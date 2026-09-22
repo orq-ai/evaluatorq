@@ -113,7 +113,7 @@ def test_log_bridge_defaults_to_info(monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.dashboard import launch
 
     monkeypatch.delenv('EVALUATORQ_LOG_LEVEL', raising=False)
-    with patch('evaluatorq.dashboard.launch.logging.basicConfig') as mock_cfg:
+    with patch('evaluatorq.dashboard.launch.logging.basicConfig') as mock_cfg, patch('evaluatorq.dashboard.launch.logger'):
         launch._install_log_bridge()
 
     assert mock_cfg.call_args.kwargs['level'] == logging.INFO
@@ -124,10 +124,88 @@ def test_log_bridge_respects_env_override(monkeypatch: pytest.MonkeyPatch) -> No
     from evaluatorq.dashboard import launch
 
     monkeypatch.setenv('EVALUATORQ_LOG_LEVEL', 'debug')
-    with patch('evaluatorq.dashboard.launch.logging.basicConfig') as mock_cfg:
+    with patch('evaluatorq.dashboard.launch.logging.basicConfig') as mock_cfg, patch('evaluatorq.dashboard.launch.logger'):
         launch._install_log_bridge()
 
     assert mock_cfg.call_args.kwargs['level'] == 'DEBUG'
+
+
+def test_log_bridge_writes_the_console_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stalled terminal must not block log writes, and with them every request."""
+    from evaluatorq.dashboard import launch
+
+    monkeypatch.delenv('EVALUATORQ_LOG_LEVEL', raising=False)
+    with patch('evaluatorq.dashboard.launch.logging.basicConfig'), patch('evaluatorq.dashboard.launch.logger') as mock_logger:
+        launch._install_log_bridge()
+
+    mock_logger.remove.assert_called_once_with()
+    assert isinstance(mock_logger.add.call_args.args[0], launch._DroppingConsoleSink)
+
+
+def test_console_sink_drops_lines_instead_of_blocking_when_the_console_stalls() -> None:
+    """Log calls return at once while the console stalls; the drop count is reported once it resumes."""
+    import io
+    import threading
+
+    from evaluatorq.dashboard import launch
+
+    stalled = threading.Event()
+    resume = threading.Event()
+    written = io.StringIO()
+
+    class StalledStream(io.TextIOBase):
+        def write(self, text: str) -> int:
+            stalled.set()
+            resume.wait(timeout=5)
+            return written.write(text)
+
+        def flush(self) -> None:
+            return None
+
+    sink = launch._DroppingConsoleSink(StalledStream(), maxsize=2)
+    sink('first\n')
+    assert stalled.wait(timeout=2), 'the drain thread never reached the console'
+    finished = threading.Event()
+
+    def log_more() -> None:
+        for n in range(5):
+            sink(f'line {n}\n')
+        finished.set()
+
+    threading.Thread(target=log_more, daemon=True).start()
+    assert finished.wait(timeout=2), 'logging blocked on a stalled console'
+    resume.set()
+    deadline = threading.Event()
+    for _ in range(50):
+        if 'dropped' in written.getvalue() and written.getvalue().count('line ') == 2:
+            break
+        deadline.wait(0.05)
+    output = written.getvalue()
+    assert output.startswith('first\n')
+    assert '... dropped 3 log lines while the console was not draining\n' in output
+    assert output.count('line ') == 2
+
+
+@pytest.mark.parametrize(
+    ('override', 'expected'),
+    [(None, logging.WARNING), ('DEBUG', logging.NOTSET)],
+)
+def test_log_bridge_quiets_httpx_only_at_the_default_level(
+    monkeypatch: pytest.MonkeyPatch, override: str | None, expected: int
+) -> None:
+    """httpx logs one INFO line per Orq call; a run makes hundreds, so the default level drops them."""
+    from evaluatorq.dashboard import launch
+
+    if override is None:
+        monkeypatch.delenv('EVALUATORQ_LOG_LEVEL', raising=False)
+    else:
+        monkeypatch.setenv('EVALUATORQ_LOG_LEVEL', override)
+    httpx_logger = logging.getLogger('httpx')
+    monkeypatch.setattr(httpx_logger, 'level', logging.NOTSET)
+    with patch('evaluatorq.dashboard.launch.logging.basicConfig'), patch('evaluatorq.dashboard.launch.logger'):
+        launch._install_log_bridge()
+
+    assert httpx_logger.level == expected
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +254,7 @@ def test_serve_calls_uvicorn_run(tmp_path: Path) -> None:
     call_kwargs = mock_run.call_args
     assert call_kwargs.kwargs.get('host') == '0.0.0.0'
     assert call_kwargs.kwargs.get('port') == 9999
+    assert call_kwargs.kwargs.get('log_config') is None, 'uvicorn must log through the loguru bridge'
 
 
 def test_eq_dashboard_accepts_multiple_paths(tmp_path: Path) -> None:

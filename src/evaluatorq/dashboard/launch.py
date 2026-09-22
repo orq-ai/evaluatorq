@@ -10,7 +10,11 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
+import sys
+import threading
 from pathlib import Path
+from typing import TextIO
 
 from loguru import logger
 
@@ -56,16 +60,54 @@ class _InterceptHandler(logging.Handler):
         logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
 
 
+class _DroppingConsoleSink:
+    """Write log lines from a bounded queue on a thread; drop lines while the console stops draining.
+
+    A terminal that stops reading stdout (a hidden pane, a paused pipe) makes the
+    next write block, and a blocking write on the event loop hangs every route and
+    ignores SIGTERM until the reader catches up. loguru's ``enqueue=True`` does not
+    help: its queue is a pipe that fills the same way. A bounded in-process queue
+    never blocks the caller; a note of what was dropped follows once writes resume.
+    """
+
+    def __init__(self, stream: TextIO, maxsize: int = 10_000) -> None:
+        self._queue: queue.Queue[str] = queue.Queue(maxsize)
+        self._dropped = 0
+        threading.Thread(target=self._drain, args=(stream,), name='console-log', daemon=True).start()
+
+    def __call__(self, message: str) -> None:
+        try:
+            self._queue.put_nowait(message)
+        except queue.Full:
+            self._dropped += 1
+
+    def _drain(self, stream: TextIO) -> None:
+        while True:
+            line = self._queue.get()
+            if self._dropped:
+                dropped, self._dropped = self._dropped, 0
+                stream.write(f'... dropped {dropped} log lines while the console was not draining\n')
+            stream.write(line)
+            stream.flush()
+
+
 def _install_log_bridge() -> None:
     """Route all stdlib logging (uvicorn access-log, starlette, etc.) through
     loguru.  ``force=True`` replaces any pre-existing root-logger handlers.
 
     Defaults to INFO so third-party DEBUG chatter (watchfiles reload scans,
-    httpx request logs, uvicorn internals) stays out of the console. Override
-    with ``EVALUATORQ_LOG_LEVEL=DEBUG`` (or any level name) when diagnosing.
+    uvicorn internals) stays out of the console, and quiets httpx's per-request
+    INFO line. Override with ``EVALUATORQ_LOG_LEVEL=DEBUG`` (or any level name)
+    when diagnosing; the override shows httpx lines again.
     """
-    level: int | str = os.environ.get('EVALUATORQ_LOG_LEVEL', '').upper() or logging.INFO
+    override = os.environ.get('EVALUATORQ_LOG_LEVEL', '').upper()
+    level: int | str = override or logging.INFO
+    logger.remove()
+    logger.add(_DroppingConsoleSink(sys.stderr), colorize=True)
     logging.basicConfig(handlers=[_InterceptHandler()], level=level, force=True)
+    if not override:
+        # One INFO line per Orq call; a run classifies hundreds of traces.
+        logging.getLogger('httpx').setLevel(logging.WARNING)
 
 
 # Env var carrying the JSON-encoded roots to the reload subprocess. uvicorn's
@@ -133,4 +175,7 @@ def serve(
         port=port,
         reload=True,
         reload_dirs=[pkg_dir],
+        # uvicorn's own dictConfig writes the access log straight to stdout, past the
+        # loguru bridge and its queue thread; None leaves its loggers propagating to root.
+        log_config=None,
     )
