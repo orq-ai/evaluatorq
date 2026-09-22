@@ -248,7 +248,7 @@ async def _save_settings(req: Request) -> Response | NotStr:
     if old_store is not None:
         # A running finder keeps old model settings, so retire it before the
         # next request builds the replacement store from the saved settings.
-        await old_store.cancel()
+        await old_store.close()
     req.app.state.finder_settings = settings
     for state_name in ('finder_store', 'finder_catalogue_cache'):
         if hasattr(req.app.state, state_name):

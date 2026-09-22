@@ -110,7 +110,7 @@ def test_saving_settings_invalidates_initialized_finder_store(client: TestClient
         async def snapshot(self) -> RunSnapshot:
             return RunSnapshot()
 
-        async def cancel(self) -> None:
+        async def close(self) -> None:
             return None
 
     def build_store(app: Any) -> Store:

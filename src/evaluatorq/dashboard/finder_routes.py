@@ -131,7 +131,8 @@ def _optional_value(form: Any, name: str) -> object | None:
     return raw
 
 
-def _run_request(form: Any, settings: Any) -> RunRequest:
+def _run_request(form: Any, settings: Any, *, anchor: PopulationRequest | None = None) -> RunRequest:
+    """Build the run request; *anchor* pins ``end`` to a reviewed population so an unchanged review reuses its traces."""
     values = {
         'query': str(form.get('query') or '').strip(),
         'mode': str(form.get('mode') or 'immediate'),
@@ -151,7 +152,7 @@ def _run_request(form: Any, settings: Any) -> RunRequest:
         duration_ms_min=parsed.duration_ms_min,
         duration_ms_max=parsed.duration_ms_max,
     )
-    end = datetime.now(timezone.utc)
+    end = anchor.end if anchor is not None and anchor.end is not None else datetime.now(timezone.utc)
     return RunRequest(
         query=parsed.query,
         mode=parsed.mode,
@@ -302,7 +303,7 @@ def register_finder_routes(app: Any, roots: list[Any] | None = None) -> None:  #
         if current.request is None or current.compiled is None:
             return _html(fragment(current, settings, error='There is no plan waiting for review.'), status_code=409)
         try:
-            request = _run_request(form, settings)
+            request = _run_request(form, settings, anchor=current.request.population)
             compiled = _compiled_from_form(current.compiled, form)
             snapshot = await store.start(request, compiled)
         except (ValidationError, ValueError, TypeError) as exc:

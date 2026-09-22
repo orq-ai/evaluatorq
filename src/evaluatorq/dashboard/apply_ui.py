@@ -240,14 +240,18 @@ def render_rec_apply_button(rid: str, category: str, rec: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _drawer(title: str, body: str, footer: str = '') -> str:
-    """Right-hand drawer shell: overlay + panel; the close button empties the mount."""
+def drawer(
+    title: str, body: str, footer: str = '', *, dismiss_route: str = '/apply/dismiss', drawer_id: str = DRAWER_ID
+) -> str:
+    """Right-hand drawer shell: overlay + panel; the close button empties the mount.
+
+    Shared by the apply and finder surfaces; each passes its own dismiss route and mount id."""
     close = (
         f'<button class="rt-drawer-close" aria-label="Close" '
-        f'hx-get="/apply/dismiss" hx-target="#{DRAWER_ID}" hx-swap="innerHTML">&times;</button>'
+        f'hx-get="{dismiss_route}" hx-target="#{drawer_id}" hx-swap="innerHTML">&times;</button>'
     )
     overlay = (
-        f'<div class="rt-drawer-overlay" hx-get="/apply/dismiss" hx-target="#{DRAWER_ID}" hx-swap="innerHTML"></div>'
+        f'<div class="rt-drawer-overlay" hx-get="{dismiss_route}" hx-target="#{drawer_id}" hx-swap="innerHTML"></div>'
     )
     footer_html = f'<div class="rt-drawer-footer">{footer}</div>' if footer else ''
     return (
@@ -261,7 +265,7 @@ def _drawer(title: str, body: str, footer: str = '') -> str:
 
 
 def render_error_drawer(message: str) -> str:
-    return _drawer('Apply recommendations', f'<p class="rt-drawer-error">{esc(message)}</p>')
+    return drawer('Apply recommendations', f'<p class="rt-drawer-error">{esc(message)}</p>')
 
 
 def _diff_html(diff: str) -> str:
@@ -365,7 +369,7 @@ def render_preview_drawer(
         )
     )
     if unchanged:
-        return _drawer('Preview: no change', body)
+        return drawer('Preview: no change', body)
 
     safe_rid = esc(rid)
     footer = (
@@ -377,7 +381,7 @@ def render_preview_drawer(
         f'hx-target="#{DRAWER_ID}" hx-swap="innerHTML">Cancel</button>'
         '<span class="rt-drawer-footnote">Applies the diff above, as a new minor version of the agent.</span>'
     )
-    return _drawer('Preview changes', body, footer)
+    return drawer('Preview changes', body, footer)
 
 
 def render_applied_drawer(agent_key: str, applied_count: int, new_version: str | None) -> str:
@@ -403,7 +407,7 @@ def render_applied_drawer(agent_key: str, applied_count: int, new_version: str |
         'see the updated state. Review the new version in the Orq UI before routing traffic to it.</p>'
         '</div>'
     )
-    return _drawer('Applied', body)
+    return drawer('Applied', body)
 
 
 # ---------------------------------------------------------------------------

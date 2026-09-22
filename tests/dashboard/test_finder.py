@@ -282,6 +282,8 @@ def test_find_review_start_transitions_to_classification(setup_finder) -> None:
     assert store.started_request.parallelism == 3
     assert store.started_request.population.facets.project == frozenset({'support-agent'})
     assert store.started_request.population.numeric.tokens_min == 900
+    assert store.compile_request is not None
+    assert store.started_request.population.end == store.compile_request.population.end
     assert store.started_compiled is not None
     assert store.started_compiled.task.instructions == 'Edited instructions'
     assert store.started_compiled.task.criteria['frustrated'] == 'Changed criterion'
@@ -338,6 +340,18 @@ def test_find_export_is_404_until_completed_then_downloads_json(setup_finder) ->
     assert response.status_code == 200
     assert response.headers['content-disposition'] == 'attachment; filename="trace-finder-1.json"'
     assert json.loads(response.text)['counts']['matched'] == 1
+
+
+def test_find_facets_menu_reports_unavailable_catalogue(setup_finder, monkeypatch: pytest.MonkeyPatch) -> None:
+    _store, client = setup_finder
+
+    async def load_catalogue(app: Any, window_days: int | None = None) -> FacetCatalogue | None:
+        return None
+
+    monkeypatch.setattr(finder_routes, '_load_catalogue', load_catalogue)
+    response = client.get('/find/facets')
+    assert response.status_code == 200
+    assert 'Facet values are unavailable' in response.text
 
 
 def test_find_facets_menu_lists_catalogue_values(setup_finder, monkeypatch: pytest.MonkeyPatch) -> None:

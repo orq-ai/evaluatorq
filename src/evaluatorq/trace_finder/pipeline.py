@@ -45,4 +45,5 @@ def build_run_store(settings: DashboardSettings, *, client: AsyncOpenAI, orq: Or
         filter_selector=filter_selector,
         population_loader=population_loader,
         run_jev=partial(run_jev, model=settings.jev_model, client=client),
+        close=source.close,
     )

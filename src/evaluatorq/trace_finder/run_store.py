@@ -8,6 +8,8 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Protocol
 
+from loguru import logger
+
 from .compiler import CompiledPlan
 from .models import (
     FACET_NAMES,
@@ -71,8 +73,10 @@ class RunStore:
         project_trace: Callable[[TraceRecord], JevProjection] = default_project_trace,
         monotonic: Callable[[], float] = time.monotonic,
         now_utc: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        close: Callable[[], None] | None = None,
     ) -> None:
         self._compiler = compiler
+        self._close = close
         self._population_loader = population_loader
         self._run_jev = run_jev
         self._filter_selector = filter_selector
@@ -337,6 +341,13 @@ class RunStore:
                 self._task = None
                 return self._view()
 
+    async def close(self) -> None:
+        """Cancel owned work and release the resources the builder handed over (``close=``)."""
+
+        await self.cancel()
+        if self._close is not None:
+            self._close()
+
     async def reset(self) -> RunSnapshot:
         """Cancel owned work and return a new empty idle generation."""
 
@@ -392,6 +403,8 @@ class RunStore:
             raise
 
     def _finish(self, state: RunState, error: str | None = None) -> None:
+        if state == 'failed':
+            logger.warning('Trace finder run {} failed: {}', self._generation, error)
         self._snapshot = replace(
             self._snapshot,
             state=state,

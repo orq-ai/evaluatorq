@@ -287,15 +287,32 @@ async def test_filter_selector_receives_the_run_population_bounds() -> None:
 
 
 @pytest.mark.asyncio
-async def test_compiler_failure_sets_failed_state_with_error_text() -> None:
+async def test_compiler_failure_sets_failed_state_with_error_text(caplog: pytest.LogCaptureFixture) -> None:
     store, _, loader, runner, _ = make_store(planner=RaisingPlanner())
 
     failed = await store.compile(request())
 
     assert failed.state == 'failed'
     assert failed.error == 'compiler exploded'
+    assert 'compiler exploded' in caplog.text
     assert not loader.calls
     assert runner.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_close_cancels_and_releases_the_builder_resources() -> None:
+    released: list[bool] = []
+    store = RunStore(
+        compiler=Planner(),
+        population_loader=Loader(),
+        run_jev=Runner(),
+        filter_selector=make_store()[0]._filter_selector,
+        close=lambda: released.append(True),
+    )
+
+    await store.close()
+
+    assert released == [True]
 
 
 @pytest.mark.asyncio

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import quote
 
 from evaluatorq.common.reports import esc
-from evaluatorq.dashboard.apply_ui import _drawer
+from evaluatorq.dashboard.apply_ui import drawer as drawer_shell
 from evaluatorq.dashboard.security import csrf_field
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.trace_links import trace_link_button, trace_span_url
@@ -127,7 +127,9 @@ def facet_menu(
             rows.append(
                 f'<div class="facet-group"><div><span>{esc(label)}</span><span class="kind">{kind}</span></div></div>'
             )
-    if catalogue is not None and not any(_facet_values(catalogue, name) for name, _ in FACET_LABELS):
+    if catalogue is None:
+        rows.append('<p class="finder-empty">Facet values are unavailable; check the Orq connection and reopen.</p>')
+    elif not any(_facet_values(catalogue, name) for name, _ in FACET_LABELS):
         rows.append('<p class="finder-empty">No facet values available.</p>')
     return f'<div class="finder-facets{" open" if open_ else ""}">{"".join(rows)}</div>'
 
@@ -567,8 +569,9 @@ def drawer(detail: TraceDetail, *, experiment_url: str | None = None) -> str:
         trace_link_button(url, 'Open in Orq ↗')
         + f'<button class="btn-secondary" type="button" data-trace-id="{esc(trace.trace_id)}" onclick="navigator.clipboard.writeText(this.dataset.traceId)">Copy trace id</button>'
     )
-    html = _drawer(f'Trace {esc(trace.trace_id)}', body_html, footer)
-    return html.replace('/apply/dismiss', '/find/dismiss').replace('#rt-apply-drawer', '#finder-drawer')
+    return drawer_shell(
+        f'Trace {esc(trace.trace_id)}', body_html, footer, dismiss_route='/find/dismiss', drawer_id='finder-drawer'
+    )
 
 
 def _message_text(content: object) -> str:
