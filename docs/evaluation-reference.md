@@ -193,6 +193,25 @@ data=ExperimentInput(experiment_id="<experiment_id>", run_id="<run_id>")
 
 `ORQ_API_KEY` must be set — the recorded rows are fetched from the Orq API. When `inference=False`, `jobs` is optional and ignored. Any row whose recorded response is missing or blank fails loudly rather than being silently skipped.
 
+### Evaluate recorded trace output
+
+`TraceInput` is the async request for recorded trace data. Pass query criteria such as `limit`, time bounds, search text, or filters, or pass one `trace_id` with an optional exact `span_id`; `span_id` cannot be used without its trace. The shared importer returns normalized `Trace` objects and `Trace.to_datapoint()` supplies the evaluatorq row shape.
+
+Use `inference=False` when the trace already contains the response you want to score. Evaluatorq skips jobs and sends that recorded output to your evaluators. An exact span is parsed on its own; a trace or query selection starts from the latest eligible non-evaluator span and follows parents until it finds messages. Chat Completions, Responses, and OpenTelemetry GenAI messages are accepted from span attributes, events, and the resource, scope, and entity locations implemented by the parser.
+
+```python
+from evaluatorq import TraceInput, evaluatorq, orq_evaluator
+
+results = await evaluatorq(
+    'production-quality',
+    data=TraceInput(trace_id='trace_123', span_id='span_456'),
+    inference=False,
+    evaluators=[orq_evaluator('eval-1', name='groundedness')],
+)
+```
+
+`orq_evaluator('eval-1')` invokes an evaluator that already exists in Orq. `model=` is optional and overrides the configured model only for model-backed evaluators; deterministic built-ins do not need it. A missing trace response is an error, not a clean score, so check the returned results before trusting a rate.
+
 ## Built-in evaluators
 
 ```python

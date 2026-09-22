@@ -34,6 +34,31 @@ report = await red_team(target=target, mode="static", dataset="./my_attacks.json
 report = await red_team(target=target, mode="static", dataset="hf:my-org/my-attacks")
 ```
 
+## Seed a dynamic attack from a trace
+
+`datapoints_from_traces(...)` turns recorded conversations into dynamic attack seeds. The rows are not offline scores: `red_team()` sends a new attack to the target, captures a new response, and judges that new exchange.
+
+```python
+from evaluatorq import TraceInput
+from evaluatorq.redteam import datapoints_from_traces, red_team
+
+datapoints = await datapoints_from_traces(
+    TraceInput(trace_id='trace_123'),
+    start_from='last_assistant',  # or 'first_user'
+)
+report = await red_team(
+    target=agent,
+    datapoints=datapoints,
+    vulnerabilities=['prompt_injection'],
+    attack_techniques=['direct-injection'],
+    delivery_methods=['role-play'],
+)
+```
+
+`first_user` is the default. Evaluatorq sends the opening user message to a fresh target, records its new assistant response as bootstrap context, and begins the attack after that response. `last_assistant` imports the transcript through its final assistant message and starts the attack there; it works only for a target that accepts caller-owned history. Every job gets a fresh target, and production thread, task, and memory identifiers are provenance only.
+
+Bootstrap context and its usage are recorded separately, do not consume `max_turns`, and are not scored as an attack turn. Keep `vulnerabilities`, `attack_techniques`, and `delivery_methods` on `red_team()` because they shape the attacker prompt and its strategy selection. Trace seed rows use the dynamic pipeline and cannot be combined with `dataset=` or a previous-run replay.
+
 ## Red-team your target
 
 !!! warning "Use a sandbox or test agent"

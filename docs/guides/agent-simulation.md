@@ -512,6 +512,18 @@ results = await simulate(
 
 Replay reruns what you already have. The other move is to generate *new* cases that are shaped by what really happened. Production traces show you the user archetypes and situations your agent actually meets.
 
+The async `datapoints_from_traces(...)` helper accepts the same `TraceInput` used by core evaluation. It fetches and normalizes traces through the shared importer, then turns each usable conversation into a simulation datapoint; pass the returned rows to the existing `simulate()` runner.
+
+```python
+from evaluatorq import TraceInput
+from evaluatorq.simulation import datapoints_from_traces, simulate
+
+datapoints = await datapoints_from_traces(TraceInput(trace_id='trace_123'))
+results = await simulate(target=agent, datapoints=datapoints)
+```
+
+The trace is source material for a new simulation, not a scored result. Simulation infers a persona and scenario from each conversation and writes a fresh opening message by default. The trace analysis and simulation calls use their own budgets; `max_turns` applies to the generated conversation and does not count trace bootstrap work.
+
 The direct route is `eq sim from-traces`, which pulls recent traces from the Orq traces API and writes one datapoint per conversation — persona and scenario inferred from a short summary of it, opening message written from that persona and scenario:
 
 ```bash
