@@ -72,7 +72,7 @@ Settings are resolved in this order, from strongest to weakest: explicit CLI or 
 | JEV model | `typesafe/jev-latest` | `EVALUATORQ_JEV_MODEL` |
 | Apply-recommendations model | `openai/gpt-5.6-luna` | `EVALUATORQ_APPLY_MODEL` |
 | Search window | 7 days | `EVALUATORQ_FINDER_WINDOW_DAYS` |
-| Trace limit | 500 | `EVALUATORQ_FINDER_LIMIT` |
+| Trace limit | 500 (max 5000) | `EVALUATORQ_FINDER_LIMIT` |
 | JEV parallelism | 100 | `EVALUATORQ_FINDER_PARALLELISM` |
 
 The dashboard command accepts finder overrides for `--compiler-model`, `--jev-model`, `--window-days`, `--limit`, and `--parallelism`. Those options apply to finder runs started by that dashboard process.
@@ -91,7 +91,7 @@ The command accepts these options:
 | Option | Meaning |
 |---|---|
 | `--window-days INTEGER` (`1`–`90`) | How many recent days to search. |
-| `--limit INTEGER` (`1`–`500`) | Maximum traces to classify. |
+| `--limit INTEGER` (`1`–`5000`) | Maximum traces to classify. |
 | `--parallelism INTEGER` (`1`–`200`) | Concurrent JEV classifications. |
 | `--compiler-model TEXT` | Model that compiles the search question through the Orq router. Default: `openai/gpt-5.6-luna`. |
 | `--jev-model TEXT` | JEV model that classifies each trace through the Orq router. Default: `typesafe/jev-latest`. |
@@ -114,6 +114,6 @@ The facet and numeric options are explicit OQL constraints. The natural-language
 
 ## Limits and cost
 
-The finder searches a maximum of 500 usable traces per run, even if a larger limit is supplied elsewhere. The default lookback is seven days, the default JEV parallelism is 100, and parallelism is capped at 200. Each projected trace has a 25,000-token budget based on the serialized UTF-8 projection estimate; older conversation units are omitted first when the budget is reached.
+The finder searches at most 5000 usable traces per run, even if a larger limit is supplied elsewhere; the default is 500. The default lookback is seven days, the default JEV parallelism is 100, and parallelism is capped at 200. Each projected trace has a 25,000-token budget based on the serialized UTF-8 projection estimate; older conversation units are omitted first when the budget is reached.
 
 One completed run makes one compiler call, at most one facet-selection classify call, and one JEV classification call per selected trace. The facet-selection call is skipped when the facet catalogue is empty, including when every facet lookup failed. A 500-trace run therefore has up to 502 model calls before retries, so use the limit and window controls when you are exploring a large workspace.

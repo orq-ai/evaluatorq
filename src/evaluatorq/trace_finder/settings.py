@@ -16,7 +16,8 @@ SETTINGS_PATH_ENV = 'EVALUATORQ_DASHBOARD_SETTINGS'
 MIN_WINDOW_DAYS = 1
 MAX_WINDOW_DAYS = 90
 MIN_LIMIT = 1
-MAX_LIMIT = 500
+MAX_LIMIT = 5000
+DEFAULT_LIMIT = 500
 MIN_PARALLELISM = 1
 MAX_PARALLELISM = 200
 
@@ -28,7 +29,7 @@ class DashboardSettings(BaseModel):
     jev_model: str = 'typesafe/jev-latest'
     apply_model: str = DEFAULT_PIPELINE_MODEL
     window_days: int = Field(7, ge=MIN_WINDOW_DAYS, le=MAX_WINDOW_DAYS)
-    limit: int = Field(MAX_LIMIT, ge=MIN_LIMIT, le=MAX_LIMIT)
+    limit: int = Field(DEFAULT_LIMIT, ge=MIN_LIMIT, le=MAX_LIMIT)
     parallelism: int = Field(100, ge=MIN_PARALLELISM, le=MAX_PARALLELISM)
     orq_profile: str | None = None
 

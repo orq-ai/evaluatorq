@@ -31,7 +31,7 @@ FACET_OQL_FIELDS: Mapping[str, str] = MappingProxyType({
     'agent_name': 'agent_name',
     'tool_name': 'tool_name',
 })
-MAX_LIVE_TRACES = 500
+MAX_LIVE_TRACES = 5000
 PAGE_SIZE = 200
 SDK_TIMEOUT_MS = 30_000
 DEFAULT_LOOKBACK = timedelta(days=7)

@@ -234,7 +234,7 @@ def controls(
         f'{facet_menu(catalogue, numeric=carried_numeric, form_id=form_id, selection=carried_facets, pending=pending)}</span><span class="spacer"></span>'
         f'<span class="quiet"><b>Window</b><input id="finder-window" form="{form_id}" name="window_days" type="number" min="1" max="90" value="{values["window_days"]}" style="width:64px" '
         f'hx-get="/find/facets?form_id={form_id}" hx-trigger="change" hx-include="#finder-controls" hx-target=".finder-facets" hx-swap="outerHTML"></span>'
-        f'<span class="quiet"><b>Limit</b><input form="{form_id}" name="limit" type="number" min="1" max="500" value="{values["limit"]}" style="width:72px"></span>'
+        f'<span class="quiet"><b>Limit</b><input form="{form_id}" name="limit" type="number" min="1" max="5000" value="{values["limit"]}" style="width:72px"></span>'
         f'<span class="quiet"><b>Parallel</b><input form="{form_id}" name="parallelism" type="number" min="1" max="200" value="{values["parallelism"]}" style="width:64px"></span>'
         f'{count_html}</div>'
     )
@@ -292,7 +292,7 @@ def matrix(snapshot: RunSnapshot) -> str:
     unresolved = [trace.trace_id for trace in traces if trace.trace_id not in snapshot.results]
     active = set(unresolved[: snapshot.active]) if snapshot.state == 'classifying' else set()
     dots: list[str] = []
-    for trace in traces[:500]:
+    for trace in traces:
         result = snapshot.results.get(trace.trace_id)
         if result is not None:
             state = 'failed' if result.error else 'match' if result.matched else 'unmatched'

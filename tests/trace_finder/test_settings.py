@@ -116,7 +116,7 @@ def test_effective_settings_ignores_invalid_finder_limit_environment_layer(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.setenv('EVALUATORQ_FINDER_WINDOW_DAYS', 'not-an-int')
-    monkeypatch.setenv('EVALUATORQ_FINDER_LIMIT', '501')
+    monkeypatch.setenv('EVALUATORQ_FINDER_LIMIT', '5001')
     monkeypatch.setenv('EVALUATORQ_FINDER_PARALLELISM', '0')
 
     with caplog.at_level('WARNING'):

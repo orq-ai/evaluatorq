@@ -169,7 +169,7 @@ def find(
         int | None,
         typer.Option('--window-days', min=1, max=90, help='How many recent days to search.'),
     ] = None,
-    limit: Annotated[int | None, typer.Option('--limit', min=1, max=500, help='Maximum traces to classify.')] = None,
+    limit: Annotated[int | None, typer.Option('--limit', min=1, max=5000, help='Maximum traces to classify.')] = None,
     parallelism: Annotated[
         int | None,
         typer.Option('--parallelism', min=1, max=200, help='Concurrent JEV classifications.'),
