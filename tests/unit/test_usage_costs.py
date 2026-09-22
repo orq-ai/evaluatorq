@@ -378,3 +378,25 @@ def test_non_finite_cost_is_ignored_rather_than_raising():
     assert extracted is not None
     assert extracted.total_cost is None
     assert extracted.priced_calls == 0
+
+
+def test_extract_codex_cli_flat_shape():
+    usage = Usage.extract(
+        {
+            'input_tokens': 40041,
+            'cached_input_tokens': 1024,
+            'cache_write_input_tokens': 256,
+            'output_tokens': 125,
+            'reasoning_output_tokens': 43,
+        }
+    )
+    assert usage is not None
+    assert (usage.input_tokens, usage.output_tokens, usage.total_tokens) == (40041, 125, 40166)
+    assert (usage.cached_tokens, usage.cache_creation_tokens, usage.reasoning_tokens) == (1024, 256, 43)
+
+
+def test_extract_opencode_step_finish_shape():
+    usage = Usage.extract({'input': 58843, 'output': 33, 'reasoning': 7, 'cache': {'read': 500, 'write': 20}})
+    assert usage is not None
+    assert (usage.input_tokens, usage.output_tokens, usage.total_tokens) == (58843, 33, 58876)
+    assert (usage.cached_tokens, usage.cache_creation_tokens, usage.reasoning_tokens) == (500, 20, 7)

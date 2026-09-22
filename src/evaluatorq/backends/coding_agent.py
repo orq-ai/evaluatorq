@@ -263,12 +263,13 @@ def _tool_call(
     )
 
 
-def _parse_claude_usage(usage_block: Any) -> Usage | None:
+def _usage_or_none(agent: str, usage_block: Any, required: tuple[str, str]) -> Usage | None:
+    """``Usage.extract`` for one agent usage record; ``None`` plus a warning when a required count is absent."""
     if usage_block is None:
         return None
-    missing_fields = [field for field in ('input_tokens', 'output_tokens') if field not in usage_block]
+    missing_fields = [field for field in required if field not in usage_block]
     if missing_fields:
-        logger.warning(f'claude result usage missing required field(s): {", ".join(missing_fields)}; usage is None')
+        logger.warning(f'{agent} usage missing required field(s): {", ".join(missing_fields)}; usage is None')
         return None
     return Usage.extract(usage_block, calls=1)
 
@@ -316,7 +317,7 @@ def _parse_claude(events: list[dict[str, Any]]) -> ParsedTurn:
             turn.text = result_text if isinstance(result_text, str) else (''.join(last_text) or None)
             if event.get('is_error'):
                 turn.agent_error = result_text if isinstance(result_text, str) else str(event.get('subtype'))
-            turn.usage = _parse_claude_usage(event.get('usage'))
+            turn.usage = _usage_or_none('claude', event.get('usage'), ('input_tokens', 'output_tokens'))
             model_usage = event.get('modelUsage') or {}
             turn.model = next(iter(model_usage), None)
             for denial in event.get('permission_denials') or []:
@@ -359,22 +360,7 @@ def _parse_codex(events: list[dict[str, Any]]) -> ParsedTurn:
         elif kind == 'turn.failed':
             turn.agent_error = str((event.get('error') or {}).get('message') or 'turn.failed')
         elif kind == 'turn.completed':
-            usage = event.get('usage')
-            if usage is not None:
-                missing_fields = [field for field in ('input_tokens', 'output_tokens') if field not in usage]
-                if missing_fields:
-                    for field in missing_fields:
-                        logger.warning(f'codex turn.completed usage missing required field: {field}')
-                else:
-                    turn.usage = Usage(
-                        input_tokens=int(usage['input_tokens']),
-                        output_tokens=int(usage['output_tokens']),
-                        total_tokens=int(usage['input_tokens']) + int(usage['output_tokens']),
-                        cached_tokens=int(usage.get('cached_input_tokens', 0)),
-                        cache_creation_tokens=int(usage.get('cache_write_input_tokens', 0)),
-                        reasoning_tokens=int(usage.get('reasoning_output_tokens', 0)),
-                        calls=1,
-                    )
+            turn.usage = _usage_or_none('codex', event.get('usage'), ('input_tokens', 'output_tokens'))
         elif kind in ('item.started', 'item.completed'):
             item = event.get('item') or {}
             item_id = str(item.get('id'))
@@ -422,9 +408,7 @@ def _parse_codex(events: list[dict[str, Any]]) -> ParsedTurn:
 def _parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
     turn = ParsedTurn()
     last_text: str | None = None
-    totals = {'input': 0, 'output': 0, 'reasoning': 0, 'read': 0, 'write': 0}
     cost = 0.0
-    usage_steps = 0
     saw_step_finish = False
     saw_cost = False
     for event in events:
@@ -455,15 +439,9 @@ def _parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
             )
         elif kind == 'step_finish':
             saw_step_finish = True
-            tokens = part.get('tokens') or {}
-            if 'input' in tokens and 'output' in tokens:
-                usage_steps += 1
-                totals['input'] += int(tokens['input'])
-                totals['output'] += int(tokens['output'])
-                totals['reasoning'] += int(tokens.get('reasoning', 0))
-                cache = tokens.get('cache') or {}
-                totals['read'] += int(cache.get('read', 0))
-                totals['write'] += int(cache.get('write', 0))
+            step_usage = _usage_or_none('opencode', part.get('tokens'), ('input', 'output'))
+            if step_usage is not None:
+                turn.usage = step_usage if turn.usage is None else turn.usage + step_usage
             if 'cost' in part:
                 saw_cost = True
                 cost += float(part['cost'] or 0)
@@ -473,18 +451,8 @@ def _parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
             logger.warning(f'opencode skipped unknown event type: {kind}')
     if last_text is not None:
         turn.text = last_text
-    if usage_steps:
-        turn.usage = Usage(
-            input_tokens=totals['input'],
-            output_tokens=totals['output'],
-            total_tokens=totals['input'] + totals['output'],
-            cached_tokens=totals['read'],
-            cache_creation_tokens=totals['write'],
-            reasoning_tokens=totals['reasoning'],
-            calls=usage_steps,
-        )
-    elif saw_step_finish:
-        logger.warning('opencode step_finish usage missing input and output token fields; usage is unknown')
+    if saw_step_finish and turn.usage is None:
+        logger.warning('opencode step_finish carried no usable token counts; usage is unknown')
     if saw_cost:
         turn.cost_usd = cost
     return turn
