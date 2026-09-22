@@ -62,7 +62,7 @@ A tool call the harness refused still appears in the response as a tool call who
 
 The private copy preserves symlinks from `workdir` as symlinks, so a link that pointed outside the original still points there and the agent can read or write through it. Point `workdir` at a tree whose links you are willing to expose.
 
-Codex under `launcher='orq'` is unverified: orq 10.0.0-rc.1 launches `codex exec --full-auto`, and codex-cli 0.153.4 rejects that flag before the sandbox question is reached, so every such run ends in `cli.exit.2`. Whether a `permission_mode` sandbox survives orq's `--full-auto` once that is fixed is still open; the live check for it is marked expected-to-fail in `tests/integration/test_coding_agent_live.py`.
+Under `launcher='orq'`, orq launch adds provider and MCP configuration only; it passes no sandbox or permission flag of its own. Codex therefore runs with `permission_mode` when given, otherwise with the sandbox configured in the user's own codex config. Requires an orq CLI that no longer injects `--full-auto` (orq 10.0.0-rc.1 still does, and codex-cli 0.153.4 rejects it with `cli.exit.2`).
 
 ## What the response carries
 

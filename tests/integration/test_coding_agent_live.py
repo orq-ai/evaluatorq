@@ -27,12 +27,8 @@ async def test_claude_direct_stdin_prompt_text_turn() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    reason='orq 10.0.0-rc.1 runs `codex exec --full-auto`, which codex-cli 0.153.4 rejects; unanswerable until orq drops the flag',
-    strict=False,
-)
-async def test_codex_orq_sandbox_after_full_auto() -> None:
-    """Spec question 1: does a later --sandbox win over orq's injected --full-auto?"""
+async def test_codex_orq_read_only_sandbox_holds() -> None:
+    """Spec question 1: permission_mode='read-only' under launcher='orq' blocks writes (orq passes no sandbox flag)."""
     _needs('orq')
     _needs('codex')
     target = CodingAgentTarget('codex', launcher='orq', permission_mode='read-only', timeout_ms=180_000)
@@ -40,7 +36,7 @@ async def test_codex_orq_sandbox_after_full_auto() -> None:
         Message(role='user', content='Create a file named probe.txt containing "x". Then say done or blocked.')
     ])
     assert target.workdir is not None
-    assert not (target.workdir / 'probe.txt').exists(), 'read-only sandbox was overridden by --full-auto'
+    assert not (target.workdir / 'probe.txt').exists(), 'read-only sandbox did not hold under orq launch'
     await target.close()
 
 
