@@ -234,7 +234,7 @@ class _StreamingInputs:
 @dataclass(frozen=True)
 class _EvaluationInputs:
     params: EvaluatorParams | dict[str, Any] | None
-    data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None
+    data: DatasetIdInput | ExperimentInput | TraceInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None
     jobs: list[Job] | None
     evaluators: list[Evaluator] | None
     datapoint_parallelism: int
@@ -249,7 +249,7 @@ class _EvaluationInputs:
 
 @dataclass(frozen=True)
 class _ResolvedEvaluationInputs:
-    data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput]
+    data: DatasetIdInput | ExperimentInput | TraceInput | Sequence[Awaitable[DataPoint] | DataPointInput]
     inference: bool
     jobs: list[Job]
     evaluators_list: list[Evaluator]
@@ -393,10 +393,10 @@ async def _enter_single_trace(
 
 
 async def _resolve_experiment_input(
-    data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None,
+    data: DatasetIdInput | ExperimentInput | TraceInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None,
     orq_api_key: str | None,
     base_url: str | None,
-) -> DatasetIdInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None:
+) -> DatasetIdInput | TraceInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None:
     """Turn an experiment reference into the rows it recorded, before the data phase.
 
     Only ``ExperimentInput`` is touched; every other source is returned unchanged

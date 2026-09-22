@@ -338,6 +338,83 @@ async def generate_dynamic_datapoints(
     return datapoints, filtering_metadata
 
 
+def _trace_seed_from_inputs(inputs: dict[str, Any]) -> tuple[list[Message] | None, TraceStart | None]:
+    """Validate and deserialize optional trace replay state from a datapoint."""
+    seed_payload = inputs.get('trace_seed_messages')
+    if seed_payload is None:
+        return None, None
+    if not isinstance(seed_payload, list):
+        raise TypeError('trace_seed_messages must be a list of messages')
+    return (
+        [Message.model_validate(message) for message in seed_payload],
+        TraceStart(inputs.get('trace_start_from', TraceStart.FIRST_USER.value)),
+    )
+
+
+def _register_job_target(
+    target: Any,
+    cleanup_stack: contextlib.AsyncExitStack,
+    *,
+    agent_context: AgentContext,
+    memory_entity_ids: list[str] | None,
+) -> None:
+    """Register target cleanup, memory tracking, and optional trace model metadata."""
+    cleanup_stack.push_async_callback(close_target, target)
+    target_memory_id = getattr(target, 'memory_entity_id', None)
+    if target_memory_id is not None and memory_entity_ids is not None:
+        memory_entity_ids.append(target_memory_id)
+    if hasattr(target, 'model') and agent_context.model:
+        object.__setattr__(target, 'model', agent_context.model)  # type: ignore[misc]
+
+
+def _effective_max_turns(strategy: AttackStrategy, max_turns: int) -> int:
+    return 1 if strategy.turn_type == TurnType.SINGLE else max_turns
+
+
+def _is_fixed_template_attack(strategy: AttackStrategy) -> bool:
+    return bool(strategy.prompt_template) and strategy.turn_type == TurnType.SINGLE
+
+
+def _serialize_dynamic_result(
+    result: AttackOutput,
+    *,
+    trace_seeded: bool,
+    effective_max_turns: int,
+    thread_id: str | None,
+) -> dict[str, Any]:
+    """Serialize an attack while preserving a zero-turn trace bootstrap failure."""
+    payload = result.model_dump(mode='json')
+    if trace_seeded and result.error is not None and not result.turns:
+        payload['turns'] = 0
+    return {**payload, 'max_turns': effective_max_turns, 'thread_id': thread_id}
+
+
+def _safe_agent_key(agent_key: str) -> str:
+    return ''.join(ch if ch.isalnum() or ch in {'-', '_'} else '-' for ch in agent_key).strip('-')
+
+
+def _orchestrator_run_kwargs(
+    *,
+    target: Any,
+    strategy: AttackStrategy,
+    objective: str,
+    agent_context: AgentContext,
+    max_turns: int,
+    seed_messages: list[Message] | None,
+    trace_start_from: TraceStart | None,
+) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        'target': target,
+        'strategy': strategy,
+        'objective': objective,
+        'agent_context': agent_context,
+        'max_turns': max_turns,
+    }
+    if seed_messages is not None:
+        kwargs.update(seed_messages=seed_messages, trace_start_from=trace_start_from)
+    return kwargs
+
+
 def create_dynamic_redteam_job(
     *,
     agent_key: str,
@@ -376,7 +453,7 @@ def create_dynamic_redteam_job(
     """
     cfg = pipeline_config or PIPELINE_CONFIG
     resolved_backend: Backend = backend if backend is not None else resolve_backend('orq', pipeline_config=cfg)
-    safe_agent_key = ''.join(ch if ch.isalnum() or ch in {'-', '_'} else '-' for ch in agent_key).strip('-')
+    safe_agent_key = _safe_agent_key(agent_key)
     job_name = f'redteam:dynamic:{safe_agent_key or "agent"}'
 
     @job(job_name)
@@ -387,7 +464,7 @@ def create_dynamic_redteam_job(
         objective = str(inputs['objective'])
         category = str(inputs['category'])
         vulnerability = str(inputs.get('vulnerability', ''))
-        effective_max_turns = 1 if strategy.turn_type == TurnType.SINGLE else max_turns
+        effective_max_turns = _effective_max_turns(strategy, max_turns)
         thread_id = build_thread_id(run_id, safe_agent_key, _row)
 
         async with (
@@ -404,28 +481,15 @@ def create_dynamic_redteam_job(
             contextlib.AsyncExitStack() as cleanup_stack,
         ):
             target = resolved_backend.create_target(agent_key=agent_key)
-            # Register HTTP-client cleanup for targets that own a client
-            # (e.g. OrqResponsesTarget). Plain callable targets have no
-            # close(); duck-type to avoid coupling.
-            cleanup_stack.push_async_callback(close_target, target)
-            # Targets own their memory_entity_id — track it for cleanup.
-            target_memory_id = getattr(target, 'memory_entity_id', None)
-            if target_memory_id is not None and memory_entity_ids is not None:
-                memory_entity_ids.append(target_memory_id)
-            # Inject model info for tracing if the target supports it
-            if hasattr(target, 'model') and agent_context.model:
-                object.__setattr__(target, 'model', agent_context.model)  # type: ignore[misc]
+            _register_job_target(
+                target,
+                cleanup_stack,
+                agent_context=agent_context,
+                memory_entity_ids=memory_entity_ids,
+            )
+            seed_messages, trace_start_from = _trace_seed_from_inputs(inputs)
 
-            seed_payload = inputs.get('trace_seed_messages')
-            seed_messages = None
-            trace_start_from = None
-            if seed_payload is not None:
-                if not isinstance(seed_payload, list):
-                    raise TypeError('trace_seed_messages must be a list of messages')
-                seed_messages = [Message.model_validate(message) for message in seed_payload]
-                trace_start_from = TraceStart(inputs.get('trace_start_from', TraceStart.FIRST_USER.value))
-
-            if strategy.prompt_template and strategy.turn_type == TurnType.SINGLE:
+            if _is_fixed_template_attack(strategy):
                 # Fixed template: fill and send directly (no adversarial LLM needed)
                 t0 = time.time()
                 prompt = generate_attack_prompt(strategy, agent_context)
@@ -566,18 +630,15 @@ def create_dynamic_redteam_job(
             try:
                 # One Orq thread per attack groups all its turns in observability.
                 with conversation_thread(thread_id) as thread_id:
-                    run_kwargs: dict[str, Any] = {
-                        'target': target,
-                        'strategy': strategy,
-                        'objective': objective,
-                        'agent_context': agent_context,
-                        'max_turns': effective_max_turns,
-                    }
-                    if seed_messages is not None:
-                        run_kwargs.update(
-                            seed_messages=seed_messages,
-                            trace_start_from=trace_start_from,
-                        )
+                    run_kwargs = _orchestrator_run_kwargs(
+                        target=target,
+                        strategy=strategy,
+                        objective=objective,
+                        agent_context=agent_context,
+                        max_turns=effective_max_turns,
+                        seed_messages=seed_messages,
+                        trace_start_from=trace_start_from,
+                    )
                     result = await orchestrator.run_attack(**run_kwargs)
             except asyncio.TimeoutError as e:
                 tb = traceback.format_exc(limit=8)
@@ -634,10 +695,12 @@ def create_dynamic_redteam_job(
             if result_dict.final_response:
                 set_span_attrs(attack_span, {'output': truncate_for_span(result_dict.final_response)})
             _set_attack_span_attrs(attack_span, result_dict)
-            output_payload = result_dict.model_dump(mode='json')
-            if seed_messages is not None and result_dict.error is not None and not result_dict.turns:
-                output_payload['turns'] = 0
-            return {**output_payload, 'max_turns': effective_max_turns, 'thread_id': thread_id}
+            return _serialize_dynamic_result(
+                result_dict,
+                trace_seeded=seed_messages is not None,
+                effective_max_turns=effective_max_turns,
+                thread_id=thread_id,
+            )
 
     return dynamic_job
 

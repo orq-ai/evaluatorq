@@ -1525,6 +1525,7 @@ async def red_team(
     resolved_output_dir = output_dirs.pipeline_output_dir
 
     targets, agent_targets = _split_and_dedupe_targets(target=target)
+    raw_targets: list[str | AgentTarget] = target if isinstance(target, list) else [target]
 
     # A last-assistant seed imports the existing conversation instead of replaying
     # it through the target. Enforce that ownership boundary before credentials,
@@ -2025,6 +2026,24 @@ def _create_job_for_target(
 # ---------------------------------------------------------------------------
 
 
+def _matched_filter_dimensions(datapoints: list[DataPoint]) -> tuple[set[str], set[str], set[str]]:
+    """Collect the strategy, delivery-method, and technique values present in rows."""
+    matched_names: set[str] = set()
+    matched_methods: set[str] = set()
+    matched_techniques: set[str] = set()
+    for datapoint in datapoints:
+        strategy = datapoint.inputs.get('strategy')
+        if isinstance(strategy, dict):
+            if name := strategy.get('name'):
+                matched_names.add(name)
+            matched_methods.update(strategy.get('delivery_methods') or [])
+            if technique := strategy.get('attack_technique'):
+                matched_techniques.add(str(technique))
+        if delivery_method := datapoint.inputs.get('delivery_method'):
+            matched_methods.add(delivery_method)
+    return matched_names, matched_methods, matched_techniques
+
+
 def _check_filter_results(
     datapoints: list[DataPoint],
     strategy_names: set[str] | None,
@@ -2066,22 +2085,7 @@ def _check_filter_results(
     if strategy_names is None and delivery_methods is None and attack_techniques is None and filter_selection is None:
         return
 
-    matched_names: set[str] = set()
-    matched_methods: set[str] = set()
-    matched_techniques: set[str] = set()
-    for dp in datapoints:
-        strategy = dp.inputs.get('strategy')
-        if isinstance(strategy, dict):
-            name = strategy.get('name')
-            if name:
-                matched_names.add(name)
-            matched_methods.update(strategy.get('delivery_methods') or [])
-            technique = strategy.get('attack_technique')
-            if technique:
-                matched_techniques.add(str(technique))
-        single = dp.inputs.get('delivery_method')  # static datapoint shape (singular)
-        if single:
-            matched_methods.add(single)
+    matched_names, matched_methods, matched_techniques = _matched_filter_dimensions(datapoints)
 
     if strategy_names is not None and names_apply:
         unmatched = sorted(strategy_names - matched_names)
@@ -2159,6 +2163,23 @@ def _reject_unsupported_targets(targets: list[str], mode: Pipeline) -> None:
         )
 
 
+def _agent_context_summary(agent_context: AgentContext) -> dict[str, int]:
+    """Build the context-retrieval hook payload without branching in its caller."""
+    return {
+        'num_tools': len(agent_context.tools or []),
+        'num_memory_stores': len(agent_context.memory_stores or []),
+        'num_knowledge_bases': len(agent_context.knowledge_bases or []),
+    }
+
+
+def _parse_dynamic_target(target: str, mode: Pipeline) -> tuple[TargetKind, str]:
+    """Parse a target already accepted by the public pipeline support guard."""
+    target_kind, target_value = parse_target(target)
+    if target_kind is not TargetKind.AGENT:
+        raise ValueError(f'{mode.value} pipeline cannot prepare a {target_kind.value} target ({target!r}).')
+    return target_kind, target_value
+
+
 async def _prepare_target(
     *,
     target: str,
@@ -2215,14 +2236,8 @@ async def _prepare_target(
     Returns:
         A `PreparedTarget` instance with all per-target state.
     """
-    target_kind, target_value = parse_target(target)
+    target_kind, target_value = _parse_dynamic_target(target, mode)
     safe_target = _make_safe_target(target_value)
-
-    # Exhaustiveness, not policy: `_reject_unsupported_targets` already refused every
-    # kind this pipeline cannot drive, and `parse_target` yields only AGENT or DEPLOYMENT.
-    # Reaching this raise means a caller skipped the guard.
-    if target_kind is not TargetKind.AGENT:
-        raise ValueError(f'{mode.value} pipeline cannot prepare a {target_kind.value} target ({target!r}).')
     backend = make_agent_backend(target_config=target_config, pipeline_config=pipeline_config)
 
     # Context retrieval (skip if already fetched for the confirm step)
@@ -2234,11 +2249,7 @@ async def _prepare_target(
         await await_maybe(
             hooks.on_stage_end(
                 PipelineStage.CONTEXT_RETRIEVAL,
-                {
-                    'num_tools': len(agent_context.tools) if agent_context.tools else 0,
-                    'num_memory_stores': len(agent_context.memory_stores) if agent_context.memory_stores else 0,
-                    'num_knowledge_bases': len(agent_context.knowledge_bases) if agent_context.knowledge_bases else 0,
-                },
+                _agent_context_summary(agent_context),
             )
         )
 

@@ -169,6 +169,50 @@ def _chat_messages(value: Any, *, default_role: _ROLE) -> list[Message]:
     return [message for raw in value if (message := _chat_message(raw, default_role=default_role)) is not None]
 
 
+def _otel_parts(parts: list[Any]) -> tuple[list[str], list[StrategyToolCall], list[Message]]:
+    """Normalize the content parts belonging to one OTel GenAI message."""
+    text: list[str] = []
+    tool_calls: list[StrategyToolCall] = []
+    tool_responses: list[Message] = []
+    media_types = {'image', 'image_url', 'input_image', 'input_file', 'file', 'audio', 'input_audio'}
+    for part in parts:
+        if not isinstance(part, dict):
+            logger.warning('Unknown OTel GenAI part shape {}; dropping it.', type(part).__name__)
+            continue
+        part_type = part.get('type')
+        if part_type in {None, 'text', 'refusal'}:
+            content = part.get('content') or part.get('text') or part.get('refusal')
+            if isinstance(content, str):
+                text.append(content)
+        elif part_type == 'tool_call':
+            if (call := _tool_call(part)) is not None:
+                tool_calls.append(call)
+        elif part_type == 'tool_call_response':
+            call_id = part.get('id') or part.get('call_id')
+            if isinstance(call_id, str) and call_id:
+                tool_responses.append(
+                    Message(
+                        role='tool',
+                        tool_call_id=call_id,
+                        name=part.get('name'),
+                        content=_json_text(part.get('response', part.get('result', part.get('output', '')))),
+                    )
+                )
+            else:
+                logger.warning('OTel GenAI tool response has no call ID; dropping it.')
+        elif part_type in media_types:
+            logger.warning(
+                'Trace message contains a {} part that cannot be scored as text; preserving a marker.', part_type
+            )
+            text.append(f'[{part_type}]')
+        elif part_type == 'reasoning':
+            logger.debug('Dropping an OTel GenAI reasoning part from the imported transcript.')
+        else:
+            logger.warning('Unknown OTel GenAI part type {!r}; preserving JSON text.', part_type)
+            text.append(_json_text(part))
+    return text, tool_calls, tool_responses
+
+
 def _otel_messages(value: Any, *, default_role: _ROLE) -> list[Message]:
     value = _decode_json(value)
     if isinstance(value, dict) and isinstance(value.get('messages'), list):
@@ -184,44 +228,7 @@ def _otel_messages(value: Any, *, default_role: _ROLE) -> list[Message]:
             continue
         raw_role = raw.get('role') or default_role
         role = raw_role.strip().lower() if isinstance(raw_role, str) else raw_role
-        text: list[str] = []
-        tool_calls: list[StrategyToolCall] = []
-        tool_responses: list[Message] = []
-        for part in raw['parts']:
-            if not isinstance(part, dict):
-                logger.warning('Unknown OTel GenAI part shape {}; dropping it.', type(part).__name__)
-                continue
-            part_type = part.get('type')
-            if part_type in {None, 'text', 'refusal'}:
-                content = part.get('content') or part.get('text') or part.get('refusal')
-                if isinstance(content, str):
-                    text.append(content)
-            elif part_type == 'tool_call':
-                if (call := _tool_call(part)) is not None:
-                    tool_calls.append(call)
-            elif part_type == 'tool_call_response':
-                call_id = part.get('id') or part.get('call_id')
-                if isinstance(call_id, str) and call_id:
-                    tool_responses.append(
-                        Message(
-                            role='tool',
-                            tool_call_id=call_id,
-                            name=part.get('name'),
-                            content=_json_text(part.get('response', part.get('result', part.get('output', '')))),
-                        )
-                    )
-                else:
-                    logger.warning('OTel GenAI tool response has no call ID; dropping it.')
-            elif part_type in {'image', 'image_url', 'input_image', 'input_file', 'file', 'audio', 'input_audio'}:
-                logger.warning(
-                    'Trace message contains a {} part that cannot be scored as text; preserving a marker.', part_type
-                )
-                text.append(f'[{part_type}]')
-            elif part_type == 'reasoning':
-                logger.debug('Dropping an OTel GenAI reasoning part from the imported transcript.')
-            else:
-                logger.warning('Unknown OTel GenAI part type {!r}; preserving JSON text.', part_type)
-                text.append(_json_text(part))
+        text, tool_calls, tool_responses = _otel_parts(raw['parts'])
         if role == 'tool' and tool_responses:
             messages.extend(tool_responses)
         elif role in {'user', 'assistant', 'tool', 'system', 'developer'} and (text or tool_calls):
@@ -495,6 +502,19 @@ def _failed_trace(
     return Trace(trace_id=trace_id, requested_span_id=requested_span_id, import_error=error)
 
 
+def _evaluator_subtree_ids(indexed: list[tuple[str, dict[str, Any], int]]) -> set[str]:
+    """Return evaluator span IDs together with every descendant span ID."""
+    evaluator_ids = {span_id for span_id, span, _ in indexed if _is_evaluator(span)}
+    changed = True
+    while changed:
+        changed = False
+        for span_id, span, _ in indexed:
+            if span_id not in evaluator_ids and _parent_id(span) in evaluator_ids:
+                evaluator_ids.add(span_id)
+                changed = True
+    return evaluator_ids
+
+
 def _trace_from_spans(
     trace_id: str,
     spans: list[dict[str, Any]],
@@ -512,14 +532,7 @@ def _trace_from_spans(
         return _failed_trace(trace_id, 'the trace has no spans.', requested_span_id=requested_span_id)
     indexed = [(_span_id(span, index), span, index) for index, span in enumerate(spans)]
     by_id = {span_id: span for span_id, span, _ in indexed}
-    evaluator_ids = {span_id for span_id, span, _ in indexed if _is_evaluator(span)}
-    changed = True
-    while changed:
-        changed = False
-        for span_id, span, _ in indexed:
-            if span_id not in evaluator_ids and _parent_id(span) in evaluator_ids:
-                evaluator_ids.add(span_id)
-                changed = True
+    evaluator_ids = _evaluator_subtree_ids(indexed)
     if requested_span_id is not None:
         requested_span = by_id.get(requested_span_id)
         if requested_span is None:
