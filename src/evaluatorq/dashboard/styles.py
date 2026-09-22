@@ -2628,7 +2628,8 @@ _FINDER_CSS = """
 .finder-matrix i.unmatched::before { background:var(--c); opacity:.55; }
 .finder-matrix i.match::before { width:9px; height:9px; background:var(--c); box-shadow:0 0 8px var(--c); }
 .finder-matrix i.failed::before { width:8px; height:8px; border-radius:2px; background:#7a3b2e; }
-.finder-matrix i.pending::before,.finder-matrix i.idle::before { width:6px; height:6px; background:transparent; border:1.5px solid #6e6c7c; }
+.finder-matrix i.idle::before { width:6px; height:6px; background:#6e6c7c; }
+.finder-matrix i.pending::before { width:6px; height:6px; background:transparent; border:1.5px solid #6e6c7c; }
 .finder-matrix.idle { min-height:360px; align-content:center; }
 .finder-matrix.idle i { cursor:default; }
 .finder-hint { position:absolute; inset:0; display:grid; place-items:center; text-align:center; padding:24px; background:radial-gradient(ellipse at center,rgba(22,21,28,.85) 25%,rgba(22,21,28,.4) 60%,transparent 100%); }
