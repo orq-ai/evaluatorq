@@ -126,15 +126,11 @@ async def deployment(
     """
     client = _get_or_create_client()
 
-    # Convert our types to SDK-compatible types
-    from orq_ai_sdk.models import Thread
-
-    sdk_thread: Thread | None = None
+    # Passed as a plain dict: the SDK's request-thread model was renamed across versions
+    # (``Thread`` now names the trace-thread record), and the invoke call accepts the TypedDict.
+    sdk_thread: dict[str, Any] | None = None
     if thread is not None:
-        sdk_thread = Thread(
-            id=thread.get('id', ''),
-            tags=thread.get('tags'),
-        )
+        sdk_thread = {'id': thread.get('id', ''), 'tags': thread.get('tags')}
 
     # Propagate W3C trace context so the deployment's server-side execution nests
     # under the calling span instead of starting a loose root trace. Empty (and so
@@ -148,7 +144,7 @@ async def deployment(
         inputs=inputs,
         context=context,
         metadata=metadata,
-        thread=sdk_thread,
+        thread=cast('Any', sdk_thread),
         messages=cast('Any', messages),
         http_headers=trace_headers or None,
     )

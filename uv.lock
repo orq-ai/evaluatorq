@@ -1179,10 +1179,10 @@ requires-dist = [
     { name = "opentelemetry-sdk", marker = "extra == 'otel'", specifier = ">=1.20.0" },
     { name = "opentelemetry-semantic-conventions", marker = "extra == 'all'", specifier = ">=0.41b0" },
     { name = "opentelemetry-semantic-conventions", marker = "extra == 'otel'", specifier = ">=0.41b0" },
-    { name = "orq-ai-sdk", specifier = ">=4.12" },
-    { name = "orq-ai-sdk", marker = "extra == 'all'", specifier = ">=4.12" },
-    { name = "orq-ai-sdk", marker = "extra == 'orq'", specifier = ">=4.12" },
-    { name = "orq-ai-sdk", marker = "extra == 'simulation'", specifier = ">=4.12" },
+    { name = "orq-ai-sdk", specifier = ">=4.14" },
+    { name = "orq-ai-sdk", marker = "extra == 'all'", specifier = ">=4.14" },
+    { name = "orq-ai-sdk", marker = "extra == 'orq'", specifier = ">=4.14" },
+    { name = "orq-ai-sdk", marker = "extra == 'simulation'", specifier = ">=4.14" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-ai-slim", extras = ["openai"], marker = "extra == 'all'", specifier = ">=1.0.0" },
     { name = "pydantic-ai-slim", extras = ["openai"], marker = "extra == 'pydantic-ai'", specifier = ">=1.0.0" },
@@ -1210,7 +1210,7 @@ dev = [
     { name = "opentelemetry-api", specifier = ">=1.20.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.20.0" },
     { name = "opentelemetry-sdk", specifier = ">=1.20.0" },
-    { name = "orq-ai-sdk", specifier = ">=4.12" },
+    { name = "orq-ai-sdk", specifier = ">=4.14" },
     { name = "pytest", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", specifier = ">=1.2.0" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
@@ -3431,7 +3431,7 @@ wheels = [
 
 [[package]]
 name = "orq-ai-sdk"
-version = "4.12.22"
+version = "4.15.9"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpcore" },
@@ -3439,9 +3439,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f7/4c/6118630afd87569dcc45e10275d68dc3c1ae6b2f3ee581fea314ac18b456/orq_ai_sdk-4.12.22.tar.gz", hash = "sha256:bc64bef4c18a96de15270fd1ebc754de0acfff9e68c858c539bce69f382afa26", size = 1854729, upload-time = "2026-08-06T08:36:22.916Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0b/4f/4d8e062d6f70756456f8e48a5a8c39621ebfee819bfca995687a87ad66ac/orq_ai_sdk-4.15.9.tar.gz", hash = "sha256:3891ed6f83fac9e9caecab0866416fa38a53cbad612e8dfc1e362e61d1c3b79e", size = 970897, upload-time = "2026-09-21T14:38:20.564Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a8/0a/be397fe5b871f8bccd8dc3a9943b12ebfa58cc0388b1c56bf531780db47a/orq_ai_sdk-4.12.22-py3-none-any.whl", hash = "sha256:9b7223bfd778f2d5f62c8dde0f4e8153a45bd892f9f23e97290032e07198365c", size = 2336334, upload-time = "2026-08-06T08:36:20.672Z" },
+    { url = "https://files.pythonhosted.org/packages/41/ac/ebe04dfdfee92a5b19cbe3e8df7dc129f75026b598bca9f1a676c333df4c/orq_ai_sdk-4.15.9-py3-none-any.whl", hash = "sha256:b549976605193cca3c3684a691365c5d3d37bb272c440f0a66c62fcca36b2632", size = 1516395, upload-time = "2026-09-21T14:38:18.445Z" },
 ]
 
 [[package]]

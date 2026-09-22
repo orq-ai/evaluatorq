@@ -435,8 +435,20 @@ def test_raw_response_capture_retains_only_supported_operations() -> None:
     capture.after_success(namespace(operation_id='TracesQueryOql'), response)
     capture.after_success(namespace(operation_id='TracesSearch'), response)
 
-    assert capture.pop('/v2/traces/query') == {'search': {'data': [{'trace_id': 'trace'}]}}
-    assert capture.pop('/v2/traces/query') is None
+    assert capture.pop('/traces/query') == {'search': {'data': [{'trace_id': 'trace'}]}}
+    assert capture.pop('/traces/query') is None
+
+
+def test_raw_response_capture_ignores_the_api_version_segment() -> None:
+    capture = _RawResponseCapture()
+    response = namespace(
+        request=namespace(url=namespace(path='/v3/traces/query')),
+        json=lambda: {'search': {'data': [{'trace_id': 'trace'}]}},
+    )
+
+    capture.after_success(namespace(operation_id='TracesQueryOql'), response)
+
+    assert capture.pop('/traces/query') == {'search': {'data': [{'trace_id': 'trace'}]}}
 
 
 def test_conversation_messages_accepts_direct_messages() -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import weakref
 from collections import defaultdict, deque
 from collections.abc import Mapping
@@ -49,6 +50,9 @@ class OrqSourceError(ValueError):
     """Live trace acquisition could not produce a valid snapshot."""
 
 
+_API_VERSION = re.compile(r'^/v\d+(?=/)')
+
+
 class _RawResponseCapture:
     """Retain raw trace payloads whose generated SDK models discard attributes."""
 
@@ -56,6 +60,12 @@ class _RawResponseCapture:
 
     def __init__(self) -> None:
         self._responses: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=_MAX_CAPTURED_RESPONSES))
+
+    @staticmethod
+    def key(path: str) -> str:
+        """Capture key for a request path: the API version segment is dropped so SDK upgrades keep matching."""
+
+        return _API_VERSION.sub('', path, count=1)
 
     def after_success(self, hook_context: Any, response: Any) -> Any:
         """Capture supported JSON responses while leaving the SDK response unchanged."""
@@ -68,13 +78,13 @@ class _RawResponseCapture:
             return response
         path = getattr(getattr(getattr(response, 'request', None), 'url', None), 'path', None)
         if isinstance(payload, dict) and isinstance(path, str):
-            self._responses[path].append(payload)
+            self._responses[self.key(path)].append(payload)
         return response
 
     def pop(self, path: str) -> dict[str, Any] | None:
-        """Return the oldest captured response for ``path``."""
+        """Return the oldest captured response for ``path`` (any API version)."""
 
-        responses = self._responses.get(path)
+        responses = self._responses.get(self.key(path))
         return responses.popleft() if responses else None
 
     def clear(self) -> None:
@@ -251,7 +261,7 @@ class OrqTraceSource:
                     page_token=page_token,
                     timeout_ms=SDK_TIMEOUT_MS,
                 )
-                raw_page = self._capture.pop('/v2/traces/query')
+                raw_page = self._capture.pop('/traces/query')
             else:
                 async with registration.lock_for(asyncio.get_running_loop()):
                     response = await self._client.traces.query_async(
@@ -262,7 +272,7 @@ class OrqTraceSource:
                         page_token=page_token,
                         timeout_ms=SDK_TIMEOUT_MS,
                     )
-                    raw_page = self._capture.pop('/v2/traces/query')
+                    raw_page = self._capture.pop('/traces/query')
             search = _field(response, 'search') or response
             summaries = _as_list(_field(search, 'data'))
             raw_summaries = _raw_trace_summaries(raw_page)
@@ -362,7 +372,7 @@ class OrqTraceSource:
                         span_id=span_id,
                         timeout_ms=SDK_TIMEOUT_MS,
                     )
-                    raw_response = self._capture.pop(f'/v2/traces/{trace_id}/spans/{span_id}')
+                    raw_response = self._capture.pop(f'/traces/{trace_id}/spans/{span_id}')
                 else:
                     async with registration.lock_for(asyncio.get_running_loop()):
                         response = await self._client.traces.get_span_async(
@@ -370,7 +380,7 @@ class OrqTraceSource:
                             span_id=span_id,
                             timeout_ms=SDK_TIMEOUT_MS,
                         )
-                        raw_response = self._capture.pop(f'/v2/traces/{trace_id}/spans/{span_id}')
+                        raw_response = self._capture.pop(f'/traces/{trace_id}/spans/{span_id}')
             detail = _field(response, 'span') or response
             raw_detail = _field(raw_response, 'span') if raw_response else None
             detail_fallback = raw_detail is None
