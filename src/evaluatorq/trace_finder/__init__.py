@@ -44,6 +44,7 @@ from .models import (
     validate_compiled_query,
 )
 from .orq_source import OrqTraceSource, build_oql
+from .pipeline import build_run_store
 from .projection import MAX_TOKEN_BUDGET, OMISSION_MARKER, estimate_tokens, project_trace, serialize_projection
 from .run_store import RunStore
 from .settings import (
@@ -100,6 +101,7 @@ __all__ = [
     'build_export',
     'build_jev_evaluator',
     'build_oql',
+    'build_run_store',
     'classification_legend',
     'compile_query',
     'effective_settings',

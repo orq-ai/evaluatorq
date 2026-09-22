@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta, timezone
-from functools import partial
 from typing import Any
 
 from loguru import logger
@@ -20,18 +19,15 @@ from evaluatorq.trace_finder import (
     FacetCatalogue,
     FacetSelection,
     NumericFilters,
-    OrqTraceSource,
     PopulationRequest,
     RunRequest,
     RunSnapshot,
     RunStore,
+    build_run_store,
     effective_settings,
     export_json,
     load_facet_catalogue,
-    run_jev,
-    select_filters,
 )
-from evaluatorq.trace_finder.compiler import compile_query
 from evaluatorq.trace_finder.models import FACET_NAMES
 
 
@@ -46,40 +42,14 @@ def _settings(app: Any) -> Any:
 def _build_store(app: Any) -> RunStore | None:
     """Build the app-owned store, returning ``None`` when Orq is unavailable."""
     try:
-        client = resolve_llm_client(require_orq=True, max_retries=0)
+        resolved = resolve_llm_client(require_orq=True, max_retries=0)
         orq = resolve_orq_client()
     except ValueError as exc:
         logger.warning('Find surface is unavailable because an Orq client could not be resolved: {}', exc)
         return None
 
     settings = _settings(app)
-    source = OrqTraceSource(orq)
-
-    async def filter_selector(query: str) -> FacetSelection:
-        now = datetime.now(timezone.utc)
-        catalogue = await load_facet_catalogue(
-            orq,
-            start=now - timedelta(days=settings.window_days),
-            end=now,
-            limit=50,
-        )
-        return await select_filters(client, settings.jev_model, catalogue, query)
-
-    async def population_loader(request: PopulationRequest) -> Any:
-        return await source.load_async(
-            request.start,
-            request.end,
-            request.limit,
-            facets=request.facets,
-            numeric=request.numeric,
-        )
-
-    return RunStore(
-        compiler=partial(compile_query, client, settings.compiler_model),
-        filter_selector=filter_selector,
-        population_loader=population_loader,
-        run_jev=partial(run_jev, model=settings.jev_model, client=client),
-    )
+    return build_run_store(settings, client=resolved.client, orq=orq)
 
 
 def _store(app: Any) -> RunStore | None:

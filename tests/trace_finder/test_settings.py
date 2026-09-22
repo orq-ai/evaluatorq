@@ -100,6 +100,36 @@ def test_effective_settings_precedence_is_file_then_environment_then_overrides(
     assert settings.parallelism == 8
 
 
+def test_effective_settings_reads_finder_limit_environment_layer(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv('EVALUATORQ_FINDER_WINDOW_DAYS', '14')
+    monkeypatch.setenv('EVALUATORQ_FINDER_LIMIT', '120')
+    monkeypatch.setenv('EVALUATORQ_FINDER_PARALLELISM', '12')
+
+    settings = effective_settings()
+
+    assert settings.window_days == 14
+    assert settings.limit == 120
+    assert settings.parallelism == 12
+
+
+def test_effective_settings_ignores_invalid_finder_limit_environment_layer(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_FINDER_WINDOW_DAYS', 'not-an-int')
+    monkeypatch.setenv('EVALUATORQ_FINDER_LIMIT', '501')
+    monkeypatch.setenv('EVALUATORQ_FINDER_PARALLELISM', '0')
+
+    with caplog.at_level('WARNING'):
+        settings = effective_settings()
+
+    assert settings.window_days == 7
+    assert settings.limit == 500
+    assert settings.parallelism == 100
+    assert 'EVALUATORQ_FINDER_WINDOW_DAYS' in caplog.text
+    assert 'EVALUATORQ_FINDER_LIMIT' in caplog.text
+    assert 'EVALUATORQ_FINDER_PARALLELISM' in caplog.text
+
+
 def test_settings_path_uses_environment_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     path = tmp_path / 'settings.json'
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(path))

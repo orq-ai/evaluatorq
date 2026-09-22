@@ -86,7 +86,10 @@ def effective_settings(overrides: dict[str, Any] | None = None) -> DashboardSett
     which beat the saved file, which beats model defaults. ``None`` values in
     *overrides* are ignored so callers can pass optional flags directly.
     Environment model variables are ``EVALUATORQ_APPLY_MODEL``,
-    ``EVALUATORQ_COMPILER_MODEL``, and ``EVALUATORQ_JEV_MODEL``.
+    ``EVALUATORQ_COMPILER_MODEL``, and ``EVALUATORQ_JEV_MODEL``. Finder limit
+    variables are ``EVALUATORQ_FINDER_WINDOW_DAYS``, ``EVALUATORQ_FINDER_LIMIT``,
+    and ``EVALUATORQ_FINDER_PARALLELISM``; invalid integer or out-of-range values
+    are ignored with a warning.
     """
     values = load_settings().model_dump()
     for field, env_name in (
@@ -97,6 +100,29 @@ def effective_settings(overrides: dict[str, Any] | None = None) -> DashboardSett
         env_value = os.environ.get(env_name, '').strip()
         if env_value:
             values[field] = env_value
+    for field, env_name, minimum, maximum in (
+        ('window_days', 'EVALUATORQ_FINDER_WINDOW_DAYS', 1, 90),
+        ('limit', 'EVALUATORQ_FINDER_LIMIT', 1, 500),
+        ('parallelism', 'EVALUATORQ_FINDER_PARALLELISM', 1, 200),
+    ):
+        env_value = os.environ.get(env_name, '').strip()
+        if not env_value:
+            continue
+        try:
+            parsed = int(env_value)
+        except ValueError:
+            logger.warning('Ignoring invalid integer {}={} in finder settings', env_name, env_value)
+            continue
+        if not minimum <= parsed <= maximum:
+            logger.warning(
+                'Ignoring out-of-range {}={} in finder settings; expected {}..{}',
+                env_name,
+                env_value,
+                minimum,
+                maximum,
+            )
+            continue
+        values[field] = parsed
     if overrides:
         values.update({key: value for key, value in overrides.items() if value is not None})
     return DashboardSettings.model_validate(values)

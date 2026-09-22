@@ -2579,6 +2579,7 @@ _FINDER_CSS = """
 .finder-query textarea::placeholder { color:var(--text-faint); }
 .finder-run { display:flex; flex-direction:column; gap:8px; align-items:flex-end; }
 .finder-run .rt-apply-btn { height:42px; padding:0 20px; font-size:14px; border-radius:10px; }
+.finder-run .rt-apply-btn[disabled] { opacity:.4; cursor:default; }
 .finder-key-hint { color:var(--text-faint); font-size:10.5px; white-space:nowrap; }
 .finder-below { display:flex; align-items:center; gap:14px; margin-top:14px; font-size:12px; color:var(--text-muted); }
 .finder-below .ex,.finder-controls .addwrap { position:relative; }
