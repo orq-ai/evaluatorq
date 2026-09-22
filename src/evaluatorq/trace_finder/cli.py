@@ -15,7 +15,6 @@ from rich.text import Text
 from evaluatorq.common import cli_width  # noqa: F401 — import for its non-TTY width side effect
 from evaluatorq.common.cli_epilog import examples
 from evaluatorq.common.cli_errors import emit_error
-from evaluatorq.common.cli_help import MODEL_OPTION_NOTE
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.common.orq_client import resolve_orq_client
 
@@ -177,11 +176,17 @@ def find(
     ] = None,
     compiler_model: Annotated[
         str | None,
-        typer.Option('--compiler-model', help=f'Model that compiles the question. {MODEL_OPTION_NOTE}'),
+        typer.Option(
+            '--compiler-model',
+            help='Model that compiles the search question via the Orq router. Default: openai/gpt-5.6-luna. Requires ORQ_API_KEY.',
+        ),
     ] = None,
     jev_model: Annotated[
         str | None,
-        typer.Option('--jev-model', help=f'Model that judges each trace. {MODEL_OPTION_NOTE}'),
+        typer.Option(
+            '--jev-model',
+            help='JEV model that classifies each trace via the Orq router. Default: typesafe/jev-latest. Requires ORQ_API_KEY.',
+        ),
     ] = None,
     json_path: Annotated[Path | None, typer.Option('--json', help='Write the completed run export to PATH.')] = None,
     project: Annotated[list[str] | None, typer.Option('--project', help='Project facet; repeatable.')] = None,
