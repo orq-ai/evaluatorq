@@ -203,7 +203,7 @@ Use `inference=False` when the trace already contains the response you want to s
 from evaluatorq import TraceInput, evaluatorq, orq_evaluator
 
 results = await evaluatorq(
-    'production-quality',
+    name='production-quality',
     data=TraceInput(trace_id='trace_123', span_id='span_456'),
     inference=False,
     evaluators=[orq_evaluator(evaluator_id='eval-1')],

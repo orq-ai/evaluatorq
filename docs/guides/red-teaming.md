@@ -42,7 +42,7 @@ report = await red_team(target=target, mode="static", dataset="hf:my-org/my-atta
 from evaluatorq import TraceInput
 from evaluatorq.redteam import datapoints_from_traces, red_team
 
-datapoints = await datapoints_from_traces(TraceInput(trace_id='trace_123'))
+datapoints = await datapoints_from_traces(source=TraceInput(trace_id='trace_123'))
 report = await red_team(
     target='agent:my-support-agent',
     datapoints=datapoints,
@@ -61,7 +61,10 @@ from evaluatorq import TraceInput
 from evaluatorq.redteam import OpenAIModelTarget, datapoints_from_traces, red_team
 
 target = OpenAIModelTarget(model='gpt-5.6-luna', system_prompt='You are a support agent.')
-datapoints = await datapoints_from_traces(TraceInput(trace_id='trace_123'), start_from='last_assistant')
+datapoints = await datapoints_from_traces(
+    source=TraceInput(trace_id='trace_123'),
+    start_from='last_assistant',
+)
 report = await red_team(target=target, datapoints=datapoints, vulnerabilities=['prompt_injection'])
 ```
 

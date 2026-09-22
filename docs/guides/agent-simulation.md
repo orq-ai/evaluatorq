@@ -518,7 +518,7 @@ The async `datapoints_from_traces(...)` helper accepts the same `TraceInput` use
 from evaluatorq import TraceInput
 from evaluatorq.simulation import datapoints_from_traces, simulate
 
-datapoints = await datapoints_from_traces(TraceInput(trace_id='trace_123'))
+datapoints = await datapoints_from_traces(source=TraceInput(trace_id='trace_123'))
 results = await simulate(target='agent:my-support-agent', datapoints=datapoints)
 ```
 
