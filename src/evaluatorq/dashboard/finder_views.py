@@ -309,11 +309,16 @@ def progress(snapshot: RunSnapshot) -> str:
         if snapshot.error
         else ''
     )
-    return (
-        f'<div class="finder-progress">{live_html}<span class="state">{esc(state)}</span>'
-        f'<span class="sep">·</span><span><b>{snapshot.completed} / {snapshot.total}</b> judged</span>'
+    counts = (
+        '<span class="sep">·</span><span>compiling the question and selecting traces</span>'
+        if snapshot.state == 'compiling'
+        else f'<span class="sep">·</span><span><b>{snapshot.completed} / {snapshot.total}</b> judged</span>'
         f'<span class="sep">·</span><span><b>{snapshot.failed}</b> failed</span><span class="sep">·</span>'
-        f'<span><b>{snapshot.rate:.1f}</b>/s</span><span class="sep">·</span><span>{snapshot.elapsed:.1f}s</span>{error_html}{action}</div>'
+        f'<span><b>{snapshot.rate:.1f}</b>/s</span>'
+    )
+    return (
+        f'<div class="finder-progress">{live_html}<span class="state">{esc(state)}</span>{counts}'
+        f'<span class="sep">·</span><span>{snapshot.elapsed:.1f}s</span>{error_html}{action}</div>'
     )
 
 
@@ -326,6 +331,13 @@ def field(snapshot: RunSnapshot, *, api_available: bool = True) -> str:
         else:
             body += '<div class="finder-hint"><div class="inner"><h4>Set ORQ_API_KEY to load traces</h4>'
             body += '<p>Trace finding is unavailable until the Orq API key is configured.</p></div></div>'
+    elif snapshot.state == 'compiling':
+        body += (
+            '<div class="finder-hint finder-compiling" role="status" aria-live="polite"><div class="inner">'
+            '<span class="finder-pulse" aria-hidden="true"><i></i><i></i><i></i></span>'
+            '<h4>Asking JEV what to look for…</h4>'
+            '<p>Compiling your question into a task, picking filters, and loading the trace population.</p></div></div>'
+        )
     elif not snapshot.traces:
         body += '<div class="finder-hint"><div class="inner"><h4>No traces loaded.</h4><p>No traces match the current window and filters.</p></div></div>'
     unavailable = ' unavailable' if snapshot.state == 'idle' and not api_available else ''

@@ -185,6 +185,18 @@ def setup_finder(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     return store, TestClient(build_app(roots=[tmp_path]), raise_server_exceptions=True)
 
 
+def test_find_compiling_state_shows_an_indicator(setup_finder) -> None:
+    store, client = setup_finder
+    store.snapshot_value = replace(store.snapshot_value, state='compiling')
+    response = client.get('/find')
+    assert response.status_code == 200
+    assert 'finder-compiling' in response.text
+    assert 'Asking JEV what to look for' in response.text
+    assert 'compiling the question and selecting traces' in response.text
+    assert 'No traces loaded.' not in response.text
+    assert '<b>0 / 0</b> judged' not in response.text
+
+
 def test_find_idle_page_and_nav(setup_finder) -> None:
     _store, client = setup_finder
     response = client.get('/find')

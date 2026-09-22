@@ -2622,7 +2622,14 @@ _FINDER_CSS = """
 .finder-progress .sep { color:rgba(255,255,255,.18); }
 .finder-progress .state { color:var(--accent); letter-spacing:.08em; text-transform:uppercase; font-size:10.5px; font-weight:600; }
 .finder-progress .btn-secondary { height:26px; font-size:12px; margin-left:auto; background:rgba(255,255,255,.06); border-color:rgba(255,255,255,.14); color:#f2f1f5; }
-.finder-progress .live { width:7px; height:7px; border-radius:50%; background:var(--accent); box-shadow:0 0 10px var(--accent); }
+.finder-progress .live { width:7px; height:7px; border-radius:50%; background:var(--accent); box-shadow:0 0 10px var(--accent); animation:finder-live 1.2s ease-in-out infinite; }
+@keyframes finder-live { 0%,100% { opacity:1; box-shadow:0 0 10px var(--accent); } 50% { opacity:.45; box-shadow:0 0 2px var(--accent); } }
+.finder-pulse { display:inline-flex; gap:6px; margin-bottom:4px; }
+.finder-pulse i { width:8px; height:8px; border-radius:50%; background:var(--accent); animation:finder-pulse 1.1s ease-in-out infinite; }
+.finder-pulse i:nth-child(2) { animation-delay:.18s; }
+.finder-pulse i:nth-child(3) { animation-delay:.36s; }
+@keyframes finder-pulse { 0%,100% { transform:scale(.6); opacity:.35; } 50% { transform:scale(1); opacity:1; } }
+@media (prefers-reduced-motion:reduce) { .finder-progress .live,.finder-pulse i { animation:none; } .finder-pulse i { opacity:1; transform:none; } }
 .finder-matrix { display:grid; grid-template-columns:repeat(auto-fill,18px); grid-auto-rows:18px; gap:2px; justify-content:center; padding:26px 24px 22px; }
 .finder-matrix i { display:grid; place-items:center; width:18px; height:18px; cursor:pointer; border-radius:4px; }
 .finder-matrix i::before { content:''; width:5px; height:5px; border-radius:50%; background:#4a4957; }
