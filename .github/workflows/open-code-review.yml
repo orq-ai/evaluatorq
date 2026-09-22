@@ -108,4 +108,4 @@ jobs:
           # so there is nothing left to pin and nothing floats to latest. Build
           # step: https://github.com/orq-ai/open-code-review/blob/a07e0883477a3a627af7643bebd99004909c2b17/action.yml#L488-L496
           # Router is billed per token; over budget the action publishes partial results and exits 0.
-          max_tokens_budget: '500000'
+          max_tokens_budget: '1000000'
