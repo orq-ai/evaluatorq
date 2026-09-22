@@ -51,6 +51,9 @@ if TYPE_CHECKING:
 AgentName = Literal['claude', 'codex', 'opencode']
 Launcher = Literal['direct', 'orq']
 
+# 30 s under the retry helper's DEFAULT_TARGET_TIMEOUT_MS so this ceiling fires first: the helper starts its
+# clock before the agent process exists, and its own timeout is a retried target.timeout, not cli.timeout.
+DEFAULT_CODING_AGENT_TIMEOUT_MS = DEFAULT_TARGET_TIMEOUT_MS - 30_000
 _STDERR_EXCERPT_CHARS = 4000
 
 
@@ -529,7 +532,8 @@ class CodingAgentTarget(AgentTarget):
     provider/id`` under ``orq``.
 
     ``env`` overlays ``os.environ``; caller-supplied values win. ``timeout_ms`` is the per-turn ceiling
-    and defaults to the same value the outer retry helper uses.
+    and defaults to 30 s under the retry helper's, so a hung agent surfaces as ``cli.timeout`` and is
+    not retried; raise both together when you raise ``target_agent_timeout_ms``.
     """
 
     def __init__(
@@ -545,7 +549,7 @@ class CodingAgentTarget(AgentTarget):
         workdir: Path | None = None,
         keep_workdir: bool = False,
         skills: list[Path] | None = None,
-        timeout_ms: int = DEFAULT_TARGET_TIMEOUT_MS,
+        timeout_ms: int = DEFAULT_CODING_AGENT_TIMEOUT_MS,
         env: dict[str, str] | None = None,
     ) -> None:
         super().__init__()
