@@ -27,13 +27,13 @@ The finder plans the query before it spends a JEV call on each trace:
 5. Each trace is projected into a bounded JEV state. The projection keeps the newest conversation suffix, preserves tool-call names, arguments, and completion status, removes reasoning fields and tool-result bodies, and truncates text from the front when necessary.
 6. JEV classifies each projected trace through evaluatorq. Results stream into the matrix and the included-traces table as each trace finishes.
 
-The compiler and facet selector run concurrently, so a slow facet catalogue does not wait for semantic compilation. The population is fixed before per-trace judging begins; changing a finder control starts a new run.
+The compiler and facet selector run concurrently, so a slow facet catalogue does not wait for semantic compilation. The population is fixed before per-trace judging begins; changing a finder control does nothing until you submit the form again, which starts a new run.
 
 ## Dashboard workflow
 
 The finder has two modes. **Immediate** compiles the task, loads the population, and starts judging. **Review first** stops after compilation and population selection so you can edit the task before any per-trace JEV calls begin.
 
-After you submit a question, the chips above the field show the generated categorical and numeric filters. Use **+ Filter** to inspect live values for project, agent, model, provider, status, product, trace type, tool, tokens, and duration. Explicit selections are combined with the generated filters before OQL runs.
+After you submit a question, the chips above the field show the generated categorical and numeric filters. Use **+ Filter** to inspect live values for project, agent, model, provider, status, product, trace type, tool, tokens, and duration. For the same facet or numeric bound, an explicit value takes precedence over the generated value; generated values fill only facets and bounds you leave empty before OQL runs.
 
 The dot field represents the selected population. Each dot is a trace, including traces that do not match and traces whose judgment failed. Matching dots use the task's legend colors, while failed judgments are marked separately. The included-traces table below the field contains only successful matches and is sorted newest first.
 
@@ -58,7 +58,7 @@ JEV selects categorical metadata from the live catalogue. The eight categorical 
 | `agent_name` | `agent_name` | Agent name recorded on the trace. |
 | `tool_name` | `tool_name` | Tool name recorded on the trace. |
 
-The compiler handles the two numeric dimensions because JEV has no numeric output type. It extracts inclusive ranges for `total_tokens` and `duration_ms`; for example, “over 20k tokens” becomes `total_tokens >= 20000`, and “slower than 30 seconds” becomes `duration_ms >= 30000`. The CLI and dashboard also let you enter minimum and maximum bounds explicitly.
+The compiler handles the two numeric dimensions because trace-finder metadata thresholds are not JEV classify outputs. JEV classify tasks return a label (`choice`), a yes/no probability (`noul`), or a 0–1 score (`score`); they do not extract numeric metadata thresholds. The compiler extracts inclusive ranges for `total_tokens` and `duration_ms` and applies them in OQL; for example, “over 20k tokens” becomes `total_tokens >= 20000`, and “slower than 30 seconds” becomes `duration_ms >= 30000`. The CLI and dashboard also let you enter minimum and maximum bounds explicitly.
 
 ## Settings and precedence
 
@@ -116,4 +116,4 @@ The facet and numeric options are explicit OQL constraints. The natural-language
 
 The finder searches a maximum of 500 usable traces per run, even if a larger limit is supplied elsewhere. The default lookback is seven days, the default JEV parallelism is 100, and parallelism is capped at 200. Each projected trace has a 25,000-token budget based on the serialized UTF-8 projection estimate; older conversation units are omitted first when the budget is reached.
 
-One completed run makes one compiler call, one facet-selection classify call, and one JEV classification call per selected trace. A 500-trace run therefore has up to 502 model calls before retries, so use the limit and window controls when you are exploring a large workspace.
+One completed run makes one compiler call, at most one facet-selection classify call, and one JEV classification call per selected trace. The facet-selection call is skipped when the facet catalogue is empty, including when every facet lookup failed. A 500-trace run therefore has up to 502 model calls before retries, so use the limit and window controls when you are exploring a large workspace.
