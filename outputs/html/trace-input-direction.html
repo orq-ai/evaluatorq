@@ -355,7 +355,7 @@
 
     <div class="callout">
       <span class="ico">↗</span>
-      <div><b>Caller-owned-history continuation:</b> hosted <code>agent:&lt;key&gt;</code> targets own their server-side history and cannot use <code>last_assistant</code>. A caller-owned target can continue from the imported assistant turn:
+      <div><b>Caller-owned-history continuation:</b> the current hosted <code>agent:&lt;key&gt;</code> path and stateless direct-model targets replay the full transcript, so they can continue from the imported assistant turn:
         <pre class="mini-code">from evaluatorq import TraceInput
 from evaluatorq.redteam import OpenAIModelTarget, datapoints_from_traces, red_team
 
@@ -511,7 +511,7 @@ datapoint = trace.to_datapoint()</pre>
       <dd>The async converter owns retrieval and replay-point selection while the already-large runner keeps vulnerability, strategy, attack-technique, delivery-method, validation, and reporting semantics in one place. Passing already-loaded <code>Trace</code> objects avoids a second fetch.</dd>
 
       <dt>Can <code>last_assistant</code> continue a hosted Orq agent trace?</dt>
-      <dd>Only through a target surface that accepts the full caller-owned transcript, such as the stateless Responses adapter. The hosted agents endpoint owns its thread and forwards only the newest user turn, so evaluatorq rejects imported assistant history for that adapter. <code>first_user</code> remains available because it can establish a new isolated thread from the recorded opening.</dd>
+      <dd>Yes. The current <code>agent:&lt;key&gt;</code> execution path uses the stateless Responses adapter and accepts the full caller-owned transcript. A custom or legacy adapter that owns an opaque server-side thread cannot import that assistant history; use <code>first_user</code> for such a target.</dd>
 
       <dt>Where do the three formats become identical?</dt>
       <dd>At the <code>Trace</code> boundary. Below it, the importer knows Chat Completions, Responses, and OpenTelemetry GenAI. Above it, every consumer sees evaluatorq <code>Message</code> objects and provenance describing the original format.</dd>

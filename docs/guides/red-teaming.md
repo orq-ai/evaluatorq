@@ -54,7 +54,7 @@ report = await red_team(
 
 `first_user` is the default. Evaluatorq sends the opening user message to a fresh target, records its new assistant response as bootstrap context, and begins the attack after that response. Every job gets a fresh target, and production thread, task, and memory identifiers are provenance only.
 
-Use `last_assistant` only with a target that accepts caller-owned history, such as `OpenAIModelTarget`. Hosted `agent:<key>` targets own their server-side history and cannot continue from an imported assistant turn.
+Use `last_assistant` only with a target that accepts caller-owned history. The current hosted `agent:<key>` path and `OpenAIModelTarget` both replay the full transcript; a custom or legacy adapter that owns opaque server-side history cannot continue from an imported assistant turn.
 
 ```python
 from evaluatorq import TraceInput

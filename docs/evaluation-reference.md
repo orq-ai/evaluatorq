@@ -25,7 +25,7 @@ async def evaluatorq(
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `data` | `list[DataPoint \| dict]` \| `list[Awaitable[DataPoint]]` \| `DatasetIdInput` \| `ExperimentInput` \| `TraceInput` | **required** | Data to evaluate — local rows (a `DataPoint` or a plain dict with the same keys), an Orq dataset, an existing experiment, or recorded trace output |
-| `jobs` | `list[Job]` | **required** | Jobs to run on each data point |
+| `jobs` | `list[Job]` \| `None` | required when `inference=True` | Jobs to run on each data point; omitted and ignored when `inference=False` |
 | `evaluators` | `list[Evaluator]` \| `None` | `None` | Evaluators that score job outputs |
 | `datapoint_parallelism` | `int` (≥1) | `10` | Number of concurrent datapoints. The former name `parallelism` still works, deprecated |
 | `llm_parallelism` | `int` (≥1) \| `None` | `None` | Ceiling on in-flight LLM requests for the whole run. Unbounded when unset |
