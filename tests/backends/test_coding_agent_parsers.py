@@ -183,3 +183,15 @@ def test_missing_usage_is_none() -> None:
 
 def test_no_final_message_is_none_text() -> None:
     assert parse_events('claude', [{'type': 'system', 'subtype': 'init'}]).text is None
+
+
+def test_claude_housekeeping_events_do_not_warn(caplog: pytest.LogCaptureFixture) -> None:
+    from loguru import logger
+
+    handler_id = logger.add(caplog.handler, level='WARNING', format='{message}')
+    try:
+        parse_events('claude', [{'type': 'system', 'subtype': 'init'}, {'type': 'rate_limit_event'}, {'type': 'brand_new'}])
+    finally:
+        logger.remove(handler_id)
+    warnings = {r.message for r in caplog.records if 'skipped unknown event type' in r.message}
+    assert warnings == {'claude skipped unknown event type: brand_new'}

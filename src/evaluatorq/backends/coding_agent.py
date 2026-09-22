@@ -304,12 +304,18 @@ def _heaviest_model(model_usage: dict[str, dict[str, Any]]) -> str | None:
     return max(model_usage, key=lambda m: model_usage[m].get('inputTokens', 0) + model_usage[m].get('outputTokens', 0))
 
 
+# Stream events claude emits every turn that carry no text, tool call or usage: `system` (init, hooks,
+# status) and `rate_limit_event`. Skipped silently so the unknown-event warning stays meaningful.
+_CLAUDE_HOUSEKEEPING_EVENTS = frozenset({'system', 'rate_limit_event'})
+
+
 def _parse_claude(events: list[dict[str, Any]]) -> ParsedTurn:
     turn = ParsedTurn()
     calls: dict[str, ToolCallOutputItem] = {}
     order: list[str] = []
     last_text: list[str] = []
-    for event in events:
+    content_events = [e for e in events if e.get('type') not in _CLAUDE_HOUSEKEEPING_EVENTS]
+    for event in content_events:
         kind = event.get('type')
         if kind == 'assistant':
             turn.model = event.get('message', {}).get('model') or turn.model
