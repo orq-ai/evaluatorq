@@ -100,6 +100,12 @@
 
     var item = evt.target.closest('.facet-item');
     if (item) { showFacet(item); return; }
+    var addFilter = evt.target.closest('.finder-controls .add');
+    if (addFilter) {
+      var ownMenu = addFilter.parentElement.querySelector('.finder-facets');
+      if (ownMenu) { ownMenu.style.left = ''; ownMenu.style.top = ''; ownMenu.classList.toggle('open'); }
+      return;
+    }
     var chipOpen = evt.target.closest('[data-chip-open]');
     if (chipOpen) {
       var menu = document.querySelector('.finder-controls .finder-facets');

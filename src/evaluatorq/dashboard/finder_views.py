@@ -103,8 +103,13 @@ def facet_menu(
     open_: bool = False,
     form_id: str = 'finder-query-form',
     selection: FacetSelection | None = None,
+    pending: bool = False,
 ) -> str:
-    """Two-level filter menu: a category list, and a value popout the client opens per category."""
+    """Two-level filter menu: a category list, and a value popout the client opens per category.
+
+    ``pending`` renders the menu without values and has it fetch them itself as soon as it lands
+    on the page, so a page render never waits on the Orq facet call.
+    """
     items: list[str] = []
     subs: list[str] = []
     for name, label in FACET_LABELS:
@@ -138,13 +143,18 @@ def facet_menu(
         subs.append(
             f'<div class="facet-sub" data-facet-sub="{esc(name)}" hidden><div class="hd">{esc(label)}</div>{body}</div>'
         )
-    note = (
-        '<p class="finder-empty">Facet values are unavailable; check the Orq connection and reopen.</p>'
-        if catalogue is None
-        else ''
-    )
+    if pending:
+        note = '<p class="finder-empty">Loading facet values…</p>'
+        loader = f' hx-get="/find/facets?form_id={form_id}" hx-trigger="load" hx-include="#finder-controls" hx-swap="outerHTML"'
+    else:
+        note = (
+            '<p class="finder-empty">Facet values are unavailable; check the Orq connection and reopen.</p>'
+            if catalogue is None
+            else ''
+        )
+        loader = ''
     return (
-        f'<div class="finder-facets{" open" if open_ else ""}"><div class="facet-list">{"".join(items)}{note}</div>'
+        f'<div class="finder-facets{" open" if open_ else ""}"{loader}><div class="facet-list">{"".join(items)}{note}</div>'
         f'{"".join(subs)}</div>'
     )
 
@@ -186,7 +196,13 @@ def _facet_chips(selection: FacetSelection, numeric: object | None = None, *, re
     return ''.join(chips)
 
 
-def controls(snapshot: RunSnapshot, settings: DashboardSettings, catalogue: FacetCatalogue | None = None) -> str:
+def controls(
+    snapshot: RunSnapshot,
+    settings: DashboardSettings,
+    catalogue: FacetCatalogue | None = None,
+    *,
+    pending: bool = False,
+) -> str:
     request = snapshot.request
     population = request.population if request is not None else None
     selection = population.facets if population is not None else None
@@ -214,9 +230,10 @@ def controls(snapshot: RunSnapshot, settings: DashboardSettings, catalogue: Face
     return (
         '<div class="finder-controls" id="finder-controls">'
         f'{hidden_facets}{_facet_chips(facets, numeric, removable=snapshot.state not in {"compiling", "classifying"})}'
-        f'<span class="addwrap"><button class="add" type="button" hx-get="/find/facets?form_id={form_id}" hx-include="#finder-controls" hx-target=".finder-facets" '
-        f'hx-swap="outerHTML">+ Filter</button>{facet_menu(catalogue, numeric=carried_numeric, form_id=form_id, selection=carried_facets)}</span><span class="spacer"></span>'
-        f'<span class="quiet"><b>Window</b><input id="finder-window" form="{form_id}" name="window_days" type="number" min="1" max="90" value="{values["window_days"]}" style="width:64px"></span>'
+        f'<span class="addwrap"><button class="add" type="button" aria-haspopup="true">+ Filter</button>'
+        f'{facet_menu(catalogue, numeric=carried_numeric, form_id=form_id, selection=carried_facets, pending=pending)}</span><span class="spacer"></span>'
+        f'<span class="quiet"><b>Window</b><input id="finder-window" form="{form_id}" name="window_days" type="number" min="1" max="90" value="{values["window_days"]}" style="width:64px" '
+        f'hx-get="/find/facets?form_id={form_id}" hx-trigger="change" hx-include="#finder-controls" hx-target=".finder-facets" hx-swap="outerHTML"></span>'
         f'<span class="quiet"><b>Limit</b><input form="{form_id}" name="limit" type="number" min="1" max="500" value="{values["limit"]}" style="width:72px"></span>'
         f'<span class="quiet"><b>Parallel</b><input form="{form_id}" name="parallelism" type="number" min="1" max="200" value="{values["parallelism"]}" style="width:64px"></span>'
         f'{count_html}</div>'
@@ -531,21 +548,30 @@ def body(
     settings: DashboardSettings,
     *,
     catalogue: FacetCatalogue | None = None,
+    pending: bool = False,
     api_available: bool = True,
 ) -> str:
     if snapshot.state == 'awaiting_review' and snapshot.compiled is not None:
         return (
-            f'{controls(snapshot, settings, catalogue)}<div class="finder-review"><span>⏸</span><span><b>Review the plan before running per-trace JEV classification.</b> '
+            f'{controls(snapshot, settings, catalogue, pending=pending)}<div class="finder-review"><span>⏸</span><span><b>Review the plan before running per-trace JEV classification.</b> '
             'Edit the task, criteria or filters, then start.</span></div>'
             f'{task_panel(snapshot.compiled, editable=True, open_=True, request=snapshot.request)}'
         )
     if snapshot.state == 'idle':
-        return f'{controls(snapshot, settings, catalogue)}{field(snapshot, api_available=api_available)}'
-    return f'{controls(snapshot, settings, catalogue)}{field(snapshot, api_available=api_available)}{table(snapshot)}{task_panel(snapshot.compiled, editable=False) if snapshot.compiled else ""}'
+        return (
+            f'{controls(snapshot, settings, catalogue, pending=pending)}{field(snapshot, api_available=api_available)}'
+        )
+    return f'{controls(snapshot, settings, catalogue, pending=pending)}{field(snapshot, api_available=api_available)}{table(snapshot)}{task_panel(snapshot.compiled, editable=False) if snapshot.compiled else ""}'
 
 
 def page_html(
-    snapshot: RunSnapshot, settings: DashboardSettings, *, api_available: bool, error: str | None = None
+    snapshot: RunSnapshot,
+    settings: DashboardSettings,
+    *,
+    api_available: bool,
+    error: str | None = None,
+    catalogue: FacetCatalogue | None = None,
+    pending: bool = False,
 ) -> str:
     request = snapshot.request
     query = request.query if request is not None else ''
@@ -555,7 +581,7 @@ def page_html(
         if snapshot.state in {'compiling', 'classifying'}
         else ''
     )
-    html = f'<div class="finder">{hero(query, mode, api_available=api_available, error=error)}<div id="finder-body"{polling}>{body(snapshot, settings, api_available=api_available)}</div><div id="finder-drawer"></div></div>'
+    html = f'<div class="finder">{hero(query, mode, api_available=api_available, error=error)}<div id="finder-body"{polling}>{body(snapshot, settings, catalogue=catalogue, pending=pending, api_available=api_available)}</div><div id="finder-drawer"></div></div>'
     return page('Trace search', html, active_nav='find')
 
 
@@ -565,12 +591,14 @@ def fragment(
     *,
     error: str | None = None,
     api_available: bool = True,
+    catalogue: FacetCatalogue | None = None,
+    pending: bool = False,
 ) -> str:
     attrs = ''
     if snapshot.state in {'compiling', 'classifying'}:
         attrs = ' hx-get="/find/poll" hx-trigger="every 1s" hx-target="#finder-body" hx-swap="innerHTML"'
     error_html = f'<div class="finder-review finder-form-error" role="alert">{esc(error)}</div>' if error else ''
-    return f'<div class="finder-body-fragment"{attrs}>{error_html}{body(snapshot, settings, api_available=api_available)}</div>'
+    return f'<div class="finder-body-fragment"{attrs}>{error_html}{body(snapshot, settings, catalogue=catalogue, pending=pending, api_available=api_available)}</div>'
 
 
 def drawer(detail: TraceDetail, *, experiment_url: str | None = None) -> str:

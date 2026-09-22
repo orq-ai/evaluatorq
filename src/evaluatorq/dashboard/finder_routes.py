@@ -116,9 +116,21 @@ async def _load_catalogue(app: Any, window_days: int | None = None) -> FacetCata
         )
     except ValueError as exc:
         logger.warning('Find facet menu is empty because the Orq client could not be resolved: {}', exc)
+        # Cached too, briefly: a menu that never resolves would otherwise retry on every poll swap.
+        app.state.finder_catalogue_cache = (now + timedelta(minutes=1), window, None)
         return None
     app.state.finder_catalogue_cache = (now + timedelta(minutes=5), window, catalogue)
     return catalogue
+
+
+def _catalogue_kwargs(app: Any) -> dict[str, Any]:
+    """The cached facet catalogue for a page render, or ``pending`` so the menu fetches it itself."""
+    cached = getattr(app.state, 'finder_catalogue_cache', None)
+    if cached is not None:
+        expires, cached_window, catalogue = cached
+        if expires > datetime.now(timezone.utc) and cached_window == _settings(app).window_days:
+            return {'catalogue': catalogue}
+    return {'pending': True}
 
 
 def _form_values(form: Any, name: str) -> list[str]:
@@ -255,7 +267,7 @@ def register_finder_routes(app: Any, roots: list[Any] | None = None) -> None:  #
         settings = _settings(req.app)
         store = _store(req.app) if api_available else None
         snapshot = await store.snapshot() if store is not None else RunSnapshot()
-        return _html(page_html(snapshot, settings, api_available=api_available))
+        return _html(page_html(snapshot, settings, api_available=api_available, **_catalogue_kwargs(req.app)))
 
     @app.post('/find/run')
     async def find_run(req: Request) -> Response:
@@ -269,26 +281,37 @@ def register_finder_routes(app: Any, roots: list[Any] | None = None) -> None:  #
                     settings,
                     error=rejected,
                     api_available=bool(os.environ.get('ORQ_API_KEY', '').strip()),
+                    **_catalogue_kwargs(req.app),
                 ),
                 status_code=403,
             )
         settings = _settings(req.app)
         store = _store(req.app)
         if store is None:
-            return _html(fragment(RunSnapshot(), settings, error='Set ORQ_API_KEY to load traces', api_available=False))
+            return _html(
+                fragment(
+                    RunSnapshot(),
+                    settings,
+                    **_catalogue_kwargs(req.app),
+                    error='Set ORQ_API_KEY to load traces',
+                    api_available=False,
+                )
+            )
         try:
             request = _run_request(form, settings)
             snapshot = await store.compile(request, wait=False)
         except (ValidationError, ValueError, TypeError) as exc:
-            return _html(fragment(RunSnapshot(), settings, error=str(exc)), status_code=422)
-        return _html(fragment(snapshot, settings))
+            return _html(
+                fragment(RunSnapshot(), settings, **_catalogue_kwargs(req.app), error=str(exc)), status_code=422
+            )
+        return _html(fragment(snapshot, settings, **_catalogue_kwargs(req.app)))
 
     @app.get('/find/poll')
     async def find_poll(req: Request) -> Response:
         settings = _settings(req.app)
         store = _store(req.app)
         snapshot = await store.snapshot() if store is not None else RunSnapshot()
-        return _html(fragment(snapshot, settings))
+        return _html(fragment(snapshot, settings, **_catalogue_kwargs(req.app)))
 
     @app.post('/find/start')
     async def find_start(req: Request) -> Response:
@@ -296,21 +319,34 @@ def register_finder_routes(app: Any, roots: list[Any] | None = None) -> None:  #
         rejected = request_rejected(req, form)
         if rejected:
             settings = _settings(req.app)
-            return _html(fragment(RunSnapshot(), settings, error=rejected), status_code=403)
+            return _html(
+                fragment(RunSnapshot(), settings, **_catalogue_kwargs(req.app), error=rejected), status_code=403
+            )
         settings = _settings(req.app)
         store = _store(req.app)
         if store is None:
-            return _html(fragment(RunSnapshot(), settings, error='Set ORQ_API_KEY to load traces', api_available=False))
+            return _html(
+                fragment(
+                    RunSnapshot(),
+                    settings,
+                    **_catalogue_kwargs(req.app),
+                    error='Set ORQ_API_KEY to load traces',
+                    api_available=False,
+                )
+            )
         current = await store.snapshot()
         if current.request is None or current.compiled is None:
-            return _html(fragment(current, settings, error='There is no plan waiting for review.'), status_code=409)
+            return _html(
+                fragment(current, settings, error='There is no plan waiting for review.', **_catalogue_kwargs(req.app)),
+                status_code=409,
+            )
         try:
             request = _run_request(form, settings, anchor=current.request.population)
             compiled = _compiled_from_form(current.compiled, form)
             snapshot = await store.start(request, compiled)
         except (ValidationError, ValueError, TypeError) as exc:
-            return _html(fragment(current, settings, error=str(exc)), status_code=422)
-        return _html(fragment(snapshot, settings))
+            return _html(fragment(current, settings, error=str(exc), **_catalogue_kwargs(req.app)), status_code=422)
+        return _html(fragment(snapshot, settings, **_catalogue_kwargs(req.app)))
 
     @app.post('/find/cancel')
     async def find_cancel(req: Request) -> Response:
@@ -318,11 +354,13 @@ def register_finder_routes(app: Any, roots: list[Any] | None = None) -> None:  #
         rejected = request_rejected(req, form)
         if rejected:
             settings = _settings(req.app)
-            return _html(fragment(RunSnapshot(), settings, error=rejected), status_code=403)
+            return _html(
+                fragment(RunSnapshot(), settings, **_catalogue_kwargs(req.app), error=rejected), status_code=403
+            )
         settings = _settings(req.app)
         store = _store(req.app)
         snapshot = await store.cancel() if store is not None else RunSnapshot()
-        return _html(fragment(snapshot, settings))
+        return _html(fragment(snapshot, settings, **_catalogue_kwargs(req.app)))
 
     @app.post('/find/reset')
     async def find_reset(req: Request) -> Response:
@@ -330,11 +368,13 @@ def register_finder_routes(app: Any, roots: list[Any] | None = None) -> None:  #
         rejected = request_rejected(req, form)
         if rejected:
             settings = _settings(req.app)
-            return _html(fragment(RunSnapshot(), settings, error=rejected), status_code=403)
+            return _html(
+                fragment(RunSnapshot(), settings, **_catalogue_kwargs(req.app), error=rejected), status_code=403
+            )
         settings = _settings(req.app)
         store = _store(req.app)
         snapshot = await store.reset() if store is not None else RunSnapshot()
-        return _html(fragment(snapshot, settings))
+        return _html(fragment(snapshot, settings, **_catalogue_kwargs(req.app)))
 
     @app.get('/find/trace/{trace_id:path}')
     async def find_trace(trace_id: str, req: Request) -> Response:
@@ -383,7 +423,7 @@ def register_finder_routes(app: Any, roots: list[Any] | None = None) -> None:  #
             form_id = 'finder-query-form'
         selection = FacetSelection(**{name: frozenset(_form_values(params, f'facet_{name}')) for name in FACET_NAMES})
         numeric = NumericFilters(**{name: getattr(parsed, name) for name in _NUMERIC_FIELDS})
-        return _html(facet_menu(catalogue, numeric=numeric, open_=True, form_id=form_id, selection=selection))
+        return _html(facet_menu(catalogue, numeric=numeric, form_id=form_id, selection=selection))
 
     @app.get('/find/dismiss')
     def find_dismiss() -> Response:

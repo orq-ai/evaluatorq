@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -238,6 +238,36 @@ def test_jev_picked_filters_do_not_carry_into_the_next_query(setup_finder) -> No
     )
     html = client.get('/find').text
     assert '<input type="hidden" form="finder-start-form" name="facet_project" value="support-agent">' in html
+
+
+def test_facet_menu_loads_itself_after_the_page_renders(setup_finder, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The page never waits on the Orq facet call: the menu fetches its values with an htmx load trigger."""
+    _store, client = setup_finder
+    loads: list[int | None] = []
+
+    async def load_catalogue(app: Any, window_days: int | None = None) -> FacetCatalogue:
+        loads.append(window_days)
+        catalogue = FacetCatalogue(project=('support-agent',))
+        app.state.finder_catalogue_cache = (datetime.now(timezone.utc) + timedelta(minutes=5), 7, catalogue)
+        return catalogue
+
+    monkeypatch.setattr(finder_routes, '_load_catalogue', load_catalogue)
+    page = client.get('/find').text
+    assert loads == []
+    assert 'hx-get="/find/facets?form_id=finder-query-form" hx-trigger="load" hx-include="#finder-controls"' in page
+    assert 'Loading facet values…' in page
+    assert '<button class="add" type="button" aria-haspopup="true">+ Filter</button>' in page
+    assert 'name="window_days" type="number" min="1" max="90" value="7" style="width:64px" hx-get="/find/facets?form_id=finder-query-form" hx-trigger="change"' in page
+
+    menu = client.get('/find/facets?form_id=finder-query-form&window_days=7').text
+    assert loads == [7]
+    assert 'hx-trigger="load"' not in menu
+    assert 'support-agent' in menu
+
+    page = client.get('/find').text
+    assert 'hx-trigger="load"' not in page
+    assert 'support-agent' in page
+    assert loads == [7]
 
 
 def test_switching_to_immediate_resets_an_open_review(setup_finder) -> None:
