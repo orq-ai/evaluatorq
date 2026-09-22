@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from typing import Any, cast
 
 import pytest
@@ -69,6 +71,7 @@ async def test_compile_query_uses_shared_structured_output_and_returns_numeric_f
     ]
     assert calls[0]['label'] == 'trace_finder.compile'
     assert calls[0]['max_tokens'] == 2000
+    assert calls[0]['api'] == 'responses'
 
 
 @pytest.mark.asyncio
@@ -123,6 +126,14 @@ def test_compiler_wire_schema_forbids_extra_fields() -> None:
 
     with pytest.raises(ValidationError):
         CompilerWireQuery.model_validate(document)
+
+
+def test_compiler_wire_schema_is_strict_mode_compatible() -> None:
+    """OpenAI strict structured output rejects `oneOf`, which a discriminated union renders as."""
+    schema = json.dumps(CompilerWireQuery.model_json_schema())
+    assert 'oneOf' not in schema
+    assert 'anyOf' in schema
+    assert CompilerWireQuery.model_validate(choice_document()).selection.kind == 'values'
 
 
 def test_compiler_wire_selection_schema_forbids_extra_fields() -> None:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
 
@@ -102,7 +102,10 @@ class WireThresholdSelection(BaseModel):
     value: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
 
 
-WireSelection = Annotated[WireValueSelection | WireThresholdSelection, Field(discriminator='kind')]
+# No `discriminator=`: pydantic renders a discriminated union as `oneOf`, which OpenAI's strict
+# structured output rejects ("'oneOf' is not permitted"); a plain union renders as `anyOf`, which
+# it accepts, and the `kind` literals still pick the member during validation.
+WireSelection = WireValueSelection | WireThresholdSelection
 
 
 class CompilerWireQuery(BaseModel):
@@ -183,6 +186,7 @@ async def compile_query(
         response_format=CompilerWireQuery,
         max_tokens=2000,
         label='trace_finder.compile',
+        api='responses',
         config=cfg,
     )
     if result.parsed is None:
