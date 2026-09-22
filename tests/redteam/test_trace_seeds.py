@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from evaluatorq import DataPoint
-from evaluatorq.contracts import AgentResponse, AgentTarget, Message
+from evaluatorq.contracts import AgentResponse, AgentTarget, ConversationHistoryMode, Message
 from evaluatorq.redteam.contracts import (
     AgentContext,
     AttackStrategy,
@@ -122,12 +122,125 @@ def _seed_without_identity() -> DataPoint:
     )
 
 
+def _last_assistant_seed() -> DataPoint:
+    return DataPoint(
+        inputs={
+            'trace_seed_messages': [FIRST_USER, {'role': 'assistant', 'content': 'Your order is on the way.'}],
+            'trace_start_from': 'last_assistant',
+            'source_trace_id': 'trace-1',
+        }
+    )
+
+
+class _TargetOwnedHistory(_Target):
+    history_mode = ConversationHistoryMode.TARGET
+
+    async def get_agent_context(self) -> AgentContext:
+        raise AssertionError('target context must not be fetched for a rejected trace seed')
+
+
 @pytest.mark.asyncio
 async def test_trace_seed_validation_rejects_non_trace_datapoints() -> None:
     from evaluatorq.redteam.runner import red_team
 
     with pytest.raises(ValueError, match='trace seed'):
         await red_team(_Target(), datapoints=[DataPoint(inputs={'query': 'not a trace'})], save=SaveMode.NONE)
+
+
+@pytest.mark.asyncio
+async def test_last_assistant_rejects_target_owned_history_before_pipeline() -> None:
+    from unittest.mock import AsyncMock, patch
+
+    from evaluatorq.redteam.exceptions import RedTeamError
+    from evaluatorq.redteam.runner import red_team
+
+    with (
+        patch('evaluatorq.redteam.runner._run_dynamic_or_hybrid', new_callable=AsyncMock) as pipeline,
+        patch('evaluatorq.redteam.runner.resolve_backend', side_effect=AssertionError('backend must not resolve')),
+    ):
+        with pytest.raises(RedTeamError, match='caller-owned history'):
+            await red_team(
+                _TargetOwnedHistory(),
+                datapoints=[_last_assistant_seed()],
+                recommendations=False,
+                generate_executive_summary=False,
+                save=SaveMode.NONE,
+            )
+
+    pipeline.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_last_assistant_accepts_caller_owned_direct_target() -> None:
+    from unittest.mock import AsyncMock, patch
+
+    from evaluatorq.redteam.runner import red_team
+    from tests.redteam.test_runner import _make_report, _run_result
+
+    report = _make_report(target='_Target')
+    with patch(
+        'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
+        new_callable=AsyncMock,
+        return_value=_run_result(report),
+    ) as pipeline:
+        result = await red_team(
+            _Target(),
+            datapoints=[_last_assistant_seed()],
+            recommendations=False,
+            generate_executive_summary=False,
+            save=SaveMode.NONE,
+        )
+
+    assert result is report
+    pipeline.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_last_assistant_accepts_caller_owned_hosted_agent_target() -> None:
+    from unittest.mock import AsyncMock, patch
+
+    from evaluatorq.redteam.runner import red_team
+    from tests.redteam.test_runner import _make_report, _run_result
+
+    report = _make_report()
+    with patch(
+        'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
+        new_callable=AsyncMock,
+        return_value=_run_result(report),
+    ) as pipeline:
+        result = await red_team(
+            'agent:test',
+            datapoints=[_last_assistant_seed()],
+            recommendations=False,
+            generate_executive_summary=False,
+            save=SaveMode.NONE,
+        )
+
+    assert result is report
+    pipeline.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_last_assistant_rejects_target_owned_string_before_backend() -> None:
+    from unittest.mock import AsyncMock, patch
+
+    from evaluatorq.redteam.exceptions import RedTeamError
+    from evaluatorq.redteam.runner import red_team
+
+    with (
+        patch('evaluatorq.redteam.runner._run_dynamic_or_hybrid', new_callable=AsyncMock) as pipeline,
+        patch('evaluatorq.redteam.runner.resolve_backend', side_effect=AssertionError('backend must not resolve')),
+    ):
+        with pytest.raises(RedTeamError, match='caller-owned history'):
+            await red_team(
+                'deployment:test',
+                datapoints=[_last_assistant_seed()],
+                recommendations=False,
+                generate_executive_summary=False,
+                save=SaveMode.NONE,
+            )
+
+    pipeline.assert_not_awaited()
 
 
 @pytest.mark.asyncio

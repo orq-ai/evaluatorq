@@ -11,6 +11,7 @@ from loguru import logger
 
 from .common.llm_limit import llm_concurrency_limit
 from .common.messages import coerce_content_text
+from .common.output_adapters import has_meaningful_output
 from .common.parallelism import resolve_datapoint_parallelism
 from .common.trace_input import fetch_traces
 from .fetch_data import (
@@ -140,10 +141,7 @@ async def _replay_recorded_response(data_point: DataPoint, _row_index: int) -> d
         raise ValueError(f'The source trace could not be imported: {import_error}')
     if 'recorded_output' in data_point.inputs:
         recorded_output = data_point.inputs['recorded_output']
-        has_recorded_output = (
-            bool(recorded_output.strip()) if isinstance(recorded_output, str) else bool(recorded_output)
-        )
-        if has_recorded_output:
+        if has_meaningful_output(recorded_output):
             return {'name': 'recorded', 'output': recorded_output}
         raise ValueError(
             "inference=False requires a non-empty 'recorded_output' for an imported trace, "

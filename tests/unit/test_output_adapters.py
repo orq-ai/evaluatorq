@@ -3,6 +3,7 @@ import json
 import pytest
 
 from evaluatorq.common.output_adapters import (
+    has_meaningful_output,
     inputs_to_messages,
     output_error_text,
     output_to_messages,
@@ -44,6 +45,20 @@ async def test_output_to_text_message_list_supports_exact_match():
 
 def test_output_to_text_none_is_empty():
     assert output_to_text(None) == ''
+
+
+def test_has_meaningful_output_rejects_blank_structured_message():
+    assert not has_meaningful_output([{'role': 'assistant', 'content': '   '}])
+
+
+def test_has_meaningful_output_accepts_tool_call_without_text():
+    output = [{'role': 'assistant', 'content': None, 'tool_calls': [{'id': 'call-1'}]}]
+
+    assert has_meaningful_output(output)
+
+
+def test_has_meaningful_output_accepts_unknown_nonempty_shape():
+    assert has_meaningful_output([{'type': 'future_output', 'payload': {}}])
 
 
 def test_output_to_text_dict_non_response_json():

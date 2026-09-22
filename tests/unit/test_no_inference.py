@@ -214,6 +214,70 @@ async def test_trace_input_rejects_empty_recorded_output(monkeypatch: pytest.Mon
 
 
 @pytest.mark.asyncio
+async def test_trace_input_rejects_blank_structured_recorded_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
+    fetch = AsyncMock(return_value=[
+        Trace(
+            trace_id='trace-blank-structured',
+            input_messages=[Message(role='user', content='question')],
+            output_messages=[Message(role='assistant', content='   ')],
+        )
+    ])
+    monkeypatch.setattr(evaluatorq_module, 'fetch_traces', fetch)
+
+    results = await evaluatorq(
+        'trace-eval',
+        data=TraceInput(trace_id='trace-blank-structured'),
+        inference=False,
+        evaluators=[],
+        print_results=False,
+        _send_results=False,
+    )
+
+    assert results[0].job_results is not None
+    job_result = results[0].job_results[0]
+    assert job_result.output is None
+    assert job_result.error is not None
+    assert 'no recorded assistant response' in job_result.error
+
+
+@pytest.mark.asyncio
+async def test_trace_input_preserves_structured_tool_output() -> None:
+    recorded_output = [
+        {
+            'role': 'assistant',
+            'content': None,
+            'tool_calls': [
+                {
+                    'id': 'call-1',
+                    'type': 'function',
+                    'function': {'name': 'search', 'arguments': '{}'},
+                }
+            ],
+        }
+    ]
+
+    seen: list[object] = []
+
+    async def capture(params: ScorerParameter) -> EvaluationResult:
+        seen.append(params['output'])
+        return EvaluationResult(value=1)
+
+    results = await evaluatorq(
+        'trace-eval',
+        data=[DataPoint(inputs={'recorded_output': recorded_output, 'messages': []})],
+        inference=False,
+        evaluators=[{'name': 'capture', 'scorer': capture}],
+        print_results=False,
+        _send_results=False,
+    )
+
+    assert seen == [recorded_output]
+    assert results[0].job_results is not None
+    assert results[0].job_results[0].output is not None
+
+
+@pytest.mark.asyncio
 async def test_trace_input_does_not_replay_earlier_assistant_when_output_is_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

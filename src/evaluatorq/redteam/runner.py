@@ -40,7 +40,7 @@ from evaluatorq.common.thread_context import (
     evaluatorq_pipeline,
 )
 from evaluatorq.common.tracing import AttrMap, set_span_attrs, truncate_for_span
-from evaluatorq.contracts import AgentTarget, LLMCallConfig, Message, TokenUsage
+from evaluatorq.contracts import AgentTarget, ConversationHistoryMode, LLMCallConfig, Message, TokenUsage
 from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities, classify_agent_capabilities
 from evaluatorq.redteam.adaptive.orchestrator import ProgressDisplay, _get_active_progress
 from evaluatorq.redteam.adaptive.pipeline import (
@@ -181,6 +181,34 @@ def _validate_trace_seed_messages(datapoint: DataPoint, index: int) -> None:
             raise ValueError(
                 f'datapoints[{index}].trace_seed_messages[{message_index}] is not parseable as a Message: {exc}'
             ) from exc
+
+
+def _validate_trace_replay_targets(targets: list[str | AgentTarget], seed_datapoints: list[DataPoint] | None) -> None:
+    """Reject last-assistant seeds before resolving a target or paying for an LLM call."""
+    if not seed_datapoints or not any(
+        datapoint.inputs.get('trace_start_from') == TraceStart.LAST_ASSISTANT.value for datapoint in seed_datapoints
+    ):
+        return
+
+    for target in targets:
+        if isinstance(target, AgentTarget):
+            try:
+                history_mode = ConversationHistoryMode(target.history_mode)
+            except (TypeError, ValueError) as exc:
+                raise RedTeamError('last_assistant trace replay requires caller-owned history on the target') from exc
+            if history_mode is ConversationHistoryMode.TARGET:
+                raise RedTeamError(
+                    'last_assistant trace replay requires caller-owned history; '
+                    'the supplied target owns the conversation history'
+                )
+            continue
+
+        kind, _value = parse_target(target)
+        if kind is not TargetKind.AGENT:
+            raise RedTeamError(
+                'last_assistant trace replay requires caller-owned history; '
+                f'target {target!r} resolves through a target-owned execution path'
+            )
 
 
 def get_runs_dir() -> Path:
@@ -1497,6 +1525,14 @@ async def red_team(
     resolved_output_dir = output_dirs.pipeline_output_dir
 
     targets, agent_targets = _split_and_dedupe_targets(target=target)
+
+    # A last-assistant seed imports the existing conversation instead of replaying
+    # it through the target. Enforce that ownership boundary before credentials,
+    # context discovery, strategy planning, or target/backend construction.
+    _validate_trace_replay_targets(
+        raw_targets,
+        trace_datapoints if trace_datapoints is not None else replay.datapoints if replay is not None else None,
+    )
 
     # Build or merge config -------------------------------------------------
     # When ``llm_config`` is provided it is the source of truth for models and
