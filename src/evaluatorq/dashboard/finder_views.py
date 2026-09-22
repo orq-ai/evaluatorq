@@ -8,9 +8,11 @@ from urllib.parse import quote
 
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.apply_ui import _drawer
+from evaluatorq.dashboard.security import csrf_field
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.trace_links import trace_link_button, trace_span_url
 from evaluatorq.trace_finder import classification_legend
+from evaluatorq.trace_finder.models import FACET_NAMES
 
 if TYPE_CHECKING:
     from evaluatorq.trace_finder import (
@@ -18,6 +20,7 @@ if TYPE_CHECKING:
         DashboardSettings,
         FacetCatalogue,
         FacetSelection,
+        RunRequest,
         RunSnapshot,
         TraceClassification,
         TraceDetail,
@@ -53,7 +56,9 @@ def icon_search() -> str:
 
 
 def examples() -> str:
-    items = ''.join(f'<button type="button">{esc(sample)}</button>' for sample in SAMPLES)
+    items = ''.join(
+        f'<button type="button" data-finder-example="{esc(sample)}">{esc(sample)}</button>' for sample in SAMPLES
+    )
     return f'<div class="finder-examples"><div class="hd">Examples</div>{items}</div>'
 
 
@@ -68,7 +73,7 @@ def hero(query: str, mode: str, *, api_available: bool, error: str | None = None
         '<h2 class="finder-title">Ask <em>JEV</em> to find the conversations you care about.</h2>'
         '<form id="finder-query-form" class="finder-query" hx-post="/find/run" hx-target="#finder-body" '
         'hx-swap="innerHTML" hx-include="#finder-controls">'
-        f'{icon_search()}<div class="col"><textarea name="query" placeholder="Describe the conversations you want to find…" '
+        f'{csrf_field()}{icon_search()}<div class="col"><textarea name="query" placeholder="Describe the conversations you want to find…" '
         f'required{disabled}>{esc(query)}</textarea></div><div class="finder-run">'
         f'<button class="rt-apply-btn" type="submit"{disabled}>Run</button>'
         '</div></form>'
@@ -92,6 +97,8 @@ def facet_menu(
     *,
     numeric: object | None = None,
     open_: bool = False,
+    form_id: str = 'finder-query-form',
+    selection: FacetSelection | None = None,
 ) -> str:
     rows: list[str] = []
     for name, label in FACET_LABELS:
@@ -102,14 +109,15 @@ def facet_menu(
             maximum = getattr(numeric, f'{name}_max', None) if numeric is not None else None
             rows.append(
                 f'<div class="facet-group"><div><span>{esc(label)}</span><span class="kind">{kind}</span></div>'
-                f'<label><span>≥</span><input form="finder-query-form" name="{esc(name)}_min" type="number" min="0" '
+                f'<label><span>≥</span><input form="{form_id}" name="{esc(name)}_min" type="number" min="0" '
                 f'placeholder="min" value="{esc(str(minimum)) if minimum is not None else ""}"></label>'
-                f'<label><span>≤</span><input form="finder-query-form" name="{esc(name)}_max" type="number" min="0" '
+                f'<label><span>≤</span><input form="{form_id}" name="{esc(name)}_max" type="number" min="0" '
                 f'placeholder="max" value="{esc(str(maximum)) if maximum is not None else ""}"></label></div>'
             )
         elif values:
+            selected_values = getattr(selection, name, frozenset()) if selection is not None else frozenset()
             options = ''.join(
-                f'<label><input form="finder-query-form" type="checkbox" name="facet_{esc(name)}" value="{esc(value)}">{esc(value)}</label>'
+                f'<label><input form="{form_id}" type="checkbox" name="facet_{esc(name)}" value="{esc(value)}"{(" checked" if value in selected_values else "")}>{esc(value)}</label>'
                 for value in values
             )
             rows.append(
@@ -129,6 +137,8 @@ def _facet_chips(
     generated: FacetSelection,
     numeric: object | None = None,
     generated_numeric: object | None = None,
+    *,
+    removable: bool = False,
 ) -> str:
     chips: list[str] = []
     for name, label in FACET_LABELS[:8]:
@@ -139,7 +149,13 @@ def _facet_chips(
         for value in sorted(values):
             jev = ' jev' if value in generated_values else ''
             tag = '<span class="tag">jev</span>' if jev else ''
-            chips.append(f'<span class="chip{jev}"><b>{esc(label)}</b>{esc(value)}{tag}<i>✕</i></span>')
+            remove = (
+                f'<button type="button" class="finder-chip-remove" data-finder-remove="facet_{name}" '
+                f'data-finder-value="{esc(value)}" aria-label="Remove {esc(label)} {esc(value)}">✕</button>'
+                if removable
+                else '<i>✕</i>'
+            )
+            chips.append(f'<span class="chip{jev}"><b>{esc(label)}</b>{esc(value)}{tag}{remove}</span>')
     for name, label, operator in (
         ('tokens_min', 'tokens', '≥'),
         ('tokens_max', 'tokens', '≤'),
@@ -152,7 +168,13 @@ def _facet_chips(
         generated_value = getattr(generated_numeric, name, None) if generated_numeric is not None else None
         jev = ' jev' if generated_value == value else ''
         tag = '<span class="tag">jev</span>' if jev else ''
-        chips.append(f'<span class="chip{jev}"><b>{label}</b>{operator} {value}{tag}<i>✕</i></span>')
+        remove = (
+            f'<button type="button" class="finder-chip-remove" data-finder-remove="{name}" '
+            f'aria-label="Remove {esc(label)} {operator} {value}">✕</button>'
+            if removable
+            else '<i>✕</i>'
+        )
+        chips.append(f'<span class="chip{jev}"><b>{label}</b>{operator} {value}{tag}{remove}</span>')
     return ''.join(chips)
 
 
@@ -161,21 +183,31 @@ def controls(snapshot: RunSnapshot, settings: DashboardSettings, catalogue: Face
     population = request.population if request is not None else None
     selection = population.facets if population is not None else None
     facets = selection or _empty_facets()
+    review = snapshot.state == 'awaiting_review'
+    form_id = 'finder-start-form' if review else 'finder-query-form'
+    window_days = settings.window_days
+    if population is not None and population.start is not None and population.end is not None:
+        window_days = max(1, round((population.end - population.start).total_seconds() / 86400))
     values = {
-        'window_days': settings.window_days,
+        'window_days': window_days,
         'limit': population.limit if population is not None else settings.limit,
         'parallelism': request.parallelism if request is not None else settings.parallelism,
     }
     numeric = population.numeric if population is not None else None
     count_html = f'<span class="count">{esc(str(snapshot.total))} traces selected</span>' if snapshot.total else ''
+    hidden_facets = ''.join(
+        f'<input type="hidden" form="{form_id}" name="facet_{name}" value="{esc(value)}">'
+        for name in FACET_NAMES
+        for value in sorted(getattr(facets, name))
+    )
     return (
         '<div class="finder-controls" id="finder-controls">'
-        f'{_facet_chips(facets, snapshot.generated_filters, numeric, snapshot.generated_numeric)}'
-        f'<span class="addwrap"><button class="add" type="button" hx-get="/find/facets" hx-target=".finder-facets" '
-        f'hx-swap="outerHTML">+ Filter</button>{facet_menu(catalogue, numeric=numeric)}</span><span class="spacer"></span>'
-        f'<span class="quiet"><b>Window</b><input form="finder-query-form" name="window_days" type="number" min="1" max="90" value="{values["window_days"]}" style="width:52px"></span>'
-        f'<span class="quiet"><b>Limit</b><input form="finder-query-form" name="limit" type="number" min="1" max="500" value="{values["limit"]}" style="width:52px"></span>'
-        f'<span class="quiet"><b>Parallel</b><input form="finder-query-form" name="parallelism" type="number" min="1" max="200" value="{values["parallelism"]}" style="width:48px"></span>'
+        f'{hidden_facets}{_facet_chips(facets, snapshot.generated_filters, numeric, snapshot.generated_numeric, removable=review)}'
+        f'<span class="addwrap"><button class="add" type="button" hx-get="/find/facets?form_id={form_id}" hx-include="#finder-window" hx-target=".finder-facets" '
+        f'hx-swap="outerHTML">+ Filter</button>{facet_menu(catalogue, numeric=numeric, form_id=form_id, selection=facets)}</span><span class="spacer"></span>'
+        f'<span class="quiet"><b>Window</b><input id="finder-window" form="{form_id}" name="window_days" type="number" min="1" max="90" value="{values["window_days"]}" style="width:52px"></span>'
+        f'<span class="quiet"><b>Limit</b><input form="{form_id}" name="limit" type="number" min="1" max="500" value="{values["limit"]}" style="width:52px"></span>'
+        f'<span class="quiet"><b>Parallel</b><input form="{form_id}" name="parallelism" type="number" min="1" max="200" value="{values["parallelism"]}" style="width:48px"></span>'
         f'{count_html}</div>'
     )
 
@@ -257,12 +289,17 @@ def legend(snapshot: RunSnapshot) -> str:
 def progress(snapshot: RunSnapshot) -> str:
     running = snapshot.state in {'compiling', 'classifying'}
     state = 'classifying' if snapshot.state == 'classifying' else snapshot.state.replace('_', ' ')
-    action = (
-        '<button class="btn-secondary" type="button" hx-post="/find/cancel" hx-target="#finder-body" hx-swap="innerHTML">Cancel</button>'
-        if running
-        else '<a class="btn-secondary" href="/find/export.json">Download JSON</a>'
-        if snapshot.state == 'completed'
+    reset = (
+        f'<form hx-post="/find/reset" hx-target="#finder-body" hx-swap="innerHTML">{csrf_field()}<button class="btn-secondary" type="submit">Reset</button></form>'
+        if snapshot.state != 'idle'
         else ''
+    )
+    action = (
+        f'<form hx-post="/find/cancel" hx-target="#finder-body" hx-swap="innerHTML">{csrf_field()}<button class="btn-secondary" type="submit">Cancel</button></form>'
+        if running
+        else f'<a class="btn-secondary" href="/find/export.json">Download JSON</a>{reset}'
+        if snapshot.state == 'completed'
+        else reset
     )
     live_html = '<span class="live"></span>' if running else ''
     error_html = (
@@ -321,13 +358,7 @@ def table(snapshot: RunSnapshot) -> str:
 
 
 def _task_kind_select(kind: str, *, editable: bool) -> str:
-    if not editable:
-        return f'<p>{esc(kind)}</p>'
-    options = ''.join(
-        f'<option value="{value}"{" selected" if kind == value else ""}>{label}</option>'
-        for value, label in (('choice', 'choice'), ('noul', 'noul (yes/no)'), ('score', 'score (0-1)'))
-    )
-    return f'<select name="kind">{options}</select>'
+    return f'<p class="finder-kind-badge">{esc(kind)}</p>'
 
 
 def _selection_rule_html(compiled: CompiledQuery, *, editable: bool) -> str:
@@ -410,7 +441,13 @@ def _criterion_html(compiled: CompiledQuery, *, editable: bool) -> tuple[str, in
     return '<p>Binary true / false judgment.</p>', 0
 
 
-def task_panel(compiled: CompiledQuery, *, editable: bool, open_: bool = False) -> str:
+def task_panel(
+    compiled: CompiledQuery,
+    *,
+    editable: bool,
+    open_: bool = False,
+    request: RunRequest | None = None,
+) -> str:
     task = compiled.task
     criterion_html, criterion_count = _criterion_html(compiled, editable=editable)
     instruction = (
@@ -423,8 +460,19 @@ def task_panel(compiled: CompiledQuery, *, editable: bool, open_: bool = False) 
         if editable and task.kind == 'noul'
         else ''
     )
-    form_open = '<form hx-post="/find/start" hx-target="#finder-body" hx-swap="innerHTML">' if editable else ''
-    form_close = '<button class="rt-apply-btn" type="submit">Start classification</button></form>' if editable else ''
+    if editable:
+        form_open = '<form id="finder-start-form" hx-post="/find/start" hx-target="#finder-body" hx-swap="innerHTML">'
+        hidden_request = ''
+        if request is not None:
+            hidden_request = (
+                f'<input type="hidden" name="query" value="{esc(request.query)}">'
+                f'<input type="hidden" name="mode" value="review">'
+            )
+        form_open += hidden_request + csrf_field()
+        form_close = '<button class="rt-apply-btn" type="submit">Start classification</button></form>'
+    else:
+        form_open = ''
+        form_close = ''
     return (
         f'<details class="finder-task"{" open" if open_ else ""}><summary><span class="chev">▸</span><span class="kind">{esc(task.kind)}</span>'
         f'<span>Generated JEV task · {criterion_count} labels</span></summary>{form_open}'
@@ -445,9 +493,9 @@ def body(
 ) -> str:
     if snapshot.state == 'awaiting_review' and snapshot.compiled is not None:
         return (
-            f'{controls(snapshot, settings, catalogue)}<div class="finder-review"><span>⏸</span><span><b>Review the plan before spending JEV calls.</b> '
+            f'{controls(snapshot, settings, catalogue)}<div class="finder-review"><span>⏸</span><span><b>Review the plan before running per-trace JEV classification.</b> '
             'Edit the task, criteria or filters, then start.</span></div>'
-            f'{task_panel(snapshot.compiled, editable=True, open_=True)}'
+            f'{task_panel(snapshot.compiled, editable=True, open_=True, request=snapshot.request)}'
         )
     if snapshot.state == 'idle':
         return f'{controls(snapshot, settings, catalogue)}{field(snapshot, api_available=api_available)}'

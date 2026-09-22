@@ -113,6 +113,8 @@ class ExportTrace(BaseModel):
     trace_id: str
     span_id: str
     timestamp: datetime
+    agent_name: str | None = None
+    tool_names: tuple[str, ...] = ()
     value: StrictBool | StrictFloat | StrictStr | None = None
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     probabilities: dict[str, float] | None = None
@@ -238,6 +240,8 @@ def _export_trace(trace: TraceRecord, classification: TraceClassification | None
             trace_id=trace.trace_id,
             span_id=trace.span_id,
             timestamp=trace.timestamp,
+            agent_name=trace.agent_name or None,
+            tool_names=trace.tool_names,
             matched=False,
             error='classification not completed',
         )
@@ -245,6 +249,8 @@ def _export_trace(trace: TraceRecord, classification: TraceClassification | None
         trace_id=trace.trace_id,
         span_id=trace.span_id,
         timestamp=trace.timestamp,
+        agent_name=trace.agent_name or None,
+        tool_names=trace.tool_names,
         value=classification.value,
         confidence=classification.confidence,
         probabilities=dict(classification.probabilities) if classification.probabilities is not None else None,

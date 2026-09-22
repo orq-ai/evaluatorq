@@ -48,6 +48,7 @@ from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
 from evaluatorq.dashboard.finder_routes import register_finder_routes
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
+from evaluatorq.dashboard.security import request_rejected
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.sim_compare import register_sim_compare_routes
 from evaluatorq.dashboard.sim_views import register_sim_view_routes
@@ -222,8 +223,13 @@ def _settings(req: Request) -> NotStr:
 
 async def _save_settings(req: Request) -> Response | NotStr:
     """Validate and persist the settings form, or render field errors."""
-    roots = _roots(req)
     form_data = await req.form()
+    rejected = request_rejected(req, form_data)
+    if rejected:
+        roots = _roots(req)
+        body = settings_body(_settings_config(roots), effective_settings(), errors={'form': rejected})
+        return Response(page('Settings', body, active_nav='settings'), status_code=403, media_type='text/html')
+    roots = _roots(req)
     field_names = ('compiler_model', 'jev_model', 'apply_model', 'window_days', 'limit', 'parallelism')
     values = {name: form_data.get(name, '') for name in field_names}
     try:
@@ -238,6 +244,15 @@ async def _save_settings(req: Request) -> Response | NotStr:
         return Response(page('Settings', body, active_nav='settings'), status_code=422, media_type='text/html')
 
     save_settings(settings)
+    old_store = getattr(req.app.state, 'finder_store', None)
+    if old_store is not None:
+        # A running finder keeps old model settings, so retire it before the
+        # next request builds the replacement store from the saved settings.
+        await old_store.cancel()
+    req.app.state.finder_settings = settings
+    for state_name in ('finder_store', 'finder_catalogue_cache'):
+        if hasattr(req.app.state, state_name):
+            delattr(req.app.state, state_name)
     return RedirectResponse('/settings?saved=1', status_code=303)
 
 

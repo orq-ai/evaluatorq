@@ -110,6 +110,8 @@ def test_build_export_is_conversation_free_and_contains_all_filters() -> None:
     assert exported.numeric.duration_ms_max == 500
     assert exported.generated_numeric.tokens_min == 50
     assert exported.traces[0].trace_id == 'trace-2'
+    assert exported.traces[0].agent_name == 'support'
+    assert exported.traces[0].tool_names == ('lookup', 'refund')
     assert exported.traces[0].matched is True
     assert exported.traces[1].error is None
     assert exported.traces[2].error == 'classification not completed'
@@ -125,6 +127,8 @@ def test_export_models_have_explicit_allow_lists_and_no_snapshot_file_fields() -
         'trace_id',
         'span_id',
         'timestamp',
+        'agent_name',
+        'tool_names',
         'value',
         'confidence',
         'probabilities',

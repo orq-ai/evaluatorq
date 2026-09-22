@@ -27,7 +27,7 @@ The finder plans the query before it spends a JEV call on each trace:
 5. Each trace is projected into a bounded JEV state. The projection keeps the newest conversation suffix, preserves tool-call names, arguments, and completion status, removes reasoning fields and tool-result bodies, and truncates text from the front when necessary.
 6. JEV classifies each projected trace through evaluatorq. Results stream into the matrix and the included-traces table as each trace finishes.
 
-The compiler and facet selector run concurrently, so a slow facet catalogue does not wait for semantic compilation. The population is fixed before per-trace judging begins; changing a finder control does nothing until you submit the form again, which starts a new run.
+The compiler and facet selector run concurrently, so a slow facet catalogue does not wait for semantic compilation. The facet catalogue follows the current search window, and dashboard windows are bounded to 1–90 days. The population is fixed before per-trace judging begins; changing a finder control does nothing until you submit the form again, which starts a new run.
 
 ## Dashboard workflow
 
@@ -39,7 +39,7 @@ The dot field represents the selected population. Each dot is a trace, including
 
 Click a dot or a table row to open its drawer. **Full thread** shows the source conversation, **JEV input** shows the exact bounded projection sent for judgment, and **Raw result** shows the stored evaluator result. The drawer also shows the trace and span IDs, metadata, verdict, and an **Open in Orq** link when the dashboard has a workspace configured.
 
-When a run completes, choose **Download JSON** to export the query, compiled task, filters, selected trace metadata, verdicts, and errors. The export does not include source messages or the JEV projection.
+When a run completes, choose **Download JSON** to export the query, compiled task, filters, selected trace metadata including each trace's agent and tool names, verdicts, and errors. The export does not include source messages or the JEV projection.
 
 The common failure mode is stopping in **Review first**: the plan is visible, but no trace is judged until you press **Start classification**. If no traces match the compiled filters, the run ends with an explicit error instead of pretending that zero judgments are a successful result. Without `ORQ_API_KEY`, the page stays available but shows that trace finding is unavailable.
 

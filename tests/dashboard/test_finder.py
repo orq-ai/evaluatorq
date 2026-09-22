@@ -12,6 +12,7 @@ from starlette.testclient import TestClient
 
 from evaluatorq.dashboard import finder_routes
 from evaluatorq.dashboard.app import build_app
+from evaluatorq.dashboard.security import CSRF_FIELD, _CSRF_TOKEN
 from evaluatorq.trace_finder import (
     CompiledQuery,
     FacetCatalogue,
@@ -26,6 +27,12 @@ from evaluatorq.trace_finder import (
     ValueSelection,
 )
 from evaluatorq.common.judge import ClassifyQuestion
+
+
+def csrf_data(values: dict[str, str] | None = None) -> dict[str, str]:
+    """Build a finder POST body with the token used by the dashboard security module."""
+
+    return {CSRF_FIELD: _CSRF_TOKEN, **(values or {})}
 
 
 def _trace() -> TraceRecord:
@@ -77,6 +84,7 @@ class FakeStore:
         self.snapshot_value = RunSnapshot()
         self.started = False
         self.compile_request: Any | None = None
+        self.started_request: Any | None = None
         self.started_compiled: CompiledQuery | None = None
 
     async def compile(self, request: Any) -> RunSnapshot:
@@ -100,6 +108,7 @@ class FakeStore:
 
     async def start(self, request: Any, compiled: CompiledQuery) -> RunSnapshot:
         self.started = True
+        self.started_request = request
         self.started_compiled = compiled
         result = TraceClassification(
             trace_id=self.trace.trace_id,
@@ -185,6 +194,8 @@ def test_find_idle_page_and_nav(setup_finder) -> None:
     assert 'Find' in response.text
     assert 'about 1,240 traces in window' not in response.text
     assert response.text.count('class="idle"') == 500
+    assert 'data-finder-example="Frustrated customers in the support agent on production this week."' in response.text
+    assert 'id="finder-query-form"' in response.text
 
 
 def test_find_without_api_key_renders_empty_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -202,7 +213,7 @@ def test_find_without_api_key_renders_empty_state(monkeypatch: pytest.MonkeyPatc
 
 def test_find_run_starts_polling_and_completed_poll_shows_matches(setup_finder) -> None:
     store, client = setup_finder
-    response = client.post('/find/run', data={'query': 'frustrated customers', 'mode': 'immediate'})
+    response = client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate'}))
     assert response.status_code == 200
     assert 'hx-trigger="every 1s"' in response.text
 
@@ -214,9 +225,23 @@ def test_find_run_starts_polling_and_completed_poll_shows_matches(setup_finder) 
     assert 'trace-1' in poll.text
 
 
+@pytest.mark.parametrize('window_days', ['0', '91', str(10**12)])
+def test_find_run_rejects_invalid_windows(setup_finder, window_days: str) -> None:
+    store, client = setup_finder
+    response = client.post(
+        '/find/run',
+        data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate', 'window_days': window_days}),
+    )
+
+    assert response.status_code == 422
+    assert store.compile_request is None
+
+
 def test_find_run_passes_numeric_filter_and_renders_chip(setup_finder) -> None:
     store, client = setup_finder
-    response = client.post('/find/run', data={'query': 'long traces', 'mode': 'immediate', 'tokens_min': '5000'})
+    response = client.post(
+        '/find/run', data=csrf_data({'query': 'long traces', 'mode': 'immediate', 'tokens_min': '5000'})
+    )
     assert response.status_code == 200
     assert store.compile_request is not None
     assert store.compile_request.population.numeric.tokens_min == 5000
@@ -226,28 +251,57 @@ def test_find_run_passes_numeric_filter_and_renders_chip(setup_finder) -> None:
 
 def test_find_review_start_transitions_to_classification(setup_finder) -> None:
     store, client = setup_finder
-    review = client.post('/find/run', data={'query': 'frustrated customers', 'mode': 'review'})
+    review = client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'review'}))
     assert review.status_code == 200
-    assert 'Review the plan before spending JEV calls.' in review.text
+    assert 'Review the plan before running per-trace JEV classification.' in review.text
     assert 'name="instructions"' in review.text
 
     started = client.post(
         '/find/start',
-        data={
-            'kind': 'choice',
+        data=csrf_data({
             'instructions': 'Edited instructions',
             'criteria_label_0': 'frustrated',
             'criteria_description_0': 'Changed criterion',
             'criteria_label_1': 'neutral',
             'criteria_description_1': 'Transactional.',
             'selection_value': 'frustrated',
-        },
+            'window_days': '14',
+            'limit': '12',
+            'parallelism': '3',
+            'facet_project': 'support-agent',
+            'tokens_min': '900',
+        }),
     )
     assert started.status_code == 200
     assert store.started
+    assert store.started_request is not None
+    assert store.started_request.population.start is not None
+    assert store.started_request.population.end is not None
+    assert (store.started_request.population.end - store.started_request.population.start).days == 14
+    assert store.started_request.population.limit == 12
+    assert store.started_request.parallelism == 3
+    assert store.started_request.population.facets.project == frozenset({'support-agent'})
+    assert store.started_request.population.numeric.tokens_min == 900
     assert store.started_compiled is not None
     assert store.started_compiled.task.instructions == 'Edited instructions'
     assert store.started_compiled.task.criteria['frustrated'] == 'Changed criterion'
+    assert 'name="kind"' not in review.text
+
+
+def test_finder_state_changing_posts_require_csrf_and_same_origin(setup_finder) -> None:
+    _store, client = setup_finder
+    missing = client.post('/find/run', data={'query': 'anything'})
+    wrong = client.post('/find/run', data={CSRF_FIELD: 'wrong', 'query': 'anything'})
+    cross_site = client.post(
+        '/find/run',
+        data=csrf_data({'query': 'anything'}),
+        headers={'sec-fetch-site': 'cross-site'},
+    )
+
+    assert missing.status_code == 403
+    assert wrong.status_code == 403
+    assert cross_site.status_code == 403
+    assert 'request rejected' in cross_site.text.lower()
 
 
 def test_find_failed_snapshot_renders_escaped_error(setup_finder) -> None:
@@ -261,7 +315,7 @@ def test_find_failed_snapshot_renders_escaped_error(setup_finder) -> None:
 
 def test_find_trace_drawer_renders_thread_and_jev_input(setup_finder, monkeypatch: pytest.MonkeyPatch) -> None:
     store, client = setup_finder
-    client.post('/find/run', data={'query': 'frustrated customers', 'mode': 'immediate'})
+    client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate'}))
     store.complete()
     monkeypatch.setenv('ORQ_WORKSPACE', 'workspace')
     drawer = client.get('/find/trace/trace-1')
@@ -278,7 +332,7 @@ def test_find_trace_drawer_renders_thread_and_jev_input(setup_finder, monkeypatc
 def test_find_export_is_404_until_completed_then_downloads_json(setup_finder) -> None:
     store, client = setup_finder
     assert client.get('/find/export.json').status_code == 404
-    client.post('/find/run', data={'query': 'frustrated customers', 'mode': 'immediate'})
+    client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate'}))
     store.complete()
     response = client.get('/find/export.json')
     assert response.status_code == 200
@@ -288,7 +342,8 @@ def test_find_export_is_404_until_completed_then_downloads_json(setup_finder) ->
 
 def test_find_facets_menu_lists_catalogue_values(setup_finder, monkeypatch: pytest.MonkeyPatch) -> None:
     _store, client = setup_finder
-    async def load_catalogue(app: Any) -> FacetCatalogue:
+    async def load_catalogue(app: Any, window_days: int | None = None) -> FacetCatalogue:
+        assert window_days == 7
         return FacetCatalogue(project=('support-agent',), model=('gpt-5.6-luna',))
 
     monkeypatch.setattr(finder_routes, '_load_catalogue', load_catalogue)

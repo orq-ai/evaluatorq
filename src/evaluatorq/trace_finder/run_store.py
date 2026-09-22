@@ -67,7 +67,7 @@ class RunStore:
         compiler: Callable[[str], Awaitable[CompiledPlan]],
         population_loader: Callable[[PopulationRequest], Awaitable[Snapshot]],
         run_jev: JevRunner,
-        filter_selector: Callable[[str], Awaitable[FacetSelection]],
+        filter_selector: Callable[[str, PopulationRequest], Awaitable[FacetSelection]],
         project_trace: Callable[[TraceRecord], JevProjection] = default_project_trace,
         monotonic: Callable[[], float] = time.monotonic,
         now_utc: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
@@ -131,7 +131,7 @@ class RunStore:
 
         try:
             if compile_query:
-                plan_task = asyncio.create_task(self._plan(request.query))
+                plan_task = asyncio.create_task(self._plan(request.query, request.population))
                 async with self._lock:
                     if generation != self._generation or self._snapshot.state != 'compiling':
                         plan_task.cancel()
@@ -233,14 +233,14 @@ class RunStore:
             raise asyncio.CancelledError
         return await task
 
-    async def _plan(self, query: str) -> tuple[CompiledPlan, FacetSelection]:
+    async def _plan(self, query: str, population: PopulationRequest) -> tuple[CompiledPlan, FacetSelection]:
         """Run semantic and facet planning concurrently and clean up both."""
 
         async def compile_plan() -> object:
             return await self._compiler(query)
 
         async def select_filters() -> object:
-            return await self._filter_selector(query)
+            return await self._filter_selector(query, population)
 
         compiler = asyncio.create_task(compile_plan())
         filters = asyncio.create_task(select_filters())

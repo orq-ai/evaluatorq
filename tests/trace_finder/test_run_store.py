@@ -208,8 +208,8 @@ def make_store(
     runner = runner or Runner()
     clock = clock or Clock()
 
-    async def select_filters(query: str) -> FacetSelection:
-        del query
+    async def select_filters(query: str, population: PopulationRequest) -> FacetSelection:
+        del query, population
         return filters or FacetSelection(provider=frozenset({'openai'}))
 
     store = RunStore(
@@ -250,6 +250,40 @@ async def test_compile_merges_generated_filters_and_numeric_constraints_with_man
     assert store._task is not None
     await asyncio.wait_for(store._task, timeout=1)
     assert (await store.snapshot()).state == 'completed'
+
+
+@pytest.mark.asyncio
+async def test_filter_selector_receives_the_run_population_bounds() -> None:
+    planner = Planner()
+    loader = Loader()
+    runner = Runner()
+    clock = Clock()
+    seen: list[PopulationRequest] = []
+
+    async def select_filters(query: str, population: PopulationRequest) -> FacetSelection:
+        del query
+        seen.append(population)
+        return FacetSelection()
+
+    store = RunStore(
+        compiler=planner,
+        population_loader=loader,
+        run_jev=runner,
+        filter_selector=select_filters,
+        monotonic=clock.monotonic,
+        now_utc=clock.now,
+    )
+    population = PopulationRequest(
+        start=datetime(2026, 9, 1, tzinfo=timezone.utc),
+        end=datetime(2026, 9, 20, tzinfo=timezone.utc),
+    )
+
+    started = await store.compile(request(population=population))
+    assert started.state == 'classifying'
+    assert seen == [population]
+    runner.release.set()
+    assert store._task is not None
+    await asyncio.wait_for(store._task, timeout=1)
 
 
 @pytest.mark.asyncio

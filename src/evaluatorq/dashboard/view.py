@@ -32,6 +32,7 @@ from fasthtml.common import Script
 from evaluatorq.common.reports import cost_coverage as _cost_coverage
 from evaluatorq.common.reports import esc
 from evaluatorq.common.reports import fmt_cost as _fmt_cost
+from evaluatorq.dashboard.security import csrf_field
 from evaluatorq.simulation.metrics import TURN_METRICS
 
 if TYPE_CHECKING:
@@ -779,9 +780,10 @@ def settings_body(
             f'value="{esc(setting_value(name))}" required>{error_html}</span></div>'
         )
     saved_html = '<p class="settings-saved" role="status">Settings saved.</p>' if saved else ''
+    form_error = f'<p class="settings-error" role="alert">{esc(errors["form"])}</p>' if 'form' in errors else ''
     form = (
         '<form class="settings-form" method="post" action="/settings">'
-        f'<div class="config-list">{"".join(field_rows)}</div>'
+        f'{csrf_field()}{form_error}<div class="config-list">{"".join(field_rows)}</div>'
         '<button type="submit" class="rt-apply-btn">Save</button>'
         '</form>'
     )

@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Literal
 
 from loguru import logger
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import Response
 
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.dashboard.finder_views import drawer, facet_menu, fragment, page_html
+from evaluatorq.dashboard.security import request_rejected
 from evaluatorq.trace_finder import (
     CompiledQuery,
     FacetCatalogue,
@@ -29,6 +30,30 @@ from evaluatorq.trace_finder import (
     load_facet_catalogue,
 )
 from evaluatorq.trace_finder.models import FACET_NAMES
+from evaluatorq.trace_finder.settings import (
+    MAX_LIMIT,
+    MAX_PARALLELISM,
+    MAX_WINDOW_DAYS,
+    MIN_LIMIT,
+    MIN_PARALLELISM,
+    MIN_WINDOW_DAYS,
+)
+
+
+class FinderRunForm(BaseModel):
+    """Validated values accepted by finder run and reviewed-start forms."""
+
+    model_config = ConfigDict(extra='ignore')
+
+    query: str = ''
+    mode: Literal['immediate', 'review'] = 'immediate'
+    window_days: int = Field(ge=MIN_WINDOW_DAYS, le=MAX_WINDOW_DAYS)
+    limit: int = Field(ge=MIN_LIMIT, le=MAX_LIMIT)
+    parallelism: int = Field(ge=MIN_PARALLELISM, le=MAX_PARALLELISM)
+    tokens_min: int | None = Field(default=None, ge=0)
+    tokens_max: int | None = Field(default=None, ge=0)
+    duration_ms_min: int | None = Field(default=None, ge=0)
+    duration_ms_max: int | None = Field(default=None, ge=0)
 
 
 def _settings(app: Any) -> Any:
@@ -61,27 +86,36 @@ def _store(app: Any) -> RunStore | None:
     return store
 
 
-async def _load_catalogue(app: Any) -> FacetCatalogue | None:
+async def _load_catalogue(app: Any, window_days: int | None = None) -> FacetCatalogue | None:
     """Load and cache facet values for five minutes; failures render an empty menu."""
     now = datetime.now(timezone.utc)
+    settings = _settings(app)
+    window = window_days if window_days is not None else settings.window_days
+    if not MIN_WINDOW_DAYS <= window <= MAX_WINDOW_DAYS:
+        logger.warning(
+            'Find facet menu uses the configured window because {} days is outside {}..{}',
+            window,
+            MIN_WINDOW_DAYS,
+            MAX_WINDOW_DAYS,
+        )
+        window = settings.window_days
     cached = getattr(app.state, 'finder_catalogue_cache', None)
     if cached is not None:
-        expires, catalogue = cached
-        if expires > now:
+        expires, cached_window, catalogue = cached
+        if expires > now and cached_window == window:
             return catalogue
     try:
         orq = resolve_orq_client()
-        settings = _settings(app)
         catalogue = await load_facet_catalogue(
             orq,
-            start=now - timedelta(days=settings.window_days),
+            start=now - timedelta(days=window),
             end=now,
             limit=50,
         )
     except ValueError as exc:
         logger.warning('Find facet menu is empty because the Orq client could not be resolved: {}', exc)
         return None
-    app.state.finder_catalogue_cache = (now + timedelta(minutes=5), catalogue)
+    app.state.finder_catalogue_cache = (now + timedelta(minutes=5), window, catalogue)
     return catalogue
 
 
@@ -90,38 +124,45 @@ def _form_values(form: Any, name: str) -> list[str]:
     return [str(value) for value in values if value not in (None, '')]
 
 
-def _optional_int(form: Any, name: str) -> int | None:
+def _optional_value(form: Any, name: str) -> object | None:
     raw = form.get(name)
     if raw in (None, ''):
         return None
-    return int(str(raw))
+    return raw
 
 
 def _run_request(form: Any, settings: Any) -> RunRequest:
-    query = str(form.get('query') or '').strip()
-    mode = str(form.get('mode') or 'immediate')
-    window_days = int(str(form.get('window_days') or settings.window_days))
-    limit = int(str(form.get('limit') or settings.limit))
-    parallelism = int(str(form.get('parallelism') or settings.parallelism))
+    values = {
+        'query': str(form.get('query') or '').strip(),
+        'mode': str(form.get('mode') or 'immediate'),
+        'window_days': form.get('window_days') or settings.window_days,
+        'limit': form.get('limit') or settings.limit,
+        'parallelism': form.get('parallelism') or settings.parallelism,
+        'tokens_min': _optional_value(form, 'tokens_min'),
+        'tokens_max': _optional_value(form, 'tokens_max'),
+        'duration_ms_min': _optional_value(form, 'duration_ms_min'),
+        'duration_ms_max': _optional_value(form, 'duration_ms_max'),
+    }
+    parsed = FinderRunForm.model_validate(values)
     facet_values = {name: frozenset(_form_values(form, f'facet_{name}')) for name in FACET_NAMES}
     numeric = NumericFilters(
-        tokens_min=_optional_int(form, 'tokens_min'),
-        tokens_max=_optional_int(form, 'tokens_max'),
-        duration_ms_min=_optional_int(form, 'duration_ms_min'),
-        duration_ms_max=_optional_int(form, 'duration_ms_max'),
+        tokens_min=parsed.tokens_min,
+        tokens_max=parsed.tokens_max,
+        duration_ms_min=parsed.duration_ms_min,
+        duration_ms_max=parsed.duration_ms_max,
     )
     end = datetime.now(timezone.utc)
     return RunRequest(
-        query=query,
-        mode=mode,
+        query=parsed.query,
+        mode=parsed.mode,
         population=PopulationRequest(
-            start=end - timedelta(days=window_days),
+            start=end - timedelta(days=parsed.window_days),
             end=end,
             facets=FacetSelection(**facet_values),
             numeric=numeric,
-            limit=limit,
+            limit=parsed.limit,
         ),
-        parallelism=parallelism,
+        parallelism=parsed.parallelism,
     )
 
 
@@ -130,7 +171,7 @@ def _compiled_from_form(current: CompiledQuery, form: Any) -> CompiledQuery:
     from evaluatorq.trace_finder import ThresholdSelection, ValueSelection
 
     current_task = current.task
-    kind = str(form.get('kind') or form.get('task_kind') or current_task.kind)
+    kind = current_task.kind
     instructions = str(form.get('instructions') or current_task.instructions).strip()
 
     if kind == 'choice':
@@ -215,11 +256,23 @@ def register_finder_routes(app: Any, roots: list[Any] | None = None) -> None:  #
 
     @app.post('/find/run')
     async def find_run(req: Request) -> Response:
+        form = await req.form()
+        rejected = request_rejected(req, form)
+        if rejected:
+            settings = _settings(req.app)
+            return _html(
+                fragment(
+                    RunSnapshot(),
+                    settings,
+                    error=rejected,
+                    api_available=bool(os.environ.get('ORQ_API_KEY', '').strip()),
+                ),
+                status_code=403,
+            )
         settings = _settings(req.app)
         store = _store(req.app)
         if store is None:
             return _html(fragment(RunSnapshot(), settings, error='Set ORQ_API_KEY to load traces', api_available=False))
-        form = await req.form()
         try:
             request = _run_request(form, settings)
             snapshot = await store.compile(request)
@@ -236,23 +289,33 @@ def register_finder_routes(app: Any, roots: list[Any] | None = None) -> None:  #
 
     @app.post('/find/start')
     async def find_start(req: Request) -> Response:
+        form = await req.form()
+        rejected = request_rejected(req, form)
+        if rejected:
+            settings = _settings(req.app)
+            return _html(fragment(RunSnapshot(), settings, error=rejected), status_code=403)
         settings = _settings(req.app)
         store = _store(req.app)
         if store is None:
             return _html(fragment(RunSnapshot(), settings, error='Set ORQ_API_KEY to load traces', api_available=False))
-        form = await req.form()
         current = await store.snapshot()
         if current.request is None or current.compiled is None:
             return _html(fragment(current, settings, error='There is no plan waiting for review.'), status_code=409)
         try:
+            request = _run_request(form, settings)
             compiled = _compiled_from_form(current.compiled, form)
-            snapshot = await store.start(current.request, compiled)
+            snapshot = await store.start(request, compiled)
         except (ValidationError, ValueError, TypeError) as exc:
             return _html(fragment(current, settings, error=str(exc)), status_code=422)
         return _html(fragment(snapshot, settings))
 
     @app.post('/find/cancel')
     async def find_cancel(req: Request) -> Response:
+        form = await req.form()
+        rejected = request_rejected(req, form)
+        if rejected:
+            settings = _settings(req.app)
+            return _html(fragment(RunSnapshot(), settings, error=rejected), status_code=403)
         settings = _settings(req.app)
         store = _store(req.app)
         snapshot = await store.cancel() if store is not None else RunSnapshot()
@@ -260,6 +323,11 @@ def register_finder_routes(app: Any, roots: list[Any] | None = None) -> None:  #
 
     @app.post('/find/reset')
     async def find_reset(req: Request) -> Response:
+        form = await req.form()
+        rejected = request_rejected(req, form)
+        if rejected:
+            settings = _settings(req.app)
+            return _html(fragment(RunSnapshot(), settings, error=rejected), status_code=403)
         settings = _settings(req.app)
         store = _store(req.app)
         snapshot = await store.reset() if store is not None else RunSnapshot()
@@ -291,8 +359,24 @@ def register_finder_routes(app: Any, roots: list[Any] | None = None) -> None:  #
 
     @app.get('/find/facets')
     async def find_facets(req: Request) -> Response:
-        catalogue = await _load_catalogue(req.app)
-        return _html(facet_menu(catalogue, open_=True))
+        settings = _settings(req.app)
+        raw_window = req.query_params.get('window_days')
+        try:
+            window_days = FinderRunForm.model_validate({
+                'window_days': raw_window or settings.window_days,
+                'limit': settings.limit,
+                'parallelism': settings.parallelism,
+            }).window_days
+        except ValidationError as exc:
+            logger.warning(
+                'Find facet menu uses the configured window because the requested window was invalid: {}', exc
+            )
+            window_days = settings.window_days
+        catalogue = await _load_catalogue(req.app, window_days)
+        form_id = req.query_params.get('form_id')
+        if form_id not in {'finder-query-form', 'finder-start-form'}:
+            form_id = 'finder-query-form'
+        return _html(facet_menu(catalogue, open_=True, form_id=form_id))
 
     @app.get('/find/dismiss')
     def find_dismiss() -> Response:

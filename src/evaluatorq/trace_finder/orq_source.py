@@ -108,7 +108,11 @@ class _CaptureRegistration:
 
 
 class OrqTraceSource:
-    """Load recent live traces once, returning the immutable local snapshot contract."""
+    """Load recent live traces once, returning the immutable local snapshot contract.
+
+    This shared source is loop-affine: its capture lock serialises calls within
+    one event loop only, so build one source per event loop.
+    """
 
     def __init__(self, client: Orq, *, hydration_concurrency: int = 20, owns_client: bool = False) -> None:
         if hydration_concurrency < 1:

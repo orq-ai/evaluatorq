@@ -85,6 +85,44 @@
     }
   });
 
+  // Finder examples, chip removal, and the displayed Cmd/Ctrl+Enter shortcut
+  // are delegated so they keep working after HTMX replaces finder fragments.
+  document.body.addEventListener('click', function (evt) {
+    var example = evt.target.closest('[data-finder-example]');
+    if (example) {
+      var query = document.querySelector('#finder-query-form textarea[name="query"]');
+      if (query) {
+        query.value = example.getAttribute('data-finder-example') || '';
+        query.focus();
+        query.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      return;
+    }
+
+    var remove = evt.target.closest('[data-finder-remove]');
+    if (!remove) return;
+    var name = remove.getAttribute('data-finder-remove');
+    if (!name) return;
+    var value = remove.getAttribute('data-finder-value');
+    document.querySelectorAll('input[name="' + name + '"]').forEach(function (input) {
+      if (value === null || input.value === value) {
+        if (input.type === 'checkbox') input.checked = false;
+        if (input.type === 'hidden') input.remove();
+        else input.value = '';
+      }
+    });
+    remove.closest('.chip').remove();
+  });
+
+  document.addEventListener('keydown', function (evt) {
+    if (!(evt.metaKey || evt.ctrlKey) || evt.key !== 'Enter') return;
+    var query = evt.target.closest('#finder-query-form textarea[name="query"]');
+    if (!query) return;
+    evt.preventDefault();
+    var form = query.form || document.getElementById('finder-query-form');
+    if (form && form.requestSubmit) form.requestSubmit();
+  });
+
   // Resize-on-tab-show: CSS-only report tabs render their Vega charts while the
   // panel is display:none (zero width), so charts come up tiny. When a tab is
   // selected, resize the now-visible panel's tracked views to fit (RES-1021).

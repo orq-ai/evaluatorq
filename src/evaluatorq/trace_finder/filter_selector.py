@@ -6,7 +6,8 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from evaluatorq.common.judge import ClassifyQuestion, ClassifyRequest, run_classify
+from evaluatorq.common.judge import ClassifyOutcome, ClassifyQuestion, ClassifyRequest, run_classify
+from evaluatorq.common.retry import with_retry, without_client_retries
 from evaluatorq.contracts import LLMCallConfig
 
 from .models import FACET_NAMES, FacetCatalogue, FacetSelection
@@ -30,7 +31,11 @@ async def select_filters(
     *,
     cfg: LLMCallConfig | None = None,
 ) -> FacetSelection:
-    """Ask JEV one classify question per non-empty catalogue dimension."""
+    """Ask JEV one classify question per non-empty catalogue dimension.
+
+    Retry is owned by ``with_retry`` here; the SDK client's own retry budget is
+    disabled so this classify call has exactly one retry layer.
+    """
 
     normalized = query.strip()
     if not normalized:
@@ -60,12 +65,29 @@ async def select_filters(
         return FacetSelection()
 
     request = ClassifyRequest(state={'query': normalized}, questions=questions)
-    outcome = await run_classify(
-        client=client,
-        model=model,
-        cfg=cfg if cfg is not None else LLMCallConfig(model=model, timeout_ms=FILTER_TIMEOUT_MS),
-        request=request,
-    )
+    call_cfg = cfg if cfg is not None else LLMCallConfig(model=model, timeout_ms=FILTER_TIMEOUT_MS)
+
+    async def classify_once() -> ClassifyOutcome:
+        outcome = await run_classify(
+            client=without_client_retries(client),
+            model=model,
+            cfg=call_cfg,
+            request=request,
+        )
+        if outcome.error_kind is not None:
+            error = getattr(outcome, '_error_exc', None)
+            if isinstance(error, Exception):
+                raise error
+        return outcome
+
+    try:
+        outcome = await with_retry(
+            classify_once,
+            max_attempts=call_cfg.retry_count + 1,
+            label=f'filter selection[{model}]',
+        )
+    except Exception as exc:
+        raise FilterSelectionError(str(exc)) from exc
     if outcome.error_kind is not None or outcome.response is None:
         message = outcome.error_message or 'JEV returned no filter selection.'
         raise FilterSelectionError(message)

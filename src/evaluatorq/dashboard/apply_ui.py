@@ -46,6 +46,9 @@ from starlette.responses import Response
 from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.common.reports import esc
 from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL
+from evaluatorq.dashboard.security import _CSRF_TOKEN as _SECURITY_CSRF_TOKEN
+from evaluatorq.dashboard.security import CSRF_FIELD as _SECURITY_CSRF_FIELD
+from evaluatorq.dashboard.security import csrf_field, request_rejected
 from evaluatorq.trace_finder.settings import effective_settings
 
 if TYPE_CHECKING:
@@ -58,11 +61,13 @@ if TYPE_CHECKING:
 DRAWER_ID = 'rt-apply-drawer'
 AGENT_FIELD_ID = 'rt-apply-agent-field'
 
-# One process-wide CSRF token, minted into every apply form. A cross-origin page
-# cannot read this dashboard's HTML, so it cannot supply the token - which closes
-# the form-POST CSRF hole on the dashboard's state-changing routes (review).
-CSRF_FIELD = 'csrf'
-_CSRF_TOKEN = secrets.token_urlsafe(32)
+# Compatibility aliases for existing dashboard tests and integrations. The
+# canonical helpers live in dashboard.security so every state-changing route
+# uses the same token and request gate.
+CSRF_FIELD = _SECURITY_CSRF_FIELD
+_CSRF_TOKEN = _SECURITY_CSRF_TOKEN
+_csrf_field = csrf_field
+_request_rejected = request_rejected
 
 # Server-side previews keyed by a SINGLE-USE token. Confirm accepts only the
 # token, so the write is exactly what this server previewed - "what you saw is
@@ -84,25 +89,6 @@ def _store_preview(entry: dict[str, Any]) -> str:
 def _pop_preview(token: str) -> dict[str, Any] | None:
     with _PREVIEWS_LOCK:
         return _PREVIEWS.pop(token, None)
-
-
-def _csrf_field() -> str:
-    return f'<input type="hidden" name="{CSRF_FIELD}" value="{_CSRF_TOKEN}">'
-
-
-def _request_rejected(req: Request, form: Any) -> str | None:
-    """CSRF/origin gate for the apply routes. Returns an error message or None.
-
-    Two independent checks: the form must echo the per-process token (unreadable
-    cross-origin), and when the browser sends Sec-Fetch-Site it must be a
-    same-origin (or direct) request. Absent headers pass - test clients and
-    older browsers do not send them; the token check still holds then."""
-    sec_fetch = req.headers.get('sec-fetch-site', '')
-    if sec_fetch and sec_fetch not in ('same-origin', 'none'):
-        return 'Cross-origin request rejected.'
-    if str(form.get(CSRF_FIELD) or '') != _CSRF_TOKEN:
-        return 'Stale or missing form token; reload the page and try again.'
-    return None
 
 
 # Model for the instruction-merge call. It used to default to its own literal,

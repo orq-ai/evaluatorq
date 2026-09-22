@@ -8,11 +8,17 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL
 
 SETTINGS_PATH_ENV = 'EVALUATORQ_DASHBOARD_SETTINGS'
+MIN_WINDOW_DAYS = 1
+MAX_WINDOW_DAYS = 90
+MIN_LIMIT = 1
+MAX_LIMIT = 500
+MIN_PARALLELISM = 1
+MAX_PARALLELISM = 200
 
 
 class DashboardSettings(BaseModel):
@@ -21,9 +27,21 @@ class DashboardSettings(BaseModel):
     compiler_model: str = DEFAULT_PIPELINE_MODEL
     jev_model: str = 'typesafe/jev-latest'
     apply_model: str = DEFAULT_PIPELINE_MODEL
-    window_days: int = Field(7, ge=1, le=90)
-    limit: int = Field(500, ge=1, le=500)
-    parallelism: int = Field(100, ge=1, le=200)
+    window_days: int = Field(7, ge=MIN_WINDOW_DAYS, le=MAX_WINDOW_DAYS)
+    limit: int = Field(MAX_LIMIT, ge=MIN_LIMIT, le=MAX_LIMIT)
+    parallelism: int = Field(100, ge=MIN_PARALLELISM, le=MAX_PARALLELISM)
+
+    @field_validator('compiler_model', 'jev_model', 'apply_model', mode='before')
+    @classmethod
+    def strip_model_identifier(cls, value: object) -> object:
+        """Reject blank model identifiers after removing surrounding space."""
+
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                raise ValueError('model identifier must not be blank')
+            return stripped
+        return value
 
 
 def _default_settings() -> DashboardSettings:
@@ -101,9 +119,9 @@ def effective_settings(overrides: dict[str, Any] | None = None) -> DashboardSett
         if env_value:
             values[field] = env_value
     for field, env_name, minimum, maximum in (
-        ('window_days', 'EVALUATORQ_FINDER_WINDOW_DAYS', 1, 90),
-        ('limit', 'EVALUATORQ_FINDER_LIMIT', 1, 500),
-        ('parallelism', 'EVALUATORQ_FINDER_PARALLELISM', 1, 200),
+        ('window_days', 'EVALUATORQ_FINDER_WINDOW_DAYS', MIN_WINDOW_DAYS, MAX_WINDOW_DAYS),
+        ('limit', 'EVALUATORQ_FINDER_LIMIT', MIN_LIMIT, MAX_LIMIT),
+        ('parallelism', 'EVALUATORQ_FINDER_PARALLELISM', MIN_PARALLELISM, MAX_PARALLELISM),
     ):
         env_value = os.environ.get(env_name, '').strip()
         if not env_value:

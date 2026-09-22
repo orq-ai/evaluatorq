@@ -6,9 +6,10 @@ from typing import Any, cast
 
 import pytest
 
+from evaluatorq.trace_finder import filter_selector as filter_selector_module
 from evaluatorq.common.judge import ClassifyAnswer, ClassifyOutcome, ClassifyResponse, JudgeError
 from evaluatorq.trace_finder.filter_selector import FilterSelectionError, select_filters
-from evaluatorq.trace_finder.models import FACET_NAMES, FacetCatalogue
+from evaluatorq.trace_finder.models import FACET_NAMES, FacetCatalogue, FacetSelection
 
 
 def catalogue() -> FacetCatalogue:
@@ -97,3 +98,52 @@ async def test_select_filters_rejects_empty_query(monkeypatch) -> None:
 
     with pytest.raises(ValueError, match='Enter a semantic trace query'):
         await select_filters(cast(Any, object()), 'typesafe/jev-latest', catalogue(), ' \n\t ')
+
+
+@pytest.mark.asyncio
+async def test_select_filters_retries_a_transient_classify_failure(monkeypatch) -> None:
+    calls = 0
+
+    async def fake_run_classify(**kwargs: Any) -> ClassifyOutcome:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError('transient')
+        request = kwargs['request']
+        return ClassifyOutcome(
+            response=ClassifyResponse(
+                answers={name: ClassifyAnswer(type='choice', choice='none') for name in request.questions}
+            )
+        )
+
+    async def fake_with_retry(fn: Any, **kwargs: Any) -> Any:
+        del kwargs
+        try:
+            return await fn()
+        except RuntimeError:
+            return await fn()
+
+    monkeypatch.setattr(filter_selector_module, 'run_classify', fake_run_classify)
+    monkeypatch.setattr(filter_selector_module, 'with_retry', fake_with_retry)
+
+    selected = await select_filters(cast(Any, object()), 'typesafe/jev-latest', catalogue(), 'find errors')
+
+    assert calls == 2
+    assert selected == FacetSelection()
+
+
+@pytest.mark.asyncio
+async def test_select_filters_turns_exhausted_retries_into_domain_error(monkeypatch) -> None:
+    async def fake_run_classify(**kwargs: Any) -> ClassifyOutcome:
+        del kwargs
+        raise RuntimeError('transient exhausted')
+
+    async def fake_with_retry(fn: Any, **kwargs: Any) -> Any:
+        del kwargs
+        return await fn()
+
+    monkeypatch.setattr(filter_selector_module, 'run_classify', fake_run_classify)
+    monkeypatch.setattr(filter_selector_module, 'with_retry', fake_with_retry)
+
+    with pytest.raises(FilterSelectionError, match='transient exhausted'):
+        await select_filters(cast(Any, object()), 'typesafe/jev-latest', catalogue(), 'find errors')
