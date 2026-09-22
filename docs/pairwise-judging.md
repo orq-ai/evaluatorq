@@ -80,7 +80,6 @@ Both orderings run concurrently, so swapping does not add wall-clock latency, on
 | `replacement_judges` | `None` | Stand-ins for judges that fail mechanically. Promoted per pair and run in **both** orderings, so a stand-in casts a real reconciled vote. |
 | `min_successful_judges` | `1` | Minimum decisive reconciled votes, otherwise the comparison is **inconclusive**. Must not exceed the panel size. |
 | `state_fields` | `None` | Classify judges only: which template paths are handed to the judge as the material to compare. Defaults to every placeholder the template renders, minus `criteria`. |
-| `max_concurrency` | `None` | Cap on total in-flight judge LLM calls across all concurrently running `compare()` calls (each pair fans out judges × orderings × repetitions). Unbounded when unset. |
 
 ### Jev on a pairwise panel
 
@@ -263,7 +262,7 @@ from evaluatorq.pairwise import pairwise_consensus, reconcile_pair, run_pairwise
 
 `run_pairwise()` is also re-exported at the top level as `evaluatorq.run_pairwise`; `reconcile_pair()` and `pairwise_consensus()` are not. `run_jury()` is internal to `evaluatorq.common.jury` and is not part of the public top-level API.
 
-Both `run_pairwise()` and the shared `run_jury()` accept `max_concurrency` as an int or an existing `asyncio.Semaphore`; pass the same semaphore to several runs to bound their combined fan-out with one budget.
+Judge fan-out is bounded by the run-scoped LLM ceiling (`evaluatorq(llm_parallelism=...)`): every judge call routes through the shared LLM path and takes a slot, so all judges, orderings, and concurrent `compare()` calls share one run-wide cap rather than a per-run one.
 
 ## Where to next
 

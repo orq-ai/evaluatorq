@@ -323,34 +323,14 @@ def attach_jury_raw_output(
     return merged
 
 
-def as_semaphore(max_concurrency: int | asyncio.Semaphore | None) -> asyncio.Semaphore | None:
-    """Normalize a concurrency limit to a semaphore (or None for unbounded).
-
-    An existing semaphore passes through unchanged so several jury runs can
-    share one budget — ``run_pairwise`` relies on this to bound its two
-    concurrent orderings with a single limit.
-    """
-    if max_concurrency is None:
-        return None
-    if isinstance(max_concurrency, asyncio.Semaphore):
-        return max_concurrency
-    if max_concurrency < 1:
-        raise ValueError(f'max_concurrency ({max_concurrency}) must be >= 1.')
-    return asyncio.Semaphore(max_concurrency)
-
-
 async def _call_prediction(
     judge_fn: Callable[[str], Awaitable[Prediction]],
     model: str,
     *,
     propagate_errors: bool = False,
-    semaphore: asyncio.Semaphore | None = None,
 ) -> Prediction:
     try:
-        if semaphore is None:
-            return await judge_fn(model)
-        async with semaphore:
-            return await judge_fn(model)
+        return await judge_fn(model)
     except Exception as exc:
         # When the caller has no redundancy to fall back on (a lone judge, no
         # replacements), let the error abort the run instead of silently
@@ -371,7 +351,6 @@ async def _judge_vote(
     replacement: bool,
     numeric_how: NumericAggName,
     propagate_errors: bool = False,
-    semaphore: asyncio.Semaphore | None = None,
     parent_context: object | None = None,
     label_swapped: bool | None = None,
 ) -> tuple[JuryVote, list[TokenUsage]]:
@@ -401,7 +380,6 @@ async def _judge_vote(
             replacement=replacement,
             numeric_how=numeric_how,
             propagate_errors=propagate_errors,
-            semaphore=semaphore,
         )
         _record_judge_span(span, vote, latency_ms=(time.monotonic() - start) * 1000.0, label_swapped=label_swapped)
     return vote, usages
@@ -459,11 +437,9 @@ async def _compute_judge_vote(
     replacement: bool,
     numeric_how: NumericAggName,
     propagate_errors: bool = False,
-    semaphore: asyncio.Semaphore | None = None,
 ) -> tuple[JuryVote, list[TokenUsage]]:
     predictions = await asyncio.gather(*[
-        _call_prediction(judge_fn, model, propagate_errors=propagate_errors, semaphore=semaphore)
-        for _ in range(max(1, repetitions))
+        _call_prediction(judge_fn, model, propagate_errors=propagate_errors) for _ in range(max(1, repetitions))
     ])
     usages = [p.token_usage for p in predictions if p.token_usage is not None]
     decisive = [p for p in predictions if p.decisive]
@@ -567,7 +543,6 @@ async def run_jury(
     aggregator: AggregatorSpec | None = None,
     tie_break_label: str | None = None,
     propagate_errors: bool = False,
-    max_concurrency: int | asyncio.Semaphore | None = None,
 ) -> JuryDeliberation:
     """Run a generic panel of judges and aggregate their verdicts.
 
@@ -583,10 +558,10 @@ async def run_jury(
     judge with no replacements) so an outage aborts loudly rather than producing
     inconclusive verdicts on every datapoint.
 
-    ``max_concurrency`` caps how many ``judge_fn`` calls run at once across the
-    whole panel (judges x repetitions, replacements included). Pass an int for
-    a run-local cap, or an existing ``asyncio.Semaphore`` to share one budget
-    across several jury runs. ``None`` (default) keeps the fan-out unbounded.
+    Concurrency is bounded by the run-scoped LLM ceiling (see
+    ``common.llm_limit``): every judge call routes through ``common.llm_call``
+    and takes a slot, so the whole panel's fan-out is capped run-wide rather
+    than per jury run.
 
     The deliberation runs inside an ``orq.jury`` span with the panel's
     aggregate attributes; each judge opens a child ``orq.judge`` span, and the
@@ -611,7 +586,6 @@ async def run_jury(
             aggregator=aggregator,
             tie_break_label=tie_break_label,
             propagate_errors=propagate_errors,
-            max_concurrency=max_concurrency,
             parent_context=current_otel_context(),
         )
         record_jury_span(
@@ -683,7 +657,6 @@ async def _run_jury_core(
     aggregator: AggregatorSpec | None = None,
     tie_break_label: str | None = None,
     propagate_errors: bool = False,
-    max_concurrency: int | asyncio.Semaphore | None = None,
     parent_context: object | None = None,
     label_swapped: bool | None = None,
     replacement: bool = False,
@@ -704,7 +677,6 @@ async def _run_jury_core(
         numeric_how = cast('NumericAggName', aggregator)
     agg_fn: Aggregator = aggregator if callable(aggregator) else _AGGREGATORS[aggregator]
 
-    semaphore = as_semaphore(max_concurrency)
     resolved_panel = resolve_panel(panel)
     # Dedup the replacement pool against the panel AND within itself; a repeated
     # stand-in (e.g. ['mistral-large', 'mistral-large']) would otherwise cast two
@@ -726,7 +698,6 @@ async def _run_jury_core(
             replacement=replacement,
             numeric_how=numeric_how,
             propagate_errors=propagate_errors,
-            semaphore=semaphore,
             parent_context=parent_context,
             label_swapped=label_swapped,
         )
@@ -751,7 +722,6 @@ async def _run_jury_core(
                 tie_break=tie_break,
                 replacement=True,
                 numeric_how=numeric_how,
-                semaphore=semaphore,
                 parent_context=parent_context,
                 label_swapped=label_swapped,
             )

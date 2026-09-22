@@ -9,7 +9,6 @@ import asyncio
 import logging
 from itertools import starmap
 from typing import Any
-from weakref import WeakValueDictionary
 
 from evaluatorq.contracts import LLMCallConfig  # noqa: TC001
 from evaluatorq.simulation.generators.first_message_generator import (
@@ -28,9 +27,6 @@ from evaluatorq.simulation.utils.prompt_builders import generate_datapoint
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_RATE_LIMIT_DELAY = 0.1  # 100ms
-_DEFAULT_MAX_CONCURRENT_CALLS = 5
-
 
 class DatapointGenerator:
     """Generates complete datapoints for simulation.
@@ -43,18 +39,12 @@ class DatapointGenerator:
         self,
         *,
         model: str = DEFAULT_MODEL,
-        rate_limit_delay: float = _DEFAULT_RATE_LIMIT_DELAY,
-        max_concurrent_calls: int = _DEFAULT_MAX_CONCURRENT_CALLS,
         config: LLMCallConfig | None = None,
     ) -> None:
         from evaluatorq.simulation._config import resolve_sim_llm_config
 
         self._config = resolve_sim_llm_config(model=model, llm_config=config, caller=type(self).__name__)
         self._model = self._config.model
-        self._rate_limit_delay = rate_limit_delay
-        self._max_concurrent_calls = max_concurrent_calls
-        # A semaphore binds to the loop that first waits on it, so keep one per loop.
-        self._semaphores: WeakValueDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = WeakValueDictionary()
 
         from evaluatorq.openresponses.client import build_simulation_client
 
@@ -173,17 +163,10 @@ class DatapointGenerator:
             len(personas),
             len(scenarios),
         )
-        loop = asyncio.get_running_loop()
-        semaphore = self._semaphores.get(loop)
-        if semaphore is None:
-            semaphore = asyncio.Semaphore(self._max_concurrent_calls)
-            self._semaphores[loop] = semaphore
 
         async def generate_single(persona: Persona, scenario: Scenario) -> SimulationDatapoint:
-            async with semaphore:
-                first_message = await self._first_message_generator.generate(persona, scenario)
-                await asyncio.sleep(self._rate_limit_delay)
-                return generate_datapoint(persona, scenario, first_message)
+            first_message = await self._first_message_generator.generate(persona, scenario)
+            return generate_datapoint(persona, scenario, first_message)
 
         tasks = list(starmap(generate_single, combinations))
         datapoints = await asyncio.gather(*tasks)

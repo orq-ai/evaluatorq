@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import itertools
 import typing
 from functools import partial
@@ -1344,7 +1343,6 @@ class PairwiseComparator:
         extra_body: dict[str, Any] | None,
         client: Any,
         reasoning_effort: str | None = None,
-        max_concurrency: int | None = None,
         state_fields: list[str] | None = None,
         classify_seated: bool | None = None,
     ) -> None:
@@ -1369,11 +1367,6 @@ class PairwiseComparator:
         self._client = client
         # `classify_seated=None` means the comparator was constructed by hand.
         direct_construction = classify_seated is None
-        if max_concurrency is not None and max_concurrency < 1:
-            raise ValueError(f'max_concurrency ({max_concurrency}) must be >= 1.')
-        self._max_concurrency = max_concurrency
-        self._semaphore: asyncio.Semaphore | None = None
-        self._semaphore_loop: asyncio.AbstractEventLoop | None = None
         self._verdict_model = _build_verdict_model(
             verdict_kind='categorical', labels=PAIRWISE_LABELS, score_range=(0.0, 1.0)
         )
@@ -1417,24 +1410,6 @@ class PairwiseComparator:
             extra_kwargs=self._extra_kwargs,
             extra_body=self._extra_body,
         )
-
-    def _current_semaphore(self) -> asyncio.Semaphore | None:
-        """The shared concurrency budget, bound to the running event loop.
-
-        One semaphore is shared by every compare() call on the same loop, so
-        ``max_concurrency`` bounds TOTAL in-flight judge calls across pairs. A
-        semaphore binds to the loop that first blocks on it, so when the caller
-        switches loops (e.g. one ``asyncio.run`` per pair) a fresh one is minted
-        instead of every judge call failing with 'bound to a different event
-        loop' and silently degrading verdicts to inconclusive.
-        """
-        if self._max_concurrency is None:
-            return None
-        loop = asyncio.get_running_loop()
-        if self._semaphore is None or self._semaphore_loop is not loop:
-            self._semaphore = asyncio.Semaphore(self._max_concurrency)
-            self._semaphore_loop = loop
-        return self._semaphore
 
     async def compare(self, *, question: str, response_a: Output, response_b: Output) -> PairwiseComparison:
         """Run the panel over one A-vs-B comparison and return the reconciled verdict.
@@ -1498,7 +1473,6 @@ class PairwiseComparator:
             replacement_judges=self._replacement_judges,
             min_successful_judges=self._min_successful_judges,
             propagate_errors=(len(self._panel) == 1 and not self._replacement_judges),
-            max_concurrency=self._current_semaphore(),
         )
 
 
@@ -1522,7 +1496,6 @@ def llm_jury_pairwise(
     extra_body: dict[str, Any] | None = None,
     reasoning_effort: str | None = None,
     client: Any = None,
-    max_concurrency: int | None = None,
     state_fields: list[str] | None = None,
 ) -> PairwiseComparator:
     """Build a pairwise (A-vs-B) LLM jury that reuses the shared panel machinery.
@@ -1543,10 +1516,10 @@ def llm_jury_pairwise(
     you name. Position-bias swapping is unchanged — the question is rebuilt per
     ordering, so each call says which response sits in which seat.
 
-    ``max_concurrency`` caps TOTAL in-flight judge LLM calls across all
-    concurrently running ``compare`` calls on the returned comparator (each
-    pair fans out judges x orderings x repetitions). ``None`` (default) keeps
-    the fan-out unbounded.
+    Concurrency is bounded by the run-scoped LLM ceiling (see
+    ``common.llm_limit``): every judge call routes through ``common.llm_call``
+    and takes a slot, so judge fan-out across concurrent ``compare`` calls is
+    capped run-wide.
 
     ``assignment="cyclic"`` (CyclicJudge, arXiv:2603.01865) gives each
     comparison exactly one judge, cycling through the panel so every judge
@@ -1624,7 +1597,6 @@ def llm_jury_pairwise(
         extra_body=extra_body,
         reasoning_effort=reasoning_effort,
         client=client,
-        max_concurrency=max_concurrency,
         state_fields=state_fields,
         classify_seated=bool(classify_judges),
     )

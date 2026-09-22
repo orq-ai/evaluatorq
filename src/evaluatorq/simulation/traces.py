@@ -54,8 +54,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_INFER_CONCURRENCY = 5
-
 
 class TraceAnalysisConfig(BaseModel):
     """Tunable limits for the LLM steps that turn traces into datapoints.
@@ -328,13 +326,11 @@ async def summarize_conversations(
     model = llm_config.model
     config = config or TraceAnalysisConfig()
     llm_client, owned = build_simulation_client(client or llm_config.client, extra_api_key=api_key, max_retries=0)
-    semaphore = asyncio.Semaphore(_INFER_CONCURRENCY)
 
     async def one(conversation: TraceConversation) -> tuple[str, str | None, TokenUsage | None]:
-        async with semaphore:
-            summary, usage = await _summarize_conversation(
-                conversation, llm_client=llm_client, model=model, llm_config=llm_config, config=config
-            )
+        summary, usage = await _summarize_conversation(
+            conversation, llm_client=llm_client, model=model, llm_config=llm_config, config=config
+        )
         return conversation.trace_id, summary, usage
 
     try:
@@ -559,9 +555,6 @@ async def datapoints_from_traces(
         if config.generate_first_message
         else None
     )
-    # Inference dominates wall-clock, so it runs bounded-concurrent like the
-    # span-fetch phase (and DatapointGenerator, which uses the same width).
-    semaphore = asyncio.Semaphore(_INFER_CONCURRENCY)
     # Appended from concurrent tasks only between awaits, so it needs no lock.
     drop_reasons: list[str] = []
 
@@ -574,72 +567,71 @@ async def datapoints_from_traces(
             logger.warning('Trace %s has no usable first user message; dropping it', conversation.trace_id)
             drop_reasons.append('no usable first message')
             return None, None
-        async with semaphore:
-            if summaries is not None:
-                summary = summaries.get(conversation.trace_id)
-                if summary is None:
-                    # A supplied mapping is authoritative: absence means the
-                    # conversation was already attempted and already warned
-                    # about — a second call here would bill and warn again.
-                    drop_reasons.append('missing from supplied summaries')
-                    return None, None
-            else:
-                summary, summary_usage = await _summarize_conversation(
-                    conversation, llm_client=llm_client, model=model, llm_config=llm_config, config=config
-                )
-                usages.append(summary_usage)
-                if summary is None:
-                    drop_reasons.append('summarize failed')
-                    return None, sum_structured_usage(usages)
-            messages: list[dict[str, Any]] = [
-                {'role': 'system', 'content': _INFER_SYSTEM_PROMPT.format(redaction_note=_redaction_note(config))},
-                {
-                    'role': 'user',
-                    'content': (
-                        f'Summary of the conversation:\n{delimit(summary, tag="summary")}\n\n'
-                        "Infer the persona and scenario. Return JSON with keys 'persona' and 'scenario'."
-                    ),
-                },
-            ]
+        if summaries is not None:
+            summary = summaries.get(conversation.trace_id)
+            if summary is None:
+                # A supplied mapping is authoritative: absence means the
+                # conversation was already attempted and already warned
+                # about — a second call here would bill and warn again.
+                drop_reasons.append('missing from supplied summaries')
+                return None, None
+        else:
+            summary, summary_usage = await _summarize_conversation(
+                conversation, llm_client=llm_client, model=model, llm_config=llm_config, config=config
+            )
+            usages.append(summary_usage)
+            if summary is None:
+                drop_reasons.append('summarize failed')
+                return None, sum_structured_usage(usages)
+        messages: list[dict[str, Any]] = [
+            {'role': 'system', 'content': _INFER_SYSTEM_PROMPT.format(redaction_note=_redaction_note(config))},
+            {
+                'role': 'user',
+                'content': (
+                    f'Summary of the conversation:\n{delimit(summary, tag="summary")}\n\n'
+                    "Infer the persona and scenario. Return JSON with keys 'persona' and 'scenario'."
+                ),
+            },
+        ]
+        try:
+            result = await generate_structured(
+                llm_client,
+                model=model,
+                messages=messages,
+                response_format=_InferredPersonaScenario,
+                max_tokens=config.max_tokens,
+                label='datapoints_from_traces',
+                config=llm_config,
+            )
+        except Exception as exc:
+            # Append rather than replace: `usages` may already hold the
+            usages.append(usage_from_exception(exc))
+            logger.warning(
+                'Persona/scenario inference failed for trace %s: %s',
+                conversation.trace_id,
+                exc,
+            )
+            drop_reasons.append('inference failed')
+            return None, sum_structured_usage(usages)
+        usages.append(result.usage)
+        parsed = result.parsed
+        if parsed is None:
+            logger.warning(
+                'Persona/scenario inference returned no parseable output for trace %s',
+                conversation.trace_id,
+            )
+            drop_reasons.append('inference unparseable')
+            return None, sum_structured_usage(usages)
+        first_message = recorded_first_message
+        if first_message_generator is not None:
             try:
-                result = await generate_structured(
-                    llm_client,
-                    model=model,
-                    messages=messages,
-                    response_format=_InferredPersonaScenario,
-                    max_tokens=config.max_tokens,
-                    label='datapoints_from_traces',
-                    config=llm_config,
-                )
+                first_message = await first_message_generator.generate(parsed.persona, parsed.scenario)
             except Exception as exc:
-                # Append rather than replace: `usages` may already hold the
-                usages.append(usage_from_exception(exc))
                 logger.warning(
-                    'Persona/scenario inference failed for trace %s: %s',
+                    'First-message generation failed for trace %s (%s); replaying the recorded opening',
                     conversation.trace_id,
                     exc,
                 )
-                drop_reasons.append('inference failed')
-                return None, sum_structured_usage(usages)
-            usages.append(result.usage)
-            parsed = result.parsed
-            if parsed is None:
-                logger.warning(
-                    'Persona/scenario inference returned no parseable output for trace %s',
-                    conversation.trace_id,
-                )
-                drop_reasons.append('inference unparseable')
-                return None, sum_structured_usage(usages)
-            first_message = recorded_first_message
-            if first_message_generator is not None:
-                try:
-                    first_message = await first_message_generator.generate(parsed.persona, parsed.scenario)
-                except Exception as exc:
-                    logger.warning(
-                        'First-message generation failed for trace %s (%s); replaying the recorded opening',
-                        conversation.trace_id,
-                        exc,
-                    )
         datapoint = generate_datapoint(parsed.persona, parsed.scenario, first_message).model_copy(
             update={'id': f'trace-{conversation.trace_id}'}
         )
@@ -765,7 +757,6 @@ async def extend_from_traces(
                 len(conversations),
                 config.max_reduce_summaries,
             )
-        semaphore = asyncio.Semaphore(_INFER_CONCURRENCY)
 
         async def summarize_one(conversation: TraceConversation) -> str | None:
             if summaries is not None:
@@ -773,10 +764,9 @@ async def extend_from_traces(
                 # conversation was already attempted and already warned about —
                 # a second call here would bill and warn again.
                 return summaries.get(conversation.trace_id)
-            async with semaphore:
-                summary, usage = await _summarize_conversation(
-                    conversation, llm_client=llm_client, model=model, llm_config=llm_config, config=config
-                )
+            summary, usage = await _summarize_conversation(
+                conversation, llm_client=llm_client, model=model, llm_config=llm_config, config=config
+            )
             # Appended from a concurrent task, but only between awaits, so the
             # list needs no lock; the order of entries does not matter to the sum.
             profile_usages.append(usage)
