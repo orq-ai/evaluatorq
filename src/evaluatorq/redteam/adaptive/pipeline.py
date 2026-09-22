@@ -29,7 +29,12 @@ from evaluatorq.common.tracing import set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentResponse, Message
 from evaluatorq.redteam.adaptive.attack_generator import generate_attack_prompt, generate_objective
 from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
-from evaluatorq.redteam.adaptive.orchestrator import MultiTurnOrchestrator, _get_active_progress
+from evaluatorq.redteam.adaptive.orchestrator import (
+    MultiTurnOrchestrator,
+    _get_active_progress,
+    _merge_usage,
+    replay_seed_context,
+)
 from evaluatorq.redteam.adaptive.strategy_planner import (
     plan_strategies_for_categories,
     plan_strategies_for_vulnerabilities,
@@ -411,11 +416,54 @@ def create_dynamic_redteam_job(
             if hasattr(target, 'model') and agent_context.model:
                 object.__setattr__(target, 'model', agent_context.model)  # type: ignore[misc]
 
+            seed_payload = inputs.get('trace_seed_messages')
+            seed_messages = None
+            trace_start_from = None
+            if seed_payload is not None:
+                if not isinstance(seed_payload, list):
+                    raise TypeError('trace_seed_messages must be a list of messages')
+                seed_messages = [Message.model_validate(message) for message in seed_payload]
+                trace_start_from = TraceStart(inputs.get('trace_start_from', TraceStart.FIRST_USER.value))
+
             if strategy.prompt_template and strategy.turn_type == TurnType.SINGLE:
                 # Fixed template: fill and send directly (no adversarial LLM needed)
                 t0 = time.time()
                 prompt = generate_attack_prompt(strategy, agent_context)
                 token_usage = None
+                seed_context: list[Message] = []
+                bootstrap_usage = None
+
+                if seed_messages is not None:
+                    seed_context, bootstrap_usage, bootstrap_error = await replay_seed_context(
+                        target,
+                        seed_messages,
+                        trace_start_from or TraceStart.FIRST_USER,
+                        target_agent_timeout_ms=cfg.target_agent_timeout_ms,
+                        max_target_retries=cfg.max_target_retries,
+                        map_error=resolved_backend.map_error,
+                    )
+                    if bootstrap_error is not None:
+                        result_dict = AttackOutput(
+                            turns=[],
+                            objective_achieved=False,
+                            duration_seconds=time.time() - t0,
+                            token_usage=bootstrap_usage,
+                            token_usage_adversarial=None,
+                            token_usage_target=None,
+                            token_usage_bootstrap=bootstrap_usage,
+                            seed_context=seed_context,
+                            system_prompt=None,
+                            max_turns=effective_max_turns,
+                            **bootstrap_error,
+                            category=category,
+                            vulnerability=vulnerability,
+                        )
+                        _set_attack_span_attrs(attack_span, result_dict)
+                        return {
+                            **result_dict.model_dump(mode='json'),
+                            'max_turns': effective_max_turns,
+                            'thread_id': thread_id,
+                        }
 
                 @asynccontextmanager
                 async def _attempt_span(i: int):
@@ -445,7 +493,7 @@ def create_dynamic_redteam_job(
                 with conversation_thread(thread_id) as thread_id:
                     result = await call_target_with_retry(
                         target,
-                        [Message(role='user', content=prompt)],
+                        [*seed_context, Message(role='user', content=prompt)],
                         target_agent_timeout_ms=cfg.target_agent_timeout_ms,
                         max_target_retries=cfg.max_target_retries,
                         map_error=resolved_backend.map_error,
@@ -470,9 +518,11 @@ def create_dynamic_redteam_job(
                     ],
                     objective_achieved=False,
                     duration_seconds=time.time() - t0,
-                    token_usage=token_usage,
+                    token_usage=_merge_usage(token_usage, bootstrap_usage),
                     token_usage_adversarial=None,
                     token_usage_target=token_usage,
+                    token_usage_bootstrap=bootstrap_usage,
+                    seed_context=seed_context,
                     system_prompt=None,
                     **error_fields,
                     category=category,
@@ -507,15 +557,6 @@ def create_dynamic_redteam_job(
                 llm_kwargs=llm_kwargs,
                 pipeline_config=cfg,
             )
-
-            seed_payload = inputs.get('trace_seed_messages')
-            seed_messages = None
-            trace_start_from = None
-            if seed_payload is not None:
-                if not isinstance(seed_payload, list):
-                    raise TypeError('trace_seed_messages must be a list of messages')
-                seed_messages = [Message.model_validate(message) for message in seed_payload]
-                trace_start_from = TraceStart(inputs.get('trace_start_from', TraceStart.FIRST_USER.value))
 
             try:
                 # One Orq thread per attack groups all its turns in observability.

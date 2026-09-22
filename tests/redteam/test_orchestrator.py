@@ -5,7 +5,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from evaluatorq.contracts import AgentResponse, AgentResponseError, ConversationHistoryMode, Message
+from evaluatorq.contracts import (
+    AgentResponse,
+    AgentResponseError,
+    ConversationHistoryMode,
+    Message,
+    TextOutputItem,
+    ToolCallOutputItem,
+)
 from evaluatorq.redteam.contracts import (
     AgentContext,
     AttackStrategy,
@@ -504,6 +511,43 @@ class TestMultiTurnOrchestrator:
             *prefix,
             Message(role='user', content='attack prompt'),
         ]
+
+    @pytest.mark.asyncio
+    async def test_first_user_bootstrap_preserves_structured_output_in_seed_context(self):
+        """Tool calls and their results survive bootstrap replay as messages."""
+        mock_llm = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = 'attack prompt'
+        mock_response.choices[0].finish_reason = 'stop'
+        mock_llm.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        bootstrap = AgentResponse(
+            output=[
+                ToolCallOutputItem(
+                    id='fc_1', call_id='call_1', name='lookup', arguments='{"q":"order"}', result='found'
+                ),
+                TextOutputItem(text='Here is the result.', annotations=[]),
+            ]
+        )
+        mock_target = AsyncMock()
+        mock_target.respond = AsyncMock(side_effect=[bootstrap, AgentResponse(text='attack reply')])
+        opening = Message(role='user', content='recorded opening')
+
+        result = await MultiTurnOrchestrator(llm_client=mock_llm, model='azure/gpt-5-mini').run_attack(
+            target=mock_target,
+            strategy=_make_strategy(),
+            objective='Test objective',
+            agent_context=AgentContext(key='test_agent'),
+            max_turns=1,
+            seed_messages=[opening],
+            trace_start_from=TraceStart.FIRST_USER,
+        )
+
+        assert [message.role for message in result.seed_context] == ['user', 'assistant', 'tool', 'assistant']
+        assert result.seed_context[1].tool_calls is not None
+        assert result.seed_context[1].tool_calls[0].function.name == 'lookup'
+        assert result.seed_context[2].tool_call_id == 'call_1'
 
 
 class TestAdversarialSystemPrompt:

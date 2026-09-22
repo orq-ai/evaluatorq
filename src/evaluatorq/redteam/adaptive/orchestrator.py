@@ -33,7 +33,14 @@ from evaluatorq.common.prompt_cache import apply_cache_breakpoints, caching_appl
 from evaluatorq.common.sanitize import delimit, xml_escape
 from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry, default_map_error
 from evaluatorq.common.tracing import set_span_attrs, truncate_for_span
-from evaluatorq.contracts import AgentResponse, AgentTarget, ConversationHistoryMode, Message, TextOutputItem
+from evaluatorq.contracts import (
+    AgentResponse,
+    AgentTarget,
+    ConversationHistoryMode,
+    Message,
+    TextOutputItem,
+    content_to_text,
+)
 from evaluatorq.redteam.adaptive.tool_chaining import (
     ToolChainingPlanner,
     ToolChainingVerifier,
@@ -415,7 +422,9 @@ def _build_adversarial_system_prompt(
     if seed_context is not None:
         vulnerability = strategy.vulnerability.value if strategy.vulnerability else 'unspecified'
         technique = strategy.attack_technique.value if strategy.attack_technique else 'unspecified'
-        delivery_methods = ', '.join(str(method) for method in strategy.delivery_methods) or 'unspecified'
+        delivery_methods = (
+            ', '.join(str(getattr(method, 'value', method)) for method in strategy.delivery_methods) or 'unspecified'
+        )
         transcript = json.dumps(
             [message.model_dump(mode='json', exclude_none=True) for message in seed_context],
             ensure_ascii=False,
@@ -510,6 +519,57 @@ class _MarkerPhase:
     objective_achieved: bool
     objective_rationale: str | None
     stop: bool
+
+
+async def replay_seed_context(
+    target: AgentTarget,
+    seed_messages: list[Message],
+    trace_start_from: TraceStart,
+    *,
+    target_agent_timeout_ms: float,
+    max_target_retries: int,
+    map_error: Any,
+) -> tuple[list[Message], TokenUsage | None, dict[str, Any] | None]:
+    """Replay trace context into a fresh target and return context plus bootstrap usage.
+
+    The bootstrap exchange is shared by dynamic adaptive and fixed-template attacks so
+    both paths enforce the same history capability and preserve structured output.
+    """
+    if trace_start_from is TraceStart.LAST_ASSISTANT:
+        if target.history_mode is ConversationHistoryMode.TARGET:
+            raise RedTeamError(
+                'last_assistant replay cannot import conversation history from a target-owned history adapter'
+            )
+        if not seed_messages:
+            raise RedTeamError('Trace replay requires at least one seed message')
+        return list(seed_messages), None, None
+
+    if not seed_messages:
+        raise RedTeamError('Trace replay requires at least one seed message')
+    opening = seed_messages[0]
+    if opening.role != 'user':
+        raise RedTeamError('first_user replay requires a user opening message')
+    bootstrap = await call_target_with_retry(
+        target,
+        [opening],
+        target_agent_timeout_ms=target_agent_timeout_ms,
+        max_target_retries=max_target_retries,
+        map_error=map_error,
+    )
+    bootstrap_usage = bootstrap.response.usage
+    if bootstrap_usage is not None and bootstrap_usage.calls == 0:
+        bootstrap_usage = bootstrap_usage.with_calls(1)
+    if not bootstrap.succeeded:
+        return [opening], bootstrap_usage, bootstrap.error_payload(context=' during trace bootstrap')
+
+    bootstrap_turn = Turn(
+        attacker=AgentResponse(
+            output=[TextOutputItem(text=content_to_text(opening.content), annotations=[])],
+        ),
+        target=bootstrap.response,
+    )
+    bootstrap_messages = turns_to_messages([bootstrap_turn])[1:]
+    return [opening, *bootstrap_messages], bootstrap_usage, None
 
 
 class MultiTurnOrchestrator:
@@ -1247,40 +1307,22 @@ class MultiTurnOrchestrator:
 
         if seed_messages is not None:
             replay_start = TraceStart(trace_start_from or TraceStart.FIRST_USER)
-            if replay_start is TraceStart.LAST_ASSISTANT and target.history_mode is ConversationHistoryMode.TARGET:
-                raise RedTeamError(
-                    'last_assistant replay cannot import conversation history from a target-owned history adapter'
+            seed_context, bootstrap_usage, bootstrap_error = await replay_seed_context(
+                target,
+                seed_messages,
+                replay_start,
+                target_agent_timeout_ms=self._cfg.target_agent_timeout_ms,
+                max_target_retries=self._cfg.max_target_retries,
+                map_error=self._backend.map_error if self._backend is not None else default_map_error,
+            )
+            if bootstrap_error is not None:
+                return OrchestratorResult(
+                    max_turns=max_turns,
+                    seed_context=seed_context,
+                    token_usage_bootstrap=bootstrap_usage,
+                    token_usage=_merge_usage(bootstrap_usage),
+                    **bootstrap_error,
                 )
-            if not seed_messages:
-                raise RedTeamError('Trace replay requires at least one seed message')
-
-            if replay_start is TraceStart.FIRST_USER:
-                opening = seed_messages[0]
-                if opening.role != 'user':
-                    raise RedTeamError('first_user replay requires a user opening message')
-                bootstrap = await call_target_with_retry(
-                    target,
-                    [opening],
-                    target_agent_timeout_ms=self._cfg.target_agent_timeout_ms,
-                    max_target_retries=self._cfg.max_target_retries,
-                    map_error=self._backend.map_error if self._backend is not None else default_map_error,
-                )
-                bootstrap_usage = bootstrap.response.usage
-                if bootstrap_usage is not None and bootstrap_usage.calls == 0:
-                    bootstrap_usage = bootstrap_usage.with_calls(1)
-                if not bootstrap.succeeded:
-                    fields = bootstrap.error_payload(context=' during trace bootstrap')
-                    return OrchestratorResult(
-                        max_turns=max_turns,
-                        seed_context=[opening],
-                        token_usage_bootstrap=bootstrap_usage,
-                        token_usage=_merge_usage(bootstrap_usage),
-                        **fields,
-                    )
-                bootstrap_response = bootstrap.response
-                seed_context = [opening, Message(role='assistant', content=bootstrap_response.text or '')]
-            else:
-                seed_context = list(seed_messages)
 
         # TokenUsage accumulators so cached/reasoning/cost carry through, not just totals.
         adversarial_usage_acc = TokenUsage()

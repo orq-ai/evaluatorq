@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel
 
-from evaluatorq.contracts import AgentResponseError
+from evaluatorq.contracts import AgentResponseError, Message
 from evaluatorq.redteam.contracts import (
     AgentContext,
     AgentInfo,
@@ -445,6 +445,8 @@ def _make_dynamic_mock_result(
     objective_achieved: bool = False,
     objective_rationale: str | None = None,
     token_usage: dict[str, Any] | None = None,
+    token_usage_bootstrap: dict[str, Any] | None = None,
+    seed_context: list[dict[str, Any]] | None = None,
     evaluator_token_usage: dict[str, Any] | None = None,
     evaluator_raw_output: dict[str, Any] | None = None,
     error: str | None = None,
@@ -469,6 +471,10 @@ def _make_dynamic_mock_result(
         output['objective_rationale'] = objective_rationale
     if token_usage is not None:
         output['token_usage'] = token_usage
+    if token_usage_bootstrap is not None:
+        output['token_usage_bootstrap'] = token_usage_bootstrap
+    if seed_context is not None:
+        output['seed_context'] = seed_context
     if output_error is not None:
         output['error'] = output_error
 
@@ -808,6 +814,39 @@ class TestDynamicConverterValuePropagation:
         assert result.execution.token_usage is not None
         assert result.execution.token_usage.prompt_tokens == 100
         assert result.execution.token_usage.total_tokens == 150
+
+    def test_trace_replay_fields_round_trip_into_execution_and_result(self):
+        bootstrap = {'prompt_tokens': 4, 'completion_tokens': 3, 'total_tokens': 7, 'calls': 1}
+        seed_context = [
+            {'role': 'user', 'content': 'recorded opening'},
+            {'role': 'assistant', 'content': 'live reply'},
+        ]
+        mock_result = _make_dynamic_mock_result(
+            token_usage={'prompt_tokens': 20, 'completion_tokens': 8, 'total_tokens': 28, 'calls': 2},
+            token_usage_bootstrap=bootstrap,
+            seed_context=seed_context,
+        )
+
+        report = dynamic_evaluatorq_results_to_report(
+            agent_context=_make_agent_context(), categories_tested=['ASI01'], results=[mock_result]
+        )
+
+        result = report.results[0]
+        assert result.execution is not None
+        assert result.execution.token_usage_bootstrap is not None
+        assert result.execution.token_usage_bootstrap.total_tokens == 7
+        assert result.execution.seed_context == [
+            Message(role='user', content='recorded opening'),
+            Message(role='assistant', content='live reply'),
+        ]
+        assert result.token_usage_bootstrap is not None
+        assert result.token_usage_bootstrap.total_tokens == 7
+        assert result.seed_context == result.execution.seed_context
+
+        round_trip = RedTeamResult.model_validate(result.model_dump(mode='json'))
+        assert round_trip.token_usage_bootstrap is not None
+        assert round_trip.token_usage_bootstrap.total_tokens == 7
+        assert round_trip.seed_context == result.seed_context
 
     def test_objective_rationale_flows_into_execution(self):
         """The attacker rationale threads job_output → ExecutionDetails."""

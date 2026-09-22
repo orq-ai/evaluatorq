@@ -320,6 +320,8 @@ def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
         'token_usage',
         'token_usage_adversarial',
         'token_usage_target',
+        'token_usage_bootstrap',
+        'seed_context',
         'system_prompt',
         'error',
         'error_type',
@@ -695,6 +697,8 @@ def dynamic_evaluatorq_results_to_report(
             objective_achieved=job_output.objective_achieved,
             objective_rationale=job_output.objective_rationale,
             token_usage=token_usage,
+            token_usage_bootstrap=job_output.token_usage_bootstrap,
+            seed_context=job_output.seed_context,
         )
 
         agent = AgentInfo(
@@ -719,6 +723,8 @@ def dynamic_evaluatorq_results_to_report(
                 error_stage=error_stage,
                 error_code=error_code,
                 error_details=error_details,
+                token_usage_bootstrap=job_output.token_usage_bootstrap,
+                seed_context=job_output.seed_context,
                 thread_id=job_output.thread_id,
                 response_traces=job_output.response_traces,
             )

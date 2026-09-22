@@ -1606,6 +1606,8 @@ class ExecutionDetails(BaseModel):
         description="Attacker's self-reported reason (multi-turn); signal only, never scored",
     )
     token_usage: TokenUsage | None = None
+    token_usage_bootstrap: TokenUsage | None = None
+    seed_context: list[Message] = Field(default_factory=list)
 
 
 class AgentInfo(BaseModel):
@@ -1631,6 +1633,8 @@ class RedTeamResult(BaseModel):
         'it as a passing result.',
     )
     execution: ExecutionDetails | None = Field(default=None, description='Null for static pipeline')
+    token_usage_bootstrap: TokenUsage | None = None
+    seed_context: list[Message] = Field(default_factory=list)
     evaluation_error: RunError | None = Field(
         default=None,
         description='Why the judge could not return a verdict, when it could not. Deliberately '
