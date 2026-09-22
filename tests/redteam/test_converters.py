@@ -685,6 +685,37 @@ class TestCoerceJobOutputPayload:
         assert result.conversation[1].content == 'agent reply'
         assert result.final_response == 'agent reply'
 
+    def test_empty_turn_list_is_normalized_for_failed_bootstrap(self):
+        raw = {
+            'turns': [],
+            'error': 'Target agent failed during trace bootstrap',
+            'error_type': 'timeout',
+            'error_stage': 'target_call',
+        }
+
+        result = _coerce_job_output_payload(raw)
+
+        assert result.turns == 0
+        assert result.error == raw['error']
+
+    def test_failed_bootstrap_becomes_report_result_error(self):
+        mock_result = _make_dynamic_mock_result(
+            turns=0,
+            output_error='Target agent failed during trace bootstrap',
+        )
+        mock_result.job_results[0].output['turns'] = []
+        mock_result.job_results[0].output['error_type'] = 'timeout'
+        mock_result.job_results[0].output['error_stage'] = 'target_call'
+
+        report = dynamic_evaluatorq_results_to_report(
+            agent_context=_make_agent_context(), categories_tested=['ASI01'], results=[mock_result]
+        )
+
+        assert len(report.results) == 1
+        assert report.results[0].execution is not None
+        assert report.results[0].execution.turns == 0
+        assert report.results[0].error is not None
+
     def test_last_successful_target_trace_id_is_extracted(self):
         # trace_id of the LAST non-errored target turn wins; an errored final turn
         # (target carries an error) must not overwrite an earlier good trace.

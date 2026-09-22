@@ -150,8 +150,12 @@ def _flatten_turns(d: dict[str, Any]) -> dict[str, Any]:
     so JobOutputPayload validates.
     """
     turns_val = d.get('turns')
-    if not isinstance(turns_val, list) or not turns_val:
+    if not isinstance(turns_val, list):
         return d
+    if not turns_val:
+        out = dict(d)
+        out['turns'] = 0
+        return out
     first = turns_val[0]
     if not (isinstance(first, dict) and 'attacker' in first and 'target' in first):
         return d
@@ -691,7 +695,7 @@ def dynamic_evaluatorq_results_to_report(
         )
 
         execution = ExecutionDetails(
-            turns=job_output.turns or 1,
+            turns=job_output.turns if job_output.turns is not None else 1,
             max_turns=job_output.max_turns,
             duration_seconds=job_output.duration_seconds,
             objective_achieved=job_output.objective_achieved,

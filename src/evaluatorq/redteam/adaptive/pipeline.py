@@ -459,8 +459,10 @@ def create_dynamic_redteam_job(
                             vulnerability=vulnerability,
                         )
                         _set_attack_span_attrs(attack_span, result_dict)
+                        output_payload = result_dict.model_dump(mode='json')
+                        output_payload['turns'] = 0
                         return {
-                            **result_dict.model_dump(mode='json'),
+                            **output_payload,
                             'max_turns': effective_max_turns,
                             'thread_id': thread_id,
                         }
@@ -629,7 +631,10 @@ def create_dynamic_redteam_job(
             if result_dict.final_response:
                 set_span_attrs(attack_span, {'output': truncate_for_span(result_dict.final_response)})
             _set_attack_span_attrs(attack_span, result_dict)
-            return {**result_dict.model_dump(mode='json'), 'max_turns': effective_max_turns, 'thread_id': thread_id}
+            output_payload = result_dict.model_dump(mode='json')
+            if seed_messages is not None and result_dict.error is not None and not result_dict.turns:
+                output_payload['turns'] = 0
+            return {**output_payload, 'max_turns': effective_max_turns, 'thread_id': thread_id}
 
     return dynamic_job
 

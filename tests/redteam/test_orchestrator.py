@@ -12,6 +12,7 @@ from evaluatorq.contracts import (
     Message,
     TextOutputItem,
     ToolCallOutputItem,
+    InputImageContent,
 )
 from evaluatorq.redteam.contracts import (
     AgentContext,
@@ -548,6 +549,36 @@ class TestMultiTurnOrchestrator:
         assert result.seed_context[1].tool_calls is not None
         assert result.seed_context[1].tool_calls[0].function.name == 'lookup'
         assert result.seed_context[2].tool_call_id == 'call_1'
+
+    @pytest.mark.asyncio
+    async def test_first_user_bootstrap_accepts_multimodal_opening(self):
+        """Bootstrap replay does not flatten or inspect multimodal user content."""
+        mock_llm = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = 'attack prompt'
+        mock_response.choices[0].finish_reason = 'stop'
+        mock_llm.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        opening = Message(
+            role='user',
+            content=[InputImageContent(type='input_image', image_url='https://example.test/image.png')],
+        )
+        mock_target = AsyncMock()
+        mock_target.respond = AsyncMock(side_effect=[AgentResponse(text='bootstrap reply'), AgentResponse(text='reply')])
+
+        result = await MultiTurnOrchestrator(llm_client=mock_llm, model='azure/gpt-5-mini').run_attack(
+            target=mock_target,
+            strategy=_make_strategy(),
+            objective='Test objective',
+            agent_context=AgentContext(key='test_agent'),
+            max_turns=1,
+            seed_messages=[opening],
+            trace_start_from=TraceStart.FIRST_USER,
+        )
+
+        assert result.seed_context[0] == opening
+        assert mock_target.respond.await_args_list[0].args[0] == [opening]
 
 
 class TestAdversarialSystemPrompt:

@@ -375,6 +375,33 @@ class TestTemplateSingleTurnPath:
         ]
 
     @pytest.mark.asyncio
+    async def test_seeded_template_bootstrap_failure_is_a_zero_turn_output(self):
+        """A failed bootstrap is reportable and does not emit a list-valued turn count."""
+        from evaluatorq.redteam.adaptive.pipeline import create_dynamic_redteam_job
+        from evaluatorq.redteam.reports.converters import _coerce_job_output_payload
+
+        strategy = _make_strategy(prompt_template="Continue the request for {agent_name}.")
+        target = _make_target()
+        target.respond = AsyncMock(side_effect=asyncio.TimeoutError)
+        datapoint = _make_datapoint(strategy=strategy)
+        datapoint.inputs.update(
+            {
+                "trace_seed_messages": [{"role": "user", "content": "recorded opening"}],
+                "trace_start_from": "first_user",
+            }
+        )
+        job_fn = create_dynamic_redteam_job(
+            agent_key="test-agent", agent_context=_make_agent_context(), backend=_make_target_factory(target)
+        )
+
+        output = await _call_dynamic_job(job_fn, datapoint)
+        payload = _coerce_job_output_payload(output)
+
+        assert output["turns"] == 0
+        assert payload.turns == 0
+        assert payload.error is not None
+
+    @pytest.mark.asyncio
     @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
     @patch(_PATCH_SET_SPAN_ATTRS)
     @patch(_PATCH_ATTACK_SPAN_ATTRS)

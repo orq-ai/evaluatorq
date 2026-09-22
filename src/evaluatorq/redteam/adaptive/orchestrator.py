@@ -39,7 +39,6 @@ from evaluatorq.contracts import (
     ConversationHistoryMode,
     Message,
     TextOutputItem,
-    content_to_text,
 )
 from evaluatorq.redteam.adaptive.tool_chaining import (
     ToolChainingPlanner,
@@ -563,9 +562,7 @@ async def replay_seed_context(
         return [opening], bootstrap_usage, bootstrap.error_payload(context=' during trace bootstrap')
 
     bootstrap_turn = Turn(
-        attacker=AgentResponse(
-            output=[TextOutputItem(text=content_to_text(opening.content), annotations=[])],
-        ),
+        attacker=AgentResponse(),
         target=bootstrap.response,
     )
     bootstrap_messages = turns_to_messages([bootstrap_turn])[1:]
