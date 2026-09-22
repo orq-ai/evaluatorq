@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import TYPE_CHECKING
 
@@ -26,13 +26,9 @@ def build_run_store(settings: DashboardSettings, *, client: AsyncOpenAI, orq: Or
     source = OrqTraceSource(orq)
 
     async def filter_selector(query: str, request: PopulationRequest) -> FacetSelection:
-        now = datetime.now(timezone.utc)
-        catalogue = await load_facet_catalogue(
-            orq,
-            start=request.start or now,
-            end=request.end or now,
-            limit=50,
-        )
+        end = request.end or datetime.now(timezone.utc)
+        start = request.start or end - timedelta(days=settings.window_days)
+        catalogue = await load_facet_catalogue(orq, start=start, end=end, limit=50)
         return await select_filters(client, settings.jev_model, catalogue, query)
 
     async def population_loader(request: PopulationRequest) -> Snapshot:
