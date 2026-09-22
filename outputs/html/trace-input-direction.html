@@ -495,7 +495,7 @@ datapoint = trace.to_datapoint()</pre>
     <ul style="padding-left:20px; max-width:680px;">
       <li style="margin-bottom:8px;"><b>An exact span really is exact.</b> <code>TraceInput(trace_id=..., span_id=...)</code> parses only that span and reports an error if it has no messages. Only trace-only and query modes walk toward the root.</li>
       <li style="margin-bottom:8px;"><b>Evaluator descendants must be excluded together.</b> Ignoring only the evaluator parent can still select its nested model-call span and accidentally evaluate the judge instead of the application.</li>
-      <li style="margin-bottom:8px;"><b><code>last_assistant</code> is not universally replayable.</b> A hosted target that owns an opaque server-side thread cannot be made to remember an imported assistant reply. Evaluatorq rejects that combination instead of pretending the history was applied.</li>
+      <li style="margin-bottom:8px;"><b><code>last_assistant</code> is not universally replayable.</b> A custom or legacy target adapter that owns an opaque server-side thread cannot be made to remember an imported assistant reply. Evaluatorq rejects that combination instead of pretending the history was applied.</li>
       <li><b>The bootstrap is context.</b> It is visible separately in provenance and usage, is billed and included once in aggregate totals, but it does not spend an attack turn or become the response judged for vulnerability.</li>
     </ul>
 
