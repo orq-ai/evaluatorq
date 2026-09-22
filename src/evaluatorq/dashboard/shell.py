@@ -38,6 +38,10 @@ _SIDEBAR_TOGGLE_SCRIPT = (
     "document.addEventListener('keydown',function(e){"
     "if((e.metaKey||e.ctrlKey)&&!e.shiftKey&&!e.altKey&&e.key.toLowerCase()==='b')"
     '{e.preventDefault();eqToggleSidebar();}});'
+    'function eqFinderTab(el,id){'
+    "var root=el.closest('.rt-drawer');if(!root)return;"
+    "root.querySelectorAll('.fd-tabs [data-panel]').forEach(function(tab){tab.classList.toggle('on',tab===el);});"
+    "root.querySelectorAll('.fd-panel').forEach(function(panel){panel.hidden=panel.id!==id;});}"
     # Non-Mac shows "Ctrl B" instead of the ⌘B glyph on the hotkey hint.
     'if(!/Mac|iPhone|iPad/.test(navigator.platform)){'
     "document.addEventListener('DOMContentLoaded',function(){"

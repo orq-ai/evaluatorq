@@ -59,7 +59,6 @@ def examples() -> str:
 
 def hero(query: str, mode: str, *, api_available: bool, error: str | None = None) -> str:
     disabled = '' if api_available else ' disabled'
-    key_hint = '' if api_available else '<span class="finder-key-hint">Set ORQ_API_KEY to load traces</span>'
     error_html = f'<div class="finder-form-error" role="alert">{esc(error)}</div>' if error else ''
     selected_immediate = ' selected' if mode == 'immediate' else ''
     selected_review = ' selected' if mode == 'review' else ''
@@ -70,8 +69,8 @@ def hero(query: str, mode: str, *, api_available: bool, error: str | None = None
         '<form id="finder-query-form" class="finder-query" hx-post="/find/run" hx-target="#finder-body" '
         'hx-swap="innerHTML" hx-include="#finder-controls">'
         f'{icon_search()}<div class="col"><textarea name="query" placeholder="Describe the conversations you want to find…" '
-        f'required>{esc(query)}</textarea></div><div class="finder-run">'
-        f'<button class="rt-apply-btn" type="submit"{disabled}>Run</button>{key_hint}'
+        f'required{disabled}>{esc(query)}</textarea></div><div class="finder-run">'
+        f'<button class="rt-apply-btn" type="submit"{disabled}>Run</button>'
         '</div></form>'
         '<div class="finder-below"><label class="finder-mode"><span>Mode</span>'
         f'<select name="mode" form="finder-query-form"><option value="immediate"{selected_immediate}>Immediate</option>'
@@ -88,14 +87,29 @@ def _facet_values(catalogue: FacetCatalogue | None, name: str) -> tuple[str, ...
     return tuple(getattr(catalogue, name, ()))
 
 
-def facet_menu(catalogue: FacetCatalogue | None = None, *, open_: bool = False) -> str:
+def facet_menu(
+    catalogue: FacetCatalogue | None = None,
+    *,
+    numeric: object | None = None,
+    open_: bool = False,
+) -> str:
     rows: list[str] = []
     for name, label in FACET_LABELS:
         kind = '≥ / ≤' if name in {'tokens', 'duration_ms'} else 'any of ▾'
         values = _facet_values(catalogue, name)
-        if values:
+        if name in {'tokens', 'duration_ms'}:
+            minimum = getattr(numeric, f'{name}_min', None) if numeric is not None else None
+            maximum = getattr(numeric, f'{name}_max', None) if numeric is not None else None
+            rows.append(
+                f'<div class="facet-group"><div><span>{esc(label)}</span><span class="kind">{kind}</span></div>'
+                f'<label><span>≥</span><input form="finder-query-form" name="{esc(name)}_min" type="number" min="0" '
+                f'placeholder="min" value="{esc(str(minimum)) if minimum is not None else ""}"></label>'
+                f'<label><span>≤</span><input form="finder-query-form" name="{esc(name)}_max" type="number" min="0" '
+                f'placeholder="max" value="{esc(str(maximum)) if maximum is not None else ""}"></label></div>'
+            )
+        elif values:
             options = ''.join(
-                f'<label><input type="checkbox" name="facet_{esc(name)}" value="{esc(value)}">{esc(value)}</label>'
+                f'<label><input form="finder-query-form" type="checkbox" name="facet_{esc(name)}" value="{esc(value)}">{esc(value)}</label>'
                 for value in values
             )
             rows.append(
@@ -110,7 +124,12 @@ def facet_menu(catalogue: FacetCatalogue | None = None, *, open_: bool = False) 
     return f'<div class="finder-facets{" open" if open_ else ""}">{"".join(rows)}</div>'
 
 
-def _facet_chips(selection: FacetSelection, generated: FacetSelection) -> str:
+def _facet_chips(
+    selection: FacetSelection,
+    generated: FacetSelection,
+    numeric: object | None = None,
+    generated_numeric: object | None = None,
+) -> str:
     chips: list[str] = []
     for name, label in FACET_LABELS[:8]:
         values = getattr(selection, name, frozenset())
@@ -121,6 +140,19 @@ def _facet_chips(selection: FacetSelection, generated: FacetSelection) -> str:
             jev = ' jev' if value in generated_values else ''
             tag = '<span class="tag">jev</span>' if jev else ''
             chips.append(f'<span class="chip{jev}"><b>{esc(label)}</b>{esc(value)}{tag}<i>✕</i></span>')
+    for name, label, operator in (
+        ('tokens_min', 'tokens', '≥'),
+        ('tokens_max', 'tokens', '≤'),
+        ('duration_ms_min', 'duration', '≥'),
+        ('duration_ms_max', 'duration', '≤'),
+    ):
+        value = getattr(numeric, name, None) if numeric is not None else None
+        if value is None:
+            continue
+        generated_value = getattr(generated_numeric, name, None) if generated_numeric is not None else None
+        jev = ' jev' if generated_value == value else ''
+        tag = '<span class="tag">jev</span>' if jev else ''
+        chips.append(f'<span class="chip{jev}"><b>{label}</b>{operator} {value}{tag}<i>✕</i></span>')
     return ''.join(chips)
 
 
@@ -134,16 +166,17 @@ def controls(snapshot: RunSnapshot, settings: DashboardSettings, catalogue: Face
         'limit': population.limit if population is not None else settings.limit,
         'parallelism': request.parallelism if request is not None else settings.parallelism,
     }
-    count = f'{snapshot.total} traces selected' if snapshot.total else 'about 1,240 traces in window'
+    numeric = population.numeric if population is not None else None
+    count_html = f'<span class="count">{esc(str(snapshot.total))} traces selected</span>' if snapshot.total else ''
     return (
         '<div class="finder-controls" id="finder-controls">'
-        f'{_facet_chips(facets, snapshot.generated_filters)}'
+        f'{_facet_chips(facets, snapshot.generated_filters, numeric, snapshot.generated_numeric)}'
         f'<span class="addwrap"><button class="add" type="button" hx-get="/find/facets" hx-target=".finder-facets" '
-        f'hx-swap="outerHTML">+ Filter</button>{facet_menu(catalogue)}</span><span class="spacer"></span>'
-        f'<span class="quiet"><b>Window</b><input name="window_days" type="number" min="1" max="90" value="{values["window_days"]}" style="width:52px"></span>'
-        f'<span class="quiet"><b>Limit</b><input name="limit" type="number" min="1" max="500" value="{values["limit"]}" style="width:52px"></span>'
-        f'<span class="quiet"><b>Parallel</b><input name="parallelism" type="number" min="1" max="200" value="{values["parallelism"]}" style="width:48px"></span>'
-        f'<span class="count">{esc(count)}</span></div>'
+        f'hx-swap="outerHTML">+ Filter</button>{facet_menu(catalogue, numeric=numeric)}</span><span class="spacer"></span>'
+        f'<span class="quiet"><b>Window</b><input form="finder-query-form" name="window_days" type="number" min="1" max="90" value="{values["window_days"]}" style="width:52px"></span>'
+        f'<span class="quiet"><b>Limit</b><input form="finder-query-form" name="limit" type="number" min="1" max="500" value="{values["limit"]}" style="width:52px"></span>'
+        f'<span class="quiet"><b>Parallel</b><input form="finder-query-form" name="parallelism" type="number" min="1" max="200" value="{values["parallelism"]}" style="width:48px"></span>'
+        f'{count_html}</div>'
     )
 
 
@@ -175,7 +208,7 @@ def _result_color(result: TraceClassification | None, compiled: CompiledQuery | 
 def matrix(snapshot: RunSnapshot) -> str:
     traces = snapshot.traces
     if not traces:
-        idle_dots = ''.join('<i class="idle"></i>' for _ in range(60))
+        idle_dots = ''.join('<i class="idle"></i>' for _ in range(500))
         return f'<div class="finder-matrix idle">{idle_dots}</div>'
     unresolved = [trace.trace_id for trace in traces if trace.trace_id not in snapshot.results]
     active = set(unresolved[: snapshot.active]) if snapshot.state == 'classifying' else set()
@@ -231,22 +264,33 @@ def progress(snapshot: RunSnapshot) -> str:
         if snapshot.state == 'completed'
         else ''
     )
+    live_html = '<span class="live"></span>' if running else ''
+    error_html = (
+        f'<span class="finder-progress-error finder-review" role="alert">{esc(snapshot.error)}</span>'
+        if snapshot.error
+        else ''
+    )
     return (
-        f'<div class="finder-progress"><span class="live"></span><span class="state">{esc(state)}</span>'
+        f'<div class="finder-progress">{live_html}<span class="state">{esc(state)}</span>'
         f'<span class="sep">·</span><span><b>{snapshot.completed} / {snapshot.total}</b> judged</span>'
         f'<span class="sep">·</span><span><b>{snapshot.failed}</b> failed</span><span class="sep">·</span>'
-        f'<span><b>{snapshot.rate:.1f}</b>/s</span><span class="sep">·</span><span>{snapshot.elapsed:.1f}s</span>{action}</div>'
+        f'<span><b>{snapshot.rate:.1f}</b>/s</span><span class="sep">·</span><span>{snapshot.elapsed:.1f}s</span>{error_html}{action}</div>'
     )
 
 
-def field(snapshot: RunSnapshot) -> str:
+def field(snapshot: RunSnapshot, *, api_available: bool = True) -> str:
     body = matrix(snapshot)
     if snapshot.state == 'idle':
-        body += '<div class="finder-hint"><div class="inner"><h4>Every dot is a trace. Ask a question to light them up.</h4>'
-        body += '<p>JEV picks filters from your wording, judges recent traces, and marks the ones that match.</p></div></div>'
+        if api_available:
+            body += '<div class="finder-hint"><div class="inner"><h4>Every dot is a trace. Ask a question to light them up.</h4>'
+            body += '<p>JEV picks filters from your wording, judges recent traces, and marks the ones that match.</p></div></div>'
+        else:
+            body += '<div class="finder-hint"><div class="inner"><h4>Set ORQ_API_KEY to load traces</h4>'
+            body += '<p>Trace finding is unavailable until the Orq API key is configured.</p></div></div>'
     elif not snapshot.traces:
         body += '<div class="finder-hint"><div class="inner"><h4>No traces loaded.</h4><p>No traces match the current window and filters.</p></div></div>'
-    return f'<div class="finder-field">{progress(snapshot) if snapshot.state != "idle" else ""}{body}{legend(snapshot) if snapshot.compiled else ""}</div>'
+    unavailable = ' unavailable' if snapshot.state == 'idle' and not api_available else ''
+    return f'<div class="finder-field{unavailable}">{progress(snapshot) if snapshot.state != "idle" else ""}{body}{legend(snapshot) if snapshot.compiled else ""}</div>'
 
 
 def table(snapshot: RunSnapshot) -> str:
@@ -276,32 +320,129 @@ def table(snapshot: RunSnapshot) -> str:
     )
 
 
+def _task_kind_select(kind: str, *, editable: bool) -> str:
+    if not editable:
+        return f'<p>{esc(kind)}</p>'
+    options = ''.join(
+        f'<option value="{value}"{" selected" if kind == value else ""}>{label}</option>'
+        for value, label in (('choice', 'choice'), ('noul', 'noul (yes/no)'), ('score', 'score (0-1)'))
+    )
+    return f'<select name="kind">{options}</select>'
+
+
+def _selection_rule_html(compiled: CompiledQuery, *, editable: bool) -> str:
+    from evaluatorq.trace_finder import ThresholdSelection
+
+    task = compiled.task
+    selection = compiled.selection
+    if task.kind == 'choice':
+        labels = tuple(task.criteria) if isinstance(task.criteria, dict) else ()
+        selected = next(
+            (value for value in getattr(selection, 'values', ()) if value in labels), labels[0] if labels else ''
+        )
+        if not editable:
+            return f'<p>include verdict = <b>{esc(str(selected))}</b></p>'
+        options = ''.join(
+            f'<option value="{esc(str(label))}"{" selected" if label == selected else ""}>{esc(str(label))}</option>'
+            for label in labels
+        )
+        return f'<select name="selection_value">{options}</select>'
+    if task.kind == 'noul':
+        selected_bool = next((value for value in getattr(selection, 'values', ()) if type(value) is bool), False)
+        if not editable:
+            return f'<p>include verdict = <b>{str(selected_bool).lower()}</b></p>'
+        options = ''.join(
+            f'<option value="{value}"{" selected" if selected_bool == (value == "true") else ""}>{value}</option>'
+            for value in ('true', 'false')
+        )
+        return f'<select name="selection_value">{options}</select>'
+    if not isinstance(selection, ThresholdSelection):
+        operator, threshold = 'gte', 0.5
+    else:
+        operator, threshold = selection.operator, selection.value
+    if not editable:
+        return f'<p>include score {esc(operator)} <b>{threshold:g}</b></p>'
+    options = ''.join(
+        f'<option value="{op}:{value:g}"{" selected" if operator == op and threshold == value else ""}>{op} {value:g}</option>'
+        for op, value in (('gte', 0.5), ('gte', 0.7), ('gte', 0.8), ('lte', 0.3), ('lte', 0.5))
+    )
+    return f'<select name="selection_rule">{options}</select>'
+
+
+def _criterion_html(compiled: CompiledQuery, *, editable: bool) -> tuple[str, int]:
+    task = compiled.task
+    if task.kind == 'choice' and isinstance(task.criteria, dict):
+        pairs = tuple(task.criteria.items())
+        if editable:
+            return (
+                ''.join(
+                    f'<div class="finder-crit-row"><input name="criteria_label_{index}" value="{esc(str(label))}" required>'
+                    f'<input name="criteria_description_{index}" value="{esc(str(description or ""))}" required></div>'
+                    for index, (label, description) in enumerate(pairs)
+                ),
+                len(pairs),
+            )
+        return (
+            ''.join(
+                f'<span class="lab"><span class="sw" style="background:var(--chart-{index + 1})"></span>{esc(str(label))}</span>'
+                f'<span class="desc">{esc(str(description or ""))}</span>'
+                for index, (label, description) in enumerate(pairs)
+            ),
+            len(pairs),
+        )
+    if task.kind == 'score' and isinstance(task.criteria, list):
+        if editable:
+            return (
+                ''.join(
+                    f'<div class="finder-crit-row"><span class="lab">Level {index + 1}</span>'
+                    f'<input name="score_criteria_{index}" value="{esc(str(description))}" required></div>'
+                    for index, description in enumerate(task.criteria)
+                ),
+                len(task.criteria),
+            )
+        return (
+            ''.join(
+                f'<span class="lab">Level {index + 1}</span><span class="desc">{esc(str(description))}</span>'
+                for index, description in enumerate(task.criteria)
+            ),
+            len(task.criteria),
+        )
+    return '<p>Binary true / false judgment.</p>', 0
+
+
 def task_panel(compiled: CompiledQuery, *, editable: bool, open_: bool = False) -> str:
     task = compiled.task
-    criteria = task.criteria.items() if isinstance(task.criteria, dict) else enumerate(task.criteria or ())
-    readonly = '' if editable else ' readonly'
-    criterion_html = ''.join(
-        f'<span class="lab"><span class="sw" style="background:var(--chart-{index + 1})"></span>{esc(str(label))}</span>'
-        f'<input name="criteria_{esc(str(label))}" value="{esc(str(description or ""))}"{readonly}>'
-        for index, (label, description) in enumerate(criteria)
-    )
+    criterion_html, criterion_count = _criterion_html(compiled, editable=editable)
     instruction = (
         f'<textarea name="instructions" required>{esc(task.instructions)}</textarea>'
         if editable
         else f'<p>{esc(task.instructions)}</p>'
     )
+    threshold = (
+        f'<div><h5>Noul threshold</h5><input name="noul_threshold" type="number" min="0" max="1" step="0.01" value="{task.noul_threshold:g}"></div>'
+        if editable and task.kind == 'noul'
+        else ''
+    )
     form_open = '<form hx-post="/find/start" hx-target="#finder-body" hx-swap="innerHTML">' if editable else ''
     form_close = '<button class="rt-apply-btn" type="submit">Start classification</button></form>' if editable else ''
     return (
         f'<details class="finder-task"{" open" if open_ else ""}><summary><span class="chev">▸</span><span class="kind">{esc(task.kind)}</span>'
-        f'<span>Generated JEV task · {len(task.criteria) if isinstance(task.criteria, (dict, list)) else 0} labels</span></summary>'
-        f'{form_open}<div class="finder-task-body"><div class="full"><h5>Instructions</h5>{instruction}</div>'
+        f'<span>Generated JEV task · {criterion_count} labels</span></summary>{form_open}'
+        f'<div class="finder-task-body"><div><h5>Kind</h5>{_task_kind_select(task.kind, editable=editable)}</div>'
+        f'<div><h5>Inclusion rule</h5>{_selection_rule_html(compiled, editable=editable)}</div>{threshold}'
+        f'<div class="full"><h5>Instructions</h5>{instruction}</div>'
         f'<div class="full"><h5>Criteria</h5><div class="finder-crit">{criterion_html}</div></div>'
         f'<div class="full"><h5>Raw plan</h5><pre>{esc(json.dumps(compiled.model_dump(mode="json"), indent=2))}</pre></div></div>{form_close}</details>'
     )
 
 
-def body(snapshot: RunSnapshot, settings: DashboardSettings, *, catalogue: FacetCatalogue | None = None) -> str:
+def body(
+    snapshot: RunSnapshot,
+    settings: DashboardSettings,
+    *,
+    catalogue: FacetCatalogue | None = None,
+    api_available: bool = True,
+) -> str:
     if snapshot.state == 'awaiting_review' and snapshot.compiled is not None:
         return (
             f'{controls(snapshot, settings, catalogue)}<div class="finder-review"><span>⏸</span><span><b>Review the plan before spending JEV calls.</b> '
@@ -309,8 +450,8 @@ def body(snapshot: RunSnapshot, settings: DashboardSettings, *, catalogue: Facet
             f'{task_panel(snapshot.compiled, editable=True, open_=True)}'
         )
     if snapshot.state == 'idle':
-        return f'{controls(snapshot, settings, catalogue)}{field(snapshot)}'
-    return f'{controls(snapshot, settings, catalogue)}{field(snapshot)}{table(snapshot)}{task_panel(snapshot.compiled, editable=False) if snapshot.compiled else ""}'
+        return f'{controls(snapshot, settings, catalogue)}{field(snapshot, api_available=api_available)}'
+    return f'{controls(snapshot, settings, catalogue)}{field(snapshot, api_available=api_available)}{table(snapshot)}{task_panel(snapshot.compiled, editable=False) if snapshot.compiled else ""}'
 
 
 def page_html(
@@ -324,16 +465,22 @@ def page_html(
         if snapshot.state in {'compiling', 'classifying'}
         else ''
     )
-    html = f'<div class="finder">{hero(query, mode, api_available=api_available, error=error)}<div id="finder-body"{polling}>{body(snapshot, settings)}</div><div id="finder-drawer"></div></div>'
+    html = f'<div class="finder">{hero(query, mode, api_available=api_available, error=error)}<div id="finder-body"{polling}>{body(snapshot, settings, api_available=api_available)}</div><div id="finder-drawer"></div></div>'
     return page('Find', html, active_nav='find')
 
 
-def fragment(snapshot: RunSnapshot, settings: DashboardSettings, *, error: str | None = None) -> str:
+def fragment(
+    snapshot: RunSnapshot,
+    settings: DashboardSettings,
+    *,
+    error: str | None = None,
+    api_available: bool = True,
+) -> str:
     attrs = ''
     if snapshot.state in {'compiling', 'classifying'}:
         attrs = ' hx-get="/find/poll" hx-trigger="every 1s" hx-target="#finder-body" hx-swap="innerHTML"'
-    error_html = f'<p class="finder-form-error" role="alert">{esc(error)}</p>' if error else ''
-    return f'<div class="finder-body-fragment"{attrs}>{error_html}{body(snapshot, settings)}</div>'
+    error_html = f'<div class="finder-review finder-form-error" role="alert">{esc(error)}</div>' if error else ''
+    return f'<div class="finder-body-fragment"{attrs}>{error_html}{body(snapshot, settings, api_available=api_available)}</div>'
 
 
 def drawer(detail: TraceDetail, *, experiment_url: str | None = None) -> str:
@@ -359,14 +506,18 @@ def drawer(detail: TraceDetail, *, experiment_url: str | None = None) -> str:
         f'<dl class="fd-meta"><dt>trace</dt><dd>{esc(trace.trace_id)}</dd><dt>span</dt><dd>{esc(trace.span_id)}</dd>'
         f'<dt>project</dt><dd>{esc(trace.project)}</dd><dt>model</dt><dd>{esc(trace.model)}</dd><dt>time</dt><dd>{esc(trace.timestamp.isoformat())}</dd></dl>'
         f'<div class="fd-verdict"><span class="sw" style="background:{esc(_result_color(result, detail.compiled))}"></span>{result_html}</div>'
-        '<div class="fd-tabs"><span class="on">Full thread</span><span>JEV input</span><span>Raw result</span></div>'
-        f'<div class="fd-panel"><div class="fd-panel-title">Full thread</div>{thread_html}</div>'
-        f'<div class="fd-panel"><div class="fd-panel-title">JEV input</div><pre>{esc(jev)}</pre></div>'
-        f'<div class="fd-panel"><div class="fd-panel-title">Raw result</div><pre>{esc(raw)}</pre></div>'
+        '<div class="fd-tabs">'
+        '<button type="button" class="on" data-panel="fd-thread" onclick="eqFinderTab(this,\'fd-thread\')">Full thread</button>'
+        '<button type="button" data-panel="fd-jev" onclick="eqFinderTab(this,\'fd-jev\')">JEV input</button>'
+        '<button type="button" data-panel="fd-raw" onclick="eqFinderTab(this,\'fd-raw\')">Raw result</button></div>'
+        f'<div id="fd-thread" class="fd-panel"><div class="fd-panel-title">Full thread</div>{thread_html}</div>'
+        f'<div id="fd-jev" class="fd-panel" hidden><div class="fd-panel-title">JEV input</div><pre>{esc(jev)}</pre></div>'
+        f'<div id="fd-raw" class="fd-panel" hidden><div class="fd-panel-title">Raw result</div><pre>{esc(raw)}</pre></div>'
     )
     url = trace_span_url(trace.trace_id, trace.span_id, experiment_url)
     footer = (
-        trace_link_button(url, 'Open in Orq ↗') + '<button class="btn-secondary" type="button">Copy trace id</button>'
+        trace_link_button(url, 'Open in Orq ↗')
+        + f'<button class="btn-secondary" type="button" data-trace-id="{esc(trace.trace_id)}" onclick="navigator.clipboard.writeText(this.dataset.traceId)">Copy trace id</button>'
     )
     html = _drawer(f'Trace {esc(trace.trace_id)}', body_html, footer)
     return html.replace('/apply/dismiss', '/find/dismiss').replace('#rt-apply-drawer', '#finder-drawer')

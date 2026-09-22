@@ -76,8 +76,11 @@ class FakeStore:
         self.compiled = _compiled()
         self.snapshot_value = RunSnapshot()
         self.started = False
+        self.compile_request: Any | None = None
+        self.started_compiled: CompiledQuery | None = None
 
     async def compile(self, request: Any) -> RunSnapshot:
+        self.compile_request = request
         state = 'awaiting_review' if request.mode == 'review' else 'classifying'
         self.snapshot_value = RunSnapshot(
             generation=1,
@@ -97,6 +100,7 @@ class FakeStore:
 
     async def start(self, request: Any, compiled: CompiledQuery) -> RunSnapshot:
         self.started = True
+        self.started_compiled = compiled
         result = TraceClassification(
             trace_id=self.trace.trace_id,
             span_id=self.trace.span_id,
@@ -179,6 +183,8 @@ def test_find_idle_page_and_nav(setup_finder) -> None:
     assert 'Ask <em>JEV</em>' in response.text
     assert 'Every dot is a trace' in response.text
     assert 'Find' in response.text
+    assert 'about 1,240 traces in window' not in response.text
+    assert response.text.count('class="idle"') == 500
 
 
 def test_find_without_api_key_renders_empty_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -188,7 +194,10 @@ def test_find_without_api_key_renders_empty_state(monkeypatch: pytest.MonkeyPatc
     response = client.get('/find')
     assert response.status_code == 200
     assert 'Set ORQ_API_KEY to load traces' in response.text
-    assert 'disabled' in response.text
+    assert '<textarea name="query"' in response.text
+    assert '<textarea name="query"' in response.text and 'disabled' in response.text.split('<textarea name="query"', 1)[1].split('>', 1)[0]
+    assert 'class="finder-hint"' in response.text
+    assert '<span class="finder-key-hint"' not in response.text
 
 
 def test_find_run_starts_polling_and_completed_poll_shows_matches(setup_finder) -> None:
@@ -205,6 +214,16 @@ def test_find_run_starts_polling_and_completed_poll_shows_matches(setup_finder) 
     assert 'trace-1' in poll.text
 
 
+def test_find_run_passes_numeric_filter_and_renders_chip(setup_finder) -> None:
+    store, client = setup_finder
+    response = client.post('/find/run', data={'query': 'long traces', 'mode': 'immediate', 'tokens_min': '5000'})
+    assert response.status_code == 200
+    assert store.compile_request is not None
+    assert store.compile_request.population.numeric.tokens_min == 5000
+    assert '<span class="chip"><b>tokens</b>≥ 5000' in response.text
+    assert 'name="tokens_min"' in response.text
+
+
 def test_find_review_start_transitions_to_classification(setup_finder) -> None:
     store, client = setup_finder
     review = client.post('/find/run', data={'query': 'frustrated customers', 'mode': 'review'})
@@ -212,9 +231,32 @@ def test_find_review_start_transitions_to_classification(setup_finder) -> None:
     assert 'Review the plan before spending JEV calls.' in review.text
     assert 'name="instructions"' in review.text
 
-    started = client.post('/find/start', data={'instructions': 'Edited instructions'})
+    started = client.post(
+        '/find/start',
+        data={
+            'kind': 'choice',
+            'instructions': 'Edited instructions',
+            'criteria_label_0': 'frustrated',
+            'criteria_description_0': 'Changed criterion',
+            'criteria_label_1': 'neutral',
+            'criteria_description_1': 'Transactional.',
+            'selection_value': 'frustrated',
+        },
+    )
     assert started.status_code == 200
     assert store.started
+    assert store.started_compiled is not None
+    assert store.started_compiled.task.instructions == 'Edited instructions'
+    assert store.started_compiled.task.criteria['frustrated'] == 'Changed criterion'
+
+
+def test_find_failed_snapshot_renders_escaped_error(setup_finder) -> None:
+    store, client = setup_finder
+    store.snapshot_value = RunSnapshot(state='failed', error='<compiler failed>')
+    response = client.get('/find/poll')
+    assert response.status_code == 200
+    assert '&lt;compiler failed&gt;' in response.text
+    assert '<compiler failed>' not in response.text
 
 
 def test_find_trace_drawer_renders_thread_and_jev_input(setup_finder, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -229,6 +271,8 @@ def test_find_trace_drawer_renders_thread_and_jev_input(setup_finder, monkeypatc
     assert 'JEV input' in drawer.text
     assert 'Raw result' in drawer.text
     assert 'This is the third time' in drawer.text
+    assert 'eqFinderTab(this' in drawer.text
+    assert 'navigator.clipboard.writeText' in drawer.text
 
 
 def test_find_export_is_404_until_completed_then_downloads_json(setup_finder) -> None:

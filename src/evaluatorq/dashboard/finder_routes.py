@@ -156,29 +156,75 @@ def _run_request(form: Any, settings: Any) -> RunRequest:
 
 
 def _compiled_from_form(current: CompiledQuery, form: Any) -> CompiledQuery:
-    task = current.task
-    instructions = str(form.get('instructions') or task.instructions)
-    criteria = task.criteria
-    if isinstance(criteria, dict):
-        criteria = {
-            label: str(form.get(f'criteria_{label}') or description or '') for label, description in criteria.items()
-        }
-    elif isinstance(criteria, list):
-        criteria = [str(form.get(f'criteria_{index}') or description) for index, description in enumerate(criteria)]
-    task = task.model_copy(update={'instructions': instructions, 'criteria': criteria, 'state': {}})
+    from evaluatorq.common.judge import ClassifyQuestion
+    from evaluatorq.trace_finder import ThresholdSelection, ValueSelection
+
+    current_task = current.task
+    kind = str(form.get('kind') or form.get('task_kind') or current_task.kind)
+    instructions = str(form.get('instructions') or current_task.instructions).strip()
+
+    if kind == 'choice':
+        existing = current_task.criteria.items() if isinstance(current_task.criteria, dict) else ()
+        existing_pairs = tuple(existing)
+        pairs: list[tuple[str, str]] = []
+        for index, (old_label, old_description) in enumerate(existing_pairs):
+            label = str(form.get(f'criteria_label_{index}') or old_label).strip()
+            description = str(form.get(f'criteria_description_{index}') or old_description or '').strip()
+            pairs.append((label, description))
+        if not pairs:
+            old_descriptions = current_task.criteria if isinstance(current_task.criteria, list) else ()
+            pairs = [(f'option_{index + 1}', str(description)) for index, description in enumerate(old_descriptions)]
+        if not pairs:
+            pairs = [('yes', 'The request is satisfied.'), ('no', 'The request is not satisfied.')]
+        criteria: dict[str, str] | list[str] | None = dict(pairs)
+    elif kind == 'score':
+        existing_descriptions = current_task.criteria if isinstance(current_task.criteria, list) else ()
+        if not existing_descriptions and isinstance(current_task.criteria, dict):
+            existing_descriptions = tuple(current_task.criteria.values())
+        criteria_values = [
+            str(form.get(f'score_criteria_{index}') or form.get(f'criteria_{index}') or description).strip()
+            for index, description in enumerate(existing_descriptions)
+        ]
+        if not criteria_values:
+            criteria_values = ['Low match', 'High match']
+        criteria = criteria_values
+    elif kind == 'noul':
+        criteria = None
+    else:
+        raise ValueError('kind must be one of choice, noul, or score')
+
+    threshold = float(form.get('noul_threshold') or current_task.noul_threshold)
+    task = ClassifyQuestion(
+        kind=kind,
+        instructions=instructions,
+        criteria=criteria,
+        noul_threshold=threshold,
+        state={},
+    )
 
     values = _form_values(form, 'selection_value') or _form_values(form, 'selection_values')
-    selection = current.selection
-    if values:
-        if selection.kind == 'values' and task.kind == 'noul':
-            parsed: tuple[object, ...] = tuple(value.casefold() == 'true' for value in values)
+    if kind == 'choice':
+        labels = tuple(criteria) if isinstance(criteria, dict) else ()
+        selected = tuple(value for value in values if value in labels)
+        if not selected:
+            current_values = getattr(current.selection, 'values', ())
+            selected = tuple(value for value in current_values if type(value) is str and value in labels)
+        selection = ValueSelection(kind='values', values=selected or (labels[0],))
+    elif kind == 'noul':
+        selected_bool = tuple(value.casefold() == 'true' for value in values if value.casefold() in {'true', 'false'})
+        if not selected_bool:
+            selected_bool = tuple(value for value in getattr(current.selection, 'values', ()) if type(value) is bool)
+        selection = ValueSelection(kind='values', values=selected_bool or (False,))
+    else:
+        rule = str(form.get('selection_rule') or '')
+        if ':' in rule:
+            operator, raw_threshold = rule.split(':', 1)
+            score_threshold = float(raw_threshold)
         else:
-            parsed = tuple(values)
-        selection = selection.model_copy(update={'values': parsed})
-    elif selection.kind == 'threshold':
-        operator = str(form.get('selection_operator') or selection.operator)
-        threshold = float(form.get('selection_value') or selection.value)
-        selection = selection.model_copy(update={'operator': operator, 'value': threshold})
+            operator = str(form.get('selection_operator') or getattr(current.selection, 'operator', 'gte'))
+            raw_threshold = form.get('selection_threshold') or form.get('selection_value')
+            score_threshold = float(raw_threshold or getattr(current.selection, 'value', 0.5))
+        selection = ThresholdSelection(operator=operator, value=score_threshold, kind='threshold')
     return CompiledQuery(task=task, selection=selection)
 
 
@@ -202,7 +248,7 @@ def register_finder_routes(app: Any, roots: list[Any] | None = None) -> None:  #
         settings = _settings(req.app)
         store = _store(req.app)
         if store is None:
-            return _html(fragment(RunSnapshot(), settings, error='Set ORQ_API_KEY to load traces'))
+            return _html(fragment(RunSnapshot(), settings, error='Set ORQ_API_KEY to load traces', api_available=False))
         form = await req.form()
         try:
             request = _run_request(form, settings)
@@ -223,7 +269,7 @@ def register_finder_routes(app: Any, roots: list[Any] | None = None) -> None:  #
         settings = _settings(req.app)
         store = _store(req.app)
         if store is None:
-            return _html(fragment(RunSnapshot(), settings, error='Set ORQ_API_KEY to load traces'))
+            return _html(fragment(RunSnapshot(), settings, error='Set ORQ_API_KEY to load traces', api_available=False))
         form = await req.form()
         current = await store.snapshot()
         if current.request is None or current.compiled is None:
