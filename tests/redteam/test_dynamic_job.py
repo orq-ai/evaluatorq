@@ -394,12 +394,16 @@ class TestTemplateSingleTurnPath:
             agent_key="test-agent", agent_context=_make_agent_context(), backend=_make_target_factory(target)
         )
 
-        output = await _call_dynamic_job(job_fn, datapoint)
+        progress = MagicMock()
+        progress.finish_attack = AsyncMock()
+        with patch(f"{_PIPELINE_MOD}._get_active_progress", return_value=progress):
+            output = await _call_dynamic_job(job_fn, datapoint)
         payload = _coerce_job_output_payload(output)
 
         assert output["turns"] == 0
         assert payload.turns == 0
         assert payload.error is not None
+        progress.finish_attack.assert_awaited_once_with(None)
 
     @pytest.mark.asyncio
     @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)

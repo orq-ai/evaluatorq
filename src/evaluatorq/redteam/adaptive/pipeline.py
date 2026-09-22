@@ -461,6 +461,9 @@ def create_dynamic_redteam_job(
                         _set_attack_span_attrs(attack_span, result_dict)
                         output_payload = result_dict.model_dump(mode='json')
                         output_payload['turns'] = 0
+                        active_progress = _get_active_progress()
+                        if active_progress is not None:
+                            await active_progress.finish_attack(None)
                         return {
                             **output_payload,
                             'max_turns': effective_max_turns,
