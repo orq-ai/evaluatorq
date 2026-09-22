@@ -189,9 +189,9 @@ def test_find_idle_page_and_nav(setup_finder) -> None:
     _store, client = setup_finder
     response = client.get('/find')
     assert response.status_code == 200
-    assert 'Ask <em>JEV</em>' in response.text
+    assert 'Find the signal.' in response.text
     assert 'Every dot is a trace' in response.text
-    assert 'Find' in response.text
+    assert 'Trace search' in response.text
     assert 'about 1,240 traces in window' not in response.text
     assert response.text.count('class="idle"') == 500
     assert 'data-finder-example="Frustrated customers in the support agent on production this week."' in response.text

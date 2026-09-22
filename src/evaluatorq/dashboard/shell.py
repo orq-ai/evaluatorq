@@ -118,7 +118,7 @@ _NAV: list[tuple[str, str, str, str]] = [
     ),
     (
         'find',
-        'Find',
+        'Trace search',
         '/find',
         FIND_ICON,
     ),

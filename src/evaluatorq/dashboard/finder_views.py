@@ -65,21 +65,21 @@ def examples() -> str:
 def hero(query: str, mode: str, *, api_available: bool, error: str | None = None) -> str:
     disabled = '' if api_available else ' disabled'
     error_html = f'<div class="finder-form-error" role="alert">{esc(error)}</div>' if error else ''
-    selected_immediate = ' selected' if mode == 'immediate' else ''
-    selected_review = ' selected' if mode == 'review' else ''
+    checked_immediate = ' checked' if mode != 'review' else ''
+    checked_review = ' checked' if mode == 'review' else ''
     return (
         '<section class="finder-hero"><div class="finder-hero-bg"></div>'
-        '<div class="finder-kicker">Trace finder</div>'
-        '<h2 class="finder-title">Ask <em>JEV</em> to find the conversations you care about.</h2>'
+        '<h2 class="finder-title">Find the signal.</h2>'
+        '<p class="finder-sub">Ask a question of your traces. Inspect every judgment.</p>'
         '<form id="finder-query-form" class="finder-query" hx-post="/find/run" hx-target="#finder-body" '
         'hx-swap="innerHTML" hx-include="#finder-controls">'
         f'{csrf_field()}{icon_search()}<div class="col"><textarea name="query" rows="1" placeholder="Describe the conversations you want to find…" '
-        f'required{disabled}>{esc(query)}</textarea></div><div class="finder-run">'
-        f'<button class="rt-apply-btn" type="submit"{disabled}>Run</button>'
-        '</div></form>'
-        '<div class="finder-below"><label class="finder-mode"><span>Mode</span>'
-        f'<select name="mode" form="finder-query-form"><option value="immediate"{selected_immediate}>Immediate</option>'
-        f'<option value="review"{selected_review}>Review first</option></select></label>'
+        f'required{disabled}>{esc(query)}</textarea></div>'
+        f'<button class="finder-go" type="submit"{disabled}>Find traces <span aria-hidden="true">↗</span></button>'
+        '</form>'
+        '<div class="finder-below"><div class="finder-seg" role="radiogroup" aria-label="Mode">'
+        f'<label><input type="radio" name="mode" value="immediate" form="finder-query-form"{checked_immediate}><span>Immediate</span></label>'
+        f'<label><input type="radio" name="mode" value="review" form="finder-query-form"{checked_review}><span>Review first</span></label></div>'
         f'<span class="ex"><button type="button" class="link">Examples ▾</button>{examples()}</span>'
         '<span class="spacer"></span><span class="hint"><kbd>⌘</kbd> <kbd>↵</kbd> to run</span></div>'
         f'{error_html}</section>'
@@ -516,7 +516,7 @@ def page_html(
         else ''
     )
     html = f'<div class="finder">{hero(query, mode, api_available=api_available, error=error)}<div id="finder-body"{polling}>{body(snapshot, settings, api_available=api_available)}</div><div id="finder-drawer"></div></div>'
-    return page('Find', html, active_nav='find')
+    return page('Trace search', html, active_nav='find')
 
 
 def fragment(

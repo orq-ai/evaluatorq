@@ -14,7 +14,7 @@ export ORQ_API_KEY=...
 eq dashboard --compiler-model openai/gpt-5.6-luna --jev-model typesafe/jev-latest
 ```
 
-Open [http://127.0.0.1:8080/find](http://127.0.0.1:8080/find), choose a question, and select **Run**. The **Find** item in the dashboard sidebar opens the same page.
+Open [http://127.0.0.1:8080/find](http://127.0.0.1:8080/find), choose a question, and select **Find traces**. The **Trace search** item in the dashboard sidebar opens the same page.
 
 ## How a query becomes matches
 
