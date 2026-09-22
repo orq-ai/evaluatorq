@@ -2606,8 +2606,10 @@ _FINDER_CSS = """
 .finder-controls .chip .tag { font-size:9px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; opacity:.75; }
 .finder-controls .add { display:inline-flex; align-items:center; height:28px; padding:0 12px; border-radius:999px; border:1px dashed var(--border-strong); color:var(--text-muted); background:transparent; font:inherit; font-size:12px; }
 .finder-controls .quiet { display:inline-flex; align-items:center; gap:6px; color:var(--text-muted); }
-.finder-controls .quiet input { height:26px; border:1px solid transparent; border-radius:6px; background:transparent; color:var(--text-strong); padding:0 4px; }
-.finder-controls .quiet b { font-size:10.5px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--text-faint); }
+.finder-controls .quiet input { height:28px; border:1px solid var(--border-default); border-radius:8px; background:var(--surface-card); color:var(--text-strong); padding:0 8px; font-family:var(--font-mono); font-size:12px; font-variant-numeric:tabular-nums; box-shadow:0 1px 2px rgba(20,18,30,.05); transition:border-color .15s ease-out,box-shadow .15s ease-out; }
+.finder-controls .quiet input:hover { border-color:var(--border-strong); }
+.finder-controls .quiet input:focus { outline:0; border-color:var(--accent); box-shadow:0 0 0 3px rgba(255,143,52,.18); }
+.finder-controls .quiet b { font-size:10.5px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--text-muted); }
 .finder-controls .count { color:var(--text-muted); font-variant-numeric:tabular-nums; }
 .finder-facets { display:none; position:absolute; top:34px; left:0; z-index:30; min-width:240px; max-height:420px; overflow:auto; padding:6px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:12px; box-shadow:var(--shadow-lg); }
 .finder-facets.open { display:block; }

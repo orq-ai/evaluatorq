@@ -766,9 +766,6 @@ def settings_body(
         ('compiler_model', 'Compiler model', 'text'),
         ('jev_model', 'JEV model', 'text'),
         ('apply_model', 'Apply-recommendations model', 'text'),
-        ('window_days', 'Window (days)', 'number'),
-        ('limit', 'Trace limit', 'number'),
-        ('parallelism', 'Parallelism', 'number'),
     )
     field_rows: list[str] = []
     for name, label, input_type in fields:
@@ -787,7 +784,9 @@ def settings_body(
         '<button type="submit" class="rt-apply-btn">Save</button>'
         '</form>'
     )
-    settings_panel = _panel('Finder settings', 'Models and trace-finder defaults', f'{saved_html}{form}')
+    settings_panel = _panel(
+        'Models', 'Window, limit and parallelism are set per run on the Trace search page', f'{saved_html}{form}'
+    )
 
     def val_html(v: str | list[str]) -> str:
         # A list renders one item per line; a scalar is a single line.

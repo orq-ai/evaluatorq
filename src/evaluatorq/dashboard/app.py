@@ -230,8 +230,12 @@ async def _save_settings(req: Request) -> Response | NotStr:
         body = settings_body(_settings_config(roots), effective_settings(), errors={'form': rejected})
         return Response(page('Settings', body, active_nav='settings'), status_code=403, media_type='text/html')
     roots = _roots(req)
-    field_names = ('compiler_model', 'jev_model', 'apply_model', 'window_days', 'limit', 'parallelism')
-    values = {name: form_data.get(name, '') for name in field_names}
+    # Window, limit and parallelism are tuned per run on the Trace search page; the form only carries models.
+    current = effective_settings()
+    values: dict[str, object] = {
+        name: form_data.get(name, '') for name in ('compiler_model', 'jev_model', 'apply_model')
+    }
+    values.update(window_days=current.window_days, limit=current.limit, parallelism=current.parallelism)
     try:
         settings = DashboardSettings.model_validate(values)
     except ValidationError as exc:

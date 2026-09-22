@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -67,22 +68,20 @@ def test_settings_post_requires_csrf_and_same_origin(client: TestClient) -> None
     )
 
 
-def test_invalid_limit_rerenders_form_with_error(client: TestClient) -> None:
+def test_numeric_fields_are_not_taken_from_the_form(client: TestClient, settings_file: Path) -> None:
     response = client.post(
         '/settings',
         data=csrf_data({
             'compiler_model': 'compiler/custom',
             'jev_model': 'jev/custom',
             'apply_model': 'apply/custom',
-            'window_days': '14',
             'limit': '9999',
-            'parallelism': '7',
         }),
     )
 
-    assert response.status_code == 422
-    assert 'limit' in response.text
-    assert 'less than or equal to 500' in response.text
+    assert response.status_code == 303
+    saved = json.loads(settings_file.read_text())
+    assert saved['limit'] == DashboardSettings.model_fields['limit'].default
 
 
 def test_blank_model_is_rejected(client: TestClient) -> None:
@@ -155,9 +154,9 @@ def test_settings_page_shows_saved_values(client: TestClient, settings_file: Pat
     assert 'value="saved/compiler"' in response.text
     assert 'value="saved/jev"' in response.text
     assert 'value="saved/apply"' in response.text
-    assert 'value="11"' in response.text
-    assert 'value="123"' in response.text
-    assert 'value="19"' in response.text
+    assert 'name="window_days"' not in response.text
+    assert 'name="limit"' not in response.text
+    assert 'name="parallelism"' not in response.text
 
 
 def test_saved_confirmation_is_rendered_after_redirect(client: TestClient) -> None:

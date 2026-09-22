@@ -62,7 +62,7 @@ The compiler handles the two numeric dimensions because trace-finder metadata th
 
 ## Settings and precedence
 
-The dashboard **Settings** page at `/settings` has editable fields for the compiler model, JEV model, apply-recommendations model, window days, trace limit, and parallelism. Save the form to persist them in `.evaluatorq/dashboard-settings.json`, or point `EVALUATORQ_DASHBOARD_SETTINGS` at another JSON file.
+The dashboard **Settings** page at `/settings` has editable fields for the compiler model, JEV model, and apply-recommendations model. Save the form to persist them in `.evaluatorq/dashboard-settings.json`, or point `EVALUATORQ_DASHBOARD_SETTINGS` at another JSON file. The window, trace limit, and parallelism are edited per run in the controls row of the Trace search page; their defaults come from the environment variables below or the saved file.
 
 Settings are resolved in this order, from strongest to weakest: explicit CLI or dashboard overrides, environment variables, the saved JSON file, and built-in defaults. Invalid environment integers are ignored with a warning; invalid saved settings fall back to built-in defaults.
 
