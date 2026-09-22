@@ -30,7 +30,7 @@ Values are fixed here because no registry enumerates them; the *accepted efforts
 
 `LLMCallConfig.api` defaults to `chat_completions`; `EvaluatorConfig.api` defaults to `responses`, because that is the endpoint the Orq router prices. The endpoint decides the spelling of every knob (`max_completion_tokens` vs `max_output_tokens`, flat `reasoning_effort` vs a `reasoning` block), which keys `check_reserved_keys` rejects inside `extra_kwargs`, and whether the call records cost at all.
 
-It is honoured by the judge (`common/judge.py`) and by simulation agents (`simulation/agents/base.py`). Red team's attacker call sites pass `api='chat_completions'` explicitly, so the field is inert there — treat that as a gap to document, not an `N/A`, until the code either honours it or warns.
+It is honoured by the judge (`common/judge.py`) and by simulation agents (`simulation/agents/base.py`). Red team's attacker call sites pass `api='chat_completions'` explicitly, so the field is inert there. That used to be recorded here as a gap to document "until the code either honours it or warns" — the code now warns: `LLMCallConfig.request_params` logs when an explicit `api=` contradicts an `api` the caller set itself (`contracts.py`), and both attacker call sites (`redteam/adaptive/blackbox_classifier.py`, `redteam/adaptive/tool_chaining.py`) render through it. The condition is met, so the cell is no longer a gap. Re-open it if a third attacker call site ever renders params without going through `request_params`.
 
 Simulation agents carry a third default, distinct from both: `BaseAgent.DEFAULT_API` is `responses`, not `LLMCallConfig`'s own `chat_completions`, because the judge sends function tools and `reasoning_effort` in the same request and chat completions answers that combination with a 400. `BaseAgent.__init__` applies it only when the caller's `llm_config` did not set `api` itself (the `model_fields_set` gate, same mechanism as the rest of the `own-calls LLM config` axis), so `LLMCallConfig(api='chat_completions')` opts a simulation run back out. The deprecated `AgentConfig` path pins `api` to `chat_completions` unconditionally instead of leaving it unset, so it never picks up this default — document that as the legacy path's own behaviour, not a bug. There is deliberately no environment variable for this default.
 
@@ -87,6 +87,10 @@ Marked `N/A` in the matrix, never reported as a gap.
 | own-calls LLM config × dashboard | it reads saved artifacts; it makes no call of its own to configure |
 | own-calls LLM config × `evaluatorq()` | the core loop runs your task function and your evaluators; it has no own-calls role to configure. Judge settings go to `llm_jury(...)` |
 | own-calls LLM config `model-name shorthand` × `red_team()` | red team has no `sim_model` equivalent; both roles are named on `LLMConfig` |
+| `evaluatorq()` × data source `HuggingFace` | `data=` takes rows, a `DatasetIdInput` or an `ExperimentInput`. There is no HuggingFace form; the `hf:` specifier is a red-team `dataset=` spelling |
+| `evaluatorq()` × data source `generated` | the core loop runs your jobs over rows you supply. Nothing in it generates data — that is what `generate()` and the red-team dynamic pipeline are for |
+| `evaluatorq()` × data source `replay` | replay is `previous_run=` / `--from-run`, which exists on `red_team()` and `simulate()` only. `evaluatorq()` has no run store to replay from; `ExperimentInput` is the nearest thing and is its own documented data source |
+| `simulate()` / `generate_and_simulate()` × data source `HuggingFace` | same as above — the five simulation sources are `datapoints`, `dataset_id`, `experiment_id`, `previous_run`, and `personas` + `scenarios`. No HuggingFace form exists |
 
 ## Tiers
 
