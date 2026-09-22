@@ -133,8 +133,8 @@ async def _replay_recorded_response(data_point: DataPoint, _row_index: int) -> d
     """Synthetic job for the no-inference path: replays the pre-recorded response."""
     if import_error := data_point.inputs.get('trace_import_error'):
         raise ValueError(f'The source trace could not be imported: {import_error}')
-    if 'recorded_output' in data_point.inputs:
-        return {'name': 'recorded', 'output': data_point.inputs['recorded_output']}
+    if recorded_output := data_point.inputs.get('recorded_output'):
+        return {'name': 'recorded', 'output': recorded_output}
     response = extract_recorded_response(data_point.inputs.get('messages'))
     return {'name': 'recorded', 'output': response}
 

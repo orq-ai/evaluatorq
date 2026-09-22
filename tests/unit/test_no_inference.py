@@ -148,6 +148,11 @@ TRACE = Trace(
     output_messages=[Message(role='assistant', content='recorded answer')],
 )
 
+INPUT_ONLY_TRACE = Trace(
+    trace_id='trace-input-only',
+    input_messages=[Message(role='user', content='question')],
+)
+
 
 @pytest.mark.asyncio
 async def test_trace_input_fetches_once_and_scores_recorded_output(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -174,6 +179,29 @@ async def test_trace_input_fetches_once_and_scores_recorded_output(monkeypatch: 
     assert captured == [TRACE.to_datapoint().inputs['recorded_output']]
     assert results[0].job_results is not None
     assert results[0].job_results[0].output == TRACE.output_messages
+
+
+@pytest.mark.asyncio
+async def test_trace_input_rejects_empty_recorded_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
+    fetch = AsyncMock(return_value=[INPUT_ONLY_TRACE])
+    monkeypatch.setattr(evaluatorq_module, 'fetch_traces', fetch)
+
+    results = await evaluatorq(
+        'trace-eval',
+        data=TraceInput(trace_id='trace-input-only'),
+        inference=False,
+        evaluators=[],
+        print_results=False,
+        _send_results=False,
+    )
+
+    fetch.assert_awaited_once()
+    assert results[0].job_results is not None
+    job_result = results[0].job_results[0]
+    assert job_result.output is None
+    assert job_result.error is not None
+    assert 'no assistant message' in job_result.error
 
 
 @pytest.mark.asyncio
