@@ -79,6 +79,13 @@ def single_trace_url(trace_id: str | None, experiment_url: str | None = None) ->
     return _traces_url(f'trace_id:is:{trace_id}', experiment_url)
 
 
+def trace_span_url(trace_id: str | None, span_id: str | None, experiment_url: str | None = None) -> str | None:
+    """Return an Orq trace inspector link using the trace/span locator syntax."""
+    if not trace_id or not span_id:
+        return None
+    return _traces_url(f'(trace:{trace_id}//span:{span_id})', experiment_url)
+
+
 def run_trace_url(run_id: str | None, experiment_url: str | None = None) -> str | None:
     """URL that filters traces to every conversation in a run.
 

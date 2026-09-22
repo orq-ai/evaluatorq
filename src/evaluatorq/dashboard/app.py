@@ -46,6 +46,7 @@ from evaluatorq.dashboard import library, metrics, report_tabs
 from evaluatorq.dashboard.apply_ui import register_apply_routes
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
+from evaluatorq.dashboard.finder_routes import register_finder_routes
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.sim_compare import register_sim_compare_routes
@@ -642,6 +643,11 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     # Routes: GET /compare/sim*  — side-by-side sim run comparison
     # ------------------------------------------------------------------
     register_sim_compare_routes(app, roots)
+
+    # ------------------------------------------------------------------
+    # Routes: /find — JEV trace finder
+    # ------------------------------------------------------------------
+    register_finder_routes(app, roots)
 
     # Register static file handler LAST so its catch-all /{fname}.{ext} does not
     # intercept the download routes above. Serve under /static/ to match the page

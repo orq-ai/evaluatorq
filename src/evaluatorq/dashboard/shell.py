@@ -66,6 +66,7 @@ def _load_mark() -> str:
 # tests, and in static exports without depending on the /static/ route.
 _FAVICON_PATH = Path(__file__).parent / 'static' / 'orq-favicon.svg'
 _favicon_cache: str | None = None
+FIND_ICON = '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/><circle cx="11" cy="11" r="2"/>'
 
 
 def _favicon_link() -> str:
@@ -110,6 +111,12 @@ _NAV: list[tuple[str, str, str, str]] = [
         SURFACE_LABELS['pairwise'],
         '/?surface=pairwise',
         PAIRWISE_ICON_PATH,
+    ),
+    (
+        'find',
+        'Find',
+        '/find',
+        FIND_ICON,
     ),
     (
         'settings',

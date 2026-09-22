@@ -1,0 +1,283 @@
+"""Route wiring and per-application runtime ownership for ``/find``."""
+
+from __future__ import annotations
+
+import os
+from datetime import datetime, timedelta, timezone
+from functools import partial
+from typing import Any
+
+from loguru import logger
+from pydantic import ValidationError
+from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
+from starlette.responses import Response
+
+from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.common.orq_client import resolve_orq_client
+from evaluatorq.dashboard.finder_views import drawer, facet_menu, fragment, page_html
+from evaluatorq.trace_finder import (
+    CompiledQuery,
+    FacetCatalogue,
+    FacetSelection,
+    NumericFilters,
+    OrqTraceSource,
+    PopulationRequest,
+    RunRequest,
+    RunSnapshot,
+    RunStore,
+    effective_settings,
+    export_json,
+    load_facet_catalogue,
+    run_jev,
+    select_filters,
+)
+from evaluatorq.trace_finder.compiler import compile_query
+from evaluatorq.trace_finder.models import FACET_NAMES
+
+
+def _settings(app: Any) -> Any:
+    settings = getattr(app.state, 'finder_settings', None)
+    if settings is None:
+        settings = effective_settings()
+        app.state.finder_settings = settings
+    return settings
+
+
+def _build_store(app: Any) -> RunStore | None:
+    """Build the app-owned store, returning ``None`` when Orq is unavailable."""
+    try:
+        client = resolve_llm_client(require_orq=True, max_retries=0)
+        orq = resolve_orq_client()
+    except ValueError as exc:
+        logger.warning('Find surface is unavailable because an Orq client could not be resolved: {}', exc)
+        return None
+
+    settings = _settings(app)
+    source = OrqTraceSource(orq)
+
+    async def filter_selector(query: str) -> FacetSelection:
+        now = datetime.now(timezone.utc)
+        catalogue = await load_facet_catalogue(
+            orq,
+            start=now - timedelta(days=settings.window_days),
+            end=now,
+            limit=50,
+        )
+        return await select_filters(client, settings.jev_model, catalogue, query)
+
+    async def population_loader(request: PopulationRequest) -> Any:
+        return await source.load_async(
+            request.start,
+            request.end,
+            request.limit,
+            facets=request.facets,
+            numeric=request.numeric,
+        )
+
+    return RunStore(
+        compiler=partial(compile_query, client, settings.compiler_model),
+        filter_selector=filter_selector,
+        population_loader=population_loader,
+        run_jev=partial(run_jev, model=settings.jev_model, client=client),
+    )
+
+
+def _store(app: Any) -> RunStore | None:
+    store = getattr(app.state, 'finder_store', None)
+    if store is None:
+        store = _build_store(app)
+        if store is not None:
+            app.state.finder_store = store
+    return store
+
+
+async def _load_catalogue(app: Any) -> FacetCatalogue | None:
+    """Load and cache facet values for five minutes; failures render an empty menu."""
+    now = datetime.now(timezone.utc)
+    cached = getattr(app.state, 'finder_catalogue_cache', None)
+    if cached is not None:
+        expires, catalogue = cached
+        if expires > now:
+            return catalogue
+    try:
+        orq = resolve_orq_client()
+        settings = _settings(app)
+        catalogue = await load_facet_catalogue(
+            orq,
+            start=now - timedelta(days=settings.window_days),
+            end=now,
+            limit=50,
+        )
+    except ValueError as exc:
+        logger.warning('Find facet menu is empty because the Orq client could not be resolved: {}', exc)
+        return None
+    app.state.finder_catalogue_cache = (now + timedelta(minutes=5), catalogue)
+    return catalogue
+
+
+def _form_values(form: Any, name: str) -> list[str]:
+    values = form.getlist(name) if hasattr(form, 'getlist') else [form.get(name)]
+    return [str(value) for value in values if value not in (None, '')]
+
+
+def _optional_int(form: Any, name: str) -> int | None:
+    raw = form.get(name)
+    if raw in (None, ''):
+        return None
+    return int(str(raw))
+
+
+def _run_request(form: Any, settings: Any) -> RunRequest:
+    query = str(form.get('query') or '').strip()
+    mode = str(form.get('mode') or 'immediate')
+    window_days = int(str(form.get('window_days') or settings.window_days))
+    limit = int(str(form.get('limit') or settings.limit))
+    parallelism = int(str(form.get('parallelism') or settings.parallelism))
+    facet_values = {name: frozenset(_form_values(form, f'facet_{name}')) for name in FACET_NAMES}
+    numeric = NumericFilters(
+        tokens_min=_optional_int(form, 'tokens_min'),
+        tokens_max=_optional_int(form, 'tokens_max'),
+        duration_ms_min=_optional_int(form, 'duration_ms_min'),
+        duration_ms_max=_optional_int(form, 'duration_ms_max'),
+    )
+    end = datetime.now(timezone.utc)
+    return RunRequest(
+        query=query,
+        mode=mode,
+        population=PopulationRequest(
+            start=end - timedelta(days=window_days),
+            end=end,
+            facets=FacetSelection(**facet_values),
+            numeric=numeric,
+            limit=limit,
+        ),
+        parallelism=parallelism,
+    )
+
+
+def _compiled_from_form(current: CompiledQuery, form: Any) -> CompiledQuery:
+    task = current.task
+    instructions = str(form.get('instructions') or task.instructions)
+    criteria = task.criteria
+    if isinstance(criteria, dict):
+        criteria = {
+            label: str(form.get(f'criteria_{label}') or description or '') for label, description in criteria.items()
+        }
+    elif isinstance(criteria, list):
+        criteria = [str(form.get(f'criteria_{index}') or description) for index, description in enumerate(criteria)]
+    task = task.model_copy(update={'instructions': instructions, 'criteria': criteria, 'state': {}})
+
+    values = _form_values(form, 'selection_value') or _form_values(form, 'selection_values')
+    selection = current.selection
+    if values:
+        if selection.kind == 'values' and task.kind == 'noul':
+            parsed: tuple[object, ...] = tuple(value.casefold() == 'true' for value in values)
+        else:
+            parsed = tuple(values)
+        selection = selection.model_copy(update={'values': parsed})
+    elif selection.kind == 'threshold':
+        operator = str(form.get('selection_operator') or selection.operator)
+        threshold = float(form.get('selection_value') or selection.value)
+        selection = selection.model_copy(update={'operator': operator, 'value': threshold})
+    return CompiledQuery(task=task, selection=selection)
+
+
+def _html(content: str, *, status_code: int = 200) -> Response:
+    return Response(content, status_code=status_code, media_type='text/html')
+
+
+def register_finder_routes(app: Any, roots: list[Any] | None = None) -> None:  # noqa: C901
+    """Register the Find page and its HTMX fragments on *app*."""
+
+    @app.get('/find')
+    async def find_page(req: Request) -> Response:
+        api_available = bool(os.environ.get('ORQ_API_KEY', '').strip())
+        settings = _settings(req.app)
+        store = _store(req.app) if api_available else None
+        snapshot = await store.snapshot() if store is not None else RunSnapshot()
+        return _html(page_html(snapshot, settings, api_available=api_available))
+
+    @app.post('/find/run')
+    async def find_run(req: Request) -> Response:
+        settings = _settings(req.app)
+        store = _store(req.app)
+        if store is None:
+            return _html(fragment(RunSnapshot(), settings, error='Set ORQ_API_KEY to load traces'))
+        form = await req.form()
+        try:
+            request = _run_request(form, settings)
+            snapshot = await store.compile(request)
+        except (ValidationError, ValueError, TypeError) as exc:
+            return _html(fragment(RunSnapshot(), settings, error=str(exc)), status_code=422)
+        return _html(fragment(snapshot, settings))
+
+    @app.get('/find/poll')
+    async def find_poll(req: Request) -> Response:
+        settings = _settings(req.app)
+        store = _store(req.app)
+        snapshot = await store.snapshot() if store is not None else RunSnapshot()
+        return _html(fragment(snapshot, settings))
+
+    @app.post('/find/start')
+    async def find_start(req: Request) -> Response:
+        settings = _settings(req.app)
+        store = _store(req.app)
+        if store is None:
+            return _html(fragment(RunSnapshot(), settings, error='Set ORQ_API_KEY to load traces'))
+        form = await req.form()
+        current = await store.snapshot()
+        if current.request is None or current.compiled is None:
+            return _html(fragment(current, settings, error='There is no plan waiting for review.'), status_code=409)
+        try:
+            compiled = _compiled_from_form(current.compiled, form)
+            snapshot = await store.start(current.request, compiled)
+        except (ValidationError, ValueError, TypeError) as exc:
+            return _html(fragment(current, settings, error=str(exc)), status_code=422)
+        return _html(fragment(snapshot, settings))
+
+    @app.post('/find/cancel')
+    async def find_cancel(req: Request) -> Response:
+        settings = _settings(req.app)
+        store = _store(req.app)
+        snapshot = await store.cancel() if store is not None else RunSnapshot()
+        return _html(fragment(snapshot, settings))
+
+    @app.post('/find/reset')
+    async def find_reset(req: Request) -> Response:
+        settings = _settings(req.app)
+        store = _store(req.app)
+        snapshot = await store.reset() if store is not None else RunSnapshot()
+        return _html(fragment(snapshot, settings))
+
+    @app.get('/find/trace/{trace_id:path}')
+    async def find_trace(trace_id: str, req: Request) -> Response:
+        store = _store(req.app)
+        if store is None:
+            return _html('<p class="finder-empty">Trace finding is unavailable.</p>', status_code=404)
+        detail = await store.trace_detail(trace_id)
+        if detail is None:
+            return _html('<p class="finder-empty">Trace not found.</p>', status_code=404)
+        return _html(drawer(detail))
+
+    @app.get('/find/export.json')
+    async def find_export(req: Request) -> Response:
+        store = _store(req.app)
+        if store is None:
+            return Response('Not found', status_code=404, media_type='text/plain')
+        snapshot = await store.snapshot()
+        if snapshot.state != 'completed' or snapshot.request is None or snapshot.compiled is None:
+            return Response('Not found', status_code=404, media_type='text/plain')
+        return Response(
+            export_json(snapshot),
+            media_type='application/json',
+            headers={'Content-Disposition': f'attachment; filename="trace-finder-{snapshot.generation}.json"'},
+        )
+
+    @app.get('/find/facets')
+    async def find_facets(req: Request) -> Response:
+        catalogue = await _load_catalogue(req.app)
+        return _html(facet_menu(catalogue, open_=True))
+
+    @app.get('/find/dismiss')
+    def find_dismiss() -> Response:
+        return Response('', media_type='text/html')
