@@ -98,6 +98,12 @@
       return;
     }
 
+    var item = evt.target.closest('.facet-item');
+    if (item) { showFacet(item); return; }
+    if (!evt.target.closest('.finder-controls .addwrap') && !evt.target.closest('.chip-open')) {
+      document.querySelectorAll('.finder-facets.open').forEach(function (menu) { menu.classList.remove('open'); });
+    }
+
     var remove = evt.target.closest('[data-finder-remove]');
     if (!remove) return;
     var name = remove.getAttribute('data-finder-remove');
@@ -113,7 +119,43 @@
     remove.closest('.chip').remove();
   });
 
+  function showFacet(item) {
+    var menu = item.closest('.finder-facets');
+    if (!menu) return;
+    var name = item.getAttribute('data-facet');
+    menu.querySelectorAll('.facet-item').forEach(function (other) {
+      var on = other === item;
+      other.classList.toggle('is-active', on);
+      other.setAttribute('aria-expanded', on ? 'true' : 'false');
+    });
+    menu.querySelectorAll('.facet-sub').forEach(function (sub) {
+      var on = sub.getAttribute('data-facet-sub') === name;
+      sub.classList.toggle('is-active', on);
+      sub.hidden = !on;
+    });
+  }
+
+  document.body.addEventListener('mouseover', function (evt) {
+    var item = evt.target.closest('.facet-item');
+    if (item && !item.classList.contains('is-active')) showFacet(item);
+  });
+
+  // Unticking a value in the menu must also drop the hidden input the chip row submits.
+  document.body.addEventListener('change', function (evt) {
+    var box = evt.target;
+    if (!box.matches || !box.matches('.finder-facets input[type="checkbox"]') || box.checked) return;
+    document.querySelectorAll('input[type="hidden"][name="' + box.name + '"]').forEach(function (hidden) {
+      if (hidden.value === box.value) hidden.remove();
+    });
+    document.querySelectorAll('.chip[data-chip-name="' + box.name + '"]').forEach(function (chip) {
+      if (chip.getAttribute('data-finder-value') === box.value) chip.remove();
+    });
+  });
+
   document.addEventListener('keydown', function (evt) {
+    if (evt.key === 'Escape') {
+      document.querySelectorAll('.finder-facets.open').forEach(function (menu) { menu.classList.remove('open'); });
+    }
     if (!(evt.metaKey || evt.ctrlKey) || evt.key !== 'Enter') return;
     var query = evt.target.closest('#finder-query-form textarea[name="query"]');
     if (!query) return;

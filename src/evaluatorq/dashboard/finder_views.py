@@ -99,39 +99,53 @@ def facet_menu(
     open_: bool = False,
     form_id: str = 'finder-query-form',
     selection: FacetSelection | None = None,
+    active: str | None = None,
 ) -> str:
-    rows: list[str] = []
+    """Two-level filter menu: a category list, and a value popout for the active category."""
+    items: list[str] = []
+    subs: list[str] = []
     for name, label in FACET_LABELS:
-        kind = '≥ / ≤' if name in {'tokens', 'duration_ms'} else 'any of ▾'
+        numeric_facet = name in {'tokens', 'duration_ms'}
         values = _facet_values(catalogue, name)
-        if name in {'tokens', 'duration_ms'}:
+        selected_values = getattr(selection, name, frozenset()) if selection is not None else frozenset()
+        if numeric_facet:
             minimum = getattr(numeric, f'{name}_min', None) if numeric is not None else None
             maximum = getattr(numeric, f'{name}_max', None) if numeric is not None else None
-            rows.append(
-                f'<div class="facet-group"><div><span>{esc(label)}</span><span class="kind">{kind}</span></div>'
+            count = sum(bound is not None for bound in (minimum, maximum))
+            body = (
                 f'<label><span>≥</span><input form="{form_id}" name="{esc(name)}_min" type="number" min="0" '
                 f'placeholder="min" value="{esc(str(minimum)) if minimum is not None else ""}"></label>'
                 f'<label><span>≤</span><input form="{form_id}" name="{esc(name)}_max" type="number" min="0" '
-                f'placeholder="max" value="{esc(str(maximum)) if maximum is not None else ""}"></label></div>'
-            )
-        elif values:
-            selected_values = getattr(selection, name, frozenset()) if selection is not None else frozenset()
-            options = ''.join(
-                f'<label><input form="{form_id}" type="checkbox" name="facet_{esc(name)}" value="{esc(value)}"{(" checked" if value in selected_values else "")}>{esc(value)}</label>'
-                for value in values
-            )
-            rows.append(
-                f'<div class="facet-group"><div><span>{esc(label)}</span><span class="kind">{kind}</span></div>{options}</div>'
+                f'placeholder="max" value="{esc(str(maximum)) if maximum is not None else ""}"></label>'
             )
         else:
-            rows.append(
-                f'<div class="facet-group"><div><span>{esc(label)}</span><span class="kind">{kind}</span></div></div>'
+            count = len(selected_values)
+            body = (
+                ''.join(
+                    f'<label><input form="{form_id}" type="checkbox" name="facet_{esc(name)}" value="{esc(value)}"{(" checked" if value in selected_values else "")}><span>{esc(value)}</span></label>'
+                    for value in values
+                )
+                or '<p class="finder-empty">No values in this window.</p>'
             )
-    if catalogue is None:
-        rows.append('<p class="finder-empty">Facet values are unavailable; check the Orq connection and reopen.</p>')
-    elif not any(_facet_values(catalogue, name) for name, _ in FACET_LABELS):
-        rows.append('<p class="finder-empty">No facet values available.</p>')
-    return f'<div class="finder-facets{" open" if open_ else ""}">{"".join(rows)}</div>'
+        is_active = ' is-active' if name == active else ''
+        count_html = f'<span class="count">{count}</span>' if count else ''
+        items.append(
+            f'<button type="button" class="facet-item{is_active}" data-facet="{esc(name)}" aria-haspopup="true" '
+            f'aria-expanded="{"true" if name == active else "false"}"><span>{esc(label)}</span>{count_html}<span class="chev" aria-hidden="true">&rsaquo;</span></button>'
+        )
+        subs.append(
+            f'<div class="facet-sub{is_active}" data-facet-sub="{esc(name)}"{"" if name == active else " hidden"}>'
+            f'<div class="hd">{esc(label)}</div>{body}</div>'
+        )
+    note = (
+        '<p class="finder-empty">Facet values are unavailable; check the Orq connection and reopen.</p>'
+        if catalogue is None
+        else ''
+    )
+    return (
+        f'<div class="finder-facets{" open" if open_ else ""}"><div class="facet-list">{"".join(items)}{note}</div>'
+        f'{"".join(subs)}</div>'
+    )
 
 
 def _facet_chips(
@@ -141,23 +155,30 @@ def _facet_chips(
     generated_numeric: object | None = None,
     *,
     removable: bool = False,
+    form_id: str = 'finder-query-form',
 ) -> str:
+    """Render one chip per active filter value. Editable chips open the menu at their category."""
+    del generated, generated_numeric  # JEV-picked filters look like any other; they are edited the same way.
+
+    def chip(facet: str, label: str, value_html: str, remove_name: str, remove_value: str | None, aria: str) -> str:
+        if not removable:
+            return f'<span class="chip"><b>{esc(label)}</b><span class="v">{value_html}</span></span>'
+        value_attr = f' data-finder-value="{esc(remove_value)}"' if remove_value is not None else ''
+        return (
+            f'<span class="chip is-editable" data-chip-name="{esc(remove_name)}"{value_attr}>'
+            f'<button type="button" class="chip-open" hx-get="/find/facets?form_id={form_id}&open={esc(facet)}" '
+            f'hx-include="#finder-window" hx-target=".finder-facets" hx-swap="outerHTML" aria-label="Edit {aria}">'
+            f'<b>{esc(label)}</b><span class="v">{value_html}</span></button>'
+            f'<button type="button" class="finder-chip-remove" data-finder-remove="{esc(remove_name)}"{value_attr} '
+            f'aria-label="Remove {aria}">✕</button></span>'
+        )
+
     chips: list[str] = []
     for name, label in FACET_LABELS[:8]:
-        values = getattr(selection, name, frozenset())
-        if not values:
-            continue
-        generated_values = getattr(generated, name, frozenset())
-        for value in sorted(values):
-            jev = ' jev' if value in generated_values else ''
-            tag = '<span class="tag">jev</span>' if jev else ''
-            remove = (
-                f'<button type="button" class="finder-chip-remove" data-finder-remove="facet_{name}" '
-                f'data-finder-value="{esc(value)}" aria-label="Remove {esc(label)} {esc(value)}">✕</button>'
-                if removable
-                else '<i>✕</i>'
-            )
-            chips.append(f'<span class="chip{jev}"><b>{esc(label)}</b>{esc(value)}{tag}{remove}</span>')
+        chips.extend(
+            chip(name, label, esc(value), f'facet_{name}', value, f'{esc(label)} {esc(value)}')
+            for value in sorted(getattr(selection, name, frozenset()))
+        )
     for name, label, operator in (
         ('tokens_min', 'tokens', '≥'),
         ('tokens_max', 'tokens', '≤'),
@@ -167,16 +188,8 @@ def _facet_chips(
         value = getattr(numeric, name, None) if numeric is not None else None
         if value is None:
             continue
-        generated_value = getattr(generated_numeric, name, None) if generated_numeric is not None else None
-        jev = ' jev' if generated_value == value else ''
-        tag = '<span class="tag">jev</span>' if jev else ''
-        remove = (
-            f'<button type="button" class="finder-chip-remove" data-finder-remove="{name}" '
-            f'aria-label="Remove {esc(label)} {operator} {value}">✕</button>'
-            if removable
-            else '<i>✕</i>'
-        )
-        chips.append(f'<span class="chip{jev}"><b>{label}</b>{operator} {value}{tag}{remove}</span>')
+        facet = name.rsplit('_', 1)[0]
+        chips.append(chip(facet, label, f'{operator} {value}', name, None, f'{label} {operator} {value}'))
     return ''.join(chips)
 
 
@@ -204,7 +217,7 @@ def controls(snapshot: RunSnapshot, settings: DashboardSettings, catalogue: Face
     )
     return (
         '<div class="finder-controls" id="finder-controls">'
-        f'{hidden_facets}{_facet_chips(facets, snapshot.generated_filters, numeric, snapshot.generated_numeric, removable=review)}'
+        f'{hidden_facets}{_facet_chips(facets, snapshot.generated_filters, numeric, snapshot.generated_numeric, removable=review, form_id=form_id)}'
         f'<span class="addwrap"><button class="add" type="button" hx-get="/find/facets?form_id={form_id}" hx-include="#finder-window" hx-target=".finder-facets" '
         f'hx-swap="outerHTML">+ Filter</button>{facet_menu(catalogue, numeric=numeric, form_id=form_id, selection=facets)}</span><span class="spacer"></span>'
         f'<span class="quiet"><b>Window</b><input id="finder-window" form="{form_id}" name="window_days" type="number" min="1" max="90" value="{values["window_days"]}" style="width:64px"></span>'

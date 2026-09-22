@@ -377,7 +377,22 @@ def register_finder_routes(app: Any, roots: list[Any] | None = None) -> None:  #
         form_id = req.query_params.get('form_id')
         if form_id not in {'finder-query-form', 'finder-start-form'}:
             form_id = 'finder-query-form'
-        return _html(facet_menu(catalogue, open_=True, form_id=form_id))
+        active = req.query_params.get('open')
+        if active not in FACET_NAMES and active not in {'tokens', 'duration_ms'}:
+            active = None
+        store = _store(req.app)
+        snapshot = await store.snapshot() if store is not None else RunSnapshot()
+        population = snapshot.request.population if snapshot.request is not None else None
+        return _html(
+            facet_menu(
+                catalogue,
+                numeric=population.numeric if population is not None else None,
+                open_=True,
+                form_id=form_id,
+                selection=population.facets if population is not None else None,
+                active=active,
+            )
+        )
 
     @app.get('/find/dismiss')
     def find_dismiss() -> Response:
