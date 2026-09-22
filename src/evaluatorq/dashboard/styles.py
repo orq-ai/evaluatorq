@@ -2590,10 +2590,12 @@ _FINDER_CSS = """
 .finder-seg span { display:inline-flex; align-items:center; height:24px; padding:0 12px; border-radius:999px; font-size:12px; color:var(--text-muted); transition:background .15s ease-out,color .15s ease-out; }
 .finder-seg input:checked + span { background:var(--text-strong); color:#fff; }
 .finder-seg input:focus-visible + span { outline:2px solid var(--accent); outline-offset:1px; }
-.finder-examples { display:none; position:absolute; top:24px; left:-8px; z-index:30; min-width:460px; padding:6px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:12px; box-shadow:var(--shadow-lg); }
-.finder-below .ex:hover .finder-examples,.finder-below .ex:focus-within .finder-examples { display:block; }
+.finder-examples { display:block; visibility:hidden; opacity:0; transform:translateY(-4px); transition:opacity .15s cubic-bezier(.22,1,.36,1),transform .15s cubic-bezier(.22,1,.36,1),visibility 0s .15s; position:absolute; top:24px; left:-8px; z-index:30; min-width:460px; padding:6px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:12px; box-shadow:var(--shadow-lg); }
+.finder-below .ex:hover .finder-examples,.finder-below .ex:focus-within .finder-examples { visibility:visible; opacity:1; transform:none; transition-delay:0s; }
 .finder-examples .hd { font-size:10.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-faint); padding:6px 10px 4px; }
-.finder-examples button { display:block; width:100%; text-align:left; border:0; background:transparent; font:inherit; font-size:13px; color:var(--text-body); padding:7px 10px; border-radius:8px; }
+.finder-examples button { display:block; width:100%; text-align:left; border:0; background:transparent; font:inherit; font-size:13px; color:var(--text-body); padding:7px 10px; border-radius:8px; cursor:pointer; transition:background .15s cubic-bezier(.22,1,.36,1),color .15s cubic-bezier(.22,1,.36,1),padding-left .15s cubic-bezier(.22,1,.36,1); }
+.finder-examples button:hover,.finder-examples button:focus-visible { background:var(--surface-sunken); color:var(--text-strong); padding-left:14px; outline:0; }
+@media (prefers-reduced-motion:reduce) { .finder-examples,.finder-examples button { transition:none; } .finder-examples { transform:none; } .finder-examples button:hover,.finder-examples button:focus-visible { padding-left:10px; } }
 #finder-body,.finder-body-fragment { display:flex; flex-direction:column; gap:12px; }
 .finder-controls { display:flex; flex-wrap:wrap; align-items:center; gap:8px 10px; font-size:12px; color:var(--text-body); padding:0 4px; }
 .finder-controls .chip { display:inline-flex; align-items:center; gap:6px; height:28px; padding:0 6px 0 10px; border-radius:999px; background:var(--surface-card); border:1px solid var(--border-default); color:var(--text-strong); box-shadow:0 1px 2px rgba(20,18,30,.05); }
