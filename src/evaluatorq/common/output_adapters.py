@@ -49,21 +49,15 @@ def output_to_text(output: Any) -> str:
     if output is None:
         return ''
     if isinstance(output, AgentResponse):
-        # A tool-call-only response has empty .text while has_meaningful_output
-        # counts it as a response; rendering the calls keeps a judge from scoring
-        # an agent that acted as one that said nothing.
+        # A tool-call-only response has empty .text, which has_meaningful_output still counts as a response.
         return output.text or messages_to_text([{'role': 'assistant', 'tool_calls': output.tool_calls}])
     if isinstance(output, str):
         return output
     if isinstance(output, list) and (not output or all(_is_message_shape(item) for item in output)):
-        # messages_to_text, not a bare join: has_meaningful_output counts a tool
-        # call as a response, so a renderer that dropped tool calls handed the
-        # judge an empty string for an agent that acted.
+        # messages_to_text, not a bare join: dropping tool calls hands the judge an empty string for an agent that acted.
         return messages_to_text(output)
     if isinstance(output, list):
-        # A list of non-message mappings (Responses output items, or any
-        # structured payload) is not a transcript: messages_to_text would read
-        # every element as a content-less turn and return ''.
+        # A list of non-message mappings is not a transcript: every element would read as a content-less turn.
         try:
             return json.dumps(output, indent=2, default=str)
         except Exception as exc:
@@ -114,8 +108,7 @@ def _message_has_meaningful_output(message: Message | dict[str, Any]) -> bool:
 
     role = message.get('role')
     if not isinstance(role, str):
-        # A non-message mapping is an unknown, non-empty structured output. Keep it
-        # rather than deciding that an unfamiliar provider shape is blank.
+        # An unfamiliar provider shape is unknown structured output, not a blank one.
         return bool(message)
     if message.get('tool_calls') or message.get('function_call') or message.get('function_call_output'):
         return True

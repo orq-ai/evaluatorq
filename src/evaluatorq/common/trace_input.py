@@ -45,8 +45,7 @@ def _resolve_orq_credentials(api_key: str | None, base_url: str | None) -> tuple
     key = api_key or os.environ.get('ORQ_API_KEY')
     if not key:
         raise ValueError('Missing Orq API key: set ORQ_API_KEY or pass api_key=.')
-    # orq_server_url() is the single resolver for the host; re-deriving it from
-    # ORQ_BASE_URL here is how self-hosted deployments got ignored on other paths.
+    # orq_server_url() is the single host resolver; re-deriving it here is how self-hosted deployments got ignored.
     host = (base_url or orq_server_url()).rstrip('/')
     return key, host
 
@@ -144,10 +143,7 @@ def _chat_message(raw: Any, *, default_role: _ROLE) -> Message | None:
         logger.warning('Unknown trace message shape {}; dropping it.', type(raw).__name__)
         return None
     if not _MESSAGE_KEYS.intersection(raw):
-        # Without this, a request-parameter mapping such as ``{'model': ...,
-        # 'temperature': ...}`` parses as a content-less user turn, which counts
-        # as a successful parse and stops the candidate search before the
-        # attribute that actually holds the conversation.
+        # A request-parameter mapping would otherwise parse as a user turn and stop the search before the real one.
         logger.warning('Trace message mapping carries no message keys (saw {}); dropping it.', sorted(raw)[:8])
         return None
     raw_role = raw.get('role') or default_role
@@ -156,9 +152,7 @@ def _chat_message(raw: Any, *, default_role: _ROLE) -> Message | None:
         logger.warning('Unknown trace message role {!r}; dropping it.', role)
         return None
     tool_calls = [call for value in raw.get('tool_calls') or [] if (call := _tool_call(value)) is not None]
-    # A chat-completions refusal carries content=None and the text under
-    # 'refusal'; without this the message parses as empty and the candidate
-    # search reports the trace as having no messages.
+    # A chat-completions refusal carries content=None and its text under 'refusal'.
     content = raw.get('content') if raw.get('content') is not None else raw.get('refusal')
     return Message(
         role=cast('_ROLE', role),
@@ -240,8 +234,7 @@ def _otel_messages(value: Any, *, default_role: _ROLE) -> list[Message]:
     if isinstance(value, dict) and isinstance(value.get('messages'), list):
         value = value['messages']
     if isinstance(value, dict) and isinstance(value.get('parts'), list):
-        # One bare OTel message object. _chat_messages reads only 'content', so
-        # falling through would drop every part and tool call it carries.
+        # One bare OTel message object: _chat_messages reads only 'content' and would drop its parts.
         value = [value]
     if not isinstance(value, list):
         return _chat_messages(value, default_role=default_role)
@@ -315,9 +308,7 @@ def _looks_like_otel(value: Any) -> bool:
 def _looks_like_responses(value: Any) -> bool:
     decoded = _decode_json(value)
     if isinstance(decoded, dict):
-        # ``input`` and ``output`` are the Responses envelope boundary. The
-        # selected side may be a scalar or a Chat-style shorthand list, so
-        # inspecting only typed Responses items would misclassify it.
+        # Either side of the Responses envelope may be a scalar or a Chat-style shorthand list.
         if 'input' in decoded or 'output' in decoded:
             return True
         return _is_responses_item(decoded)
@@ -419,9 +410,7 @@ def _parse_exchange(
         parsed: tuple[list[Message], _MESSAGE_FORMAT] | None = None
         for hinted, value in _message_candidates(span, side):
             messages, detected = _parse_messages(value, hinted=hinted, default_role=default_role)
-            # A candidate counts as parsed only when it carries something to
-            # score. Accepting content-less messages would stop the search at a
-            # shape that merely looked like a conversation.
+            # Content-less messages would stop the search at a shape that merely looked like a conversation.
             if any(message.content or message.tool_calls or message.tool_call_id for message in messages):
                 parsed = messages, detected
                 break
@@ -791,9 +780,7 @@ async def fetch_traces(
             if not isinstance(spans, list):
                 return _failed_trace(trace_id, f'its spans payload is {type(spans).__name__}, not a list.')
             if not all(isinstance(span, dict) for span in spans):
-                # _trace_from_spans indexes every span; one non-object element
-                # would raise inside asyncio.gather and take the whole batch
-                # with it instead of failing this one trace.
+                # One non-object element would raise inside asyncio.gather and take the whole batch with it.
                 return _failed_trace(trace_id, 'its spans payload contains a non-object span.')
             return _trace_from_spans(
                 trace_id,
@@ -804,8 +791,7 @@ async def fetch_traces(
 
         selected_rows = rows if source.trace_id is not None else rows[: source.query_limit]
         if not selected_rows and source.trace_id is None:
-            # Zero rows and zero results are indistinguishable downstream, and a
-            # green run over no datapoints reads as "everything passed".
+            # A green run over no datapoints reads as "everything passed".
             logger.warning(
                 'Trace query matched no traces (limit={}, search={!r}, filters={}, start_time={}, end_time={}).',
                 source.query_limit,

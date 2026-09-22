@@ -399,8 +399,7 @@ async def fetch_trace_conversations(
     fetched = len(imported)
     usable = [conversation for conversation in conversations if conversation.first_user_message]
     if len(usable) < len(conversations):
-        # The only signal that traces without a usable message were dropped —
-        # keep it visible at the default WARNING level, not buried at INFO.
+        # The only signal that traces without a usable message were dropped, so it stays at WARNING.
         logger.warning(
             '%d of %d fetched trace(s) had no usable conversation and were dropped',
             len(conversations) - len(usable),
@@ -553,8 +552,7 @@ async def datapoints_from_traces(
     # Inference dominates wall-clock, so it runs bounded-concurrent like the
     # span-fetch phase (and DatapointGenerator, which uses the same width).
     semaphore = asyncio.Semaphore(_INFER_CONCURRENCY)
-    # Appended from concurrent tasks, but only between awaits, so this needs no
-    # lock — same convention as `extend_from_traces`'s `profile_usages`.
+    # Appended from concurrent tasks only between awaits, so it needs no lock.
     drop_reasons: list[str] = []
 
     async def infer_one(conversation: TraceConversation) -> tuple[SimulationDatapoint | None, TokenUsage | None]:
@@ -644,9 +642,7 @@ async def datapoints_from_traces(
             phase='Trace persona/scenario inference',
         )
         if drop_reasons:
-            # One aggregate line, not one warning per trace repeated at the
-            # caller: a run that turns 20 traces into 3 datapoints should not
-            # have to be re-run with logging turned up to see why.
+            # One aggregate line: a run that turns 20 traces into 3 datapoints should not need a re-run to explain it.
             counts = ', '.join(f'{reason} x{drop_reasons.count(reason)}' for reason in dict.fromkeys(drop_reasons))
             logger.warning(
                 '%d of %d trace conversation(s) produced no datapoint: %s',

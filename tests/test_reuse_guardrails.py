@@ -567,11 +567,7 @@ def test_new_hardcoded_class_detector_actually_fires() -> None:
     ]
 
 
-# Conversation-history ownership is a capability of AgentTarget, not a list of
-# concrete adapters for red-team code to identify. The adapter names are the AST
-# sentinels a future isinstance ladder would use, so they are derived from the
-# source rather than frozen here: a hand-maintained mirror leaves the sixth
-# adapter silently unguarded, which is the same drift this guardrail exists to catch.
+# Derived from the source, not frozen here: a hand-maintained mirror leaves the next adapter unguarded.
 def _agent_target_subclass_names() -> frozenset[str]:
     """Every class in src/ that declares AgentTarget as a base."""
     names: set[str] = set()
@@ -603,9 +599,7 @@ def _target_history_ladder_lines(source: str, path: str) -> list[str]:
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or _dotted(node.func) != 'isinstance' or len(node.args) < 2:
             continue
-        # A singleton class argument is not a tuple, and an import-qualified one
-        # (`integrations.CrewAITarget`) is an ast.Attribute — both are the same
-        # ladder this guardrail forbids, so match on the trailing name.
+        # A singleton argument is not a tuple and a qualified one is an Attribute, so match the trailing name.
         argument = node.args[1]
         classes = argument.elts if isinstance(argument, ast.Tuple) else [argument]
         if any(_trailing_name(item) in _TARGET_ADAPTER_NAMES for item in classes):
@@ -628,14 +622,12 @@ def test_redteam_reads_history_mode_instead_of_adapter_type_ladders() -> None:
 
 
 def test_target_history_ladder_detector_actually_fires() -> None:
-    # Built from a name the source actually declares, so the detector cannot pass
-    # against an adapter that no longer exists.
+    # Built from a name the source declares, so the detector cannot pass against an adapter that is gone.
     assert _TARGET_ADAPTER_NAMES, 'No AgentTarget subclass found in src/; the detector would match nothing.'
     adapter = sorted(_TARGET_ADAPTER_NAMES)[0]
     source = f'if isinstance(target, ({adapter}, SomethingElse)):\n    pass\n'
     assert _target_history_ladder_lines(source, 'x.py') == ['x.py:1']
-    # The tuple form is the obvious one; a bare class and an import-qualified
-    # one are the same ladder and used to slip through.
+    # The bare and import-qualified forms are the same ladder and used to slip through.
     assert _target_history_ladder_lines(f'if isinstance(target, {adapter}):\n    pass\n', 'x.py') == ['x.py:1']
     assert _target_history_ladder_lines(f'if isinstance(target, mod.{adapter}):\n    pass\n', 'x.py') == ['x.py:1']
     assert _target_history_ladder_lines('if isinstance(target, AgentTarget):\n    pass\n', 'x.py') == []

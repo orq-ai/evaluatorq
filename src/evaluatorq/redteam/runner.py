@@ -200,12 +200,7 @@ def _validate_trace_replay_targets(targets: list[str | AgentTarget], seed_datapo
                 )
             continue
 
-        # `parse_target` only ever yields AGENT or DEPLOYMENT for a string target.
-        # AGENT resolves to `ORQAgentTarget`, whose `history_mode` is TARGET — the
-        # server owns history and `respond()` sends only the latest message — and
-        # DEPLOYMENT is rejected from dynamic mode entirely. So no string target
-        # can replay a last_assistant seed; reject every one of them up front,
-        # before context discovery, strategy planning or target construction run.
+        # No string target can replay a last_assistant seed: AGENT owns history server-side, DEPLOYMENT is rejected.
         raise RedTeamError(
             'last_assistant trace replay requires caller-owned history on the target '
             f'(a target whose history_mode is CALLER, e.g. OpenAIModelTarget or a custom '
@@ -609,9 +604,7 @@ def _resolve_replay(*, inputs: _ReplayResolutionInputs) -> _ResolvedReplay:
     max_turns = inputs.max_turns
     attacker_instructions = inputs.attacker_instructions
 
-    # Replay short-circuits every data-selection input: the cases are already
-    # decided by the run being replayed, so accepting a conflicting selector
-    # would silently ignore it. Reject the combination instead.
+    # Replay decides the cases, so a conflicting selector would be silently ignored.
     replay: RedTeamReplay | None = None
     if previous_run is not None:
         conflicting = [
@@ -1472,11 +1465,7 @@ async def red_team(
 
     save = _resolve_save_mode(save=save)
 
-    # Fail fast on an unknown attack technique before any other validation runs.
-    # `resolved_filters` below recomputes the resolved set for actual use (it
-    # composes with the other filters); this call is for its raising side
-    # effect only, so the API boundary rejects a typo immediately rather than
-    # deep inside filter resolution.
+    # Called for its raising side effect only, so a typo is rejected here rather than deep inside filter resolution.
     _validate_attack_techniques(attack_techniques)
 
     # Replay short-circuits every data-selection input: the cases are already
@@ -1488,10 +1477,7 @@ async def red_team(
     trace_datapoints: list[DataPoint] | None = None
     if datapoints is not None:
         if not datapoints:
-            # An empty list passes `is not None` and every downstream check on it
-            # (the validation loop iterates nothing, `expand_trace_seed_datapoints`
-            # returns `[]`), so a search that matched no traces silently runs zero
-            # attacks and exits 0 rather than surfacing that nothing was selected.
+            # An empty list passes every downstream check, so a search that matched nothing would exit 0.
             raise ValueError(
                 'datapoints=[] selected no trace seeds; nothing to attack. '
                 'Check the TraceInput search/filters that produced this list.'
@@ -1536,9 +1522,7 @@ async def red_team(
     targets, agent_targets = _split_and_dedupe_targets(target=target)
     raw_targets: list[str | AgentTarget] = target if isinstance(target, list) else [target]
 
-    # A last-assistant seed imports the existing conversation instead of replaying
-    # it through the target. Enforce that ownership boundary before credentials,
-    # context discovery, strategy planning, or target/backend construction.
+    # Enforce the history-ownership boundary before credentials, planning or target construction bill anything.
     _validate_trace_replay_targets(
         raw_targets,
         trace_datapoints if trace_datapoints is not None else replay.datapoints if replay is not None else None,

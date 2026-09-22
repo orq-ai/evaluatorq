@@ -269,11 +269,7 @@ class TraceInput(BaseModel):
 
     @model_validator(mode='after')
     def _validate_source(self) -> 'TraceInput':
-        # A naive datetime is read as UTC, not as the host's local timezone: the
-        # Orq query fields are epoch milliseconds, so a local-time reading made
-        # the same TraceInput select a different window on every machine. It
-        # also keeps the comparison below from raising TypeError on a naive
-        # start_time against an aware end_time.
+        # Naive means UTC: the query fields are epoch milliseconds, so local time shifted the window per host.
         for field in ('start_time', 'end_time'):
             value = getattr(self, field)
             if value is not None and value.tzinfo is None:

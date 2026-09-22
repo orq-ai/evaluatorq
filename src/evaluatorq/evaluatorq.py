@@ -434,8 +434,7 @@ async def _resolve_remote_data_input(
                 'data=TraceInput(...) selected no traces. Widen the query (limit, search, '
                 'filters, start_time/end_time) or name a trace_id.'
             )
-        # Failed imports stay in the row set on purpose: each becomes a row that
-        # fails on its own rather than vanishing from the denominator.
+        # Failed imports stay in the row set so each fails on its own rather than vanishing from the denominator.
         logger.info('Imported {} trace(s) ({} usable, {} failed).', len(traces), len(usable), len(failed))
         return [trace.to_datapoint() for trace in traces]
     return data

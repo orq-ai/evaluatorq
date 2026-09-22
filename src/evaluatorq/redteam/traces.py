@@ -23,10 +23,7 @@ class TraceStart(StrEnum):
     LAST_ASSISTANT = 'last_assistant'
 
 
-# The two keys that carry trace-replay state on a `DataPoint.inputs` mapping.
-# Exported so the producer (`_seed_datapoint`) and both readers (the
-# `red_team()` API-boundary precheck in `runner.py` and the per-attack read in
-# `adaptive/pipeline.py`) share one name instead of three copies that can drift.
+# Exported so the producer and both readers share one name instead of three copies that can drift.
 TRACE_SEED_MESSAGES_KEY = 'trace_seed_messages'
 TRACE_START_FROM_KEY = 'trace_start_from'
 
@@ -178,10 +175,7 @@ def parse_trace_seed(
         raise ValueError(f'{label}.{TRACE_START_FROM_KEY} is not a valid TraceStart value.') from exc
 
     if start_from is TraceStart.LAST_ASSISTANT and parsed_messages[-1].role != 'assistant':
-        # The replay prefix is sent as-is and the attack is appended as a user
-        # turn, so a prefix ending in a user or tool message produces two
-        # consecutive user turns (or an unanswered tool call) for a
-        # caller-owned-history target.
+        # The attack is appended as a user turn, so a user-ending prefix produces two consecutive user turns.
         raise ValueError(
             f'{label}.{TRACE_SEED_MESSAGES_KEY} must end with an assistant message when '
             f"{TRACE_START_FROM_KEY} is '{TraceStart.LAST_ASSISTANT.value}'; "

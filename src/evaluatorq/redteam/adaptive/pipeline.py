@@ -118,12 +118,7 @@ def _error_codes(turns: list[Turn]) -> str:
     return ', '.join(sorted({t.target.error.code for t in turns if t.target.error and t.target.error.code})) or 'none'
 
 
-# The only trace-derived keys anything in `redteam/` ever reads back off an
-# expanded seed x strategy row. `Trace.to_datapoint()` puts far more than this on
-# a seed (the full production transcript, `recorded_output`, `retrievals`,
-# `trace_metadata`, ...) — carrying all of it into every cross-product row
-# multiplies a handful of traces by dozens of strategies into hundreds of
-# in-memory copies of data nothing downstream reads.
+# The only trace-derived keys `redteam/` reads back; carrying the rest copies the whole transcript per strategy.
 _TRACE_SEED_PROJECTED_KEYS = (TRACE_SEED_MESSAGES_KEY, TRACE_START_FROM_KEY, 'source_trace_id')
 
 
@@ -521,9 +516,7 @@ def create_dynamic_redteam_job(
                         },
                     )
 
-                # One Orq thread per attack, opened before the seed replay: a bootstrap
-                # sent outside this scope reaches the target without the attack's thread
-                # id, so the replay and the attack land in different conversations.
+                # Opened before the seed replay: a bootstrap sent outside this scope carries no thread id.
                 with conversation_thread(thread_id) as thread_id:
                     if seed_messages is not None:
                         seed_context, bootstrap_usage, bootstrap_error = await replay_seed_context(
@@ -810,16 +803,8 @@ def create_dynamic_evaluator(
                     f'codes: {_error_codes(output.turns)}) — nothing to evaluate'
                 ),
             )
-        # For TraceStart.LAST_ASSISTANT, output.seed_context is the imported
-        # conversation the attack continues — turn 1 of scorable_turns often
-        # refers back into it. Without it in front, the judge has no way to
-        # resolve that reference, and `passed=True` means RESISTANT, so the
-        # judge's failure mode defaults to the optimistic verdict. Marked
-        # distinctly from the attacker's own turns so the rubric can tell
-        # recorded/imported content from attacker-generated content.
-        # to_chat_completion, not a {role, content} flatten: an imported turn can
-        # carry tool_calls / tool_call_id / name, and dropping those presents a
-        # tool-using assistant turn to the judge as an empty message.
+        # Turn 1 refers back into the imported conversation, and an unresolvable reference defaults to RESISTANT.
+        # to_chat_completion, not a {role, content} flatten: that drops tool_calls and empties a tool-using turn.
         seed_context_messages: list[dict[str, Any]] = []
         for message in output.seed_context:
             rendered = message.to_chat_completion()

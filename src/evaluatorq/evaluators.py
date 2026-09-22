@@ -174,9 +174,7 @@ def orq_evaluator(
         }
         if model is not None:
             invoke_params['model'] = model
-        # Resolve once, on first use, and cache on the closure: no `await` runs between the
-        # None check and the assignment, so this is race-free under asyncio's cooperative
-        # concurrency even though `evaluate()` invokes this scorer for many rows at once.
+        # No `await` runs between the None check and the assignment, so this cache is race-free across rows.
         if cached_client is None:
             cached_client = resolve_orq_client(api_key, base_url)
         response = await cached_client.evals.invoke_async(**invoke_params)

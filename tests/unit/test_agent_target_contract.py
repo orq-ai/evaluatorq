@@ -8,10 +8,7 @@ from evaluatorq.contracts import AgentTarget, ConversationHistoryMode, Message
 from evaluatorq.openresponses.target import OrqResponsesTarget
 from evaluatorq.redteam.backends.orq import ORQAgentTarget
 
-# Each optional integration is imported inside the test that needs it. A
-# module-level importorskip would skip the core assertions below whenever one
-# optional extra is missing, and a module-level import of the others would fail
-# collection outright.
+# Imported per test: a module-level skip would hide the core assertions when one optional extra is missing.
 
 
 def test_core_target_history_modes_are_explicit() -> None:
