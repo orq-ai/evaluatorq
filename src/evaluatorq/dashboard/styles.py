@@ -2697,6 +2697,7 @@ _FINDER_CSS = """
 .finder-review { border:1px solid var(--orange-100); background:var(--orange-50); border-radius:var(--radius-lg); padding:14px 16px; display:flex; align-items:center; gap:14px; font-size:13px; color:var(--text-body); }
 .finder-review b { color:var(--text-strong); }
 .finder-review .rt-apply-btn { margin-left:auto; }
+.finder-task > form > .rt-apply-btn { margin:0 16px 16px; }
 .finder-form-error { color:var(--red-700); margin:8px 0 0; font-size:12px; }
 .finder-field.unavailable { filter:grayscale(.35); }
 .finder-progress-error { margin-left:auto; padding:4px 8px; font-size:12px; color:var(--red-700); }

@@ -199,6 +199,16 @@ def test_find_compiling_state_shows_an_indicator(setup_finder) -> None:
     assert '<b>0 / 0</b> judged' not in response.text
 
 
+def test_switching_to_immediate_resets_an_open_review(setup_finder) -> None:
+    """The Immediate radio posts a reset only while a review panel (its start form) is on the page."""
+    _store, client = setup_finder
+    html = client.get('/find').text
+    assert (
+        'value="immediate" form="finder-query-form" checked hx-post="/find/reset" '
+        'hx-trigger="change[document.getElementById(\'finder-start-form\')]" hx-include="#finder-query-form"'
+    ) in html
+
+
 def test_find_idle_page_and_nav(setup_finder) -> None:
     _store, client = setup_finder
     response = client.get('/find')
