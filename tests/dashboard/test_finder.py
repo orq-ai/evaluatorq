@@ -199,6 +199,47 @@ def test_find_compiling_state_shows_an_indicator(setup_finder) -> None:
     assert '<b>0 / 0</b> judged' not in response.text
 
 
+def test_jev_picked_filters_do_not_carry_into_the_next_query(setup_finder) -> None:
+    """Chips show the run's whole population, but only the user's own filters are re-submitted."""
+    store, client = setup_finder
+    client.post(
+        '/find/run',
+        data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate', 'facet_model': 'gpt-5', 'tokens_min': '900'}),
+    )
+    request = store.snapshot_value.request
+    assert request is not None
+    population = request.population.model_copy(
+        update={
+            'facets': FacetSelection(project=frozenset({'support-agent'}), model=frozenset({'gpt-5'})),
+            'numeric': NumericFilters(tokens_min=900, duration_ms_min=50),
+        }
+    )
+    store.snapshot_value = replace(
+        store.snapshot_value,
+        request=request.model_copy(update={'population': population}),
+        generated_numeric=NumericFilters(duration_ms_min=50),
+    )
+    store.complete()
+
+    html = client.get('/find').text
+    assert 'data-chip-name="facet_project" data-finder-value="support-agent"' in html
+    assert 'data-chip-name="duration_ms_min"' in html
+    assert 'name="facet_model" value="gpt-5"' in html
+    assert '<input type="hidden" form="finder-query-form" name="facet_project"' not in html
+    assert 'name="tokens_min" type="number" min="0" placeholder="min" value="900"' in html
+    assert 'name="duration_ms_min" type="number" min="0" placeholder="min" value=""' in html
+
+    client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'review'}))
+    review_request = store.snapshot_value.request
+    assert review_request is not None
+    store.snapshot_value = replace(
+        store.snapshot_value,
+        request=review_request.model_copy(update={'population': population}),
+    )
+    html = client.get('/find').text
+    assert '<input type="hidden" form="finder-start-form" name="facet_project" value="support-agent">' in html
+
+
 def test_switching_to_immediate_resets_an_open_review(setup_finder) -> None:
     """The Immediate radio posts a reset only while a review panel (its start form) is on the page."""
     _store, client = setup_finder

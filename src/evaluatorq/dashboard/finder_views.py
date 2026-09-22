@@ -202,17 +202,20 @@ def controls(snapshot: RunSnapshot, settings: DashboardSettings, catalogue: Face
         'parallelism': request.parallelism if request is not None else settings.parallelism,
     }
     numeric = population.numeric if population is not None else None
+    # A reviewed start reuses the whole population, JEV picks included. A fresh query only carries
+    # the filters the user set themselves; JEV's picks for the last question are not sticky.
+    carried_facets, carried_numeric = (facets, numeric) if review else _explicit_filters(facets, numeric, snapshot)
     count_html = f'<span class="count">{esc(str(snapshot.total))} traces selected</span>' if snapshot.total else ''
     hidden_facets = ''.join(
         f'<input type="hidden" form="{form_id}" name="facet_{name}" value="{esc(value)}">'
         for name in FACET_NAMES
-        for value in sorted(getattr(facets, name))
+        for value in sorted(getattr(carried_facets, name))
     )
     return (
         '<div class="finder-controls" id="finder-controls">'
         f'{hidden_facets}{_facet_chips(facets, numeric, removable=snapshot.state not in {"compiling", "classifying"})}'
         f'<span class="addwrap"><button class="add" type="button" hx-get="/find/facets?form_id={form_id}" hx-include="#finder-controls" hx-target=".finder-facets" '
-        f'hx-swap="outerHTML">+ Filter</button>{facet_menu(catalogue, numeric=numeric, form_id=form_id, selection=facets)}</span><span class="spacer"></span>'
+        f'hx-swap="outerHTML">+ Filter</button>{facet_menu(catalogue, numeric=carried_numeric, form_id=form_id, selection=carried_facets)}</span><span class="spacer"></span>'
         f'<span class="quiet"><b>Window</b><input id="finder-window" form="{form_id}" name="window_days" type="number" min="1" max="90" value="{values["window_days"]}" style="width:64px"></span>'
         f'<span class="quiet"><b>Limit</b><input form="{form_id}" name="limit" type="number" min="1" max="500" value="{values["limit"]}" style="width:72px"></span>'
         f'<span class="quiet"><b>Parallel</b><input form="{form_id}" name="parallelism" type="number" min="1" max="200" value="{values["parallelism"]}" style="width:64px"></span>'
@@ -224,6 +227,25 @@ def _empty_facets() -> FacetSelection:
     from evaluatorq.trace_finder import FacetSelection
 
     return FacetSelection()
+
+
+def _explicit_filters(
+    facets: FacetSelection, numeric: object | None, snapshot: RunSnapshot
+) -> tuple[FacetSelection, object | None]:
+    """The run's filters minus the ones JEV generated, i.e. the ones the user set."""
+    from evaluatorq.trace_finder import FacetSelection, NumericFilters
+
+    generated = snapshot.generated_filters
+    explicit_facets = FacetSelection(**{name: getattr(facets, name) - getattr(generated, name) for name in FACET_NAMES})
+    if numeric is None:
+        return explicit_facets, None
+    generated_numeric = snapshot.generated_numeric
+    explicit_numeric = NumericFilters(**{
+        field: value
+        for field in NumericFilters.model_fields
+        if (value := getattr(numeric, field)) is not None and getattr(generated_numeric, field) != value
+    })
+    return explicit_facets, explicit_numeric
 
 
 def _value_text(value: object) -> str:
