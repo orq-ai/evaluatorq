@@ -211,6 +211,13 @@ async def call_target_with_retry(
     `TargetCallResult`.
     """
     timeout_s = target_agent_timeout_ms / 1000.0
+    own_timeout_ms = getattr(target, 'timeout_ms', None)
+    if isinstance(own_timeout_ms, (int, float)) and own_timeout_ms >= target_agent_timeout_ms:
+        logger.warning(
+            f'{type(target).__name__}.timeout_ms ({own_timeout_ms:.0f} ms) is not below '
+            f'target_agent_timeout_ms ({target_agent_timeout_ms:.0f} ms); the retry helper will time out first '
+            "and retry a hung call instead of surfacing the target's own non-retryable timeout"
+        )
     max_attempts = max(1, max_target_retries + 1)
     last_response: AgentResponse = AgentResponse()
     last_error: AgentResponseError | None = None

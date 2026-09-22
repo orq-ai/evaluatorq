@@ -75,7 +75,7 @@ class CodingAgentError(Exception):
 class CodingAgentUnavailableError(  # pyright: ignore[reportUnsafeMultipleInheritance]
     CodingAgentError, NonRetryableTargetError
 ):
-    """``cli.not_found`` and ``cli.timeout``: a retry replays the same outcome, so the loop stops."""
+    """``cli.not_found``, ``cli.timeout`` and ``cli.prompt_too_long``: a retry replays the same outcome, so the loop stops."""
 
 
 @dataclass(frozen=True)
@@ -275,6 +275,28 @@ def _usage_or_none(agent: str, usage_block: Any, required: tuple[str, str]) -> U
     return Usage.extract(usage_block, calls=1)
 
 
+def _opencode_usage(tokens: Any) -> dict[str, Any] | None:
+    """Spell OpenCode's ``step_finish.tokens`` block in the canonical names ``Usage.extract`` reads.
+
+    OpenCode uses bare ``input``/``output``/``reasoning`` and a nested ``cache`` object; those words are
+    too generic to live in the shared alias table, so the rename stays here.
+    """
+    if not isinstance(tokens, dict):
+        return None
+    cache: dict[str, Any] = tokens['cache'] if isinstance(tokens.get('cache'), dict) else {}
+    renamed: dict[str, Any] = {
+        'input_tokens': tokens.get('input'),
+        'output_tokens': tokens.get('output'),
+        'cache_read_input_tokens': cache.get('read'),
+        'cache_creation_input_tokens': cache.get('write'),
+    }
+    if tokens.get('reasoning') is not None:
+        renamed['output_tokens_details'] = {'reasoning_tokens': tokens['reasoning']}
+    # `total` is left out: OpenCode adds cache reads on top of input there, which breaks the
+    # `total == input + output` invariant Usage keeps, so the extractor's own sum is used instead.
+    return {k: v for k, v in renamed.items() if v is not None}
+
+
 def _heaviest_model(model_usage: dict[str, dict[str, Any]]) -> str | None:
     """The ``modelUsage`` entry with the most tokens; the first key is often an auxiliary model."""
     if not model_usage:
@@ -447,7 +469,9 @@ def _parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
             )
         elif kind == 'step_finish':
             saw_step_finish = True
-            step_usage = _usage_or_none('opencode', part.get('tokens'), ('input', 'output'))
+            step_usage = _usage_or_none(
+                'opencode', _opencode_usage(part.get('tokens')), ('input_tokens', 'output_tokens')
+            )
             if step_usage is not None:
                 turn.usage = step_usage if turn.usage is None else turn.usage + step_usage
             if 'cost' in part:
@@ -566,7 +590,7 @@ class CodingAgentTarget(AgentTarget):
         self._source_workdir = Path(workdir) if workdir is not None else None
         self._keep_workdir = keep_workdir
         self._skills = [Path(s) for s in skills or []]
-        self._timeout_ms = timeout_ms
+        self.timeout_ms = timeout_ms
         self._env = dict(env or {})
         self._workdir: Path | None = None
         self._finalizer: weakref.finalize | None = None  # pyright: ignore[reportMissingTypeArgument]
@@ -717,11 +741,11 @@ class CodingAgentTarget(AgentTarget):
         try:
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(stdin_text.encode() if stdin_text is not None else None),
-                timeout=self._timeout_ms / 1000,
+                timeout=self.timeout_ms / 1000,
             )
         except asyncio.TimeoutError as exc:
             raise CodingAgentUnavailableError(
-                'cli.timeout', f'{argv[0]} produced no result within {self._timeout_ms / 1000:.0f}s'
+                'cli.timeout', f'{argv[0]} produced no result within {self.timeout_ms / 1000:.0f}s'
             ) from exc
         finally:
             _kill_group(proc)

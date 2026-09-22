@@ -393,10 +393,3 @@ def test_extract_codex_cli_flat_shape():
     assert usage is not None
     assert (usage.input_tokens, usage.output_tokens, usage.total_tokens) == (40041, 125, 40166)
     assert (usage.cached_tokens, usage.cache_creation_tokens, usage.reasoning_tokens) == (1024, 256, 43)
-
-
-def test_extract_opencode_step_finish_shape():
-    usage = Usage.extract({'input': 58843, 'output': 33, 'reasoning': 7, 'cache': {'read': 500, 'write': 20}})
-    assert usage is not None
-    assert (usage.input_tokens, usage.output_tokens, usage.total_tokens) == (58843, 33, 58876)
-    assert (usage.cached_tokens, usage.cache_creation_tokens, usage.reasoning_tokens) == (500, 20, 7)

@@ -131,6 +131,8 @@ def test_opencode_tool_turn() -> None:
     assert turn.usage.calls == 2
     assert turn.usage.output_tokens == 33 + 5
     assert turn.usage.cached_tokens == 57856
+    assert turn.usage.reasoning_tokens == 19
+    assert turn.usage.total_tokens == turn.usage.input_tokens + turn.usage.output_tokens  # opencode's own total adds cache reads
     assert turn.cost_usd == 0
 
 
