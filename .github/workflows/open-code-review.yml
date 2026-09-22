@@ -29,12 +29,12 @@ jobs:
     steps:
       # Fork of alibaba/open-code-review, based on upstream main at
       # 6e5cd8cf2578768b6c6d1fafa1d14f66801d5f2b (after v1.11.1); the fork diff
-      # is four commits, `git log 6e5cd8c..560e68a`. Upstream caps code_search
+      # is five commits, `git log 6e5cd8c..a07e088`. Upstream caps code_search
       # by match count, never by size, so one match in a generated report — one in
       # orq-ai/research is a 10.7 MB single line — filled the whole context window
       # and the review stopped on "context compression exceeded its threshold". The fork
       # bounds a single tool result and spills the rest to a handle the model can
-      # page through. The fourth commit adds the llm_protocol input: the CLI
+      # page through. The last two commits add the llm_protocol input: the CLI
       # has spoken the OpenAI Responses API for a while, but the action only
       # exposed the two-way llm_use_anthropic toggle, so the protocol below was
       # unreachable from a workflow. Both are to be upstreamed; drop the fork
@@ -43,7 +43,7 @@ jobs:
       # The SHA below is also tagged v1.12.1+orq.2 in the fork, so it stays
       # reachable if the feat/ branch is rebased away. Pin stays on the SHA: a
       # tag can be moved, a SHA cannot.
-      - uses: orq-ai/open-code-review@560e68aa9a8c64f343fabcd2afff7b8333644856 # v1.12.1+orq.2
+      - uses: orq-ai/open-code-review@a07e0883477a3a627af7643bebd99004909c2b17 # v1.12.1+orq.2
         with:
           # The Responses API, which is what the OpenAI model below is built
           # for: the CLI appends /responses to this URL, giving the same
@@ -108,6 +108,6 @@ jobs:
           # No ocr_version: the fork builds the CLI from its own checkout with
           # `go build ./cmd/opencodereview` and never installs the npm package,
           # so there is nothing left to pin and nothing floats to latest. Build
-          # step: https://github.com/orq-ai/open-code-review/blob/560e68aa9a8c64f343fabcd2afff7b8333644856/action.yml#L486-L494
+          # step: https://github.com/orq-ai/open-code-review/blob/a07e0883477a3a627af7643bebd99004909c2b17/action.yml#L488-L496
           # Router is billed per token; over budget the action publishes partial results and exits 0.
           max_tokens_budget: '500000'
