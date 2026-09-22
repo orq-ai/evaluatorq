@@ -100,6 +100,13 @@
 
     var item = evt.target.closest('.facet-item');
     if (item) { showFacet(item); return; }
+    var chipOpen = evt.target.closest('[data-chip-open]');
+    if (chipOpen) {
+      var menu = document.querySelector('.finder-controls .finder-facets');
+      var target = menu && menu.querySelector('.facet-item[data-facet="' + chipOpen.getAttribute('data-chip-open') + '"]');
+      if (target) { menu.classList.add('open'); showFacet(target); }
+      return;
+    }
     if (!evt.target.closest('.finder-controls .addwrap') && !evt.target.closest('.chip-open')) {
       document.querySelectorAll('.finder-facets.open').forEach(function (menu) { menu.classList.remove('open'); });
     }

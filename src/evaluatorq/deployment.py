@@ -28,6 +28,7 @@ from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
     from orq_ai_sdk import Orq
+    from orq_ai_sdk.models import InvokeDeploymentRequestThreadTypedDict
 
 # Cached client instance
 _cached_client: Orq | None = None
@@ -126,11 +127,12 @@ async def deployment(
     """
     client = _get_or_create_client()
 
-    # Passed as a plain dict: the SDK's request-thread model was renamed across versions
-    # (``Thread`` now names the trace-thread record), and the invoke call accepts the TypedDict.
-    sdk_thread: dict[str, Any] | None = None
+    sdk_thread: InvokeDeploymentRequestThreadTypedDict | None = None
     if thread is not None:
-        sdk_thread = {'id': thread.get('id', ''), 'tags': thread.get('tags')}
+        sdk_thread = {'id': thread.get('id', '')}
+        tags = thread.get('tags')
+        if tags is not None:
+            sdk_thread['tags'] = tags
 
     # Propagate W3C trace context so the deployment's server-side execution nests
     # under the calling span instead of starting a loose root trace. Empty (and so
@@ -144,7 +146,7 @@ async def deployment(
         inputs=inputs,
         context=context,
         metadata=metadata,
-        thread=cast('Any', sdk_thread),
+        thread=sdk_thread,
         messages=cast('Any', messages),
         http_headers=trace_headers or None,
     )

@@ -366,19 +366,21 @@ def test_find_facets_menu_reports_unavailable_catalogue(setup_finder, monkeypatc
     assert 'Facet values are unavailable' in response.text
 
 
-def test_find_facets_menu_opens_the_requested_category(setup_finder, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_find_facets_menu_renders_from_the_submitted_controls(setup_finder, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The refetched menu mirrors what the page currently holds, not what the store last saw."""
     _store, client = setup_finder
 
     async def load_catalogue(app: Any, window_days: int | None = None) -> FacetCatalogue:
-        return FacetCatalogue(project=('support-agent',), model=('gpt-5.6-luna',))
+        return FacetCatalogue(project=('support-agent', 'docs-agent'), model=('gpt-5.6-luna',))
 
     monkeypatch.setattr(finder_routes, '_load_catalogue', load_catalogue)
-    response = client.get('/find/facets?open=model')
+    response = client.get('/find/facets?facet_project=support-agent&tokens_min=5000')
     assert response.status_code == 200
-    assert 'class="facet-item is-active" data-facet="model"' in response.text
-    assert '<div class="facet-sub is-active" data-facet-sub="model">' in response.text
+    assert 'name="facet_project" value="support-agent" checked' in response.text
+    assert 'name="facet_project" value="docs-agent">' in response.text
+    assert 'name="tokens_min" type="number" min="0" placeholder="min" value="5000"' in response.text
     assert '<div class="facet-sub" data-facet-sub="project" hidden>' in response.text
-    assert 'class="facet-item is-active"' not in client.get('/find/facets?open=bogus').text
+    assert 'is-active' not in response.text
 
 
 def test_find_facets_menu_lists_catalogue_values(setup_finder, monkeypatch: pytest.MonkeyPatch) -> None:

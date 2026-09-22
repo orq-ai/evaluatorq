@@ -70,7 +70,7 @@ from evaluatorq.dashboard.view import (
     settings_body,
     sim_overview_body,
 )
-from evaluatorq.trace_finder.settings import DashboardSettings, effective_settings, save_settings
+from evaluatorq.trace_finder.settings import DashboardSettings, effective_settings, load_settings, save_settings
 
 _STATIC_DIR = Path(__file__).parent / 'static'
 
@@ -231,7 +231,8 @@ async def _save_settings(req: Request) -> Response | NotStr:
         return Response(page('Settings', body, active_nav='settings'), status_code=403, media_type='text/html')
     roots = _roots(req)
     # Window, limit and parallelism are tuned per run on the Trace search page; the form only carries models.
-    current = effective_settings()
+    # Carry them over from the saved file, not the effective view, so env overrides never get persisted.
+    current = load_settings()
     values: dict[str, object] = {
         name: form_data.get(name, '') for name in ('compiler_model', 'jev_model', 'apply_model')
     }

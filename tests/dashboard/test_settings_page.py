@@ -84,6 +84,20 @@ def test_numeric_fields_are_not_taken_from_the_form(client: TestClient, settings
     assert saved['limit'] == DashboardSettings.model_fields['limit'].default
 
 
+def test_environment_overrides_are_not_persisted_by_save(
+    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_FINDER_LIMIT', '42')
+    response = client.post(
+        '/settings',
+        data=csrf_data({'compiler_model': 'compiler/custom', 'jev_model': 'jev/custom', 'apply_model': 'apply/custom'}),
+    )
+
+    assert response.status_code == 303
+    saved = json.loads(settings_file.read_text())
+    assert saved['limit'] == DashboardSettings.model_fields['limit'].default
+
+
 def test_blank_model_is_rejected(client: TestClient) -> None:
     response = client.post(
         '/settings',

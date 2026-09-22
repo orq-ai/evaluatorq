@@ -12,7 +12,7 @@ from evaluatorq.dashboard.security import csrf_field
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.trace_links import trace_link_button, trace_span_url
 from evaluatorq.trace_finder import classification_legend
-from evaluatorq.trace_finder.models import FACET_NAMES
+from evaluatorq.trace_finder.models import FACET_NAMES, NUMERIC_FACET_NAMES
 
 if TYPE_CHECKING:
     from evaluatorq.trace_finder import (
@@ -45,6 +45,8 @@ FACET_LABELS = (
     ('tokens', 'tokens'),
     ('duration_ms', 'duration'),
 )
+if {name for name, _ in FACET_LABELS} != {*FACET_NAMES, *NUMERIC_FACET_NAMES}:
+    raise RuntimeError('FACET_LABELS must mirror FACET_NAMES and NUMERIC_FACET_NAMES')
 
 
 def icon_search() -> str:
@@ -87,7 +89,7 @@ def hero(query: str, mode: str, *, api_available: bool, error: str | None = None
 
 
 def _facet_values(catalogue: FacetCatalogue | None, name: str) -> tuple[str, ...]:
-    if catalogue is None or name in {'tokens', 'duration_ms'}:
+    if catalogue is None or name in NUMERIC_FACET_NAMES:
         return ()
     return tuple(getattr(catalogue, name, ()))
 
@@ -99,13 +101,12 @@ def facet_menu(
     open_: bool = False,
     form_id: str = 'finder-query-form',
     selection: FacetSelection | None = None,
-    active: str | None = None,
 ) -> str:
-    """Two-level filter menu: a category list, and a value popout for the active category."""
+    """Two-level filter menu: a category list, and a value popout the client opens per category."""
     items: list[str] = []
     subs: list[str] = []
     for name, label in FACET_LABELS:
-        numeric_facet = name in {'tokens', 'duration_ms'}
+        numeric_facet = name in NUMERIC_FACET_NAMES
         values = _facet_values(catalogue, name)
         selected_values = getattr(selection, name, frozenset()) if selection is not None else frozenset()
         if numeric_facet:
@@ -127,15 +128,13 @@ def facet_menu(
                 )
                 or '<p class="finder-empty">No values in this window.</p>'
             )
-        is_active = ' is-active' if name == active else ''
         count_html = f'<span class="count">{count}</span>' if count else ''
         items.append(
-            f'<button type="button" class="facet-item{is_active}" data-facet="{esc(name)}" aria-haspopup="true" '
-            f'aria-expanded="{"true" if name == active else "false"}"><span>{esc(label)}</span>{count_html}<span class="chev" aria-hidden="true">&rsaquo;</span></button>'
+            f'<button type="button" class="facet-item" data-facet="{esc(name)}" aria-haspopup="true" '
+            f'aria-expanded="false"><span>{esc(label)}</span>{count_html}<span class="chev" aria-hidden="true">&rsaquo;</span></button>'
         )
         subs.append(
-            f'<div class="facet-sub{is_active}" data-facet-sub="{esc(name)}"{"" if name == active else " hidden"}>'
-            f'<div class="hd">{esc(label)}</div>{body}</div>'
+            f'<div class="facet-sub" data-facet-sub="{esc(name)}" hidden><div class="hd">{esc(label)}</div>{body}</div>'
         )
     note = (
         '<p class="finder-empty">Facet values are unavailable; check the Orq connection and reopen.</p>'
@@ -148,17 +147,8 @@ def facet_menu(
     )
 
 
-def _facet_chips(
-    selection: FacetSelection,
-    generated: FacetSelection,
-    numeric: object | None = None,
-    generated_numeric: object | None = None,
-    *,
-    removable: bool = False,
-    form_id: str = 'finder-query-form',
-) -> str:
-    """Render one chip per active filter value. Editable chips open the menu at their category."""
-    del generated, generated_numeric  # JEV-picked filters look like any other; they are edited the same way.
+def _facet_chips(selection: FacetSelection, numeric: object | None = None, *, removable: bool = False) -> str:
+    """Render one chip per active filter value. Editable chips open the already-rendered menu at their category."""
 
     def chip(facet: str, label: str, value_html: str, remove_name: str, remove_value: str | None, aria: str) -> str:
         if not removable:
@@ -166,15 +156,16 @@ def _facet_chips(
         value_attr = f' data-finder-value="{esc(remove_value)}"' if remove_value is not None else ''
         return (
             f'<span class="chip is-editable" data-chip-name="{esc(remove_name)}"{value_attr}>'
-            f'<button type="button" class="chip-open" hx-get="/find/facets?form_id={form_id}&open={esc(facet)}" '
-            f'hx-include="#finder-window" hx-target=".finder-facets" hx-swap="outerHTML" aria-label="Edit {aria}">'
+            f'<button type="button" class="chip-open" data-chip-open="{esc(facet)}" aria-label="Edit {aria}">'
             f'<b>{esc(label)}</b><span class="v">{value_html}</span></button>'
             f'<button type="button" class="finder-chip-remove" data-finder-remove="{esc(remove_name)}"{value_attr} '
             f'aria-label="Remove {aria}">✕</button></span>'
         )
 
     chips: list[str] = []
-    for name, label in FACET_LABELS[:8]:
+    for name, label in FACET_LABELS:
+        if name in NUMERIC_FACET_NAMES:
+            continue
         chips.extend(
             chip(name, label, esc(value), f'facet_{name}', value, f'{esc(label)} {esc(value)}')
             for value in sorted(getattr(selection, name, frozenset()))
@@ -217,8 +208,8 @@ def controls(snapshot: RunSnapshot, settings: DashboardSettings, catalogue: Face
     )
     return (
         '<div class="finder-controls" id="finder-controls">'
-        f'{hidden_facets}{_facet_chips(facets, snapshot.generated_filters, numeric, snapshot.generated_numeric, removable=review, form_id=form_id)}'
-        f'<span class="addwrap"><button class="add" type="button" hx-get="/find/facets?form_id={form_id}" hx-include="#finder-window" hx-target=".finder-facets" '
+        f'{hidden_facets}{_facet_chips(facets, numeric, removable=review)}'
+        f'<span class="addwrap"><button class="add" type="button" hx-get="/find/facets?form_id={form_id}" hx-include="#finder-controls" hx-target=".finder-facets" '
         f'hx-swap="outerHTML">+ Filter</button>{facet_menu(catalogue, numeric=numeric, form_id=form_id, selection=facets)}</span><span class="spacer"></span>'
         f'<span class="quiet"><b>Window</b><input id="finder-window" form="{form_id}" name="window_days" type="number" min="1" max="90" value="{values["window_days"]}" style="width:64px"></span>'
         f'<span class="quiet"><b>Limit</b><input form="{form_id}" name="limit" type="number" min="1" max="500" value="{values["limit"]}" style="width:72px"></span>'

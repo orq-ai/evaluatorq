@@ -29,7 +29,7 @@ from evaluatorq.trace_finder import (
     export_json,
     load_facet_catalogue,
 )
-from evaluatorq.trace_finder.models import FACET_NAMES
+from evaluatorq.trace_finder.models import FACET_NAMES, NUMERIC_FACET_NAMES
 from evaluatorq.trace_finder.settings import (
     MAX_LIMIT,
     MAX_PARALLELISM,
@@ -38,6 +38,8 @@ from evaluatorq.trace_finder.settings import (
     MIN_PARALLELISM,
     MIN_WINDOW_DAYS,
 )
+
+_NUMERIC_FIELDS = tuple(f'{name}_{bound}' for name in NUMERIC_FACET_NAMES for bound in ('min', 'max'))
 
 
 class FinderRunForm(BaseModel):
@@ -360,39 +362,28 @@ def register_finder_routes(app: Any, roots: list[Any] | None = None) -> None:  #
 
     @app.get('/find/facets')
     async def find_facets(req: Request) -> Response:
+        """Re-render the filter menu from the controls the client sends, so it never lags the page."""
         settings = _settings(req.app)
-        raw_window = req.query_params.get('window_days')
+        params = req.query_params
         try:
-            window_days = FinderRunForm.model_validate({
-                'window_days': raw_window or settings.window_days,
+            parsed = FinderRunForm.model_validate({
+                'window_days': params.get('window_days') or settings.window_days,
                 'limit': settings.limit,
                 'parallelism': settings.parallelism,
-            }).window_days
+                **{name: _optional_value(params, name) for name in _NUMERIC_FIELDS},
+            })
         except ValidationError as exc:
-            logger.warning(
-                'Find facet menu uses the configured window because the requested window was invalid: {}', exc
+            logger.warning('Find facet menu uses the configured window because the request was invalid: {}', exc)
+            parsed = FinderRunForm(
+                window_days=settings.window_days, limit=settings.limit, parallelism=settings.parallelism
             )
-            window_days = settings.window_days
-        catalogue = await _load_catalogue(req.app, window_days)
-        form_id = req.query_params.get('form_id')
+        catalogue = await _load_catalogue(req.app, parsed.window_days)
+        form_id = params.get('form_id')
         if form_id not in {'finder-query-form', 'finder-start-form'}:
             form_id = 'finder-query-form'
-        active = req.query_params.get('open')
-        if active not in FACET_NAMES and active not in {'tokens', 'duration_ms'}:
-            active = None
-        store = _store(req.app)
-        snapshot = await store.snapshot() if store is not None else RunSnapshot()
-        population = snapshot.request.population if snapshot.request is not None else None
-        return _html(
-            facet_menu(
-                catalogue,
-                numeric=population.numeric if population is not None else None,
-                open_=True,
-                form_id=form_id,
-                selection=population.facets if population is not None else None,
-                active=active,
-            )
-        )
+        selection = FacetSelection(**{name: frozenset(_form_values(params, f'facet_{name}')) for name in FACET_NAMES})
+        numeric = NumericFilters(**{name: getattr(parsed, name) for name in _NUMERIC_FIELDS})
+        return _html(facet_menu(catalogue, numeric=numeric, open_=True, form_id=form_id, selection=selection))
 
     @app.get('/find/dismiss')
     def find_dismiss() -> Response:

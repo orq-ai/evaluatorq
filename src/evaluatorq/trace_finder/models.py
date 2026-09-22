@@ -33,6 +33,8 @@ FACET_NAMES: tuple[FacetName, ...] = (
     'agent_name',
     'tool_name',
 )
+NumericFacetName = Literal['tokens', 'duration_ms']
+NUMERIC_FACET_NAMES: tuple[NumericFacetName, ...] = ('tokens', 'duration_ms')
 
 
 class TraceRecord(BaseModel):
