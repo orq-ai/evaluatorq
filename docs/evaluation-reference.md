@@ -10,7 +10,7 @@ async def evaluatorq(
     name: str,
     params: EvaluatorParams | dict[str, Any] | None = None,
     *,
-    data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None = None,
+    data: DatasetIdInput | ExperimentInput | TraceInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None = None,
     jobs: list[Job] | None = None,
     evaluators: list[Evaluator] | None = None,
     datapoint_parallelism: int = 10,
@@ -24,7 +24,7 @@ async def evaluatorq(
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `data` | `list[DataPoint \| dict]` \| `list[Awaitable[DataPoint]]` \| `DatasetIdInput` \| `ExperimentInput` | **required** | Data to evaluate — local rows (a `DataPoint` or a plain dict with the same keys), an Orq dataset, or an existing experiment |
+| `data` | `list[DataPoint \| dict]` \| `list[Awaitable[DataPoint]]` \| `DatasetIdInput` \| `ExperimentInput` \| `TraceInput` | **required** | Data to evaluate — local rows (a `DataPoint` or a plain dict with the same keys), an Orq dataset, an existing experiment, or recorded trace output |
 | `jobs` | `list[Job]` | **required** | Jobs to run on each data point |
 | `evaluators` | `list[Evaluator]` \| `None` | `None` | Evaluators that score job outputs |
 | `datapoint_parallelism` | `int` (≥1) | `10` | Number of concurrent datapoints. The former name `parallelism` still works, deprecated |
@@ -197,7 +197,7 @@ data=ExperimentInput(experiment_id="<experiment_id>", run_id="<run_id>")
 
 `TraceInput` is the async request for recorded trace data. Pass query criteria such as `limit`, time bounds, search text, or filters, or pass one `trace_id` with an optional exact `span_id`; `span_id` cannot be used without its trace. The shared importer returns normalized `Trace` objects and `Trace.to_datapoint()` supplies the evaluatorq row shape.
 
-Use `inference=False` when the trace already contains the response you want to score. Evaluatorq skips jobs and sends that recorded output to your evaluators. An exact span is parsed on its own; a trace or query selection starts from the latest eligible non-evaluator span and follows parents until it finds messages. Chat Completions, Responses, and OpenTelemetry GenAI messages are accepted from span attributes, events, and the resource, scope, and entity locations implemented by the parser.
+Use `inference=False` when the trace already contains the response you want to score. Evaluatorq skips jobs and sends that recorded output to your evaluators. An exact span is parsed on its own; a trace or query selection starts from the latest eligible non-evaluator span and follows parents until it finds messages. Chat Completions, Responses, and OpenTelemetry GenAI messages are accepted from top-level span input/output, flat or nested span attributes, and span event attributes.
 
 ```python
 from evaluatorq import TraceInput, evaluatorq, orq_evaluator

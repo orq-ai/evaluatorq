@@ -354,6 +354,18 @@
     </div>
 
     <div class="callout">
+      <span class="ico">↗</span>
+      <div><b>Caller-owned-history continuation:</b> hosted <code>agent:&lt;key&gt;</code> targets own their server-side history and cannot use <code>last_assistant</code>. A caller-owned target can continue from the imported assistant turn:
+        <pre class="mini-code">from evaluatorq import TraceInput
+from evaluatorq.redteam import OpenAIModelTarget, datapoints_from_traces, red_team
+
+target = OpenAIModelTarget(model='gpt-5.6-luna', system_prompt='You are a support agent.')
+datapoints = await datapoints_from_traces(TraceInput(trace_id='trace_123'), start_from='last_assistant')
+report = await red_team(target=target, datapoints=datapoints, vulnerabilities=['prompt_injection'])</pre>
+      </div>
+    </div>
+
+    <div class="callout">
       <span class="ico">!</span>
       <div><b>Implemented boundary:</b> the loaded entity is a <code>Trace</code>, not a datapoint. It preserves <code>input_messages</code> and <code>output_messages</code> separately, exposes a derived combined transcript, and becomes a generic row only when <code>trace.to_datapoint()</code> is called.</div>
     </div>
@@ -383,7 +395,7 @@ trace = (await fetch_traces(
     <details>
       <summary>3 · Normalize all supported message shapes <span class="where">common/trace_input.py:335</span></summary>
       <div class="body">
-        <p>Chat Completions messages, Responses input/output items, and OpenTelemetry GenAI messages are normalized to evaluatorq's shared <code>Message</code> contract. Candidates may live in span attributes, events, or the resource, scope, and entity locations implemented by the parser. Tool calls and tool results survive normalization; reasoning parts are deliberately excluded.</p>
+        <p>Chat Completions messages, Responses input/output items, and OpenTelemetry GenAI messages are normalized to evaluatorq's shared <code>Message</code> contract. Candidates may live in top-level span input/output, flat or nested span attributes, or span event attributes. Tool calls and tool results survive normalization; reasoning parts are deliberately excluded.</p>
       </div>
     </details>
 
@@ -416,60 +428,22 @@ results = await evaluatorq(
 from evaluatorq.simulation import datapoints_from_traces, simulate
 
 datapoints = await datapoints_from_traces(TraceInput(trace_id='trace_123'))
-results = await simulate(target=agent, datapoints=datapoints)</pre>
+results = await simulate(target='agent:my-support-agent', datapoints=datapoints)</pre>
 <pre>from evaluatorq import TraceInput
 from evaluatorq.redteam import datapoints_from_traces, red_team
 
-datapoints = await datapoints_from_traces(
-    TraceInput(trace_id='trace_123'),
-    start_from='last_assistant',  <span class="cm"># or 'first_user'</span>
-)
+datapoints = await datapoints_from_traces(TraceInput(trace_id='trace_123'))
 report = await red_team(
-    target=agent,
+    target='agent:my-support-agent',
     datapoints=datapoints,
     vulnerabilities=['prompt_injection'],
     attack_techniques=['direct-injection'],
     delivery_methods=['role-play'],
 )</pre>
-<pre><span class="cm"># Approved canonical model: one loaded trace, no surface policy.</span>
-class Trace(BaseModel):
-    trace_id: str
-    requested_span_id: str | None
-    message_span_id: str | None
-    message_format: TraceMessageFormat | None
+<pre>from evaluatorq import TraceInput, fetch_traces
 
-    <span class="hl">input_messages: list[Message]</span>
-    <span class="hl">output_messages: list[Message]</span>
-
-    retrievals: list[str]
-    tools_called: list[str]
-    session_id: str | None
-    actor_id: str | None
-    thread_id: str | None
-    metadata: dict[str, Any]
-    expected_output: Output | None
-    import_error: str | None
-
-    <span class="hl">def to_datapoint(self) -&gt; DataPoint:</span>
-        return DataPoint(
-            inputs={
-                "messages": dump(self.input_messages),
-                "recorded_output": dump(self.output_messages),
-                "source_trace_id": self.trace_id,
-                "source_requested_span_id": self.requested_span_id,
-                "source_span_id": self.message_span_id,
-                "trace_metadata": self.metadata,
-                "trace_import_error": self.import_error,
-            },
-            expected_output=self.expected_output,
-        )
-
-    @property
-    def messages(self) -&gt; list[Message]:
-        return merge_without_overlap(
-            self.input_messages,
-            self.output_messages,
-        )</pre>
+trace = (await fetch_traces(TraceInput(trace_id='trace_123')))[0]
+datapoint = trace.to_datapoint()</pre>
     </div>
 
     <div class="callout">
@@ -490,7 +464,7 @@ class Trace(BaseModel):
       <div class="decision">
         <span class="status set">Settled</span>
         <h3>2. Attack configuration</h3>
-        <p>Vulnerabilities, categories, named strategies, attack techniques, and delivery methods stay on <code>red_team()</code>. They filter the ordinary strategy set and are named explicitly in the attacker prompt.</p>
+        <p>Vulnerabilities, categories, named strategies, attack techniques, and delivery methods stay on <code>red_team()</code>. Categories and strategies select the strategy set; the attacker prompt names the selected vulnerabilities, attack techniques, and delivery methods.</p>
         <p class="recommend"><b>Same default:</b> omitting vulnerability and category filters keeps the existing full registered sweep.</p>
       </div>
       <div class="decision">
@@ -522,7 +496,7 @@ class Trace(BaseModel):
       <li style="margin-bottom:8px;"><b>An exact span really is exact.</b> <code>TraceInput(trace_id=..., span_id=...)</code> parses only that span and reports an error if it has no messages. Only trace-only and query modes walk toward the root.</li>
       <li style="margin-bottom:8px;"><b>Evaluator descendants must be excluded together.</b> Ignoring only the evaluator parent can still select its nested model-call span and accidentally evaluate the judge instead of the application.</li>
       <li style="margin-bottom:8px;"><b><code>last_assistant</code> is not universally replayable.</b> A hosted target that owns an opaque server-side thread cannot be made to remember an imported assistant reply. Evaluatorq rejects that combination instead of pretending the history was applied.</li>
-      <li><b>The bootstrap is context.</b> It is visible in provenance and usage, but it does not spend an attack turn or become the response judged for vulnerability.</li>
+      <li><b>The bootstrap is context.</b> It is visible separately in provenance and usage, is billed and included once in aggregate totals, but it does not spend an attack turn or become the response judged for vulnerability.</li>
     </ul>
 
     <h2 id="faq">FAQ</h2>

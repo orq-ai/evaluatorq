@@ -519,10 +519,10 @@ from evaluatorq import TraceInput
 from evaluatorq.simulation import datapoints_from_traces, simulate
 
 datapoints = await datapoints_from_traces(TraceInput(trace_id='trace_123'))
-results = await simulate(target=agent, datapoints=datapoints)
+results = await simulate(target='agent:my-support-agent', datapoints=datapoints)
 ```
 
-The trace is source material for a new simulation, not a scored result. Simulation infers a persona and scenario from each conversation and writes a fresh opening message by default. The trace analysis and simulation calls use their own budgets; `max_turns` applies to the generated conversation and does not count trace bootstrap work.
+The trace is source material for a new simulation, not a scored result. Simulation infers a persona and scenario from each conversation and writes a fresh opening message by default. The trace analysis and simulation calls use their own budgets; `max_turns` applies to the generated conversation and does not count trace analysis.
 
 The direct route is `eq sim from-traces`, which pulls recent traces from the Orq traces API and writes one datapoint per conversation — persona and scenario inferred from a short summary of it, opening message written from that persona and scenario:
 
