@@ -508,3 +508,33 @@ async def test_scorer_prepends_seed_context_for_judge() -> None:
     assert passed_messages[0]['role'] == 'assistant'
     assert 'Your order is on the way.' in passed_messages[0]['content']
     assert passed_messages[-1]['content'] == 'continue the order'
+
+
+def test_last_assistant_seed_must_end_with_an_assistant_turn() -> None:
+    """The attack is appended as a user turn, so a user-ending prefix doubles up."""
+    from evaluatorq.redteam.traces import TRACE_SEED_MESSAGES_KEY, TRACE_START_FROM_KEY, parse_trace_seed
+
+    inputs = {
+        TRACE_SEED_MESSAGES_KEY: [
+            {'role': 'assistant', 'content': 'Your order is on the way.'},
+            {'role': 'user', 'content': 'thanks'},
+        ],
+        TRACE_START_FROM_KEY: 'last_assistant',
+    }
+    with pytest.raises(ValueError, match='must end with an assistant message'):
+        parse_trace_seed(inputs, label='datapoint[0]')
+
+
+def test_last_assistant_seed_accepts_an_assistant_ending_prefix() -> None:
+    from evaluatorq.redteam.traces import TRACE_SEED_MESSAGES_KEY, TRACE_START_FROM_KEY, parse_trace_seed
+
+    inputs = {
+        TRACE_SEED_MESSAGES_KEY: [
+            {'role': 'user', 'content': 'where is my order?'},
+            {'role': 'assistant', 'content': 'Your order is on the way.'},
+        ],
+        TRACE_START_FROM_KEY: 'last_assistant',
+    }
+    messages, start_from = parse_trace_seed(inputs, label='datapoint[0]')
+    assert messages is not None and messages[-1].role == 'assistant'
+    assert start_from is not None and start_from.value == 'last_assistant'

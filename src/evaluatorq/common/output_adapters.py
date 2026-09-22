@@ -25,19 +25,50 @@ if TYPE_CHECKING:
     from evaluatorq.types import Output
 
 
+_MESSAGE_SHAPE_KEYS = frozenset({
+    'role',
+    'content',
+    'tool_calls',
+    'tool_call_id',
+    'function_call',
+    'function_call_output',
+})
+
+
+def _is_message_shape(item: Any) -> bool:
+    """Whether a list element is a chat message rather than a structured item.
+
+    A Responses output item (``{'type': 'output_text', ...}``) is a dict too, so
+    dict-ness alone is not enough: read as a message it renders as nothing.
+    """
+    return isinstance(item, Message) or (isinstance(item, dict) and bool(_MESSAGE_SHAPE_KEYS.intersection(item)))
+
+
 def output_to_text(output: Any) -> str:
     """Best-effort plain-text view of any Output. Total / fail-soft."""
     if output is None:
         return ''
     if isinstance(output, AgentResponse):
-        return output.text
+        # A tool-call-only response has empty .text while has_meaningful_output
+        # counts it as a response; rendering the calls keeps a judge from scoring
+        # an agent that acted as one that said nothing.
+        return output.text or messages_to_text([{'role': 'assistant', 'tool_calls': output.tool_calls}])
     if isinstance(output, str):
         return output
-    if isinstance(output, list) and (not output or all(isinstance(message, (Message, dict)) for message in output)):
+    if isinstance(output, list) and (not output or all(_is_message_shape(item) for item in output)):
         # messages_to_text, not a bare join: has_meaningful_output counts a tool
         # call as a response, so a renderer that dropped tool calls handed the
         # judge an empty string for an agent that acted.
         return messages_to_text(output)
+    if isinstance(output, list):
+        # A list of non-message mappings (Responses output items, or any
+        # structured payload) is not a transcript: messages_to_text would read
+        # every element as a content-less turn and return ''.
+        try:
+            return json.dumps(output, indent=2, default=str)
+        except Exception as exc:
+            logger.warning('output_to_text: json.dumps failed for a structured list, falling back to str(): {}', exc)
+            return str(output)
     if isinstance(output, dict):
         if output.get('object') == 'response':
             try:

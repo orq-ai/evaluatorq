@@ -177,6 +177,17 @@ def parse_trace_seed(
     except ValueError as exc:
         raise ValueError(f'{label}.{TRACE_START_FROM_KEY} is not a valid TraceStart value.') from exc
 
+    if start_from is TraceStart.LAST_ASSISTANT and parsed_messages[-1].role != 'assistant':
+        # The replay prefix is sent as-is and the attack is appended as a user
+        # turn, so a prefix ending in a user or tool message produces two
+        # consecutive user turns (or an unanswered tool call) for a
+        # caller-owned-history target.
+        raise ValueError(
+            f'{label}.{TRACE_SEED_MESSAGES_KEY} must end with an assistant message when '
+            f"{TRACE_START_FROM_KEY} is '{TraceStart.LAST_ASSISTANT.value}'; "
+            f'it ends with a {parsed_messages[-1].role} message.'
+        )
+
     return parsed_messages, start_from
 
 

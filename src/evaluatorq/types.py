@@ -1,6 +1,6 @@
 import json
 from collections.abc import Awaitable, Callable, Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, ClassVar, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_serializer, model_validator
@@ -244,6 +244,10 @@ class TraceInput(BaseModel):
     included: in trace mode it is never read, so accepting it would answer
     ``limit=50`` with exactly one trace and no warning. Read the resolved count
     off `query_limit` rather than the field.
+
+    ``start_time`` / ``end_time`` are stored timezone-aware: a naive value is read
+    as UTC rather than as the host's local time, so one query means one window
+    wherever it runs.
     """
 
     model_config = ConfigDict(extra='forbid')
@@ -265,6 +269,15 @@ class TraceInput(BaseModel):
 
     @model_validator(mode='after')
     def _validate_source(self) -> 'TraceInput':
+        # A naive datetime is read as UTC, not as the host's local timezone: the
+        # Orq query fields are epoch milliseconds, so a local-time reading made
+        # the same TraceInput select a different window on every machine. It
+        # also keeps the comparison below from raising TypeError on a naive
+        # start_time against an aware end_time.
+        for field in ('start_time', 'end_time'):
+            value = getattr(self, field)
+            if value is not None and value.tzinfo is None:
+                object.__setattr__(self, field, value.replace(tzinfo=timezone.utc))
         if self.span_id is not None and self.trace_id is None:
             raise ValueError('span_id requires trace_id.')
         if self.trace_id is not None and (

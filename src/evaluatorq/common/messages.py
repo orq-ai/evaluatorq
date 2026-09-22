@@ -7,6 +7,7 @@ judge then scores. Use these helpers or ``contracts.content_to_text``.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -47,6 +48,17 @@ def coerce_content_text(content: Any) -> str:
     return str(content or '')
 
 
+def _json_or_text(value: Any) -> str:
+    """Render a value as text, using JSON for mappings.
+
+    ``str()`` on a dict renders a Python repr that a judge then scores as the
+    agent's words, so structured values go through ``json.dumps``.
+    """
+    if isinstance(value, dict):
+        return json.dumps(value, default=str)
+    return coerce_content_text(value)
+
+
 def _tool_call_text(call: Any) -> str:
     """Render one tool call as a marker a judge can read."""
     function = call.get('function') if isinstance(call, dict) else getattr(call, 'function', None)
@@ -55,8 +67,19 @@ def _tool_call_text(call: Any) -> str:
         name, arguments = source.get('name'), source.get('arguments')
     else:
         name, arguments = getattr(source, 'name', None), getattr(source, 'arguments', None)
-    rendered = arguments if isinstance(arguments, str) else coerce_content_text(arguments)
+    rendered = arguments if isinstance(arguments, str) else _json_or_text(arguments)
     return f'[tool_call: {name or "unknown"}({rendered or ""})]'
+
+
+def _legacy_result_text(result: Any) -> str:
+    """Render a legacy ``function_call_output`` value as text.
+
+    A mapping that is not itself the result carries it under ``output`` or
+    ``result``; anything still structured is rendered as JSON rather than a
+    Python repr, which a judge would otherwise score verbatim.
+    """
+    value = result.get('output', result.get('result', result)) if isinstance(result, dict) else result
+    return _json_or_text(value)
 
 
 def messages_to_text(messages: Iterable[Any]) -> str:
@@ -69,17 +92,29 @@ def messages_to_text(messages: Iterable[Any]) -> str:
     used to render as the empty string, so a working agent scored as silent), and
     non-assistant turns are labelled (tool JSON used to read as the agent's own
     answer). A single assistant text message still renders as its bare text.
+
+    Content is rendered exactly as recorded — ``strip()`` decides only whether a
+    turn is blank, never what it contains, because an exact-match scorer reading
+    a single-message output would otherwise score trimmed text the trace never
+    had. The legacy ``function_call`` / ``function_call_output`` fields render
+    alongside ``tool_calls``: `has_meaningful_output` counts them, so skipping
+    them here would hand a judge an empty string for an agent that acted.
     """
     lines: list[str] = []
     for message in messages:
         if isinstance(message, dict):
             role, content, tool_calls = message.get('role'), message.get('content'), message.get('tool_calls')
+            legacy_call, legacy_result = message.get('function_call'), message.get('function_call_output')
         else:
             role = getattr(message, 'role', None)
             content = getattr(message, 'content', None)
             tool_calls = getattr(message, 'tool_calls', None)
-        parts = [text] if (text := coerce_content_text(content).strip()) else []
-        parts.extend(_tool_call_text(call) for call in tool_calls or [])
+            legacy_call, legacy_result = None, None
+        text = coerce_content_text(content)
+        parts = [text] if text.strip() else []
+        parts.extend(_tool_call_text(call) for call in [*(tool_calls or []), *([legacy_call] if legacy_call else [])])
+        if legacy_result:
+            parts.append(f'[tool_result: {_legacy_result_text(legacy_result)}]')
         if not parts:
             continue
         body = '\n'.join(parts)

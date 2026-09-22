@@ -474,8 +474,9 @@ class _InferredPersonaScenario(BaseModel):
 
 
 async def datapoints_from_traces(
-    source: TraceInput | Sequence[Trace | TraceConversation],
+    source: TraceInput | Sequence[Trace | TraceConversation] | None = None,
     *,
+    conversations: Sequence[Trace | TraceConversation] | None = None,
     model: str = DEFAULT_MODEL,
     llm_config: LLMCallConfig | None = None,
     client: AsyncOpenAI | None = None,
@@ -496,6 +497,8 @@ async def datapoints_from_traces(
 
     ``source`` may be a ``TraceInput`` to fetch canonical traces, a sequence of
     already-loaded ``Trace`` objects, or the legacy ``TraceConversation`` values.
+    It was named ``conversations`` before it accepted anything but conversations;
+    that keyword still works so existing callers do not break.
 
     Every conversation is summarized first, then persona and scenario are inferred
     from that summary. The opening message is written fresh from them; set
@@ -527,6 +530,12 @@ async def datapoints_from_traces(
     so an unset ``temperature`` still omits the parameter from the request. When both name a model,
     ``llm_config.model`` wins and the contradiction is logged.
     """
+    if source is None:
+        if conversations is None:
+            raise TypeError("datapoints_from_traces() requires 'source'.")
+        source = conversations
+    elif conversations is not None:
+        raise TypeError("datapoints_from_traces() got both 'source' and its legacy alias 'conversations'.")
     conversations = await _resolve_trace_conversations(source, orq_api_key=orq_api_key, base_url=base_url)
     from evaluatorq.openresponses.client import build_simulation_client
     from evaluatorq.simulation._config import resolve_sim_llm_config

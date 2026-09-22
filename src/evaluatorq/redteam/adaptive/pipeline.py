@@ -496,43 +496,6 @@ def create_dynamic_redteam_job(
                 seed_context: list[Message] = []
                 bootstrap_usage = None
 
-                if seed_messages is not None:
-                    seed_context, bootstrap_usage, bootstrap_error = await replay_seed_context(
-                        target,
-                        seed_messages,
-                        trace_start_from or TraceStart.FIRST_USER,
-                        target_agent_timeout_ms=cfg.target_agent_timeout_ms,
-                        max_target_retries=cfg.max_target_retries,
-                        map_error=resolved_backend.map_error,
-                    )
-                    if bootstrap_error is not None:
-                        result_dict = AttackOutput(
-                            turns=[],
-                            objective_achieved=False,
-                            duration_seconds=time.time() - t0,
-                            token_usage=bootstrap_usage,
-                            token_usage_adversarial=None,
-                            token_usage_target=None,
-                            token_usage_bootstrap=bootstrap_usage,
-                            seed_context=seed_context,
-                            system_prompt=None,
-                            max_turns=effective_max_turns,
-                            **bootstrap_error,
-                            category=category,
-                            vulnerability=vulnerability,
-                        )
-                        _set_attack_span_attrs(attack_span, result_dict)
-                        output_payload = result_dict.model_dump(mode='json')
-                        output_payload['turns'] = 0
-                        active_progress = _get_active_progress()
-                        if active_progress is not None:
-                            await active_progress.finish_attack(None)
-                        return {
-                            **output_payload,
-                            'max_turns': effective_max_turns,
-                            'thread_id': thread_id,
-                        }
-
                 @asynccontextmanager
                 async def _attempt_span(i: int):
                     async with with_redteam_span(
@@ -558,7 +521,46 @@ def create_dynamic_redteam_job(
                         },
                     )
 
+                # One Orq thread per attack, opened before the seed replay: a bootstrap
+                # sent outside this scope reaches the target without the attack's thread
+                # id, so the replay and the attack land in different conversations.
                 with conversation_thread(thread_id) as thread_id:
+                    if seed_messages is not None:
+                        seed_context, bootstrap_usage, bootstrap_error = await replay_seed_context(
+                            target,
+                            seed_messages,
+                            trace_start_from or TraceStart.FIRST_USER,
+                            target_agent_timeout_ms=cfg.target_agent_timeout_ms,
+                            max_target_retries=cfg.max_target_retries,
+                            map_error=resolved_backend.map_error,
+                        )
+                        if bootstrap_error is not None:
+                            result_dict = AttackOutput(
+                                turns=[],
+                                objective_achieved=False,
+                                duration_seconds=time.time() - t0,
+                                token_usage=bootstrap_usage,
+                                token_usage_adversarial=None,
+                                token_usage_target=None,
+                                token_usage_bootstrap=bootstrap_usage,
+                                seed_context=seed_context,
+                                system_prompt=None,
+                                max_turns=effective_max_turns,
+                                **bootstrap_error,
+                                category=category,
+                                vulnerability=vulnerability,
+                            )
+                            _set_attack_span_attrs(attack_span, result_dict)
+                            output_payload = result_dict.model_dump(mode='json')
+                            output_payload['turns'] = 0
+                            active_progress = _get_active_progress()
+                            if active_progress is not None:
+                                await active_progress.finish_attack(None)
+                            return {
+                                **output_payload,
+                                'max_turns': effective_max_turns,
+                                'thread_id': thread_id,
+                            }
                     result = await call_target_with_retry(
                         target,
                         [*seed_context, Message(role='user', content=prompt)],
@@ -815,10 +817,14 @@ def create_dynamic_evaluator(
         # judge's failure mode defaults to the optimistic verdict. Marked
         # distinctly from the attacker's own turns so the rubric can tell
         # recorded/imported content from attacker-generated content.
-        seed_context_messages = [
-            {'role': str(message.role), 'content': f'[imported trace context] {coerce_content_text(message.content)}'}
-            for message in output.seed_context
-        ]
+        # to_chat_completion, not a {role, content} flatten: an imported turn can
+        # carry tool_calls / tool_call_id / name, and dropping those presents a
+        # tool-using assistant turn to the judge as an empty message.
+        seed_context_messages: list[dict[str, Any]] = []
+        for message in output.seed_context:
+            rendered = message.to_chat_completion()
+            rendered['content'] = f'[imported trace context] {coerce_content_text(message.content)}'
+            seed_context_messages.append(rendered)
         input_messages = [
             *seed_context_messages,
             *({'role': 'user', 'content': t.attacker.text} for t in scorable_turns),

@@ -711,3 +711,97 @@ async def test_query_matching_no_traces_warns(caplog: pytest.LogCaptureFixture) 
 
     assert traces == []
     assert 'matched no traces' in caplog.text
+
+
+def test_naive_query_bounds_are_read_as_utc() -> None:
+    """The same TraceInput must select the same window on every host."""
+    source = TraceInput(start_time=datetime(2026, 1, 1, 12, 0), end_time=datetime(2026, 1, 2, 12, 0))
+    assert source.start_time is not None and source.start_time.tzinfo is timezone.utc
+    assert source.end_time is not None and source.end_time.tzinfo is timezone.utc
+
+
+def test_mixed_timezone_awareness_does_not_raise_typeerror() -> None:
+    source = TraceInput(
+        start_time=datetime(2026, 1, 1, 12, 0),
+        end_time=datetime(2026, 1, 2, 12, 0, tzinfo=timezone.utc),
+    )
+    assert source.start_time is not None and source.end_time is not None
+    assert source.start_time < source.end_time
+
+
+@pytest.mark.asyncio
+async def test_a_non_object_span_fails_only_its_own_trace() -> None:
+    """One malformed spans payload must not abort the whole gather."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith('/v3oql'):
+            return httpx.Response(200, json={'data': [{'trace_id': 'good'}, {'trace_id': 'bad'}], 'has_more': False})
+        if request.url.path.startswith('/v2/traces/bad'):
+            return httpx.Response(200, json=[None])
+        return httpx.Response(
+            200,
+            json=[
+                _span(
+                    's1',
+                    parent_id=None,
+                    started_at='2026-01-01T00:00:00Z',
+                    input_={'messages': [{'role': 'user', 'content': 'hi'}]},
+                    output={'messages': [{'role': 'assistant', 'content': 'hello'}]},
+                )
+            ],
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        traces = await fetch_traces(TraceInput(search='x'), api_key='k', http_client=client)
+
+    by_id = {trace.trace_id: trace for trace in traces}
+    assert by_id['good'].import_error is None
+    assert by_id['bad'].import_error is not None
+    assert 'non-object span' in by_id['bad'].import_error
+
+
+@pytest.mark.asyncio
+async def test_a_non_object_list_payload_does_not_crash_pagination() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=['unexpected'])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        assert await fetch_traces(TraceInput(search='x'), api_key='k', http_client=client) == []
+
+
+def test_a_refusal_message_keeps_its_text() -> None:
+    """A refusal has content=None; dropping it reported the trace as empty."""
+    spans = [
+        _span(
+            's1',
+            parent_id=None,
+            started_at='2026-01-01T00:00:00Z',
+            input_={'messages': [{'role': 'user', 'content': 'do something banned'}]},
+            output={'messages': [{'role': 'assistant', 'content': None, 'refusal': 'I cannot help.'}]},
+        )
+    ]
+    trace = _trace_from_spans('t1', spans, requested_span_id=None, trace_metadata={})
+    assert trace.import_error is None
+    assert [message.content for message in trace.output_messages] == ['I cannot help.']
+
+
+def test_a_bare_otel_message_object_keeps_its_parts() -> None:
+    """A single {'role', 'parts'} object used to fall through to the chat parser."""
+    spans = [
+        _span(
+            's1',
+            parent_id=None,
+            started_at='2026-01-01T00:00:00Z',
+            attributes={
+                'gen_ai.input.messages': json.dumps({'role': 'user', 'parts': [{'type': 'text', 'content': 'hi'}]}),
+                'gen_ai.output.messages': json.dumps({
+                    'role': 'assistant',
+                    'parts': [{'type': 'text', 'content': 'hello'}],
+                }),
+            },
+        )
+    ]
+    trace = _trace_from_spans('t1', spans, requested_span_id=None, trace_metadata={})
+    assert trace.import_error is None
+    assert [message.content for message in trace.input_messages] == ['hi']
+    assert [message.content for message in trace.output_messages] == ['hello']

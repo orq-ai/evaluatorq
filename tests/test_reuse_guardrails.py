@@ -587,6 +587,15 @@ def _agent_target_subclass_names() -> frozenset[str]:
 _TARGET_ADAPTER_NAMES = _agent_target_subclass_names()
 
 
+def _trailing_name(node: ast.expr) -> str | None:
+    """The final segment of a name or dotted attribute reference."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
 def _target_history_ladder_lines(source: str, path: str) -> list[str]:
     """Return lines that branch on concrete AgentTarget adapter classes."""
     tree = ast.parse(source)
@@ -594,10 +603,12 @@ def _target_history_ladder_lines(source: str, path: str) -> list[str]:
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or _dotted(node.func) != 'isinstance' or len(node.args) < 2:
             continue
-        classes = node.args[1]
-        if not isinstance(classes, ast.Tuple):
-            continue
-        if any(isinstance(item, ast.Name) and item.id in _TARGET_ADAPTER_NAMES for item in classes.elts):
+        # A singleton class argument is not a tuple, and an import-qualified one
+        # (`integrations.CrewAITarget`) is an ast.Attribute — both are the same
+        # ladder this guardrail forbids, so match on the trailing name.
+        argument = node.args[1]
+        classes = argument.elts if isinstance(argument, ast.Tuple) else [argument]
+        if any(_trailing_name(item) in _TARGET_ADAPTER_NAMES for item in classes):
             hits.append(f'{path}:{node.lineno}')
     return hits
 
@@ -619,10 +630,14 @@ def test_redteam_reads_history_mode_instead_of_adapter_type_ladders() -> None:
 def test_target_history_ladder_detector_actually_fires() -> None:
     # Built from a name the source actually declares, so the detector cannot pass
     # against an adapter that no longer exists.
-    adapter = sorted(_TARGET_ADAPTER_NAMES)[0]
     assert _TARGET_ADAPTER_NAMES, 'No AgentTarget subclass found in src/; the detector would match nothing.'
+    adapter = sorted(_TARGET_ADAPTER_NAMES)[0]
     source = f'if isinstance(target, ({adapter}, SomethingElse)):\n    pass\n'
     assert _target_history_ladder_lines(source, 'x.py') == ['x.py:1']
+    # The tuple form is the obvious one; a bare class and an import-qualified
+    # one are the same ladder and used to slip through.
+    assert _target_history_ladder_lines(f'if isinstance(target, {adapter}):\n    pass\n', 'x.py') == ['x.py:1']
+    assert _target_history_ladder_lines(f'if isinstance(target, mod.{adapter}):\n    pass\n', 'x.py') == ['x.py:1']
     assert _target_history_ladder_lines('if isinstance(target, AgentTarget):\n    pass\n', 'x.py') == []
 
 

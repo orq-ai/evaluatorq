@@ -156,9 +156,13 @@ def _chat_message(raw: Any, *, default_role: _ROLE) -> Message | None:
         logger.warning('Unknown trace message role {!r}; dropping it.', role)
         return None
     tool_calls = [call for value in raw.get('tool_calls') or [] if (call := _tool_call(value)) is not None]
+    # A chat-completions refusal carries content=None and the text under
+    # 'refusal'; without this the message parses as empty and the candidate
+    # search reports the trace as having no messages.
+    content = raw.get('content') if raw.get('content') is not None else raw.get('refusal')
     return Message(
         role=cast('_ROLE', role),
-        content=_content_text(raw.get('content')),
+        content=_content_text(content),
         tool_calls=tool_calls or None,
         tool_call_id=_optional_message_string(raw.get('tool_call_id') or raw.get('call_id'), field='tool_call_id'),
         name=_optional_message_string(raw.get('name'), field='name'),
@@ -235,6 +239,10 @@ def _otel_messages(value: Any, *, default_role: _ROLE) -> list[Message]:
     value = _decode_json(value)
     if isinstance(value, dict) and isinstance(value.get('messages'), list):
         value = value['messages']
+    if isinstance(value, dict) and isinstance(value.get('parts'), list):
+        # One bare OTel message object. _chat_messages reads only 'content', so
+        # falling through would drop every part and tool call it carries.
+        value = [value]
     if not isinstance(value, list):
         return _chat_messages(value, default_role=default_role)
     messages: list[Message] = []
@@ -676,7 +684,65 @@ def _trace_from_spans(
 
 
 def _datetime_ms(value: datetime | None) -> int | None:
+    """Epoch milliseconds for an Orq query bound.
+
+    ``TraceInput`` normalizes naive datetimes to UTC, so this conversion no
+    longer depends on the host's local timezone — the same query used to shift
+    by the offset of whichever machine ran it.
+    """
     return int(value.timestamp() * 1000) if value is not None else None
+
+
+async def _list_trace_rows(
+    client: httpx.AsyncClient,
+    source: TraceInput,
+    *,
+    host: str,
+    headers: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Page through the trace-list endpoint until the query limit is reached.
+
+    A page that is not a JSON object, or that carries no usable trace ID, stops
+    pagination with a warning rather than raising: the caller still gets the rows
+    it already has, and the reason is in the log.
+    """
+    rows: list[dict[str, Any]] = []
+    page = 1
+    query_limit = source.query_limit
+    while len(rows) < query_limit:
+        before = len(rows)
+        body: dict[str, Any] = {
+            'filters': {'operator': 'and', 'filters': source.filters, 'search': source.search},
+            'limit': min(query_limit - len(rows), _API_PAGE_LIMIT),
+            'page': page,
+            'fields': [],
+        }
+        if (start_date := _datetime_ms(source.start_time)) is not None:
+            body['start_date'] = start_date
+        if (end_date := _datetime_ms(source.end_time)) is not None:
+            body['end_date'] = end_date
+        try:
+
+            async def list_page(body: dict[str, Any] = body) -> Any:
+                response = await client.post(f'{host}/v2/traces/v3oql', headers=headers, json=body)
+                response.raise_for_status()
+                return response.json()
+
+            payload = await with_retry(list_page, label='Orq trace list')
+        except (httpx.HTTPError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f'Failed to list Orq traces: {exc}') from exc
+        if not isinstance(payload, dict):
+            logger.warning('Orq trace list returned a {}, not an object; stopping pagination.', type(payload).__name__)
+            break
+        data = payload.get('data', [])
+        rows.extend(row for row in data if isinstance(row, dict) and row.get('trace_id'))
+        if not data or not payload.get('has_more'):
+            break
+        if len(rows) == before:
+            logger.warning('Stopped paginating traces: a page contained no usable trace IDs.')
+            break
+        page += 1
+    return rows
 
 
 async def fetch_traces(
@@ -701,42 +767,11 @@ async def fetch_traces(
     owned = http_client is None
     client = http_client or httpx.AsyncClient(timeout=60.0)
     try:
-        if source.trace_id is not None:
-            rows = [{'trace_id': source.trace_id}]
-        else:
-            rows: list[dict[str, Any]] = []
-            page = 1
-            query_limit = source.query_limit
-            while len(rows) < query_limit:
-                before = len(rows)
-                body = {
-                    'filters': {'operator': 'and', 'filters': source.filters, 'search': source.search},
-                    'limit': min(query_limit - len(rows), _API_PAGE_LIMIT),
-                    'page': page,
-                    'fields': [],
-                }
-                if (start_date := _datetime_ms(source.start_time)) is not None:
-                    body['start_date'] = start_date
-                if (end_date := _datetime_ms(source.end_time)) is not None:
-                    body['end_date'] = end_date
-                try:
-
-                    async def list_page(body: dict[str, Any] = body) -> Any:
-                        response = await client.post(f'{host}/v2/traces/v3oql', headers=headers, json=body)
-                        response.raise_for_status()
-                        return response.json()
-
-                    payload = await with_retry(list_page, label='Orq trace list')
-                except (httpx.HTTPError, json.JSONDecodeError) as exc:
-                    raise RuntimeError(f'Failed to list Orq traces: {exc}') from exc
-                data = payload.get('data', []) if isinstance(payload, dict) else []
-                rows.extend(row for row in data if isinstance(row, dict) and row.get('trace_id'))
-                if not data or not payload.get('has_more'):
-                    break
-                if len(rows) == before:
-                    logger.warning('Stopped paginating traces: a page contained no usable trace IDs.')
-                    break
-                page += 1
+        rows = (
+            [{'trace_id': source.trace_id}]
+            if source.trace_id is not None
+            else await _list_trace_rows(client, source, host=host, headers=headers)
+        )
 
         semaphore = asyncio.Semaphore(_SPAN_FETCH_CONCURRENCY)
 
@@ -755,6 +790,11 @@ async def fetch_traces(
                     return _failed_trace(trace_id, f'could not fetch its spans: {exc}')
             if not isinstance(spans, list):
                 return _failed_trace(trace_id, f'its spans payload is {type(spans).__name__}, not a list.')
+            if not all(isinstance(span, dict) for span in spans):
+                # _trace_from_spans indexes every span; one non-object element
+                # would raise inside asyncio.gather and take the whole batch
+                # with it instead of failing this one trace.
+                return _failed_trace(trace_id, 'its spans payload contains a non-object span.')
             return _trace_from_spans(
                 trace_id,
                 spans,

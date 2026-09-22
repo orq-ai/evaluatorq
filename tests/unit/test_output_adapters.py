@@ -174,3 +174,35 @@ def test_output_to_text_separates_messages_and_labels_non_assistant_turns():
 
 def test_output_to_text_leaves_a_single_assistant_message_bare():
     assert output_to_text([{'role': 'assistant', 'content': 'answer'}]) == 'answer'
+
+
+def test_output_to_text_preserves_recorded_whitespace():
+    """Trimming is for the blank check, not for the text a scorer compares."""
+    assert output_to_text([{'role': 'assistant', 'content': ' answer '}]) == ' answer '
+
+
+def test_output_to_text_renders_a_legacy_function_call():
+    """has_meaningful_output counts the legacy fields, so the renderer must too."""
+    recorded = [{'role': 'assistant', 'function_call': {'name': 'lookup', 'arguments': '{}'}}]
+    assert has_meaningful_output(recorded) is True
+    assert output_to_text(recorded) == '[tool_call: lookup({})]'
+
+
+def test_output_to_text_renders_a_legacy_function_call_output():
+    recorded = [{'role': 'assistant', 'function_call_output': {'call_id': 'c1', 'output': '42'}}]
+    assert has_meaningful_output(recorded) is True
+    assert output_to_text(recorded) == '[tool_result: 42]'
+
+
+def test_output_to_text_json_renders_a_list_of_structured_items():
+    """A Responses output item is a dict but not a message: reading it as one rendered ''."""
+    rendered = output_to_text([{'type': 'output_text', 'text': 'answer'}])
+    assert 'answer' in rendered
+
+
+def test_output_to_text_renders_a_tool_call_only_agent_response():
+    response = AgentResponse(
+        output=[ToolCallOutputItem(id='c1', call_id='c1', name='get_balance', arguments='{}')]
+    )
+    assert has_meaningful_output(response) is True
+    assert output_to_text(response) == '[tool_call: get_balance({})]'
