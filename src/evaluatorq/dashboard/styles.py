@@ -2623,15 +2623,15 @@ _FINDER_CSS = """
 .finder-progress .live { width:7px; height:7px; border-radius:50%; background:var(--accent); box-shadow:0 0 10px var(--accent); }
 .finder-matrix { display:grid; grid-template-columns:repeat(auto-fill,18px); grid-auto-rows:18px; gap:2px; justify-content:center; padding:26px 24px 22px; }
 .finder-matrix i { display:grid; place-items:center; width:18px; height:18px; cursor:pointer; border-radius:4px; }
-.finder-matrix i::before { content:''; width:5px; height:5px; border-radius:50%; background:#3a3946; }
+.finder-matrix i::before { content:''; width:5px; height:5px; border-radius:50%; background:#4a4957; }
 .finder-matrix i.active::before { width:6px; height:6px; background:#d9d8e0; }
 .finder-matrix i.unmatched::before { background:var(--c); opacity:.55; }
 .finder-matrix i.match::before { width:9px; height:9px; background:var(--c); box-shadow:0 0 8px var(--c); }
 .finder-matrix i.failed::before { width:8px; height:8px; border-radius:2px; background:#7a3b2e; }
-.finder-matrix i.pending::before,.finder-matrix i.idle::before { background:transparent; border:1px solid #4a4957; }
+.finder-matrix i.pending::before,.finder-matrix i.idle::before { width:6px; height:6px; background:transparent; border:1.5px solid #6e6c7c; }
 .finder-matrix.idle { min-height:360px; align-content:center; }
 .finder-matrix.idle i { cursor:default; }
-.finder-hint { position:absolute; inset:0; display:grid; place-items:center; text-align:center; padding:24px; background:radial-gradient(ellipse at center,rgba(22,21,28,.92) 30%,rgba(22,21,28,.55) 70%,transparent 100%); }
+.finder-hint { position:absolute; inset:0; display:grid; place-items:center; text-align:center; padding:24px; background:radial-gradient(ellipse at center,rgba(22,21,28,.85) 25%,rgba(22,21,28,.4) 60%,transparent 100%); }
 .finder-hint .inner { max-width:820px; display:flex; flex-direction:column; align-items:center; gap:10px; }
 .finder-hint h4 { margin:0; text-transform:none; letter-spacing:-0.01em; font-family:var(--font-display); font-size:20px; font-weight:600; color:#f2f1f5; text-wrap:balance; }
 .finder-hint p { margin:0; max-width:460px; font-size:13px; color:#a9a7b4; line-height:1.5; text-wrap:pretty; }
