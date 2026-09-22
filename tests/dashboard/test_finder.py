@@ -84,11 +84,13 @@ class FakeStore:
         self.snapshot_value = RunSnapshot()
         self.started = False
         self.compile_request: Any | None = None
+        self.compile_wait: bool | None = None
         self.started_request: Any | None = None
         self.started_compiled: CompiledQuery | None = None
 
-    async def compile(self, request: Any) -> RunSnapshot:
+    async def compile(self, request: Any, *, wait: bool = True) -> RunSnapshot:
         self.compile_request = request
+        self.compile_wait = wait
         state = 'awaiting_review' if request.mode == 'review' else 'classifying'
         self.snapshot_value = RunSnapshot(
             generation=1,
@@ -228,6 +230,7 @@ def test_find_run_starts_polling_and_completed_poll_shows_matches(setup_finder) 
     response = client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate'}))
     assert response.status_code == 200
     assert 'hx-trigger="every 1s"' in response.text
+    assert store.compile_wait is False
 
     store.complete()
     poll = client.get('/find/poll')

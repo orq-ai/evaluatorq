@@ -278,7 +278,7 @@ def register_finder_routes(app: Any, roots: list[Any] | None = None) -> None:  #
             return _html(fragment(RunSnapshot(), settings, error='Set ORQ_API_KEY to load traces', api_available=False))
         try:
             request = _run_request(form, settings)
-            snapshot = await store.compile(request)
+            snapshot = await store.compile(request, wait=False)
         except (ValidationError, ValueError, TypeError) as exc:
             return _html(fragment(RunSnapshot(), settings, error=str(exc)), status_code=422)
         return _html(fragment(snapshot, settings))

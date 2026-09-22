@@ -90,23 +90,45 @@ class RunStore:
         self._generation = 0
         self._started_monotonic: float | None = None
 
-    async def compile(self, request: RunRequest) -> RunSnapshot:
-        """Compile, select the population, and stage or start the requested run."""
+    async def compile(self, request: RunRequest, *, wait: bool = True) -> RunSnapshot:
+        """Compile, select the population, and stage or start the requested run.
 
-        return await self._prepare(request, None, compile_query=True)
+        With ``wait=False`` the planning runs as an owned background task and the
+        ``compiling`` snapshot is returned at once, so a caller that polls can show
+        progress while the compiler and facet selector are still working.
+        """
+
+        return await self._prepare(request, None, compile_query=True, wait=wait)
 
     async def start(self, request: RunRequest, compiled: CompiledQuery) -> RunSnapshot:
         """Start a reviewed task without running the compiler or facet selector."""
 
         return await self._prepare(request, compiled, compile_query=False)
 
-    async def _prepare(  # noqa: C901 - lifecycle state transitions are intentionally kept together
+    async def _prepare(
         self,
         request: RunRequest,
         compiled: CompiledQuery | None,
         *,
         compile_query: bool,
+        wait: bool = True,
     ) -> RunSnapshot:
+        generation, staged_traces = await self._begin(request, compile_query=compile_query)
+        work = self._plan_and_start(generation, staged_traces, request, compiled, compile_query=compile_query)
+        if wait:
+            return await work
+        task = asyncio.create_task(work)
+        async with self._lock:
+            if generation == self._generation and self._snapshot.state == 'compiling':
+                self._task = task
+                return self._view()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        return await self.snapshot()
+
+    async def _begin(self, request: RunRequest, *, compile_query: bool) -> tuple[int, tuple[TraceRecord, ...]]:
+        """Replace the current generation with a fresh ``compiling`` one."""
+
         staged_traces: tuple[TraceRecord, ...] = ()
         async with self._lifecycle_lock:
             await self._stop_current()
@@ -132,7 +154,17 @@ class RunStore:
                 )
                 self._started_monotonic = None
                 self._task = None
+                return generation, staged_traces
 
+    async def _plan_and_start(
+        self,
+        generation: int,
+        staged_traces: tuple[TraceRecord, ...],
+        request: RunRequest,
+        compiled: CompiledQuery | None,
+        *,
+        compile_query: bool,
+    ) -> RunSnapshot:
         try:
             if compile_query:
                 plan_task = asyncio.create_task(self._plan(request.query, request.population))

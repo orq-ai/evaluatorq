@@ -2607,7 +2607,8 @@ _FINDER_CSS = """
 .finder-controls .chip.is-editable:hover b { color:var(--text-strong); }
 .finder-controls .chip .finder-chip-remove { border:0; background:transparent; padding:0 8px 0 4px; font:inherit; font-size:11px; color:var(--text-faint); cursor:pointer; transition:color .15s ease-out; }
 .finder-controls .chip .finder-chip-remove:hover { color:var(--danger,#c2410c); }
-.finder-controls .add { display:inline-flex; align-items:center; height:28px; padding:0 12px; border-radius:999px; border:1px dashed var(--border-strong); color:var(--text-muted); background:transparent; font:inherit; font-size:12px; }
+.finder-controls .add { display:inline-flex; align-items:center; height:28px; padding:0 12px; border-radius:999px; border:1px dashed var(--border-strong); color:var(--text-muted); background:transparent; font:inherit; font-size:12px; cursor:pointer; transition:border-color .15s ease-out,color .15s ease-out,background .15s ease-out; }
+.finder-controls .add:hover,.finder-controls .addwrap:has(.finder-facets.open) .add { border-style:solid; border-color:var(--accent); color:var(--accent); background:var(--surface-card); }
 .finder-controls .quiet { display:inline-flex; align-items:center; gap:6px; color:var(--text-muted); }
 .finder-controls .quiet input { height:28px; border:1px solid var(--border-default); border-radius:8px; background:var(--surface-card); color:var(--text-strong); padding:0 8px; font-family:var(--font-mono); font-size:12px; font-variant-numeric:tabular-nums; box-shadow:0 1px 2px rgba(20,18,30,.05); transition:border-color .15s ease-out,box-shadow .15s ease-out; }
 .finder-controls .quiet input:hover { border-color:var(--border-strong); }
@@ -2631,7 +2632,7 @@ _FINDER_CSS = """
 .finder-facets .facet-sub label:hover { background:var(--surface-sunken); color:var(--text-strong); }
 .finder-facets .facet-sub label input[type=number] { width:96px; height:26px; border:1px solid var(--border-default); border-radius:6px; padding:0 6px; font-family:var(--font-mono); font-size:12px; }
 .finder-facets .facet-sub label span { word-break:break-all; }
-@media (prefers-reduced-motion:reduce) { .finder-facets.open,.finder-facets .facet-sub { animation:none; } .finder-facets .facet-item,.finder-controls .chip { transition:none; } .finder-facets .facet-item:hover,.finder-facets .facet-item.is-active { padding-left:10px; } .finder-controls .chip.is-editable:hover { transform:none; } }
+@media (prefers-reduced-motion:reduce) { .finder-facets.open,.finder-facets .facet-sub { animation:none; } .finder-facets .facet-item,.finder-controls .chip,.finder-controls .add { transition:none; } .finder-facets .facet-item:hover,.finder-facets .facet-item.is-active { padding-left:10px; } .finder-controls .chip.is-editable:hover { transform:none; } }
 .finder-field { position:relative; border-radius:18px; overflow:hidden; background:#16151c; background-image:radial-gradient(ellipse at 20% 0%,rgba(255,143,52,.10),transparent 55%),radial-gradient(ellipse at 90% 100%,rgba(2,85,88,.25),transparent 55%); box-shadow:0 1px 2px rgba(20,18,30,.06),0 20px 50px -24px rgba(20,18,30,.45); }
 .finder-progress { display:flex; align-items:center; gap:14px; padding:14px 20px; font-size:12.5px; color:#b9b7c2; border-bottom:1px solid rgba(255,255,255,.06); font-family:var(--font-mono); }
 .finder-progress b { color:#f2f1f5; font-weight:500; }

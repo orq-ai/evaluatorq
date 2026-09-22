@@ -344,6 +344,42 @@ async def test_jev_runner_failure_mid_run_sets_failed_state_with_error_text() ->
 
 
 @pytest.mark.asyncio
+async def test_compile_without_waiting_returns_the_compiling_snapshot_and_finishes_in_the_background() -> None:
+    planner = SwallowingCancellationPlanner()
+    store, _, loader, runner, _ = make_store(planner=planner)
+
+    compiling = await store.compile(request(), wait=False)
+
+    assert compiling.state == 'compiling'
+    await planner.entered.wait()
+    assert (await store.snapshot()).state == 'compiling'
+    assert not loader.calls
+
+    cancelled = await store.cancel()
+
+    assert cancelled.state == 'cancelled'
+    assert runner.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_compile_without_waiting_reaches_classifying_once_planning_completes() -> None:
+    store, _, loader, runner, _ = make_store()
+
+    compiling = await store.compile(request(), wait=False)
+
+    assert compiling.state == 'compiling'
+    assert store._task is not None
+    await asyncio.wait_for(store._task, timeout=1)
+    assert (await store.snapshot()).state == 'classifying'
+    assert len(loader.calls) == 1
+    await runner.entered.wait()
+    runner.release.set()
+    assert store._task is not None
+    await asyncio.wait_for(store._task, timeout=1)
+    assert (await store.snapshot()).state == 'completed'
+
+
+@pytest.mark.asyncio
 async def test_cancel_finishes_when_compiler_swallows_cancellation() -> None:
     planner = SwallowingCancellationPlanner()
     store, _, loader, runner, _ = make_store(planner=planner)
