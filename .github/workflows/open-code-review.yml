@@ -34,16 +34,16 @@ jobs:
       # orq-ai/research is a 10.7 MB single line — filled the whole context window
       # and the review stopped on "context compression exceeded its threshold". The fork
       # bounds a single tool result and spills the rest to a handle the model can
-      # page through. The last two commits add the llm_protocol input: the CLI
-      # has spoken the OpenAI Responses API for a while, but the action only
-      # exposed the two-way llm_use_anthropic toggle, so the protocol below was
-      # unreachable from a workflow. Both are to be upstreamed; drop the fork
-      # once they land.
+      # page through. The last three commits add the llm_protocol input and make
+      # it the only field that picks the protocol: the CLI has spoken the OpenAI
+      # Responses API for a while, but the action only exposed the two-way
+      # llm_use_anthropic toggle, so the protocol below was unreachable from a
+      # workflow. Both are to be upstreamed; drop the fork once they land.
       #
-      # The SHA below is also tagged v1.12.1+orq.2 in the fork, so it stays
+      # The SHA below is also tagged v1.12.1+orq.3 in the fork, so it stays
       # reachable if the feat/ branch is rebased away. Pin stays on the SHA: a
       # tag can be moved, a SHA cannot.
-      - uses: orq-ai/open-code-review@a07e0883477a3a627af7643bebd99004909c2b17 # v1.12.1+orq.2
+      - uses: orq-ai/open-code-review@76cc63a5aac08f3648b3ba89a675416c2f850f2e # v1.12.1+orq.3
         with:
           # The Responses API, which is what the OpenAI model below is built
           # for: the CLI appends /responses to this URL, giving the same
@@ -74,10 +74,6 @@ jobs:
           # sticky_summary, which defaults to true. Set full_review: 'true' for
           # one deliberate re-review from the merge-base.
           checkpoint_range: 'true'
-          # llm_use_anthropic is still required by the action, but llm_protocol
-          # wins over it and the action keeps the two in sync — the toggle is
-          # two-way and cannot name the Responses API on its own.
-          llm_use_anthropic: 'false'
           llm_protocol: 'openai-responses'
           # Pinned rather than left empty, which would resolve to medium: the
           # cost dial should be visible in the file, not inherited. At medium on
