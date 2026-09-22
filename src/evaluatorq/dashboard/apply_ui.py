@@ -61,9 +61,7 @@ if TYPE_CHECKING:
 DRAWER_ID = 'rt-apply-drawer'
 AGENT_FIELD_ID = 'rt-apply-agent-field'
 
-# Compatibility aliases for existing dashboard tests and integrations. The
-# canonical helpers live in dashboard.security so every state-changing route
-# uses the same token and request gate.
+# Aliases kept for existing tests; the canonical helpers live in dashboard.security.
 CSRF_FIELD = _SECURITY_CSRF_FIELD
 _CSRF_TOKEN = _SECURITY_CSRF_TOKEN
 _csrf_field = csrf_field

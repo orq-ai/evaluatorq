@@ -397,8 +397,7 @@ class RunStore:
         try:
             await asyncio.shield(cleanup)
         except asyncio.CancelledError:
-            # Cancellation of the owned task is expected; cancellation of this
-            # caller is re-raised after the owned task has finished cleanup.
+            # The caller's own cancellation is re-raised only after the owned task finishes cleanup.
             await cleanup
             raise
 

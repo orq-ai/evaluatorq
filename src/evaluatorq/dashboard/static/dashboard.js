@@ -85,8 +85,7 @@
     }
   });
 
-  // Finder examples, chip removal, and the displayed Cmd/Ctrl+Enter shortcut
-  // are delegated so they keep working after HTMX replaces finder fragments.
+  // Delegated so the finder handlers survive HTMX fragment swaps.
   document.body.addEventListener('click', function (evt) {
     var example = evt.target.closest('[data-finder-example]');
     if (example) {

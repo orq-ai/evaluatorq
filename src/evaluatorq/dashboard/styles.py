@@ -2557,9 +2557,7 @@ _SIM_COMPARE_CSS = """
   text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); margin: 0 0 8px; }
 """
 
-# The Find surface keeps the wireframe's class names so its visual language can
-# evolve independently from the report views. The mock state-switcher rules are
-# intentionally omitted; state changes arrive as HTMX fragments instead.
+# Keeps the wireframe's class names; its mock state-switcher rules are omitted because HTMX fragments drive state.
 _FINDER_CSS = """
 .finder { display:flex; flex-direction:column; gap:20px; width:100%; max-width:1040px; margin:0 auto; }
 .finder-hero { position:relative; padding:34px 36px 26px; border-radius:20px; background:linear-gradient(135deg,#fff 0%,#fbf7f2 55%,#f3f6f6 100%); border:1px solid var(--border-subtle); box-shadow:0 1px 2px rgba(20,18,30,.04),0 12px 40px -18px rgba(20,18,30,.18); }
