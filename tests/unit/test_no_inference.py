@@ -153,6 +153,15 @@ INPUT_ONLY_TRACE = Trace(
     input_messages=[Message(role='user', content='question')],
 )
 
+TRACE_WITH_EMPTY_SELECTED_OUTPUT = Trace(
+    trace_id='trace-empty-selected-output',
+    input_messages=[
+        Message(role='user', content='earlier question'),
+        Message(role='assistant', content='earlier answer'),
+        Message(role='user', content='current question'),
+    ],
+)
+
 
 @pytest.mark.asyncio
 async def test_trace_input_fetches_once_and_scores_recorded_output(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -201,7 +210,32 @@ async def test_trace_input_rejects_empty_recorded_output(monkeypatch: pytest.Mon
     job_result = results[0].job_results[0]
     assert job_result.output is None
     assert job_result.error is not None
-    assert 'no assistant message' in job_result.error
+    assert 'no messages' in job_result.error
+
+
+@pytest.mark.asyncio
+async def test_trace_input_does_not_replay_earlier_assistant_when_output_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
+    fetch = AsyncMock(return_value=[TRACE_WITH_EMPTY_SELECTED_OUTPUT])
+    monkeypatch.setattr(evaluatorq_module, 'fetch_traces', fetch)
+
+    results = await evaluatorq(
+        'trace-eval',
+        data=TraceInput(trace_id='trace-empty-selected-output'),
+        inference=False,
+        evaluators=[],
+        print_results=False,
+        _send_results=False,
+    )
+
+    fetch.assert_awaited_once()
+    assert results[0].job_results is not None
+    job_result = results[0].job_results[0]
+    assert job_result.output is None
+    assert job_result.error is not None
+    assert 'no messages' in job_result.error
 
 
 @pytest.mark.asyncio

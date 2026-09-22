@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Sequence
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from loguru import logger
 
@@ -110,9 +110,7 @@ def extract_recorded_response(messages: Any) -> str:
         ValueError: if ``messages`` is empty or holds no assistant message with text.
     """
     if not messages:
-        raise ValueError(
-            "inference=False requires a recorded response in the 'messages' column, but this row has no messages."
-        )
+        _raise_missing_recorded_response()
     for message in reversed(list(messages)):
         role = message.get('role') if isinstance(message, dict) else getattr(message, 'role', None)
         if role != 'assistant':
@@ -127,14 +125,27 @@ def extract_recorded_response(messages: Any) -> str:
     )
 
 
+def _raise_missing_recorded_response() -> NoReturn:
+    """Raise the shared error for a row with no recorded response at all."""
+    raise ValueError(
+        "inference=False requires a recorded response in the 'messages' column, but this row has no messages."
+    )
+
+
 # Must be async to satisfy the Job protocol (an Awaitable-returning callable), even
 # though replaying a recorded response involves no awaiting.
 async def _replay_recorded_response(data_point: DataPoint, _row_index: int) -> dict[str, Any]:  # noqa: RUF029
     """Synthetic job for the no-inference path: replays the pre-recorded response."""
     if import_error := data_point.inputs.get('trace_import_error'):
         raise ValueError(f'The source trace could not be imported: {import_error}')
-    if recorded_output := data_point.inputs.get('recorded_output'):
-        return {'name': 'recorded', 'output': recorded_output}
+    if 'recorded_output' in data_point.inputs:
+        recorded_output = data_point.inputs['recorded_output']
+        has_recorded_output = (
+            bool(recorded_output.strip()) if isinstance(recorded_output, str) else bool(recorded_output)
+        )
+        if has_recorded_output:
+            return {'name': 'recorded', 'output': recorded_output}
+        _raise_missing_recorded_response()
     response = extract_recorded_response(data_point.inputs.get('messages'))
     return {'name': 'recorded', 'output': response}
 
