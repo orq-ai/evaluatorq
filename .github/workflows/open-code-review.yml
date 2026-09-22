@@ -101,10 +101,12 @@ jobs:
           # so an outage at one provider does not take the review with it.
           # Nothing here fails over on a slow or bad review, only on a dead
           # endpoint. Keep the chain at three: that is the documented ceiling.
+          # All three ids, and this body shape, were verified live against
+          # /v3/router/responses on the orq-research workspace.
           llm_extra_body: >-
             {"reasoning": {"effort": "high"},
              "fallbacks": [{"model": "deepseek/deepseek-flash"},
-                           {"model": "anthropic/claude-haiku-4-5-20251001"}]}
+                           {"model": "zai/glm-5.3-flash"}]}
           # No ocr_version: the fork builds the CLI from its own checkout with
           # `go build ./cmd/opencodereview` and never installs the npm package,
           # so there is nothing left to pin and nothing floats to latest. Build
