@@ -128,6 +128,7 @@ def test_opencode_tool_turn() -> None:
     assert call.status is FunctionCallStatus.completed
     assert turn.usage is not None
     assert turn.usage.input_tokens == 58843 + 1054
+    assert turn.usage.calls == 2
     assert turn.usage.output_tokens == 33 + 5
     assert turn.usage.cached_tokens == 57856
     assert turn.cost_usd == 0

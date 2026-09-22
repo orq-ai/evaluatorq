@@ -111,8 +111,7 @@ class _AgentSpec:
     system_prompt_flag: str | None
     skills_dir: str
     tools: tuple[str, ...]
-    # Argv that makes the binary read the prompt from stdin under ``direct``. Empty means the
-    # binary reads stdin when no positional prompt is given (claude ``-p``, opencode ``run``).
+    # Empty means the binary reads stdin whenever no positional prompt is given.
     stdin_marker: tuple[str, ...] = ()
 
 
@@ -186,8 +185,7 @@ def build_argv(
     orq_flags += (orq or OrqLaunchOptions()).to_flags()
     if agent == 'claude':
         return ['orq', 'launch', 'claude', *orq_flags, '--', *agent_args], prompt
-    # ``orq launch`` already invokes the agent's subcommand (``codex exec`` / ``opencode run``), so
-    # the leading entry of ``output_args`` is dropped here to avoid passing it twice.
+    # orq launch injects the subcommand (``exec`` / ``run``) itself, so the leading entry is dropped.
     return ['orq', 'launch', agent, *orq_flags, '-p', prompt, '--', *agent_args[1:]], None
 
 
@@ -423,7 +421,7 @@ def _parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
     last_text: str | None = None
     totals = {'input': 0, 'output': 0, 'reasoning': 0, 'read': 0, 'write': 0}
     cost = 0.0
-    saw_valid_usage = False
+    usage_steps = 0
     saw_step_finish = False
     saw_cost = False
     for event in events:
@@ -456,7 +454,7 @@ def _parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
             saw_step_finish = True
             tokens = part.get('tokens') or {}
             if 'input' in tokens and 'output' in tokens:
-                saw_valid_usage = True
+                usage_steps += 1
                 totals['input'] += int(tokens['input'])
                 totals['output'] += int(tokens['output'])
                 totals['reasoning'] += int(tokens.get('reasoning', 0))
@@ -472,7 +470,7 @@ def _parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
             logger.warning(f'opencode skipped unknown event type: {kind}')
     if last_text is not None:
         turn.text = last_text
-    if saw_valid_usage:
+    if usage_steps:
         turn.usage = Usage(
             input_tokens=totals['input'],
             output_tokens=totals['output'],
@@ -480,7 +478,7 @@ def _parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
             cached_tokens=totals['read'],
             cache_creation_tokens=totals['write'],
             reasoning_tokens=totals['reasoning'],
-            calls=1,
+            calls=usage_steps,
         )
     elif saw_step_finish:
         logger.warning('opencode step_finish usage missing input and output token fields; usage is unknown')
@@ -607,12 +605,12 @@ class CodingAgentTarget(AgentTarget):
             if self._source_workdir is not None:
                 shutil.copytree(self._source_workdir, dst, symlinks=True, dirs_exist_ok=True)
             skills_dir = dst / self._spec.skills_dir
-            skills_dir.mkdir(parents=True, exist_ok=True)
             if not skills_dir.resolve().is_relative_to(dst.resolve()):
                 raise ValueError(
                     f'{self._spec.skills_dir} in the workdir is a symlink that leaves the private copy; '
                     'refusing to write skill links through it'
                 )
+            skills_dir.mkdir(parents=True, exist_ok=True)
             for skill in self._skills:
                 link = skills_dir / skill.name
                 if link.exists() or link.is_symlink():
