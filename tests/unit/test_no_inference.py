@@ -210,7 +210,7 @@ async def test_trace_input_rejects_empty_recorded_output(monkeypatch: pytest.Mon
     job_result = results[0].job_results[0]
     assert job_result.output is None
     assert job_result.error is not None
-    assert 'no messages' in job_result.error
+    assert 'no recorded assistant response' in job_result.error
 
 
 @pytest.mark.asyncio
@@ -235,7 +235,7 @@ async def test_trace_input_does_not_replay_earlier_assistant_when_output_is_empt
     job_result = results[0].job_results[0]
     assert job_result.output is None
     assert job_result.error is not None
-    assert 'no messages' in job_result.error
+    assert 'no recorded assistant response' in job_result.error
 
 
 @pytest.mark.asyncio

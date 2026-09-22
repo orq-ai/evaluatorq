@@ -145,7 +145,10 @@ async def _replay_recorded_response(data_point: DataPoint, _row_index: int) -> d
         )
         if has_recorded_output:
             return {'name': 'recorded', 'output': recorded_output}
-        _raise_missing_recorded_response()
+        raise ValueError(
+            "inference=False requires a non-empty 'recorded_output' for an imported trace, "
+            'but the selected trace span has no recorded assistant response.'
+        )
     response = extract_recorded_response(data_point.inputs.get('messages'))
     return {'name': 'recorded', 'output': response}
 
