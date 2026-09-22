@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from loguru import logger
 
 from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL
 from evaluatorq.trace_finder.settings import (
@@ -41,6 +42,26 @@ def test_invalid_settings_file_warns_and_returns_defaults(tmp_path: Path, caplog
 
     assert settings == DashboardSettings.model_validate({})
     assert 'Could not load dashboard settings' in caplog.text
+
+
+def test_unreadable_settings_file_warns_with_path_and_returns_defaults(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / 'dashboard-settings.json'
+
+    def raise_unreadable(*args: object, **kwargs: object) -> str:
+        raise OSError('permission denied')
+
+    monkeypatch.setattr(Path, 'read_text', raise_unreadable)
+    messages: list[str] = []
+    sink_id = logger.add(lambda message: messages.append(message.record['message']), level='WARNING')
+    try:
+        settings = load_settings(path)
+    finally:
+        logger.remove(sink_id)
+
+    assert settings == DashboardSettings.model_validate({})
+    assert any(str(path) in message for message in messages)
 
 
 def test_effective_settings_precedence_is_file_then_environment_then_overrides(

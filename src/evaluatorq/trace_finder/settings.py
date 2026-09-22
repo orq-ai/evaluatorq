@@ -27,14 +27,7 @@ class DashboardSettings(BaseModel):
 
 
 def _default_settings() -> DashboardSettings:
-    return DashboardSettings(
-        compiler_model=DEFAULT_PIPELINE_MODEL,
-        jev_model='typesafe/jev-latest',
-        apply_model=DEFAULT_PIPELINE_MODEL,
-        window_days=7,
-        limit=500,
-        parallelism=100,
-    )
+    return DashboardSettings.model_validate({})
 
 
 def settings_path() -> Path:
