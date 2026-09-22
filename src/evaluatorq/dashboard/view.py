@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
+from collections.abc import Mapping
 from datetime import datetime
 from itertools import starmap
 from pathlib import Path
@@ -742,14 +743,49 @@ def report_actions(rid: str) -> str:
     return f'<a class="btn-secondary" href="/r/{esc(rid)}/export.html">{_DOWNLOAD_ICON} Export</a>'
 
 
-def settings_body(config: list[tuple[str, str | list[str]]]) -> str:
-    """Render the Settings screen: read-only runtime configuration (run stores,
-    default model, API-key presence, Orq host/workspace).
+def settings_body(
+    config: list[tuple[str, str | list[str]]],
+    settings: Any | None = None,
+    *,
+    errors: Mapping[str, str] | None = None,
+    saved: bool = False,
+) -> str:
+    """Render editable finder settings above the read-only runtime configuration."""
+    if settings is None:
+        from evaluatorq.trace_finder.settings import effective_settings
 
-    There's nothing editable here anymore — deep-links derive host + workspace
-    per-run from each run's ``experiment_url``; the host/workspace rows are just
-    the env fallback for runs with no experiment.
-    """
+        settings = effective_settings()
+    errors = errors or {}
+
+    def setting_value(name: str) -> str:
+        value = settings.get(name, '') if isinstance(settings, Mapping) else getattr(settings, name, '')
+        return str(value)
+
+    fields = (
+        ('compiler_model', 'Compiler model', 'text'),
+        ('jev_model', 'JEV model', 'text'),
+        ('apply_model', 'Apply-recommendations model', 'text'),
+        ('window_days', 'Window (days)', 'number'),
+        ('limit', 'Trace limit', 'number'),
+        ('parallelism', 'Parallelism', 'number'),
+    )
+    field_rows: list[str] = []
+    for name, label, input_type in fields:
+        error = errors.get(name)
+        error_html = f'<span class="settings-error">{esc(error)}</span>' if error else ''
+        field_rows.append(
+            f'<div class="config-row settings-field"><label class="config-key" for="{esc(name)}">{esc(label)}</label>'
+            f'<span class="config-val"><input id="{esc(name)}" name="{esc(name)}" type="{input_type}" '
+            f'value="{esc(setting_value(name))}" required>{error_html}</span></div>'
+        )
+    saved_html = '<p class="settings-saved" role="status">Settings saved.</p>' if saved else ''
+    form = (
+        '<form class="settings-form" method="post" action="/settings">'
+        f'<div class="config-list">{"".join(field_rows)}</div>'
+        '<button type="submit" class="rt-apply-btn">Save</button>'
+        '</form>'
+    )
+    settings_panel = _panel('Finder settings', 'Models and trace-finder defaults', f'{saved_html}{form}')
 
     def val_html(v: str | list[str]) -> str:
         # A list renders one item per line; a scalar is a single line.
@@ -762,7 +798,7 @@ def settings_body(config: list[tuple[str, str | list[str]]]) -> str:
         for k, v in config
     )
     config_panel = _panel('Configuration', 'What this dashboard is reading', f'<div class="config-list">{rows}</div>')
-    return f'<section class="dash-wrap">{config_panel}</section>'
+    return f'<section class="dash-wrap">{settings_panel}{config_panel}</section>'
 
 
 def report_not_found(rid: str) -> str:

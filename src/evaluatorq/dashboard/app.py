@@ -4,7 +4,7 @@
 
 - ``GET /``                   → combined Dashboard landing (no ``surface``), or a
                                per-kind run list when ``?surface=redteam|sim|pairwise``
-- ``GET /settings``           → settings stub screen (matches the v1 design nav)
+- ``GET /settings``           → editable settings plus read-only runtime details
 - ``GET /r/{rid}``            → embedded report view in the dashboard shell
 - ``GET /r/{rid}/export``     → standalone HTML export (alias: export.html)
 - ``GET /r/{rid}/export.html``→ standalone HTML export (full document)
@@ -33,8 +33,9 @@ from pathlib import Path
 
 from fasthtml.core import FastHTML, NotStr
 from loguru import logger
+from pydantic import ValidationError
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
-from starlette.responses import Response
+from starlette.responses import RedirectResponse, Response
 
 # Starlette 1.3.x / FastHTML 0.12.x compat shim. Must be imported, not deferred to
 # serve(): the patch has to be live when build_app() constructs the FastHTML app, and
@@ -67,6 +68,7 @@ from evaluatorq.dashboard.view import (
     settings_body,
     sim_overview_body,
 )
+from evaluatorq.trace_finder.settings import DashboardSettings, effective_settings, save_settings
 
 _STATIC_DIR = Path(__file__).parent / 'static'
 
@@ -146,7 +148,13 @@ def _settings_config(roots: list[Path] | None) -> list[tuple[str, str | list[str
     config: list[tuple[str, str | list[str]]] = [('Run stores', store_paths)]
     config.append(('Default sim model', DEFAULT_MODEL))
     model = apply_model()
-    source = f'{APPLY_MODEL_ENV}' if model != DEFAULT_APPLY_MODEL else 'default'
+    source = (
+        APPLY_MODEL_ENV
+        if os.environ.get(APPLY_MODEL_ENV, '').strip()
+        else 'saved'
+        if model != DEFAULT_APPLY_MODEL
+        else 'default'
+    )
     config.append(('Apply-recommendations model', f'{model} ({source})'))
     for label, var in (('ORQ API key', 'ORQ_API_KEY'), ('OpenAI API key', 'OPENAI_API_KEY')):
         value = os.environ.get(var)
@@ -203,8 +211,33 @@ def _index(req: Request) -> NotStr:
 
 def _settings(req: Request) -> NotStr:
     roots = _roots(req)
-    body = settings_body(_settings_config(roots))
+    body = settings_body(
+        _settings_config(roots),
+        effective_settings(),
+        saved=req.query_params.get('saved') == '1',
+    )
     return NotStr(page('Settings', body, active_nav='settings'))
+
+
+async def _save_settings(req: Request) -> Response | NotStr:
+    """Validate and persist the settings form, or render field errors."""
+    roots = _roots(req)
+    form_data = await req.form()
+    field_names = ('compiler_model', 'jev_model', 'apply_model', 'window_days', 'limit', 'parallelism')
+    values = {name: form_data.get(name, '') for name in field_names}
+    try:
+        settings = DashboardSettings.model_validate(values)
+    except ValidationError as exc:
+        errors: dict[str, str] = {}
+        for detail in exc.errors():
+            location = detail.get('loc', ())
+            field = str(location[0]) if location else 'form'
+            errors[field] = str(detail.get('msg', 'Invalid value'))
+        body = settings_body(_settings_config(roots), values, errors=errors)
+        return Response(page('Settings', body, active_nav='settings'), status_code=422, media_type='text/html')
+
+    save_settings(settings)
+    return RedirectResponse('/settings?saved=1', status_code=303)
 
 
 def _search(req: Request) -> NotStr:
@@ -550,6 +583,7 @@ def register_report_routes(app: FastHTML) -> None:
     """Register the report routes on *app*."""
     app.get('/')(_index)
     app.get('/settings')(_settings)
+    app.post('/settings')(_save_settings)
     app.get('/search')(_search)
     app.get('/r/{rid}')(_report_view)
     app.get('/r/{rid}/sim/agent-card')(_sim_agent_card)

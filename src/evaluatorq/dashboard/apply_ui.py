@@ -46,6 +46,7 @@ from starlette.responses import Response
 from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.common.reports import esc
 from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL
+from evaluatorq.trace_finder.settings import effective_settings
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -114,7 +115,7 @@ DEFAULT_APPLY_MODEL = DEFAULT_PIPELINE_MODEL
 
 def apply_model() -> str:
     """The model used to merge recommendations into agent instructions."""
-    return os.environ.get(APPLY_MODEL_ENV, '').strip() or DEFAULT_APPLY_MODEL
+    return effective_settings().apply_model
 
 
 # ---------------------------------------------------------------------------

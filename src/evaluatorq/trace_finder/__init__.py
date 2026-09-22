@@ -46,15 +46,25 @@ from .models import (
 from .orq_source import OrqTraceSource, build_oql
 from .projection import MAX_TOKEN_BUDGET, OMISSION_MARKER, estimate_tokens, project_trace, serialize_projection
 from .run_store import RunStore
+from .settings import (
+    SETTINGS_PATH_ENV,
+    DashboardSettings,
+    effective_settings,
+    load_settings,
+    save_settings,
+    settings_path,
+)
 
 __all__ = [
     'FACET_NAMES',
     'MAX_TOKEN_BUDGET',
     'NO_FILTER_LABEL',
     'OMISSION_MARKER',
+    'SETTINGS_PATH_ENV',
     'CompileError',
     'CompiledPlan',
     'CompiledQuery',
+    'DashboardSettings',
     'ExportCounts',
     'ExportFilters',
     'ExportNumericFilters',
@@ -92,14 +102,18 @@ __all__ = [
     'build_oql',
     'classification_legend',
     'compile_query',
+    'effective_settings',
     'estimate_tokens',
     'export_json',
     'load_facet_catalogue',
+    'load_settings',
     'matches_selection',
     'parse_datapoint_result',
     'project_trace',
     'run_jev',
+    'save_settings',
     'select_filters',
     'serialize_projection',
+    'settings_path',
     'validate_compiled_query',
 ]

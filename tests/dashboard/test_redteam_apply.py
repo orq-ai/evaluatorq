@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture
-def apply_client(tmp_path, rt_report_multi):
+def apply_client(tmp_path, rt_report_multi, monkeypatch: pytest.MonkeyPatch):
     """(client, rid, report_path): like client_with_rt_fixture but the report
     path is exposed so write-back assertions can read the file."""
     from starlette.testclient import TestClient as _TC
@@ -36,6 +36,7 @@ def apply_client(tmp_path, rt_report_multi):
     from evaluatorq.dashboard.app import build_app
     from evaluatorq.dashboard.library import report_id
 
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'dashboard-settings.json'))
     rt_dir = tmp_path / 'runs'
     rt_dir.mkdir()
     rt_path = rt_dir / 'rt_fixture.json'
@@ -488,6 +489,10 @@ class TestMultiAgentGating:
 
 
 class TestApplyModelSetting:
+    @pytest.fixture(autouse=True)
+    def isolate_settings(self, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'dashboard-settings.json'))
+
     def test_default_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(apply_mod.APPLY_MODEL_ENV, raising=False)
         assert apply_mod.apply_model() == apply_mod.DEFAULT_APPLY_MODEL == DEFAULT_PIPELINE_MODEL

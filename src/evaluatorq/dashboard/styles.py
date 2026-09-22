@@ -452,7 +452,7 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .search-hit-name { font-size: 13px; color: var(--text-strong); }
 .search-empty { padding: 10px 12px; font-size: 13px; color: var(--text-muted); }
 
-/* ==== settings — read-only config ================================= */
+/* ==== settings ====================================================== */
 .config-list { display: flex; flex-direction: column; }
 .config-row { display: flex; align-items: baseline; gap: 24px; padding: 8px 0; border-bottom: 1px solid var(--border, #eee); }
 .config-key { flex: 0 0 160px; font-family: var(--font-sans); font-size: 13px; color: var(--text-muted); }
@@ -460,6 +460,12 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .config-val { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-family: var(--font-mono); font-size: 12px; color: var(--text-strong); }
 .config-val-item { word-break: break-all; }
 .config-note { font-size: 13px; color: var(--text-muted); line-height: 1.5; }
+.settings-form { display: flex; flex-direction: column; gap: 14px; }
+.settings-field .config-key { cursor: pointer; }
+.settings-field input { width: 100%; box-sizing: border-box; border: 1px solid var(--border-default, #d8d5cf); border-radius: 6px; padding: 7px 9px; color: var(--text-strong); background: var(--surface-card, #fff); font: inherit; }
+.settings-field input:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
+.settings-error { color: var(--red-600, #dc2626); font-family: var(--font-sans); font-size: 12px; }
+.settings-saved { margin: 0 0 12px; color: var(--green-600, #16a34a); font-size: 13px; }
 
 /* ==== run rows (recent + per-kind list) ============================= */
 .run-list { display: flex; flex-direction: column; }

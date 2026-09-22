@@ -55,22 +55,24 @@ def test_classify_host(url: str | None, label: str) -> None:
     assert ow.classify_host(url) == label
 
 
-# --- settings page renders read-only (no editable panels / POST routes) -----
+# --- workspace and host remain read-only on the editable settings page ------
 
 
-def test_settings_page_is_read_only(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_settings_page_keeps_workspace_and_host_read_only(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     from starlette.testclient import TestClient
 
     from evaluatorq.dashboard.app import build_app
 
     monkeypatch.setenv('ORQ_WORKSPACE', 'orq-research')
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'dashboard-settings.json'))
     client = TestClient(build_app(roots=[tmp_path]), follow_redirects=False)
 
     page = client.get('/settings').text
     assert 'Orq workspace' in page
     assert 'orq-research' in page
     assert 'Orq host' in page
-    # Editable controls and their POST routes are gone.
+    assert 'action="/settings"' in page
+    # Workspace and host controls are still absent; their old POST routes stay gone.
     assert 'action="/settings/workspace"' not in page
     assert client.post('/settings/workspace', data={'workspace': 'x'}).status_code == 404
     assert client.post('/settings/host', data={'base_url': 'x'}).status_code == 404
