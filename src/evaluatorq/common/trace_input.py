@@ -748,8 +748,11 @@ async def fetch_traces(
     Partition the result with `partition_traces` rather than filtering by hand —
     every surface is meant to report import failures the same way.
 
-    The HTTP calls retry through `common.retry.with_retry`; the shared
-    ``httpx.AsyncClient`` adds no retry layer of its own.
+    The HTTP calls retry through `common.retry.with_retry` — including the 429s
+    and 5xx that ``raise_for_status`` raises as ``httpx.HTTPStatusError`` — and the
+    shared ``httpx.AsyncClient`` adds no retry layer of its own. Raw httpx rather
+    than the Orq SDK because ``traces.search`` requires a ``from_``/``to`` window
+    that ``TraceInput`` does not, and its span models would need a second parser.
     """
     key, host = _resolve_orq_credentials(api_key, base_url)
     headers = {'Authorization': f'Bearer {key}'}

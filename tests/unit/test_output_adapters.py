@@ -206,3 +206,16 @@ def test_output_to_text_renders_a_tool_call_only_agent_response():
     )
     assert has_meaningful_output(response) is True
     assert output_to_text(response) == '[tool_call: get_balance({})]'
+
+
+def test_output_to_text_renders_text_and_tool_calls_together():
+    """A turn that answered and acted must show both: the action used to vanish behind the text."""
+    response = AgentResponse(
+        output=[
+            TextOutputItem(text='checking that now', annotations=[]),
+            ToolCallOutputItem(id='c1', call_id='c1', name='get_balance', arguments='{}'),
+        ]
+    )
+    rendered = output_to_text(response)
+    assert 'checking that now' in rendered
+    assert '[tool_call: get_balance({})]' in rendered

@@ -16,6 +16,7 @@ import asyncio
 import random
 from typing import TYPE_CHECKING, TypeVar
 
+import httpx
 from loguru import logger
 from openai import APIConnectionError, APIStatusError
 
@@ -95,6 +96,12 @@ def _is_retryable_error(
     # ordinary way a long router call dies mid-flight).
     if isinstance(err, APIConnectionError):
         return True
+
+    # A raw httpx call (the Orq trace endpoints, which have no SDK method) raises
+    # HTTPStatusError from raise_for_status() — not an SDK class, so without this
+    # branch a 429 or a 503 mid-import ended the run on the first attempt.
+    if isinstance(err, httpx.HTTPStatusError):
+        return _is_retryable_status(err.response.status_code, retry_statuses)
 
     # Defensive fallback for a raw httpx error raised outside the SDK: match the
     # connection-error class names directly, or through a single __cause__ hop.

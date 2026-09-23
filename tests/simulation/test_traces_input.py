@@ -830,3 +830,21 @@ async def test_supplied_partial_summaries_drop_missing_without_resummarizing_ext
 
     # Only the profile call ran — no summarize call for either trace.
     assert schemas == [traces_mod._TrafficProfile]
+
+
+@pytest.mark.asyncio
+async def test_trace_query_selecting_nothing_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Core evaluation and red team both refuse an empty selection; simulation matches them."""
+    monkeypatch.setattr(traces_module, "fetch_traces", AsyncMock(return_value=[]))
+
+    with pytest.raises(ValueError, match="selected no usable conversation"):
+        await traces_module._resolve_trace_conversations(TraceInput(search="nothing matches"))
+
+
+@pytest.mark.asyncio
+async def test_trace_query_whose_traces_are_all_unusable_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    no_user_turn = Trace(trace_id="t1", output_messages=[Message(role="assistant", content="Hi.")])
+    monkeypatch.setattr(traces_module, "fetch_traces", AsyncMock(return_value=[no_user_turn]))
+
+    with pytest.raises(ValueError, match="1 trace"):
+        await traces_module._resolve_trace_conversations(TraceInput(trace_id="t1"))

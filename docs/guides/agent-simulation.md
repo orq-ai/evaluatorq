@@ -512,7 +512,7 @@ results = await simulate(
 
 Replay reruns what you already have. The other move is to generate *new* cases that are shaped by what really happened. Production traces show you the user archetypes and situations your agent actually meets.
 
-The async `datapoints_from_traces(...)` helper accepts the same `TraceInput` used by core evaluation. It fetches and normalizes traces through the shared importer, then turns each usable conversation into a simulation datapoint; pass the returned rows to the existing `simulate()` runner.
+The async `datapoints_from_traces(...)` helper accepts the same `TraceInput` used by core evaluation. It fetches and normalizes traces through the shared importer, then turns each usable conversation into a simulation datapoint; pass the returned rows to the existing `simulate()` runner. A query that selects no conversation with a user turn raises rather than returning an empty list, so a mistyped `search=` fails where you made it rather than as a run of zero personas.
 
 Query mode pulls a bounded recent batch, no trace ID required:
 

@@ -49,8 +49,9 @@ def output_to_text(output: Any) -> str:
     if output is None:
         return ''
     if isinstance(output, AgentResponse):
-        # A tool-call-only response has empty .text, which has_meaningful_output still counts as a response.
-        return output.text or messages_to_text([{'role': 'assistant', 'tool_calls': output.tool_calls}])
+        # Text and tool calls both render: a turn that answered *and* acted loses the action otherwise,
+        # while has_meaningful_output counts either alone as a response.
+        return messages_to_text([{'role': 'assistant', 'content': output.text, 'tool_calls': output.tool_calls}])
     if isinstance(output, str):
         return output
     if isinstance(output, list) and (not output or all(_is_message_shape(item) for item in output)):

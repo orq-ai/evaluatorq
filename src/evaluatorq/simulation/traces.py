@@ -316,6 +316,10 @@ async def summarize_conversations(
     ``llm_config`` is the fuller surface behind ``model``: only the fields you set take effect,
     so an unset ``temperature`` still omits the parameter from the request. When both name a model,
     ``llm_config.model`` wins and the contradiction is logged.
+
+    Raises:
+        ValueError: A ``TraceInput`` selected no conversation carrying a user turn.
+            Zero rows is a caller error on every surface, not a run of zero personas.
     """
     from evaluatorq.openresponses.client import build_simulation_client
     from evaluatorq.simulation._config import resolve_sim_llm_config
@@ -418,7 +422,14 @@ async def _resolve_trace_conversations(
     if isinstance(source, TraceInput):
         traces = await fetch_traces(source, api_key=orq_api_key, base_url=base_url)
         usable_traces, _failed = partition_traces(traces, caller='_resolve_trace_conversations')
-        return [_to_trace_conversation(trace) for trace in usable_traces]
+        conversations = [_to_trace_conversation(trace) for trace in usable_traces]
+        usable = [conversation for conversation in conversations if conversation.first_user_message]
+        if not usable:
+            raise ValueError(
+                f'TraceInput(...) selected no usable conversation ({len(traces)} trace(s) fetched). '
+                'Widen the query (limit, search, filters, start_time/end_time) or name a trace_id.'
+            )
+        return usable
     values = list(source)
     canonical = [value for value in values if isinstance(value, Trace)]
     if canonical:
@@ -526,6 +537,10 @@ async def datapoints_from_traces(
     ``llm_config`` is the fuller surface behind ``model``: only the fields you set take effect,
     so an unset ``temperature`` still omits the parameter from the request. When both name a model,
     ``llm_config.model`` wins and the contradiction is logged.
+
+    Raises:
+        ValueError: A ``TraceInput`` selected no conversation carrying a user turn.
+            Zero rows is a caller error on every surface, not a run of zero personas.
     """
     if source is None:
         if conversations is None:
@@ -722,6 +737,10 @@ async def extend_from_traces(
     ``llm_config`` is the fuller surface behind ``model``: only the fields you set take effect,
     so an unset ``temperature`` still omits the parameter from the request. When both name a model,
     ``llm_config.model`` wins and the contradiction is logged.
+
+    Raises:
+        ValueError: A ``TraceInput`` selected no conversation carrying a user turn.
+            Zero rows is a caller error on every surface, not a run of zero personas.
     """
     from evaluatorq.openresponses.client import build_simulation_client
     from evaluatorq.simulation._config import resolve_sim_llm_config
