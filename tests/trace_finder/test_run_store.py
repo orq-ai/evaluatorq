@@ -321,6 +321,26 @@ async def test_close_cancels_and_releases_the_builder_resources() -> None:
 
 
 @pytest.mark.asyncio
+async def test_close_awaits_async_resource_cleanup() -> None:
+    released: list[str] = []
+
+    async def cleanup() -> None:
+        await asyncio.sleep(0)
+        released.append('closed')
+
+    store = RunStore(
+        compiler=Planner(),
+        population_loader=Loader(),
+        run_jev=Runner(),
+        filter_selector=make_store()[0]._filter_selector,
+        close=cleanup,
+    )
+
+    await store.close()
+    assert released == ['closed']
+
+
+@pytest.mark.asyncio
 async def test_population_loader_failure_sets_failed_state_with_error_text() -> None:
     store, _, _, runner, _ = make_store(loader=RaisingLoader())
 

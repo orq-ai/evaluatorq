@@ -206,6 +206,32 @@ def test_console_sink_flushes_queued_lines_when_removed() -> None:
     assert stream.getvalue().count('queued line ') == 100
 
 
+def test_console_sink_disables_itself_when_output_pipe_breaks() -> None:
+    import io
+    import threading
+
+    from evaluatorq.dashboard import launch
+
+    failed = threading.Event()
+
+    class BrokenStream(io.TextIOBase):
+        def write(self, text: str) -> int:
+            failed.set()
+            raise BrokenPipeError('reader exited')
+
+        def flush(self) -> None:
+            return None
+
+    sink = launch._DroppingConsoleSink(BrokenStream())
+    sink.write('first\n')
+    assert failed.wait(timeout=2)
+    sink._thread.join(timeout=2)
+    assert not sink._thread.is_alive()
+    assert sink._stop_requested.is_set()
+    sink.write('ignored after stream failure\n')
+    assert sink._queue.empty()
+
+
 @pytest.mark.parametrize(
     ('override', 'expected'),
     [(None, logging.WARNING), ('DEBUG', logging.NOTSET)],

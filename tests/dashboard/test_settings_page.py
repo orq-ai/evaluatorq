@@ -17,7 +17,7 @@ from evaluatorq.dashboard import finder_routes
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.apply_ui import apply_model
 from evaluatorq.dashboard.security import CSRF_FIELD, _CSRF_TOKEN
-from evaluatorq.trace_finder import RunSnapshot
+from evaluatorq.trace_finder import FacetCatalogue, RunSnapshot
 from evaluatorq.trace_finder.settings import DashboardSettings, save_settings
 
 
@@ -378,6 +378,111 @@ def test_saved_profile_is_applied_when_the_finder_first_loads_settings(
     finder_routes._settings(app)
 
     assert app.state.finder_profile == _profiles()[1]
+
+
+def test_finder_requests_do_not_run_profile_discovery(
+    settings_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    save_settings(DashboardSettings.model_validate({'orq_profile': 'prod'}), settings_file)
+    calls: list[str] = []
+
+    def profiles() -> tuple[OrqProfile, ...]:
+        calls.append('discover')
+        return _profiles()
+
+    monkeypatch.setattr(finder_routes, 'list_orq_profiles', profiles)
+    app = build_app(roots=[tmp_path])
+    assert calls == ['discover']
+    monkeypatch.setattr(finder_routes, 'list_orq_profiles', lambda: pytest.fail('discovery ran in request'))
+    monkeypatch.setattr(finder_routes, '_build_store', lambda _app: None)
+
+    assert TestClient(app).get('/find').status_code == 200
+    assert calls == ['discover']
+
+
+@pytest.mark.asyncio
+async def test_stale_facet_load_cannot_restore_cache_after_settings_change(
+    settings_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = build_app(roots=[tmp_path])
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def load(*args: object, **kwargs: object) -> FacetCatalogue:
+        started.set()
+        await release.wait()
+        return FacetCatalogue(project=('old-profile',))
+
+    monkeypatch.setattr(finder_routes, 'resolve_orq_client', lambda *args, **kwargs: object())
+    monkeypatch.setattr(finder_routes, 'load_facet_catalogue', load)
+    task = asyncio.create_task(finder_routes._load_catalogue(app))
+    await started.wait()
+    app.state.finder_generation += 1
+    release.set()
+
+    assert await task is None
+    assert not hasattr(app.state, 'finder_catalogue_cache')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('fail', [False, True])
+async def test_facet_refresh_closes_its_temporary_orq_client(
+    settings_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail: bool
+) -> None:
+    app = build_app(roots=[tmp_path])
+    closed: list[str] = []
+
+    class FakeOrq:
+        async def __aexit__(self, *_args: object) -> None:
+            closed.append('async')
+
+        def __exit__(self, *_args: object) -> None:
+            closed.append('sync')
+
+    async def load(*args: object, **kwargs: object) -> FacetCatalogue:
+        if fail:
+            raise RuntimeError('facet service failed')
+        return FacetCatalogue(project=('project',))
+
+    monkeypatch.setattr(finder_routes, 'resolve_orq_client', lambda *args, **kwargs: FakeOrq())
+    monkeypatch.setattr(finder_routes, 'load_facet_catalogue', load)
+
+    result = await finder_routes._load_catalogue(app)
+
+    assert (result is None) is fail
+    assert closed == ['async', 'sync']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('owned', [True, False])
+async def test_retired_finder_closes_only_clients_it_owns(
+    settings_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, owned: bool
+) -> None:
+    app = build_app(roots=[tmp_path])
+    closed: list[str] = []
+
+    class FakeOrq:
+        async def __aexit__(self, *_args: object) -> None:
+            closed.append('orq-async')
+
+        def __exit__(self, *_args: object) -> None:
+            closed.append('orq-sync')
+
+    class FakeLLM:
+        async def close(self) -> None:
+            closed.append('llm')
+
+    monkeypatch.setattr(
+        finder_routes, 'resolve_llm_client', lambda **kwargs: SimpleNamespace(client=FakeLLM(), owned=owned)
+    )
+    monkeypatch.setattr(finder_routes, 'resolve_orq_client', lambda *args, **kwargs: FakeOrq())
+    store = finder_routes._build_store(app)
+    assert store is not None
+
+    await store.close()
+    await store.close()
+
+    assert closed == ['orq-async', 'orq-sync', *(['llm'] if owned else [])]
 
 
 @pytest.mark.parametrize(

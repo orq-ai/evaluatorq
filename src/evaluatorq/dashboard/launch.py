@@ -99,6 +99,12 @@ class _DroppingConsoleSink:
             self._stop_requested.set()
         self._thread.join(timeout=2)
 
+    def _disable(self) -> None:
+        """Stop accepting logs after the output stream breaks and release queued text."""
+        with self._state_lock:
+            self._stop_requested.set()
+            self._queue = queue.Queue(self._queue.maxsize)
+
     def _drain(self, stream: TextIO) -> None:
         while not self._stop_requested.is_set() or not self._queue.empty():
             try:
@@ -107,15 +113,22 @@ class _DroppingConsoleSink:
                 continue
             with self._dropped_lock:
                 dropped, self._dropped = self._dropped, 0
-            if dropped:
-                stream.write(f'... dropped {dropped} log lines while the console was not draining\n')
-            stream.write(line)
-            stream.flush()
+            try:
+                if dropped:
+                    stream.write(f'... dropped {dropped} log lines while the console was not draining\n')
+                stream.write(line)
+                stream.flush()
+            except (BrokenPipeError, OSError, ValueError):
+                self._disable()
+                return
         with self._dropped_lock:
             dropped, self._dropped = self._dropped, 0
         if dropped:
-            stream.write(f'... dropped {dropped} log lines while the console was not draining\n')
-            stream.flush()
+            try:
+                stream.write(f'... dropped {dropped} log lines while the console was not draining\n')
+                stream.flush()
+            except (BrokenPipeError, OSError, ValueError):
+                self._disable()
 
 
 def _install_log_bridge() -> None:

@@ -23,7 +23,7 @@ The finder plans the query before it spends a JEV call on each trace:
 1. You enter a question, such as `Conversations over 20k tokens where the customer was frustrated.`
 2. The compiler creates one semantic JEV task and extracts numeric constraints for total tokens or duration. At the same time, one JEV classify request selects categorical metadata filters from the live facet catalogue. It normally asks one question per non-empty facet dimension; when your query names multiple available values in one dimension, it asks a yes/no question for each named value in the same round trip.
 3. The finder merges those selections with any filters you chose explicitly and builds an OQL query. The base filter excludes `generate_content` operations, so the compiler and classifier traces do not crowd the population being searched.
-4. Orq returns the newest usable traces in the selected window. The finder hydrates conversations when the trace summary does not contain usable messages, and applies the OQL filters before judging.
+4. Orq returns the newest usable traces in the selected window. The finder hydrates conversations when the trace summary does not contain usable messages, and applies the OQL filters before judging. Hydration stops with an error if a trace exceeds ten span pages or 2,000 spans.
 5. Each trace is projected into a bounded JEV state. The projection keeps the newest conversation suffix, preserves tool-call names, arguments, and completion status, removes reasoning fields and tool-result bodies, and truncates text from the front when necessary.
 6. JEV classifies each projected trace through evaluatorq. Results stream into the matrix and the included-traces table as each trace finishes.
 
@@ -58,7 +58,7 @@ JEV selects categorical metadata from the live catalogue. The eight categorical 
 | `agent_name` | `agent_name` | Agent name recorded on the trace. |
 | `tool_name` | `tool_name` | Tool name recorded on the trace. |
 
-The compiler handles the two numeric dimensions because trace-finder metadata thresholds are not JEV classify outputs. JEV classify tasks return a label (`choice`), a yes/no probability (`noul`), or a 0–1 score (`score`); they do not extract numeric metadata thresholds. The compiler extracts inclusive integer ranges for `total_tokens` and `duration_ms` and applies them in OQL; for example, “over 20k tokens” becomes `total_tokens >= 20001`, and “slower than 30 seconds” becomes `duration_ms >= 30001`. The CLI and dashboard also let you enter minimum and maximum bounds explicitly.
+The compiler handles the two numeric dimensions because trace-finder metadata thresholds are not JEV classify outputs. JEV classify tasks return a label (`choice`), a yes/no probability (`noul`), or a 0–1 score (`score`); they do not extract numeric metadata thresholds. The compiler extracts inclusive integer ranges for `total_tokens` and `duration_ms` and applies them in OQL; for example, “over 20k tokens” becomes `total_tokens >= 20001`, “under 20k tokens” becomes `total_tokens <= 19999`, and “slower than 30 seconds” becomes `duration_ms >= 30001`. The CLI and dashboard also let you enter minimum and maximum bounds explicitly.
 
 ## Settings and precedence
 

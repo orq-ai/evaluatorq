@@ -12,6 +12,7 @@ import pytest
 from evaluatorq.trace_finder import FacetSelection, NumericFilters
 from evaluatorq.trace_finder.models import Snapshot
 from evaluatorq.trace_finder.orq_source import (
+    MAX_SPAN_PAGES,
     OrqSourceError,
     OrqTraceSource,
     _RawResponseCapture,
@@ -457,6 +458,66 @@ async def test_rejects_repeated_page_token() -> None:
             facets=FacetSelection(),
             numeric=NumericFilters(),
         )
+
+
+@pytest.mark.asyncio
+async def test_hydration_failure_cancels_other_span_requests() -> None:
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    class FailingSpans(FakeTraces):
+        async def list_spans_async(self, *, trace_id: str, **kwargs: Any) -> Any:
+            self.list_span_calls.append({'trace_id': trace_id, **kwargs})
+            if len(self.list_span_calls) == 2:
+                started.set()
+            await started.wait()
+            if trace_id == 'first':
+                raise RuntimeError('span service unavailable')
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+    traces = FailingSpans({None: ([summary('first', messages=[]), summary('second', messages=[])], False, None)})
+
+    with pytest.raises(OrqSourceError, match='span service unavailable'):
+        await make_source(FakeOrq(traces)).load_async(
+            START, END, 2, facets=FacetSelection(), numeric=NumericFilters()
+        )
+
+    assert len(traces.list_span_calls) == 2
+    assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_span_pagination_stops_at_page_limit() -> None:
+    class EndlessSpans(FakeTraces):
+        async def list_spans_async(self, *, trace_id: str, **kwargs: Any) -> Any:
+            self.list_span_calls.append({'trace_id': trace_id, **kwargs})
+            return namespace(data=[], has_more=True, next_page_token=f'page-{len(self.list_span_calls)}')
+
+    traces = EndlessSpans({})
+    source = make_source(FakeOrq(traces))
+
+    with pytest.raises(OrqSourceError, match=f'exceeded {MAX_SPAN_PAGES} pages'):
+        await source._list_spans('trace', asyncio.Semaphore(1))
+
+    assert len(traces.list_span_calls) == MAX_SPAN_PAGES
+
+
+@pytest.mark.asyncio
+async def test_span_pagination_rejects_more_than_span_limit() -> None:
+    class OversizeSpans(FakeTraces):
+        async def list_spans_async(self, *, trace_id: str, **kwargs: Any) -> Any:
+            self.list_span_calls.append({'trace_id': trace_id, **kwargs})
+            return namespace(data=[namespace(span_id=f'span-{index}') for index in range(2001)], has_more=False)
+
+    traces = OversizeSpans({})
+    source = make_source(FakeOrq(traces))
+
+    with pytest.raises(OrqSourceError, match='exceeded 2000 spans'):
+        await source._list_spans('trace', asyncio.Semaphore(1))
 
 
 def test_raw_response_capture_retains_only_supported_operations() -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -75,7 +76,7 @@ class RunStore:
         project_trace: Callable[[TraceRecord], JevProjection] = default_project_trace,
         monotonic: Callable[[], float] = time.monotonic,
         now_utc: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
-        close: Callable[[], None] | None = None,
+        close: Callable[[], Awaitable[None] | None] | None = None,
     ) -> None:
         self._compiler = compiler
         self._close = close
@@ -426,7 +427,9 @@ class RunStore:
             finally:
                 if self._close is not None:
                     close, self._close = self._close, None
-                    close()
+                    result = close()
+                    if inspect.isawaitable(result):
+                        await result
 
     async def reset(self) -> RunSnapshot:
         """Cancel owned work and return a new empty idle generation."""

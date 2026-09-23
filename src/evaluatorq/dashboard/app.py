@@ -50,8 +50,7 @@ from evaluatorq.dashboard import library, metrics, report_tabs
 from evaluatorq.dashboard.apply_ui import register_apply_routes
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
-from evaluatorq.dashboard.finder_routes import _settings as initialize_finder_settings
-from evaluatorq.dashboard.finder_routes import register_finder_routes
+from evaluatorq.dashboard.finder_routes import initialize_finder_settings, register_finder_routes
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
 from evaluatorq.dashboard.security import request_rejected
 from evaluatorq.dashboard.shell import page
@@ -276,13 +275,14 @@ async def _save_settings(req: Request) -> Response | NotStr:
             'Saved Orq profile {} is unavailable; select another profile or Environment', settings.orq_profile
         )
     old_store = getattr(req.app.state, 'finder_store', None)
-    if old_store is not None:
-        # Retire the running finder so the next request rebuilds it from the saved settings.
-        await old_store.close()
     req.app.state.finder_settings = effective_settings()
+    req.app.state.finder_generation += 1
     for state_name in ('finder_store', 'finder_catalogue_cache'):
         if hasattr(req.app.state, state_name):
             delattr(req.app.state, state_name)
+    if old_store is not None:
+        # Retire the old store after removing it from app state so new requests cannot acquire it.
+        await old_store.close()
     return RedirectResponse('/settings?saved=1', status_code=303)
 
 

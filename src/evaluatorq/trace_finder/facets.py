@@ -37,9 +37,17 @@ async def load_facet_catalogue(
 ) -> FacetCatalogue:
     """Load a complete facet catalogue or fail before planning a broad query."""
 
-    results = await asyncio.gather(
-        *(_safe_facet_values(client, field, start=start, end=end, limit=limit) for name, field in _FACET_FIELDS.items())
-    )
+    tasks = [
+        asyncio.create_task(_safe_facet_values(client, field, start=start, end=end, limit=limit))
+        for field in _FACET_FIELDS.values()
+    ]
+    try:
+        results = await asyncio.gather(*tasks)
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
     values_by_name = dict(zip(_FACET_FIELDS, results, strict=True))
 
     project_names = await _project_names(client)

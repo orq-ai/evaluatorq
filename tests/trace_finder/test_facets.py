@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, cast
@@ -94,3 +95,34 @@ async def test_load_facet_catalogue_rejects_unavailable_or_incomplete_values(
     start = datetime(2026, 9, 1, tzinfo=timezone.utc)
     with pytest.raises((RuntimeError, ValueError), match='status'):
         await load_facet_catalogue(cast(Any, client), start=start, end=start)
+
+
+@pytest.mark.asyncio
+async def test_load_facet_catalogue_cancels_sibling_requests_on_failure() -> None:
+    started = asyncio.Event()
+    cancelled: set[str] = set()
+
+    class FailingTraces(FakeTraces):
+        async def list_facet_values_async(self, **kwargs: object) -> object:
+            field = cast(str, kwargs['field'])
+            self.calls.append(kwargs)
+            if len(self.calls) == 8:
+                started.set()
+            await started.wait()
+            if field == 'status':
+                raise RuntimeError('status service unavailable')
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.add(field)
+                raise
+
+    client = FakeClient()
+    client.traces = FailingTraces()
+    start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+
+    with pytest.raises(RuntimeError, match='status service unavailable'):
+        await load_facet_catalogue(cast(Any, client), start=start, end=start)
+
+    assert len(client.traces.calls) == 8
+    assert len(cancelled) == 7

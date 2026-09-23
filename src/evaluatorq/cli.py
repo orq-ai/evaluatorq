@@ -111,7 +111,7 @@ def dashboard(
     ] = None,
     limit: Annotated[
         int | None,
-        typer.Option('--limit', min=1, max=500, help='Finder trace limit.'),
+        typer.Option('--limit', min=1, max=5000, help='Finder trace limit.'),
     ] = None,
     parallelism: Annotated[
         int | None,

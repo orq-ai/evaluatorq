@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from decimal import ROUND_FLOOR, Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
@@ -29,8 +29,17 @@ _STRICT_TOKEN_MIN = re.compile(
     r'\b(?:over|above|more than|greater than)\s+(\d[\d,]*(?:\.\d+)?)\s*([km]?)\s*(?:total\s+)?tokens?\b',
     re.IGNORECASE,
 )
+_STRICT_TOKEN_MAX = re.compile(
+    r'\b(?:under|below|less than|fewer than)\s+(\d[\d,]*(?:\.\d+)?)\s*([km]?)\s*(?:total\s+)?tokens?\b',
+    re.IGNORECASE,
+)
 _STRICT_DURATION_MIN = re.compile(
     r'\b(?:slower than|longer than|over|more than)\s+(\d[\d,]*(?:\.\d+)?)\s*'
+    r'(milliseconds?|msecs?|ms|seconds?|secs?|s)\b',
+    re.IGNORECASE,
+)
+_STRICT_DURATION_MAX = re.compile(
+    r'\b(?:faster than|shorter than|under|less than|below)\s+(\d[\d,]*(?:\.\d+)?)\s*'
     r'(milliseconds?|msecs?|ms|seconds?|secs?|s)\b',
     re.IGNORECASE,
 )
@@ -212,11 +221,11 @@ async def compile_query(
         else CompilerWireQuery.model_validate(result.parsed)
     )
     compiled, numeric = wire.to_domain()
-    numeric = _tighten_strict_minima(normalized, numeric)
+    numeric = _tighten_strict_bounds(normalized, numeric)
     return CompiledPlan(compiled=compiled, numeric=numeric)
 
 
-def _tighten_strict_minima(query: str, numeric: NumericFilters) -> NumericFilters:
+def _tighten_strict_bounds(query: str, numeric: NumericFilters) -> NumericFilters:
     """Enforce strict integer boundaries even when the compiler supplies an inclusive value."""
 
     updates: dict[str, int] = {}
@@ -225,12 +234,28 @@ def _tighten_strict_minima(query: str, numeric: NumericFilters) -> NumericFilter
         boundary = Decimal(match.group(1).replace(',', '')) * multiplier
         minimum = int(boundary.to_integral_value(rounding=ROUND_FLOOR)) + 1
         updates['tokens_min'] = max(updates.get('tokens_min', numeric.tokens_min or 0), minimum)
+    for match in _STRICT_TOKEN_MAX.finditer(query):
+        multiplier = {'': 1, 'k': 1_000, 'm': 1_000_000}[match.group(2).lower()]
+        boundary = Decimal(match.group(1).replace(',', '')) * multiplier
+        maximum = int(boundary.to_integral_value(rounding=ROUND_CEILING)) - 1
+        updates['tokens_max'] = min(
+            updates.get('tokens_max', numeric.tokens_max if numeric.tokens_max is not None else maximum), maximum
+        )
     for match in _STRICT_DURATION_MIN.finditer(query):
         unit = match.group(2).lower()
         multiplier = 1 if unit.startswith(('milli', 'msec')) or unit == 'ms' else 1_000
         boundary = Decimal(match.group(1).replace(',', '')) * multiplier
         minimum = int(boundary.to_integral_value(rounding=ROUND_FLOOR)) + 1
         updates['duration_ms_min'] = max(updates.get('duration_ms_min', numeric.duration_ms_min or 0), minimum)
+    for match in _STRICT_DURATION_MAX.finditer(query):
+        unit = match.group(2).lower()
+        multiplier = 1 if unit.startswith(('milli', 'msec')) or unit == 'ms' else 1_000
+        boundary = Decimal(match.group(1).replace(',', '')) * multiplier
+        maximum = int(boundary.to_integral_value(rounding=ROUND_CEILING)) - 1
+        updates['duration_ms_max'] = min(
+            updates.get('duration_ms_max', numeric.duration_ms_max if numeric.duration_ms_max is not None else maximum),
+            maximum,
+        )
     if not updates:
         return numeric
     return NumericFilters.model_validate({**numeric.model_dump(), **updates})

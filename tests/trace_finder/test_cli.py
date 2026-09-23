@@ -226,7 +226,7 @@ def test_dashboard_flags_are_handed_to_reload_worker_environment(monkeypatch: An
                 '--window-days',
                 '14',
                 '--limit',
-                '120',
+                '5000',
                 '--parallelism',
                 '12',
             ],
@@ -236,7 +236,7 @@ def test_dashboard_flags_are_handed_to_reload_worker_environment(monkeypatch: An
         assert os.environ['EVALUATORQ_COMPILER_MODEL'] == 'compiler/model'
         assert os.environ['EVALUATORQ_JEV_MODEL'] == 'jev/model'
         assert os.environ['EVALUATORQ_FINDER_WINDOW_DAYS'] == '14'
-        assert os.environ['EVALUATORQ_FINDER_LIMIT'] == '120'
+        assert os.environ['EVALUATORQ_FINDER_LIMIT'] == '5000'
         assert os.environ['EVALUATORQ_FINDER_PARALLELISM'] == '12'
     finally:
         for name in names:

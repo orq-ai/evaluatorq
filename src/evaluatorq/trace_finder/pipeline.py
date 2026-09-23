@@ -17,6 +17,8 @@ from .orq_source import OrqTraceSource
 from .run_store import RunStore
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from openai import AsyncOpenAI
     from orq_ai_sdk import Orq
 
@@ -24,9 +26,22 @@ if TYPE_CHECKING:
     from .settings import DashboardSettings
 
 
-def build_run_store(settings: DashboardSettings, *, client: AsyncOpenAI, orq: Orq) -> RunStore:
+def build_run_store(
+    settings: DashboardSettings,
+    *,
+    client: AsyncOpenAI,
+    orq: Orq,
+    cleanup: Callable[[], Awaitable[None]] | None = None,
+) -> RunStore:
     """Build the shared trace-finder pipeline for one application runtime."""
     source = OrqTraceSource(orq)
+
+    async def close() -> None:
+        try:
+            source.close()
+        finally:
+            if cleanup is not None:
+                await cleanup()
 
     async def filter_selector(query: str, request: PopulationRequest) -> FacetSelection:
         end = request.end or datetime.now(timezone.utc)
@@ -54,5 +69,5 @@ def build_run_store(settings: DashboardSettings, *, client: AsyncOpenAI, orq: Or
         filter_selector=filter_selector,
         population_loader=population_loader,
         run_jev=partial(run_jev, model=settings.jev_model, client=client),
-        close=source.close,
+        close=close,
     )

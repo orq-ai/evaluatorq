@@ -57,6 +57,18 @@ def resolve_orq_client(api_key: str | None = None, *, server_url: str | None = N
     return Orq(api_key=key, server_url=server_url or orq_server_url())
 
 
+async def close_orq_client(client: Orq) -> None:
+    """Close both transports owned by an Orq SDK client, when they were created."""
+    async_exit = getattr(client, '__aexit__', None)
+    sync_exit = getattr(client, '__exit__', None)
+    try:
+        if async_exit is not None:
+            await async_exit(None, None, None)
+    finally:
+        if sync_exit is not None:
+            sync_exit(None, None, None)
+
+
 class OrqProfile(NamedTuple):
     """One credentials profile from the ``orq`` CLI."""
 

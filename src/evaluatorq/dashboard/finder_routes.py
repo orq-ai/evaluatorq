@@ -12,7 +12,13 @@ from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this
 from starlette.responses import Response
 
 from evaluatorq.common.llm_client import resolve_llm_client
-from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, list_orq_profiles, resolve_orq_client
+from evaluatorq.common.orq_client import (
+    DEFAULT_ORQ_BASE_URL,
+    OrqProfile,
+    close_orq_client,
+    list_orq_profiles,
+    resolve_orq_client,
+)
 from evaluatorq.dashboard.finder_views import drawer, facet_menu, fragment, page_html
 from evaluatorq.dashboard.security import request_rejected
 from evaluatorq.trace_finder import (
@@ -59,17 +65,25 @@ class FinderRunForm(BaseModel):
     duration_ms_max: int | None = Field(default=None, ge=0)
 
 
+def initialize_finder_settings(app: Any) -> None:
+    """Resolve the saved profile while constructing the app, outside request handlers."""
+    if getattr(app.state, 'finder_settings', None) is not None:
+        return
+    settings = effective_settings()
+    profiles = list_orq_profiles() if settings.orq_profile is not None else ()
+    app.state.finder_profile = next((p for p in profiles if p.name == settings.orq_profile), None)
+    if settings.orq_profile is not None and app.state.finder_profile is None:
+        logger.warning(
+            'Saved Orq profile {} is unavailable; select another profile or Environment', settings.orq_profile
+        )
+    app.state.finder_settings = settings
+    app.state.finder_generation = 0
+
+
 def _settings(app: Any) -> Any:
     settings = getattr(app.state, 'finder_settings', None)
     if settings is None:
-        settings = effective_settings()
-        profiles = list_orq_profiles() if settings.orq_profile is not None else ()
-        app.state.finder_profile = next((p for p in profiles if p.name == settings.orq_profile), None)
-        if settings.orq_profile is not None and app.state.finder_profile is None:
-            logger.warning(
-                'Saved Orq profile {} is unavailable; select another profile or Environment', settings.orq_profile
-            )
-        app.state.finder_settings = settings
+        raise RuntimeError('Finder settings must be initialized before handling requests.')
     return settings
 
 
@@ -117,7 +131,14 @@ def _build_store(app: Any) -> RunStore | None:
         logger.warning('Find surface is unavailable because an Orq client could not be resolved: {}', exc)
         return None
 
-    return build_run_store(settings, client=resolved.client, orq=orq)
+    async def cleanup() -> None:
+        try:
+            await close_orq_client(orq)
+        finally:
+            if resolved.owned:
+                await resolved.client.close()
+
+    return build_run_store(settings, client=resolved.client, orq=orq, cleanup=cleanup)
 
 
 def _store(app: Any) -> RunStore | None:
@@ -133,6 +154,7 @@ async def _load_catalogue(app: Any, window_days: int | None = None) -> FacetCata
     """Load and cache facet values for five minutes; failures render an empty menu."""
     now = datetime.now(timezone.utc)
     settings = _settings(app)
+    generation = app.state.finder_generation
     window = window_days if window_days is not None else settings.window_days
     if not MIN_WINDOW_DAYS <= window <= MAX_WINDOW_DAYS:
         logger.warning(
@@ -147,6 +169,7 @@ async def _load_catalogue(app: Any, window_days: int | None = None) -> FacetCata
         expires, cached_window, catalogue = cached
         if expires > now and cached_window == window:
             return catalogue
+    orq = None
     try:
         profile = _profile(app)
         orq = resolve_orq_client(
@@ -164,7 +187,17 @@ async def _load_catalogue(app: Any, window_days: int | None = None) -> FacetCata
             'Find facet menu is unavailable because loading facet values failed: {}', exc
         )
         # Cached too, briefly: a menu that never resolves would otherwise retry on every poll swap.
-        app.state.finder_catalogue_cache = (now + timedelta(minutes=1), window, None)
+        if generation == app.state.finder_generation:
+            app.state.finder_catalogue_cache = (now + timedelta(minutes=1), window, None)
+        return None
+    finally:
+        if orq is not None:
+            try:
+                await close_orq_client(orq)
+            except Exception as exc:  # noqa: BLE001 — cleanup failure must not replace the menu response.
+                logger.opt(exception=True).warning('Could not close the facet catalogue Orq client: {}', exc)
+    if generation != app.state.finder_generation:
+        logger.debug('Discarding facet values loaded for a retired finder configuration')
         return None
     app.state.finder_catalogue_cache = (now + timedelta(minutes=5), window, catalogue)
     return catalogue
@@ -313,6 +346,7 @@ def _html(content: str, *, status_code: int = 200) -> Response:
 
 def register_finder_routes(app: Any) -> None:  # noqa: C901
     """Register the Find page and its HTMX fragments on *app*."""
+    initialize_finder_settings(app)
 
     @app.get('/find')
     async def find_page(req: Request) -> Response:

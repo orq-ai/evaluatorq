@@ -34,6 +34,8 @@ FACET_OQL_FIELDS: Mapping[str, str] = MappingProxyType({
 })
 MAX_LIVE_TRACES = 5000
 PAGE_SIZE = 200
+MAX_SPAN_PAGES = 10
+MAX_SPANS_PER_TRACE = PAGE_SIZE * MAX_SPAN_PAGES
 SDK_TIMEOUT_MS = 30_000
 DEFAULT_LOOKBACK = timedelta(days=7)
 CONVERSATION_SPAN_TYPES = frozenset({
@@ -199,7 +201,7 @@ class OrqTraceSource:
         facets: FacetSelection,
         numeric: NumericFilters,
     ) -> Snapshot:
-        """Load at most 500 usable traces in deterministic newest-first order."""
+        """Load at most 5000 usable traces in deterministic newest-first order."""
 
         try:
             return await self._load_with_lifecycle(start, end, limit, facets, numeric)
@@ -324,18 +326,7 @@ class OrqTraceSource:
                     raw_capture_fallback,
                 ))
 
-            hydrated = await asyncio.gather(
-                *(
-                    self._hydrate_trace(
-                        summary,
-                        raw_summary,
-                        project_names,
-                        semaphore,
-                        raw_capture_fallback=raw_capture_fallback,
-                    )
-                    for summary, raw_summary, raw_capture_fallback in unique_summaries
-                )
-            )
+            hydrated = await self._hydrate_page(unique_summaries, project_names, semaphore)
             fallback_count += sum(result[1] for result in hydrated)
             dropped_count += sum(record is None for record, _ in hydrated)
             records.extend(record for record, _ in hydrated if record is not None)
@@ -370,6 +361,32 @@ class OrqTraceSource:
                 'end': end.isoformat(),
             },
         )
+
+    async def _hydrate_page(
+        self,
+        summaries: list[tuple[Any, Any, bool]],
+        project_names: Mapping[str, str],
+        semaphore: asyncio.Semaphore,
+    ) -> list[tuple[TraceRecord | None, int]]:
+        tasks = [
+            asyncio.create_task(
+                self._hydrate_trace(
+                    summary,
+                    raw_summary,
+                    project_names,
+                    semaphore,
+                    raw_capture_fallback=raw_capture_fallback,
+                )
+            )
+            for summary, raw_summary, raw_capture_fallback in summaries
+        ]
+        try:
+            return await asyncio.gather(*tasks)
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _hydrate_trace(
         self,
@@ -420,7 +437,11 @@ class OrqTraceSource:
         spans: list[Any] = []
         page_token: str | None = None
         used_tokens: set[str] = set()
+        pages = 0
         while True:
+            if pages >= MAX_SPAN_PAGES:
+                raise OrqSourceError(f'span pagination exceeded {MAX_SPAN_PAGES} pages for trace {trace_id!r}')
+            pages += 1
             async with semaphore:
                 response = await self._client.traces.list_spans_async(
                     trace_id=trace_id,
@@ -429,6 +450,8 @@ class OrqTraceSource:
                     timeout_ms=SDK_TIMEOUT_MS,
                 )
             spans.extend(_as_list(_field(response, 'data')))
+            if len(spans) > MAX_SPANS_PER_TRACE:
+                raise OrqSourceError(f'span pagination exceeded {MAX_SPANS_PER_TRACE} spans for trace {trace_id!r}')
             if not _field(response, 'has_more'):
                 return spans
             next_token = _field(response, 'next_page_token')
