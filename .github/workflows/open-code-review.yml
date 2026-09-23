@@ -9,7 +9,7 @@ name: OpenCodeReview
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 concurrency:
   group: ocr-${{ github.event.pull_request.number }}
@@ -22,8 +22,9 @@ permissions:
 jobs:
   open-code-review:
     # A dependabot-triggered run reads the Dependabot secret store, where
-    # ORQ_REVIEW_API_KEY does not exist.
-    if: github.actor != 'dependabot[bot]'
+    # ORQ_REVIEW_API_KEY does not exist. Drafts are skipped to avoid paying
+    # for push storms; ready_for_review triggers the first review.
+    if: github.actor != 'dependabot[bot]' && !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -75,16 +76,15 @@ jobs:
           # one deliberate re-review from the merge-base.
           checkpoint_range: 'true'
           llm_protocol: 'openai-responses'
-          # Pinned rather than left empty, which would resolve to medium: the
-          # cost dial should be visible in the file, not inherited. At medium on
-          # the previous model one 90-line diff cost 924,609 tokens (216,641 of
-          # them not cache reads) in 9m33s; high costs more. Drop it if too dear.
+          # Pinned rather than left empty (which also resolves to medium): the
+          # cost dial should be visible in the file, not inherited. At high,
+          # runs reached 17M tokens, so it was dropped to medium.
           # Note llm_reasoning_effort is a different dial and must stay unset —
           # it sends a top-level reasoning_effort, which is Chat Completions
           # vocabulary that the Responses API rejects, so the action fails fast
           # when it is set here. The Responses-side equivalent is the reasoning
           # effort in llm_extra_body below.
-          effort: 'high'
+          effort: 'medium'
           # Required, not cosmetic: the action's default extra_body is
           # {"thinking": {"type": "disabled"}}, an Anthropic-shaped field the
           # Responses API would reject. Reasoning effort rides this body as
@@ -100,7 +100,7 @@ jobs:
           # All three ids, and this body shape, were verified live against
           # /v3/router/responses on the orq-research workspace.
           llm_extra_body: >-
-            {"reasoning": {"effort": "high"},
+            {"reasoning": {"effort": "medium"},
              "fallbacks": [{"model": "deepseek/deepseek-flash"},
                            {"model": "zai/glm-5.3-flash"}]}
           # No ocr_version: the fork builds the CLI from its own checkout with
@@ -109,3 +109,7 @@ jobs:
           # step: https://github.com/orq-ai/open-code-review/blob/a07e0883477a3a627af7643bebd99004909c2b17/action.yml#L488-L496
           # Router is billed per token; over budget the action publishes partial results and exits 0.
           max_tokens_budget: '1000000'
+          # The budget is only checked before a file group is dispatched; groups
+          # already in flight run to completion, so overshoot scales with
+          # concurrency (default 8). Runs hit 17M tokens against this cap.
+          review_concurrency: '4'
