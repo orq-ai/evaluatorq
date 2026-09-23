@@ -73,19 +73,22 @@ class _DroppingConsoleSink:
     def __init__(self, stream: TextIO, maxsize: int = 10_000) -> None:
         self._queue: queue.Queue[str] = queue.Queue(maxsize)
         self._dropped = 0
+        self._dropped_lock = threading.Lock()
         threading.Thread(target=self._drain, args=(stream,), name='console-log', daemon=True).start()
 
     def __call__(self, message: str) -> None:
         try:
             self._queue.put_nowait(message)
         except queue.Full:
-            self._dropped += 1
+            with self._dropped_lock:
+                self._dropped += 1
 
     def _drain(self, stream: TextIO) -> None:
         while True:
             line = self._queue.get()
-            if self._dropped:
+            with self._dropped_lock:
                 dropped, self._dropped = self._dropped, 0
+            if dropped:
                 stream.write(f'... dropped {dropped} log lines while the console was not draining\n')
             stream.write(line)
             stream.flush()

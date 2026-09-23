@@ -62,7 +62,7 @@ The compiler handles the two numeric dimensions because trace-finder metadata th
 
 ## Settings and precedence
 
-The dashboard **Settings** page at `/settings` has editable fields for the compiler model, JEV model, and apply-recommendations model. Save the form to persist them in `.evaluatorq/dashboard-settings.json`, or point `EVALUATORQ_DASHBOARD_SETTINGS` at another JSON file. The window, trace limit, and parallelism are edited per run in the controls row of the Trace search page; their defaults come from the environment variables below or the saved file. An **Advanced** block appears when the `orq` CLI is installed with API-key profiles (`orq auth profile list`); choosing one makes the dashboard use that profile's key and host in place of `ORQ_API_KEY` and `ORQ_BASE_URL`. The `eq find` CLI ignores the saved profile and reads the environment.
+The dashboard **Settings** page at `/settings` has editable fields for the compiler model, JEV model, and apply-recommendations model. Save the form to persist them in `.evaluatorq/dashboard-settings.json`, or point `EVALUATORQ_DASHBOARD_SETTINGS` at another JSON file. The window, trace limit, and parallelism are edited per run in the controls row of the Trace search page; their defaults come from the environment variables below or the saved file. An **Advanced** block appears when the `orq` CLI is installed with API-key profiles (`orq auth profile list`); choosing one makes the dashboard's trace finder and apply flow use that profile's key and host in place of `ORQ_API_KEY` and `ORQ_BASE_URL`. Choosing **Environment** switches those dashboard clients back to the environment values without changing the process environment. If a saved profile is unavailable, the dashboard logs a warning and uses the environment credentials. The `eq find` CLI ignores the saved profile and reads the environment.
 
 Settings are resolved in this order, from strongest to weakest: explicit CLI or dashboard overrides, environment variables, the saved JSON file, and built-in defaults. Invalid environment integers are ignored with a warning; invalid saved settings fall back to built-in defaults.
 
@@ -79,7 +79,7 @@ The dashboard command accepts finder overrides for `--compiler-model`, `--jev-mo
 
 ## CLI reference
 
-`eq find` runs an immediate finder query and prints progress followed by a newest-first table of matched traces. Add `--json PATH` to write the completed run export.
+`eq find` runs an immediate finder query and prints progress followed by a newest-first table of matched traces. Add `--json PATH` to write the completed run export. If any trace classification fails, the command exits with status 1 and does not write the JSON file.
 
 ```bash
 export ORQ_API_KEY=...
@@ -116,4 +116,4 @@ The facet and numeric options are explicit OQL constraints. The natural-language
 
 The finder searches at most 5000 usable traces per run, even if a larger limit is supplied elsewhere; the default is 500. The default lookback is seven days, the default JEV parallelism is 100, and parallelism is capped at 200. Each projected trace has a 25,000-token budget based on the serialized UTF-8 projection estimate; older conversation units are omitted first when the budget is reached.
 
-One completed run makes one compiler call, at most one facet-selection classify call, and one JEV classification call per selected trace. The facet-selection call is skipped when the facet catalogue is empty, including when every facet lookup failed. A 500-trace run therefore has up to 502 model calls before retries, so use the limit and window controls when you are exploring a large workspace.
+One completed run makes one compiler call, at most one facet-selection classify call, and one JEV classification call per selected trace. If a facet lookup fails or the catalogue reports more values than the SDK can retrieve, the run warns and skips JEV-generated categorical filters; filters you chose explicitly and semantic classification still run. A 500-trace run therefore has up to 502 model calls before retries, so use the limit and window controls when you are exploring a large workspace.

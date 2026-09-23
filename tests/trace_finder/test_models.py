@@ -82,6 +82,12 @@ def test_numeric_filters_accept_independent_ranges() -> None:
     assert PopulationRequest().numeric == NumericFilters()
 
 
+def test_population_request_accepts_configured_limit_above_500() -> None:
+    assert PopulationRequest(limit=5000).limit == 5000
+    with pytest.raises(ValidationError):
+        PopulationRequest(limit=5001)
+
+
 def test_snapshot_has_no_file_path_or_filename_contract() -> None:
     snapshot = Snapshot(traces=(), capture_metadata={'source': 'orq'})
     assert snapshot.traces == ()

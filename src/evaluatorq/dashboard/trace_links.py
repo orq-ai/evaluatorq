@@ -25,12 +25,14 @@ Source of host + workspace:
 from __future__ import annotations
 
 import os
+import re
 from urllib.parse import quote
 
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.orq_links import parse_experiment_url
 
 _DEFAULT_UI_BASE = 'https://my.orq.ai'
+_LOCATOR_ID = re.compile(r'[A-Za-z0-9._~-]+\Z')
 
 
 def ui_base_url() -> str:
@@ -80,8 +82,8 @@ def single_trace_url(trace_id: str | None, experiment_url: str | None = None) ->
 
 
 def trace_span_url(trace_id: str | None, span_id: str | None, experiment_url: str | None = None) -> str | None:
-    """Return an Orq trace inspector link using the trace/span locator syntax."""
-    if not trace_id or not span_id:
+    """Return an Orq trace inspector link, or None for unsafe locator IDs."""
+    if not trace_id or not span_id or not _LOCATOR_ID.fullmatch(trace_id) or not _LOCATOR_ID.fullmatch(span_id):
         return None
     return _traces_url(f'(trace:{trace_id}//span:{span_id})', experiment_url)
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
@@ -31,9 +30,9 @@ def serialize_projection(payload: dict[str, Any]) -> str:
 
 
 def estimate_tokens(serialized: str) -> int:
-    """Conservatively estimate tokens from serialized UTF-8 bytes."""
+    """Bound byte-level tokenizer tokens by the serialized UTF-8 byte count."""
 
-    return math.ceil(len(serialized.encode('utf-8')) / 3)
+    return len(serialized.encode('utf-8'))
 
 
 def project_trace(trace: TraceRecord, token_budget: int = MAX_TOKEN_BUDGET) -> JevProjection:
@@ -186,10 +185,11 @@ def _tail_truncate_unit(
 def _truncatable_text_lengths(messages: tuple[dict[str, Any], ...]) -> tuple[int, ...]:
     lengths: list[int] = []
     for message in messages:
-        content = message.get('content')
-        if isinstance(content, str) and content:
-            lengths.append(len(content.encode('utf-8')))
-        lengths.extend(len(container[key].encode('utf-8')) for container, key in _content_text_slots(content))
+        for name in ('content', 'parts'):
+            content = message.get(name)
+            if isinstance(content, str) and content:
+                lengths.append(len(content.encode('utf-8')))
+            lengths.extend(len(container[key].encode('utf-8')) for container, key in _content_text_slots(content))
         tool_calls = message.get('tool_calls')
         if isinstance(tool_calls, list):
             lengths.extend(
@@ -205,7 +205,7 @@ def _content_text_slots(content: Any) -> list[tuple[dict[str, Any], str]]:
     slots = []
     if isinstance(content, list):
         for block in content:
-            if not isinstance(block, dict) or block.get('type') not in {'text', 'input_text', 'output_text'}:
+            if not isinstance(block, dict):
                 continue
             text = block.get('text')
             if isinstance(text, str):
@@ -222,15 +222,16 @@ def _truncate_messages(
     omitted_bytes = 0
     for message in messages:
         truncated = dict(message)
-        content = truncated.get('content')
-        if isinstance(content, str):
-            truncated['content'], omitted = _tail_truncate_text(content, retained_bytes)
-            omitted_bytes += omitted
-        elif isinstance(content, list):
-            truncated['content'] = deepcopy(content)
-            for container, key in _content_text_slots(truncated['content']):
-                container[key], omitted = _tail_truncate_text(container[key], retained_bytes)
+        for name in ('content', 'parts'):
+            content = truncated.get(name)
+            if isinstance(content, str):
+                truncated[name], omitted = _tail_truncate_text(content, retained_bytes)
                 omitted_bytes += omitted
+            elif isinstance(content, list):
+                truncated[name] = deepcopy(content)
+                for container, key in _content_text_slots(truncated[name]):
+                    container[key], omitted = _tail_truncate_text(container[key], retained_bytes)
+                    omitted_bytes += omitted
         tool_calls = truncated.get('tool_calls')
         if isinstance(tool_calls, list):
             truncated_calls: list[Any] = []
@@ -242,8 +243,9 @@ def _truncate_messages(
                 if 'arguments' in truncated_call:
                     arguments = truncated_call['arguments']
                     arguments_text = _argument_text_for_truncation(arguments)
-                    truncated_call['arguments'], omitted = _tail_truncate_text(arguments_text, retained_bytes)
-                    omitted_bytes += omitted
+                    if len(arguments_text.encode('utf-8')) > retained_bytes:
+                        truncated_call['arguments'], omitted = _tail_truncate_text(arguments_text, retained_bytes)
+                        omitted_bytes += omitted
                 truncated_calls.append(truncated_call)
             truncated['tool_calls'] = truncated_calls
         truncated_messages.append(truncated)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -12,23 +12,24 @@ from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this
 from starlette.responses import Response
 
 from evaluatorq.common.llm_client import resolve_llm_client
-from evaluatorq.common.orq_client import apply_orq_profile, resolve_orq_client
+from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, list_orq_profiles, resolve_orq_client
 from evaluatorq.dashboard.finder_views import drawer, facet_menu, fragment, page_html
 from evaluatorq.dashboard.security import request_rejected
 from evaluatorq.trace_finder import (
     CompiledQuery,
-    FacetCatalogue,
     FacetSelection,
     NumericFilters,
     PopulationRequest,
     RunRequest,
     RunSnapshot,
-    RunStore,
     build_run_store,
     effective_settings,
     export_json,
     load_facet_catalogue,
 )
+
+if TYPE_CHECKING:
+    from evaluatorq.trace_finder import FacetCatalogue, RunStore
 from evaluatorq.trace_finder.models import FACET_NAMES, NUMERIC_FACET_NAMES
 from evaluatorq.trace_finder.settings import (
     MAX_LIMIT,
@@ -47,7 +48,7 @@ class FinderRunForm(BaseModel):
 
     model_config = ConfigDict(extra='ignore')
 
-    query: str = ''
+    query: str = Field(default='', min_length=1)
     mode: Literal['immediate', 'review'] = 'immediate'
     window_days: int = Field(ge=MIN_WINDOW_DAYS, le=MAX_WINDOW_DAYS)
     limit: int = Field(ge=MIN_LIMIT, le=MAX_LIMIT)
@@ -62,22 +63,44 @@ def _settings(app: Any) -> Any:
     settings = getattr(app.state, 'finder_settings', None)
     if settings is None:
         settings = effective_settings()
-        if settings.orq_profile is not None:
-            apply_orq_profile(settings.orq_profile)
+        profiles = list_orq_profiles() if settings.orq_profile is not None else ()
+        app.state.finder_profile = next((p for p in profiles if p.name == settings.orq_profile), None)
+        if settings.orq_profile is not None and app.state.finder_profile is None:
+            logger.warning(
+                'Saved Orq profile {} is unavailable; finder uses environment credentials', settings.orq_profile
+            )
         app.state.finder_settings = settings
     return settings
 
 
+def _profile(app: Any) -> Any:
+    _settings(app)
+    return getattr(app.state, 'finder_profile', None)
+
+
+def _api_available(app: Any) -> bool:
+    return _profile(app) is not None or bool(os.environ.get('ORQ_API_KEY', '').strip())
+
+
 def _build_store(app: Any) -> RunStore | None:
     """Build the app-owned store, returning ``None`` when Orq is unavailable."""
+    settings = _settings(app)
+    profile = _profile(app)
     try:
-        resolved = resolve_llm_client(require_orq=True, max_retries=0)
-        orq = resolve_orq_client()
-    except ValueError as exc:
+        resolved = resolve_llm_client(
+            extra_api_key=profile.api_key if profile else None,
+            orq_host=(profile.server or DEFAULT_ORQ_BASE_URL) if profile else None,
+            require_orq=True,
+            max_retries=0,
+        )
+        orq = resolve_orq_client(
+            profile.api_key if profile else None,
+            server_url=(profile.server or DEFAULT_ORQ_BASE_URL) if profile else None,
+        )
+    except (ImportError, ValueError) as exc:
         logger.warning('Find surface is unavailable because an Orq client could not be resolved: {}', exc)
         return None
 
-    settings = _settings(app)
     return build_run_store(settings, client=resolved.client, orq=orq)
 
 
@@ -109,14 +132,18 @@ async def _load_catalogue(app: Any, window_days: int | None = None) -> FacetCata
         if expires > now and cached_window == window:
             return catalogue
     try:
-        orq = resolve_orq_client()
+        profile = _profile(app)
+        orq = resolve_orq_client(
+            profile.api_key if profile else None,
+            server_url=(profile.server or DEFAULT_ORQ_BASE_URL) if profile else None,
+        )
         catalogue = await load_facet_catalogue(
             orq,
             start=now - timedelta(days=window),
             end=now,
             limit=50,
         )
-    except ValueError as exc:
+    except (ImportError, ValueError) as exc:
         logger.warning('Find facet menu is empty because the Orq client could not be resolved: {}', exc)
         # Cached too, briefly: a menu that never resolves would otherwise retry on every poll swap.
         app.state.finder_catalogue_cache = (now + timedelta(minutes=1), window, None)
@@ -147,10 +174,16 @@ def _optional_value(form: Any, name: str) -> object | None:
     return raw
 
 
-def _run_request(form: Any, settings: Any, *, anchor: PopulationRequest | None = None) -> RunRequest:
+def _run_request(
+    form: Any,
+    settings: Any,
+    *,
+    anchor: PopulationRequest | None = None,
+    query_fallback: str | None = None,
+) -> RunRequest:
     """Build the run request; *anchor* pins ``end`` to a reviewed population so an unchanged review reuses its traces."""
     values = {
-        'query': str(form.get('query') or '').strip(),
+        'query': str(form.get('query') or query_fallback or '').strip(),
         'mode': str(form.get('mode') or 'immediate'),
         'window_days': form.get('window_days') or settings.window_days,
         'limit': form.get('limit') or settings.limit,
@@ -260,12 +293,12 @@ def _html(content: str, *, status_code: int = 200) -> Response:
     return Response(content, status_code=status_code, media_type='text/html')
 
 
-def register_finder_routes(app: Any, roots: list[Any] | None = None) -> None:  # noqa: C901
+def register_finder_routes(app: Any) -> None:  # noqa: C901
     """Register the Find page and its HTMX fragments on *app*."""
 
     @app.get('/find')
     async def find_page(req: Request) -> Response:
-        api_available = bool(os.environ.get('ORQ_API_KEY', '').strip())
+        api_available = _api_available(req.app)
         settings = _settings(req.app)
         store = _store(req.app) if api_available else None
         snapshot = await store.snapshot() if store is not None else RunSnapshot()
@@ -282,7 +315,7 @@ def register_finder_routes(app: Any, roots: list[Any] | None = None) -> None:  #
                     RunSnapshot(),
                     settings,
                     error=rejected,
-                    api_available=bool(os.environ.get('ORQ_API_KEY', '').strip()),
+                    api_available=_api_available(req.app),
                     **_catalogue_kwargs(req.app),
                 ),
                 status_code=403,
@@ -337,13 +370,15 @@ def register_finder_routes(app: Any, roots: list[Any] | None = None) -> None:  #
                 )
             )
         current = await store.snapshot()
-        if current.request is None or current.compiled is None:
+        if current.state != 'awaiting_review' or current.request is None or current.compiled is None:
             return _html(
                 fragment(current, settings, error='There is no plan waiting for review.', **_catalogue_kwargs(req.app)),
                 status_code=409,
             )
         try:
-            request = _run_request(form, settings, anchor=current.request.population)
+            request = _run_request(
+                form, settings, anchor=current.request.population, query_fallback=current.request.query
+            )
             compiled = _compiled_from_form(current.compiled, form)
             snapshot = await store.start(request, compiled)
         except (ValidationError, ValueError, TypeError) as exc:
@@ -412,7 +447,6 @@ def register_finder_routes(app: Any, roots: list[Any] | None = None) -> None:  #
                 'window_days': params.get('window_days') or settings.window_days,
                 'limit': settings.limit,
                 'parallelism': settings.parallelism,
-                **{name: _optional_value(params, name) for name in _NUMERIC_FIELDS},
             })
         except ValidationError as exc:
             logger.warning('Find facet menu uses the configured window because the request was invalid: {}', exc)
@@ -424,7 +458,28 @@ def register_finder_routes(app: Any, roots: list[Any] | None = None) -> None:  #
         if form_id not in {'finder-query-form', 'finder-start-form'}:
             form_id = 'finder-query-form'
         selection = FacetSelection(**{name: frozenset(_form_values(params, f'facet_{name}')) for name in FACET_NAMES})
-        numeric = NumericFilters(**{name: getattr(parsed, name) for name in _NUMERIC_FIELDS})
+        numeric_values: dict[str, int | None] = {}
+        for name in _NUMERIC_FIELDS:
+            raw = _optional_value(params, name)
+            if raw is None:
+                numeric_values[name] = None
+                continue
+            try:
+                value = int(str(raw))
+                if value < 0:
+                    raise ValueError('must be nonnegative')
+            except (TypeError, ValueError):
+                logger.warning('Find facet menu ignores invalid {}={}', name, raw)
+                numeric_values[name] = None
+            else:
+                numeric_values[name] = value
+        for facet in NUMERIC_FACET_NAMES:
+            minimum, maximum = f'{facet}_min', f'{facet}_max'
+            lower, upper = numeric_values[minimum], numeric_values[maximum]
+            if lower is not None and upper is not None and lower > upper:
+                logger.warning('Find facet menu ignores {} because it is below {}', maximum, minimum)
+                numeric_values[maximum] = None
+        numeric = NumericFilters(**numeric_values)
         return _html(facet_menu(catalogue, numeric=numeric, form_id=form_id, selection=selection))
 
     @app.get('/find/dismiss')

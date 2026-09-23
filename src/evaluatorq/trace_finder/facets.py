@@ -7,8 +7,6 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
-from loguru import logger
-
 from .models import FACET_NAMES, FacetCatalogue, FacetName
 
 if TYPE_CHECKING:
@@ -37,21 +35,17 @@ async def load_facet_catalogue(
     end: datetime,
     limit: int = 50,
 ) -> FacetCatalogue:
-    """Load all facet values concurrently, degrading an unavailable field to empty."""
+    """Load a complete facet catalogue or fail before planning a broad query."""
 
     results = await asyncio.gather(
-        *(
-            _safe_facet_values(client, name, field, start=start, end=end, limit=limit)
-            for name, field in _FACET_FIELDS.items()
-        )
+        *(_safe_facet_values(client, field, start=start, end=end, limit=limit) for name, field in _FACET_FIELDS.items())
     )
     values_by_name = dict(zip(_FACET_FIELDS, results, strict=True))
 
-    try:
-        project_names = await _project_names(client)
-    except Exception as error:  # noqa: BLE001 - the catalogue must remain usable if projects fail
-        logger.warning('Trace facet field project_id project lookup failed: {}; using an empty facet', error)
-        project_names = {}
+    project_names = await _project_names(client)
+    missing_projects = set(values_by_name['project']) - set(project_names)
+    if missing_projects:
+        raise ValueError(f'cannot resolve facet project ids: {sorted(missing_projects)}')
     values_by_name['project'] = tuple(
         sorted({project_names[project_id] for project_id in values_by_name['project'] if project_id in project_names})
     )
@@ -60,28 +54,22 @@ async def load_facet_catalogue(
 
 async def _safe_facet_values(
     client: Orq,
-    name: FacetName,
     field: str,
     *,
     start: datetime,
     end: datetime,
     limit: int,
 ) -> tuple[str, ...]:
-    try:
-        response = await client.traces.list_facet_values_async(field=field, from_=start, to=end, limit=limit)
-        raw_values = _read(response, 'values')
-        if not isinstance(raw_values, (list, tuple)):
-            logger.warning('Trace facet field {} returned no readable values; using an empty facet', field)
-            return ()
-        values = {
-            value
-            for item in raw_values
-            if isinstance(value := _read(item, 'value'), str) and value and value != 'unknown'
-        }
-        return tuple(sorted(values))
-    except Exception as error:  # noqa: BLE001 - one field must not break the catalogue
-        logger.warning('Trace facet field {} failed: {}; using an empty facet', field, error)
-        return ()
+    response = await client.traces.list_facet_values_async(field=field, from_=start, to=end, limit=limit)
+    raw_values = _read(response, 'values')
+    if not isinstance(raw_values, (list, tuple)):
+        raise TypeError(f'trace facet field {field} returned no readable values')
+    if _read(response, 'has_more'):
+        raise ValueError(f'trace facet field {field} has more values than the requested limit of {limit}')
+    values = {
+        value for item in raw_values if isinstance(value := _read(item, 'value'), str) and value and value != 'unknown'
+    }
+    return tuple(sorted(values))
 
 
 async def _project_names(client: Orq) -> dict[str, str]:

@@ -6,7 +6,7 @@ import asyncio
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, TypeVar
 
 from loguru import logger
 
@@ -30,6 +30,8 @@ from .projection import project_trace as default_project_trace
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+
+TReviewFilters = TypeVar('TReviewFilters', FacetSelection, NumericFilters)
 
 
 class PopulationLoader(Protocol):
@@ -67,7 +69,7 @@ class RunStore:
         self,
         *,
         compiler: Callable[[str], Awaitable[CompiledPlan]],
-        population_loader: Callable[[PopulationRequest], Awaitable[Snapshot]],
+        population_loader: PopulationLoader,
         run_jev: JevRunner,
         filter_selector: Callable[[str, PopulationRequest], Awaitable[FacetSelection]],
         project_trace: Callable[[TraceRecord], JevProjection] = default_project_trace,
@@ -77,6 +79,7 @@ class RunStore:
     ) -> None:
         self._compiler = compiler
         self._close = close
+        self._closed = False
         self._population_loader = population_loader
         self._run_jev = run_jev
         self._filter_selector = filter_selector
@@ -87,6 +90,7 @@ class RunStore:
         self._lifecycle_lock = asyncio.Lock()
         self._snapshot = RunSnapshot()
         self._task: asyncio.Task[object] | None = None
+        self._stopped_generation: int | None = None
         self._generation = 0
         self._started_monotonic: float | None = None
 
@@ -131,6 +135,8 @@ class RunStore:
 
         staged_traces: tuple[TraceRecord, ...] = ()
         async with self._lifecycle_lock:
+            if self._closed:
+                raise ValueError('Trace finder store is closed.')
             await self._stop_current()
             async with self._lock:
                 if (
@@ -140,6 +146,23 @@ class RunStore:
                     and self._snapshot.request.population == request.population
                 ):
                     staged_traces = self._snapshot.traces
+                explicit_filters = request.population.facets
+                explicit_numeric = request.population.numeric
+                if (
+                    not compile_query
+                    and self._snapshot.state == 'awaiting_review'
+                    and self._snapshot.request is not None
+                ):
+                    previous = self._snapshot.request.population
+                    explicit_filters = _review_explicit(
+                        previous.facets, self._snapshot.explicit_filters, explicit_filters, FACET_NAMES
+                    )
+                    explicit_numeric = _review_explicit(
+                        previous.numeric,
+                        self._snapshot.explicit_numeric,
+                        explicit_numeric,
+                        tuple(NumericFilters.model_fields),
+                    )
                 self._generation += 1
                 generation = self._generation
                 generated_filters = FacetSelection() if compile_query else self._snapshot.generated_filters
@@ -148,6 +171,8 @@ class RunStore:
                     generation=generation,
                     state='compiling',
                     request=request.model_copy(deep=True),
+                    explicit_filters=explicit_filters.model_copy(deep=True),
+                    explicit_numeric=explicit_numeric.model_copy(deep=True),
                     generated_filters=generated_filters.model_copy(deep=True),
                     generated_numeric=generated_numeric.model_copy(deep=True),
                     created_at=self._now_utc(),
@@ -238,18 +263,25 @@ class RunStore:
                 self._task = task
                 return self._view()
         except asyncio.CancelledError:
-            async with self._lock:
-                if generation == self._generation:
-                    if self._snapshot.state == 'compiling':
-                        self._finish('cancelled')
-                    self._task = None
-            raise
+            return await self._cancelled_plan(generation)
         except Exception as error:  # noqa: BLE001 - every run error becomes a terminal failed snapshot
             async with self._lock:
                 if generation == self._generation:
                     self._finish('failed', str(error))
                     self._task = None
                 return self._view()
+
+    async def _cancelled_plan(self, generation: int) -> RunSnapshot:
+        """Return a superseded view, or preserve actual caller cancellation."""
+
+        async with self._lock:
+            if self._stopped_generation == generation:
+                return self._view()
+            if generation == self._generation:
+                if self._snapshot.state == 'compiling':
+                    self._finish('cancelled')
+                self._task = None
+        raise asyncio.CancelledError
 
     async def _load_population(self, generation: int, request: PopulationRequest) -> Snapshot:
         """Load one population and let replacement generations make it stale."""
@@ -266,8 +298,13 @@ class RunStore:
         if stale:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-            raise asyncio.CancelledError
-        return await task
+            return Snapshot(traces=())
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            raise
 
     async def _plan(self, query: str, population: PopulationRequest) -> tuple[CompiledPlan, FacetSelection]:
         """Run semantic and facet planning concurrently and clean up both."""
@@ -376,14 +413,27 @@ class RunStore:
     async def close(self) -> None:
         """Cancel owned work and release the resources the builder handed over (``close=``)."""
 
-        await self.cancel()
-        if self._close is not None:
-            self._close()
+        async with self._lifecycle_lock:
+            if self._closed:
+                return
+            self._closed = True
+            try:
+                await self._stop_current()
+                async with self._lock:
+                    if self._snapshot.state in {'compiling', 'awaiting_review', 'classifying'}:
+                        self._finish('cancelled')
+                    self._task = None
+            finally:
+                if self._close is not None:
+                    close, self._close = self._close, None
+                    close()
 
     async def reset(self) -> RunSnapshot:
         """Cancel owned work and return a new empty idle generation."""
 
         async with self._lifecycle_lock:
+            if self._closed:
+                raise ValueError('Trace finder store is closed.')
             await self._stop_current()
             async with self._lock:
                 self._generation += 1
@@ -422,6 +472,7 @@ class RunStore:
         if task is None or task.done():
             return
         async with self._lock:
+            self._stopped_generation = self._generation
             if self._snapshot.state in {'compiling', 'classifying'}:
                 self._finish('cancelled')
         task.cancel()
@@ -475,6 +526,22 @@ def _merge_facets(caller: FacetSelection, generated: FacetSelection) -> FacetSel
     return FacetSelection(**{name: getattr(caller, name) or getattr(generated, name) for name in FACET_NAMES})
 
 
+def _review_explicit(
+    previous: TReviewFilters,
+    explicit: TReviewFilters,
+    requested: TReviewFilters,
+    names: tuple[str, ...],
+) -> TReviewFilters:
+    """Preserve user provenance for unchanged review fields and adopt edits as explicit."""
+
+    return type(requested)(**{
+        name: getattr(requested, name)
+        if getattr(requested, name) != getattr(previous, name)
+        else getattr(explicit, name)
+        for name in names
+    })
+
+
 def _merge_numeric(caller: NumericFilters, generated: NumericFilters) -> NumericFilters:
     """Merge numeric bounds with each caller-supplied bound taking precedence."""
 
@@ -491,6 +558,8 @@ def _detach(snapshot: RunSnapshot) -> RunSnapshot:
         snapshot,
         request=snapshot.request.model_copy(deep=True) if snapshot.request is not None else None,
         compiled=snapshot.compiled.model_copy(deep=True) if snapshot.compiled is not None else None,
+        explicit_filters=snapshot.explicit_filters.model_copy(deep=True),
+        explicit_numeric=snapshot.explicit_numeric.model_copy(deep=True),
         generated_filters=snapshot.generated_filters.model_copy(deep=True),
         generated_numeric=snapshot.generated_numeric.model_copy(deep=True),
         traces=tuple(trace.model_copy(deep=True) for trace in snapshot.traces),

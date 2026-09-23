@@ -1,6 +1,6 @@
 # Configuration
 
-Everything is configured through environment variables. There is no config file, and nothing to set up before your first run: evaluatorq with no environment at all still runs local jobs and local evaluators.
+Most settings use environment variables. The dashboard and trace finder can also save defaults in `.evaluatorq/dashboard-settings.json`; nothing needs setting up before your first local job or local evaluator.
 
 You only add variables when you want something more — a hosted model, a dataset from Orq, traces, a dashboard.
 

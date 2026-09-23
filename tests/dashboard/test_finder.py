@@ -10,9 +10,10 @@ from typing import Any
 import pytest
 from starlette.testclient import TestClient
 
-from evaluatorq.dashboard import finder_routes
+from evaluatorq.dashboard import finder_routes, finder_views
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.security import CSRF_FIELD, _CSRF_TOKEN
+from evaluatorq.dashboard.trace_links import trace_span_url
 from evaluatorq.trace_finder import (
     CompiledQuery,
     FacetCatalogue,
@@ -20,7 +21,7 @@ from evaluatorq.trace_finder import (
     JevProjection,
     NumericFilters,
     RunSnapshot,
-    Snapshot,
+    ThresholdSelection,
     TraceClassification,
     TraceDetail,
     TraceRecord,
@@ -99,6 +100,8 @@ class FakeStore:
             compiled=self.compiled,
             generated_filters=FacetSelection(project=frozenset({'support-agent'})),
             generated_numeric=NumericFilters(),
+            explicit_filters=request.population.facets,
+            explicit_numeric=request.population.numeric,
             trace_ids=(self.trace.trace_id,),
             traces=(self.trace,),
             projections={self.trace.trace_id: self.projection} if state == 'classifying' else {},
@@ -240,6 +243,25 @@ def test_jev_picked_filters_do_not_carry_into_the_next_query(setup_finder) -> No
     assert '<input type="hidden" form="finder-start-form" name="facet_project" value="support-agent">' in html
 
 
+def test_explicit_filters_survive_matching_jev_picks(setup_finder) -> None:
+    store, client = setup_finder
+    client.post('/find/run', data=csrf_data({
+        'query': 'support agent traces', 'mode': 'immediate',
+        'facet_project': 'support-agent', 'tokens_min': '900',
+    }))
+    request = store.snapshot_value.request
+    assert request is not None
+    store.snapshot_value = replace(
+        store.snapshot_value,
+        generated_numeric=NumericFilters(tokens_min=900),
+    )
+    store.complete()
+
+    html = client.get('/find').text
+    assert '<input type="hidden" form="finder-query-form" name="facet_project" value="support-agent">' in html
+    assert 'name="tokens_min" type="number" min="0" placeholder="min" value="900"' in html
+
+
 def test_facet_menu_loads_itself_after_the_page_renders(setup_finder, monkeypatch: pytest.MonkeyPatch) -> None:
     """The page never waits on the Orq facet call: the menu fetches its values with an htmx load trigger."""
     _store, client = setup_finder
@@ -300,7 +322,6 @@ def test_find_without_api_key_renders_empty_state(monkeypatch: pytest.MonkeyPatc
     response = client.get('/find')
     assert response.status_code == 200
     assert 'Set ORQ_API_KEY to load traces' in response.text
-    assert '<textarea name="query"' in response.text
     assert '<textarea name="query"' in response.text and 'disabled' in response.text.split('<textarea name="query"', 1)[1].split('>', 1)[0]
     assert 'class="finder-hint"' in response.text
     assert '<span class="finder-key-hint"' not in response.text
@@ -321,6 +342,44 @@ def test_find_run_starts_polling_and_completed_poll_shows_matches(setup_finder) 
     assert 'trace-1' in poll.text
 
 
+def test_full_page_polling_timer_disappears_on_terminal_fragment(setup_finder) -> None:
+    store, client = setup_finder
+    client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate'}))
+    page = client.get('/find').text
+    assert page.count('hx-get="/find/poll"') == 1
+    assert '<div id="finder-body"><div class="finder-body-fragment" hx-get="/find/poll"' in page
+
+    store.complete()
+    poll = client.get('/find/poll').text
+    assert 'hx-get="/find/poll"' not in poll
+
+
+def test_score_review_keeps_generated_threshold_and_colors_scores() -> None:
+    compiled = CompiledQuery(
+        task=ClassifyQuestion(kind='score', instructions='Score the trace.', criteria=['Low', 'High'], state={}),
+        selection=ThresholdSelection(kind='threshold', operator='gte', value=0.65),
+    )
+    review = finder_views.task_panel(compiled, editable=True)
+    assert '<option value="gte:0.65" selected>gte 0.65</option>' in review
+
+    result = TraceClassification(trace_id='trace-1', span_id='span-1', value=0.8, matched=True, raw_result={})
+    snapshot = RunSnapshot(
+        state='completed', compiled=compiled, trace_ids=('trace-1',), traces=(_trace(),),
+        results={'trace-1': result}, total=1, completed=1, matched=1,
+    )
+    assert 'color-mix(in srgb, var(--chart-5) 80%, var(--chart-2))' in finder_views.matrix(snapshot)
+    legend = finder_views.legend(snapshot)
+    assert '0.0 → 1.0 <b>1</b>' in legend
+    assert 'gte 0.65 <b>1</b>' in legend
+
+
+def test_trace_span_link_rejects_filter_delimiters(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv('ORQ_WORKSPACE', 'workspace')
+    assert trace_span_url('trace-1', 'span-1') is not None
+    assert trace_span_url('trace-1)//trace:other', 'span-1') is None
+    assert trace_span_url('trace-1', 'span-1//trace:other') is None
+
+
 @pytest.mark.parametrize('window_days', ['0', '91', str(10**12)])
 def test_find_run_rejects_invalid_windows(setup_finder, window_days: str) -> None:
     store, client = setup_finder
@@ -329,6 +388,13 @@ def test_find_run_rejects_invalid_windows(setup_finder, window_days: str) -> Non
         data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate', 'window_days': window_days}),
     )
 
+    assert response.status_code == 422
+    assert store.compile_request is None
+
+
+def test_find_run_rejects_blank_query_before_starting_work(setup_finder) -> None:
+    store, client = setup_finder
+    response = client.post('/find/run', data=csrf_data({'query': '   ', 'mode': 'immediate'}))
     assert response.status_code == 422
     assert store.compile_request is None
 
@@ -390,6 +456,14 @@ def test_find_review_start_transitions_to_classification(setup_finder) -> None:
     assert store.started_compiled.task.instructions == 'Edited instructions'
     assert store.started_compiled.task.criteria['frustrated'] == 'Changed criterion'
     assert 'name="kind"' not in review.text
+
+
+def test_find_start_rejects_a_stale_review_form(setup_finder) -> None:
+    store, client = setup_finder
+    assert client.post('/find/run', data=csrf_data({'query': 'question', 'mode': 'immediate'})).status_code == 200
+    response = client.post('/find/start', data=csrf_data({'instructions': 'stale'}))
+    assert response.status_code == 409
+    assert store.started is False
 
 
 def test_finder_state_changing_posts_require_csrf_and_same_origin(setup_finder) -> None:
@@ -471,6 +545,30 @@ def test_find_facets_menu_renders_from_the_submitted_controls(setup_finder, monk
     assert 'name="tokens_min" type="number" min="0" placeholder="min" value="5000"' in response.text
     assert '<div class="facet-sub" data-facet-sub="project" hidden>' in response.text
     assert 'is-active' not in response.text
+
+
+def test_find_facets_preserves_valid_numeric_filter_when_another_is_invalid(
+    setup_finder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _store, client = setup_finder
+    async def load_catalogue(app: Any, window_days: int | None = None) -> FacetCatalogue:
+        return FacetCatalogue()
+    monkeypatch.setattr(finder_routes, '_load_catalogue', load_catalogue)
+    response = client.get('/find/facets?tokens_min=5000&duration_ms_min=not-a-number')
+    assert response.status_code == 200
+    assert 'name="tokens_min" type="number" min="0" placeholder="min" value="5000"' in response.text
+    assert 'name="duration_ms_min" type="number" min="0" placeholder="min" value=""' in response.text
+
+
+def test_find_facets_rejects_inverted_range_without_server_error(setup_finder, monkeypatch: pytest.MonkeyPatch) -> None:
+    _store, client = setup_finder
+    async def load_catalogue(app: Any, window_days: int | None = None) -> FacetCatalogue:
+        return FacetCatalogue()
+    monkeypatch.setattr(finder_routes, '_load_catalogue', load_catalogue)
+    response = client.get('/find/facets?tokens_min=10&tokens_max=5')
+    assert response.status_code == 200
+    assert 'name="tokens_min" type="number" min="0" placeholder="min" value="10"' in response.text
+    assert 'name="tokens_max" type="number" min="0" placeholder="max" value=""' in response.text
 
 
 def test_find_facets_menu_lists_catalogue_values(setup_finder, monkeypatch: pytest.MonkeyPatch) -> None:

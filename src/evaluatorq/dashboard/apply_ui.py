@@ -43,7 +43,8 @@ from loguru import logger
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import Response
 
-from evaluatorq.common.orq_client import resolve_orq_client
+from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, resolve_orq_client
 from evaluatorq.common.reports import esc
 from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL
 from evaluatorq.dashboard.security import _CSRF_TOKEN as _SECURITY_CSRF_TOKEN
@@ -449,7 +450,7 @@ def record_applied_on_report(path: Path, recommendations: list[str], field: str 
 # ---------------------------------------------------------------------------
 
 
-def _build_clients() -> tuple[Any, Any, str]:
+def _build_clients(profile: OrqProfile | None) -> tuple[Any, Any, str]:
     """(orq_client, llm_client, model) for the apply flow, or raise ValueError.
 
     The call config (temperature, retries) follows the red-team pipeline's
@@ -457,19 +458,22 @@ def _build_clients() -> tuple[Any, Any, str]:
     (``EVALUATORQ_APPLY_MODEL``, default ``openai/gpt-5.6-luna``), shown on the
     Settings page.
     """
-    api_key = os.environ.get('ORQ_API_KEY', '')
+    api_key = profile.api_key if profile is not None else os.environ.get('ORQ_API_KEY', '')
     if not api_key:
         raise ValueError('ORQ_API_KEY is not set; the dashboard cannot reach the Orq API to apply recommendations.')
-    from evaluatorq.redteam.backends.registry import create_async_llm_client
     from evaluatorq.redteam.contracts import PIPELINE_CONFIG
 
+    host = (profile.server or DEFAULT_ORQ_BASE_URL) if profile is not None else None
     try:
-        orq_client = resolve_orq_client(api_key)
+        orq_client = resolve_orq_client(api_key, server_url=host)
     except ImportError as e:  # pragma: no cover - extra not installed
         raise ValueError("The 'orq-ai-sdk' package is required to apply recommendations (install extra 'orq').") from e
-    llm_client = create_async_llm_client(
-        role_config=PIPELINE_CONFIG.evaluator.as_call_config(), max_retries=PIPELINE_CONFIG.retry_count
-    )
+    llm_client = resolve_llm_client(
+        PIPELINE_CONFIG.evaluator.as_call_config().client,
+        extra_api_key=api_key,
+        orq_host=host,
+        max_retries=PIPELINE_CONFIG.retry_count,
+    ).client
     return orq_client, llm_client, apply_model()
 
 
@@ -539,7 +543,7 @@ async def _confirm_response(
         )
 
     try:
-        orq_client, _llm_client, _model = _build_clients()
+        orq_client, _llm_client, _model = _build_clients(getattr(req.app.state, 'finder_profile', None))
     except ValueError as e:
         return Response(render_error_drawer(str(e)), media_type='text/html')
 
@@ -681,7 +685,7 @@ async def _preview_response(
         return Response(render_error_drawer(narrow_error), media_type='text/html')
 
     try:
-        orq_client, llm_client, model = _build_clients()
+        orq_client, llm_client, model = _build_clients(getattr(req.app.state, 'finder_profile', None))
     except ValueError as e:
         return Response(render_error_drawer(str(e)), media_type='text/html')
 

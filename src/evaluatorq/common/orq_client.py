@@ -38,7 +38,7 @@ def orq_server_url() -> str:
     return os.environ.get('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL)
 
 
-def resolve_orq_client(api_key: str | None = None) -> Orq:
+def resolve_orq_client(api_key: str | None = None, *, server_url: str | None = None) -> Orq:
     """Build an Orq SDK client from ``api_key`` or ``ORQ_API_KEY``.
 
     Raises:
@@ -54,7 +54,7 @@ def resolve_orq_client(api_key: str | None = None) -> Orq:
     except ModuleNotFoundError as e:  # pragma: no cover - extra not installed
         raise ImportError(_INSTALL_HINT) from e
 
-    return Orq(api_key=key, server_url=orq_server_url())
+    return Orq(api_key=key, server_url=server_url or orq_server_url())
 
 
 class OrqProfile(NamedTuple):
@@ -85,11 +85,15 @@ def list_orq_profiles(timeout: float = 5.0) -> tuple[OrqProfile, ...]:
         )
         listing = json.loads(result.stdout) if result.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
-        logger.debug('orq profile listing skipped: {}', exc)
+        logger.warning('Could not read profiles from the installed orq CLI: {}', exc)
         return ()
     rows = listing.get('profiles') if isinstance(listing, dict) else listing
     if not isinstance(rows, list):
-        logger.debug('orq profile listing skipped: exit {} {}', result.returncode, result.stderr.strip()[:200])
+        logger.warning(
+            'Could not read profiles from the installed orq CLI (exit {}): {}',
+            result.returncode,
+            result.stderr.strip()[:200] or 'unexpected JSON response',
+        )
         return ()
     profiles: list[OrqProfile] = []
     for row in rows:

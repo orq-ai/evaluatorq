@@ -765,7 +765,7 @@ def settings_body(
 
     def setting_value(name: str) -> str:
         value = settings.get(name, '') if isinstance(settings, Mapping) else getattr(settings, name, '')
-        return str(value)
+        return '' if value is None else str(value)
 
     fields = (
         ('compiler_model', 'Compiler model', 'text'),

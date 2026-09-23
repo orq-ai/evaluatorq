@@ -87,9 +87,9 @@
 
   // Delegated so the finder handlers survive HTMX fragment swaps.
   document.body.addEventListener('click', function (evt) {
-    var example = evt.target.closest('[data-finder-example]');
+    const example = evt.target.closest('[data-finder-example]');
     if (example) {
-      var query = document.querySelector('#finder-query-form textarea[name="query"]');
+      const query = document.querySelector('#finder-query-form textarea[name="query"]');
       if (query) {
         query.value = example.getAttribute('data-finder-example') || '';
         query.focus();
@@ -98,22 +98,22 @@
       return;
     }
 
-    var item = evt.target.closest('.facet-item');
+    const item = evt.target.closest('.facet-item');
     if (item) { showFacet(item); return; }
-    var addFilter = evt.target.closest('.finder-controls .add');
+    const addFilter = evt.target.closest('.finder-controls .add');
     if (addFilter) {
-      var ownMenu = addFilter.parentElement.querySelector('.finder-facets');
+      const ownMenu = addFilter.parentElement.querySelector('.finder-facets');
       if (ownMenu) { ownMenu.style.left = ''; ownMenu.style.top = ''; ownMenu.classList.toggle('open'); }
       return;
     }
-    var chipOpen = evt.target.closest('[data-chip-open]');
+    const chipOpen = evt.target.closest('[data-chip-open]');
     if (chipOpen) {
-      var menu = document.querySelector('.finder-controls .finder-facets');
-      var target = menu && menu.querySelector('.facet-item[data-facet="' + chipOpen.getAttribute('data-chip-open') + '"]');
+      const menu = document.querySelector('.finder-controls .finder-facets');
+      const target = menu && menu.querySelector('.facet-item[data-facet="' + chipOpen.getAttribute('data-chip-open') + '"]');
       if (target) {
         // Anchor the menu under the clicked chip instead of under + Filter.
-        var chip = chipOpen.closest('.chip').getBoundingClientRect();
-        var wrap = menu.parentElement.getBoundingClientRect();
+        const chip = chipOpen.closest('.chip').getBoundingClientRect();
+        const wrap = menu.parentElement.getBoundingClientRect();
         menu.style.left = (chip.left - wrap.left) + 'px';
         menu.style.top = (chip.bottom - wrap.top + 6) + 'px';
         menu.classList.add('open');
@@ -125,15 +125,15 @@
       document.querySelectorAll('.finder-facets.open').forEach(function (menu) { menu.classList.remove('open'); });
     }
 
-    var remove = evt.target.closest('[data-finder-remove]');
+    const remove = evt.target.closest('[data-finder-remove]');
     if (!remove) return;
-    var name = remove.getAttribute('data-finder-remove');
+    const name = remove.getAttribute('data-finder-remove');
     if (!name) return;
-    var value = remove.getAttribute('data-finder-value');
+    const value = remove.getAttribute('data-finder-value');
     document.querySelectorAll('input[name="' + name + '"]').forEach(function (input) {
       if (value === null || input.value === value) {
         if (input.type === 'checkbox') input.checked = false;
-        if (input.type === 'hidden') input.remove();
+        else if (input.type === 'hidden') input.remove();
         else input.value = '';
       }
     });
@@ -141,30 +141,30 @@
   });
 
   function showFacet(item) {
-    var menu = item.closest('.finder-facets');
+    const menu = item.closest('.finder-facets');
     if (!menu) return;
-    var name = item.getAttribute('data-facet');
+    const name = item.getAttribute('data-facet');
     menu.querySelectorAll('.facet-item').forEach(function (other) {
-      var on = other === item;
+      const on = other === item;
       other.classList.toggle('is-active', on);
       other.setAttribute('aria-expanded', on ? 'true' : 'false');
     });
     menu.querySelectorAll('.facet-sub').forEach(function (sub) {
-      var on = sub.getAttribute('data-facet-sub') === name;
+      const on = sub.getAttribute('data-facet-sub') === name;
       sub.classList.toggle('is-active', on);
       sub.hidden = !on;
     });
   }
 
   document.body.addEventListener('mouseover', function (evt) {
-    var item = evt.target.closest('.facet-item');
+    const item = evt.target.closest('.facet-item');
     if (item && !item.classList.contains('is-active')) showFacet(item);
   });
 
   // Unticking a value in the menu must also drop the hidden input the chip row submits.
   document.body.addEventListener('change', function (evt) {
-    var box = evt.target;
-    if (!box.matches || !box.matches('.finder-facets input[type="checkbox"]') || box.checked) return;
+    const box = evt.target;
+    if (!box.matches('.finder-facets input[type="checkbox"]') || box.checked) return;
     document.querySelectorAll('input[type="hidden"][name="' + box.name + '"]').forEach(function (hidden) {
       if (hidden.value === box.value) hidden.remove();
     });
@@ -178,10 +178,10 @@
       document.querySelectorAll('.finder-facets.open').forEach(function (menu) { menu.classList.remove('open'); });
     }
     if (!(evt.metaKey || evt.ctrlKey) || evt.key !== 'Enter') return;
-    var query = evt.target.closest('#finder-query-form textarea[name="query"]');
+    const query = evt.target.closest('#finder-query-form textarea[name="query"]');
     if (!query) return;
     evt.preventDefault();
-    var form = query.form || document.getElementById('finder-query-form');
+    const form = query.form || document.getElementById('finder-query-form');
     if (form && form.requestSubmit) form.requestSubmit();
   });
 

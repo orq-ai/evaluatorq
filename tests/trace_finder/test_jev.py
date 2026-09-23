@@ -115,7 +115,8 @@ async def test_build_jev_evaluator_passes_exact_question_and_state(
     result = await scorer({'data': build_datapoint(_trace(), _projection()), 'output': 'JEV state prepared'})
 
     assert evaluator['name'] == 'jev'
-    assert result.value in {'frustrated', True, 1.0}
+    assert type(result.value) is type({'choice': 'frustrated', 'noul': True, 'score': 1.0}[kind])
+    assert result.value == {'choice': 'frustrated', 'noul': True, 'score': 1.0}[kind]
     assert calls[0]['model'] == 'typesafe/jev-latest'
     assert calls[0]['cfg'].timeout_ms == 90_000
     assert calls[0]['prompt_template'] == ''
@@ -225,6 +226,16 @@ def test_parse_datapoint_result_keeps_absent_classification_details_absent() -> 
     classification = parse_datapoint_result(_result(raw_answer={'choice': 'frustrated'}), _compiled())
     assert classification.confidence is None
     assert classification.probabilities is None
+
+
+@pytest.mark.parametrize('probability', [-0.1, 1.1, float('nan'), float('inf')])
+def test_parse_datapoint_result_rejects_invalid_probabilities(probability: float) -> None:
+    classification = parse_datapoint_result(
+        _result(raw_answer={'choice': 'frustrated', 'probabilities': {'frustrated': probability}}), _compiled()
+    )
+
+    assert classification.error == 'malformed JEV probabilities'
+    assert classification.matched is False
 
 
 def test_parse_datapoint_result_returns_terminal_classification_for_malformed_tree() -> None:

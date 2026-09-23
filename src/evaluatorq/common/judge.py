@@ -233,7 +233,7 @@ class ClassifyOutcome(BaseModel):
     raw_content: str = ''
     error_kind: JudgeError | None = None
     error_message: str | None = None
-    _error_exc: Exception | None = PrivateAttr(default=None)
+    error_exc: Exception | None = None
 
 
 class JudgeOutcome(BaseModel):
@@ -687,8 +687,9 @@ async def run_classify(
     The caller owns retry policy. This helper owns the classify span, timeout, wire
     response validation, and mapping provider failures into ``ClassifyOutcome``.
     """
-    warn_unread_config_fields(cfg, frozenset({'model', 'timeout_ms'}), caller='run_classify')
+    warn_unread_config_fields(cfg, frozenset({'timeout_ms', 'retry_count'}), caller='run_classify')
     raw_payload = ''
+    usage: TokenUsage | None = None
     try:
         async with with_llm_span(
             model=model,
@@ -735,30 +736,26 @@ async def run_classify(
             return ClassifyOutcome(response=response, token_usage=usage, raw_content=response.model_dump_json())
     except (asyncio.TimeoutError, APITimeoutError) as exc:
         logger.error('Judge [{}] classify call timed out after {}ms', model, cfg.timeout_ms)
-        outcome = ClassifyOutcome(
+        return ClassifyOutcome(
             error_kind=JudgeError.TIMEOUT,
             error_message=f'timed out after {cfg.timeout_ms}ms',
+            error_exc=exc,
         )
-        outcome._error_exc = exc  # noqa: SLF001
-        return outcome
     except ValidationError as exc:
         logger.error('Judge [{}] classify reply did not validate: {}', model, exc)
         return ClassifyOutcome(
             error_kind=JudgeError.PARSE,
             error_message=f'classify reply from {model} did not validate: {exc}',
+            token_usage=usage,
             raw_content=raw_payload,
         )
     except (APIConnectionError, APIStatusError) as exc:
         kind = _classify(exc)
         logger.error('Judge [{}] classify API error ({}): {}', model, kind.value, exc)
-        outcome = ClassifyOutcome(error_kind=kind, error_message=str(exc))
-        outcome._error_exc = exc  # noqa: SLF001
-        return outcome
+        return ClassifyOutcome(error_kind=kind, error_message=str(exc), error_exc=exc)
     except Exception as exc:
         logger.exception('Judge [{}] classify call failed (unknown): {}', model, exc)
-        outcome = ClassifyOutcome(error_kind=JudgeError.UNKNOWN, error_message=str(exc))
-        outcome._error_exc = exc  # noqa: SLF001
-        return outcome
+        return ClassifyOutcome(error_kind=JudgeError.UNKNOWN, error_message=str(exc), error_exc=exc)
 
 
 async def _classify_judge(
@@ -788,7 +785,7 @@ async def _classify_judge(
         request=ClassifyRequest(state=question.state, questions={'verdict': question}),
         span_attributes=span_attributes,
     )
-    error_exc = getattr(outcome, '_error_exc', None)
+    error_exc = outcome.error_exc
     if error_exc is not None:
         raise error_exc
     if outcome.error_kind is not None:
@@ -797,7 +794,6 @@ async def _classify_judge(
             error_message=outcome.error_message,
             token_usage=outcome.token_usage,
             raw_content=outcome.raw_content,
-            timeout_ms=cfg.timeout_ms if outcome.error_kind is JudgeError.TIMEOUT else None,
             endpoint='classify',
         )
     response = outcome.response

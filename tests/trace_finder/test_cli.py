@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -46,7 +47,8 @@ class FakeStore:
     def __init__(self) -> None:
         self.request: Any | None = None
 
-    async def compile(self, request: Any) -> RunSnapshot:
+    async def compile(self, request: Any, *, wait: bool = True) -> RunSnapshot:
+        assert wait is False
         self.request = request
         trace = _trace()
         compiled = CompiledQuery(
@@ -77,6 +79,26 @@ class FakeStore:
             completed=1,
             matched=1,
         )
+
+
+def test_find_exits_nonzero_when_classifications_failed(monkeypatch: Any, tmp_path: Path) -> None:
+    from evaluatorq.trace_finder import cli as find_cli
+
+    class FailedStore(FakeStore):
+        async def compile(self, request: Any, *, wait: bool = True) -> RunSnapshot:
+            snapshot = await super().compile(request, wait=wait)
+            return replace(snapshot, failed=1)
+
+    monkeypatch.setattr(find_cli, 'resolve_orq_client', lambda: object())
+    monkeypatch.setattr(find_cli, 'resolve_llm_client', lambda **_: SimpleNamespace(client=object()))
+    monkeypatch.setattr(find_cli, 'build_run_store', lambda *args, **kwargs: FailedStore())
+    output = tmp_path / 'partial.json'
+
+    result = CliRunner().invoke(_app(), ['find', 'refund requests', '--json', str(output)])
+
+    assert result.exit_code == 1
+    assert '1 failed classifications' in result.output
+    assert not output.exists()
 
 
 def test_find_missing_orq_key_exits_two(monkeypatch: Any) -> None:

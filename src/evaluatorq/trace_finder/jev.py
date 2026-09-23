@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
@@ -245,7 +246,11 @@ def _classification_details(raw_answer: dict[str, Any] | None) -> tuple[float | 
         raise _TerminalResultError('malformed JEV confidence')
     if probabilities is not None:
         if not isinstance(probabilities, dict) or any(
-            not isinstance(label, str) or isinstance(probability, bool) or not isinstance(probability, int | float)
+            not isinstance(label, str)
+            or isinstance(probability, bool)
+            or not isinstance(probability, int | float)
+            or not math.isfinite(probability)
+            or not 0 <= probability <= 1
             for label, probability in probabilities.items()
         ):
             raise _TerminalResultError('malformed JEV probabilities')

@@ -75,7 +75,7 @@ async def select_filters(
             request=request,
         )
         if outcome.error_kind is not None:
-            error = getattr(outcome, '_error_exc', None)
+            error = outcome.error_exc
             if isinstance(error, Exception):
                 raise error
         return outcome

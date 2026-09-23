@@ -7,30 +7,34 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from loguru import logger
-
 from evaluatorq.trace_finder.facets import load_facet_catalogue
 
 
 class FakeTraces:
-    def __init__(self) -> None:
+    def __init__(self, *, fail_status: bool = False, has_more: bool = False) -> None:
         self.calls: list[dict[str, object]] = []
+        self.fail_status = fail_status
+        self.has_more = has_more
 
     async def list_facet_values_async(self, **kwargs: object) -> object:
         self.calls.append(kwargs)
         field = cast(str, kwargs['field'])
-        if field == 'status':
+        if field == 'status' and self.fail_status:
             raise RuntimeError('status service unavailable')
         values = {
             'project_id': ['project-1'],
             'model': ['gpt-5'],
             'provider': ['openai'],
+            'status': ['error'],
             'product': ['agents'],
             'attributes.orq.leading_span.span_type': ['span.responses'],
             'agent_name': ['support-agent'],
             'tool_name': ['lookup'],
         }[field]
-        return SimpleNamespace(values=[SimpleNamespace(value=value) for value in values])
+        return SimpleNamespace(
+            values=[SimpleNamespace(value=value) for value in values],
+            has_more=self.has_more and field == 'status',
+        )
 
 
 class FakeProjects:
@@ -46,33 +50,27 @@ class FakeProjects:
 
 
 class FakeClient:
-    def __init__(self) -> None:
-        self.traces = FakeTraces()
+    def __init__(self, *, fail_status: bool = False, has_more: bool = False) -> None:
+        self.traces = FakeTraces(fail_status=fail_status, has_more=has_more)
         self.projects = FakeProjects()
 
 
 @pytest.mark.asyncio
-async def test_load_facet_catalogue_gathers_all_fields_resolves_projects_and_degrades_one_failure() -> None:
+async def test_load_facet_catalogue_gathers_all_fields_and_resolves_projects() -> None:
     client = FakeClient()
     start = datetime(2026, 9, 1, tzinfo=timezone.utc)
     end = datetime(2026, 9, 22, tzinfo=timezone.utc)
 
-    messages: list[str] = []
-    sink_id = logger.add(lambda message: messages.append(message.record['message']), level='WARNING')
-    try:
-        catalogue = await load_facet_catalogue(cast(Any, client), start=start, end=end)
-    finally:
-        logger.remove(sink_id)
+    catalogue = await load_facet_catalogue(cast(Any, client), start=start, end=end)
 
     assert catalogue.project == ('Research',)
     assert catalogue.model == ('gpt-5',)
     assert catalogue.provider == ('openai',)
-    assert catalogue.status == ()
+    assert catalogue.status == ('error',)
     assert catalogue.product == ('agents',)
     assert catalogue.trace_type == ('span.responses',)
     assert catalogue.agent_name == ('support-agent',)
     assert catalogue.tool_name == ('lookup',)
-    assert any('status' in message for message in messages)
     assert {call['field'] for call in client.traces.calls} == {
         'project_id',
         'model',
@@ -85,3 +83,14 @@ async def test_load_facet_catalogue_gathers_all_fields_resolves_projects_and_deg
     }
     assert all(call['from_'] == start and call['to'] == end and call['limit'] == 50 for call in client.traces.calls)
     assert client.projects.calls
+
+
+@pytest.mark.parametrize(('fail_status', 'has_more'), [(True, False), (False, True)])
+@pytest.mark.asyncio
+async def test_load_facet_catalogue_rejects_unavailable_or_incomplete_values(
+    fail_status: bool, has_more: bool
+) -> None:
+    client = FakeClient(fail_status=fail_status, has_more=has_more)
+    start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    with pytest.raises((RuntimeError, ValueError), match='status'):
+        await load_facet_catalogue(cast(Any, client), start=start, end=start)

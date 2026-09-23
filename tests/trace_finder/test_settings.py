@@ -100,7 +100,8 @@ def test_effective_settings_precedence_is_file_then_environment_then_overrides(
     assert settings.parallelism == 8
 
 
-def test_effective_settings_reads_finder_limit_environment_layer(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_effective_settings_reads_finder_limit_environment_layer(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'settings.json'))
     monkeypatch.setenv('EVALUATORQ_FINDER_WINDOW_DAYS', '14')
     monkeypatch.setenv('EVALUATORQ_FINDER_LIMIT', '120')
     monkeypatch.setenv('EVALUATORQ_FINDER_PARALLELISM', '12')
@@ -113,8 +114,9 @@ def test_effective_settings_reads_finder_limit_environment_layer(monkeypatch: py
 
 
 def test_effective_settings_ignores_invalid_finder_limit_environment_layer(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, tmp_path: Path
 ) -> None:
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'settings.json'))
     monkeypatch.setenv('EVALUATORQ_FINDER_WINDOW_DAYS', 'not-an-int')
     monkeypatch.setenv('EVALUATORQ_FINDER_LIMIT', '5001')
     monkeypatch.setenv('EVALUATORQ_FINDER_PARALLELISM', '0')

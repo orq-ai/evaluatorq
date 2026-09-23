@@ -170,7 +170,7 @@ class PopulationRequest(BaseModel):
     end: datetime | None = None
     facets: FacetSelection = FacetSelection()
     numeric: NumericFilters = NumericFilters()
-    limit: int = Field(default=500, ge=1, le=500)
+    limit: int = Field(default=500, ge=1, le=5000)
 
     @field_validator('start', 'end')
     @classmethod
@@ -180,17 +180,6 @@ class PopulationRequest(BaseModel):
         if value is not None and (value.tzinfo is None or value.utcoffset() is None):
             raise ValueError('time bounds must include a timezone offset')
         return value
-
-
-class FacetOption(BaseModel):
-    """One facet value together with its compatibility count and UI state."""
-
-    model_config = ConfigDict(frozen=True)
-
-    value: str
-    count: int = Field(ge=0)
-    selected: bool
-    disabled: bool
 
 
 class ValueSelection(BaseModel):
@@ -262,6 +251,8 @@ class RunSnapshot:
     state: RunState = 'idle'
     request: RunRequest | None = None
     compiled: CompiledQuery | None = None
+    explicit_filters: FacetSelection = field(default_factory=FacetSelection)
+    explicit_numeric: NumericFilters = field(default_factory=NumericFilters)
     generated_filters: FacetSelection = field(default_factory=FacetSelection)
     generated_numeric: NumericFilters = field(default_factory=NumericFilters)
     trace_ids: tuple[str, ...] = ()

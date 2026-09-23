@@ -154,7 +154,7 @@ def _print_matches(console: Console, snapshot: RunSnapshot) -> None:
 
 
 async def _run(store: Any, request: RunRequest, console: Console) -> RunSnapshot:
-    snapshot = await store.compile(request)
+    snapshot = await store.compile(request, wait=False)
     _print_progress(console, snapshot)
     while snapshot.state not in {'completed', 'failed', 'cancelled'}:
         await asyncio.sleep(0.5)
@@ -250,8 +250,13 @@ def find(
         emit_error(exc)
         raise typer.Exit(code=1) from None
 
-    if snapshot.state != 'completed':
-        emit_error(snapshot.error or f'Find run ended in {snapshot.state}.')
+    if snapshot.state != 'completed' or snapshot.failed:
+        detail = snapshot.error or (
+            f'Find run completed with {snapshot.failed} failed classifications.'
+            if snapshot.failed
+            else f'Find run ended in {snapshot.state}.'
+        )
+        emit_error(detail)
         raise typer.Exit(code=1)
     if json_path is not None:
         try:

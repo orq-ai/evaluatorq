@@ -26,10 +26,13 @@ a concern in the task-3 report.
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import json
+import os
 from pathlib import Path
+from typing import Any
 
 from fasthtml.core import FastHTML, NotStr
 from loguru import logger
@@ -42,11 +45,12 @@ from starlette.responses import RedirectResponse, Response
 # dashboard tests use build_app()+TestClient without ever calling serve(). See
 # evaluatorq/dashboard/_compat.py.
 import evaluatorq.dashboard._compat  # noqa: F401 — side-effect import
-from evaluatorq.common.orq_client import apply_orq_profile, list_orq_profiles
+from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, list_orq_profiles
 from evaluatorq.dashboard import library, metrics, report_tabs
 from evaluatorq.dashboard.apply_ui import register_apply_routes
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
+from evaluatorq.dashboard.finder_routes import _settings as initialize_finder_settings
 from evaluatorq.dashboard.finder_routes import register_finder_routes
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
 from evaluatorq.dashboard.security import request_rejected
@@ -134,12 +138,10 @@ def _csv_safe(value: object) -> object:
     return value
 
 
-def _settings_config(roots: list[Path] | None) -> list[tuple[str, str | list[str]]]:
+def _settings_config(roots: list[Path] | None, profile: OrqProfile | None = None) -> list[tuple[str, str | list[str]]]:
     """Build the read-only runtime config shown on the Settings page: the run
     stores being scanned, the default sim model, and API-key presence with a
     masked suffix (never the full value)."""
-    import os
-
     from evaluatorq.dashboard.library import default_roots
     from evaluatorq.dashboard.orq_workspace import classify_host, resolve_base_url, resolve_slug
     from evaluatorq.simulation.types import DEFAULT_MODEL
@@ -162,6 +164,11 @@ def _settings_config(roots: list[Path] | None) -> list[tuple[str, str | list[str
         ('Apply-recommendations model', f'{model} ({source})'),
         ('Orq profile', effective_settings().orq_profile or 'environment'),
     ))
+    if profile is not None:
+        config.extend((
+            ('Selected profile API key', _mask_key(profile.api_key)),
+            ('Selected profile host', profile.server or DEFAULT_ORQ_BASE_URL),
+        ))
     for label, var in (('ORQ API key', 'ORQ_API_KEY'), ('OpenAI API key', 'OPENAI_API_KEY')):
         value = os.environ.get(var)
         config.append((label, _mask_key(value) if value else 'not set'))
@@ -218,7 +225,7 @@ def _index(req: Request) -> NotStr:
 def _settings(req: Request) -> NotStr:
     roots = _roots(req)
     body = settings_body(
-        _settings_config(roots),
+        _settings_config(roots, getattr(req.app.state, 'finder_profile', None)),
         effective_settings(),
         saved=req.query_params.get('saved') == '1',
         profiles=list_orq_profiles(),
@@ -238,11 +245,8 @@ async def _save_settings(req: Request) -> Response | NotStr:
     # Window, limit and parallelism are tuned per run on the Trace search page; the form only carries models.
     # Carry them over from the saved file, not the effective view, so env overrides never get persisted.
     current = load_settings()
-    values: dict[str, object] = {
-        name: form_data.get(name, '') for name in ('compiler_model', 'jev_model', 'apply_model', 'orq_profile')
-    }
-    values.update(window_days=current.window_days, limit=current.limit, parallelism=current.parallelism)
-    profiles = list_orq_profiles()
+    values = _submitted_settings_values(form_data, current)
+    profiles = await asyncio.to_thread(list_orq_profiles)
     errors: dict[str, str] = {}
     settings: DashboardSettings | None = None
     try:
@@ -254,6 +258,7 @@ async def _save_settings(req: Request) -> Response | NotStr:
             errors[field] = str(detail.get('msg', 'Invalid value'))
     if (
         settings is not None
+        and 'orq_profile' in form_data
         and settings.orq_profile is not None
         and settings.orq_profile not in {p.name for p in profiles}
     ):
@@ -263,17 +268,36 @@ async def _save_settings(req: Request) -> Response | NotStr:
         return Response(page('Settings', body, active_nav='settings'), status_code=422, media_type='text/html')
 
     save_settings(settings)
-    if settings.orq_profile is not None:
-        apply_orq_profile(settings.orq_profile, profiles)
+    req.app.state.finder_profile = next((p for p in profiles if p.name == settings.orq_profile), None)
+    if settings.orq_profile is not None and req.app.state.finder_profile is None:
+        logger.warning('Saved Orq profile {} is unavailable; finder uses environment credentials', settings.orq_profile)
     old_store = getattr(req.app.state, 'finder_store', None)
     if old_store is not None:
         # Retire the running finder so the next request rebuilds it from the saved settings.
         await old_store.close()
-    req.app.state.finder_settings = settings
+    req.app.state.finder_settings = effective_settings()
     for state_name in ('finder_store', 'finder_catalogue_cache'):
         if hasattr(req.app.state, state_name):
             delattr(req.app.state, state_name)
     return RedirectResponse('/settings?saved=1', status_code=303)
+
+
+def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> dict[str, object]:
+    """Keep environment model overrides out of the saved file when the form was unchanged."""
+    values: dict[str, object] = {
+        name: form_data.get(name, '') for name in ('compiler_model', 'jev_model', 'apply_model')
+    }
+    for name, env_name in (
+        ('compiler_model', 'EVALUATORQ_COMPILER_MODEL'),
+        ('jev_model', 'EVALUATORQ_JEV_MODEL'),
+        ('apply_model', 'EVALUATORQ_APPLY_MODEL'),
+    ):
+        override = os.environ.get(env_name, '').strip()
+        if override and values[name] == override:
+            values[name] = getattr(current, name)
+    values['orq_profile'] = form_data.get('orq_profile', current.orq_profile)
+    values.update(window_days=current.window_days, limit=current.limit, parallelism=current.parallelism)
+    return values
 
 
 def _search(req: Request) -> NotStr:
@@ -650,6 +674,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         pico=False,
     )
     app.state.roots = roots
+    initialize_finder_settings(app)
     # NOTE: static_route_exts is registered AFTER all custom routes so that
     # its catch-all /{fname:path}.{ext:static} does not steal requests for
     # /r/{rid}/export.html, export.md, export.csv, export.json etc.
@@ -682,7 +707,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     # ------------------------------------------------------------------
     # Routes: /find — JEV trace finder
     # ------------------------------------------------------------------
-    register_finder_routes(app, roots)
+    register_finder_routes(app)
 
     # Register static file handler LAST so its catch-all /{fname}.{ext} does not
     # intercept the download routes above. Serve under /static/ to match the page

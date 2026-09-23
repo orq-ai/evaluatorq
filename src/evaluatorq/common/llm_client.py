@@ -107,6 +107,7 @@ def resolve_llm_client(
     config_client: AsyncOpenAI | None = None,
     *,
     extra_api_key: str | None = None,
+    orq_host: str | None = None,
     default_orq_host: str = ORQ_DEFAULT_HOST,
     honor_openai_base_url: bool = True,
     require_orq: bool = False,
@@ -118,6 +119,8 @@ def resolve_llm_client(
         config_client: Pre-built client to use as-is (returned not owned).
         extra_api_key: Explicit ORQ key, treated like ``ORQ_API_KEY`` but taking
             precedence over the env var (used by the simulation legacy path).
+        orq_host: Explicit Orq host for this client, taking precedence over
+            ``ORQ_BASE_URL`` when an Orq key is used.
         default_orq_host: Host used when ``ORQ_BASE_URL`` is unset.
         honor_openai_base_url: When True, the OpenAI branch respects
             ``OPENAI_BASE_URL``; when False it forces the OpenAI SDK default.
@@ -155,7 +158,7 @@ def resolve_llm_client(
 
     orq_api_key = extra_api_key or os.environ.get('ORQ_API_KEY')
     if orq_api_key:
-        host = os.environ.get('ORQ_BASE_URL', default_orq_host).rstrip('/')
+        host = (orq_host or os.environ.get('ORQ_BASE_URL', default_orq_host)).rstrip('/')
         router_url = f'{host}{ORQ_ROUTER_SUFFIX}'
         return ResolvedClient(
             client=AsyncOpenAI(api_key=orq_api_key, base_url=router_url, max_retries=retries),

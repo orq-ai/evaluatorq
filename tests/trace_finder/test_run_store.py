@@ -236,6 +236,8 @@ async def test_compile_merges_generated_filters_and_numeric_constraints_with_man
     assert started.state == 'classifying'
     assert started.generated_filters == FacetSelection(provider=frozenset({'openai'}))
     assert started.generated_numeric == NumericFilters(tokens_min=100, duration_ms_min=20)
+    assert started.explicit_filters == manual.facets
+    assert started.explicit_numeric == manual.numeric
     started_request = started.request
     assert started_request is not None
     assert started_request.population.facets == FacetSelection(
@@ -311,8 +313,11 @@ async def test_close_cancels_and_releases_the_builder_resources() -> None:
     )
 
     await store.close()
+    await store.close()
 
     assert released == [True]
+    with pytest.raises(ValueError, match='closed'):
+        await store.compile(request())
 
 
 @pytest.mark.asyncio
@@ -392,8 +397,23 @@ async def test_cancel_finishes_when_compiler_swallows_cancellation() -> None:
     assert planner.swallowed.is_set()
     assert not loader.calls
     assert runner.calls == 0
-    with pytest.raises(asyncio.CancelledError):
-        await compiling
+    assert (await compiling).state == 'cancelled'
+
+
+@pytest.mark.asyncio
+async def test_replacement_returns_a_snapshot_to_first_compile_caller() -> None:
+    planner = SwallowingCancellationPlanner()
+    store, _, _, runner, _ = make_store(planner=planner)
+    first = asyncio.create_task(store.compile(request()))
+    await planner.entered.wait()
+
+    second = await store.start(request(), compiled_query())
+
+    assert (await first).state in {'cancelled', 'compiling', 'classifying'}
+    assert second.state == 'classifying'
+    runner.release.set()
+    assert store._task is not None
+    await asyncio.wait_for(store._task, timeout=1)
 
 
 @pytest.mark.asyncio
@@ -425,9 +445,32 @@ async def test_review_start_reuses_loaded_population_without_replanning() -> Non
 
     assert review.state == 'awaiting_review'
     assert started.state == 'classifying'
+    assert started.explicit_filters == FacetSelection()
+    assert started.explicit_numeric == NumericFilters()
     assert len(loader.calls) == 1
     assert planner.calls == ['Find help requests']
     await runner.entered.wait()
+    runner.release.set()
+    assert store._task is not None
+    await asyncio.wait_for(store._task, timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_review_start_tracks_only_changed_filters_as_explicit() -> None:
+    store, _, _, runner, _ = make_store()
+    original = request(mode='review', population=PopulationRequest(facets=FacetSelection(status=frozenset({'failed'}))))
+    review = await store.compile(original)
+    assert review.request is not None and review.compiled is not None
+    revised_population = review.request.population.model_copy(update={
+        'numeric': review.request.population.numeric.model_copy(update={'tokens_min': 200}),
+    })
+    revised_request = review.request.model_copy(update={'population': revised_population})
+
+    started = await store.start(revised_request, review.compiled)
+
+    assert started.explicit_filters == original.population.facets
+    assert started.explicit_numeric == NumericFilters(tokens_min=200)
+    assert started.generated_filters == FacetSelection(provider=frozenset({'openai'}))
     runner.release.set()
     assert store._task is not None
     await asyncio.wait_for(store._task, timeout=1)

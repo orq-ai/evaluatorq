@@ -9,7 +9,12 @@ from typing import Any
 import pytest
 
 from evaluatorq.trace_finder.models import TraceRecord
-from evaluatorq.trace_finder.projection import project_trace
+from evaluatorq.trace_finder.projection import estimate_tokens, project_trace
+
+
+def test_token_budget_uses_a_conservative_bound_for_dense_punctuation() -> None:
+    serialized = ''.join('{}[],:;' for _ in range(100))
+    assert estimate_tokens(serialized) == len(serialized.encode('utf-8'))
 
 
 @pytest.mark.parametrize('block_type', ['text', 'input_text', 'output_text'])
@@ -22,7 +27,7 @@ def test_truncates_structured_text_blocks_preserving_shape_and_byte_accounting(
     image = {'type': 'image_url', 'image_url': {'url': 'https://example.test/picture'}}
     trace = _trace(messages=({'role': 'user', 'content': [image, block]},))
 
-    projection = project_trace(trace, token_budget=150)
+    projection = project_trace(trace, token_budget=450)
 
     content = projection.payload['messages'][0]['content']
     assert content[0] == image
@@ -33,7 +38,7 @@ def test_truncates_structured_text_blocks_preserving_shape_and_byte_accounting(
     tail = shortened.removeprefix('[... earlier bytes omitted ...]')
     assert projection.omitted_bytes == len(text.encode()) - len(tail.encode())
     assert projection.omitted_messages == 0
-    assert projection.estimated_tokens <= 150
+    assert projection.estimated_tokens <= 450
     assert json.loads(projection.serialized) == projection.payload
     assert trace.messages[0]['content'][1] == block
 
@@ -120,7 +125,7 @@ def test_project_trace_keeps_a_complete_newest_suffix_and_reports_discarded_unit
     old_assistant = {'role': 'assistant', 'content': 'a' * 500}
     newest = {'role': 'user', 'content': 'Newest request'}
 
-    projection = project_trace(_trace(messages=(old_user, old_assistant, newest)), token_budget=100)
+    projection = project_trace(_trace(messages=(old_user, old_assistant, newest)), token_budget=300)
 
     assert projection.payload == {'trace_status': 'completed', 'messages': [newest]}
     assert projection.omitted_messages == 2
@@ -130,15 +135,29 @@ def test_project_trace_keeps_a_complete_newest_suffix_and_reports_discarded_unit
 def test_project_trace_tail_truncates_an_oversized_newest_message() -> None:
     oversized_content = 'prefix-' + ('😀' * 1_000) + '-tail'
 
-    projection = project_trace(_trace(messages=({'role': 'user', 'content': oversized_content},)), token_budget=80)
+    projection = project_trace(_trace(messages=({'role': 'user', 'content': oversized_content},)), token_budget=240)
 
     content = projection.payload['messages'][0]['content']
-    assert projection.estimated_tokens <= 80
+    assert projection.estimated_tokens <= 240
     assert projection.omitted_messages == 0
     assert projection.omitted_bytes > 0
     assert content.startswith('[... earlier bytes omitted ...]')
     assert content.endswith('-tail')
     assert json.loads(projection.serialized) == projection.payload
+
+
+def test_project_trace_truncates_parts_text_and_keeps_unknown_text_block() -> None:
+    trace = _trace(messages=({
+        'role': 'user',
+        'parts': [{'type': 'custom_text', 'text': 'prefix-' + 'x' * 2000 + '-tail'}],
+    },))
+
+    projection = project_trace(trace, token_budget=300)
+
+    text = projection.payload['messages'][0]['parts'][0]['text']
+    assert text.startswith('[... earlier bytes omitted ...]')
+    assert text.endswith('-tail')
+    assert projection.estimated_tokens <= 300
 
 
 def test_project_trace_tail_truncates_oversized_parsed_tool_arguments() -> None:
@@ -162,16 +181,33 @@ def test_project_trace_tail_truncates_oversized_parsed_tool_arguments() -> None:
         )
     )
 
-    projection = project_trace(trace, token_budget=80)
+    projection = project_trace(trace, token_budget=240)
 
     projected_call = projection.payload['messages'][0]['tool_calls'][0]
-    assert projection.estimated_tokens <= 80
+    assert projection.estimated_tokens <= 240
     assert projection.omitted_bytes > 0
     assert projected_call['id'] == 'call_789'
     assert projected_call['name'] == 'search_orders'
     assert projected_call['status'] == 'completed'
     assert projected_call['arguments'].startswith('[... earlier bytes omitted ...]')
     assert json.loads(projection.serialized) == projection.payload
+
+
+def test_tool_argument_that_fits_retains_its_structure_when_peer_is_truncated() -> None:
+    trace = _trace(messages=({
+        'role': 'assistant',
+        'content': None,
+        'tool_calls': [
+            {'id': 'one', 'function': {'name': 'small', 'arguments': '{"id":1}'}},
+            {'id': 'two', 'function': {'name': 'large', 'arguments': '{"text":"' + 'x' * 2000 + '"}'}},
+        ],
+    },))
+
+    projection = project_trace(trace, token_budget=390)
+
+    calls = projection.payload['messages'][0]['tool_calls']
+    assert calls[0]['arguments'] == {'id': 1}
+    assert isinstance(calls[1]['arguments'], str)
 
 
 def _trace(*, messages: tuple[dict[str, Any], ...], status: str = 'completed') -> TraceRecord:

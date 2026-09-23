@@ -361,6 +361,20 @@ async def test_concurrent_sources_pop_their_own_shared_raw_query_response(
 
 
 @pytest.mark.asyncio
+async def test_missing_timestamp_drops_only_affected_trace() -> None:
+    missing_time = summary('missing-time')
+    missing_time.started_at = None
+    missing_time.ended_at = None
+    traces = FakeTraces({None: ([missing_time, summary('valid')], False, None)})
+
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START, END, 2, facets=FacetSelection(), numeric=NumericFilters()
+    )
+
+    assert [record.trace_id for record in snapshot.traces] == ['valid']
+
+
+@pytest.mark.asyncio
 async def test_logs_one_warning_for_all_traces_dropped_without_usable_messages(monkeypatch: pytest.MonkeyPatch) -> None:
     traces = FakeTraces({None: ([summary('empty-1', messages=[]), summary('empty-2', messages=[])], False, None)})
     warnings: list[str] = []
@@ -409,6 +423,26 @@ async def test_owned_client_is_closed_but_caller_owned_client_is_not() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stops_paging_after_bounded_empty_responses(monkeypatch: pytest.MonkeyPatch) -> None:
+    pages: dict[str | None, tuple[list[Any], bool, str | None]] = {None: ([], True, 'page-1')}
+    pages.update({f'page-{index}': ([], True, f'page-{index + 1}') for index in range(1, 21)})
+    traces = FakeTraces(pages)
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        'evaluatorq.trace_finder.orq_source.logger.warning',
+        lambda message, *args: warnings.append(message.format(*args)),
+    )
+
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START, END, 1, facets=FacetSelection(), numeric=NumericFilters()
+    )
+
+    assert snapshot.traces == ()
+    assert len(traces.query_calls) == 20
+    assert any('stopped trace search' in warning for warning in warnings)
+
+
+@pytest.mark.asyncio
 async def test_rejects_repeated_page_token() -> None:
     traces = FakeTraces({
         None: ([summary('first')], True, 'stuck'),
@@ -451,10 +485,47 @@ def test_raw_response_capture_ignores_the_api_version_segment() -> None:
     assert capture.pop('/traces/query') == {'search': {'data': [{'trace_id': 'trace'}]}}
 
 
+@pytest.mark.asyncio
+async def test_raw_response_capture_correlates_interleaved_requests() -> None:
+    from evaluatorq.trace_finder.orq_source import _CAPTURE_REQUEST
+
+    capture = _RawResponseCapture()
+    ready = asyncio.Event()
+
+    async def capture_one(trace_id: str, wait: bool) -> dict[str, Any] | None:
+        marker = _CAPTURE_REQUEST.set(object())
+        try:
+            response = namespace(
+                request=namespace(url=namespace(path='/v3/traces/query')),
+                json=lambda: {'search': {'data': [{'trace_id': trace_id}]}},
+            )
+            capture.after_success(namespace(operation_id='TracesQueryOql'), response)
+            if wait:
+                ready.set()
+                await asyncio.sleep(0)
+            else:
+                await ready.wait()
+            return capture.pop('/traces/query')
+        finally:
+            _CAPTURE_REQUEST.reset(marker)
+
+    first, second = await asyncio.gather(capture_one('first', True), capture_one('second', False))
+
+    assert first == {'search': {'data': [{'trace_id': 'first'}]}}
+    assert second == {'search': {'data': [{'trace_id': 'second'}]}}
+
+
 def test_conversation_messages_accepts_direct_messages() -> None:
     assert _conversation_messages({'messages': [{'role': 'user', 'content': 'direct'}]}) == [
         {'role': 'user', 'content': 'direct'}
     ]
+
+
+def test_conversation_messages_uses_input_when_direct_messages_are_blank() -> None:
+    assert _conversation_messages({
+        'messages': [{'role': 'user', 'content': ''}],
+        'input': {'messages': [{'role': 'user', 'content': 'usable'}]},
+    }) == [{'role': 'user', 'content': 'usable'}]
 
 
 def test_conversation_messages_decodes_json_conversation_strings() -> None:

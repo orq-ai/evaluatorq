@@ -97,7 +97,7 @@ class TestPreview:
 
     def test_preview_renders_diff_and_confirm(self, apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
         client, rid, path = apply_client
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda: (object(), object(), 'm'))
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: (object(), object(), 'm'))
 
         async def fake_apply(*args, **kwargs):
             return ApplyRecommendationsResult(
@@ -132,7 +132,7 @@ class TestPreview:
 
     def test_preview_error_becomes_drawer_not_500(self, apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
         client, rid, path = apply_client
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda: (object(), object(), 'm'))
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: (object(), object(), 'm'))
 
         async def boom(*args, **kwargs):
             raise RuntimeError('agent not found')
@@ -189,7 +189,7 @@ class TestConfirm:
     def test_confirm_updates_agent_and_records_on_report(self, apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
         client, rid, path = apply_client
         calls: list[dict] = []
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda: (self._fake_orq(calls), object(), 'm'))
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: (self._fake_orq(calls), object(), 'm'))
 
         r = self._post(client, rid, self._seed(rid))
         assert r.status_code == 200
@@ -214,7 +214,7 @@ class TestConfirm:
         monkeypatch.setattr(
             apply_mod,
             '_build_clients',
-            lambda: (self._fake_orq([], update_error=RuntimeError('403 from platform')), object(), 'm'),
+            lambda _profile: (self._fake_orq([], update_error=RuntimeError('403 from platform')), object(), 'm'),
         )
         r = self._post(client, rid, self._seed(rid))
         assert 'rt-drawer-error' in r.text
@@ -228,7 +228,7 @@ class TestConfirm:
         server-stored preview must not reach the platform write."""
         client, rid, path = apply_client
         calls: list[dict] = []
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda: (self._fake_orq(calls), object(), 'm'))
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: (self._fake_orq(calls), object(), 'm'))
         r = client.post(
             f'/r/{rid}/redteam/apply/confirm',
             data={
@@ -247,7 +247,7 @@ class TestConfirm:
     def test_confirm_token_is_single_use(self, apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
         client, rid, path = apply_client
         calls: list[dict] = []
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda: (self._fake_orq(calls), object(), 'm'))
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: (self._fake_orq(calls), object(), 'm'))
         token = self._seed(rid)
         assert 'Applied 1 recommendation(s)' in self._post(client, rid, token).text
         replay = self._post(client, rid, token)
@@ -257,7 +257,7 @@ class TestConfirm:
     def test_confirm_missing_csrf_is_rejected(self, apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
         client, rid, _path = apply_client
         calls: list[dict] = []
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda: (self._fake_orq(calls), object(), 'm'))
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: (self._fake_orq(calls), object(), 'm'))
         token = self._seed(rid)
         r = client.post(f'/r/{rid}/redteam/apply/confirm', data={'confirm_token': token})
         assert 'rt-drawer-error' in r.text
@@ -266,7 +266,7 @@ class TestConfirm:
     def test_confirm_cross_site_request_is_rejected(self, apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
         client, rid, _path = apply_client
         calls: list[dict] = []
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda: (self._fake_orq(calls), object(), 'm'))
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: (self._fake_orq(calls), object(), 'm'))
         token = self._seed(rid)
         r = client.post(
             f'/r/{rid}/redteam/apply/confirm',
@@ -285,7 +285,7 @@ class TestConfirm:
         monkeypatch.setattr(
             apply_mod,
             '_build_clients',
-            lambda: (self._fake_orq(calls, instructions='Someone edited these meanwhile.'), object(), 'm'),
+            lambda _profile: (self._fake_orq(calls, instructions='Someone edited these meanwhile.'), object(), 'm'),
         )
         r = self._post(client, rid, self._seed(rid))
         assert 'changed after this preview' in r.text
@@ -297,7 +297,7 @@ class TestConfirm:
         trusts the reloaded report, not the stored entry."""
         client, rid, path = apply_client
         calls: list[dict] = []
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda: (self._fake_orq(calls), object(), 'm'))
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: (self._fake_orq(calls), object(), 'm'))
         r = self._post(client, rid, self._seed(rid, agent_key='some-other-agent'))
         assert 'rt-drawer-error' in r.text
         assert calls == []
@@ -311,7 +311,7 @@ class TestConfirm:
         raw['applied_recommendations'] = ['Add stricter goal-boundary checks']
         path.write_text(json.dumps(raw))
         calls: list[dict] = []
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda: (self._fake_orq(calls), object(), 'm'))
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: (self._fake_orq(calls), object(), 'm'))
         r = self._post(client, rid, self._seed(rid))
         assert 'rt-drawer-error' in r.text
         assert 'already applied' in r.text
@@ -378,7 +378,7 @@ class TestPerRecommendationApply:
         self, apply_client, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         client, rid, _path = apply_client
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda: (object(), object(), 'm'))
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: (object(), object(), 'm'))
         seen_areas = []
 
         async def fake_apply(areas, agent_key, *args, **kwargs):

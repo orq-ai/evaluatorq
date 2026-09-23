@@ -109,6 +109,7 @@ def test_every_simulation_client_build_site_disables_sdk_retries() -> None:
     root = Path(__file__).parents[2] / 'src' / 'evaluatorq'
     excluded_wrappers = {
         'common/llm_client.py',
+        'dashboard/apply_ui.py',  # Apply uses SDK retries; it has no with_retry layer.
         'openresponses/client.py',
         'redteam/backends/registry.py',
     }

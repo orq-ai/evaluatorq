@@ -220,7 +220,8 @@ def controls(
     numeric = population.numeric if population is not None else None
     # A reviewed start reuses the whole population, JEV picks included. A fresh query only carries
     # the filters the user set themselves; JEV's picks for the last question are not sticky.
-    carried_facets, carried_numeric = (facets, numeric) if review else _explicit_filters(facets, numeric, snapshot)
+    carried_facets = facets if review else snapshot.explicit_filters
+    carried_numeric = numeric if review else snapshot.explicit_numeric
     count_html = f'<span class="count">{esc(str(snapshot.total))} traces selected</span>' if snapshot.total else ''
     hidden_facets = ''.join(
         f'<input type="hidden" form="{form_id}" name="facet_{name}" value="{esc(value)}">'
@@ -246,25 +247,6 @@ def _empty_facets() -> FacetSelection:
     return FacetSelection()
 
 
-def _explicit_filters(
-    facets: FacetSelection, numeric: object | None, snapshot: RunSnapshot
-) -> tuple[FacetSelection, object | None]:
-    """The run's filters minus the ones JEV generated, i.e. the ones the user set."""
-    from evaluatorq.trace_finder import FacetSelection, NumericFilters
-
-    generated = snapshot.generated_filters
-    explicit_facets = FacetSelection(**{name: getattr(facets, name) - getattr(generated, name) for name in FACET_NAMES})
-    if numeric is None:
-        return explicit_facets, None
-    generated_numeric = snapshot.generated_numeric
-    explicit_numeric = NumericFilters(**{
-        field: value
-        for field in NumericFilters.model_fields
-        if (value := getattr(numeric, field)) is not None and getattr(generated_numeric, field) != value
-    })
-    return explicit_facets, explicit_numeric
-
-
 def _value_text(value: object) -> str:
     if isinstance(value, bool):
         return 'true' if value else 'false'
@@ -278,6 +260,9 @@ def _result_color(result: TraceClassification | None, compiled: CompiledQuery | 
         return 'var(--red-600)' if result and result.error else '#3d3c4a'
     if compiled is None:
         return 'var(--chart-5)' if result.matched else 'var(--chart-2)'
+    if compiled.task.kind == 'score' and isinstance(result.value, (int, float)) and not isinstance(result.value, bool):
+        score = max(0.0, min(1.0, result.value))
+        return f'color-mix(in srgb, var(--chart-5) {score * 100:g}%, var(--chart-2))'
     for item in classification_legend(compiled):
         if item.label == _value_text(result.value):
             return item.color
@@ -319,6 +304,10 @@ def legend(snapshot: RunSnapshot) -> str:
         if result.error is None:
             label = _value_text(result.value)
             counts[label] = counts.get(label, 0) + 1
+    if snapshot.compiled is not None and snapshot.compiled.task.kind == 'score':
+        entries = classification_legend(snapshot.compiled)
+        counts[entries[0].label] = sum(result.error is None for result in snapshot.results.values())
+        counts[entries[1].label] = snapshot.matched
     items = ''.join(
         f'<span><span class="sw" style="background:{esc(item.color)}"></span>{esc(item.label)} '
         f'<b>{counts.get(item.label, 0)}</b></span>'
@@ -416,7 +405,7 @@ def table(snapshot: RunSnapshot) -> str:
     )
 
 
-def _task_kind_select(kind: str, *, editable: bool) -> str:
+def _task_kind_select(kind: str) -> str:
     return f'<p class="finder-kind-badge">{esc(kind)}</p>'
 
 
@@ -452,9 +441,15 @@ def _selection_rule_html(compiled: CompiledQuery, *, editable: bool) -> str:
         operator, threshold = selection.operator, selection.value
     if not editable:
         return f'<p>include score {esc(operator)} <b>{threshold:g}</b></p>'
-    options = ''.join(
+    presets = (('gte', 0.5), ('gte', 0.7), ('gte', 0.8), ('lte', 0.3), ('lte', 0.5))
+    options = (
+        ''
+        if (operator, threshold) in presets
+        else (f'<option value="{operator}:{threshold:g}" selected>{operator} {threshold:g}</option>')
+    )
+    options += ''.join(
         f'<option value="{op}:{value:g}"{" selected" if operator == op and threshold == value else ""}>{op} {value:g}</option>'
-        for op, value in (('gte', 0.5), ('gte', 0.7), ('gte', 0.8), ('lte', 0.3), ('lte', 0.5))
+        for op, value in presets
     )
     return f'<select name="selection_rule">{options}</select>'
 
@@ -535,7 +530,7 @@ def task_panel(
     return (
         f'<details class="finder-task"{" open" if open_ else ""}><summary><span class="chev">▸</span><span class="kind">{esc(task.kind)}</span>'
         f'<span>Generated JEV task · {criterion_count} labels</span></summary>{form_open}'
-        f'<div class="finder-task-body"><div><h5>Kind</h5>{_task_kind_select(task.kind, editable=editable)}</div>'
+        f'<div class="finder-task-body"><div><h5>Kind</h5>{_task_kind_select(task.kind)}</div>'
         f'<div><h5>Inclusion rule</h5>{_selection_rule_html(compiled, editable=editable)}</div>{threshold}'
         f'<div class="full"><h5>Instructions</h5>{instruction}</div>'
         f'<div class="full"><h5>Criteria</h5><div class="finder-crit">{criterion_html}</div></div>'
@@ -576,12 +571,8 @@ def page_html(
     request = snapshot.request
     query = request.query if request is not None else ''
     mode = request.mode if request is not None else 'immediate'
-    polling = (
-        ' hx-get="/find/poll" hx-trigger="every 1s" hx-target="#finder-body" hx-swap="innerHTML"'
-        if snapshot.state in {'compiling', 'classifying'}
-        else ''
-    )
-    html = f'<div class="finder">{hero(query, mode, api_available=api_available, error=error)}<div id="finder-body"{polling}>{body(snapshot, settings, catalogue=catalogue, pending=pending, api_available=api_available)}</div><div id="finder-drawer"></div></div>'
+    body_html = fragment(snapshot, settings, catalogue=catalogue, pending=pending, api_available=api_available)
+    html = f'<div class="finder">{hero(query, mode, api_available=api_available, error=error)}<div id="finder-body">{body_html}</div><div id="finder-drawer"></div></div>'
     return page('Trace search', html, active_nav='find')
 
 

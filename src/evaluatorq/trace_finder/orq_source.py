@@ -9,6 +9,7 @@ import weakref
 from collections import defaultdict, deque
 from collections.abc import Mapping
 from contextlib import suppress
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
@@ -44,6 +45,7 @@ CONVERSATION_SPAN_TYPES = frozenset({
 EVALUATOR_SPAN_TYPES = frozenset({'span.evaluation_engine', 'span.evaluator'})
 _MAX_CAPTURED_RESPONSES = 128
 _CAPTURE_REGISTRATION_ATTR = '_evaluatorq_trace_finder_capture_registration'
+_CAPTURE_REQUEST: ContextVar[object | None] = ContextVar('trace_finder_capture_request', default=None)
 
 
 class OrqSourceError(ValueError):
@@ -59,7 +61,9 @@ class _RawResponseCapture:
     _OPERATIONS = frozenset({'TracesGetSpan', 'TracesQueryOql'})
 
     def __init__(self) -> None:
-        self._responses: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=_MAX_CAPTURED_RESPONSES))
+        self._responses: dict[tuple[str, object | None], deque[dict[str, Any]]] = defaultdict(
+            lambda: deque(maxlen=_MAX_CAPTURED_RESPONSES)
+        )
 
     @staticmethod
     def key(path: str) -> str:
@@ -78,14 +82,20 @@ class _RawResponseCapture:
             return response
         path = getattr(getattr(getattr(response, 'request', None), 'url', None), 'path', None)
         if isinstance(payload, dict) and isinstance(path, str):
-            self._responses[self.key(path)].append(payload)
+            self._responses[self.key(path), _CAPTURE_REQUEST.get()].append(payload)
         return response
 
     def pop(self, path: str) -> dict[str, Any] | None:
         """Return the oldest captured response for ``path`` (any API version)."""
 
-        responses = self._responses.get(self.key(path))
-        return responses.popleft() if responses else None
+        key = (self.key(path), _CAPTURE_REQUEST.get())
+        responses = self._responses.get(key)
+        if responses:
+            payload = responses.popleft()
+            if not responses:
+                del self._responses[key]
+            return payload
+        return None
 
     def clear(self) -> None:
         """Discard all captured responses."""
@@ -243,27 +253,31 @@ class OrqTraceSource:
         used_tokens: set[str] = set()
         dropped_count = 0
         fallback_count = 0
+        scanned_count = 0
+        max_scanned = max(PAGE_SIZE, limit * 5)
+        pages_scanned = 0
+        max_pages = max(20, (max_scanned + PAGE_SIZE - 1) // PAGE_SIZE * 2)
         page_token: str | None = None
 
         while len(records) < limit:
+            if scanned_count >= max_scanned or pages_scanned >= max_pages:
+                logger.warning(
+                    'stopped trace search after scanning {} summaries across {} pages for {} usable traces',
+                    scanned_count,
+                    pages_scanned,
+                    limit,
+                )
+                break
+            pages_scanned += 1
             if page_token is not None:
                 if page_token in used_tokens:
                     raise OrqSourceError(f'repeated OQL page token {page_token!r}')
                 used_tokens.add(page_token)
             page_limit = min(PAGE_SIZE, limit - len(records))
             registration = self._registration
-            if registration is None:
-                response = await self._client.traces.query_async(
-                    from_=start,
-                    to=end,
-                    oql=oql,
-                    limit=page_limit,
-                    page_token=page_token,
-                    timeout_ms=SDK_TIMEOUT_MS,
-                )
-                raw_page = self._capture.pop('/traces/query')
-            else:
-                async with registration.lock_for(asyncio.get_running_loop()):
+            marker = _CAPTURE_REQUEST.set(object()) if registration is not None else None
+            try:
+                if registration is None:
                     response = await self._client.traces.query_async(
                         from_=start,
                         to=end,
@@ -273,8 +287,23 @@ class OrqTraceSource:
                         timeout_ms=SDK_TIMEOUT_MS,
                     )
                     raw_page = self._capture.pop('/traces/query')
+                else:
+                    async with registration.lock_for(asyncio.get_running_loop()):
+                        response = await self._client.traces.query_async(
+                            from_=start,
+                            to=end,
+                            oql=oql,
+                            limit=page_limit,
+                            page_token=page_token,
+                            timeout_ms=SDK_TIMEOUT_MS,
+                        )
+                        raw_page = self._capture.pop('/traces/query')
+            finally:
+                if marker is not None:
+                    _CAPTURE_REQUEST.reset(marker)
             search = _field(response, 'search') or response
             summaries = _as_list(_field(search, 'data'))
+            scanned_count += len(summaries)
             raw_summaries = _raw_trace_summaries(raw_page)
             raw_by_id = {
                 str(trace_id): payload
@@ -331,7 +360,7 @@ class OrqTraceSource:
                 fallback_count,
             )
         if dropped_count:
-            logger.warning('dropped {} trace(s) because no usable messages were found', dropped_count)
+            logger.warning('dropped {} trace(s) because messages or timestamps were unusable', dropped_count)
         records.sort(key=lambda record: (record.timestamp, record.trace_id), reverse=True)
         return Snapshot(
             traces=tuple(records[:limit]),
@@ -365,22 +394,17 @@ class OrqTraceSource:
             if not span_id:
                 continue
             async with semaphore:
-                registration = self._registration
-                if registration is None:
+                marker = _CAPTURE_REQUEST.set(object()) if self._registration is not None else None
+                try:
                     response = await self._client.traces.get_span_async(
                         trace_id=trace_id,
                         span_id=span_id,
                         timeout_ms=SDK_TIMEOUT_MS,
                     )
                     raw_response = self._capture.pop(f'/traces/{trace_id}/spans/{span_id}')
-                else:
-                    async with registration.lock_for(asyncio.get_running_loop()):
-                        response = await self._client.traces.get_span_async(
-                            trace_id=trace_id,
-                            span_id=span_id,
-                            timeout_ms=SDK_TIMEOUT_MS,
-                        )
-                        raw_response = self._capture.pop(f'/traces/{trace_id}/spans/{span_id}')
+                finally:
+                    if marker is not None:
+                        _CAPTURE_REQUEST.reset(marker)
             detail = _field(response, 'span') or response
             raw_detail = _field(raw_response, 'span') if raw_response else None
             detail_fallback = raw_detail is None
@@ -484,7 +508,7 @@ def _record(
     raw_selected: Any,
     messages: list[dict[str, Any]],
     project_names: Mapping[str, str],
-) -> TraceRecord:
+) -> TraceRecord | None:
     selected_summary = _field(selected, 'summary') or selected
     trace_id = str(_field(trace_summary, 'trace_id') or _field(trace_summary, 'id'))
     span_id = str(
@@ -498,7 +522,7 @@ def _record(
     project = project_names.get(str(project_id), str(project_id or 'unknown'))
     timestamp = _first_time(trace_summary, raw_trace) or _first_time(selected_summary, raw_selected)
     if timestamp is None:
-        raise OrqSourceError(f'trace {trace_id!r} has no valid recorded time')
+        return None
     model = _metadata_label(
         _metadata_value(selected_summary, raw_selected, 'model') or _first_list_value(trace_summary, 'models')
     )
@@ -541,7 +565,7 @@ def _conversation_messages(payload: Any) -> list[dict[str, Any]]:
     attributes = _mapping(payload.get('attributes'))
     gen_ai = _mapping(attributes.get('gen_ai'))
     direct = _message_list(payload.get('messages'))
-    if direct:
+    if _usable(direct):
         return direct
 
     inputs = [gen_ai.get('input'), attributes.get('gen_ai.input'), payload.get('input')]

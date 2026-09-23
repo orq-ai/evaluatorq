@@ -208,6 +208,19 @@ async def test_run_classify_reports_requested_answer_keys_that_are_missing() -> 
 
 
 @pytest.mark.asyncio
+async def test_run_classify_keeps_usage_when_an_answer_fails_validation() -> None:
+    client = _client(_reply({'type': 'noul', 'noul': 'invalid'}))
+    request = ClassifyRequest(state='reply', questions={'verdict': _noul_question()})
+
+    outcome = await run_classify(client=client, model=JEV, cfg=LLMCallConfig(model=JEV), request=request)
+
+    assert outcome.error_kind is JudgeError.PARSE
+    assert outcome.token_usage is not None
+    assert outcome.token_usage.input_tokens == 120
+    assert outcome.token_usage.output_tokens == 4
+
+
+@pytest.mark.asyncio
 async def test_run_classify_maps_a_timeout_to_a_timeout_error() -> None:
     client = _client(asyncio.TimeoutError())
     request = ClassifyRequest(state='reply', questions={'risk': _noul_question()})
