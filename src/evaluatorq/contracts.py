@@ -19,6 +19,7 @@ from evaluatorq.openresponses.convert_models import (
     InputImageContent,
     InputTextContent,
 )
+from evaluatorq.openresponses.items import parse_item
 
 # A single part of multi-modal message content (Responses-API input shapes).
 # Tagged on ``type`` (mirroring ``OutputMessage``) so Pydantic dispatches on the
@@ -1236,10 +1237,10 @@ class AgentResponse(BaseModel):
         """Build an AgentResponse from bare Responses ``output`` items, with no usage or metadata."""
         items: list[OutputMessage] = []
         refusal: str | None = None
-        for item in output_items:
-            item_type = _gf(item, 'type')
-            if item_type == 'message':
-                for part in _gf(item, 'content') or []:
+        for raw in output_items:
+            item = parse_item(raw)
+            if item.kind == 'message':
+                for part in item.content or []:
                     part_type = _gf(part, 'type')
                     # A message part is 'output_text' or 'refusal'. Keeping only
                     # the former loses the refusal entirely, and an item with
@@ -1256,30 +1257,41 @@ class AgentResponse(BaseModel):
                         logger.warning(
                             'AgentResponse.from_openresponses: skipping unknown message part type={!r}', part_type
                         )
-            # 'function_call' is the standard Responses shape; the Orq router
-            # instead types agent tool calls as 'orq:<tool_name>' (e.g.
-            # 'orq:query_knowledge_base'). Treat both as tool calls so the
-            # agent's tool activity is captured rather than silently dropped.
-            elif item_type == 'function_call' or (isinstance(item_type, str) and item_type.startswith('orq:')):
-                raw_args = _gf(item, 'arguments') or '{}'
-                call_id = _gf(item, 'call_id') or _gf(item, 'id') or ''
-                result = _gf(item, 'result')
-                if result is None:
-                    result = _gf(item, 'output')
-                name = _gf(item, 'name') or (item_type.split(':', 1)[1] if item_type.startswith('orq:') else '')
+            elif item.kind == 'tool_call':
+                raw_args = item.arguments or '{}'
                 items.append(
                     ToolCallOutputItem(
                         type='function_call',
-                        name=str(name),
-                        call_id=str(call_id),
+                        name=item.name,
+                        call_id=item.call_id,
                         arguments=raw_args if isinstance(raw_args, str) else json.dumps(raw_args),
-                        result=tool_result_to_text(result) if result is not None else None,
+                        result=tool_result_to_text(item.result) if item.result is not None else None,
                     )
                 )
-            elif item_type == 'reasoning':
+            elif item.kind == 'tool_result':
+                # A tool's output arrives as its own item; attach it to the call it answers.
+                call_index = next(
+                    (
+                        i
+                        for i, prior in enumerate(items)
+                        if isinstance(prior, ToolCallOutputItem) and prior.call_id == item.call_id
+                    ),
+                    None,
+                )
+                if call_index is None:
+                    logger.warning(
+                        'AgentResponse.from_openresponses: skipping {} with no matching call call_id={!r}',
+                        item.item_type,
+                        item.call_id,
+                    )
+                else:
+                    items[call_index] = items[call_index].model_copy(
+                        update={'result': tool_result_to_text(item.result)}
+                    )
+            elif item.kind == 'reasoning':
                 pass  # o1/o3/o4-mini reasoning steps intentionally excluded
             else:
-                logger.warning('AgentResponse.from_openresponses: skipping unknown item type={!r}', item_type)
+                logger.warning('AgentResponse.from_openresponses: skipping unknown item type={!r}', item.item_type)
         return cls(output=items, refusal=refusal)
 
     @classmethod

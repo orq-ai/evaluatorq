@@ -16,11 +16,8 @@ from evaluatorq.common.messages import content_part_text
 from evaluatorq.common.orq_client import orq_server_url
 from evaluatorq.common.retry import with_retry
 from evaluatorq.contracts import FunctionCall, Message, StrategyToolCall
-from evaluatorq.openresponses.otel_messages import (
-    is_responses_item,
-    items_to_input_messages,
-    items_to_output_messages,
-)
+from evaluatorq.openresponses.items import is_responses_item, parse_item
+from evaluatorq.openresponses.otel_messages import items_to_input_messages, items_to_output_messages
 from evaluatorq.types import Trace, TraceInput
 
 if TYPE_CHECKING:
@@ -275,13 +272,13 @@ def _responses_messages(value: Any, *, default_role: _ROLE) -> list[Message]:
             return _chat_messages([value], default_role=default_role)
     item_ids = (
         {
-            item['call_id']: item['id']
+            parsed.call_id: item['id']
             for item in value
             if isinstance(item, dict)
-            and item.get('type') == 'function_call'
-            and isinstance(item.get('call_id'), str)
+            and (parsed := parse_item(item)).kind == 'tool_call'
             and isinstance(item.get('id'), str)
             and item['id'].startswith('fc_')
+            and item['id'] != parsed.call_id
         }
         if isinstance(value, list)
         else {}

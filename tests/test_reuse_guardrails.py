@@ -909,3 +909,77 @@ def test_config_accounting_detector_actually_fires() -> None:
     )
     assert _config_accounting_gap(warn_only) == 8
     assert _config_accounting_gap(warn_only.replace('max_output_tokens=config.max_tokens', 'x=1')) is None
+
+
+# --- Responses item types decided outside the shared parser -------------------
+# `AgentResponse.from_output_items` and `otel_messages` each kept their own branch per item type, so an MCP call showed up
+# in an imported trace but not on the target's AgentResponse. `openresponses.items.parse_item` is the one place that maps a
+# type to a kind. 'message' and 'reasoning' are left out: both are also role or content-part names, so they would flag noise.
+_RESPONSES_TOOL_ITEM_TYPES = frozenset({
+    'function_call',
+    'function_call_output',
+    'custom_tool_call',
+    'custom_tool_call_output',
+    'mcp_call',
+})
+_RESPONSES_ITEM_PARSER = 'openresponses/items.py'
+# Frozen: sites that predate the rule. Shrink it, never grow it.
+_RESPONSES_ITEM_BRANCH_ALLOWLIST = frozenset({
+    'integrations/openai_agents_integration/target.py',
+    'openresponses/dataset.py',
+})
+
+
+def _string_constants(node: ast.expr) -> list[str]:
+    elements = node.elts if isinstance(node, (ast.Set, ast.Tuple, ast.List)) else [node]
+    return [e.value for e in elements if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+
+
+def _responses_item_type_branches(source: str, path: str) -> list[str]:
+    """Return ``path:line`` for every comparison or ``case`` against a Responses tool item type literal."""
+    hits: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Compare):
+            operands = [node.left, *node.comparators]
+        elif isinstance(node, ast.MatchValue):
+            operands = [node.value]
+        else:
+            continue
+        if any(value in _RESPONSES_TOOL_ITEM_TYPES for operand in operands for value in _string_constants(operand)):
+            hits.append(f'{path}:{node.lineno}')
+    return hits
+
+
+def test_responses_item_types_are_decided_by_the_shared_parser() -> None:
+    hits = [
+        hit
+        for path in sorted(SRC.rglob('*.py'))
+        if (rel := path.relative_to(SRC).as_posix()) != _RESPONSES_ITEM_PARSER
+        and rel not in _RESPONSES_ITEM_BRANCH_ALLOWLIST
+        for hit in _responses_item_type_branches(path.read_text(encoding='utf-8'), rel)
+    ]
+    assert not hits, (
+        'Branching on a Responses item type outside the shared parser: '
+        + ', '.join(hits)
+        + '. Call evaluatorq.openresponses.items.parse_item and branch on its `kind`, or teach parse_item the new type.'
+    )
+
+
+def test_responses_item_allowlist_entries_still_branch() -> None:
+    # An entry that no longer branches is stale; drop it so the freeze keeps meaning something.
+    for rel in _RESPONSES_ITEM_BRANCH_ALLOWLIST:
+        assert _responses_item_type_branches((SRC / rel).read_text(encoding='utf-8'), rel), rel
+
+
+@pytest.mark.parametrize(
+    ('source', 'expected'),
+    [
+        ("if item['type'] == 'mcp_call':\n    pass\n", True),
+        ("if kind in {'function_call_output', 'x'}:\n    pass\n", True),
+        ("match t:\n    case 'custom_tool_call':\n        pass\n", True),
+        ("if item['type'] == 'message':\n    pass\n", False),
+        ("payload = {'type': 'function_call'}\n", False),
+    ],
+)
+def test_responses_item_branch_detector_actually_fires(source: str, expected: bool) -> None:
+    assert bool(_responses_item_type_branches(source, 'x.py')) is expected

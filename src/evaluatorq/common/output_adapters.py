@@ -20,7 +20,7 @@ from evaluatorq.contracts import (
     TextOutputItem,
     ToolCallOutputItem,
 )
-from evaluatorq.openresponses.otel_messages import is_responses_item
+from evaluatorq.openresponses.items import is_responses_item
 
 if TYPE_CHECKING:
     from evaluatorq.types import Output
