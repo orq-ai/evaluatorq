@@ -769,6 +769,15 @@ async def test_a_non_object_list_payload_does_not_crash_pagination() -> None:
         assert await fetch_traces(TraceInput(search='x'), api_key='k', http_client=client) == []
 
 
+
+@pytest.mark.asyncio
+async def test_a_non_list_data_field_does_not_crash_pagination() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={'object': 'list', 'data': None, 'has_more': True})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        assert await fetch_traces(TraceInput(search='x'), api_key='k', http_client=client) == []
+
 def test_a_refusal_message_keeps_its_text() -> None:
     """A refusal has content=None; dropping it reported the trace as empty."""
     spans = [

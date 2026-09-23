@@ -9,6 +9,7 @@ from evaluatorq.common.output_adapters import (
     output_to_messages,
     output_to_text,
 )
+from evaluatorq.common.messages import messages_to_text
 from evaluatorq.contracts import (
     AgentResponse,
     AgentResponseError,
@@ -219,3 +220,48 @@ def test_output_to_text_renders_text_and_tool_calls_together():
     rendered = output_to_text(response)
     assert 'checking that now' in rendered
     assert '[tool_call: get_balance({})]' in rendered
+
+
+def test_output_to_text_renders_text_and_tool_calls_in_produced_order():
+    response = AgentResponse(
+        output=[
+            ToolCallOutputItem(id='c1', call_id='c1', name='lookup', arguments='{}'),
+            TextOutputItem(text='found it', annotations=[]),
+        ]
+    )
+    rendered = output_to_text(response)
+    assert rendered.index('[tool_call: lookup({})]') < rendered.index('found it')
+
+
+def test_output_to_text_reads_a_list_of_responses_output_items():
+    """A Responses message item carries type; reading it as a chat turn rendered '[output_text]'."""
+    items = [
+        {'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': 'answer'}]},
+        {'type': 'function_call', 'name': 'lookup', 'call_id': 'c1', 'arguments': '{}'},
+    ]
+    rendered = output_to_text(items)
+    assert 'answer' in rendered
+    assert '[output_text]' not in rendered
+    assert '[tool_call: lookup({})]' in rendered
+
+
+def test_output_to_text_reads_a_list_of_content_parts_as_text():
+    assert output_to_text([{'type': 'output_text', 'text': 'answer'}]) == 'answer'
+    assert output_to_text([{'type': 'refusal', 'refusal': 'I cannot help with that.'}]) == 'I cannot help with that.'
+
+
+def test_output_to_text_renders_a_falsey_legacy_tool_result():
+    """Presence, not truthiness: has_meaningful_output counts the key, so the text must show it."""
+    output = [{'role': 'assistant', 'function_call_output': ''}]
+    assert has_meaningful_output(output) is True
+    assert output_to_text(output) == '[tool_result: ]'
+
+
+def test_output_to_text_reads_legacy_fields_from_message_objects():
+    class _SdkMessage:
+        role = 'assistant'
+        content = None
+        tool_calls = None
+        function_call = {'name': 'get_balance', 'arguments': '{}'}
+
+    assert messages_to_text([_SdkMessage()]) == '[tool_call: get_balance({})]'

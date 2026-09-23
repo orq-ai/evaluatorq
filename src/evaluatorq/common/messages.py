@@ -32,16 +32,19 @@ def coerce_content_text(content: Any) -> str:
         texts: list[str] = []
         for part in content:
             part_type = part.get('type') if isinstance(part, dict) else getattr(part, 'type', None)
-            # Both the chat-completions ("text") and Responses ("input_text")
-            # shapes carry their text under a "text" key.
-            if part_type in ('text', 'input_text'):
+            # The chat-completions ("text") and Responses ("input_text",
+            # "output_text") shapes all carry their text under a "text" key.
+            if part_type in ('text', 'input_text', 'output_text'):
                 texts.append(part.get('text', '') if isinstance(part, dict) else getattr(part, 'text', ''))
+            elif part_type == 'refusal':
+                # A refusal is the model's real answer (and for red teaming the resistant one).
+                texts.append(part.get('refusal', '') if isinstance(part, dict) else getattr(part, 'refusal', ''))
             elif part_type in ('image_url', 'input_image'):
                 texts.append('[image]')
             elif part_type in ('file', 'input_file'):
                 texts.append('[file]')
             else:
-                # Unknown/future part shapes (e.g. audio, output_text) are still
+                # Unknown/future part shapes (e.g. audio) are still
                 # surfaced as a placeholder rather than vanishing silently.
                 texts.append(f'[{part_type or "unknown"}]')
         return '\n'.join(texts)
@@ -109,11 +112,13 @@ def messages_to_text(messages: Iterable[Any]) -> str:
             role = getattr(message, 'role', None)
             content = getattr(message, 'content', None)
             tool_calls = getattr(message, 'tool_calls', None)
-            legacy_call, legacy_result = None, None
+            legacy_call = getattr(message, 'function_call', None)
+            legacy_result = getattr(message, 'function_call_output', None)
         text = coerce_content_text(content)
         parts = [text] if text.strip() else []
-        parts.extend(_tool_call_text(call) for call in [*(tool_calls or []), *([legacy_call] if legacy_call else [])])
-        if legacy_result:
+        calls = [*(tool_calls or []), *([legacy_call] if legacy_call is not None else [])]
+        parts.extend(_tool_call_text(call) for call in calls)
+        if legacy_result is not None:
             parts.append(f'[tool_result: {_legacy_result_text(legacy_result)}]')
         if not parts:
             continue

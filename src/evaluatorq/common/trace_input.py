@@ -724,6 +724,11 @@ async def _list_trace_rows(
             logger.warning('Orq trace list returned a {}, not an object; stopping pagination.', type(payload).__name__)
             break
         data = payload.get('data', [])
+        if not isinstance(data, list):
+            logger.warning(
+                'Orq trace list returned a {} data field, not a list; stopping pagination.', type(data).__name__
+            )
+            break
         rows.extend(row for row in data if isinstance(row, dict) and row.get('trace_id'))
         if not data or not payload.get('has_more'):
             break

@@ -35,13 +35,36 @@ _MESSAGE_SHAPE_KEYS = frozenset({
 })
 
 
+_CONTENT_PART_TYPES = frozenset({'text', 'input_text', 'output_text', 'refusal'})
+
+
 def _is_message_shape(item: Any) -> bool:
     """Whether a list element is a chat message rather than a structured item.
 
-    A Responses output item (``{'type': 'output_text', ...}``) is a dict too, so
-    dict-ness alone is not enough: read as a message it renders as nothing.
+    A Responses item carries ``type`` and a chat message never does, so a
+    ``{'type': 'message', 'role': ...}`` item is not read as a chat turn.
     """
-    return isinstance(item, Message) or (isinstance(item, dict) and bool(_MESSAGE_SHAPE_KEYS.intersection(item)))
+    if isinstance(item, Message):
+        return True
+    return isinstance(item, dict) and 'type' not in item and bool(_MESSAGE_SHAPE_KEYS.intersection(item))
+
+
+def _is_responses_item(item: Any) -> bool:
+    item_type = item.get('type') if isinstance(item, dict) else None
+    return item_type in ('message', 'function_call', 'reasoning') or (
+        isinstance(item_type, str) and item_type.startswith('orq:')
+    )
+
+
+def _agent_response_text(response: AgentResponse) -> str:
+    """Render text and tool calls in the order the agent produced them."""
+    turns: list[dict[str, Any]] = []
+    for item in response.output:
+        if isinstance(item, TextOutputItem):
+            turns.append({'role': 'assistant', 'content': item.text})
+        elif isinstance(item, ToolCallOutputItem):
+            turns.append({'role': 'assistant', 'tool_calls': [item]})
+    return messages_to_text(turns)
 
 
 def output_to_text(output: Any) -> str:
@@ -49,14 +72,18 @@ def output_to_text(output: Any) -> str:
     if output is None:
         return ''
     if isinstance(output, AgentResponse):
-        # Text and tool calls both render: a turn that answered *and* acted loses the action otherwise,
-        # while has_meaningful_output counts either alone as a response.
-        return messages_to_text([{'role': 'assistant', 'content': output.text, 'tool_calls': output.tool_calls}])
+        return _agent_response_text(output)
     if isinstance(output, str):
         return output
     if isinstance(output, list) and (not output or all(_is_message_shape(item) for item in output)):
         # messages_to_text, not a bare join: dropping tool calls hands the judge an empty string for an agent that acted.
         return messages_to_text(output)
+    if isinstance(output, list) and all(_is_responses_item(item) for item in output):
+        return _agent_response_text(AgentResponse.from_output_items(output))
+    if isinstance(output, list) and all(
+        isinstance(item, dict) and item.get('type') in _CONTENT_PART_TYPES for item in output
+    ):
+        return coerce_content_text(output)
     if isinstance(output, list):
         # A list of non-message mappings is not a transcript: every element would read as a content-less turn.
         try:
@@ -67,7 +94,7 @@ def output_to_text(output: Any) -> str:
     if isinstance(output, dict):
         if output.get('object') == 'response':
             try:
-                return AgentResponse.from_openresponses(output).text
+                return _agent_response_text(AgentResponse.from_openresponses(output))
             except Exception as exc:
                 logger.warning('output_to_text: from_openresponses failed, falling back to json: {}', exc)
         try:

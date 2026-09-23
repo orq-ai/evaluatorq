@@ -1232,21 +1232,11 @@ class AgentResponse(BaseModel):
         return [item for item in self.output if isinstance(item, ToolCallOutputItem)]
 
     @classmethod
-    def from_openresponses(cls, response: Any) -> AgentResponse:
-        """Build a full AgentResponse from a Responses API response object.
-
-        Single parse path for the OpenResponses wire format. Populates
-        ``output`` + ``usage`` + ``model`` + ``finish_reason`` + ``response_id``.
-
-        ``usage`` is ``None`` when the response carries no ``usage`` block —
-        callers must distinguish "no usage reported" from "zero tokens used" so
-        cost reports stay honest. ``usage.calls`` is intentionally left at 0:
-        this is a pure parse; per-call-site accounting (``calls=1`` / ``+1``) is
-        applied by callers to the returned object's ``usage``.
-        """
+    def from_output_items(cls, output_items: Any) -> AgentResponse:
+        """Build an AgentResponse from bare Responses ``output`` items, with no usage or metadata."""
         items: list[OutputMessage] = []
         refusal: str | None = None
-        for item in _gf(response, 'output') or []:
+        for item in output_items:
             item_type = _gf(item, 'type')
             if item_type == 'message':
                 for part in _gf(item, 'content') or []:
@@ -1290,6 +1280,22 @@ class AgentResponse(BaseModel):
                 pass  # o1/o3/o4-mini reasoning steps intentionally excluded
             else:
                 logger.warning('AgentResponse.from_openresponses: skipping unknown item type={!r}', item_type)
+        return cls(output=items, refusal=refusal)
+
+    @classmethod
+    def from_openresponses(cls, response: Any) -> AgentResponse:
+        """Build a full AgentResponse from a Responses API response object.
+
+        Single parse path for the OpenResponses wire format. Populates
+        ``output`` + ``usage`` + ``model`` + ``finish_reason`` + ``response_id``.
+
+        ``usage`` is ``None`` when the response carries no ``usage`` block —
+        callers must distinguish "no usage reported" from "zero tokens used" so
+        cost reports stay honest. ``usage.calls`` is intentionally left at 0:
+        this is a pure parse; per-call-site accounting (``calls=1`` / ``+1``) is
+        applied by callers to the returned object's ``usage``.
+        """
+        parsed = cls.from_output_items(_gf(response, 'output') or [])
 
         usage_obj = _gf(response, 'usage')
         if usage_obj is None:
@@ -1307,12 +1313,12 @@ class AgentResponse(BaseModel):
         status = _gf(response, 'status')
         response_id = _gf(response, 'id')
         return cls(
-            output=items,
+            output=parsed.output,
             usage=usage,
             model=model if isinstance(model, str) else None,
             finish_reason=status if isinstance(status, str) else None,
             response_id=response_id if isinstance(response_id, str) else None,
-            refusal=refusal,
+            refusal=parsed.refusal,
         )
 
 
