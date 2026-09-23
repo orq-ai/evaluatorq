@@ -177,6 +177,17 @@ def _synthetic(text: str, *, error_type: str, code: str) -> AgentResponse:
     )
 
 
+class NonRetryableTargetError(Exception):
+    """Marker for target exceptions that a retry would only replay.
+
+    ``call_target_with_retry`` ends the loop after the first attempt when the
+    raised exception is an instance of this class, the same way it treats an
+    HTTP 4xx. Raise a subclass from ``respond()`` for outcomes that are
+    deterministic for the life of the run (binary not installed, the target's
+    own timeout already spent).
+    """
+
+
 async def call_target_with_retry(
     target: Any,
     messages: list[Message],
@@ -190,7 +201,8 @@ async def call_target_with_retry(
     """Call ``target.respond(messages)`` with bounded retry + per-call timeout.
 
     Retries the SAME exchange on a returned ``.error`` marker, a per-call
-    timeout, or a generic ``Exception``. ``asyncio.CancelledError`` is NOT
+    timeout, or a generic ``Exception`` that is not a ``NonRetryableTargetError``
+    and not an HTTP 4xx other than 408/429. ``asyncio.CancelledError`` is NOT
     caught (it is a ``BaseException``) so an outer-ceiling cancellation
     propagates cleanly. ``on_attempt(i)`` wraps each attempt in a
     caller-supplied span (0-based index). ``on_attempt_response`` receives the
@@ -199,6 +211,13 @@ async def call_target_with_retry(
     `TargetCallResult`.
     """
     timeout_s = target_agent_timeout_ms / 1000.0
+    own_timeout_ms = getattr(target, 'timeout_ms', None)
+    if isinstance(own_timeout_ms, (int, float)) and own_timeout_ms >= target_agent_timeout_ms:
+        logger.warning(
+            f'{type(target).__name__}.timeout_ms ({own_timeout_ms:.0f} ms) is not below '
+            f'target_agent_timeout_ms ({target_agent_timeout_ms:.0f} ms); the retry helper will time out first '
+            "and retry a hung call instead of surfacing the target's own non-retryable timeout"
+        )
     max_attempts = max(1, max_target_retries + 1)
     last_response: AgentResponse = AgentResponse()
     last_error: AgentResponseError | None = None
@@ -239,6 +258,9 @@ async def call_target_with_retry(
             )
             last_error = last_response.error
             last_details = {'exception_type': type(exc).__name__, 'raw_message': str(exc), 'attempts': attempt + 1}
+            if isinstance(exc, NonRetryableTargetError):
+                logger.warning(f'Target call failed with non-retryable error ({type(exc).__name__}); not retrying')
+                break
             # 4xx client errors are non-retryable by default — bad request,
             # auth, permission scope, conflict etc. are deterministic, so a
             # retry replays the same rejection. The only exceptions are 408

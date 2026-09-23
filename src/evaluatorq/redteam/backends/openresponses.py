@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from evaluatorq.contracts import AgentContext, LLMCallConfig
+from evaluatorq.contracts import DEFAULT_TARGET_TIMEOUT_MS, AgentContext, LLMCallConfig
 from evaluatorq.openresponses.target import OrqResponsesTarget
 from evaluatorq.redteam.backends._errors import (
     extract_provider_error_code,
@@ -62,7 +62,7 @@ class OpenResponsesBackend(Backend):
         config = LLMCallConfig(
             model=agent_key,
             api='responses',
-            timeout_ms=self._timeout_ms or 240_000,  # 240s matches Orq router default for long-tail tool calls
+            timeout_ms=self._timeout_ms or DEFAULT_TARGET_TIMEOUT_MS,
             reasoning_effort=self._reasoning_effort,
         )
         return OrqResponsesTarget(

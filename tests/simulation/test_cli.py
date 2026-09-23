@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 from typing import IO
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1032,8 +1033,11 @@ def test_auto_save_collision_suffix(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         evaluator_names=[],
         results=[_make_result()],
     )
-    path1 = _auto_save_run(run=run, run_name="collide")
-    path2 = _auto_save_run(run=run, run_name="collide")
+    frozen = MagicMock()
+    frozen.now.return_value = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    with patch("evaluatorq.simulation.utils.run_store.datetime", frozen):
+        path1 = _auto_save_run(run=run, run_name="collide")
+        path2 = _auto_save_run(run=run, run_name="collide")
     assert path1 != path2
     assert path2.name.endswith("_001.json")
 

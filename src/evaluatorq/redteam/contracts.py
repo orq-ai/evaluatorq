@@ -955,7 +955,7 @@ class LLMConfig(BaseModel):
     cleanup_timeout_ms: int = 60_000
 
     # --- Target agent timeout -------------------------------------------------
-    target_agent_timeout_ms: int = 240_000
+    target_agent_timeout_ms: int = DEFAULT_TARGET_TIMEOUT_MS
     # Retry a failed target transport call before abandoning its attacker turn.
     # Sole retry owner: targets built for it must disable their own SDK budgets.
     # A retry never consumes a new attacker turn or changes the transcript.
