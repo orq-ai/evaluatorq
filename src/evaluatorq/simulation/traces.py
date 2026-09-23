@@ -398,12 +398,10 @@ async def fetch_trace_conversations(
     conversations = [_to_trace_conversation(trace) for trace in usable_traces]
     fetched = len(imported)
     usable = [conversation for conversation in conversations if conversation.first_user_message]
-    if len(usable) < len(conversations):
-        # The only signal that traces without a usable message were dropped, so it stays at WARNING.
+    if len(usable) < fetched:
+        # The only signal that traces were dropped (import failure or no user message), so it stays at WARNING.
         logger.warning(
-            '%d of %d fetched trace(s) had no usable conversation and were dropped',
-            len(conversations) - len(usable),
-            fetched,
+            '%d of %d fetched trace(s) had no usable conversation and were dropped', fetched - len(usable), fetched
         )
     else:
         logger.info('Fetched %d trace(s), %d with a usable conversation', fetched, len(usable))

@@ -200,12 +200,16 @@ def _validate_trace_replay_targets(targets: list[str | AgentTarget], seed_datapo
                 )
             continue
 
-        # No string target can replay a last_assistant seed: AGENT owns history server-side, DEPLOYMENT is rejected.
+        kind = parse_target(target)[0]
+        reason = (
+            'the hosted agent owns the conversation history server-side'
+            if kind is TargetKind.AGENT
+            else f'a {kind.value} target runs single-shot prompts with no conversation to resume'
+        )
         raise RedTeamError(
             'last_assistant trace replay requires caller-owned history on the target '
-            f'(a target whose history_mode is CALLER, e.g. OpenAIModelTarget or a custom '
-            f'AgentTarget); target {target!r} is a string target and a hosted "agent:" '
-            f'target keeps conversation history server-side, which last_assistant cannot resume.'
+            f'(history_mode CALLER, e.g. OpenAIModelTarget or a custom AgentTarget); '
+            f'target {target!r} resolves to a {kind.value} target and {reason}.'
         )
 
 
