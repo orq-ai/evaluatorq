@@ -242,10 +242,14 @@ def _looks_like_capability_rejection(exc: APIStatusError, keywords: tuple[str, .
 
 
 def _rejection_message(exc: APIStatusError) -> str:
-    body = getattr(exc, 'body', None)
-    if isinstance(body, dict):
-        return str(body.get('message') or body)
-    return str(body or getattr(exc, 'message', '') or exc)
+    # Provider bodies can echo prompts; name only fixed capability clues in logs.
+    body = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
+    if 'oneof' in body:
+        return 'schema uses oneOf, which the provider rejected'
+    for keyword in _SCHEMA_KEYWORDS + _TOOL_KEYWORDS:
+        if keyword in body:
+            return f'provider rejected {keyword}'
+    return 'provider rejected the requested capability'
 
 
 def _looks_like_schema_rejection(exc: APIStatusError) -> bool:

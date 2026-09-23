@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from evaluatorq.common.judge import ClassifyOutcome, ClassifyQuestion, ClassifyRequest, run_classify
+from evaluatorq.common.judge import ClassifyOutcome, ClassifyQuestion, ClassifyRequest, ClassifyResponse, run_classify
 from evaluatorq.common.retry import with_retry, without_client_retries
 from evaluatorq.contracts import LLMCallConfig
 
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
 
 FILTER_TIMEOUT_MS = 30_000
 NO_FILTER_LABEL = 'none'
+MAX_FILTER_QUESTIONS = 100
 
 
 class FilterSelectionError(RuntimeError):
@@ -31,7 +33,7 @@ async def select_filters(
     *,
     cfg: LLMCallConfig | None = None,
 ) -> FacetSelection:
-    """Ask JEV one classify question per non-empty catalogue dimension.
+    """Ask JEV one classify request, with binary questions for explicit multi-value facets.
 
     Retry is owned by ``with_retry`` here; the SDK client's own retry budget is
     disabled so this classify call has exactly one retry layer.
@@ -41,28 +43,14 @@ async def select_filters(
     if not normalized:
         raise ValueError('Enter a semantic trace query before selecting filters.')
 
-    choices: dict[str, dict[str, str | None]] = {}
-    questions: dict[str, ClassifyQuestion] = {}
-    for name in FACET_NAMES:
-        values = getattr(catalogue, name)
-        if not values:
-            logger.debug('Skipping empty trace-finder facet catalogue: {}', name)
-            continue
-        choice_map = _choice_map(name, values)
-        choices[name] = choice_map
-        questions[name] = ClassifyQuestion(
-            kind='choice',
-            instructions=(
-                f'Identify the {name.replace("_", " ")} value explicitly requested by the user query. '
-                f'Choose {NO_FILTER_LABEL!r} when the query does not constrain this dimension. '
-                'Do not infer a metadata constraint from the semantic classification request.'
-            ),
-            criteria={label: _choice_description(name, value) for label, value in choice_map.items()},
-            state={},
-        )
+    choices, binary_values, questions = _questions_for_catalogue(catalogue, normalized)
 
     if not questions:
         return FacetSelection()
+    if len(questions) > MAX_FILTER_QUESTIONS:
+        raise FilterSelectionError(
+            f'trace filter selection needs {len(questions)} questions; maximum is {MAX_FILTER_QUESTIONS}'
+        )
 
     request = ClassifyRequest(state={'query': normalized}, questions=questions)
     call_cfg = cfg if cfg is not None else LLMCallConfig(model=model, timeout_ms=FILTER_TIMEOUT_MS)
@@ -92,19 +80,84 @@ async def select_filters(
         message = outcome.error_message or 'JEV returned no filter selection.'
         raise FilterSelectionError(message)
 
-    selected: dict[str, frozenset[str]] = {name: frozenset() for name in FACET_NAMES}
-    for name in questions:
-        answer = outcome.response.answers.get(name)
+    return _selection_from_answers(outcome.response, choices, binary_values, questions)
+
+
+def _questions_for_catalogue(
+    catalogue: FacetCatalogue, query: str
+) -> tuple[dict[str, dict[str, str | None]], dict[str, tuple[str, str]], dict[str, ClassifyQuestion]]:
+    choices: dict[str, dict[str, str | None]] = {}
+    binary_values: dict[str, tuple[str, str]] = {}
+    questions: dict[str, ClassifyQuestion] = {}
+    for name in FACET_NAMES:
+        values = getattr(catalogue, name)
+        if not values:
+            logger.debug('Skipping empty trace-finder facet catalogue: {}', name)
+            continue
+        mentioned = [
+            (index, value)
+            for index, value in enumerate(values)
+            if re.search(rf'(?<!\w){re.escape(value)}(?!\w)', query, flags=re.IGNORECASE)
+        ]
+        if len(mentioned) > 1:
+            for index, value in mentioned:
+                question_key = f'{name}_{index}'
+                binary_values[question_key] = (name, value)
+                questions[question_key] = ClassifyQuestion(
+                    kind='noul',
+                    instructions=(
+                        f'Does the query explicitly request {name.replace("_", " ")} value {value!r}? '
+                        'Answer yes when it is one of several requested alternatives. '
+                        'Do not infer a metadata constraint from the semantic task.'
+                    ),
+                    state={},
+                )
+            continue
+        choice_map = _choice_map(name, values)
+        choices[name] = choice_map
+        questions[name] = ClassifyQuestion(
+            kind='choice',
+            instructions=(
+                f'Identify the {name.replace("_", " ")} value explicitly requested by the user query. '
+                f'Choose {NO_FILTER_LABEL!r} when the query does not constrain this dimension. '
+                'Do not infer a metadata constraint from the semantic classification request.'
+            ),
+            criteria={label: _choice_description(name, value) for label, value in choice_map.items()},
+            state={},
+        )
+    return choices, binary_values, questions
+
+
+def _selection_from_answers(
+    response: ClassifyResponse,
+    choices: dict[str, dict[str, str | None]],
+    binary_values: dict[str, tuple[str, str]],
+    questions: dict[str, ClassifyQuestion],
+) -> FacetSelection:
+    selected: dict[str, set[str]] = {name: set() for name in FACET_NAMES}
+    for question_key in questions:
+        answer = response.answers.get(question_key)
         if answer is None:
-            raise FilterSelectionError(f'JEV returned no answer for filter dimension: {name}')
+            raise FilterSelectionError(f'JEV returned no answer for filter dimension: {question_key}')
+        if question_key in binary_values:
+            name, value = binary_values[question_key]
+            if answer.type != 'noul' or answer.noul is None:
+                raise FilterSelectionError(
+                    f'JEV returned an invalid {question_key} filter answer type: {answer.type!r}'
+                )
+            if answer.noul >= 0.5:
+                selected[name].add(value)
+            continue
+        name = question_key
         if answer.type != 'choice':
             raise FilterSelectionError(f'JEV returned an invalid {name} filter answer type: {answer.type!r}')
         choice = answer.choice
         if choice not in choices[name]:
             raise FilterSelectionError(f'JEV selected an unavailable {name} choice: {choice!r}')
         value = choices[name][choice]
-        selected[name] = frozenset() if value is None else frozenset({value})
-    return FacetSelection.model_validate(selected)
+        if value is not None:
+            selected[name].add(value)
+    return FacetSelection.model_validate({name: frozenset(values) for name, values in selected.items()})
 
 
 def _choice_map(name: str, values: tuple[str, ...]) -> dict[str, str | None]:

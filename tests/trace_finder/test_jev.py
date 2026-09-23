@@ -18,7 +18,7 @@ from evaluatorq.trace_finder.jev import (
     parse_datapoint_result,
     run_jev,
 )
-from evaluatorq.trace_finder.models import CompiledQuery, JevProjection, TraceRecord
+from evaluatorq.trace_finder.models import CompiledQuery, JevProjection, TraceClassification, TraceRecord
 
 
 def _compiled(kind: str = 'choice') -> CompiledQuery:
@@ -228,6 +228,26 @@ def test_parse_datapoint_result_keeps_absent_classification_details_absent() -> 
     assert classification.probabilities is None
 
 
+def test_parse_datapoint_result_propagates_unexpected_parser_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken_parser(raw_output: object) -> object:
+        raise RuntimeError('parser implementation broke')
+
+    monkeypatch.setattr(jev, '_raw_answer', broken_parser)
+
+    with pytest.raises(RuntimeError, match='parser implementation broke'):
+        parse_datapoint_result(_result(raw_answer={'choice': 'frustrated'}), _compiled())
+
+
+@pytest.mark.parametrize('confidence', [-0.1, 1.1, float('nan'), float('inf')])
+def test_parse_datapoint_result_treats_invalid_confidence_as_terminal_result(confidence: float) -> None:
+    classification = parse_datapoint_result(
+        _result(raw_answer={'choice': 'frustrated', 'confidence': confidence}), _compiled()
+    )
+
+    assert classification.error == 'malformed JEV confidence'
+    assert classification.matched is False
+
+
 @pytest.mark.parametrize('probability', [-0.1, 1.1, float('nan'), float('inf')])
 def test_parse_datapoint_result_rejects_invalid_probabilities(probability: float) -> None:
     classification = parse_datapoint_result(
@@ -309,6 +329,15 @@ async def test_run_jev_uses_matching_parallelism_and_calls_terminal_callback_onc
     result = _result(raw_answer={'choice': 'frustrated'})
     received: list[tuple[str, dict[str, Any]]] = []
     completed: list[object] = []
+    parse_calls = 0
+    original_parser = jev.parse_datapoint_result
+
+    def count_parse(result: DataPointResult, compiled: CompiledQuery) -> TraceClassification:
+        nonlocal parse_calls
+        parse_calls += 1
+        return original_parser(result, compiled)
+
+    monkeypatch.setattr(jev, 'parse_datapoint_result', count_parse)
 
     def fake_build_jev_evaluator(*_: object, **__: object) -> dict[str, str]:
         return {'name': 'jev'}
@@ -337,6 +366,7 @@ async def test_run_jev_uses_matching_parallelism_and_calls_terminal_callback_onc
     )
 
     assert len(completed) == 1
+    assert parse_calls == 1
     assert classifications[0].trace_id == 'trace-1'
     assert received[0][0] == 'jev-trace-finder'
     kwargs = received[0][1]

@@ -110,6 +110,22 @@ async def test_compile_query_preserves_duration_numeric_bounds(monkeypatch) -> N
 
 
 @pytest.mark.asyncio
+async def test_compile_query_enforces_strict_token_and_duration_minima(monkeypatch) -> None:
+    document = choice_document()
+    document['numeric']['duration_ms_min'] = 30_000
+
+    async def fake_generate_structured(client: object, **kwargs: Any) -> FakeStructuredResult:
+        return FakeStructuredResult(CompilerWireQuery.model_validate(document))
+
+    monkeypatch.setattr('evaluatorq.trace_finder.compiler.generate_structured', fake_generate_structured)
+
+    plan = await compile_query(cast(Any, object()), 'compiler-model', 'over 20k tokens and slower than 30 seconds')
+
+    assert plan.numeric.tokens_min == 20_001
+    assert plan.numeric.duration_ms_min == 30_001
+
+
+@pytest.mark.asyncio
 async def test_compile_query_rejects_empty_query(monkeypatch) -> None:
     async def should_not_run(client: object, **kwargs: Any) -> FakeStructuredResult:
         raise AssertionError('structured output should not run')

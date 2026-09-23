@@ -784,9 +784,11 @@ def settings_body(
     saved_html = '<p class="settings-saved" role="status">Settings saved.</p>' if saved else ''
     form_error = f'<p class="settings-error" role="alert">{esc(errors["form"])}</p>' if 'form' in errors else ''
     advanced = ''
-    if profiles:
-        chosen = setting_value('orq_profile')
+    chosen = setting_value('orq_profile')
+    if profiles or chosen:
         options = ['<option value="">Environment (ORQ_API_KEY)</option>']
+        if chosen and all(profile.name != chosen for profile in profiles):
+            options.append(f'<option value="{esc(chosen)}" selected disabled>{esc(chosen)} (unavailable)</option>')
         for profile in profiles:
             label = profile.name + (f' ({profile.server})' if profile.server else '')
             selected = ' selected' if profile.name == chosen else ''

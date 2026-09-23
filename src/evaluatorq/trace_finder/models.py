@@ -181,6 +181,14 @@ class PopulationRequest(BaseModel):
             raise ValueError('time bounds must include a timezone offset')
         return value
 
+    @model_validator(mode='after')
+    def validate_range(self) -> Self:
+        """Reject an inverted interval before planning or source access."""
+
+        if self.start is not None and self.end is not None and self.start > self.end:
+            raise ValueError('start must not be after end')
+        return self
+
 
 class ValueSelection(BaseModel):
     """Include classifications whose value is one of the listed values."""

@@ -74,23 +74,47 @@ class _DroppingConsoleSink:
         self._queue: queue.Queue[str] = queue.Queue(maxsize)
         self._dropped = 0
         self._dropped_lock = threading.Lock()
-        threading.Thread(target=self._drain, args=(stream,), name='console-log', daemon=True).start()
+        self._state_lock = threading.Lock()
+        self._stop_requested = threading.Event()
+        self._thread = threading.Thread(target=self._drain, args=(stream,), name='console-log', daemon=True)
+        self._thread.start()
 
     def __call__(self, message: str) -> None:
-        try:
-            self._queue.put_nowait(message)
-        except queue.Full:
-            with self._dropped_lock:
-                self._dropped += 1
+        with self._state_lock:
+            if self._stop_requested.is_set():
+                return
+            try:
+                self._queue.put_nowait(str(message))
+            except queue.Full:
+                with self._dropped_lock:
+                    self._dropped += 1
+
+    def write(self, message: str) -> None:
+        """Use Loguru's stream sink so ``logger.remove()`` calls ``stop()``."""
+        self(message)
+
+    def stop(self) -> None:
+        """Drain queued lines on removal without hanging forever on a stalled terminal."""
+        with self._state_lock:
+            self._stop_requested.set()
+        self._thread.join(timeout=2)
 
     def _drain(self, stream: TextIO) -> None:
-        while True:
-            line = self._queue.get()
+        while not self._stop_requested.is_set() or not self._queue.empty():
+            try:
+                line = self._queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
             with self._dropped_lock:
                 dropped, self._dropped = self._dropped, 0
             if dropped:
                 stream.write(f'... dropped {dropped} log lines while the console was not draining\n')
             stream.write(line)
+            stream.flush()
+        with self._dropped_lock:
+            dropped, self._dropped = self._dropped, 0
+        if dropped:
+            stream.write(f'... dropped {dropped} log lines while the console was not draining\n')
             stream.flush()
 
 

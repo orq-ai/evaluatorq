@@ -8,6 +8,7 @@ from pathlib import Path  # noqa: TC003 — Typer resolves this annotation at ru
 from typing import Annotated, Any
 
 import typer
+from loguru import logger
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
@@ -32,6 +33,8 @@ from .models import (
 from .orq_source import OrqSourceError
 from .pipeline import build_run_store
 from .settings import effective_settings
+
+MAX_FIND_WAIT_SECONDS = 2 * 60 * 60
 
 _FIND_EPILOG = examples(
     '# find traces whose conversations match a semantic question',
@@ -156,11 +159,23 @@ def _print_matches(console: Console, snapshot: RunSnapshot) -> None:
 async def _run(store: Any, request: RunRequest, console: Console) -> RunSnapshot:
     snapshot = await store.compile(request, wait=False)
     _print_progress(console, snapshot)
-    while snapshot.state not in {'completed', 'failed', 'cancelled'}:
-        await asyncio.sleep(0.5)
-        snapshot = await store.snapshot()
-        _print_progress(console, snapshot)
-    return snapshot
+
+    async def poll() -> RunSnapshot:
+        nonlocal snapshot
+        while snapshot.state not in {'completed', 'failed', 'cancelled'}:
+            await asyncio.sleep(0.5)
+            snapshot = await store.snapshot()
+            _print_progress(console, snapshot)
+        return snapshot
+
+    try:
+        return await asyncio.wait_for(poll(), timeout=MAX_FIND_WAIT_SECONDS)
+    except asyncio.TimeoutError as error:
+        try:
+            await asyncio.wait_for(store.cancel(), timeout=10)
+        except asyncio.TimeoutError:
+            logger.warning('Trace finder cancellation did not complete within 10 seconds after the CLI wait limit')
+        raise TimeoutError(f'Find run exceeded the {MAX_FIND_WAIT_SECONDS}-second wait limit.') from error
 
 
 def find(
@@ -219,7 +234,7 @@ def find(
     try:
         orq = resolve_orq_client()
         resolved = resolve_llm_client(require_orq=True, max_retries=0)
-    except ValueError as exc:
+    except (ImportError, ValueError) as exc:
         emit_error(exc)
         raise typer.Exit(code=2) from None
 
@@ -243,10 +258,7 @@ def find(
             duration_ms_max=duration_ms_max,
         )
         snapshot = asyncio.run(_run(store, request, Console()))
-    except (CompileError, FilterSelectionError, OrqSourceError, ValueError) as exc:
-        emit_error(exc)
-        raise typer.Exit(code=1) from None
-    except Exception as exc:  # noqa: BLE001 — a CLI command must render unexpected runtime failures
+    except (CompileError, FilterSelectionError, OrqSourceError, TimeoutError, ValueError) as exc:
         emit_error(exc)
         raise typer.Exit(code=1) from None
 

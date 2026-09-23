@@ -12,7 +12,7 @@ from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this
 from starlette.responses import Response
 
 from evaluatorq.common.llm_client import resolve_llm_client
-from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, list_orq_profiles, resolve_orq_client
+from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, list_orq_profiles, resolve_orq_client
 from evaluatorq.dashboard.finder_views import drawer, facet_menu, fragment, page_html
 from evaluatorq.dashboard.security import request_rejected
 from evaluatorq.trace_finder import (
@@ -67,26 +67,42 @@ def _settings(app: Any) -> Any:
         app.state.finder_profile = next((p for p in profiles if p.name == settings.orq_profile), None)
         if settings.orq_profile is not None and app.state.finder_profile is None:
             logger.warning(
-                'Saved Orq profile {} is unavailable; finder uses environment credentials', settings.orq_profile
+                'Saved Orq profile {} is unavailable; select another profile or Environment', settings.orq_profile
             )
         app.state.finder_settings = settings
     return settings
 
 
-def _profile(app: Any) -> Any:
-    _settings(app)
-    return getattr(app.state, 'finder_profile', None)
+def _profile(app: Any) -> OrqProfile | None:
+    settings = _settings(app)
+    profile: OrqProfile | None = getattr(app.state, 'finder_profile', None)
+    if settings.orq_profile is not None and profile is None:
+        raise ValueError(
+            f'Orq profile {settings.orq_profile} is unavailable. Choose another profile or Environment in Settings.'
+        )
+    return profile
 
 
 def _api_available(app: Any) -> bool:
-    return _profile(app) is not None or bool(os.environ.get('ORQ_API_KEY', '').strip())
+    try:
+        return _profile(app) is not None or bool(os.environ.get('ORQ_API_KEY', '').strip())
+    except ValueError:
+        return False
+
+
+def _unavailable_reason(app: Any) -> str:
+    try:
+        _profile(app)
+    except ValueError as exc:
+        return str(exc)
+    return 'Set ORQ_API_KEY to load traces'
 
 
 def _build_store(app: Any) -> RunStore | None:
     """Build the app-owned store, returning ``None`` when Orq is unavailable."""
     settings = _settings(app)
-    profile = _profile(app)
     try:
+        profile = _profile(app)
         resolved = resolve_llm_client(
             extra_api_key=profile.api_key if profile else None,
             orq_host=(profile.server or DEFAULT_ORQ_BASE_URL) if profile else None,
@@ -143,8 +159,10 @@ async def _load_catalogue(app: Any, window_days: int | None = None) -> FacetCata
             end=now,
             limit=50,
         )
-    except (ImportError, ValueError) as exc:
-        logger.warning('Find facet menu is empty because the Orq client could not be resolved: {}', exc)
+    except Exception as exc:  # noqa: BLE001 — provider and SDK failures vary; this UI boundary must degrade visibly.
+        logger.opt(exception=True).warning(
+            'Find facet menu is unavailable because loading facet values failed: {}', exc
+        )
         # Cached too, briefly: a menu that never resolves would otherwise retry on every poll swap.
         app.state.finder_catalogue_cache = (now + timedelta(minutes=1), window, None)
         return None
@@ -302,7 +320,15 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         settings = _settings(req.app)
         store = _store(req.app) if api_available else None
         snapshot = await store.snapshot() if store is not None else RunSnapshot()
-        return _html(page_html(snapshot, settings, api_available=api_available, **_catalogue_kwargs(req.app)))
+        return _html(
+            page_html(
+                snapshot,
+                settings,
+                api_available=api_available,
+                error=_unavailable_reason(req.app) if not api_available else None,
+                **_catalogue_kwargs(req.app),
+            )
+        )
 
     @app.post('/find/run')
     async def find_run(req: Request) -> Response:
@@ -328,7 +354,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                     RunSnapshot(),
                     settings,
                     **_catalogue_kwargs(req.app),
-                    error='Set ORQ_API_KEY to load traces',
+                    error=_unavailable_reason(req.app),
                     api_available=False,
                 )
             )
@@ -365,7 +391,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                     RunSnapshot(),
                     settings,
                     **_catalogue_kwargs(req.app),
-                    error='Set ORQ_API_KEY to load traces',
+                    error=_unavailable_reason(req.app),
                     api_available=False,
                 )
             )

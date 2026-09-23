@@ -160,6 +160,21 @@ def test_project_trace_truncates_parts_text_and_keeps_unknown_text_block() -> No
     assert projection.estimated_tokens <= 300
 
 
+def test_project_trace_omits_large_non_text_media_and_unrelated_metadata() -> None:
+    trace = _trace(messages=({
+        'role': 'user',
+        'content': [{'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,' + 'A' * 30_000}}],
+        'request_metadata': 'B' * 30_000,
+    },))
+
+    projection = project_trace(trace, token_budget=300)
+
+    message = projection.payload['messages'][0]
+    assert message['content'] == [{'type': 'image_url', 'omitted': 'non-text content'}]
+    assert 'request_metadata' not in message
+    assert projection.estimated_tokens <= 300
+
+
 def test_project_trace_tail_truncates_oversized_parsed_tool_arguments() -> None:
     arguments = json.dumps(
         {'filters': {'labels': ['priority', 'enterprise'], 'query': 'customer-' + ('x' * 2_000)}}

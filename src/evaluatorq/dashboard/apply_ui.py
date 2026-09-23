@@ -33,6 +33,7 @@ Public entry points:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import secrets
@@ -88,6 +89,17 @@ def _store_preview(entry: dict[str, Any]) -> str:
 def _pop_preview(token: str) -> dict[str, Any] | None:
     with _PREVIEWS_LOCK:
         return _PREVIEWS.pop(token, None)
+
+
+def _credential_identity(profile: OrqProfile | None) -> tuple[str, str, str]:
+    """Identify the credentials a preview used without retaining another copy of its API key."""
+    key = profile.api_key if profile is not None else os.environ.get('ORQ_API_KEY', '')
+    host = (
+        (profile.server or DEFAULT_ORQ_BASE_URL)
+        if profile is not None
+        else os.environ.get('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL)
+    )
+    return (profile.name if profile is not None else '', host.rstrip('/'), hashlib.sha256(key.encode()).hexdigest())
 
 
 # Model for the instruction-merge call. It used to default to its own literal,
@@ -505,6 +517,7 @@ async def _confirm_response(
     """
     from evaluatorq.common.apply import read_instructions, write_instructions
     from evaluatorq.dashboard import library
+    from evaluatorq.dashboard.finder_routes import _profile
 
     form = await req.form()
     rejected = _request_rejected(req, form)
@@ -543,7 +556,13 @@ async def _confirm_response(
         )
 
     try:
-        orq_client, _llm_client, _model = _build_clients(getattr(req.app.state, 'finder_profile', None))
+        profile = _profile(req.app)
+        if 'credential_identity' in entry and entry['credential_identity'] != _credential_identity(profile):
+            return Response(
+                render_error_drawer('The Orq credentials changed after this preview; run the preview again.'),
+                media_type='text/html',
+            )
+        orq_client, _llm_client, _model = _build_clients(profile)
     except ValueError as e:
         return Response(render_error_drawer(str(e)), media_type='text/html')
 
@@ -664,6 +683,8 @@ async def _preview_response(
     bullet(s), run ``apply(apply=False)``, and render the drawer. Only the
     loader, enable gate, narrowing, and apply wrapper differ between surfaces.
     """
+    from evaluatorq.dashboard.finder_routes import _profile
+
     if obj is None:
         return Response(not_found_html, status_code=404, media_type='text/html')
     if enable_error:
@@ -685,7 +706,8 @@ async def _preview_response(
         return Response(render_error_drawer(narrow_error), media_type='text/html')
 
     try:
-        orq_client, llm_client, model = _build_clients(getattr(req.app.state, 'finder_profile', None))
+        profile = _profile(req.app)
+        orq_client, llm_client, model = _build_clients(profile)
     except ValueError as e:
         return Response(render_error_drawer(str(e)), media_type='text/html')
 
@@ -709,6 +731,7 @@ async def _preview_response(
         'original_instructions': result.original_instructions,
         'new_instructions': result.new_instructions,
         'recommendations': list(result.recommendations),
+        'credential_identity': _credential_identity(profile),
     })
     return Response(
         render_preview_drawer(rid, result, area, surface=surface, breakdown=breakdown, confirm_token=token),

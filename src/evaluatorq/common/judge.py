@@ -214,7 +214,7 @@ class ClassifyRequest(BaseModel):
     """Several questions about one ``state``, answered in one ``/classify`` round trip."""
 
     state: dict[str, Any] | str | list[Any]
-    questions: dict[str, ClassifyQuestion]  # each question's own state is ignored; the request's state wins
+    questions: dict[str, ClassifyQuestion] = Field(min_length=1)  # the request's state wins over each question's state
 
 
 class JudgeError(StrEnum):
@@ -688,6 +688,7 @@ async def run_classify(
     response validation, and mapping provider failures into ``ClassifyOutcome``.
     """
     warn_unread_config_fields(cfg, frozenset({'timeout_ms', 'retry_count'}), caller='run_classify')
+    client = without_client_retries(client)
     raw_payload = ''
     usage: TokenUsage | None = None
     try:

@@ -186,6 +186,26 @@ def test_console_sink_drops_lines_instead_of_blocking_when_the_console_stalls() 
     assert output.count('line ') == 2
 
 
+def test_console_sink_flushes_queued_lines_when_removed() -> None:
+    import io
+
+    from loguru import logger
+
+    from evaluatorq.dashboard import launch
+
+    stream = io.StringIO()
+    sink = launch._DroppingConsoleSink(stream)
+    handler_id = logger.add(sink, colorize=False)
+    try:
+        for index in range(100):
+            logger.info('queued line {}', index)
+    finally:
+        logger.remove(handler_id)
+
+    assert not sink._thread.is_alive()
+    assert stream.getvalue().count('queued line ') == 100
+
+
 @pytest.mark.parametrize(
     ('override', 'expected'),
     [(None, logging.WARNING), ('DEBUG', logging.NOTSET)],

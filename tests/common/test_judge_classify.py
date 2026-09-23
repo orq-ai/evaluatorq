@@ -33,6 +33,11 @@ def test_classify_question_is_a_public_contract() -> None:
     assert evaluatorq.run_classify is run_classify
 
 
+def test_classify_request_requires_a_question() -> None:
+    with pytest.raises(ValidationError):
+        ClassifyRequest(state='reply', questions={})
+
+
 def _jev_entry() -> model_catalogue.ModelInfo:
     return model_catalogue.ModelInfo(0.0, 0.0, 'typesafe', supports_responses=False, supports_classify=True)
 
@@ -180,6 +185,27 @@ async def test_run_classify_answers_multiple_questions_in_one_request() -> None:
             'risk': {'type': 'noul', 'instructions': 'Is the reply risky?'},
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_run_classify_disables_an_injected_clients_sdk_retries() -> None:
+    client = _client()
+    client.max_retries = 2
+    retryless = _client(_reply({'type': 'noul', 'noul': 0.9}))
+    retryless.max_retries = 0
+    client.with_options.return_value = retryless
+
+    outcome = await run_classify(
+        client=client,
+        model=JEV,
+        cfg=LLMCallConfig(model=JEV),
+        request=ClassifyRequest(state='reply', questions={'verdict': _noul_question()}),
+    )
+
+    assert outcome.error_kind is None
+    client.with_options.assert_called_once_with(max_retries=0)
+    client.post.assert_not_awaited()
+    retryless.post.assert_awaited_once()
 
 
 @pytest.mark.asyncio

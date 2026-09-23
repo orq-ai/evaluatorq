@@ -164,6 +164,8 @@ def _settings_config(roots: list[Path] | None, profile: OrqProfile | None = None
         ('Apply-recommendations model', f'{model} ({source})'),
         ('Orq profile', effective_settings().orq_profile or 'environment'),
     ))
+    if effective_settings().orq_profile is not None and profile is None:
+        config.append(('Orq profile status', 'unavailable — choose Environment or another profile'))
     if profile is not None:
         config.extend((
             ('Selected profile API key', _mask_key(profile.api_key)),
@@ -270,7 +272,9 @@ async def _save_settings(req: Request) -> Response | NotStr:
     save_settings(settings)
     req.app.state.finder_profile = next((p for p in profiles if p.name == settings.orq_profile), None)
     if settings.orq_profile is not None and req.app.state.finder_profile is None:
-        logger.warning('Saved Orq profile {} is unavailable; finder uses environment credentials', settings.orq_profile)
+        logger.warning(
+            'Saved Orq profile {} is unavailable; select another profile or Environment', settings.orq_profile
+        )
     old_store = getattr(req.app.state, 'finder_store', None)
     if old_store is not None:
         # Retire the running finder so the next request rebuilds it from the saved settings.

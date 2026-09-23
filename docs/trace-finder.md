@@ -21,7 +21,7 @@ Open [http://127.0.0.1:8080/find](http://127.0.0.1:8080/find), choose a question
 The finder plans the query before it spends a JEV call on each trace:
 
 1. You enter a question, such as `Conversations over 20k tokens where the customer was frustrated.`
-2. The compiler creates one semantic JEV task and extracts numeric constraints for total tokens or duration. At the same time, one JEV classify request selects categorical metadata filters from the live facet catalogue. The classifier receives one question for each non-empty facet dimension, but this is one classify round trip.
+2. The compiler creates one semantic JEV task and extracts numeric constraints for total tokens or duration. At the same time, one JEV classify request selects categorical metadata filters from the live facet catalogue. It normally asks one question per non-empty facet dimension; when your query names multiple available values in one dimension, it asks a yes/no question for each named value in the same round trip.
 3. The finder merges those selections with any filters you chose explicitly and builds an OQL query. The base filter excludes `generate_content` operations, so the compiler and classifier traces do not crowd the population being searched.
 4. Orq returns the newest usable traces in the selected window. The finder hydrates conversations when the trace summary does not contain usable messages, and applies the OQL filters before judging.
 5. Each trace is projected into a bounded JEV state. The projection keeps the newest conversation suffix, preserves tool-call names, arguments, and completion status, removes reasoning fields and tool-result bodies, and truncates text from the front when necessary.
@@ -58,11 +58,11 @@ JEV selects categorical metadata from the live catalogue. The eight categorical 
 | `agent_name` | `agent_name` | Agent name recorded on the trace. |
 | `tool_name` | `tool_name` | Tool name recorded on the trace. |
 
-The compiler handles the two numeric dimensions because trace-finder metadata thresholds are not JEV classify outputs. JEV classify tasks return a label (`choice`), a yes/no probability (`noul`), or a 0–1 score (`score`); they do not extract numeric metadata thresholds. The compiler extracts inclusive ranges for `total_tokens` and `duration_ms` and applies them in OQL; for example, “over 20k tokens” becomes `total_tokens >= 20000`, and “slower than 30 seconds” becomes `duration_ms >= 30000`. The CLI and dashboard also let you enter minimum and maximum bounds explicitly.
+The compiler handles the two numeric dimensions because trace-finder metadata thresholds are not JEV classify outputs. JEV classify tasks return a label (`choice`), a yes/no probability (`noul`), or a 0–1 score (`score`); they do not extract numeric metadata thresholds. The compiler extracts inclusive integer ranges for `total_tokens` and `duration_ms` and applies them in OQL; for example, “over 20k tokens” becomes `total_tokens >= 20001`, and “slower than 30 seconds” becomes `duration_ms >= 30001`. The CLI and dashboard also let you enter minimum and maximum bounds explicitly.
 
 ## Settings and precedence
 
-The dashboard **Settings** page at `/settings` has editable fields for the compiler model, JEV model, and apply-recommendations model. Save the form to persist them in `.evaluatorq/dashboard-settings.json`, or point `EVALUATORQ_DASHBOARD_SETTINGS` at another JSON file. The window, trace limit, and parallelism are edited per run in the controls row of the Trace search page; their defaults come from the environment variables below or the saved file. An **Advanced** block appears when the `orq` CLI is installed with API-key profiles (`orq auth profile list`); choosing one makes the dashboard's trace finder and apply flow use that profile's key and host in place of `ORQ_API_KEY` and `ORQ_BASE_URL`. Choosing **Environment** switches those dashboard clients back to the environment values without changing the process environment. If a saved profile is unavailable, the dashboard logs a warning and uses the environment credentials. The `eq find` CLI ignores the saved profile and reads the environment.
+The dashboard **Settings** page at `/settings` has editable fields for the compiler model, JEV model, and apply-recommendations model. Save the form to persist them in `.evaluatorq/dashboard-settings.json`, or point `EVALUATORQ_DASHBOARD_SETTINGS` at another JSON file. The window, trace limit, and parallelism are edited per run in the controls row of the Trace search page; their defaults come from the environment variables below or the saved file. An **Advanced** block appears when the `orq` CLI is installed with API-key profiles (`orq auth profile list`); choosing one makes the dashboard's trace finder and apply flow use that profile's key and host in place of `ORQ_API_KEY` and `ORQ_BASE_URL`. Choosing **Environment** switches those dashboard clients back to the environment values without changing the process environment. If a saved profile is unavailable, the dashboard blocks Orq requests and shows the missing profile in Settings so you can select another profile or Environment. An apply preview must be made again if its credentials change before confirmation. The `eq find` CLI ignores the saved profile and reads the environment.
 
 Settings are resolved in this order, from strongest to weakest: explicit CLI or dashboard overrides, environment variables, the saved JSON file, and built-in defaults. Invalid environment integers are ignored with a warning; invalid saved settings fall back to built-in defaults.
 
@@ -79,7 +79,7 @@ The dashboard command accepts finder overrides for `--compiler-model`, `--jev-mo
 
 ## CLI reference
 
-`eq find` runs an immediate finder query and prints progress followed by a newest-first table of matched traces. Add `--json PATH` to write the completed run export. If any trace classification fails, the command exits with status 1 and does not write the JSON file.
+`eq find` runs an immediate finder query and prints progress followed by a newest-first table of matched traces. Add `--json PATH` to write the completed run export. The command cancels a run that has not finished after two hours. If any trace classification fails, the command exits with status 1 and does not write the JSON file.
 
 ```bash
 export ORQ_API_KEY=...

@@ -158,7 +158,7 @@ def parse_datapoint_result(result: DataPointResult, compiled: CompiledQuery) -> 
             summary=score.explanation,
             raw_result=raw_result,
         )
-    except Exception as error:  # noqa: BLE001 - every malformed evaluator tree becomes a terminal classification
+    except _TerminalResultError as error:
         logger.warning(
             'JEV result parsing failed for trace_id={} span_id={}: {}',
             trace_id,
@@ -242,7 +242,12 @@ def _classification_details(raw_answer: dict[str, Any] | None) -> tuple[float | 
         return None, None
     confidence = raw_answer.get('confidence')
     probabilities = raw_answer.get('probabilities')
-    if confidence is not None and (isinstance(confidence, bool) or not isinstance(confidence, int | float)):
+    if confidence is not None and (
+        isinstance(confidence, bool)
+        or not isinstance(confidence, int | float)
+        or not math.isfinite(confidence)
+        or not 0 <= confidence <= 1
+    ):
         raise _TerminalResultError('malformed JEV confidence')
     if probabilities is not None:
         if not isinstance(probabilities, dict) or any(
@@ -271,11 +276,14 @@ async def run_jev(
     """Evaluate all selected traces, forwarding each terminal result exactly once."""
 
     evaluator = build_jev_evaluator(compiled, model=model, client=client)
+    classifications: list[TraceClassification] = []
 
     async def complete(result: DataPointResult) -> None:
-        await on_complete(parse_datapoint_result(result, compiled))
+        classification = parse_datapoint_result(result, compiled)
+        await on_complete(classification)
+        classifications.append(classification)
 
-    results = await evaluatorq(
+    await evaluatorq(
         'jev-trace-finder',
         data=[build_datapoint(trace, projections[trace.trace_id]) for trace in traces],
         evaluators=[evaluator],
@@ -286,7 +294,7 @@ async def run_jev(
         print_results=False,
         _send_results=False,
     )
-    return [parse_datapoint_result(result, compiled) for result in results]
+    return classifications
 
 
 class _TerminalResultError(ValueError):

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+from decimal import ROUND_FLOOR, Decimal
 from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
@@ -23,6 +25,16 @@ CHOICE_PALETTE = (
     'var(--chart-4)',
 )
 
+_STRICT_TOKEN_MIN = re.compile(
+    r'\b(?:over|above|more than|greater than)\s+(\d[\d,]*(?:\.\d+)?)\s*([km]?)\s*(?:total\s+)?tokens?\b',
+    re.IGNORECASE,
+)
+_STRICT_DURATION_MIN = re.compile(
+    r'\b(?:slower than|longer than|over|more than)\s+(\d[\d,]*(?:\.\d+)?)\s*'
+    r'(milliseconds?|msecs?|ms|seconds?|secs?|s)\b',
+    re.IGNORECASE,
+)
+
 COMPILER_INSTRUCTIONS = """Compile the user's request into one semantic JEV classification task.
 
 Generate only a semantic task and its matching selection rule. Never generate, infer, or
@@ -41,8 +53,10 @@ Choose exactly one task kind:
 
 Write precise task instructions and criteria that directly answer the user's semantic request.
 
-Extract numeric constraints on total tokens ("over 20k tokens" → tokens_min: 20000) or duration
-("slower than 30 seconds" → duration_ms_min: 30000) into numeric. Keep all four numeric fields
+Extract numeric constraints on total tokens and duration into numeric. Bounds are inclusive integer
+counts, so strict phrases must move by one unit: "over 20k tokens" → tokens_min: 20001 and
+"slower than 30 seconds" → duration_ms_min: 30001. Likewise "under 20k tokens" → tokens_max:
+19999. Keep all four numeric fields
 null when the query does not mention a token or duration constraint. Never extract project, model,
 provider, status, product, trace type, agent, or tool constraints; JEV handles those."""
 
@@ -198,7 +212,28 @@ async def compile_query(
         else CompilerWireQuery.model_validate(result.parsed)
     )
     compiled, numeric = wire.to_domain()
+    numeric = _tighten_strict_minima(normalized, numeric)
     return CompiledPlan(compiled=compiled, numeric=numeric)
+
+
+def _tighten_strict_minima(query: str, numeric: NumericFilters) -> NumericFilters:
+    """Enforce strict integer boundaries even when the compiler supplies an inclusive value."""
+
+    updates: dict[str, int] = {}
+    for match in _STRICT_TOKEN_MIN.finditer(query):
+        multiplier = {'': 1, 'k': 1_000, 'm': 1_000_000}[match.group(2).lower()]
+        boundary = Decimal(match.group(1).replace(',', '')) * multiplier
+        minimum = int(boundary.to_integral_value(rounding=ROUND_FLOOR)) + 1
+        updates['tokens_min'] = max(updates.get('tokens_min', numeric.tokens_min or 0), minimum)
+    for match in _STRICT_DURATION_MIN.finditer(query):
+        unit = match.group(2).lower()
+        multiplier = 1 if unit.startswith(('milli', 'msec')) or unit == 'ms' else 1_000
+        boundary = Decimal(match.group(1).replace(',', '')) * multiplier
+        minimum = int(boundary.to_integral_value(rounding=ROUND_FLOOR)) + 1
+        updates['duration_ms_min'] = max(updates.get('duration_ms_min', numeric.duration_ms_min or 0), minimum)
+    if not updates:
+        return numeric
+    return NumericFilters.model_validate({**numeric.model_dump(), **updates})
 
 
 def classification_legend(compiled: CompiledQuery) -> tuple[LegendItem, ...]:

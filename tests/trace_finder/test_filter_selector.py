@@ -62,6 +62,44 @@ async def test_select_filters_uses_one_classify_request_for_non_empty_facets(mon
 
 
 @pytest.mark.asyncio
+async def test_select_filters_keeps_multiple_explicit_project_values_in_one_request(monkeypatch) -> None:
+    calls: list[Any] = []
+
+    async def fake_run_classify(**kwargs: Any) -> ClassifyOutcome:
+        calls.append(kwargs['request'])
+        answers = {
+            name: ClassifyAnswer(type='noul', noul=0.9)
+            if question.kind == 'noul'
+            else ClassifyAnswer(type='choice', choice='none')
+            for name, question in kwargs['request'].questions.items()
+        }
+        return ClassifyOutcome(response=ClassifyResponse(answers=answers))
+
+    monkeypatch.setattr(filter_selector_module, 'run_classify', fake_run_classify)
+    available = FacetCatalogue(project=('A', 'B', 'C'), provider=('openai',))
+
+    selected = await select_filters(cast(Any, object()), 'typesafe/jev-latest', available, 'project A or project B')
+
+    assert selected.project == frozenset({'A', 'B'})
+    assert len(calls) == 1
+    assert set(calls[0].questions) == {'project_0', 'project_1', 'provider'}
+
+
+@pytest.mark.asyncio
+async def test_select_filters_rejects_a_request_exceeding_question_limit(monkeypatch) -> None:
+    async def should_not_call(**kwargs: Any) -> ClassifyOutcome:
+        raise AssertionError('oversized classify request should not be sent')
+
+    monkeypatch.setattr(filter_selector_module, 'run_classify', should_not_call)
+    values = tuple(f'value_{index}' for index in range(50))
+    available = FacetCatalogue(project=values, model=values, provider=values)
+    query = ' '.join(values)
+
+    with pytest.raises(FilterSelectionError, match='maximum is 100'):
+        await select_filters(cast(Any, object()), 'typesafe/jev-latest', available, query)
+
+
+@pytest.mark.asyncio
 async def test_select_filters_turns_classify_errors_into_filter_selection_error(monkeypatch) -> None:
     async def fake_run_classify(**kwargs: Any) -> ClassifyOutcome:
         return ClassifyOutcome(error_kind=JudgeError.PARSE, error_message='malformed classify reply')

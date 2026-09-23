@@ -338,11 +338,22 @@ def test_missing_profile_selector_preserves_saved_choice(
 ) -> None:
     save_settings(DashboardSettings.model_validate({'orq_profile': 'prod'}), settings_file)
     monkeypatch.setattr(app_module, 'list_orq_profiles', lambda: ())
+    monkeypatch.setenv('ORQ_API_KEY', 'different-account')
 
     response = client.post('/settings', data=csrf_data(_MODELS))
 
     assert response.status_code == 303
     assert json.loads(settings_file.read_text())['orq_profile'] == 'prod'
+    app = client.app
+    assert finder_routes._api_available(app) is False
+    assert finder_routes._build_store(app) is None
+    assert 'Orq profile prod is unavailable' in client.get('/find').text
+    html = client.get('/settings').text
+    assert '<option value="prod" selected disabled>prod (unavailable)</option>' in html
+    assert '<option value="">Environment (ORQ_API_KEY)</option>' in html
+
+    assert client.post('/settings', data=csrf_data({**_MODELS, 'orq_profile': ''})).status_code == 303
+    assert finder_routes._api_available(app) is True
 
 
 def test_unknown_profile_is_rejected(client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -437,3 +448,18 @@ def test_missing_optional_orq_sdk_leaves_finder_unavailable(
 
     assert finder_routes._build_store(app) is None
     assert asyncio.run(finder_routes._load_catalogue(app)) is None
+
+
+def test_facet_menu_degrades_when_provider_fails(
+    settings_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = build_app(roots=[tmp_path])
+    monkeypatch.setattr(finder_routes, 'resolve_orq_client', lambda *args, **kwargs: object())
+
+    async def provider_failure(*args: object, **kwargs: object) -> object:
+        raise RuntimeError('provider timed out')
+
+    monkeypatch.setattr(finder_routes, 'load_facet_catalogue', provider_failure)
+
+    assert asyncio.run(finder_routes._load_catalogue(app)) is None
+    assert app.state.finder_catalogue_cache[2] is None

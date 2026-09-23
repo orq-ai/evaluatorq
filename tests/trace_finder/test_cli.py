@@ -5,9 +5,11 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import typer
+import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from evaluatorq import cli as cli_module
@@ -112,6 +114,57 @@ def test_find_missing_orq_key_exits_two(monkeypatch: Any) -> None:
 
     assert result.exit_code == 2
     assert 'ORQ_API_KEY' in result.output
+
+
+def test_find_missing_orq_sdk_exits_two(monkeypatch: Any) -> None:
+    from evaluatorq.trace_finder import cli as find_cli
+
+    def missing_sdk() -> Any:
+        raise ImportError('Install evaluatorq[orq] to run live trace search.')
+
+    monkeypatch.setattr(find_cli, 'resolve_orq_client', missing_sdk)
+    result = CliRunner().invoke(_app(), ['find', 'refund requests'])
+
+    assert result.exit_code == 2
+    assert 'Install evaluatorq[orq]' in result.output
+
+
+def test_find_preserves_unexpected_programming_errors(monkeypatch: Any) -> None:
+    from evaluatorq.trace_finder import cli as find_cli
+
+    monkeypatch.setattr(find_cli, 'resolve_orq_client', lambda: object())
+    monkeypatch.setattr(find_cli, 'resolve_llm_client', lambda **_: SimpleNamespace(client=object()))
+    monkeypatch.setattr(find_cli, 'build_run_store', lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError('bug')))
+
+    result = CliRunner().invoke(_app(), ['find', 'refund requests'])
+
+    assert isinstance(result.exception, RuntimeError)
+
+
+@pytest.mark.asyncio
+async def test_find_polling_timeout_cancels_store(monkeypatch: Any) -> None:
+    from evaluatorq.trace_finder import cli as find_cli
+
+    class StalledStore:
+        cancelled = False
+
+        async def compile(self, request: Any, *, wait: bool = True) -> RunSnapshot:
+            return RunSnapshot(state='compiling')
+
+        async def snapshot(self) -> RunSnapshot:
+            return RunSnapshot(state='compiling')
+
+        async def cancel(self) -> RunSnapshot:
+            self.cancelled = True
+            return RunSnapshot(state='cancelled')
+
+    store = StalledStore()
+    monkeypatch.setattr(find_cli, 'MAX_FIND_WAIT_SECONDS', 0.01)
+
+    with pytest.raises(TimeoutError, match='wait limit'):
+        await find_cli._run(store, cast(Any, object()), Console())
+
+    assert store.cancelled
 
 
 def test_find_writes_json_and_prints_fake_trace(monkeypatch: Any, tmp_path: Path) -> None:

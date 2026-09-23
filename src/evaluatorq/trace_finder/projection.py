@@ -103,18 +103,67 @@ def _projection_units(messages: tuple[dict[str, Any], ...]) -> tuple[ProjectionU
         if message.get('role') == 'tool':
             units.append(ProjectionUnit(messages=(), source_messages=(message,)))
         else:
-            units.append(ProjectionUnit(messages=(_strip_reasoning(message),), source_messages=(message,)))
+            units.append(ProjectionUnit(messages=(_project_message(message),), source_messages=(message,)))
         index += 1
     return tuple(units)
 
 
 def _project_assistant(message: dict[str, Any], results: tuple[dict[str, Any], ...]) -> dict[str, Any]:
     projected_calls = [_project_tool_call(call, results) for call in message['tool_calls']]
-    return {
+    projected = {
         'role': message.get('role'),
-        'content': _strip_reasoning(message.get('content')),
+        'content': _project_content(message.get('content')),
         'tool_calls': projected_calls,
     }
+    if 'parts' in message:
+        projected['parts'] = _project_content(message['parts'])
+    return projected
+
+
+def _project_message(message: dict[str, Any]) -> dict[str, Any]:
+    """Keep conversation fields while dropping unbounded unrelated source metadata."""
+
+    role = message.get('role')
+    projected: dict[str, Any] = {
+        'role': role if role in {'system', 'developer', 'user', 'assistant', 'tool'} else 'unknown'
+    }
+    for name in ('content', 'parts'):
+        if name in message:
+            projected[name] = _project_content(message[name])
+    return projected
+
+
+def _project_content(content: Any) -> Any:
+    """Render text blocks and mark non-text media without copying large media payloads."""
+
+    if isinstance(content, list):
+        blocks = [_project_content_block(block) for block in content[:16]]
+        if len(content) > 16:
+            blocks.append({'type': 'omission', 'omitted': f'{len(content) - 16} content blocks'})
+        return blocks
+    if isinstance(content, dict):
+        return [_project_content_block(content)]
+    return content if isinstance(content, str) or content is None else None
+
+
+def _project_content_block(block: Any) -> dict[str, Any]:
+    if isinstance(block, str):
+        return {'type': 'text', 'text': block}
+    if not isinstance(block, dict):
+        return {'type': 'unknown', 'omitted': 'non-text content'}
+    block_type = block.get('type')
+    kind = block_type[:80] if isinstance(block_type, str) else 'unknown'
+    text = block.get('text')
+    if isinstance(text, str):
+        return {'type': kind, 'text': text}
+    if isinstance(text, dict) and isinstance(text.get('value'), str):
+        return {'type': kind, 'text': {'value': text['value']}}
+    try:
+        if len(_canonical_json(block).encode('utf-8')) <= 512:
+            return _strip_reasoning(block)
+    except (TypeError, ValueError):
+        pass
+    return {'type': kind, 'omitted': 'non-text content'}
 
 
 def _project_tool_call(call: Any, results: tuple[dict[str, Any], ...]) -> dict[str, Any]:

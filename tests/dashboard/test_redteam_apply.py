@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 import evaluatorq.dashboard.apply_ui as apply_mod
+from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL
 from evaluatorq.dashboard.apply_ui import record_applied_on_report, render_preview_drawer
 from evaluatorq.redteam.reports.apply import ApplyRecommendationsResult
@@ -206,6 +207,23 @@ class TestConfirm:
         html = client.get(f'/r/{rid}').text
         assert '✓ applied' in html
         assert '1 recommendation(s) ready to apply' in html
+
+    def test_confirm_rejects_preview_after_profile_change(self, apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
+        client, rid, path = apply_client
+        app = client.app
+        original = OrqProfile('first', 'key-first', None, False)
+        replacement = OrqProfile('second', 'key-second', None, False)
+        app.state.finder_profile = original
+        app.state.finder_settings = app.state.finder_settings.model_copy(update={'orq_profile': 'first'})
+        token = self._seed(rid, credential_identity=apply_mod._credential_identity(original))
+        app.state.finder_profile = replacement
+        app.state.finder_settings = app.state.finder_settings.model_copy(update={'orq_profile': 'second'})
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: pytest.fail('confirm used a different profile'))
+
+        response = self._post(client, rid, token)
+
+        assert 'credentials changed after this preview' in response.text
+        assert json.loads(path.read_text()).get('applied_recommendations', []) == []
 
     def test_confirm_agent_update_failure_becomes_error_drawer(
         self, apply_client, monkeypatch: pytest.MonkeyPatch

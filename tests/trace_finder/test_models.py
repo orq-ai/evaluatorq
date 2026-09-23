@@ -88,6 +88,14 @@ def test_population_request_accepts_configured_limit_above_500() -> None:
         PopulationRequest(limit=5001)
 
 
+def test_population_request_rejects_inverted_time_range() -> None:
+    with pytest.raises(ValidationError, match='start must not be after end'):
+        PopulationRequest(
+            start=datetime(2026, 9, 21, tzinfo=timezone.utc),
+            end=datetime(2026, 9, 20, tzinfo=timezone.utc),
+        )
+
+
 def test_snapshot_has_no_file_path_or_filename_contract() -> None:
     snapshot = Snapshot(traces=(), capture_metadata={'source': 'orq'})
     assert snapshot.traces == ()
