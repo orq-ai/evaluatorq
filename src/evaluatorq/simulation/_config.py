@@ -36,7 +36,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # static typing) — pydantic resolves annotations at class-creation time even
 # with `from __future__ import annotations`, so they must be real, importable
 # names in this module's namespace and can't live behind `TYPE_CHECKING`.
-from evaluatorq.contracts import AgentTarget, LLMCallConfig, TokenUsage
+from evaluatorq.contracts import DEFAULT_TARGET_TIMEOUT_MS, AgentTarget, LLMCallConfig, TokenUsage
 from evaluatorq.simulation.evaluators.scorers import SimulationScoringConfig  # noqa: TC001
 from evaluatorq.simulation.hooks import SimulationHooks  # noqa: TC001
 from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig  # noqa: TC001
@@ -44,7 +44,7 @@ from evaluatorq.simulation.types import DEFAULT_MODEL, Message, Persona, Scenari
 
 # Named because every `simulate` overload repeats them; as literals they drifted one
 # signature at a time.
-DEFAULT_TARGET_AGENT_TIMEOUT_MS = 240_000
+DEFAULT_TARGET_AGENT_TIMEOUT_MS = DEFAULT_TARGET_TIMEOUT_MS
 DEFAULT_MAX_TARGET_RETRIES = 2
 DEFAULT_MAX_TOOL_RESULT_CHARS = 500
 

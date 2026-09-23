@@ -779,11 +779,12 @@ class Usage(BaseModel):
         total = reported_total if reported_total > 0 else inp + out
         # Anthropic reports cache reads as a flat top-level `cache_read_input_tokens`
         # (anthropic.types.Usage), not nested in a details object like Orq/OpenAI.
+        # Codex CLI is flat too (`cached_input_tokens`).
         cached = _usage_detail_int(
             usage,
             ('input_tokens_details', 'prompt_tokens_details', 'input_token_details'),
             ('cached_tokens', 'cache_read'),
-        ) or _usage_first_int(usage, ('cache_read_input_tokens',))
+        ) or _usage_first_int(usage, ('cache_read_input_tokens', 'cached_input_tokens'))
         # Anthropic prices a 1h cache write above a 5m one, so the tier split is
         # billing-relevant even though Orq folds both into the flat input_cost.
         # Orq nests the tiers under input_tokens_details; Anthropic puts them in a
@@ -808,14 +809,15 @@ class Usage(BaseModel):
                 ('input_tokens_details', 'prompt_tokens_details', 'input_token_details'),
                 ('cache_creation_tokens', 'cache_creation_input_tokens'),
             )
-            or _usage_first_int(usage, ('cache_creation_input_tokens',))
+            or _usage_first_int(usage, ('cache_creation_input_tokens', 'cache_write_input_tokens'))
             or cache_creation_1h + cache_creation_5m
         )
+        # Codex CLI reports reasoning flat as `reasoning_output_tokens`.
         reasoning = _usage_detail_int(
             usage,
             ('output_tokens_details', 'completion_tokens_details', 'output_token_details'),
             ('reasoning_tokens', 'reasoning'),
-        )
+        ) or _usage_first_int(usage, ('reasoning_output_tokens',))
         input_cost = _clamped_cost(usage, ('input_cost', 'prompt_cost'))
         output_cost = _clamped_cost(usage, ('output_cost', 'completion_cost'))
         cost = _clamped_cost(usage, ('total_cost', 'cost_usd', 'cost'))

@@ -53,7 +53,7 @@ Four decisions cover almost every real configuration. The rest of this page is r
 |---|---|---|---|
 | **Which backend runs my LLM calls?** | `ORQ_API_KEY` or `OPENAI_API_KEY` | — | Set one. `ORQ_API_KEY` unlocks datasets, deployments and tracing, and wins when both are set; `OPENAI_API_KEY` (plus `OPENAI_BASE_URL` for a non-OpenAI host) is the standalone route. |
 | **Where do run reports land?** | `EVALUATORQ_DIR` | `.evaluatorq` in the current directory | The run store that red teaming (`runs/`) and simulation (`sim-runs/`) write to, and that the [dashboard](dashboard.md) reads. |
-| **Do I want traces?** | `ORQ_DISABLE_TRACING` | off (traces enabled when `ORQ_API_KEY` **or** `OTEL_EXPORTER_OTLP_ENDPOINT` is set, and the `otel` extra is installed) | Set to `1` to send nothing. Point traces elsewhere with `OTEL_EXPORTER_OTLP_ENDPOINT`. See [Tracing](tracing.md). |
+| **Do I want traces?** | `ORQ_DISABLE_TRACING` | off (traces enabled when `ORQ_API_KEY` **or** `OTEL_EXPORTER_OTLP_ENDPOINT` is set, and the `otel` extra is installed) | Set to `1`, `true`, `yes` or `on` to send nothing. Point traces elsewhere with `OTEL_EXPORTER_OTLP_ENDPOINT`. See [Tracing](tracing.md). |
 | **Do dashboard links open my Orq workspace?** | `ORQ_WORKSPACE` | unset | Your workspace slug. Unset hides the deep-link buttons — nothing else breaks. |
 
 Two more worth knowing before you need them: `EQ_DEBUG=1` turns a one-line CLI error into a full traceback, and `EVALUATORQ_CAPTURE_MESSAGE_CONTENT=false` keeps prompts and responses out of your spans.
@@ -99,7 +99,7 @@ See [Tracing](tracing.md) for the full picture.
 
 | Variable | Required? | Default | What it does |
 |---|---|---|---|
-| `ORQ_DISABLE_TRACING` | No | unset | Set to `1` or `true` to suppress all OpenTelemetry spans even when `ORQ_API_KEY` or `OTEL_EXPORTER_OTLP_ENDPOINT` is present. |
+| `ORQ_DISABLE_TRACING` | No | unset | Set to `1`, `true`, `yes` or `on` to suppress all OpenTelemetry spans even when `ORQ_API_KEY` or `OTEL_EXPORTER_OTLP_ENDPOINT` is present. Case-insensitive; see [When a value is wrong](#when-a-value-is-wrong). |
 | `ORQ_DEBUG` | No | unset | Set to any non-empty value to print tracing setup diagnostics to stdout (endpoint, auth headers, initialization errors). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | — | Explicit OTLP HTTP endpoint. Takes precedence over the `ORQ_BASE_URL`-derived endpoint. |
 | `OTEL_EXPORTER_OTLP_HEADERS` | No | — | Comma-separated `key=value` pairs added to every OTLP export request. Format: `key1=value1,key2=value2`. |
@@ -109,8 +109,8 @@ See [Tracing](tracing.md) for the full picture.
 | `ORQ_OTEL_MAX_BATCH_SIZE` | No | `512` | Maximum spans per OTLP export request. Reaching it wakes the exporter immediately. A value larger than the queue size is clamped to the queue size, with a warning. |
 | `ORQ_OTEL_SCHEDULE_DELAY_MS` | No | `5000` | Milliseconds a partial batch waits before it is exported. It does not throttle a full batch. |
 | `ORQ_OTEL_FLUSH_TIMEOUT_MS` | No | `5000` | Milliseconds the end-of-run force-flush waits before giving up and logging a warning. Read per run; enforced by evaluatorq rather than the SDK. Bounds the final flush only — the per-request export timeout is a fixed 5s. |
-| `EVALUATORQ_CAPTURE_MESSAGE_CONTENT` | No | `true` | Set to `false` or `0` to strip LLM message content (prompts and responses) from spans. Token counts, model name, and latency are still recorded. Useful when exporting to third-party backends or to avoid capturing PII. |
-| `EVALUATORQ_PROPAGATE_TRACE_CONTEXT` | No | `true` | Set to `false` or `0` to stop evaluatorq sending W3C `traceparent`/`tracestate` headers on its outgoing LLM and target calls. Default on, so an Orq-hosted deployment or agent nests its server-side spans under the calling span. Turn it off when the receiving side should trace independently, or when a gateway rejects an unexpected `traceparent`. |
+| `EVALUATORQ_CAPTURE_MESSAGE_CONTENT` | No | `true` | Set to `false`, `0`, `no` or `off` to strip LLM message content (prompts and responses) from spans. Case-insensitive; see [When a value is wrong](#when-a-value-is-wrong). Token counts, model name, and latency are still recorded. Useful when exporting to third-party backends or to avoid capturing PII. |
+| `EVALUATORQ_PROPAGATE_TRACE_CONTEXT` | No | `true` | Set to `false`, `0`, `no` or `off` to stop evaluatorq sending W3C `traceparent`/`tracestate` headers on its outgoing LLM and target calls. Case-insensitive; see [When a value is wrong](#when-a-value-is-wrong). Default on, so an Orq-hosted deployment or agent nests its server-side spans under the calling span. Turn it off when the receiving side should trace independently, or when a gateway rejects an unexpected `traceparent`. |
 | `EVALUATORQ_SPAN_MAX_TEXT_CHARS` | No | unset (no limit) | Maximum characters per span text attribute. Set a positive integer (e.g. `8192`) to truncate long strings. Unset or `0` / `-1` means capture all. |
 
 ### Simulation LLM defaults
@@ -122,6 +122,71 @@ All three are fallback defaults only: the matching field on the agent's `LLMCall
 | `EVALUATORQ_LLM_TIMEOUT_S` | No | `60.0` | Per-LLM-call timeout in seconds. **Simulation only** — has no effect on red teaming or core evaluation. `LLMCallConfig.timeout_ms` wins when set. Increase for slow self-hosted endpoints; for the *target's* timeout rather than the simulator's, pass `target_agent_timeout_ms` to `simulate()`. |
 | `EVALUATORQ_LLM_MAX_TOKENS` | No | `10000` | Maximum completion tokens per LLM call. **Simulation only** — red teaming shares the same default (`DEFAULT_TARGET_MAX_TOKENS`) but is tuned per role via `LLMConfig.max_tokens` / `EvaluatorConfig.max_tokens`, not by this variable. `LLMCallConfig.max_tokens` wins when set. Increase for reasoning models that exhaust the default budget before emitting a tool call. |
 | `EVALUATORQ_REASONING_EFFORT` | No | *(unset — parameter not sent)* | Reasoning effort hint for the **simulator's own** LLM calls (user simulator, judge) — not for the agent under test, which takes `target_reasoning_effort` on `simulate()` / `red_team()`. **Simulation only.** There is no global default — unset means the parameter is omitted and the model uses its own. `LLMCallConfig.reasoning_effort` wins when set. Set to `""`, `none`, or `off` to omit the parameter entirely. |
+
+## When a value is wrong
+
+Ten of the variables on this page are validated when they are read, and a wrong value in any of them never stops a run: evaluatorq logs a `WARNING`, uses the documented default, and carries on.
+
+A variable that looks like it did nothing was rejected, outranked, or never read, and only the first of the three says so. A rejected value leaves the `WARNING` below. An outranked one leaves nothing: the three [Simulation LLM defaults](#simulation-llm-defaults) are fallbacks, and an `LLMCallConfig` field beats them whenever it is set at all — including when it is set to the same number as the default. A knob nobody read leaves nothing either, because these are read where they are used rather than at startup: `ORQ_OTEL_MAX_QUEUE_SIZE` is read when tracing initialises, so with tracing off a bad value passes without a word. Read the warnings first, and treat their absence as "no opinion" rather than as "fine".
+
+**Which variables this covers.** Ten knobs are parsed and validated — the numbers against a minimum, the booleans against an accepted vocabulary: `ORQ_DISABLE_TRACING`, the four `ORQ_OTEL_*` variables, `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`, `EVALUATORQ_PROPAGATE_TRACE_CONTEXT`, `EVALUATORQ_CATALOGUE_TIMEOUT_S`, `EVALUATORQ_LLM_TIMEOUT_S` and `EVALUATORQ_LLM_MAX_TOKENS`.
+
+The minimum is `1` for the four `ORQ_OTEL_*` variables and for `EVALUATORQ_LLM_MAX_TOKENS`, `1.0` for `EVALUATORQ_LLM_TIMEOUT_S`, and `0.1` for `EVALUATORQ_CATALOGUE_TIMEOUT_S`. None of them has a maximum.
+
+Everything else on this page is a string evaluatorq hands on as it finds it — a key, a base URL, a directory, `EVALUATORQ_REASONING_EFFORT` — and a wrong value there surfaces where it is used, as a failed request or an empty run store, not as one of these warnings. `EVALUATORQ_LOG_LEVEL` is the one that does not land softly: a name Python's `logging` module does not recognise raises `ValueError: Unknown level` out of the dashboard's logging setup, and the dashboard never starts.
+
+`EVALUATORQ_SPAN_MAX_TEXT_CHARS` is parsed on its own terms: a value that is not an integer warns and falls back to capturing everything.
+
+| What you set | What happens |
+|---|---|
+| Nothing — the variable is absent | The default, with no log line. |
+| A good value with whitespace around it, such as `" 45 "` | Stripped and applied. Not an error. |
+| A number that does not parse, such as `abc` | `WARNING`, then the default. |
+| A number below the knob's minimum, such as `0` where the minimum is `1` | `WARNING` naming the bound, then the default. |
+| `ORQ_OTEL_MAX_BATCH_SIZE` larger than `ORQ_OTEL_MAX_QUEUE_SIZE` | `WARNING`, then the batch size clamped down to the queue size — the one case that lands on a value you did not set rather than on the default. |
+| `nan` or `inf` where a float is expected | `WARNING`, then the default. |
+| An empty or whitespace-only value, for a **number** | `WARNING`, then the default. An unresolved `${{ vars.X }}` in a CI `env:` block expands to the empty string, and that is worth a signal rather than a silent default. |
+| An empty or whitespace-only value, for a **boolean** | The default, with **no log line**. |
+| A word a boolean does not recognise, such as `maybe` | `WARNING`, then the default. |
+
+The two empty-value rows differ, and the difference decides what an unresolved CI variable costs you. `EVALUATORQ_CAPTURE_MESSAGE_CONTENT: ${{ vars.CAPTURE_CONTENT }}` with no such repository variable expands to the empty string, which reads as unset, which means the default — and the default is `true`, so every prompt and response goes to your tracing backend with nothing in the log and exit `0`. The boolean knobs fail open.
+
+Assert the values arrived instead of watching for a warning. This distinguishes "set but empty" from "absent", because absent is legitimate:
+
+```bash
+rc=0
+for v in ORQ_DISABLE_TRACING ORQ_OTEL_MAX_QUEUE_SIZE ORQ_OTEL_MAX_BATCH_SIZE ORQ_OTEL_SCHEDULE_DELAY_MS ORQ_OTEL_FLUSH_TIMEOUT_MS EVALUATORQ_CAPTURE_MESSAGE_CONTENT EVALUATORQ_PROPAGATE_TRACE_CONTEXT EVALUATORQ_CATALOGUE_TIMEOUT_S EVALUATORQ_LLM_TIMEOUT_S EVALUATORQ_LLM_MAX_TOKENS; do
+  if [ -n "${!v+set}" ] && [ -z "${!v}" ]; then
+    echo "::error::$v is set but empty — a repository variable did not resolve."
+    rc=1
+  fi
+done
+exit $rc
+```
+
+Booleans accept `1`, `true`, `yes` and `on`, and `0`, `false`, `no` and `off`, in any capitalisation.
+
+The warnings go to stderr, so a step that redirects only stdout loses them. To see one:
+
+```bash
+EVALUATORQ_CATALOGUE_TIMEOUT_S=abc eq redteam runs
+```
+
+```console
+2026-09-14 06:32:21.018 | WARNING  | evaluatorq.common.env_config:env_float:72 - EVALUATORQ_CATALOGUE_TIMEOUT_S is not a number ('abc'); using default 30.0.
+```
+
+The command then lists your runs as usual and exits `0` — the rejected timeout costs it nothing but that line. Expect one line per read, not one per process: a knob read on every LLM call warns on every LLM call. The same contract on a boolean:
+
+```bash
+ORQ_DISABLE_TRACING=maybe python -c "from evaluatorq.tracing import is_tracing_enabled; is_tracing_enabled()"
+```
+
+```console
+2026-09-14 06:19:52.231 | WARNING  | evaluatorq.common.env_config:env_bool:95 - ORQ_DISABLE_TRACING is not a boolean ('maybe'); using default False.
+```
+
+None of the ten raise. A typo costs you a default and a log line, never a stopped process.
 
 ## Model catalogue overrides
 

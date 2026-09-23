@@ -138,6 +138,7 @@ plugins:
           - structured-results.md: Multi-dimensional evaluator scores with EvaluationResultCell.
           - framework-integrations.md: Evaluate LangChain and LangGraph agents.
           - guides/targets.md: The system under test — built-in target kinds and how to write your own AgentTarget.
+          - coding-agent-targets.md: Run Claude Code, Codex CLI or OpenCode as the system under test, directly or through orq launch.
           - guides/agent-simulation.md: Multi-turn, persona-driven conversation testing with an LLM judge.
           - guides/simulation-in-evaluatorq.md: Run a simulation as an evaluatorq job with wrap_simulation_agent(), and score the transcript with your own evaluators.
           - guides/red-teaming.md: Adaptive OWASP-mapped adversarial security testing for agents.
@@ -270,6 +271,7 @@ nav:
       - Structured Results: structured-results.md
       - Framework Integrations: framework-integrations.md
       - Targets: guides/targets.md
+      - Coding Agents: coding-agent-targets.md
       - Agent Simulation:
           - Overview: guides/agent-simulation.md
           - In an evaluatorq Run: guides/simulation-in-evaluatorq.md
