@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_2d266dd7ece662eb__datapoint_io_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.15.4">coverage.py v7.15.4</a>,
-            created at 2026-09-22 13:29 +0000
+            created at 2026-09-23 12:29 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -118,7 +118,7 @@
     <p class="pln"><span class="n"><a id="t36" href="#t36">36</a></span><span class="t"><span class="com"># static typing) &#8212; pydantic resolves annotations at class-creation time even</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t37" href="#t37">37</a></span><span class="t"><span class="com"># with `from __future__ import annotations`, so they must be real, importable</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t38" href="#t38">38</a></span><span class="t"><span class="com"># names in this module&#x27;s namespace and can&#x27;t live behind `TYPE_CHECKING`.</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t39" href="#t39">39</a></span><span class="t"><span class="key">from</span> <span class="nam">evaluatorq</span><span class="op">.</span><span class="nam">contracts</span> <span class="key">import</span> <span class="nam">AgentTarget</span><span class="op">,</span> <span class="nam">LLMCallConfig</span><span class="op">,</span> <span class="nam">TokenUsage</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t39" href="#t39">39</a></span><span class="t"><span class="key">from</span> <span class="nam">evaluatorq</span><span class="op">.</span><span class="nam">contracts</span> <span class="key">import</span> <span class="nam">DEFAULT_TARGET_TIMEOUT_MS</span><span class="op">,</span> <span class="nam">AgentTarget</span><span class="op">,</span> <span class="nam">LLMCallConfig</span><span class="op">,</span> <span class="nam">TokenUsage</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t40" href="#t40">40</a></span><span class="t"><span class="key">from</span> <span class="nam">evaluatorq</span><span class="op">.</span><span class="nam">simulation</span><span class="op">.</span><span class="nam">evaluators</span><span class="op">.</span><span class="nam">scorers</span> <span class="key">import</span> <span class="nam">SimulationScoringConfig</span>  <span class="com"># noqa: TC001</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t41" href="#t41">41</a></span><span class="t"><span class="key">from</span> <span class="nam">evaluatorq</span><span class="op">.</span><span class="nam">simulation</span><span class="op">.</span><span class="nam">hooks</span> <span class="key">import</span> <span class="nam">SimulationHooks</span>  <span class="com"># noqa: TC001</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t42" href="#t42">42</a></span><span class="t"><span class="key">from</span> <span class="nam">evaluatorq</span><span class="op">.</span><span class="nam">simulation</span><span class="op">.</span><span class="nam">reports</span><span class="op">.</span><span class="nam">recommendations</span> <span class="key">import</span> <span class="nam">SimulationRecommendationConfig</span>  <span class="com"># noqa: TC001</span>&nbsp;</span><span class="r"></span></p>
@@ -126,7 +126,7 @@
     <p class="pln"><span class="n"><a id="t44" href="#t44">44</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t45" href="#t45">45</a></span><span class="t"><span class="com"># Named because every `simulate` overload repeats them; as literals they drifted one</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t46" href="#t46">46</a></span><span class="t"><span class="com"># signature at a time.</span>&nbsp;</span><span class="r"></span></p>
-    <p class="run"><span class="n"><a id="t47" href="#t47">47</a></span><span class="t"><span class="nam">DEFAULT_TARGET_AGENT_TIMEOUT_MS</span> <span class="op">=</span> <span class="num">240_000</span>&nbsp;</span><span class="r"></span></p>
+    <p class="run"><span class="n"><a id="t47" href="#t47">47</a></span><span class="t"><span class="nam">DEFAULT_TARGET_AGENT_TIMEOUT_MS</span> <span class="op">=</span> <span class="nam">DEFAULT_TARGET_TIMEOUT_MS</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t48" href="#t48">48</a></span><span class="t"><span class="nam">DEFAULT_MAX_TARGET_RETRIES</span> <span class="op">=</span> <span class="num">2</span>&nbsp;</span><span class="r"></span></p>
     <p class="run"><span class="n"><a id="t49" href="#t49">49</a></span><span class="t"><span class="nam">DEFAULT_MAX_TOOL_RESULT_CHARS</span> <span class="op">=</span> <span class="num">500</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t50" href="#t50">50</a></span><span class="t">&nbsp;</span><span class="r"></span></p>
@@ -318,7 +318,7 @@
             <a class="nav" href="z_2d266dd7ece662eb__datapoint_io_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.15.4">coverage.py v7.15.4</a>,
-            created at 2026-09-22 13:29 +0000
+            created at 2026-09-23 12:29 +0000
         </p>
     </div>
 </footer>
