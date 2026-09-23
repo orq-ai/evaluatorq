@@ -7,34 +7,30 @@ import json
 import os
 from collections import defaultdict, deque
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 
 import httpx
 from loguru import logger
 
+from evaluatorq.common.messages import content_part_text
 from evaluatorq.common.orq_client import orq_server_url
 from evaluatorq.common.retry import with_retry
 from evaluatorq.contracts import FunctionCall, Message, StrategyToolCall
-from evaluatorq.openresponses.otel_messages import items_to_input_messages, items_to_output_messages
+from evaluatorq.openresponses.otel_messages import (
+    is_responses_item,
+    items_to_input_messages,
+    items_to_output_messages,
+)
 from evaluatorq.types import Trace, TraceInput
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterable, Sequence
 
 _SPAN_FETCH_CONCURRENCY = 5
 _API_PAGE_LIMIT = 200
 _MESSAGE_FORMAT = Literal['chat_completions', 'responses', 'otel_genai']
 _TRACE_MESSAGE_FORMAT = Literal['chat_completions', 'responses', 'otel_genai', 'mixed']
 _ROLE = Literal['user', 'assistant', 'tool', 'system', 'developer']
-_RESPONSES_ITEM_TYPES = frozenset({
-    'message',
-    'function_call',
-    'function_call_output',
-    'custom_tool_call',
-    'custom_tool_call_output',
-    'mcp_call',
-    'reasoning',
-})
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -86,9 +82,9 @@ def _content_text(value: Any) -> str | None:
             text.append(_json_text(part))
             continue
         part_type = part.get('type')
-        if part_type in (None, 'text', 'input_text', 'output_text', 'summary_text', 'refusal'):
-            content = part.get('text') or part.get('content') or part.get('refusal')
-            if isinstance(content, str):
+        # Recorded traces carry untyped {'text': ...} parts, which the shared table does not accept.
+        if (content := content_part_text(part if part_type is not None else {**part, 'type': 'text'})) is not None:
+            if content:
                 text.append(content)
             continue
         if part_type in {'image', 'image_url', 'input_image', 'input_file', 'file', 'audio', 'input_audio'}:
@@ -266,12 +262,12 @@ def _otel_messages(value: Any, *, default_role: _ROLE) -> list[Message]:
 
 def _responses_messages(value: Any, *, default_role: _ROLE) -> list[Message]:
     value = _decode_json(value)
-    if isinstance(value, dict) and not _is_responses_item(value) and ('input' in value or 'output' in value):
+    if isinstance(value, dict) and not is_responses_item(value) and ('input' in value or 'output' in value):
         value = value.get('input') if default_role == 'user' else value.get('output')
     if isinstance(value, str):
         return [Message(role=default_role, content=value)]
     if isinstance(value, dict):
-        if _is_responses_item(value):
+        if is_responses_item(value):
             value = [value]
         elif isinstance(value.get('messages'), list):
             return _chat_messages(value, default_role=default_role)
@@ -311,13 +307,8 @@ def _looks_like_responses(value: Any) -> bool:
         # Either side of the Responses envelope may be a scalar or a Chat-style shorthand list.
         if 'input' in decoded or 'output' in decoded:
             return True
-        return _is_responses_item(decoded)
-    return isinstance(decoded, list) and any(isinstance(item, dict) and _is_responses_item(item) for item in decoded)
-
-
-def _is_responses_item(value: dict[str, Any]) -> bool:
-    item_type = value.get('type')
-    return isinstance(item_type, str) and (item_type in _RESPONSES_ITEM_TYPES or item_type.startswith('orq:'))
+        return is_responses_item(decoded)
+    return isinstance(decoded, list) and any(isinstance(item, dict) and is_responses_item(item) for item in decoded)
 
 
 def _parse_messages(
@@ -833,4 +824,33 @@ def partition_traces(traces: Sequence[Trace], *, caller: str) -> tuple[list[Trac
     return usable, failed
 
 
-__all__ = ['fetch_traces', 'partition_traces']
+class TraceBatch(NamedTuple):
+    """A resolved trace source: every trace in order, and its usable/failed split."""
+
+    traces: list[Trace]
+    usable: list[Trace]
+    failed: list[Trace]
+
+
+async def load_traces(
+    source: TraceInput | Iterable[Trace],
+    *,
+    caller: str,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    http_client: httpx.AsyncClient | None = None,
+) -> TraceBatch:
+    """Resolve a trace source for any surface: fetch a `TraceInput`, take loaded traces as-is.
+
+    Import failures are logged once, through `partition_traces`. What an empty or
+    all-failed batch means is the surface's own rule, so this never raises on one.
+    """
+    if isinstance(source, TraceInput):
+        traces = await fetch_traces(source, api_key=api_key, base_url=base_url, http_client=http_client)
+    else:
+        traces = list(source)
+    usable, failed = partition_traces(traces, caller=caller)
+    return TraceBatch(traces, usable, failed)
+
+
+__all__ = ['TraceBatch', 'fetch_traces', 'load_traces', 'partition_traces']

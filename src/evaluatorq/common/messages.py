@@ -14,6 +14,30 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
 
+_TEXT_PART_TYPES = frozenset({'text', 'input_text', 'output_text', 'summary_text', 'refusal'})
+
+
+def content_part_text(part: Any) -> str | None:
+    """The text a content part carries, or ``None`` when it is not a text part.
+
+    One table for every provider shape: Chat Completions ``text``, Responses
+    ``input_text`` / ``output_text``, reasoning ``summary_text``, and ``refusal``,
+    which is the model's real answer (for red teaming, the resistant one). OTel
+    GenAI parts put the text under ``content`` rather than ``text``.
+    """
+
+    def field(key: str) -> Any:
+        return part.get(key) if isinstance(part, dict) else getattr(part, key, None)
+
+    part_type = field('type')
+    if part_type not in _TEXT_PART_TYPES:
+        return None
+    for key in ('refusal', 'text', 'content') if part_type == 'refusal' else ('text', 'content'):
+        if isinstance(value := field(key), str):
+            return value
+    return ''
+
+
 def coerce_content_text(content: Any) -> str:
     """Flatten message content to a plain text string.
 
@@ -32,13 +56,8 @@ def coerce_content_text(content: Any) -> str:
         texts: list[str] = []
         for part in content:
             part_type = part.get('type') if isinstance(part, dict) else getattr(part, 'type', None)
-            # The chat-completions ("text") and Responses ("input_text",
-            # "output_text") shapes all carry their text under a "text" key.
-            if part_type in ('text', 'input_text', 'output_text'):
-                texts.append(part.get('text', '') if isinstance(part, dict) else getattr(part, 'text', ''))
-            elif part_type == 'refusal':
-                # A refusal is the model's real answer (and for red teaming the resistant one).
-                texts.append(part.get('refusal', '') if isinstance(part, dict) else getattr(part, 'refusal', ''))
+            if (text := content_part_text(part)) is not None:
+                texts.append(text)
             elif part_type in ('image_url', 'input_image'):
                 texts.append('[image]')
             elif part_type in ('file', 'input_file'):

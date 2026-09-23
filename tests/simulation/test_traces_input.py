@@ -11,6 +11,7 @@ import pytest
 
 from evaluatorq.common.structured_output import StructuredResult
 from evaluatorq.contracts import Message
+from evaluatorq.common import trace_input as trace_input_module
 from evaluatorq.simulation import traces as traces_module
 from evaluatorq.simulation.traces import (
     TraceConversation,
@@ -232,7 +233,7 @@ async def test_simulation_datapoints_accept_trace_input(monkeypatch: pytest.Monk
     _stub_structured(monkeypatch, parsed)
     _stub_first_message(monkeypatch, "Hi, chasing an order.")
     fetch = AsyncMock(return_value=[_make_trace("trace-1")])
-    monkeypatch.setattr(traces_module, "fetch_traces", fetch)
+    monkeypatch.setattr(trace_input_module, "fetch_traces", fetch)
 
     datapoints = await datapoints_from_traces(TraceInput(trace_id="trace-1"), client=MagicMock())
 
@@ -835,7 +836,7 @@ async def test_supplied_partial_summaries_drop_missing_without_resummarizing_ext
 @pytest.mark.asyncio
 async def test_trace_query_selecting_nothing_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     """Core evaluation and red team both refuse an empty selection; simulation matches them."""
-    monkeypatch.setattr(traces_module, "fetch_traces", AsyncMock(return_value=[]))
+    monkeypatch.setattr(trace_input_module, "fetch_traces", AsyncMock(return_value=[]))
 
     with pytest.raises(ValueError, match="selected no usable conversation"):
         await traces_module._resolve_trace_conversations(TraceInput(search="nothing matches"))
@@ -844,7 +845,7 @@ async def test_trace_query_selecting_nothing_raises(monkeypatch: pytest.MonkeyPa
 @pytest.mark.asyncio
 async def test_trace_query_whose_traces_are_all_unusable_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     no_user_turn = Trace(trace_id="t1", output_messages=[Message(role="assistant", content="Hi.")])
-    monkeypatch.setattr(traces_module, "fetch_traces", AsyncMock(return_value=[no_user_turn]))
+    monkeypatch.setattr(trace_input_module, "fetch_traces", AsyncMock(return_value=[no_user_turn]))
 
     with pytest.raises(ValueError, match="1 trace"):
         await traces_module._resolve_trace_conversations(TraceInput(trace_id="t1"))

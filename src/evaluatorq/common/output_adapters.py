@@ -20,6 +20,7 @@ from evaluatorq.contracts import (
     TextOutputItem,
     ToolCallOutputItem,
 )
+from evaluatorq.openresponses.otel_messages import is_responses_item
 
 if TYPE_CHECKING:
     from evaluatorq.types import Output
@@ -49,13 +50,6 @@ def _is_message_shape(item: Any) -> bool:
     return isinstance(item, dict) and 'type' not in item and bool(_MESSAGE_SHAPE_KEYS.intersection(item))
 
 
-def _is_responses_item(item: Any) -> bool:
-    item_type = item.get('type') if isinstance(item, dict) else None
-    return item_type in ('message', 'function_call', 'reasoning') or (
-        isinstance(item_type, str) and item_type.startswith('orq:')
-    )
-
-
 def _agent_response_text(response: AgentResponse) -> str:
     """Render text and tool calls in the order the agent produced them."""
     turns: list[dict[str, Any]] = []
@@ -78,7 +72,7 @@ def output_to_text(output: Any) -> str:
     if isinstance(output, list) and (not output or all(_is_message_shape(item) for item in output)):
         # messages_to_text, not a bare join: dropping tool calls hands the judge an empty string for an agent that acted.
         return messages_to_text(output)
-    if isinstance(output, list) and all(_is_responses_item(item) for item in output):
+    if isinstance(output, list) and all(is_responses_item(item) for item in output):
         return _agent_response_text(AgentResponse.from_output_items(output))
     if isinstance(output, list) and all(
         isinstance(item, dict) and item.get('type') in _CONTENT_PART_TYPES for item in output

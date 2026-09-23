@@ -38,7 +38,7 @@ from evaluatorq.common.structured_output import (
     sum_structured_usage,
     usage_from_exception,
 )
-from evaluatorq.common.trace_input import fetch_traces, partition_traces
+from evaluatorq.common.trace_input import load_traces, partition_traces
 from evaluatorq.simulation.types import DEFAULT_MODEL, Persona, Scenario, SimulationDatapoint
 from evaluatorq.simulation.utils.prompt_builders import generate_datapoint
 from evaluatorq.simulation.utils.structured_output import generate_structured
@@ -366,6 +366,12 @@ def _to_trace_conversation(value: Trace | TraceConversation) -> TraceConversatio
     )
 
 
+def _usable_conversations(traces: Sequence[Trace]) -> list[TraceConversation]:
+    """Conversations with a user turn to simulate from; the rest cannot seed a persona."""
+    conversations = [_to_trace_conversation(trace) for trace in traces]
+    return [conversation for conversation in conversations if conversation.first_user_message]
+
+
 async def fetch_trace_conversations(
     *,
     limit: int = 20,
@@ -386,22 +392,15 @@ async def fetch_trace_conversations(
     """
     start_time = datetime.fromtimestamp(start_date_ms / 1000, tz=timezone.utc) if start_date_ms is not None else None
     end_time = datetime.fromtimestamp(end_date_ms / 1000, tz=timezone.utc) if end_date_ms is not None else None
-    imported = await fetch_traces(
-        TraceInput(
-            limit=limit,
-            start_time=start_time,
-            end_time=end_time,
-            search=search,
-            filters=filters or [],
-        ),
+    batch = await load_traces(
+        TraceInput(limit=limit, start_time=start_time, end_time=end_time, search=search, filters=filters or []),
+        caller='fetch_trace_conversations',
         api_key=api_key,
         base_url=base_url,
         http_client=http_client,
     )
-    usable_traces, _failed = partition_traces(imported, caller='fetch_trace_conversations')
-    conversations = [_to_trace_conversation(trace) for trace in usable_traces]
-    fetched = len(imported)
-    usable = [conversation for conversation in conversations if conversation.first_user_message]
+    usable = _usable_conversations(batch.usable)
+    fetched = len(batch.traces)
     if len(usable) < fetched:
         # The only signal that traces were dropped (import failure or no user message), so it stays at WARNING.
         logger.warning(
@@ -420,13 +419,11 @@ async def _resolve_trace_conversations(
 ) -> list[TraceConversation]:
     """Resolve a trace source into the conversation shape used by simulation."""
     if isinstance(source, TraceInput):
-        traces = await fetch_traces(source, api_key=orq_api_key, base_url=base_url)
-        usable_traces, _failed = partition_traces(traces, caller='_resolve_trace_conversations')
-        conversations = [_to_trace_conversation(trace) for trace in usable_traces]
-        usable = [conversation for conversation in conversations if conversation.first_user_message]
+        batch = await load_traces(source, caller='_resolve_trace_conversations', api_key=orq_api_key, base_url=base_url)
+        usable = _usable_conversations(batch.usable)
         if not usable:
             raise ValueError(
-                f'TraceInput(...) selected no usable conversation ({len(traces)} trace(s) fetched). '
+                f'TraceInput(...) selected no usable conversation ({len(batch.traces)} trace(s) fetched). '
                 'Widen the query (limit, search, filters, start_time/end_time) or name a trace_id.'
             )
         return usable

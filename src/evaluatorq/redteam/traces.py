@@ -8,12 +8,13 @@ from typing import TYPE_CHECKING
 from loguru import logger
 from pydantic import ValidationError
 
-from evaluatorq.common.trace_input import fetch_traces, partition_traces
+from evaluatorq.common.trace_input import load_traces
 from evaluatorq.contracts import Message, StrEnum
-from evaluatorq.types import DataPoint, Trace, TraceInput
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from evaluatorq.types import DataPoint, Trace, TraceInput
 
 
 class TraceStart(StrEnum):
@@ -99,11 +100,9 @@ async def datapoints_from_traces(
     `SimulationDatapoint` rows for the agent simulation surface. This one makes
     no LLM calls and returns red-team seed `DataPoint` rows.
     """
-    if isinstance(source, TraceInput):
-        traces = await fetch_traces(source, api_key=api_key, base_url=base_url)
-    else:
-        traces = list(source)
-    usable, failed = partition_traces(traces, caller='redteam.datapoints_from_traces')
+    _traces, usable, failed = await load_traces(
+        source, caller='redteam.datapoints_from_traces', api_key=api_key, base_url=base_url
+    )
     if not usable:
         if failed:
             raise ValueError(f'All {len(failed)} imported trace(s) failed to import; no trace seeds could be built.')

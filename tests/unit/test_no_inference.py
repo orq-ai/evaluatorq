@@ -165,7 +165,7 @@ TRACE_WITH_EMPTY_SELECTED_OUTPUT = Trace(
 
 @pytest.mark.asyncio
 async def test_trace_input_fetches_once_and_scores_recorded_output(monkeypatch: pytest.MonkeyPatch) -> None:
-    evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
+    trace_input_module = importlib.import_module('evaluatorq.common.trace_input')
     fetch = AsyncMock(return_value=[TRACE])
     captured: list[object] = []
 
@@ -173,7 +173,7 @@ async def test_trace_input_fetches_once_and_scores_recorded_output(monkeypatch: 
         captured.append(params['output'])
         return EvaluationResult(value=1)
 
-    monkeypatch.setattr(evaluatorq_module, 'fetch_traces', fetch)
+    monkeypatch.setattr(trace_input_module, 'fetch_traces', fetch)
 
     results = await evaluatorq(
         'trace-eval',
@@ -192,9 +192,9 @@ async def test_trace_input_fetches_once_and_scores_recorded_output(monkeypatch: 
 
 @pytest.mark.asyncio
 async def test_trace_input_rejects_empty_recorded_output(monkeypatch: pytest.MonkeyPatch) -> None:
-    evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
+    trace_input_module = importlib.import_module('evaluatorq.common.trace_input')
     fetch = AsyncMock(return_value=[INPUT_ONLY_TRACE])
-    monkeypatch.setattr(evaluatorq_module, 'fetch_traces', fetch)
+    monkeypatch.setattr(trace_input_module, 'fetch_traces', fetch)
 
     results = await evaluatorq(
         'trace-eval',
@@ -215,7 +215,7 @@ async def test_trace_input_rejects_empty_recorded_output(monkeypatch: pytest.Mon
 
 @pytest.mark.asyncio
 async def test_trace_input_rejects_blank_structured_recorded_output(monkeypatch: pytest.MonkeyPatch) -> None:
-    evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
+    trace_input_module = importlib.import_module('evaluatorq.common.trace_input')
     fetch = AsyncMock(return_value=[
         Trace(
             trace_id='trace-blank-structured',
@@ -223,7 +223,7 @@ async def test_trace_input_rejects_blank_structured_recorded_output(monkeypatch:
             output_messages=[Message(role='assistant', content='   ')],
         )
     ])
-    monkeypatch.setattr(evaluatorq_module, 'fetch_traces', fetch)
+    monkeypatch.setattr(trace_input_module, 'fetch_traces', fetch)
 
     results = await evaluatorq(
         'trace-eval',
@@ -281,9 +281,9 @@ async def test_trace_input_preserves_structured_tool_output() -> None:
 async def test_trace_input_does_not_replay_earlier_assistant_when_output_is_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
+    trace_input_module = importlib.import_module('evaluatorq.common.trace_input')
     fetch = AsyncMock(return_value=[TRACE_WITH_EMPTY_SELECTED_OUTPUT])
-    monkeypatch.setattr(evaluatorq_module, 'fetch_traces', fetch)
+    monkeypatch.setattr(trace_input_module, 'fetch_traces', fetch)
 
     results = await evaluatorq(
         'trace-eval',
@@ -305,9 +305,9 @@ async def test_trace_input_does_not_replay_earlier_assistant_when_output_is_empt
 @pytest.mark.asyncio
 async def test_trace_input_rejects_explicit_inference(monkeypatch: pytest.MonkeyPatch):
     """An explicit inference=True with a replay source is still a contradiction."""
-    evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
+    trace_input_module = importlib.import_module('evaluatorq.common.trace_input')
     fetch = AsyncMock()
-    monkeypatch.setattr(evaluatorq_module, 'fetch_traces', fetch)
+    monkeypatch.setattr(trace_input_module, 'fetch_traces', fetch)
 
     async def unused_job(_data: DataPoint, _row: int) -> dict[str, object]:
         return {"name": "unused", "output": None}
@@ -328,7 +328,7 @@ async def test_trace_input_rejects_explicit_inference(monkeypatch: pytest.Monkey
 @pytest.mark.asyncio
 async def test_trace_input_resolves_inference_without_the_flag(monkeypatch: pytest.MonkeyPatch):
     """TraceInput is a replay source, so omitting inference= resolves it to False."""
-    evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
+    trace_input_module = importlib.import_module('evaluatorq.common.trace_input')
     fetch = AsyncMock(
         return_value=[
             Trace(
@@ -338,7 +338,7 @@ async def test_trace_input_resolves_inference_without_the_flag(monkeypatch: pyte
             )
         ]
     )
-    monkeypatch.setattr(evaluatorq_module, 'fetch_traces', fetch)
+    monkeypatch.setattr(trace_input_module, 'fetch_traces', fetch)
 
     results = await evaluatorq(
         "trace-eval",

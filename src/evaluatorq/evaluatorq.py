@@ -13,7 +13,7 @@ from .common.llm_limit import llm_concurrency_limit
 from .common.messages import coerce_content_text
 from .common.output_adapters import has_meaningful_output
 from .common.parallelism import resolve_datapoint_parallelism
-from .common.trace_input import fetch_traces, partition_traces
+from .common.trace_input import load_traces
 from .fetch_data import (
     fetch_dataset_batches,
     fetch_experiment_datapoints,
@@ -427,8 +427,7 @@ async def _resolve_remote_data_input(
             base_url=base_url,
         )
     if isinstance(data, TraceInput):
-        traces = await fetch_traces(data, api_key=orq_api_key, base_url=base_url)
-        usable, failed = partition_traces(traces, caller='evaluatorq')
+        traces, usable, failed = await load_traces(data, caller='evaluatorq', api_key=orq_api_key, base_url=base_url)
         if not traces:
             raise ValueError(
                 'data=TraceInput(...) selected no traces. Widen the query (limit, search, '

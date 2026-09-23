@@ -91,6 +91,23 @@ def _is_orq_tool_call(item_type: str) -> bool:
     return item_type.startswith('orq:')
 
 
+RESPONSES_ITEM_TYPES = frozenset({
+    'message',
+    'function_call',
+    'function_call_output',
+    'custom_tool_call',
+    'custom_tool_call_output',
+    'mcp_call',
+    'reasoning',
+})
+
+
+def is_responses_item(value: Any) -> bool:
+    """Whether *value* is a typed Responses API item rather than a chat message or content part."""
+    item_type = value.get('type') if isinstance(value, dict) else None
+    return isinstance(item_type, str) and (item_type in RESPONSES_ITEM_TYPES or _is_orq_tool_call(item_type))
+
+
 def _tool_response_message(call_id: Any, response: Any) -> dict[str, Any]:
     return {
         'role': 'tool',
