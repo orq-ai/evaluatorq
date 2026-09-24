@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from time import monotonic
 from typing import Any
 
 from loguru import logger
@@ -71,7 +72,16 @@ def _cli_json(args: list[str], *, profile: str | None, timeout: float) -> dict[s
     return value if isinstance(value, dict) else None
 
 
-def _profile_workspace_rows(profile: str, workspace_id: str | None, timeout: float) -> list[dict[str, Any]]:
+def _remaining_timeout(deadline: float, per_call_timeout: float) -> float:
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        raise TimeoutError('Orq scope discovery timed out.')
+    return min(per_call_timeout, remaining)
+
+
+def _profile_workspace_rows(
+    profile: str, workspace_id: str | None, timeout: float, deadline: float
+) -> list[dict[str, Any]]:
     """Page through the profile's workspaces until the selected workspace is found."""
     rows: list[dict[str, Any]] = []
     cursor: str | None = None
@@ -80,7 +90,7 @@ def _profile_workspace_rows(profile: str, workspace_id: str | None, timeout: flo
         args = ['workspaces', 'list', '--limit', '200']
         if cursor:
             args.extend(('--starting-after', cursor))
-        listing = _cli_json(args, profile=profile, timeout=timeout)
+        listing = _cli_json(args, profile=profile, timeout=_remaining_timeout(deadline, timeout))
         page = listing.get('data') if listing is not None else None
         if not isinstance(page, list):
             raise TypeError('The orq CLI could not list workspaces for this credential.')
@@ -100,6 +110,7 @@ def discover_orq_scope(profile: str | None = None, *, timeout: float = 5.0) -> O
     """Find the workspace and all visible projects without exposing a credential."""
     if profile is None and not os.environ.get('ORQ_API_KEY', '').strip():
         return OrqScope(error='Set ORQ_API_KEY to discover projects.')
+    deadline = monotonic() + 3 * timeout
     projects: list[OrqProject] = []
     cursor: str | None = None
     seen: set[str] = set()
@@ -107,7 +118,10 @@ def discover_orq_scope(profile: str | None = None, *, timeout: float = 5.0) -> O
         args = ['projects', 'list', '--limit', '200']
         if cursor:
             args.extend(('--starting-after', cursor))
-        page = _cli_json(args, profile=profile, timeout=timeout)
+        try:
+            page = _cli_json(args, profile=profile, timeout=_remaining_timeout(deadline, timeout))
+        except TimeoutError as exc:
+            return OrqScope(error=str(exc))
         if page is None or not isinstance(page.get('data'), list):
             return OrqScope(error='The orq CLI could not list projects for this credential.')
         rows = page['data']
@@ -132,11 +146,14 @@ def discover_orq_scope(profile: str | None = None, *, timeout: float = 5.0) -> O
     workspace_id = next(iter(workspace_ids), None)
     if profile:
         try:
-            rows = _profile_workspace_rows(profile, workspace_id, timeout)
-        except (TypeError, ValueError) as exc:
+            rows = _profile_workspace_rows(profile, workspace_id, timeout, deadline)
+        except (TypeError, ValueError, TimeoutError) as exc:
             return OrqScope(error=str(exc))
     else:
-        status = _cli_json(['status'], profile=None, timeout=timeout)
+        try:
+            status = _cli_json(['status'], profile=None, timeout=_remaining_timeout(deadline, timeout))
+        except TimeoutError as exc:
+            return OrqScope(error=str(exc))
         credential = status.get('credential') if status else None
         if isinstance(credential, dict) and credential.get('workspace_id') != workspace_id:
             return OrqScope(error='The CLI session and API key point at different workspaces.')

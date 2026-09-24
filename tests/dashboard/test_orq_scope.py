@@ -120,3 +120,22 @@ def test_profile_workspace_lookup_reads_later_pages(monkeypatch) -> None:
 
     assert scope.workspace_key == 'target'
     assert any('--starting-after' in args for args in calls)
+
+
+def test_scope_discovery_has_one_deadline_across_project_and_workspace_pages(monkeypatch) -> None:
+    times = iter((0.0, 0.0, 5.0, 11.0, 16.0))
+    monkeypatch.setattr(orq_scope, 'monotonic', lambda: next(times))
+    calls: list[tuple[list[str], float]] = []
+
+    def cli(args: list[str], *, profile: str | None, timeout: float) -> dict:
+        calls.append((args, timeout))
+        if args[:2] == ['projects', 'list']:
+            return {'data': [{'project_id': 'project-a', 'name': 'A', 'workspace_id': 'workspace-target'}]}
+        return {'data': [{'id': f'workspace-{len(calls)}', 'key': 'other'}], 'has_more': True}
+
+    monkeypatch.setattr(orq_scope, '_cli_json', cli)
+    scope = orq_scope.discover_orq_scope('research', timeout=5)
+
+    assert scope.error == 'Orq scope discovery timed out.'
+    assert len(calls) == 3
+    assert [timeout for _, timeout in calls] == [5, 5, 4]
