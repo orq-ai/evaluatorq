@@ -467,6 +467,11 @@ class RunStore:
         async with self._lock:
             return self._view()
 
+    async def snapshot_for_render(self) -> RunSnapshot:
+        """Return a shallow view for trusted renderers that never mutate nested values."""
+        async with self._lock:
+            return self._view(detach=False)
+
     async def trace_detail(self, trace_id: str) -> TraceDetail | None:
         """Return a detached selected trace, projection, and classification."""
 
@@ -522,22 +527,21 @@ class RunStore:
             return self._snapshot.elapsed
         return max(0.0, self._monotonic() - self._started_monotonic)
 
-    def _view(self) -> RunSnapshot:
+    def _view(self, *, detach: bool = True) -> RunSnapshot:
         current = self._snapshot
         elapsed = self._elapsed()
         remaining = current.total - current.completed
         parallelism = current.request.parallelism if current.request is not None else 0
         active = min(parallelism, remaining) if current.state == 'classifying' else 0
-        return _detach(
-            replace(
-                current,
-                active=active,
-                queued=remaining - active if current.state == 'classifying' else 0,
-                percent=current.completed / current.total * 100 if current.total else 0.0,
-                elapsed=elapsed,
-                rate=current.completed / elapsed if elapsed else 0.0,
-            )
+        view = replace(
+            current,
+            active=active,
+            queued=remaining - active if current.state == 'classifying' else 0,
+            percent=current.completed / current.total * 100 if current.total else 0.0,
+            elapsed=elapsed,
+            rate=current.completed / elapsed if elapsed else 0.0,
         )
+        return _detach(view) if detach else view
 
 
 def _merge_facets(caller: FacetSelection, generated: FacetSelection) -> FacetSelection:

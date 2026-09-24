@@ -33,6 +33,13 @@ def test_settings_round_trip_uses_json_file(tmp_path: Path) -> None:
     assert json.loads(path.read_text()) == settings.model_dump()
 
 
+def test_unknown_settings_override_is_rejected(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'missing.json'))
+
+    with pytest.raises(ValueError, match='extra_forbidden'):
+        effective_settings({'limt': 10})
+
+
 def test_invalid_settings_file_warns_and_returns_defaults(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     path = tmp_path / 'dashboard-settings.json'
     path.write_text('{not json')

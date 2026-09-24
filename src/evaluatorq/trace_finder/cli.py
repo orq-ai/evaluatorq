@@ -17,7 +17,12 @@ from evaluatorq.common import cli_width  # noqa: F401 — import for its non-TTY
 from evaluatorq.common.cli_epilog import examples
 from evaluatorq.common.cli_errors import emit_error
 from evaluatorq.common.llm_client import resolve_llm_client
-from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, list_orq_profiles, resolve_orq_client
+from evaluatorq.common.orq_client import (
+    DEFAULT_ORQ_BASE_URL,
+    close_orq_client,
+    list_orq_profiles,
+    resolve_orq_client,
+)
 
 from .compiler import CompileError
 from .export import export_json
@@ -32,6 +37,7 @@ from .models import (
 )
 from .orq_source import OrqSourceError
 from .pipeline import build_run_store
+from .run_store import RunStore
 from .settings import effective_settings
 
 MAX_FIND_WAIT_SECONDS = 2 * 60 * 60
@@ -108,7 +114,7 @@ def _request(
                 trace_type=trace_type,
                 agent=agent,
                 tool=tool,
-            ),
+            ).model_copy(update={'project_id': settings.orq_project_id if not project else None}),
             numeric=NumericFilters(
                 tokens_min=tokens_min,
                 tokens_max=tokens_max,
@@ -166,9 +172,9 @@ async def _run(store: Any, request: RunRequest, console: Console) -> RunSnapshot
         nonlocal snapshot
         while snapshot.state not in {'completed', 'failed', 'cancelled'}:
             await asyncio.sleep(0.5)
-            snapshot = await store.snapshot()
+            snapshot = await store.snapshot_for_render() if isinstance(store, RunStore) else await store.snapshot()
             _print_progress(console, snapshot)
-        return snapshot
+        return await store.snapshot() if isinstance(store, RunStore) else snapshot
 
     try:
         return await asyncio.wait_for(poll(), timeout=MAX_FIND_WAIT_SECONDS)
@@ -178,6 +184,24 @@ async def _run(store: Any, request: RunRequest, console: Console) -> RunSnapshot
         except asyncio.TimeoutError:
             logger.warning('Trace finder cancellation did not complete within 10 seconds after the CLI wait limit')
         raise TimeoutError(f'Find run exceeded the {MAX_FIND_WAIT_SECONDS}-second wait limit.') from error
+
+
+async def _run_with_cleanup(store: Any, request: RunRequest, console: Console, resolved: Any, orq: Any) -> RunSnapshot:
+    try:
+        return await _run(store, request, console)
+    finally:
+        try:
+            await store.close()
+        finally:
+            await _close_clients(resolved, orq)
+
+
+async def _close_clients(resolved: Any, orq: Any) -> None:
+    try:
+        await close_orq_client(orq)
+    finally:
+        if getattr(resolved, 'owned', False):
+            await resolved.client.close()
 
 
 def find(
@@ -239,15 +263,19 @@ def find(
         'compiler_model': compiler_model,
         'classifier_model': classifier_model,
     })
+    if profile is not None and profile != settings.orq_profile:
+        settings = settings.model_copy(update={'orq_project_id': None, 'orq_project_name': None})
+    orq = None
     try:
         selected = None
-        if profile is not None:
-            selected = next((candidate for candidate in list_orq_profiles() if candidate.name == profile), None)
+        profile_name = profile if profile is not None else settings.orq_profile
+        if profile_name is not None:
+            selected = next((candidate for candidate in list_orq_profiles() if candidate.name == profile_name), None)
             if selected is None:
-                raise ValueError(f'Orq profile {profile!r} is unavailable. Check `orq auth profile list`.')
+                raise ValueError(f'Orq profile {profile_name!r} is unavailable. Check `orq auth profile list`.')
             if '*' in selected.api_key:
                 raise ValueError(
-                    f'Orq profile {profile!r} has a masked key that evaluatorq cannot read. '
+                    f'Orq profile {profile_name!r} has a masked key that evaluatorq cannot read. '
                     'Run `orq doctor --fix` or use ORQ_API_KEY.'
                 )
         if selected is None:
@@ -260,12 +288,14 @@ def find(
                 extra_api_key=selected.api_key, orq_host=host, require_orq=True, max_retries=0
             )
     except (ImportError, ValueError) as exc:
+        if orq is not None:
+            asyncio.run(close_orq_client(orq))
         emit_error(exc)
         raise typer.Exit(code=2) from None
 
     client = resolved.client
+    runner_entered = False
     try:
-        store = build_run_store(settings, client=client, orq=orq)
         request = _request(
             query=query,
             settings=settings,
@@ -282,10 +312,15 @@ def find(
             duration_ms_min=duration_ms_min,
             duration_ms_max=duration_ms_max,
         )
-        snapshot = asyncio.run(_run(store, request, Console()))
+        store = build_run_store(settings, client=client, orq=orq)
+        runner_entered = True
+        snapshot = asyncio.run(_run_with_cleanup(store, request, Console(), resolved, orq))
     except (CompileError, FilterSelectionError, OrqSourceError, TimeoutError, ValueError) as exc:
         emit_error(exc)
         raise typer.Exit(code=1) from None
+    finally:
+        if not runner_entered:
+            asyncio.run(_close_clients(resolved, orq))
 
     if snapshot.state != 'completed' or snapshot.failed:
         detail = snapshot.error or (

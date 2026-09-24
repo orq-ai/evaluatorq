@@ -143,6 +143,7 @@ def test_log_bridge_writes_the_console_off_the_event_loop(monkeypatch: pytest.Mo
 
     mock_logger.remove.assert_called_once_with()
     assert isinstance(mock_logger.add.call_args.args[0], launch._DroppingConsoleSink)
+    assert mock_logger.add.call_args.kwargs['level'] == logging.INFO
 
 
 def test_console_sink_drops_lines_instead_of_blocking_when_the_console_stalls() -> None:
@@ -166,27 +167,31 @@ def test_console_sink_drops_lines_instead_of_blocking_when_the_console_stalls() 
             return None
 
     sink = launch._DroppingConsoleSink(StalledStream(), maxsize=2)
-    sink('first\n')
-    assert stalled.wait(timeout=2), 'the drain thread never reached the console'
-    finished = threading.Event()
+    try:
+        sink('first\n')
+        assert stalled.wait(timeout=2), 'the drain thread never reached the console'
+        finished = threading.Event()
 
-    def log_more() -> None:
-        for n in range(5):
-            sink(f'line {n}\n')
-        finished.set()
+        def log_more() -> None:
+            for n in range(5):
+                sink(f'line {n}\n')
+            finished.set()
 
-    threading.Thread(target=log_more, daemon=True).start()
-    assert finished.wait(timeout=2), 'logging blocked on a stalled console'
-    resume.set()
-    deadline = threading.Event()
-    for _ in range(50):
-        if 'dropped' in written.getvalue() and written.getvalue().count('line ') == 2:
-            break
-        deadline.wait(0.05)
-    output = written.getvalue()
-    assert output.startswith('first\n')
-    assert '... dropped 3 log lines while the console was not draining\n' in output
-    assert output.count('line ') == 2
+        threading.Thread(target=log_more, daemon=True).start()
+        assert finished.wait(timeout=2), 'logging blocked on a stalled console'
+        resume.set()
+        deadline = threading.Event()
+        for _ in range(50):
+            if 'dropped' in written.getvalue() and written.getvalue().count('line ') == 2:
+                break
+            deadline.wait(0.05)
+        output = written.getvalue()
+        assert output.startswith('first\n')
+        assert '... dropped 3 log lines while the console was not draining\n' in output
+        assert output.count('line ') == 2
+    finally:
+        resume.set()
+        sink.stop()
 
 
 def test_console_sink_flushes_queued_lines_when_removed() -> None:
@@ -381,6 +386,27 @@ def test_browser_opens_after_dashboard_listener_is_ready() -> None:
         _open_browser_when_ready('0.0.0.0', 8125, threading.Event())
 
     assert connect.call_count == 2
+    open_browser.assert_called_once_with('http://127.0.0.1:8125/')
+
+
+def test_browser_waits_for_this_dashboard_instance() -> None:
+    import threading
+
+    from evaluatorq.dashboard.launch import _open_browser_when_ready
+
+    wrong = MagicMock()
+    wrong.read.return_value = b'other-instance'
+    wrong.__enter__.return_value = wrong
+    ready = MagicMock()
+    ready.read.return_value = b'our-instance'
+    ready.__enter__.return_value = ready
+    with (
+        patch('evaluatorq.dashboard.launch.urlopen', side_effect=[wrong, ready]) as probe,
+        patch('evaluatorq.dashboard.launch.webbrowser.open', return_value=True) as open_browser,
+    ):
+        _open_browser_when_ready('127.0.0.1', 8125, threading.Event(), 'our-instance')
+
+    assert probe.call_count == 2
     open_browser.assert_called_once_with('http://127.0.0.1:8125/')
 
 

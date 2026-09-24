@@ -11,12 +11,14 @@ from __future__ import annotations
 import logging
 import os
 import queue
+import secrets
 import socket
 import sys
 import threading
 import webbrowser
 from pathlib import Path
 from typing import TextIO
+from urllib.request import urlopen
 
 from loguru import logger
 
@@ -100,6 +102,8 @@ class _DroppingConsoleSink:
         with self._state_lock:
             self._stop_requested.set()
         self._thread.join(timeout=2)
+        if self._thread.is_alive():
+            self._disable()
 
     def _disable(self) -> None:
         """Stop accepting logs after the output stream breaks and release queued text."""
@@ -145,7 +149,7 @@ def _install_log_bridge() -> None:
     override = os.environ.get('EVALUATORQ_LOG_LEVEL', '').upper()
     level: int | str = override or logging.INFO
     logger.remove()
-    logger.add(_DroppingConsoleSink(sys.stderr), colorize=True)
+    logger.add(_DroppingConsoleSink(sys.stderr), level=level, colorize=True)
     logging.basicConfig(handlers=[_InterceptHandler()], level=level, force=True)
     if not override:
         # One INFO line per Orq call; a run classifies hundreds of traces.
@@ -170,8 +174,11 @@ def _browser_host(host: str) -> str:
     return {'0.0.0.0': '127.0.0.1', '::': '::1'}.get(host, host)  # noqa: S104
 
 
-def _open_browser_when_ready(host: str, port: int, stop: threading.Event) -> None:
-    """Open the dashboard once its TCP listener is ready, with a bounded wait."""
+_BROWSER_NONCE_ENV = 'EVALUATORQ_DASHBOARD_LAUNCH_NONCE'
+
+
+def _open_browser_when_ready(host: str, port: int, stop: threading.Event, nonce: str | None = None) -> None:
+    """Open the dashboard once this server answers a bounded readiness probe."""
     browser_host = _browser_host(host)
     url_host = f'[{browser_host}]' if ':' in browser_host else browser_host
     url = f'http://{url_host}:{port}/'
@@ -179,9 +186,14 @@ def _open_browser_when_ready(host: str, port: int, stop: threading.Event) -> Non
         if stop.wait(0.1):
             return
         try:
-            with socket.create_connection((browser_host, port), timeout=0.2):
-                pass
-        except OSError:
+            if nonce is None:
+                with socket.create_connection((browser_host, port), timeout=0.2):
+                    pass
+            else:
+                with urlopen(f'{url}_dashboard-ready', timeout=0.2) as response:  # noqa: S310
+                    if response.read().decode() != nonce:
+                        continue
+        except (OSError, ValueError):
             continue
         try:
             if not webbrowser.open(url):
@@ -205,7 +217,16 @@ def build_app_from_env():
     _install_log_bridge()
     raw = os.environ.get(_ROOTS_ENV)
     roots = [Path(p) for p in json.loads(raw)] if raw else None
-    return build_app(roots)
+    app = build_app(roots)
+    nonce = os.environ.get(_BROWSER_NONCE_ENV)
+    if nonce:
+        from starlette.responses import PlainTextResponse
+
+        @app.get('/_dashboard-ready')
+        def dashboard_ready() -> PlainTextResponse:
+            return PlainTextResponse(nonce)
+
+    return app
 
 
 def serve(
@@ -248,6 +269,8 @@ def serve(
         os.environ[_ROOTS_ENV] = json.dumps([str(p) for p in roots])
 
     pkg_dir = str(Path(evaluatorq.__file__).parent)
+    nonce = secrets.token_urlsafe(24)
+    os.environ[_BROWSER_NONCE_ENV] = nonce
     stop = threading.Event()
     browser_thread: threading.Thread | None = None
     if open_browser:
@@ -256,7 +279,7 @@ def serve(
                 logger.warning('Port {} is already in use; skipping automatic browser launch', port)
         except OSError:
             browser_thread = threading.Thread(
-                target=_open_browser_when_ready, args=(host, port, stop), name='dashboard-browser', daemon=True
+                target=_open_browser_when_ready, args=(host, port, stop, nonce), name='dashboard-browser', daemon=True
             )
             browser_thread.start()
     try:

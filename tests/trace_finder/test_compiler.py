@@ -158,6 +158,26 @@ async def test_compile_query_enforces_strict_token_and_duration_maxima(monkeypat
     assert plan.numeric.duration_ms_max == 29_999
 
 
+@pytest.mark.parametrize('query', ['under 0 tokens', 'over 10 tokens and under 5 tokens'])
+@pytest.mark.asyncio
+async def test_compile_query_reports_impossible_strict_bounds(monkeypatch, query: str) -> None:
+    document = choice_document()
+    document['numeric'] = {
+        'tokens_min': None,
+        'tokens_max': None,
+        'duration_ms_min': None,
+        'duration_ms_max': None,
+    }
+
+    async def fake_generate_structured(client: object, **kwargs: Any) -> FakeStructuredResult:
+        return FakeStructuredResult(CompilerWireQuery.model_validate(document))
+
+    monkeypatch.setattr('evaluatorq.trace_finder.compiler.generate_structured', fake_generate_structured)
+
+    with pytest.raises(CompileError, match='contradictory numeric bounds'):
+        await compile_query(cast(Any, object()), 'compiler-model', query)
+
+
 @pytest.mark.asyncio
 async def test_compile_query_tightens_fractional_duration_maximum(monkeypatch) -> None:
     document = choice_document()

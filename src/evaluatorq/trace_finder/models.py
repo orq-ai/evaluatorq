@@ -1,4 +1,4 @@
-"""Immutable data contracts for trace populations and classifications."""
+"""Validated data contracts for trace populations and classifications."""
 
 from __future__ import annotations
 
@@ -78,7 +78,7 @@ class TraceProjection(BaseModel):
     serialized: str
     estimated_tokens: int = Field(ge=0, le=25_000)
     omitted_messages: int = Field(ge=0)
-    omitted_bytes: int = Field(ge=0)
+    omitted_bytes: int = Field(ge=0, description='Bytes omitted to fit the token budget; excludes schema projection.')
 
 
 class TraceClassification(BaseModel):
@@ -255,7 +255,7 @@ class RunRequest(BaseModel):
 
 @dataclass(frozen=True)
 class RunSnapshot:
-    """A read-only progress view; nested model values are detached from the owner."""
+    """A frozen progress view; public reads detach nested mutable values from the owner."""
 
     generation: int = 0
     state: RunState = 'idle'

@@ -19,6 +19,7 @@ from evaluatorq.trace_finder.classifier import (
     run_classifier,
 )
 from evaluatorq.trace_finder.models import CompiledQuery, TraceProjection, TraceClassification, TraceRecord
+from evaluatorq.trace_finder.projection import serialize_projection
 
 
 def _compiled(kind: str = 'choice') -> CompiledQuery:
@@ -71,10 +72,11 @@ def _trace() -> TraceRecord:
 
 
 def _projection() -> TraceProjection:
+    payload = {'trace_status': 'completed', 'messages': [{'role': 'user', 'content': 'I want my money back.'}]}
     return TraceProjection(
-        payload={'trace_status': 'completed', 'messages': [{'role': 'user', 'content': 'I want my money back.'}]},
-        serialized='{"messages":[],"trace_status":"completed"}',
-        estimated_tokens=16,
+        payload=payload,
+        serialized=serialize_projection(payload),
+        estimated_tokens=len(serialize_projection(payload).encode()),
         omitted_messages=0,
         omitted_bytes=0,
     )

@@ -31,6 +31,7 @@ import csv
 import io
 import json
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -138,7 +139,12 @@ def _csv_safe(value: object) -> object:
     return value
 
 
-def _settings_config(roots: list[Path] | None, profile: OrqProfile | None = None) -> list[tuple[str, str | list[str]]]:
+def _settings_config(
+    roots: list[Path] | None,
+    profile: OrqProfile | None = None,
+    *,
+    settings: DashboardSettings | None = None,
+) -> list[tuple[str, str | list[str]]]:
     """Build the read-only runtime config shown on the Settings page: the run
     stores being scanned, the default sim model, and API-key presence with a
     masked suffix (never the full value)."""
@@ -150,6 +156,7 @@ def _settings_config(roots: list[Path] | None, profile: OrqProfile | None = None
     store_paths = [str(p) for p in scan_roots] or ['—']
     from evaluatorq.dashboard.apply_ui import APPLY_MODEL_ENV, DEFAULT_APPLY_MODEL, apply_model
 
+    settings = settings or effective_settings()
     config: list[tuple[str, str | list[str]]] = [('Run stores', store_paths)]
     config.append(('Default sim model', DEFAULT_MODEL))
     model = apply_model()
@@ -162,9 +169,9 @@ def _settings_config(roots: list[Path] | None, profile: OrqProfile | None = None
     )
     config.extend((
         ('Apply-recommendations model', f'{model} ({source})'),
-        ('Orq profile', effective_settings().orq_profile or 'environment'),
+        ('Orq profile', settings.orq_profile or 'environment'),
     ))
-    if effective_settings().orq_profile is not None and profile is None:
+    if settings.orq_profile is not None and profile is None:
         config.append(('Orq profile status', 'unavailable — choose Environment or another profile'))
     if profile is not None:
         config.extend((
@@ -181,7 +188,7 @@ def _settings_config(roots: list[Path] | None, profile: OrqProfile | None = None
     config.extend([
         ('Orq host', f'{host} ({classify_host(host)})'),
         ('Orq workspace', resolve_slug() or 'from experiment URL'),
-        ('Orq project', effective_settings().orq_project_name or 'all accessible projects'),
+        ('Orq project', settings.orq_project_name or 'all accessible projects'),
     ])
     return config
 
@@ -243,7 +250,7 @@ async def _settings(req: Request) -> NotStr:
             )
     scope = await asyncio.to_thread(discover_orq_scope, settings.orq_profile)
     body = settings_body(
-        _settings_config(roots, getattr(req.app.state, 'finder_profile', None)),
+        _settings_config(roots, next((p for p in profiles if p.name == settings.orq_profile), None), settings=settings),
         settings,
         saved=req.query_params.get('saved') == '1',
         preview='profile' in req.query_params,
@@ -307,7 +314,7 @@ async def _save_settings(req: Request) -> Response | NotStr:
         body = settings_body(_settings_config(roots), values, errors=errors, profiles=profiles, scope=scope)
         return Response(page('Settings', body, active_nav='settings'), status_code=422, media_type='text/html')
 
-    save_settings(settings)
+    await asyncio.to_thread(save_settings, settings)
     req.app.state.finder_profile = next((p for p in profiles if p.name == settings.orq_profile), None)
     if settings.orq_profile is not None and req.app.state.finder_profile is None:
         logger.warning(
@@ -322,6 +329,7 @@ async def _save_settings(req: Request) -> Response | NotStr:
     if old_store is not None:
         # Retire the old store after removing it from app state so new requests cannot acquire it.
         await old_store.close()
+    req.app.state.finder_unavailable_reason = None
     return RedirectResponse('/settings?saved=1', status_code=303)
 
 
@@ -714,11 +722,23 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         A ``FastHTML`` ASGI application ready to be served or tested via
         ``starlette.testclient.TestClient``.
     """
+
+    @asynccontextmanager
+    async def lifespan(runtime: FastHTML) -> Any:
+        try:
+            yield
+        finally:
+            store = getattr(runtime.state, 'finder_store', None)
+            if store is not None:
+                await store.close()
+                del runtime.state.finder_store
+
     app = FastHTML(
         surreal=False,
         htmx=False,
         default_hdrs=False,
         pico=False,
+        lifespan=lifespan,
     )
     app.state.roots = roots
     initialize_finder_settings(app)

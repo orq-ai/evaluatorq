@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from .facets import _project_names
+from .facets import _project_names, project_labels
 from .models import FacetSelection, NumericFilters, Snapshot, TraceRecord
 
 if TYPE_CHECKING:
@@ -492,8 +492,9 @@ def build_oql(facets: FacetSelection, numeric: NumericFilters, project_names: Ma
             raise OrqSourceError(f'cannot resolve selected project id: {facets.project_id}')
         clauses.append(f'project_id in ({_oql_values([facets.project_id])})')
     elif facets.project:
-        project_ids = sorted(project_id for project_id, name in project_names.items() if name in facets.project)
-        missing = set(facets.project) - set(project_names.values())
+        labels = project_labels(project_names)
+        project_ids = sorted(project_id for project_id, label in labels.items() if label in facets.project)
+        missing = set(facets.project) - set(labels.values())
         if missing:
             raise OrqSourceError(f'cannot resolve selected project names to ids: {sorted(missing)}')
         clauses.append(f'project_id in ({_oql_values(project_ids)})')

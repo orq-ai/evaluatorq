@@ -167,6 +167,15 @@ def test_saved_project_id_does_not_expand_a_duplicate_project_name() -> None:
     assert 'project-a' not in query
 
 
+def test_project_facet_with_duplicate_name_selects_only_its_id() -> None:
+    facets = FacetSelection(project=frozenset({'Same (project-b)'}))
+
+    query = build_oql(facets, NumericFilters(), {'project-a': 'Same', 'project-b': 'Same'})
+
+    assert 'project_id in ("project-b")' in query
+    assert 'project-a' not in query
+
+
 @pytest.mark.asyncio
 async def test_selected_project_discards_cross_project_query_results_before_hydration() -> None:
     traces = FakeTraces({

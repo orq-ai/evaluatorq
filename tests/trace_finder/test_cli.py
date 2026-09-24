@@ -26,6 +26,11 @@ from evaluatorq.trace_finder import (
 )
 
 
+@pytest.fixture(autouse=True)
+def isolated_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'settings.json'))
+
+
 def _app() -> typer.Typer:
     app = typer.Typer()
     cli_module._register_subapps(app)
@@ -63,6 +68,9 @@ def _trace() -> TraceRecord:
 class FakeStore:
     def __init__(self) -> None:
         self.request: Any | None = None
+
+    async def close(self) -> None:
+        return None
 
     async def compile(self, request: Any, *, wait: bool = True) -> RunSnapshot:
         assert wait is False
@@ -214,8 +222,12 @@ def test_find_writes_json_and_prints_fake_trace(monkeypatch: Any, tmp_path: Path
     assert store.request.population.numeric.tokens_min == 100
 
 
-def test_find_profile_overrides_environment_for_both_clients_without_mutating_it(monkeypatch: Any) -> None:
+@pytest.mark.parametrize('use_flag', [True, False])
+def test_find_profile_overrides_environment_for_both_clients_without_mutating_it(
+    monkeypatch: Any, tmp_path: Path, use_flag: bool
+) -> None:
     from evaluatorq.trace_finder import cli as find_cli
+    from evaluatorq.trace_finder.settings import DashboardSettings, save_settings
 
     monkeypatch.setenv('ORQ_API_KEY', 'environment-key')
     monkeypatch.setenv('ORQ_BASE_URL', 'https://environment.example')
@@ -234,9 +246,19 @@ def test_find_profile_overrides_environment_for_both_clients_without_mutating_it
 
     monkeypatch.setattr(find_cli, 'resolve_orq_client', orq_client)
     monkeypatch.setattr(find_cli, 'resolve_llm_client', llm_client)
-    monkeypatch.setattr(find_cli, 'build_run_store', lambda *args, **kwargs: FakeStore())
+    store = FakeStore()
+    monkeypatch.setattr(find_cli, 'build_run_store', lambda *args, **kwargs: store)
 
-    result = CliRunner().invoke(_app(), ['find', 'refund requests', '--profile', 'research', '--limit', '1'])
+    if not use_flag:
+        save_settings(
+            DashboardSettings.model_validate({'orq_profile': 'research', 'orq_project_id': 'project-research'}),
+            tmp_path / 'settings.json',
+        )
+
+    args = ['find', 'refund requests', '--limit', '1']
+    if use_flag:
+        args.extend(['--profile', 'research'])
+    result = CliRunner().invoke(_app(), args)
 
     assert result.exit_code == 0, result.output
     assert calls == [
@@ -249,6 +271,8 @@ def test_find_profile_overrides_environment_for_both_clients_without_mutating_it
     ]
     assert os.environ['ORQ_API_KEY'] == 'environment-key'
     assert os.environ['ORQ_BASE_URL'] == 'https://environment.example'
+    assert store.request is not None
+    assert store.request.population.facets.project_id == ('project-research' if not use_flag else None)
 
 
 @pytest.mark.parametrize(

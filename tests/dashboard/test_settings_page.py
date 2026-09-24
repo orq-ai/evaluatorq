@@ -177,7 +177,7 @@ def test_saving_settings_invalidates_initialized_finder_store(client: TestClient
         async def close(self) -> None:
             return None
 
-    def build_store(app: Any) -> Store:
+    async def build_store(app: Any) -> Store:
         models.append(app.state.finder_settings.compiler_model)
         return Store()
 
@@ -198,6 +198,29 @@ def test_saving_settings_invalidates_initialized_finder_store(client: TestClient
     assert response.status_code == 303
     assert client.get('/find').status_code == 200
     assert models[-1] == 'new/compiler'
+
+
+def test_dashboard_shutdown_closes_finder_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    closed: list[bool] = []
+
+    class Store:
+        async def snapshot(self) -> RunSnapshot:
+            return RunSnapshot()
+
+        async def close(self) -> None:
+            closed.append(True)
+
+    async def build_store(_app: Any) -> Store:
+        return Store()
+
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'settings.json'))
+    monkeypatch.setattr(finder_routes, '_build_store', build_store)
+    app = build_app(roots=[tmp_path])
+    with TestClient(app) as client:
+        assert client.get('/find').status_code == 200
+
+    assert closed == [True]
 
 
 def test_settings_page_shows_saved_values(client: TestClient, settings_file: Path) -> None:
@@ -355,6 +378,8 @@ def test_selecting_another_profile_refreshes_its_projects_before_save(
 
     assert 'Profile preview. Choose a project, then Save to apply.' in html
     assert '<option value="staging" selected>staging' in html
+    assert 'https://staging.orq.ai' in html
+    assert 'Selected profile API key' in html
     assert 'name="orq_workspace"' in html
     assert '<option value="project-staging" selected>Staging' in html
     assert 'project-bauke' not in html
@@ -456,7 +481,7 @@ def test_missing_profile_selector_preserves_saved_choice(
     assert json.loads(settings_file.read_text())['orq_profile'] == 'prod'
     app = client.app
     assert finder_routes._api_available(app) is False
-    assert finder_routes._build_store(app) is None
+    assert asyncio.run(finder_routes._build_store(app)) is None
     assert 'Orq profile prod is unavailable' in client.get('/find').text
     html = client.get('/settings').text
     assert '<option value="prod" selected disabled>prod (unavailable)</option>' in html
@@ -504,7 +529,10 @@ def test_finder_requests_do_not_run_profile_discovery(
     app = build_app(roots=[tmp_path])
     assert calls == ['discover']
     monkeypatch.setattr(finder_routes, 'list_orq_profiles', lambda: pytest.fail('discovery ran in request'))
-    monkeypatch.setattr(finder_routes, '_build_store', lambda _app: None)
+    async def unavailable_store(_app: Any) -> None:
+        return None
+
+    monkeypatch.setattr(finder_routes, '_build_store', unavailable_store)
 
     assert TestClient(app).get('/find').status_code == 200
     assert calls == ['discover']
@@ -586,13 +614,34 @@ async def test_retired_finder_closes_only_clients_it_owns(
         finder_routes, 'resolve_llm_client', lambda **kwargs: SimpleNamespace(client=FakeLLM(), owned=owned)
     )
     monkeypatch.setattr(finder_routes, 'resolve_orq_client', lambda *args, **kwargs: FakeOrq())
-    store = finder_routes._build_store(app)
+    store = await finder_routes._build_store(app)
     assert store is not None
 
     await store.close()
     await store.close()
 
     assert closed == ['orq-async', 'orq-sync', *(['llm'] if owned else [])]
+
+
+@pytest.mark.asyncio
+async def test_finder_closes_owned_llm_when_orq_client_resolution_fails(
+    settings_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = build_app(roots=[tmp_path])
+    closed: list[bool] = []
+
+    class FakeLLM:
+        async def close(self) -> None:
+            closed.append(True)
+
+    def missing_orq(*args: object, **kwargs: object) -> object:
+        raise ImportError('orq-ai-sdk is unavailable')
+
+    monkeypatch.setattr(finder_routes, 'resolve_llm_client', lambda **kwargs: SimpleNamespace(client=FakeLLM(), owned=True))
+    monkeypatch.setattr(finder_routes, 'resolve_orq_client', missing_orq)
+
+    assert await finder_routes._build_store(app) is None
+    assert closed == [True]
 
 
 @pytest.mark.parametrize(
@@ -621,7 +670,7 @@ def test_finder_builds_clients_with_app_profile_not_environment(
     monkeypatch.setattr(finder_routes, 'resolve_orq_client', fake_orq)
     monkeypatch.setattr(finder_routes, 'build_run_store', lambda *args, **kwargs: object())
 
-    assert finder_routes._build_store(app) is not None
+    assert asyncio.run(finder_routes._build_store(app)) is not None
     expected_key = 'key-staging' if profile_name == 'staging' else 'key-prod'
     assert calls[0][1]['extra_api_key'] == expected_key
     assert calls[0][1]['orq_host'] == expected_host
@@ -661,7 +710,7 @@ def test_missing_optional_orq_sdk_leaves_finder_unavailable(
     monkeypatch.setattr(finder_routes, 'resolve_llm_client', missing_sdk)
     monkeypatch.setattr(finder_routes, 'resolve_orq_client', missing_sdk)
 
-    assert finder_routes._build_store(app) is None
+    assert asyncio.run(finder_routes._build_store(app)) is None
     assert asyncio.run(finder_routes._load_catalogue(app)) is None
 
 

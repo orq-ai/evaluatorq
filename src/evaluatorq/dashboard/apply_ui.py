@@ -473,6 +473,8 @@ def _build_clients(profile: OrqProfile | None) -> tuple[Any, Any, str]:
     api_key = profile.api_key if profile is not None else os.environ.get('ORQ_API_KEY', '')
     if not api_key:
         raise ValueError('ORQ_API_KEY is not set; the dashboard cannot reach the Orq API to apply recommendations.')
+    if '*' in api_key:
+        raise ValueError('The selected Orq credential has no usable API key; choose another profile or Environment.')
     from evaluatorq.redteam.contracts import PIPELINE_CONFIG
 
     host = (profile.server or DEFAULT_ORQ_BASE_URL) if profile is not None else None

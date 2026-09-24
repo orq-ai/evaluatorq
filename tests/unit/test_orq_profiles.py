@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from unittest.mock import patch
 
 import pytest
 
-from evaluatorq.common.orq_client import OrqProfile, apply_orq_profile, list_orq_profiles
+from evaluatorq.common.orq_client import OrqProfile, list_orq_profiles
 
 _LISTING = {
     'message': '',
@@ -45,6 +44,16 @@ def test_no_cli_means_no_profiles() -> None:
         assert list_orq_profiles() == ()
 
 
+def test_masked_profile_without_stored_key_is_skipped() -> None:
+    listing = {'profiles': [{'name': 'research', 'api_key': 'key-****', 'active': True}]}
+    with (
+        patch('evaluatorq.common.orq_client.shutil.which', return_value='/usr/bin/orq'),
+        patch('evaluatorq.common.orq_client.subprocess.run', return_value=_completed(json.dumps(listing))),
+        patch('evaluatorq.common.orq_client._stored_profile_keys', return_value={}),
+    ):
+        assert list_orq_profiles() == ()
+
+
 @pytest.mark.parametrize(
     'outcome',
     [
@@ -67,23 +76,3 @@ def test_a_failing_cli_means_no_profiles(
         else:
             run.return_value = outcome
         assert list_orq_profiles() == ()
-
-
-def test_apply_points_the_environment_at_the_profile(monkeypatch: pytest.MonkeyPatch) -> None:
-    profiles = (OrqProfile('alpha', 'key-a', 'https://a.orq.ai', False), OrqProfile('beta', 'key-b', None, True))
-    monkeypatch.setenv('ORQ_BASE_URL', 'https://env.orq.ai')
-    monkeypatch.setenv('ORQ_API_KEY', 'from-env')
-
-    assert apply_orq_profile('alpha', profiles) is True
-    assert os.environ['ORQ_API_KEY'] == 'key-a'
-    assert os.environ['ORQ_BASE_URL'] == 'https://a.orq.ai'
-
-    assert apply_orq_profile('beta', profiles) is True
-    assert os.environ['ORQ_API_KEY'] == 'key-b'
-    assert 'ORQ_BASE_URL' not in os.environ
-
-
-def test_apply_leaves_the_environment_alone_for_an_unknown_profile(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv('ORQ_API_KEY', 'from-env')
-    assert apply_orq_profile('ghost', (OrqProfile('alpha', 'key-a', None, False),)) is False
-    assert os.environ['ORQ_API_KEY'] == 'from-env'

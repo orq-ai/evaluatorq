@@ -578,6 +578,10 @@ async def test_progress_is_counted_once_and_trace_detail_is_detached() -> None:
     await runner.on_complete(classification(0))
     clock.seconds = 4
     current = await store.snapshot()
+    render = await store.snapshot_for_render()
+
+    assert render.traces[0] is store._snapshot.traces[0]
+    assert current.traces[0] is not store._snapshot.traces[0]
 
     assert current.completed == 1
     assert current.matched == 1

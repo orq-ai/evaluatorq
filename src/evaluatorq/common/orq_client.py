@@ -150,7 +150,10 @@ def list_orq_profiles(timeout: float = 5.0) -> tuple[OrqProfile, ...]:
             continue
         name, api_key = row.get('name'), row.get('api_key')
         if isinstance(name, str) and name and isinstance(api_key, str) and api_key:
-            resolved_key = stored_keys.get(name, api_key) if '*' in api_key else api_key
+            resolved_key = stored_keys.get(name) if '*' in api_key else api_key
+            if not resolved_key:
+                logger.warning('Skipping Orq profile {} because its API key is unavailable', name)
+                continue
             server = row.get('server')
             profiles.append(
                 OrqProfile(
@@ -158,19 +161,3 @@ def list_orq_profiles(timeout: float = 5.0) -> tuple[OrqProfile, ...]:
                 )
             )
     return tuple(profiles)
-
-
-def apply_orq_profile(name: str, profiles: tuple[OrqProfile, ...] | None = None) -> bool:
-    """Point ``ORQ_API_KEY`` and ``ORQ_BASE_URL`` at the named CLI profile; False when it is unknown."""
-    # ponytail: every client in the process resolves from the environment, so the
-    # profile lands there; thread explicit credentials through if a second consumer appears.
-    for profile in profiles if profiles is not None else list_orq_profiles():
-        if profile.name == name:
-            os.environ['ORQ_API_KEY'] = profile.api_key
-            if profile.server:
-                os.environ['ORQ_BASE_URL'] = profile.server
-            else:
-                os.environ.pop('ORQ_BASE_URL', None)
-            return True
-    logger.warning('Orq profile {} is not known to the orq CLI; keeping the environment credentials', name)
-    return False

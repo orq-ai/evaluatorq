@@ -71,6 +71,20 @@ def _compiled() -> CompiledQuery:
     )
 
 
+def test_review_form_preserves_zero_thresholds() -> None:
+    noul = CompiledQuery(
+        task=ClassifyQuestion(kind='noul', instructions='Did it happen?', noul_threshold=0.5, state={}),
+        selection=ValueSelection(kind='values', values=(True,)),
+    )
+    score = CompiledQuery(
+        task=ClassifyQuestion(kind='score', instructions='Score it.', criteria=['Low', 'High'], state={}),
+        selection=ThresholdSelection(kind='threshold', operator='gte', value=0.5),
+    )
+
+    assert finder_routes._compiled_from_form(noul, {'noul_threshold': '0'}).task.noul_threshold == 0
+    assert finder_routes._compiled_from_form(score, {'selection_threshold': '0'}).selection.value == 0
+
+
 class FakeStore:
     def __init__(self) -> None:
         self.trace = _trace()
@@ -188,7 +202,10 @@ def setup_finder(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'settings.json'))
     store = FakeStore()
-    monkeypatch.setattr(finder_routes, '_build_store', lambda app: store)
+    async def build_store(_app: Any) -> FakeStore:
+        return store
+
+    monkeypatch.setattr(finder_routes, '_build_store', build_store)
     return store, TestClient(build_app(roots=[tmp_path]), raise_server_exceptions=True)
 
 

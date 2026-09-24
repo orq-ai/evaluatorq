@@ -54,10 +54,19 @@ async def load_facet_catalogue(
     missing_projects = set(values_by_name['project']) - set(project_names)
     if missing_projects:
         raise ValueError(f'cannot resolve facet project ids: {sorted(missing_projects)}')
-    values_by_name['project'] = tuple(
-        sorted({project_names[project_id] for project_id in values_by_name['project'] if project_id in project_names})
-    )
+    labels = project_labels(project_names)
+    values_by_name['project'] = tuple(sorted(labels[project_id] for project_id in values_by_name['project']))
     return FacetCatalogue.model_validate(values_by_name)
+
+
+def project_labels(project_names: Mapping[str, str]) -> dict[str, str]:
+    """Disambiguate equal project names using their stable IDs."""
+    counts: dict[str, int] = {}
+    for name in project_names.values():
+        counts[name] = counts.get(name, 0) + 1
+    return {
+        project_id: f'{name} ({project_id})' if counts[name] > 1 else name for project_id, name in project_names.items()
+    }
 
 
 async def _safe_facet_values(

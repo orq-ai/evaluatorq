@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL
 
@@ -24,6 +24,8 @@ MAX_PARALLELISM = 200
 
 class DashboardSettings(BaseModel):
     """Configurable models and finder limits used by the dashboard and CLI."""
+
+    model_config = ConfigDict(extra='forbid')
 
     compiler_model: str = DEFAULT_PIPELINE_MODEL
     classifier_model: str = 'typesafe/jev-latest'

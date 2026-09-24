@@ -7,7 +7,7 @@ from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from typing import TYPE_CHECKING, Literal
 
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError
 
 from evaluatorq.common.structured_output import generate_structured
 
@@ -225,8 +225,11 @@ async def compile_query(
         if isinstance(result.parsed, CompilerWireQuery)
         else CompilerWireQuery.model_validate(result.parsed)
     )
-    compiled, numeric = wire.to_domain()
-    numeric = _tighten_strict_bounds(normalized, numeric)
+    try:
+        compiled, numeric = wire.to_domain()
+        numeric = _tighten_strict_bounds(normalized, numeric)
+    except ValidationError as exc:
+        raise CompileError(f'Compiler produced contradictory numeric bounds: {exc}') from exc
     return CompiledPlan(compiled=compiled, numeric=numeric)
 
 

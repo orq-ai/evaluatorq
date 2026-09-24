@@ -86,6 +86,31 @@ async def test_load_facet_catalogue_gathers_all_fields_and_resolves_projects() -
     assert client.projects.calls
 
 
+@pytest.mark.asyncio
+async def test_duplicate_project_names_keep_distinct_id_labels() -> None:
+    client = FakeClient()
+    original_facets = client.traces.list_facet_values_async
+
+    async def facets(**kwargs: object) -> object:
+        if kwargs['field'] == 'project_id':
+            return SimpleNamespace(values=[SimpleNamespace(value=name) for name in ('project-1', 'project-2')], has_more=False)
+        return await original_facets(**kwargs)
+
+    async def projects(**kwargs: object) -> object:
+        return SimpleNamespace(
+            data=[SimpleNamespace(project_id=name, name='Research') for name in ('project-1', 'project-2')],
+            has_more=False,
+        )
+
+    client.traces.list_facet_values_async = facets
+    client.projects.list_async = projects
+    now = datetime(2026, 9, 22, tzinfo=timezone.utc)
+
+    catalogue = await load_facet_catalogue(cast(Any, client), start=now, end=now)
+
+    assert catalogue.project == ('Research (project-1)', 'Research (project-2)')
+
+
 @pytest.mark.parametrize(('fail_status', 'has_more'), [(True, False), (False, True)])
 @pytest.mark.asyncio
 async def test_load_facet_catalogue_rejects_unavailable_or_incomplete_values(
