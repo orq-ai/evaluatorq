@@ -40,8 +40,12 @@ def orq_server_url() -> str:
     return os.environ.get('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL)
 
 
-def resolve_orq_client(api_key: str | None = None, *, server_url: str | None = None) -> Orq:
+def resolve_orq_client(api_key: str | None = None, base_url: str | None = None) -> Orq:
     """Build an Orq SDK client from ``api_key`` or ``ORQ_API_KEY``.
+
+    ``base_url`` overrides ``ORQ_BASE_URL`` for one client, so a caller holding a
+    self-hosted host in a variable does not have to set an environment variable
+    to reach it.
 
     Raises:
         ImportError: the optional ``orq-ai-sdk`` dependency is not installed.
@@ -56,7 +60,7 @@ def resolve_orq_client(api_key: str | None = None, *, server_url: str | None = N
     except ModuleNotFoundError as e:  # pragma: no cover - extra not installed
         raise ImportError(_INSTALL_HINT) from e
 
-    return Orq(api_key=key, server_url=server_url or orq_server_url())
+    return Orq(api_key=key, server_url=base_url or orq_server_url())
 
 
 async def close_orq_client(client: Orq) -> None:

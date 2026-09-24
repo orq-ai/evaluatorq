@@ -625,7 +625,7 @@ def test_finder_builds_clients_with_app_profile_not_environment(
     expected_key = 'key-staging' if profile_name == 'staging' else 'key-prod'
     assert calls[0][1]['extra_api_key'] == expected_key
     assert calls[0][1]['orq_host'] == expected_host
-    assert calls[1][1] == {'api_key': expected_key, 'server_url': expected_host}
+    assert calls[1][1] == {'api_key': expected_key, 'base_url': expected_host}
     assert os.environ['ORQ_API_KEY'] == 'from-env'
 
 
@@ -645,7 +645,7 @@ def test_apply_clients_use_profile_key_and_host(monkeypatch: pytest.MonkeyPatch)
 
     apply_ui._build_clients(_profiles()[0])
 
-    assert calls[0][1] == {'api_key': 'key-staging', 'server_url': 'https://staging.orq.ai'}
+    assert calls[0][1] == {'api_key': 'key-staging', 'base_url': 'https://staging.orq.ai'}
     assert calls[1][1]['extra_api_key'] == 'key-staging'
     assert calls[1][1]['orq_host'] == 'https://staging.orq.ai'
 

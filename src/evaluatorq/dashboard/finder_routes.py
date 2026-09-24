@@ -125,7 +125,7 @@ def _build_store(app: Any) -> RunStore | None:
         )
         orq = resolve_orq_client(
             profile.api_key if profile else None,
-            server_url=(profile.server or DEFAULT_ORQ_BASE_URL) if profile else None,
+            base_url=(profile.server or DEFAULT_ORQ_BASE_URL) if profile else None,
         )
     except (ImportError, ValueError) as exc:
         logger.warning('Find surface is unavailable because an Orq client could not be resolved: {}', exc)
@@ -174,7 +174,7 @@ async def _load_catalogue(app: Any, window_days: int | None = None) -> FacetCata
         profile = _profile(app)
         orq = resolve_orq_client(
             profile.api_key if profile else None,
-            server_url=(profile.server or DEFAULT_ORQ_BASE_URL) if profile else None,
+            base_url=(profile.server or DEFAULT_ORQ_BASE_URL) if profile else None,
         )
         catalogue = await load_facet_catalogue(
             orq,

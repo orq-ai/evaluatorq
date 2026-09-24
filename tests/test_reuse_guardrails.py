@@ -567,6 +567,72 @@ def test_new_hardcoded_class_detector_actually_fires() -> None:
     ]
 
 
+# Derived from the source, not frozen here: a hand-maintained mirror leaves the next adapter unguarded.
+def _agent_target_subclass_names() -> frozenset[str]:
+    """Every class in src/ that declares AgentTarget as a base."""
+    names: set[str] = set()
+    for path in sorted(SRC.rglob('*.py')):
+        for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
+            if isinstance(node, ast.ClassDef) and any(
+                isinstance(base, ast.Name) and base.id == 'AgentTarget' for base in node.bases
+            ):
+                names.add(node.name)
+    return frozenset(names)
+
+
+_TARGET_ADAPTER_NAMES = _agent_target_subclass_names()
+
+
+def _trailing_name(node: ast.expr) -> str | None:
+    """The final segment of a name or dotted attribute reference."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def _target_history_ladder_lines(source: str, path: str) -> list[str]:
+    """Return lines that branch on concrete AgentTarget adapter classes."""
+    tree = ast.parse(source)
+    hits: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or _dotted(node.func) != 'isinstance' or len(node.args) < 2:
+            continue
+        # A singleton argument is not a tuple and a qualified one is an Attribute, so match the trailing name.
+        argument = node.args[1]
+        classes = argument.elts if isinstance(argument, ast.Tuple) else [argument]
+        if any(_trailing_name(item) in _TARGET_ADAPTER_NAMES for item in classes):
+            hits.append(f'{path}:{node.lineno}')
+    return hits
+
+
+def test_redteam_reads_history_mode_instead_of_adapter_type_ladders() -> None:
+    hits = [
+        hit
+        for path in sorted((SRC / 'redteam').rglob('*.py'))
+        for hit in _target_history_ladder_lines(path.read_text(encoding='utf-8'), str(path.relative_to(SRC)))
+    ]
+    assert not hits, (
+        'Red-team code branches on concrete AgentTarget adapters: '
+        + ', '.join(hits)
+        + '. Read AgentTarget.history_mode (ConversationHistoryMode) instead; the capability contract '
+        'keeps new adapters from requiring another isinstance ladder.'
+    )
+
+
+def test_target_history_ladder_detector_actually_fires() -> None:
+    # Built from a name the source declares, so the detector cannot pass against an adapter that is gone.
+    assert _TARGET_ADAPTER_NAMES, 'No AgentTarget subclass found in src/; the detector would match nothing.'
+    adapter = sorted(_TARGET_ADAPTER_NAMES)[0]
+    source = f'if isinstance(target, ({adapter}, SomethingElse)):\n    pass\n'
+    assert _target_history_ladder_lines(source, 'x.py') == ['x.py:1']
+    # The bare and import-qualified forms are the same ladder and used to slip through.
+    assert _target_history_ladder_lines(f'if isinstance(target, {adapter}):\n    pass\n', 'x.py') == ['x.py:1']
+    assert _target_history_ladder_lines(f'if isinstance(target, mod.{adapter}):\n    pass\n', 'x.py') == ['x.py:1']
+    assert _target_history_ladder_lines('if isinstance(target, AgentTarget):\n    pass\n', 'x.py') == []
+
+
 # --- an llm_config consumed in part, silently --------------------------------
 # `FirstMessageGenerator` dropped a caller's `max_tokens` for as long as it existed, because it never went through `generate_structured`.
 _SIM_GENERATORS = SRC / 'simulation' / 'generators'

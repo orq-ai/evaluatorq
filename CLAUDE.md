@@ -138,6 +138,8 @@ Read the directory itself for the file list — it is always current, this file 
 | CLI output, errors, JSON, width | `common/cli_*.py` | bespoke `typer.echo` formatting |
 | Normalising agent output shapes | `common.output_adapters`, `common.messages` | per-surface `isinstance` ladders |
 | Turning message content or a tool result into text | `contracts.content_to_text` / `tool_result_to_text` | `str()` on a `str \| list[ContentPart]` — it renders a Python repr that a judge then scores |
+| Rendering a whole message list as one text blob | `common.messages.messages_to_text` | `''.join(...)` over `content` — it glues turns into one word, drops `tool_calls` (so an agent that acted scores as silent) and lets tool JSON read as the agent's answer |
+| Turning a `TraceInput` or loaded traces into rows | `common.trace_input.load_traces` (fetch + one `partition_traces` log) | `fetch_traces` then a hand-rolled usable/failed split |
 | Building an Orq SDK client | `common.orq_client.resolve_orq_client` | `Orq(...)` anywhere but that module |
 | Rendering a transcript as Responses `input` | `openresponses.input_items.messages_to_responses_input` | a hand-built `{'role', 'content'}` list — an assistant turn needs `output_text` parts or the Orq router **silently drops it** |
 

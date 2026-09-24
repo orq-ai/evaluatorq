@@ -255,7 +255,7 @@ def find(
             resolved = resolve_llm_client(require_orq=True, max_retries=0)
         else:
             host = selected.server or DEFAULT_ORQ_BASE_URL
-            orq = resolve_orq_client(selected.api_key, server_url=host)
+            orq = resolve_orq_client(selected.api_key, base_url=host)
             resolved = resolve_llm_client(
                 extra_api_key=selected.api_key, orq_host=host, require_orq=True, max_retries=0
             )

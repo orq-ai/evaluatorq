@@ -180,6 +180,7 @@ async def test_find_polling_timeout_cancels_store(monkeypatch: Any) -> None:
 def test_find_writes_json_and_prints_fake_trace(monkeypatch: Any, tmp_path: Path) -> None:
     from evaluatorq.trace_finder import cli as find_cli
 
+    monkeypatch.setenv('COLUMNS', '160')
     store = FakeStore()
     monkeypatch.setattr(find_cli, 'resolve_orq_client', lambda: object())
     monkeypatch.setattr(find_cli, 'resolve_llm_client', lambda **_: SimpleNamespace(client=object()))
@@ -235,7 +236,7 @@ def test_find_profile_overrides_environment_for_both_clients_without_mutating_it
 
     assert result.exit_code == 0, result.output
     assert calls == [
-        ('orq', ('profile-key',), {'server_url': 'https://profile.example'}),
+        ('orq', ('profile-key',), {'base_url': 'https://profile.example'}),
         (
             'llm',
             (),

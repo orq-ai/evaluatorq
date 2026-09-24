@@ -15,6 +15,7 @@ If this file rots, `docs-coverage` reports stale gaps and people stop reading it
 | **target kind** | `_BACKEND_REGISTRY` in `redteam/backends/registry.py` + CLI `--target` prefixes | `agent:<key>`, `deployment:<key>`, direct OpenAI backend, custom `AgentTarget` / `CallableTarget`, `CodingAgentTarget` (claude / codex / opencode × direct / orq launcher) |
 | **mode** | `--mode` on `eq redteam run` | `dynamic`, `static`, `hybrid` |
 | **data source** | `evaluatorq()` / `red_team()` dataset params, **plus `replay`** (see below) | inline `DataPoint`s, ORQ dataset id, HuggingFace dataset, generated, replay of a stored run |
+| **trace replay position** | `redteam.datapoints_from_traces(start_from=...)` | `first_user` · `last_assistant` |
 | **evaluator kind** | `VULNERABILITY_EVALUATOR_REGISTRY`, `SIMULATION_EVALUATORS`, pairwise types | built-in scorer, LLM jury, pairwise jury, custom `Evaluator` |
 | **reasoning-effort scope** | fixed (see below) | target under test · pipeline attacker/judge · simulator's own calls · core-evaluation judge |
 | **API endpoint** | `LLMCallConfig.api` / `EvaluatorConfig.api` (`contracts.py`, `redteam/contracts.py`) | `chat_completions` · `responses` |
@@ -68,10 +69,12 @@ Marked `N/A` in the matrix, never reported as a gap.
 | `generate_and_simulate()` × data source `ORQ dataset id` | generation *is* the data source |
 | Python-only entry points × surface `CLI` | `build_report()`, `wrap_simulation_agent()`, `deployment()` / `invoke()` have no `eq` command |
 | `evaluatorq()` × target kind | it scores rows you already have; the target is your own task function |
+| trace replay position × entry points other than `red_team()` | only the red-team trace-seed adapter chooses where an imported conversation resumes |
+| trace replay position × modes `static` / `hybrid` | trace seed datapoints require the dynamic red-team pipeline; `red_team()` rejects them with another mode |
+| trace replay position × data sources other than trace-derived datapoints | `start_from` belongs to `datapoints_from_traces()` and is not carried by ordinary inline rows, datasets, generated rows, or stored-run replay |
 | dashboard × target kind | it reads saved artifacts; no target is invoked |
 | dashboard × entry points that write no artifacts | nothing lands in the run store, so there is nothing to browse |
 | `red_team()` × target kind `Vercel` | Vercel AI SDK agents are a simulation target kind only |
-| `red_team()` × data source `inline DataPoint`s | `dataset` takes a `Path` or specifier string; there is no inline-datapoint parameter |
 | `static` mode × generated data source | static mode consumes a fixed dataset by definition |
 | any `mode` × data source `replay` | `previous_run=` restores the stored run's pipeline and raises if `mode` is also supplied; the pair cannot be expressed |
 | CLI × custom `AgentTarget` | custom targets are constructed in Python; the CLI resolves string identifiers |

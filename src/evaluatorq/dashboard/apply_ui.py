@@ -477,7 +477,7 @@ def _build_clients(profile: OrqProfile | None) -> tuple[Any, Any, str]:
 
     host = (profile.server or DEFAULT_ORQ_BASE_URL) if profile is not None else None
     try:
-        orq_client = resolve_orq_client(api_key, server_url=host)
+        orq_client = resolve_orq_client(api_key, base_url=host)
     except ImportError as e:  # pragma: no cover - extra not installed
         raise ValueError("The 'orq-ai-sdk' package is required to apply recommendations (install extra 'orq').") from e
     llm_client = resolve_llm_client(

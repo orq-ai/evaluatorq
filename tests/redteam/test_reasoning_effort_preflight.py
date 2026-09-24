@@ -134,6 +134,8 @@ async def test_bare_agent_target_is_warned_not_raised(monkeypatch: pytest.Monkey
     import logging
     from unittest.mock import AsyncMock
 
+    from evaluatorq.redteam import runner as runner_module
+
     # The run proceeds past the pre-flight (it warns, not raises), so
     # everything downstream — attack generation, target calls — would try to
     # reach a real LLM host without this. Fail fast instead of hitting the
@@ -141,6 +143,7 @@ async def test_bare_agent_target_is_warned_not_raised(monkeypatch: pytest.Monkey
     # real connection attempt as a test failure.
     no_network_client = AsyncMock()
     no_network_client.chat.completions.create = AsyncMock(side_effect=RuntimeError('network disabled in this test'))
+    monkeypatch.setattr(runner_module, 'send_results_to_orq', AsyncMock(return_value=None))
 
     with caplog.at_level(logging.WARNING):
         # No ValueError from the pre-flight itself: it warns and lets the run

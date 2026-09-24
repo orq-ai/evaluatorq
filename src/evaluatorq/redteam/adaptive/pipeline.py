@@ -23,13 +23,19 @@ from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, Job, job
 from evaluatorq.common.jury import append_jury_summary, attach_jury_raw_output
+from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.target_call import call_target_with_retry, close_target
 from evaluatorq.common.thread_context import build_thread_id, conversation_thread
 from evaluatorq.common.tracing import set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentResponse, Message
 from evaluatorq.redteam.adaptive.attack_generator import generate_attack_prompt, generate_objective
 from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
-from evaluatorq.redteam.adaptive.orchestrator import MultiTurnOrchestrator, _get_active_progress
+from evaluatorq.redteam.adaptive.orchestrator import (
+    MultiTurnOrchestrator,
+    _get_active_progress,
+    _merge_usage,
+    replay_seed_context,
+)
 from evaluatorq.redteam.adaptive.strategy_planner import (
     plan_strategies_for_categories,
     plan_strategies_for_vulnerabilities,
@@ -40,6 +46,7 @@ from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
     AttackOutput,
     AttackStrategy,
+    AttackTechnique,
     DeliveryMethod,
     EvaluatorConfig,
     EvaluatorqEvaluatorConfig,
@@ -53,6 +60,7 @@ from evaluatorq.redteam.contracts import (
     TurnType,
     Vulnerability,
 )
+from evaluatorq.redteam.traces import TRACE_SEED_MESSAGES_KEY, TRACE_START_FROM_KEY, TraceStart, parse_trace_seed
 from evaluatorq.redteam.tracing import annotate_current_span, set_jury_span_attrs, with_redteam_span
 from evaluatorq.redteam.vulnerability_registry import (
     get_primary_category,
@@ -110,6 +118,34 @@ def _error_codes(turns: list[Turn]) -> str:
     return ', '.join(sorted({t.target.error.code for t in turns if t.target.error and t.target.error.code})) or 'none'
 
 
+# The only trace-derived keys `redteam/` reads back; carrying the rest copies the whole transcript per strategy.
+_TRACE_SEED_PROJECTED_KEYS = (TRACE_SEED_MESSAGES_KEY, TRACE_START_FROM_KEY, 'source_trace_id')
+
+
+def expand_trace_seed_datapoints(seeds: list[DataPoint] | None, dynamic_datapoints: list[DataPoint]) -> list[DataPoint]:
+    """Cross each trace seed with the already-selected attack strategies.
+
+    Only the three keys anything downstream reads are carried from the seed
+    (see `_TRACE_SEED_PROJECTED_KEYS`); the seed's other fields (the full
+    imported transcript, recorded output, retrievals, ...) are dropped rather
+    than copied into every row. The seed slice wins the merge — caller-supplied
+    values win merges, and the seed is what identifies which trace this row
+    replays, not the strategy.
+    """
+    if seeds is None:
+        return dynamic_datapoints
+    expanded: list[DataPoint] = []
+    for seed_index, seed in enumerate(seeds):
+        seed_slice = {key: seed.inputs[key] for key in _TRACE_SEED_PROJECTED_KEYS if key in seed.inputs}
+        for attack in dynamic_datapoints:
+            inputs = {**attack.inputs, **seed_slice}
+            seed_id = seed.inputs.get('source_trace_id') or seed.inputs.get('id') or 'seed'
+            attack_id = attack.inputs.get('id', 'attack')
+            inputs['id'] = f'trace_{seed_id}_{seed_index}_{attack_id}'
+            expanded.append(DataPoint(inputs=inputs, expected_output=attack.expected_output))
+    return expanded
+
+
 async def generate_dynamic_datapoints_for_vulnerabilities(
     agent_context: AgentContext,
     vulnerabilities: list[Vulnerability],
@@ -127,6 +163,7 @@ async def generate_dynamic_datapoints_for_vulnerabilities(
     agent_capabilities: AgentCapabilities | None = None,
     strategy_names: set[str] | None = None,
     delivery_methods: set[DeliveryMethod | str] | None = None,
+    attack_techniques: set[AttackTechnique] | None = None,
 ) -> tuple[list[DataPoint], dict[str, Any]]:
     """Generate evaluatorq DataPoints for dynamic red teaming, keyed by Vulnerability enum.
 
@@ -163,6 +200,7 @@ async def generate_dynamic_datapoints_for_vulnerabilities(
         agent_capabilities=agent_capabilities,
         strategy_names=strategy_names,
         delivery_methods=delivery_methods,
+        attack_techniques=attack_techniques,
     )
 
     # Convert Vulnerability-keyed metadata to string keys for external consumption
@@ -206,6 +244,7 @@ async def generate_dynamic_datapoints(
     agent_capabilities: AgentCapabilities | None = None,
     strategy_names: set[str] | None = None,
     delivery_methods: set[DeliveryMethod | str] | None = None,
+    attack_techniques: set[AttackTechnique] | None = None,
 ) -> tuple[list[DataPoint], dict[str, Any]]:
     """Generate evaluatorq DataPoints for dynamic red teaming.
 
@@ -256,6 +295,7 @@ async def generate_dynamic_datapoints(
             agent_capabilities=agent_capabilities,
             strategy_names=strategy_names,
             delivery_methods=delivery_methods,
+            attack_techniques=attack_techniques,
         )
         # Remap metadata keys from vulnerability IDs back to original category strings
         # so callers that expect category-keyed metadata continue to work.
@@ -285,6 +325,7 @@ async def generate_dynamic_datapoints(
         agent_capabilities=agent_capabilities,
         strategy_names=strategy_names,
         delivery_methods=delivery_methods,
+        attack_techniques=attack_techniques,
     )
 
     datapoints = []
@@ -309,6 +350,63 @@ async def generate_dynamic_datapoints(
 
     logger.debug(f'Generated {len(datapoints)} dynamic datapoints across {len(categories)} categories')
     return datapoints, filtering_metadata
+
+
+def _trace_seed_from_inputs(inputs: dict[str, Any]) -> tuple[list[Message] | None, TraceStart | None]:
+    """Validate and deserialize optional trace replay state from a datapoint.
+
+    Delegates to the shared `parse_trace_seed` (`redteam/traces.py`) so this
+    per-attack read can never disagree with the `red_team()` API-boundary
+    precheck on what a valid trace seed looks like. `required=False`: most
+    dynamic rows are not trace seeds at all, so an absent `trace_seed_messages`
+    is `(None, None)` here rather than a raise. Once it IS present,
+    `trace_start_from` is required — never defaulted (see finding 5: a
+    silent `first_user` default here used to replay an imported
+    `last_assistant` transcript as a single opening turn with no error).
+    """
+    return parse_trace_seed(inputs, label='datapoint', required=False)
+
+
+def _register_job_target(
+    target: Any,
+    cleanup_stack: contextlib.AsyncExitStack,
+    *,
+    agent_context: AgentContext,
+    memory_entity_ids: list[str] | None,
+) -> None:
+    """Register target cleanup, memory tracking, and optional trace model metadata."""
+    cleanup_stack.push_async_callback(close_target, target)
+    target_memory_id = getattr(target, 'memory_entity_id', None)
+    if target_memory_id is not None and memory_entity_ids is not None:
+        memory_entity_ids.append(target_memory_id)
+    if hasattr(target, 'model') and agent_context.model:
+        object.__setattr__(target, 'model', agent_context.model)  # type: ignore[misc]
+
+
+def _effective_max_turns(strategy: AttackStrategy, max_turns: int) -> int:
+    return 1 if strategy.turn_type == TurnType.SINGLE else max_turns
+
+
+def _is_fixed_template_attack(strategy: AttackStrategy) -> bool:
+    return bool(strategy.prompt_template) and strategy.turn_type == TurnType.SINGLE
+
+
+def _serialize_dynamic_result(
+    result: AttackOutput,
+    *,
+    trace_seeded: bool,
+    effective_max_turns: int,
+    thread_id: str | None,
+) -> dict[str, Any]:
+    """Serialize an attack while preserving a zero-turn trace bootstrap failure."""
+    payload = result.model_dump(mode='json')
+    if trace_seeded and result.error is not None and not result.turns:
+        payload['turns'] = 0
+    return {**payload, 'max_turns': effective_max_turns, 'thread_id': thread_id}
+
+
+def _safe_agent_key(agent_key: str) -> str:
+    return ''.join(ch if ch.isalnum() or ch in {'-', '_'} else '-' for ch in agent_key).strip('-')
 
 
 def create_dynamic_redteam_job(
@@ -349,7 +447,7 @@ def create_dynamic_redteam_job(
     """
     cfg = pipeline_config or PIPELINE_CONFIG
     resolved_backend: Backend = backend if backend is not None else resolve_backend('orq', pipeline_config=cfg)
-    safe_agent_key = ''.join(ch if ch.isalnum() or ch in {'-', '_'} else '-' for ch in agent_key).strip('-')
+    safe_agent_key = _safe_agent_key(agent_key)
     job_name = f'redteam:dynamic:{safe_agent_key or "agent"}'
 
     @job(job_name)
@@ -360,7 +458,7 @@ def create_dynamic_redteam_job(
         objective = str(inputs['objective'])
         category = str(inputs['category'])
         vulnerability = str(inputs.get('vulnerability', ''))
-        effective_max_turns = 1 if strategy.turn_type == TurnType.SINGLE else max_turns
+        effective_max_turns = _effective_max_turns(strategy, max_turns)
         thread_id = build_thread_id(run_id, safe_agent_key, _row)
 
         async with (
@@ -377,23 +475,21 @@ def create_dynamic_redteam_job(
             contextlib.AsyncExitStack() as cleanup_stack,
         ):
             target = resolved_backend.create_target(agent_key=agent_key)
-            # Register HTTP-client cleanup for targets that own a client
-            # (e.g. OrqResponsesTarget). Plain callable targets have no
-            # close(); duck-type to avoid coupling.
-            cleanup_stack.push_async_callback(close_target, target)
-            # Targets own their memory_entity_id — track it for cleanup.
-            target_memory_id = getattr(target, 'memory_entity_id', None)
-            if target_memory_id is not None and memory_entity_ids is not None:
-                memory_entity_ids.append(target_memory_id)
-            # Inject model info for tracing if the target supports it
-            if hasattr(target, 'model') and agent_context.model:
-                object.__setattr__(target, 'model', agent_context.model)  # type: ignore[misc]
+            _register_job_target(
+                target,
+                cleanup_stack,
+                agent_context=agent_context,
+                memory_entity_ids=memory_entity_ids,
+            )
+            seed_messages, trace_start_from = _trace_seed_from_inputs(inputs)
 
-            if strategy.prompt_template and strategy.turn_type == TurnType.SINGLE:
+            if _is_fixed_template_attack(strategy):
                 # Fixed template: fill and send directly (no adversarial LLM needed)
                 t0 = time.time()
                 prompt = generate_attack_prompt(strategy, agent_context)
                 token_usage = None
+                seed_context: list[Message] = []
+                bootstrap_usage = None
 
                 @asynccontextmanager
                 async def _attempt_span(i: int):
@@ -420,10 +516,47 @@ def create_dynamic_redteam_job(
                         },
                     )
 
+                # Opened before the seed replay: a bootstrap sent outside this scope carries no thread id.
                 with conversation_thread(thread_id) as thread_id:
+                    if seed_messages is not None:
+                        seed_context, bootstrap_usage, bootstrap_error = await replay_seed_context(
+                            target,
+                            seed_messages,
+                            trace_start_from or TraceStart.FIRST_USER,
+                            target_agent_timeout_ms=cfg.target_agent_timeout_ms,
+                            max_target_retries=cfg.max_target_retries,
+                            map_error=resolved_backend.map_error,
+                        )
+                        if bootstrap_error is not None:
+                            result_dict = AttackOutput(
+                                turns=[],
+                                objective_achieved=False,
+                                duration_seconds=time.time() - t0,
+                                token_usage=bootstrap_usage,
+                                token_usage_adversarial=None,
+                                token_usage_target=None,
+                                token_usage_bootstrap=bootstrap_usage,
+                                seed_context=seed_context,
+                                system_prompt=None,
+                                max_turns=effective_max_turns,
+                                **bootstrap_error,
+                                category=category,
+                                vulnerability=vulnerability,
+                            )
+                            _set_attack_span_attrs(attack_span, result_dict)
+                            output_payload = result_dict.model_dump(mode='json')
+                            output_payload['turns'] = 0
+                            active_progress = _get_active_progress()
+                            if active_progress is not None:
+                                await active_progress.finish_attack(None)
+                            return {
+                                **output_payload,
+                                'max_turns': effective_max_turns,
+                                'thread_id': thread_id,
+                            }
                     result = await call_target_with_retry(
                         target,
-                        [Message(role='user', content=prompt)],
+                        [*seed_context, Message(role='user', content=prompt)],
                         target_agent_timeout_ms=cfg.target_agent_timeout_ms,
                         max_target_retries=cfg.max_target_retries,
                         map_error=resolved_backend.map_error,
@@ -448,9 +581,11 @@ def create_dynamic_redteam_job(
                     ],
                     objective_achieved=False,
                     duration_seconds=time.time() - t0,
-                    token_usage=token_usage,
+                    token_usage=_merge_usage(token_usage, bootstrap_usage),
                     token_usage_adversarial=None,
                     token_usage_target=token_usage,
+                    token_usage_bootstrap=bootstrap_usage,
+                    seed_context=seed_context,
                     system_prompt=None,
                     **error_fields,
                     category=category,
@@ -495,6 +630,8 @@ def create_dynamic_redteam_job(
                         objective=objective,
                         agent_context=agent_context,
                         max_turns=effective_max_turns,
+                        seed_messages=seed_messages,
+                        trace_start_from=trace_start_from,
                     )
             except asyncio.TimeoutError as e:
                 tb = traceback.format_exc(limit=8)
@@ -551,7 +688,12 @@ def create_dynamic_redteam_job(
             if result_dict.final_response:
                 set_span_attrs(attack_span, {'output': truncate_for_span(result_dict.final_response)})
             _set_attack_span_attrs(attack_span, result_dict)
-            return {**result_dict.model_dump(mode='json'), 'max_turns': effective_max_turns, 'thread_id': thread_id}
+            return _serialize_dynamic_result(
+                result_dict,
+                trace_seeded=seed_messages is not None,
+                effective_max_turns=effective_max_turns,
+                thread_id=thread_id,
+            )
 
     return dynamic_job
 
@@ -661,7 +803,17 @@ def create_dynamic_evaluator(
                     f'codes: {_error_codes(output.turns)}) — nothing to evaluate'
                 ),
             )
-        input_messages = [{'role': 'user', 'content': t.attacker.text} for t in scorable_turns]
+        # Turn 1 refers back into the imported conversation, and an unresolvable reference defaults to RESISTANT.
+        # to_chat_completion, not a {role, content} flatten: that drops tool_calls and empties a tool-using turn.
+        seed_context_messages: list[dict[str, Any]] = []
+        for message in output.seed_context:
+            rendered = message.to_chat_completion()
+            rendered['content'] = f'[imported trace context] {coerce_content_text(message.content)}'
+            seed_context_messages.append(rendered)
+        input_messages = [
+            *seed_context_messages,
+            *({'role': 'user', 'content': t.attacker.text} for t in scorable_turns),
+        ]
         output_messages = [item for t in scorable_turns for item in t.target.output]
 
         # Prefer vulnerability-first path when a valid Vulnerability enum can be resolved

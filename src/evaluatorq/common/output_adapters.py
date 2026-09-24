@@ -11,11 +11,54 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from evaluatorq.common.messages import coerce_content_text
-from evaluatorq.contracts import AgentResponse, OutputMessage, TextOutputItem, ToolCallOutputItem
+from evaluatorq.common.messages import coerce_content_text, messages_to_text
+from evaluatorq.contracts import (
+    AgentResponse,
+    Message,
+    OutputMessage,
+    ReasoningOutputItem,
+    TextOutputItem,
+    ToolCallOutputItem,
+)
+from evaluatorq.openresponses.otel_messages import is_responses_item
 
 if TYPE_CHECKING:
     from evaluatorq.types import Output
+
+
+_MESSAGE_SHAPE_KEYS = frozenset({
+    'role',
+    'content',
+    'tool_calls',
+    'tool_call_id',
+    'function_call',
+    'function_call_output',
+})
+
+
+_CONTENT_PART_TYPES = frozenset({'text', 'input_text', 'output_text', 'refusal'})
+
+
+def _is_message_shape(item: Any) -> bool:
+    """Whether a list element is a chat message rather than a structured item.
+
+    A Responses item carries ``type`` and a chat message never does, so a
+    ``{'type': 'message', 'role': ...}`` item is not read as a chat turn.
+    """
+    if isinstance(item, Message):
+        return True
+    return isinstance(item, dict) and 'type' not in item and bool(_MESSAGE_SHAPE_KEYS.intersection(item))
+
+
+def _agent_response_text(response: AgentResponse) -> str:
+    """Render text and tool calls in the order the agent produced them."""
+    turns: list[dict[str, Any]] = []
+    for item in response.output:
+        if isinstance(item, TextOutputItem):
+            turns.append({'role': 'assistant', 'content': item.text})
+        elif isinstance(item, ToolCallOutputItem):
+            turns.append({'role': 'assistant', 'tool_calls': [item]})
+    return messages_to_text(turns)
 
 
 def output_to_text(output: Any) -> str:
@@ -23,13 +66,29 @@ def output_to_text(output: Any) -> str:
     if output is None:
         return ''
     if isinstance(output, AgentResponse):
-        return output.text
+        return _agent_response_text(output)
     if isinstance(output, str):
         return output
+    if isinstance(output, list) and (not output or all(_is_message_shape(item) for item in output)):
+        # messages_to_text, not a bare join: dropping tool calls hands the judge an empty string for an agent that acted.
+        return messages_to_text(output)
+    if isinstance(output, list) and all(is_responses_item(item) for item in output):
+        return _agent_response_text(AgentResponse.from_output_items(output))
+    if isinstance(output, list) and all(
+        isinstance(item, dict) and item.get('type') in _CONTENT_PART_TYPES for item in output
+    ):
+        return coerce_content_text(output)
+    if isinstance(output, list):
+        # A list of non-message mappings is not a transcript: every element would read as a content-less turn.
+        try:
+            return json.dumps(output, indent=2, default=str)
+        except Exception as exc:
+            logger.warning('output_to_text: json.dumps failed for a structured list, falling back to str(): {}', exc)
+            return str(output)
     if isinstance(output, dict):
         if output.get('object') == 'response':
             try:
-                return AgentResponse.from_openresponses(output).text
+                return _agent_response_text(AgentResponse.from_openresponses(output))
             except Exception as exc:
                 logger.warning('output_to_text: from_openresponses failed, falling back to json: {}', exc)
         try:
@@ -62,6 +121,72 @@ def output_error_text(output: Any) -> str | None:
         message = getattr(error, 'message', None)
         return str(message) if message is not None else str(error)
     return None
+
+
+def _message_has_meaningful_output(message: Message | dict[str, Any]) -> bool:
+    """Return whether a known message shape carries a response or tool action."""
+    if isinstance(message, Message):
+        return bool(message.tool_calls) or bool(coerce_content_text(message.content).strip())
+
+    role = message.get('role')
+    if not isinstance(role, str):
+        # An unfamiliar provider shape is unknown structured output, not a blank one.
+        return bool(message)
+    if message.get('tool_calls') or message.get('function_call') or message.get('function_call_output'):
+        return True
+    if 'content' in message:
+        content = message.get('content')
+        if content is None:
+            return any(key not in {'role', 'content'} for key in message)
+        return bool(coerce_content_text(content).strip())
+    # The role-specific branches that used to sit here computed exactly this.
+    return any(key not in {'role', 'name'} for key in message)
+
+
+def _output_message_has_meaningful_output(message: OutputMessage) -> bool:
+    """Return whether a canonical output item carries text or a tool call."""
+    if isinstance(message, ToolCallOutputItem):
+        return True
+    if isinstance(message, (TextOutputItem, ReasoningOutputItem)):
+        return bool(message.text.strip())
+    return True
+
+
+def has_meaningful_output(output: Any) -> bool:
+    """Return whether *output* is a non-blank recorded response.
+
+    Known text-bearing message shapes reject whitespace-only assistant content, while
+    tool calls and unfamiliar non-empty structured shapes count as meaningful. This
+    lets trace replay fail on a genuinely blank response without discarding provider
+    fields that evaluatorq does not know how to interpret yet.
+    """
+    if output is None:
+        return False
+    if isinstance(output, AgentResponse):
+        if output.error is not None:
+            return False
+        return any(_output_message_has_meaningful_output(item) for item in output.output)
+    if isinstance(output, str):
+        return bool(output.strip())
+    if isinstance(output, list):
+        if not output:
+            return False
+        if all(isinstance(item, (Message, dict)) for item in output):
+            return any(_message_has_meaningful_output(item) for item in output)
+        if all(isinstance(item, (TextOutputItem, ToolCallOutputItem, ReasoningOutputItem)) for item in output):
+            return any(_output_message_has_meaningful_output(item) for item in output)
+        return True
+    if isinstance(output, dict):
+        if output.get('object') == 'response' and 'output' in output:
+            response_output = output.get('output')
+            return (
+                has_meaningful_output(response_output) if isinstance(response_output, list) else bool(response_output)
+            )
+        if 'response' in output or 'tool_calls' in output:
+            response = output.get('response')
+            return bool(coerce_content_text(response).strip()) or bool(output.get('tool_calls'))
+        return bool(output)
+    return True
 
 
 def _adapt_tool_call(tc: Any) -> ToolCallOutputItem:

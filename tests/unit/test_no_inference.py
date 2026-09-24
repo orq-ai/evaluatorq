@@ -1,8 +1,12 @@
 """RES-993: no-inference mode replays pre-recorded responses to the evaluators."""
 
+import importlib
+from unittest.mock import AsyncMock
+
 import pytest
 
-from evaluatorq import evaluatorq
+from evaluatorq import Trace, TraceInput, evaluatorq
+from evaluatorq.contracts import Message
 from evaluatorq.evaluatorq import check_pass_failures, extract_recorded_response
 from evaluatorq.types import DataPoint, EvaluationResult, ScorerParameter
 
@@ -136,3 +140,213 @@ async def test_inference_true_without_jobs_raises():
             print_results=False,
             _send_results=False,
         )
+
+
+TRACE = Trace(
+    trace_id='trace-1',
+    input_messages=[Message(role='user', content='question')],
+    output_messages=[Message(role='assistant', content='recorded answer')],
+)
+
+INPUT_ONLY_TRACE = Trace(
+    trace_id='trace-input-only',
+    input_messages=[Message(role='user', content='question')],
+)
+
+TRACE_WITH_EMPTY_SELECTED_OUTPUT = Trace(
+    trace_id='trace-empty-selected-output',
+    input_messages=[
+        Message(role='user', content='earlier question'),
+        Message(role='assistant', content='earlier answer'),
+        Message(role='user', content='current question'),
+    ],
+)
+
+
+@pytest.mark.asyncio
+async def test_trace_input_fetches_once_and_scores_recorded_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    trace_input_module = importlib.import_module('evaluatorq.common.trace_input')
+    fetch = AsyncMock(return_value=[TRACE])
+    captured: list[object] = []
+
+    async def capture(params: ScorerParameter) -> EvaluationResult:
+        captured.append(params['output'])
+        return EvaluationResult(value=1)
+
+    monkeypatch.setattr(trace_input_module, 'fetch_traces', fetch)
+
+    results = await evaluatorq(
+        'trace-eval',
+        data=TraceInput(trace_id='trace-1'),
+        inference=False,
+        evaluators=[{'name': 'capture', 'scorer': capture}],
+        print_results=False,
+        _send_results=False,
+    )
+
+    fetch.assert_awaited_once()
+    assert captured == [TRACE.to_datapoint().inputs['recorded_output']]
+    assert results[0].job_results is not None
+    assert results[0].job_results[0].output == TRACE.output_messages
+
+
+@pytest.mark.asyncio
+async def test_trace_input_rejects_empty_recorded_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    trace_input_module = importlib.import_module('evaluatorq.common.trace_input')
+    fetch = AsyncMock(return_value=[INPUT_ONLY_TRACE])
+    monkeypatch.setattr(trace_input_module, 'fetch_traces', fetch)
+
+    results = await evaluatorq(
+        'trace-eval',
+        data=TraceInput(trace_id='trace-input-only'),
+        inference=False,
+        evaluators=[],
+        print_results=False,
+        _send_results=False,
+    )
+
+    fetch.assert_awaited_once()
+    assert results[0].job_results is not None
+    job_result = results[0].job_results[0]
+    assert job_result.output is None
+    assert job_result.error is not None
+    assert 'no recorded assistant response' in job_result.error
+
+
+@pytest.mark.asyncio
+async def test_trace_input_rejects_blank_structured_recorded_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    trace_input_module = importlib.import_module('evaluatorq.common.trace_input')
+    fetch = AsyncMock(return_value=[
+        Trace(
+            trace_id='trace-blank-structured',
+            input_messages=[Message(role='user', content='question')],
+            output_messages=[Message(role='assistant', content='   ')],
+        )
+    ])
+    monkeypatch.setattr(trace_input_module, 'fetch_traces', fetch)
+
+    results = await evaluatorq(
+        'trace-eval',
+        data=TraceInput(trace_id='trace-blank-structured'),
+        inference=False,
+        evaluators=[],
+        print_results=False,
+        _send_results=False,
+    )
+
+    assert results[0].job_results is not None
+    job_result = results[0].job_results[0]
+    assert job_result.output is None
+    assert job_result.error is not None
+    assert 'no recorded assistant response' in job_result.error
+
+
+@pytest.mark.asyncio
+async def test_trace_input_preserves_structured_tool_output() -> None:
+    recorded_output = [
+        {
+            'role': 'assistant',
+            'content': None,
+            'tool_calls': [
+                {
+                    'id': 'call-1',
+                    'type': 'function',
+                    'function': {'name': 'search', 'arguments': '{}'},
+                }
+            ],
+        }
+    ]
+
+    seen: list[object] = []
+
+    async def capture(params: ScorerParameter) -> EvaluationResult:
+        seen.append(params['output'])
+        return EvaluationResult(value=1)
+
+    results = await evaluatorq(
+        'trace-eval',
+        data=[DataPoint(inputs={'recorded_output': recorded_output, 'messages': []})],
+        inference=False,
+        evaluators=[{'name': 'capture', 'scorer': capture}],
+        print_results=False,
+        _send_results=False,
+    )
+
+    assert seen == [recorded_output]
+    assert results[0].job_results is not None
+    assert results[0].job_results[0].output is not None
+
+
+@pytest.mark.asyncio
+async def test_trace_input_does_not_replay_earlier_assistant_when_output_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trace_input_module = importlib.import_module('evaluatorq.common.trace_input')
+    fetch = AsyncMock(return_value=[TRACE_WITH_EMPTY_SELECTED_OUTPUT])
+    monkeypatch.setattr(trace_input_module, 'fetch_traces', fetch)
+
+    results = await evaluatorq(
+        'trace-eval',
+        data=TraceInput(trace_id='trace-empty-selected-output'),
+        inference=False,
+        evaluators=[],
+        print_results=False,
+        _send_results=False,
+    )
+
+    fetch.assert_awaited_once()
+    assert results[0].job_results is not None
+    job_result = results[0].job_results[0]
+    assert job_result.output is None
+    assert job_result.error is not None
+    assert 'no recorded assistant response' in job_result.error
+
+
+@pytest.mark.asyncio
+async def test_trace_input_rejects_explicit_inference(monkeypatch: pytest.MonkeyPatch):
+    """An explicit inference=True with a replay source is still a contradiction."""
+    trace_input_module = importlib.import_module('evaluatorq.common.trace_input')
+    fetch = AsyncMock()
+    monkeypatch.setattr(trace_input_module, 'fetch_traces', fetch)
+
+    async def unused_job(_data: DataPoint, _row: int) -> dict[str, object]:
+        return {"name": "unused", "output": None}
+
+    with pytest.raises(ValueError, match="TraceInput"):
+        await evaluatorq(
+            "trace-eval",
+            data=TraceInput(trace_id='trace-1'),
+            jobs=[unused_job],
+            inference=True,
+            print_results=False,
+            _send_results=False,
+        )
+
+    fetch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_trace_input_resolves_inference_without_the_flag(monkeypatch: pytest.MonkeyPatch):
+    """TraceInput is a replay source, so omitting inference= resolves it to False."""
+    trace_input_module = importlib.import_module('evaluatorq.common.trace_input')
+    fetch = AsyncMock(
+        return_value=[
+            Trace(
+                trace_id='trace-1',
+                input_messages=[Message(role='user', content='hi')],
+                output_messages=[Message(role='assistant', content='hello')],
+            )
+        ]
+    )
+    monkeypatch.setattr(trace_input_module, 'fetch_traces', fetch)
+
+    results = await evaluatorq(
+        "trace-eval",
+        data=TraceInput(trace_id='trace-1'),
+        print_results=False,
+        _send_results=False,
+    )
+
+    fetch.assert_awaited_once()
+    assert results[0].job_results is not None
+    assert results[0].job_results[0].output is not None

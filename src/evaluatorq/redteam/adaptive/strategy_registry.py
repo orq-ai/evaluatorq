@@ -18,6 +18,7 @@ from evaluatorq.redteam.contracts import (
     AgentCapability,
     AgentContext,
     AttackStrategy,
+    AttackTechnique,
     DeliveryMethod,
     TurnType,
     Vulnerability,
@@ -200,6 +201,7 @@ def _filter_by_method(
     strategies: list[AttackStrategy],
     names: set[str] | None,
     delivery_methods: set[DeliveryMethod | str] | None,
+    attack_techniques: set[AttackTechnique] | None = None,
 ) -> list[AttackStrategy]:
     """Filter strategies by name and/or delivery method.
 
@@ -215,11 +217,14 @@ def _filter_by_method(
             disables the delivery-method filter. A strategy passes if any of
             its `delivery_methods` overlaps the selection. Empty set filters
             out everything.
+        attack_techniques: Set of accepted `AttackTechnique` values, matched
+            against the strategy's single `attack_technique`. ``None`` disables
+            the filter. Empty set filters out everything.
 
     Returns:
-        Strategies that pass both filters (AND semantics when both supplied).
+        Strategies that pass every supplied filter (AND semantics).
     """
-    if names is None and delivery_methods is None:
+    if names is None and delivery_methods is None and attack_techniques is None:
         return list(strategies)
 
     kept: list[AttackStrategy] = []
@@ -227,6 +232,8 @@ def _filter_by_method(
         if names is not None and strategy.name not in names:
             continue
         if delivery_methods is not None and not (set(strategy.delivery_methods) & delivery_methods):
+            continue
+        if attack_techniques is not None and strategy.attack_technique not in attack_techniques:
             continue
         kept.append(strategy)
     return kept

@@ -29,6 +29,7 @@ from evaluatorq.contracts import (
     AgentContext,
     AgentResponse,
     AgentTarget,
+    ConversationHistoryMode,
     Message,
     OutputMessage,
     TextOutputItem,
@@ -81,6 +82,8 @@ class CrewAITarget(AgentTarget):
     results = await simulate(target=target, ...)
     ```
     """
+
+    history_mode = ConversationHistoryMode.CALLER
 
     def __init__(
         self,
