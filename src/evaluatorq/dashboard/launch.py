@@ -1,6 +1,6 @@
 """Launcher for the FastHTML dashboard.
 
-Exposes ``serve(roots, *, host, port)`` which wires the loguru bridge,
+Exposes ``serve(roots, *, host, port, open_browser)`` which wires the loguru bridge,
 then hands off to uvicorn.  Import-time side-effects are kept to a minimum
 so this module can be imported safely even when fasthtml / uvicorn are absent
 (``ensure_fasthtml`` performs the runtime guard).
@@ -11,8 +11,10 @@ from __future__ import annotations
 import logging
 import os
 import queue
+import socket
 import sys
 import threading
+import webbrowser
 from pathlib import Path
 from typing import TextIO
 
@@ -156,15 +158,50 @@ def _install_log_bridge() -> None:
 _ROOTS_ENV = 'EVALUATORQ_DASHBOARD_ROOTS'
 
 
+def _load_local_env() -> None:
+    """Read launch-directory settings in both the reloader and its worker."""
+    from dotenv import load_dotenv
+
+    load_dotenv(Path.cwd() / '.env', override=False)
+
+
+def _browser_host(host: str) -> str:
+    """Use a local address when uvicorn binds to every interface."""
+    return {'0.0.0.0': '127.0.0.1', '::': '::1'}.get(host, host)  # noqa: S104
+
+
+def _open_browser_when_ready(host: str, port: int, stop: threading.Event) -> None:
+    """Open the dashboard once its TCP listener is ready, with a bounded wait."""
+    browser_host = _browser_host(host)
+    url_host = f'[{browser_host}]' if ':' in browser_host else browser_host
+    url = f'http://{url_host}:{port}/'
+    for _ in range(100):
+        if stop.wait(0.1):
+            return
+        try:
+            with socket.create_connection((browser_host, port), timeout=0.2):
+                pass
+        except OSError:
+            continue
+        try:
+            if not webbrowser.open(url):
+                logger.warning('Could not open a browser automatically; open {}', url)
+        except OSError as exc:
+            logger.warning('Could not open a browser automatically: {}; open {}', exc, url)
+        return
+    logger.warning('Dashboard did not become ready for browser launch; open {} when it starts', url)
+
+
 def build_app_from_env():
     """uvicorn factory used under ``--reload``.  Runs in the reloader's worker
-    subprocess, so it (re)installs the loguru bridge and rebuilds the app from
-    the roots stashed in ``_ROOTS_ENV`` by `serve`."""
+    subprocess, so it reads the local environment, (re)installs the loguru
+    bridge, and rebuilds the app from the roots stashed by ``serve``."""
     import json
     import os
 
     from evaluatorq.dashboard.app import build_app
 
+    _load_local_env()
     _install_log_bridge()
     raw = os.environ.get(_ROOTS_ENV)
     roots = [Path(p) for p in json.loads(raw)] if raw else None
@@ -176,6 +213,7 @@ def serve(
     *,
     host: str = '127.0.0.1',
     port: int = 8080,
+    open_browser: bool = True,
 ) -> None:
     """Start the FastHTML dashboard under uvicorn with hot-reload always on.
 
@@ -190,10 +228,12 @@ def serve(
             production defaults defined in ``evaluatorq.dashboard.library``.
         host:  Bind address (default ``127.0.0.1``).
         port:  TCP port (default ``8080``).
+        open_browser: Open the dashboard once it starts (default ``True``).
     """
     import os
 
     ensure_fasthtml()
+    _load_local_env()
     _install_log_bridge()
 
     import json
@@ -208,14 +248,30 @@ def serve(
         os.environ[_ROOTS_ENV] = json.dumps([str(p) for p in roots])
 
     pkg_dir = str(Path(evaluatorq.__file__).parent)
-    uvicorn.run(
-        'evaluatorq.dashboard.launch:build_app_from_env',
-        factory=True,
-        host=host,
-        port=port,
-        reload=True,
-        reload_dirs=[pkg_dir],
-        # uvicorn's own dictConfig writes the access log straight to stdout, past the
-        # loguru bridge and its queue thread; None leaves its loggers propagating to root.
-        log_config=None,
-    )
+    stop = threading.Event()
+    browser_thread: threading.Thread | None = None
+    if open_browser:
+        try:
+            with socket.create_connection((_browser_host(host), port), timeout=0.2):
+                logger.warning('Port {} is already in use; skipping automatic browser launch', port)
+        except OSError:
+            browser_thread = threading.Thread(
+                target=_open_browser_when_ready, args=(host, port, stop), name='dashboard-browser', daemon=True
+            )
+            browser_thread.start()
+    try:
+        uvicorn.run(
+            'evaluatorq.dashboard.launch:build_app_from_env',
+            factory=True,
+            host=host,
+            port=port,
+            reload=True,
+            reload_dirs=[pkg_dir],
+            # uvicorn's own dictConfig writes the access log straight to stdout, past the
+            # loguru bridge and its queue thread; None leaves its loggers propagating to root.
+            log_config=None,
+        )
+    finally:
+        stop.set()
+        if browser_thread is not None:
+            browser_thread.join(timeout=0.3)

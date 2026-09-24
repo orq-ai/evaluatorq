@@ -26,23 +26,29 @@ class DashboardSettings(BaseModel):
     """Configurable models and finder limits used by the dashboard and CLI."""
 
     compiler_model: str = DEFAULT_PIPELINE_MODEL
-    jev_model: str = 'typesafe/jev-latest'
+    classifier_model: str = 'typesafe/jev-latest'
     apply_model: str = DEFAULT_PIPELINE_MODEL
     window_days: int = Field(7, ge=MIN_WINDOW_DAYS, le=MAX_WINDOW_DAYS)
     limit: int = Field(DEFAULT_LIMIT, ge=MIN_LIMIT, le=MAX_LIMIT)
     parallelism: int = Field(100, ge=MIN_PARALLELISM, le=MAX_PARALLELISM)
     orq_profile: str | None = None
+    orq_profile_host: str | None = None
+    orq_workspace: str | None = None
+    orq_project_id: str | None = None
+    orq_project_name: str | None = None
 
-    @field_validator('orq_profile', mode='before')
+    @field_validator(
+        'orq_profile', 'orq_profile_host', 'orq_workspace', 'orq_project_id', 'orq_project_name', mode='before'
+    )
     @classmethod
-    def blank_profile_is_none(cls, value: object) -> object:
-        """An empty selector means the environment credentials."""
+    def blank_selection_is_none(cls, value: object) -> object:
+        """An empty credential or scope selector means no saved choice."""
 
         if isinstance(value, str):
             return value.strip() or None
         return value
 
-    @field_validator('compiler_model', 'jev_model', 'apply_model', mode='before')
+    @field_validator('compiler_model', 'classifier_model', 'apply_model', mode='before')
     @classmethod
     def strip_model_identifier(cls, value: object) -> object:
         """Reject blank model identifiers after removing surrounding space."""
@@ -115,7 +121,7 @@ def effective_settings(overrides: dict[str, Any] | None = None) -> DashboardSett
     which beat the saved file, which beats model defaults. ``None`` values in
     *overrides* are ignored so callers can pass optional flags directly.
     Environment model variables are ``EVALUATORQ_APPLY_MODEL``,
-    ``EVALUATORQ_COMPILER_MODEL``, and ``EVALUATORQ_JEV_MODEL``. Finder limit
+    ``EVALUATORQ_COMPILER_MODEL``, and ``EVALUATORQ_CLASSIFIER_MODEL``. Finder limit
     variables are ``EVALUATORQ_FINDER_WINDOW_DAYS``, ``EVALUATORQ_FINDER_LIMIT``,
     and ``EVALUATORQ_FINDER_PARALLELISM``; invalid integer or out-of-range values
     are ignored with a warning.
@@ -124,7 +130,7 @@ def effective_settings(overrides: dict[str, Any] | None = None) -> DashboardSett
     for field, env_name in (
         ('apply_model', 'EVALUATORQ_APPLY_MODEL'),
         ('compiler_model', 'EVALUATORQ_COMPILER_MODEL'),
-        ('jev_model', 'EVALUATORQ_JEV_MODEL'),
+        ('classifier_model', 'EVALUATORQ_CLASSIFIER_MODEL'),
     ):
         env_value = os.environ.get(env_name, '').strip()
         if env_value:

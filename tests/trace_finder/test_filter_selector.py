@@ -1,4 +1,4 @@
-"""Tests for catalogue-backed JEV metadata selection."""
+"""Tests for catalogue-backed classifier metadata selection."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import pytest
 
 from evaluatorq.trace_finder import filter_selector as filter_selector_module
 from evaluatorq.common.judge import ClassifyAnswer, ClassifyOutcome, ClassifyResponse, JudgeError
-from evaluatorq.trace_finder.filter_selector import FilterSelectionError, select_filters
+from evaluatorq.trace_finder.filter_selector import FilterSelectionError, select_filters, select_filters_with_response
 from evaluatorq.trace_finder.models import FACET_NAMES, FacetCatalogue, FacetSelection
 
 
@@ -59,6 +59,32 @@ async def test_select_filters_uses_one_classify_request_for_non_empty_facets(mon
     assert set(request.questions) == {str(name) for name in FACET_NAMES} - {'agent_name', 'tool_name'}
     assert all(question.kind == 'choice' for question in request.questions.values())
     assert 'span.responses' in str(request.questions['trace_type'].criteria)
+
+
+@pytest.mark.asyncio
+async def test_filter_selector_retains_the_structured_classify_response(monkeypatch) -> None:
+    response = ClassifyResponse(
+        model='jev-latest',
+        answers={'project': ClassifyAnswer(type='choice', choice='project_0', confidence=0.8)},
+    )
+
+    async def fake_run_classify(**kwargs: Any) -> ClassifyOutcome:
+        request = kwargs['request']
+        answers = {
+            name: response.answers['project'] if name == 'project' else ClassifyAnswer(type='choice', choice='none')
+            for name in request.questions
+        }
+        return ClassifyOutcome(response=response.model_copy(update={'answers': answers}))
+
+    monkeypatch.setattr(filter_selector_module, 'run_classify', fake_run_classify)
+
+    result = await select_filters_with_response(cast(Any, object()), 'typesafe/jev-latest', catalogue(), 'Demos')
+
+    assert result.selection.project == frozenset({'Demos'})
+    assert result.response is not None
+    assert result.response.model == 'jev-latest'
+    assert result.response.answers['project'].choice == 'project_0'
+    assert result.response.answers['project'].confidence == 0.8
 
 
 @pytest.mark.asyncio

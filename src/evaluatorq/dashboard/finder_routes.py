@@ -19,7 +19,7 @@ from evaluatorq.common.orq_client import (
     list_orq_profiles,
     resolve_orq_client,
 )
-from evaluatorq.dashboard.finder_views import drawer, facet_menu, fragment, page_html
+from evaluatorq.dashboard.finder_views import drawer, facet_menu, fragment, missing_trace_drawer, page_html
 from evaluatorq.dashboard.security import request_rejected
 from evaluatorq.trace_finder import (
     CompiledQuery,
@@ -182,6 +182,8 @@ async def _load_catalogue(app: Any, window_days: int | None = None) -> FacetCata
             end=now,
             limit=50,
         )
+        if settings.orq_project_id and settings.orq_project_name:
+            catalogue = catalogue.model_copy(update={'project': (settings.orq_project_name,)})
     except Exception as exc:  # noqa: BLE001 — provider and SDK failures vary; this UI boundary must degrade visibly.
         logger.opt(exception=True).warning(
             'Find facet menu is unavailable because loading facet values failed: {}', exc
@@ -259,7 +261,7 @@ def _run_request(
         population=PopulationRequest(
             start=end - timedelta(days=parsed.window_days),
             end=end,
-            facets=FacetSelection(**facet_values),
+            facets=FacetSelection(project_id=settings.orq_project_id, **facet_values),
             numeric=numeric,
             limit=parsed.limit,
         ),
@@ -440,7 +442,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 form, settings, anchor=current.request.population, query_fallback=current.request.query
             )
             compiled = _compiled_from_form(current.compiled, form)
-            snapshot = await store.start(request, compiled)
+            snapshot = await store.start(request, compiled, wait=False)
         except (ValidationError, ValueError, TypeError) as exc:
             return _html(fragment(current, settings, error=str(exc), **_catalogue_kwargs(req.app)), status_code=422)
         return _html(fragment(snapshot, settings, **_catalogue_kwargs(req.app)))
@@ -480,7 +482,9 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             return _html('<p class="finder-empty">Trace finding is unavailable.</p>', status_code=404)
         detail = await store.trace_detail(trace_id)
         if detail is None:
-            return _html('<p class="finder-empty">Trace not found.</p>', status_code=404)
+            # htmx does not swap a 4xx body, so a 404 here would leave the click silently doing nothing.
+            logger.warning('Find drawer requested trace {} that is not in the current run', trace_id)
+            return _html(missing_trace_drawer(trace_id))
         return _html(drawer(detail))
 
     @app.get('/find/export.json')

@@ -1,4 +1,4 @@
-"""Bounded, auditable projections of traces for JEV classification."""
+"""Bounded, auditable projections of traces for classification."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
-from .models import JevProjection, TraceRecord
+from .models import TraceProjection, TraceRecord
 
 MAX_TOKEN_BUDGET = 25_000
 OMISSION_MARKER = '[... earlier bytes omitted ...]'
@@ -24,7 +24,7 @@ class ProjectionUnit:
 
 
 def serialize_projection(payload: dict[str, Any]) -> str:
-    """Return the stable representation that JEV receives and the drawer displays."""
+    """Return the stable representation that classifier receives and the drawer displays."""
 
     return _canonical_json(payload)
 
@@ -35,8 +35,8 @@ def estimate_tokens(serialized: str) -> int:
     return len(serialized.encode('utf-8'))
 
 
-def project_trace(trace: TraceRecord, token_budget: int = MAX_TOKEN_BUDGET) -> JevProjection:
-    """Project one complete trace into a newest-first-fitting JEV conversation state."""
+def project_trace(trace: TraceRecord, token_budget: int = MAX_TOKEN_BUDGET) -> TraceProjection:
+    """Project one complete trace into a newest-first-fitting classifier conversation state."""
 
     if not 1 <= token_budget <= MAX_TOKEN_BUDGET:
         raise ValueError(f'token_budget must be between 1 and {MAX_TOKEN_BUDGET}')
@@ -71,7 +71,7 @@ def project_trace(trace: TraceRecord, token_budget: int = MAX_TOKEN_BUDGET) -> J
     omitted_messages = sum(len(unit.source_messages) for unit in omitted_units)
     omitted_bytes = sum(_source_message_bytes(message) for unit in omitted_units for message in unit.source_messages)
 
-    return JevProjection(
+    return TraceProjection(
         payload=payload,
         serialized=serialized,
         estimated_tokens=estimated_tokens,

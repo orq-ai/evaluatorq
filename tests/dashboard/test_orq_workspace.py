@@ -1,4 +1,4 @@
-"""Tests for env-based workspace/host resolution (CLI/JWT machinery removed)."""
+"""Tests for saved dashboard scope and environment fallback resolution."""
 
 from __future__ import annotations
 
@@ -8,9 +8,10 @@ from evaluatorq.dashboard import orq_workspace as ow
 
 
 @pytest.fixture(autouse=True)
-def _isolate(monkeypatch: pytest.MonkeyPatch) -> None:
+def _isolate(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     for var in ('ORQ_WORKSPACE', 'ORQ_WORKSPACE_SLUG', 'ORQ_BASE_URL'):
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'empty-settings.json'))
 
 
 # --- workspace slug ---------------------------------------------------------
@@ -39,6 +40,19 @@ def test_resolve_base_url_default() -> None:
 
 def test_resolve_base_url_env_strips_slash(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('ORQ_BASE_URL', 'https://staging.orq.ai/')
+    assert ow.resolve_base_url() == 'https://staging.orq.ai'
+
+
+def test_saved_profile_host_wins_over_environment(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    from evaluatorq.trace_finder.settings import DashboardSettings, save_settings
+
+    path = tmp_path / 'settings.json'
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(path))
+    monkeypatch.setenv('ORQ_BASE_URL', 'https://environment.orq.ai')
+    save_settings(DashboardSettings.model_validate({
+        'orq_profile': 'staging', 'orq_profile_host': 'https://staging.orq.ai/',
+    }), path)
+
     assert ow.resolve_base_url() == 'https://staging.orq.ai'
 
 
@@ -72,7 +86,7 @@ def test_settings_page_keeps_workspace_and_host_read_only(monkeypatch: pytest.Mo
     assert 'orq-research' in page
     assert 'Orq host' in page
     assert 'action="/settings"' in page
-    # Workspace and host controls are still absent; their old POST routes stay gone.
+    # The old standalone workspace and host POST routes stay gone.
     assert 'action="/settings/workspace"' not in page
     assert client.post('/settings/workspace', data={'workspace': 'x'}).status_code == 404
     assert client.post('/settings/host', data={'base_url': 'x'}).status_code == 404

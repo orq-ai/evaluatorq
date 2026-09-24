@@ -1,15 +1,12 @@
-"""Resolve the Orq workspace slug + host for deep-links — from env only.
+"""Resolve the Orq workspace slug and host for dashboard deep-links.
 
 Deep-links now derive their host + workspace from each run's own
 ``experiment_url`` (``{host}/{workspace}/experiments/{id}``; see
 ``orq_links.parse_experiment_url``), which the web app resolves correctly for
 anyone with access — no API key, no workspace config, no ``orq`` CLI. This module
-is only the **fallback** for runs that never uploaded an experiment (so have no
-``experiment_url``): it reads ``ORQ_WORKSPACE`` / ``ORQ_BASE_URL`` from the
-environment. When those are unset, links are simply hidden.
-
-(Historically this reverse-engineered the slug from the API key via the local
-``orq`` CLI — a blocking subprocess that could 404. That is gone.)
+is the fallback for runs without an ``experiment_url``: it reads the saved
+dashboard profile and workspace first, then the environment. Links are hidden
+when no workspace slug is available.
 """
 
 from __future__ import annotations
@@ -20,14 +17,23 @@ DEFAULT_BASE_URL = 'https://my.orq.ai'
 
 
 def resolve_slug() -> str | None:
-    """Workspace slug from ``ORQ_WORKSPACE`` / ``ORQ_WORKSPACE_SLUG`` env, or None."""
+    """Workspace slug saved in dashboard settings, or the environment fallback."""
+    from evaluatorq.trace_finder.settings import load_settings
+
+    saved = load_settings().orq_workspace
+    if saved:
+        return saved
     env = os.environ.get('ORQ_WORKSPACE') or os.environ.get('ORQ_WORKSPACE_SLUG')
     return env.strip() or None if env and env.strip() else None
 
 
 def resolve_base_url() -> str:
-    """Orq host from ``ORQ_BASE_URL`` env, or the prod default (no trailing slash)."""
-    return (os.environ.get('ORQ_BASE_URL') or DEFAULT_BASE_URL).rstrip('/')
+    """Orq host from the saved profile, environment, or prod default."""
+    from evaluatorq.trace_finder.settings import load_settings
+
+    saved = load_settings()
+    host = saved.orq_profile_host if saved.orq_profile else None
+    return (host or os.environ.get('ORQ_BASE_URL') or DEFAULT_BASE_URL).rstrip('/')
 
 
 def classify_host(url: str | None) -> str:

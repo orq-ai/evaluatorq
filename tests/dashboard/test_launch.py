@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -268,6 +269,18 @@ def test_eq_dashboard_help() -> None:
     assert result.exit_code == 0
     for store in ('.evaluatorq/runs/', '.evaluatorq/sim-runs/', '.evaluatorq/pairwise-runs/'):
         assert store in result.output
+    assert '--no-browser' in result.output
+
+
+@pytest.mark.parametrize(('extra_args', 'expected_open'), [([], True), (['--no-browser'], False)])
+def test_dashboard_browser_flag_reaches_launcher(extra_args: list[str], expected_open: bool) -> None:
+    from evaluatorq.cli import app
+
+    with patch('evaluatorq.dashboard.launch.serve') as mock_serve:
+        result = CliRunner().invoke(app, ['dashboard', *extra_args])
+
+    assert result.exit_code == 0, result.output
+    assert mock_serve.call_args.kwargs['open_browser'] is expected_open
 
 
 # ---------------------------------------------------------------------------
@@ -290,7 +303,10 @@ def test_serve_calls_uvicorn_run(tmp_path: Path) -> None:
 
     with (
         patch('evaluatorq.dashboard.launch.ensure_fasthtml'),
+        patch('dotenv.load_dotenv'),
         patch('evaluatorq.dashboard.launch.logging.basicConfig'),
+        patch('evaluatorq.dashboard.launch._open_browser_when_ready') as mock_browser,
+        patch('evaluatorq.dashboard.launch.socket.create_connection', side_effect=ConnectionRefusedError),
         patch.object(uvicorn, 'run') as mock_run,
         patch('evaluatorq.dashboard.app.build_app', return_value=fake_asgi_app),
     ):
@@ -301,6 +317,104 @@ def test_serve_calls_uvicorn_run(tmp_path: Path) -> None:
     assert call_kwargs.kwargs.get('host') == '0.0.0.0'
     assert call_kwargs.kwargs.get('port') == 9999
     assert call_kwargs.kwargs.get('log_config') is None, 'uvicorn must log through the loguru bridge'
+    mock_browser.assert_called_once()
+
+
+def test_serve_loads_local_env_without_overriding_shell(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The dashboard reads its local .env while preserving explicitly exported values."""
+    import uvicorn
+
+    from evaluatorq.dashboard.launch import serve
+
+    (tmp_path / '.env').write_text('ORQ_WORKSPACE=orq-research\nORQ_BASE_URL=https://wrong.example\n')
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv('ORQ_WORKSPACE', raising=False)
+    monkeypatch.setenv('ORQ_BASE_URL', 'https://my.orq.ai')
+    with (
+        patch('evaluatorq.dashboard.launch.ensure_fasthtml'),
+        patch('evaluatorq.dashboard.launch._install_log_bridge'),
+        patch('evaluatorq.dashboard.launch._open_browser_when_ready'),
+        patch('evaluatorq.dashboard.launch.socket.create_connection', side_effect=ConnectionRefusedError),
+        patch.object(uvicorn, 'run'),
+    ):
+        serve(None)
+
+    assert os.environ['ORQ_WORKSPACE'] == 'orq-research'
+    assert os.environ['ORQ_BASE_URL'] == 'https://my.orq.ai'
+
+
+def test_reload_worker_reads_local_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """An already running reloader picks up the workspace slug in a new worker."""
+    from evaluatorq.dashboard.launch import build_app_from_env
+
+    (tmp_path / '.env').write_text('ORQ_WORKSPACE=orq-research\n')
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv('ORQ_WORKSPACE', raising=False)
+    app = MagicMock()
+    with (
+        patch('evaluatorq.dashboard.launch._install_log_bridge'),
+        patch('evaluatorq.dashboard.app.build_app', return_value=app) as build,
+    ):
+        assert build_app_from_env() is app
+
+    assert os.environ['ORQ_WORKSPACE'] == 'orq-research'
+    build.assert_called_once_with(None)
+
+
+def test_browser_opens_after_dashboard_listener_is_ready() -> None:
+    """A failed connection is retried before the browser opens once."""
+    import threading
+
+    from evaluatorq.dashboard.launch import _open_browser_when_ready
+
+    connection = MagicMock()
+    with (
+        patch('evaluatorq.dashboard.launch.socket.create_connection', side_effect=[ConnectionRefusedError, connection]) as connect,
+        patch('evaluatorq.dashboard.launch.webbrowser.open', return_value=True) as open_browser,
+    ):
+        _open_browser_when_ready('0.0.0.0', 8125, threading.Event())
+
+    assert connect.call_count == 2
+    open_browser.assert_called_once_with('http://127.0.0.1:8125/')
+
+
+def test_serve_does_not_open_existing_port(tmp_path: Path) -> None:
+    """A port already occupied by another process must not open its page."""
+    import uvicorn
+
+    from evaluatorq.dashboard.launch import serve
+
+    with (
+        patch('evaluatorq.dashboard.launch.ensure_fasthtml'),
+        patch('dotenv.load_dotenv'),
+        patch('evaluatorq.dashboard.launch._install_log_bridge'),
+        patch('evaluatorq.dashboard.launch.socket.create_connection', return_value=MagicMock()),
+        patch('evaluatorq.dashboard.launch._open_browser_when_ready') as open_browser,
+        patch.object(uvicorn, 'run'),
+    ):
+        serve([tmp_path], port=8125)
+
+    open_browser.assert_not_called()
+
+
+def test_serve_no_browser_skips_probe_and_browser_thread(tmp_path: Path) -> None:
+    import uvicorn
+
+    from evaluatorq.dashboard.launch import serve
+
+    with (
+        patch('evaluatorq.dashboard.launch.ensure_fasthtml'),
+        patch('evaluatorq.dashboard.launch._load_local_env'),
+        patch('evaluatorq.dashboard.launch._install_log_bridge'),
+        patch('evaluatorq.dashboard.launch.socket.create_connection') as connect,
+        patch('evaluatorq.dashboard.launch._open_browser_when_ready') as open_browser,
+        patch.object(uvicorn, 'run') as run,
+    ):
+        serve([tmp_path], port=8125, open_browser=False)
+
+    connect.assert_not_called()
+    open_browser.assert_not_called()
+    assert run.call_args.kwargs['port'] == 8125
 
 
 def test_eq_dashboard_accepts_multiple_paths(tmp_path: Path) -> None:

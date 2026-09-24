@@ -1,4 +1,4 @@
-"""Immutable data contracts for trace populations and JEV classifications."""
+"""Immutable data contracts for trace populations and classifications."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from pydantic import (
 )
 from typing_extensions import Self
 
-from evaluatorq.common.judge import ClassifyQuestion  # noqa: TC001
+from evaluatorq.common.judge import ClassifyQuestion, ClassifyResponse  # noqa: TC001
 
 FacetName = Literal['project', 'model', 'provider', 'status', 'product', 'trace_type', 'agent_name', 'tool_name']
 FACET_NAMES: tuple[FacetName, ...] = (
@@ -69,8 +69,8 @@ class TraceRecord(BaseModel):
         return value
 
 
-class JevProjection(BaseModel):
-    """The bounded, serialized trace state supplied to one JEV judgment."""
+class TraceProjection(BaseModel):
+    """The bounded, serialized trace state supplied to one classifier judgment."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -112,6 +112,7 @@ class FacetSelection(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     project: frozenset[str] = frozenset()
+    project_id: str | None = None
     model: frozenset[str] = frozenset()
     provider: frozenset[str] = frozenset()
     status: frozenset[str] = frozenset()
@@ -213,7 +214,7 @@ SelectionRule = Annotated[ValueSelection | ThresholdSelection, Field(discriminat
 
 
 class CompiledQuery(BaseModel):
-    """A semantic JEV task and its validated inclusion rule."""
+    """A semantic classifier task and its validated inclusion rule."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -238,6 +239,7 @@ class LegendItem(BaseModel):
 
 
 RunState = Literal['idle', 'compiling', 'awaiting_review', 'classifying', 'completed', 'failed', 'cancelled']
+RunPhase = Literal['planning', 'loading_traces', 'starting_classification']
 
 
 class RunRequest(BaseModel):
@@ -257,16 +259,19 @@ class RunSnapshot:
 
     generation: int = 0
     state: RunState = 'idle'
+    phase: RunPhase | None = None
     request: RunRequest | None = None
     compiled: CompiledQuery | None = None
     explicit_filters: FacetSelection = field(default_factory=FacetSelection)
     explicit_numeric: NumericFilters = field(default_factory=NumericFilters)
     generated_filters: FacetSelection = field(default_factory=FacetSelection)
     generated_numeric: NumericFilters = field(default_factory=NumericFilters)
+    filter_response: ClassifyResponse | None = None
+    filter_selection_error: str | None = None
     trace_ids: tuple[str, ...] = ()
     traces: tuple[TraceRecord, ...] = ()
     results: Mapping[str, TraceClassification] = field(default_factory=lambda: MappingProxyType({}))
-    projections: Mapping[str, JevProjection] = field(default_factory=lambda: MappingProxyType({}))
+    projections: Mapping[str, TraceProjection] = field(default_factory=lambda: MappingProxyType({}))
     total: int = 0
     completed: int = 0
     failed: int = 0
@@ -291,19 +296,19 @@ class TraceDetail:
     """Detached source trace and its inspectable projection and terminal result."""
 
     trace: TraceRecord
-    projection: JevProjection | None
+    projection: TraceProjection | None
     classification: TraceClassification | None
     compiled: CompiledQuery | None = None
 
 
 def validate_compiled_query(task: ClassifyQuestion, selection: SelectionRule) -> None:
-    """Reject match rules that cannot be evaluated against their JEV task."""
+    """Reject match rules that cannot be evaluated against their classifier task."""
 
     if task.state != {}:
         _raise_compiled_query_error(
             ('task', 'state'),
             task.state,
-            'compiled JEV task state must be exactly {}',
+            'compiled classifier task state must be exactly {}',
         )
 
     if task.kind == 'choice':

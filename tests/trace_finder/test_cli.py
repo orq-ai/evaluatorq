@@ -14,6 +14,7 @@ from typer.testing import CliRunner
 
 from evaluatorq import cli as cli_module
 from evaluatorq.common.judge import ClassifyQuestion
+from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.trace_finder import (
     CompiledQuery,
     RunSnapshot,
@@ -27,6 +28,14 @@ def _app() -> typer.Typer:
     app = typer.Typer()
     cli_module._register_subapps(app)
     return app
+
+
+def test_find_help_describes_profile_option() -> None:
+    result = CliRunner().invoke(_app(), ['find', '--help'])
+
+    assert result.exit_code == 0, result.output
+    assert '--profile' in result.output
+    assert 'ORQ_API_KEY and ORQ_BASE_URL' in result.output
 
 
 def _trace() -> TraceRecord:
@@ -199,12 +208,74 @@ def test_find_writes_json_and_prints_fake_trace(monkeypatch: Any, tmp_path: Path
     assert store.request.population.numeric.tokens_min == 100
 
 
+def test_find_profile_overrides_environment_for_both_clients_without_mutating_it(monkeypatch: Any) -> None:
+    from evaluatorq.trace_finder import cli as find_cli
+
+    monkeypatch.setenv('ORQ_API_KEY', 'environment-key')
+    monkeypatch.setenv('ORQ_BASE_URL', 'https://environment.example')
+    monkeypatch.setattr(
+        find_cli, 'list_orq_profiles', lambda: (OrqProfile('research', 'profile-key', 'https://profile.example', False),)
+    )
+    calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
+
+    def orq_client(*args: Any, **kwargs: Any) -> object:
+        calls.append(('orq', args, kwargs))
+        return object()
+
+    def llm_client(**kwargs: Any) -> SimpleNamespace:
+        calls.append(('llm', (), kwargs))
+        return SimpleNamespace(client=object())
+
+    monkeypatch.setattr(find_cli, 'resolve_orq_client', orq_client)
+    monkeypatch.setattr(find_cli, 'resolve_llm_client', llm_client)
+    monkeypatch.setattr(find_cli, 'build_run_store', lambda *args, **kwargs: FakeStore())
+
+    result = CliRunner().invoke(_app(), ['find', 'refund requests', '--profile', 'research', '--limit', '1'])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        ('orq', ('profile-key',), {'server_url': 'https://profile.example'}),
+        (
+            'llm',
+            (),
+            {'extra_api_key': 'profile-key', 'orq_host': 'https://profile.example', 'require_orq': True, 'max_retries': 0},
+        ),
+    ]
+    assert os.environ['ORQ_API_KEY'] == 'environment-key'
+    assert os.environ['ORQ_BASE_URL'] == 'https://environment.example'
+
+
+@pytest.mark.parametrize(
+    ('profiles', 'expected_error'),
+    [
+        ((), 'unavailable'),
+        ((OrqProfile('research', 'masked***', None, False),), 'masked key'),
+    ],
+)
+def test_find_invalid_explicit_profile_does_not_fall_back_to_environment(
+    monkeypatch: Any, profiles: tuple[OrqProfile, ...], expected_error: str
+) -> None:
+    from evaluatorq.trace_finder import cli as find_cli
+
+    monkeypatch.setenv('ORQ_API_KEY', 'environment-key')
+    monkeypatch.setattr(find_cli, 'list_orq_profiles', lambda: profiles)
+
+    def unexpected_client(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError('invalid profile must not fall back to environment credentials')
+
+    monkeypatch.setattr(find_cli, 'resolve_orq_client', unexpected_client)
+    result = CliRunner().invoke(_app(), ['find', 'refund requests', '--profile', 'research'])
+
+    assert result.exit_code == 2
+    assert expected_error in result.output
+
+
 def test_dashboard_flags_are_handed_to_reload_worker_environment(monkeypatch: Any, tmp_path: Path) -> None:
     from evaluatorq.dashboard import launch
 
     names = (
         'EVALUATORQ_COMPILER_MODEL',
-        'EVALUATORQ_JEV_MODEL',
+        'EVALUATORQ_CLASSIFIER_MODEL',
         'EVALUATORQ_FINDER_WINDOW_DAYS',
         'EVALUATORQ_FINDER_LIMIT',
         'EVALUATORQ_FINDER_PARALLELISM',
@@ -221,8 +292,8 @@ def test_dashboard_flags_are_handed_to_reload_worker_environment(monkeypatch: An
                 str(tmp_path),
                 '--compiler-model',
                 'compiler/model',
-                '--jev-model',
-                'jev/model',
+                '--classifier-model',
+                'classifier/model',
                 '--window-days',
                 '14',
                 '--limit',
@@ -234,7 +305,7 @@ def test_dashboard_flags_are_handed_to_reload_worker_environment(monkeypatch: An
 
         assert result.exit_code == 0, result.output
         assert os.environ['EVALUATORQ_COMPILER_MODEL'] == 'compiler/model'
-        assert os.environ['EVALUATORQ_JEV_MODEL'] == 'jev/model'
+        assert os.environ['EVALUATORQ_CLASSIFIER_MODEL'] == 'classifier/model'
         assert os.environ['EVALUATORQ_FINDER_WINDOW_DAYS'] == '14'
         assert os.environ['EVALUATORQ_FINDER_LIMIT'] == '5000'
         assert os.environ['EVALUATORQ_FINDER_PARALLELISM'] == '12'

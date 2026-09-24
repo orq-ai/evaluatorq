@@ -10,15 +10,15 @@ from loguru import logger
 
 from evaluatorq import DataPoint, DataPointResult, EvaluationResult, EvaluatorScore, JobResult
 from evaluatorq.common.judge import EvaluatorResponsePayload, JudgeOutcome
-from evaluatorq.trace_finder import jev
-from evaluatorq.trace_finder.jev import (
+from evaluatorq.trace_finder import classifier
+from evaluatorq.trace_finder.classifier import (
     build_datapoint,
-    build_jev_evaluator,
+    build_classifier_evaluator,
     matches_selection,
     parse_datapoint_result,
-    run_jev,
+    run_classifier,
 )
-from evaluatorq.trace_finder.models import CompiledQuery, JevProjection, TraceClassification, TraceRecord
+from evaluatorq.trace_finder.models import CompiledQuery, TraceProjection, TraceClassification, TraceRecord
 
 
 def _compiled(kind: str = 'choice') -> CompiledQuery:
@@ -70,8 +70,8 @@ def _trace() -> TraceRecord:
     )
 
 
-def _projection() -> JevProjection:
-    return JevProjection(
+def _projection() -> TraceProjection:
+    return TraceProjection(
         payload={'trace_status': 'completed', 'messages': [{'role': 'user', 'content': 'I want my money back.'}]},
         serialized='{"messages":[],"trace_status":"completed"}',
         estimated_tokens=16,
@@ -85,15 +85,15 @@ def test_build_datapoint_preserves_identifiers_projection_and_replay_marker() ->
         inputs={
             'trace_id': 'trace-1',
             'span_id': 'span-1',
-            'jev_state': _projection().payload,
-            'messages': [{'role': 'assistant', 'content': 'JEV state prepared'}],
+            'classifier_state': _projection().payload,
+            'messages': [{'role': 'assistant', 'content': 'classifier state prepared'}],
         }
     )
 
 
 @pytest.mark.parametrize('kind', ['choice', 'noul', 'score'])
 @pytest.mark.asyncio
-async def test_build_jev_evaluator_passes_exact_question_and_state(
+async def test_build_classifier_evaluator_passes_exact_question_and_state(
     monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
     calls: list[dict[str, Any]] = []
@@ -107,14 +107,14 @@ async def test_build_jev_evaluator_passes_exact_question_and_state(
             endpoint='classify',
         )
 
-    monkeypatch.setattr(jev, 'run_judge', fake_run_judge)
+    monkeypatch.setattr(classifier, 'run_judge', fake_run_judge)
     compiled = _compiled(kind)
-    evaluator = build_jev_evaluator(compiled, model='typesafe/jev-latest', client=cast(Any, 'client'))
+    evaluator = build_classifier_evaluator(compiled, model='typesafe/jev-latest', client=cast(Any, 'client'))
 
     scorer = cast(Any, evaluator['scorer'])
-    result = await scorer({'data': build_datapoint(_trace(), _projection()), 'output': 'JEV state prepared'})
+    result = await scorer({'data': build_datapoint(_trace(), _projection()), 'output': 'classifier state prepared'})
 
-    assert evaluator['name'] == 'jev'
+    assert evaluator['name'] == 'classifier'
     assert type(result.value) is type({'choice': 'frustrated', 'noul': True, 'score': 1.0}[kind])
     assert result.value == {'choice': 'frustrated', 'noul': True, 'score': 1.0}[kind]
     assert calls[0]['model'] == 'typesafe/jev-latest'
@@ -155,12 +155,12 @@ def _result(
     if job_results is None:
         raw_output = None if raw_answer is None else {'jury': {'votes': [{'repetitions': [{'raw_output': raw_answer}]}]}}
         score = EvaluatorScore(
-            evaluator_name='jev',
+            evaluator_name='classifier',
             error=evaluator_error,
             score=EvaluationResult(value=value, explanation='The customer is frustrated.', raw_output=raw_output),
         )
         job_results = [
-            JobResult(job_name='replay', output='JEV state prepared', error=job_error, evaluator_scores=[score])
+            JobResult(job_name='replay', output='classifier state prepared', error=job_error, evaluator_scores=[score])
         ]
     return DataPointResult(
         data_point=build_datapoint(_trace(), _projection()), error=datapoint_error, job_results=job_results
@@ -173,15 +173,15 @@ def _result_from_evaluation(evaluation: EvaluationResult) -> DataPointResult:
         job_results=[
             JobResult(
                 job_name='replay',
-                output='JEV state prepared',
-                evaluator_scores=[EvaluatorScore(evaluator_name='jev', score=evaluation)],
+                output='classifier state prepared',
+                evaluator_scores=[EvaluatorScore(evaluator_name='classifier', score=evaluation)],
             )
         ],
     )
 
 
 def test_outcome_result_maps_clean_abstention_to_an_inconclusive_classification() -> None:
-    evaluation = jev._outcome_result(
+    evaluation = classifier._outcome_result(
         JudgeOutcome(
             payload=EvaluatorResponsePayload(value=None, explanation='Unable to classify.', abstain=True),
             raw_output={'abstain': True},
@@ -232,7 +232,7 @@ def test_parse_datapoint_result_propagates_unexpected_parser_error(monkeypatch: 
     def broken_parser(raw_output: object) -> object:
         raise RuntimeError('parser implementation broke')
 
-    monkeypatch.setattr(jev, '_raw_answer', broken_parser)
+    monkeypatch.setattr(classifier, '_raw_answer', broken_parser)
 
     with pytest.raises(RuntimeError, match='parser implementation broke'):
         parse_datapoint_result(_result(raw_answer={'choice': 'frustrated'}), _compiled())
@@ -244,7 +244,7 @@ def test_parse_datapoint_result_treats_invalid_confidence_as_terminal_result(con
         _result(raw_answer={'choice': 'frustrated', 'confidence': confidence}), _compiled()
     )
 
-    assert classification.error == 'malformed JEV confidence'
+    assert classification.error == 'malformed classifier confidence'
     assert classification.matched is False
 
 
@@ -254,7 +254,7 @@ def test_parse_datapoint_result_rejects_invalid_probabilities(probability: float
         _result(raw_answer={'choice': 'frustrated', 'probabilities': {'frustrated': probability}}), _compiled()
     )
 
-    assert classification.error == 'malformed JEV probabilities'
+    assert classification.error == 'malformed classifier probabilities'
     assert classification.matched is False
 
 
@@ -273,10 +273,10 @@ def test_parse_datapoint_result_returns_terminal_classification_for_malformed_tr
 
     assert classification.value is None
     assert not classification.matched
-    assert classification.error == 'malformed JEV result tree'
+    assert classification.error == 'malformed classifier result tree'
     assert classification.raw_result == result.model_dump(mode='json', by_alias=True)
     assert any(
-        'trace-1' in message and 'span-1' in message and 'malformed JEV result tree' in message for message in messages
+        'trace-1' in message and 'span-1' in message and 'malformed classifier result tree' in message for message in messages
     )
 
 
@@ -323,26 +323,26 @@ def test_parse_datapoint_result_returns_terminal_classification_for_error_tree(
 
 
 @pytest.mark.asyncio
-async def test_run_jev_uses_matching_parallelism_and_calls_terminal_callback_once(
+async def test_run_classifier_uses_matching_parallelism_and_calls_terminal_callback_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     result = _result(raw_answer={'choice': 'frustrated'})
     received: list[tuple[str, dict[str, Any]]] = []
     completed: list[object] = []
     parse_calls = 0
-    original_parser = jev.parse_datapoint_result
+    original_parser = classifier.parse_datapoint_result
 
     def count_parse(result: DataPointResult, compiled: CompiledQuery) -> TraceClassification:
         nonlocal parse_calls
         parse_calls += 1
         return original_parser(result, compiled)
 
-    monkeypatch.setattr(jev, 'parse_datapoint_result', count_parse)
+    monkeypatch.setattr(classifier, 'parse_datapoint_result', count_parse)
 
-    def fake_build_jev_evaluator(*_: object, **__: object) -> dict[str, str]:
-        return {'name': 'jev'}
+    def fake_build_classifier_evaluator(*_: object, **__: object) -> dict[str, str]:
+        return {'name': 'classifier'}
 
-    monkeypatch.setattr(jev, 'build_jev_evaluator', fake_build_jev_evaluator)
+    monkeypatch.setattr(classifier, 'build_classifier_evaluator', fake_build_classifier_evaluator)
 
     async def fake_evaluatorq(name: str, **kwargs: Any) -> list[DataPointResult]:
         received.append((name, kwargs))
@@ -352,10 +352,10 @@ async def test_run_jev_uses_matching_parallelism_and_calls_terminal_callback_onc
     async def on_complete(classification: object) -> None:
         completed.append(classification)
 
-    monkeypatch.setattr(jev, 'evaluatorq', fake_evaluatorq)
+    monkeypatch.setattr(classifier, 'evaluatorq', fake_evaluatorq)
     projections = {'trace-1': _projection()}
 
-    classifications = await run_jev(
+    classifications = await run_classifier(
         (_trace(),),
         projections,
         _compiled(),
@@ -368,10 +368,10 @@ async def test_run_jev_uses_matching_parallelism_and_calls_terminal_callback_onc
     assert len(completed) == 1
     assert parse_calls == 1
     assert classifications[0].trace_id == 'trace-1'
-    assert received[0][0] == 'jev-trace-finder'
+    assert received[0][0] == 'classifier-trace-finder'
     kwargs = received[0][1]
     assert kwargs['data'] == [build_datapoint(_trace(), _projection())]
-    assert kwargs['evaluators'] == [{'name': 'jev'}]
+    assert kwargs['evaluators'] == [{'name': 'classifier'}]
     assert kwargs['inference'] is False
     assert kwargs['datapoint_parallelism'] == 3
     assert kwargs['llm_parallelism'] == 3

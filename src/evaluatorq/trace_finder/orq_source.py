@@ -254,6 +254,7 @@ class OrqTraceSource:
         seen_trace_ids: set[str] = set()
         used_tokens: set[str] = set()
         dropped_count = 0
+        wrong_project_count = 0
         fallback_count = 0
         scanned_count = 0
         max_scanned = max(PAGE_SIZE, limit * 5)
@@ -312,19 +313,8 @@ class OrqTraceSource:
                 for payload in raw_summaries
                 if (trace_id := _field(payload, 'trace_id') or _field(payload, 'id'))
             }
-            unique_summaries: list[tuple[Any, Any, bool]] = []
-            for summary in summaries:
-                trace_id = _field(summary, 'trace_id') or _field(summary, 'id')
-                if not trace_id or str(trace_id) in seen_trace_ids:
-                    continue
-                seen_trace_ids.add(str(trace_id))
-                raw_summary = raw_by_id.get(str(trace_id))
-                raw_capture_fallback = raw_summary is None
-                unique_summaries.append((
-                    summary,
-                    raw_summary if raw_summary is not None else _plain(summary),
-                    raw_capture_fallback,
-                ))
+            unique_summaries, rejected = _select_summaries(summaries, raw_by_id, seen_trace_ids, facets.project_id)
+            wrong_project_count += rejected
 
             hydrated = await self._hydrate_page(unique_summaries, project_names, semaphore)
             fallback_count += sum(result[1] for result in hydrated)
@@ -343,6 +333,14 @@ class OrqTraceSource:
                 raise OrqSourceError(f'repeated OQL page token {next_token!r}')
             page_token = str(next_token)
 
+        if wrong_project_count:
+            logger.warning(
+                'discarded {} trace summary(s) outside selected project {} despite the OQL filter',
+                wrong_project_count,
+                facets.project_id,
+            )
+            if not records:
+                raise OrqSourceError('Orq returned only traces outside the selected project. No traces were loaded.')
         if fallback_count:
             logger.warning(
                 'used SDK-model fallback for {} trace response(s) because raw-response capture was unavailable; '
@@ -461,11 +459,39 @@ class OrqTraceSource:
             page_token = str(next_token)
 
 
+def _select_summaries(
+    summaries: list[Any],
+    raw_by_id: Mapping[str, Any],
+    seen_trace_ids: set[str],
+    project_id: str | None,
+) -> tuple[list[tuple[Any, Any, bool]], int]:
+    """Enforce the selected project even when the trace query returns other projects."""
+
+    selected: list[tuple[Any, Any, bool]] = []
+    rejected = 0
+    for summary in summaries:
+        trace_id = _field(summary, 'trace_id') or _field(summary, 'id')
+        if not trace_id or str(trace_id) in seen_trace_ids:
+            continue
+        seen_trace_ids.add(str(trace_id))
+        raw_summary = raw_by_id.get(str(trace_id))
+        raw = raw_summary if raw_summary is not None else _plain(summary)
+        if project_id and str(_metadata_value(summary, raw, 'project_id') or '') != project_id:
+            rejected += 1
+            continue
+        selected.append((summary, raw, raw_summary is None))
+    return selected, rejected
+
+
 def build_oql(facets: FacetSelection, numeric: NumericFilters, project_names: Mapping[str, str]) -> str:
     """Compile selected categorical and numeric filters into deterministic OQL."""
 
     clauses = [BASE_FILTER]
-    if facets.project:
+    if facets.project_id:
+        if facets.project_id not in project_names:
+            raise OrqSourceError(f'cannot resolve selected project id: {facets.project_id}')
+        clauses.append(f'project_id in ({_oql_values([facets.project_id])})')
+    elif facets.project:
         project_ids = sorted(project_id for project_id, name in project_names.items() if name in facets.project)
         missing = set(facets.project) - set(project_names.values())
         if missing:

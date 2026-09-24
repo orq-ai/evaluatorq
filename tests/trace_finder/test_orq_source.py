@@ -158,6 +158,48 @@ def test_build_oql_rejects_a_project_name_that_cannot_be_resolved() -> None:
         build_oql(FacetSelection(project=frozenset({'Missing'})), NumericFilters(), {})
 
 
+def test_saved_project_id_does_not_expand_a_duplicate_project_name() -> None:
+    facets = FacetSelection(project_id='project-b', project=frozenset({'Same'}))
+
+    query = build_oql(facets, NumericFilters(), {'project-a': 'Same', 'project-b': 'Same'})
+
+    assert 'project_id in ("project-b")' in query
+    assert 'project-a' not in query
+
+
+@pytest.mark.asyncio
+async def test_selected_project_discards_cross_project_query_results_before_hydration() -> None:
+    traces = FakeTraces({
+        None: ([summary('wrong', project_id='project-a')], True, 'page-2'),
+        'page-2': ([summary('right', project_id='project-b')], False, None),
+    })
+    projects = FakeProjects([
+        namespace(project_id='project-a', name='Other'),
+        namespace(project_id='project-b', name='Selected'),
+    ])
+
+    snapshot = await make_source(FakeOrq(traces, projects)).load_async(
+        START, END, 1, facets=FacetSelection(project_id='project-b'), numeric=NumericFilters()
+    )
+
+    assert [trace.trace_id for trace in snapshot.traces] == ['right']
+    assert traces.list_span_calls == []
+    assert all('project_id in ("project-b")' in call['oql'] for call in traces.query_calls)
+
+
+@pytest.mark.asyncio
+async def test_selected_project_reports_when_query_returns_only_other_projects() -> None:
+    traces = FakeTraces({None: ([summary('wrong', project_id='project-a')], False, None)})
+    projects = FakeProjects([namespace(project_id='project-b', name='Selected')])
+
+    with pytest.raises(OrqSourceError, match='only traces outside the selected project'):
+        await make_source(FakeOrq(traces, projects)).load_async(
+            START, END, 1, facets=FacetSelection(project_id='project-b'), numeric=NumericFilters()
+        )
+
+    assert traces.list_span_calls == []
+
+
 @pytest.mark.asyncio
 async def test_loads_pages_newest_first_and_uses_bounded_requests() -> None:
     traces = FakeTraces({

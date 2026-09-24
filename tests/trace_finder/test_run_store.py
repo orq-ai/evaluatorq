@@ -8,11 +8,13 @@ from typing import Any, Literal, cast
 
 import pytest
 
+from evaluatorq.common.judge import ClassifyAnswer, ClassifyResponse
 from evaluatorq.trace_finder.compiler import CompiledPlan
+from evaluatorq.trace_finder.filter_selector import FilterSelectionResult
 from evaluatorq.trace_finder.models import (
     CompiledQuery,
     FacetSelection,
-    JevProjection,
+    TraceProjection,
     NumericFilters,
     PopulationRequest,
     RunRequest,
@@ -93,7 +95,7 @@ class Runner:
     async def __call__(
         self,
         traces: tuple[TraceRecord, ...],
-        projections: dict[str, JevProjection],
+        projections: dict[str, TraceProjection],
         compiled: CompiledQuery,
         *,
         parallelism: int,
@@ -117,7 +119,7 @@ class RaisingRunner(Runner):
     async def __call__(
         self,
         traces: tuple[TraceRecord, ...],
-        projections: dict[str, JevProjection],
+        projections: dict[str, TraceProjection],
         compiled: CompiledQuery,
         *,
         parallelism: int,
@@ -128,7 +130,7 @@ class RaisingRunner(Runner):
         self.on_complete = on_complete
         self.entered.set()
         await on_complete(classification(int(traces[0].trace_id.removeprefix('trace-'))))
-        raise RuntimeError('JEV runner exploded')
+        raise RuntimeError('classifier runner exploded')
 
 
 class Planner:
@@ -215,7 +217,7 @@ def make_store(
     store = RunStore(
         compiler=planner,
         population_loader=loader,
-        run_jev=runner,
+        run_classifier=runner,
         filter_selector=select_filters,
         monotonic=clock.monotonic,
         now_utc=clock.now,
@@ -255,6 +257,37 @@ async def test_compile_merges_generated_filters_and_numeric_constraints_with_man
 
 
 @pytest.mark.asyncio
+async def test_filter_response_survives_review_start_and_is_detached() -> None:
+    runner = Runner()
+    response = ClassifyResponse(
+        model='jev-latest', answers={'provider': ClassifyAnswer(type='choice', choice='provider_0')}
+    )
+
+    async def select_filters(query: str, population: PopulationRequest) -> FilterSelectionResult:
+        del query, population
+        return FilterSelectionResult(FacetSelection(provider=frozenset({'openai'})), response)
+
+    store = RunStore(
+        compiler=Planner(), population_loader=Loader(), run_classifier=runner, filter_selector=select_filters
+    )
+    review = await store.compile(request(mode='review'))
+    assert review.state == 'awaiting_review'
+    assert review.filter_response is not None
+    review.filter_response.answers['provider'].choice = 'changed'
+    current = await store.snapshot()
+    assert current.filter_response is not None
+    assert current.filter_response.answers['provider'].choice == 'provider_0'
+
+    assert current.request is not None
+    started = await store.start(current.request, compiled_query())
+    assert started.filter_response is not None
+    assert started.filter_response.answers['provider'].choice == 'provider_0'
+    runner.release.set()
+    assert store._task is not None
+    await asyncio.wait_for(store._task, timeout=1)
+
+
+@pytest.mark.asyncio
 async def test_filter_selector_receives_the_run_population_bounds() -> None:
     planner = Planner()
     loader = Loader()
@@ -270,7 +303,7 @@ async def test_filter_selector_receives_the_run_population_bounds() -> None:
     store = RunStore(
         compiler=planner,
         population_loader=loader,
-        run_jev=runner,
+        run_classifier=runner,
         filter_selector=select_filters,
         monotonic=clock.monotonic,
         now_utc=clock.now,
@@ -307,7 +340,7 @@ async def test_close_cancels_and_releases_the_builder_resources() -> None:
     store = RunStore(
         compiler=Planner(),
         population_loader=Loader(),
-        run_jev=Runner(),
+        run_classifier=Runner(),
         filter_selector=make_store()[0]._filter_selector,
         close=lambda: released.append(True),
     )
@@ -331,7 +364,7 @@ async def test_close_awaits_async_resource_cleanup() -> None:
     store = RunStore(
         compiler=Planner(),
         population_loader=Loader(),
-        run_jev=Runner(),
+        run_classifier=Runner(),
         filter_selector=make_store()[0]._filter_selector,
         close=cleanup,
     )
@@ -352,7 +385,7 @@ async def test_population_loader_failure_sets_failed_state_with_error_text() -> 
 
 
 @pytest.mark.asyncio
-async def test_jev_runner_failure_mid_run_sets_failed_state_with_error_text() -> None:
+async def test_classifier_runner_failure_mid_run_sets_failed_state_with_error_text() -> None:
     runner = RaisingRunner()
     store, _, _, _, _ = make_store(runner=runner)
 
@@ -364,7 +397,7 @@ async def test_jev_runner_failure_mid_run_sets_failed_state_with_error_text() ->
 
     failed = await store.snapshot()
     assert failed.state == 'failed'
-    assert failed.error == 'JEV runner exploded'
+    assert failed.error == 'classifier runner exploded'
     assert failed.completed == 1
 
 
@@ -449,6 +482,46 @@ async def test_cancelling_start_propagates_and_sets_cancelled_state() -> None:
 
     cancelled = await store.snapshot()
     assert cancelled.state == 'cancelled'
+    assert runner.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_review_start_returns_working_snapshot_while_changed_population_loads() -> None:
+    class ReviewLoader(Loader):
+        def __init__(self) -> None:
+            super().__init__()
+            self.block_next = False
+            self.entered = asyncio.Event()
+
+        async def __call__(self, population: PopulationRequest) -> Snapshot:
+            if self.block_next:
+                self.calls.append(population)
+                self.entered.set()
+                await asyncio.Event().wait()
+                raise AssertionError('blocked population unexpectedly completed')
+            return await super().__call__(population)
+
+    loader = ReviewLoader()
+    store, _, _, runner, _ = make_store(loader=loader)
+    review = await store.compile(request(mode='review'))
+    assert review.request is not None and review.compiled is not None
+    loader.block_next = True
+    changed_population = review.request.population.model_copy(
+        update={'numeric': NumericFilters(tokens_min=200)}
+    )
+    changed_request = review.request.model_copy(update={'population': changed_population})
+
+    starting = await asyncio.wait_for(store.start(changed_request, review.compiled, wait=False), timeout=1)
+    assert starting.state == 'compiling'
+    assert starting.phase == 'starting_classification'
+    await asyncio.wait_for(loader.entered.wait(), timeout=1)
+    loading = await store.snapshot()
+    assert loading.state == 'compiling'
+    assert loading.phase == 'loading_traces'
+
+    cancelled = await store.cancel()
+    assert cancelled.state == 'cancelled'
+    assert cancelled.phase is None
     assert runner.calls == 0
 
 

@@ -20,7 +20,7 @@ from .models import (
 
 
 class ExportTask(BaseModel):
-    """Allow-listed, state-free portion of a compiled JEV task."""
+    """Allow-listed, state-free portion of a compiled classifier task."""
 
     model_config = ConfigDict(frozen=True, extra='forbid')
 

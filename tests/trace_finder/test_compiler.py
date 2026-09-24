@@ -16,7 +16,7 @@ from evaluatorq.trace_finder.compiler import (
     classification_legend,
     compile_query,
 )
-from evaluatorq.trace_finder.models import CompiledQuery
+from evaluatorq.trace_finder.models import CompiledQuery, ValueSelection
 
 
 def choice_document() -> dict[str, Any]:
@@ -39,6 +39,18 @@ def choice_document() -> dict[str, Any]:
             'duration_ms_max': None,
         },
     }
+
+
+def test_noul_yes_no_selection_is_normalized_to_booleans() -> None:
+    document = choice_document()
+    document['task'].update(kind='noul', choice_criteria=None)
+    document['selection'] = {'kind': 'values', 'values': ['yes']}
+
+    compiled, _ = CompilerWireQuery.model_validate(document).to_domain()
+
+    assert compiled.task.kind == 'noul'
+    assert isinstance(compiled.selection, ValueSelection)
+    assert compiled.selection.values == (True,)
 
 
 class FakeStructuredResult:

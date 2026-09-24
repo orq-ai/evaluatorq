@@ -14,6 +14,7 @@ from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.dashboard import app as app_module
 from evaluatorq.dashboard import apply_ui
 from evaluatorq.dashboard import finder_routes
+from evaluatorq.dashboard.orq_scope import OrqProject, OrqScope
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.apply_ui import apply_model
 from evaluatorq.dashboard.security import CSRF_FIELD, _CSRF_TOKEN
@@ -21,7 +22,7 @@ from evaluatorq.trace_finder import FacetCatalogue, RunSnapshot
 from evaluatorq.trace_finder.settings import DashboardSettings, save_settings
 
 
-_MODELS = {'compiler_model': 'compiler/custom', 'jev_model': 'jev/custom', 'apply_model': 'apply/custom'}
+_MODELS = {'compiler_model': 'compiler/custom', 'classifier_model': 'classifier/custom', 'apply_model': 'apply/custom'}
 
 
 def csrf_data(values: dict[str, str] | None = None) -> dict[str, str]:
@@ -36,7 +37,7 @@ def settings_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(path))
     for name in (
         'EVALUATORQ_COMPILER_MODEL',
-        'EVALUATORQ_JEV_MODEL',
+        'EVALUATORQ_CLASSIFIER_MODEL',
         'EVALUATORQ_APPLY_MODEL',
         'EVALUATORQ_FINDER_WINDOW_DAYS',
         'EVALUATORQ_FINDER_LIMIT',
@@ -56,7 +57,7 @@ def test_settings_post_saves_and_redirects(client: TestClient, settings_file: Pa
         '/settings',
         data=csrf_data({
             'compiler_model': 'compiler/custom',
-            'jev_model': 'jev/custom',
+            'classifier_model': 'classifier/custom',
             'apply_model': 'apply/custom',
             'window_days': '14',
             'limit': '42',
@@ -72,7 +73,7 @@ def test_settings_post_saves_and_redirects(client: TestClient, settings_file: Pa
 def test_settings_post_requires_csrf_and_same_origin(client: TestClient) -> None:
     values = {
         'compiler_model': 'compiler/custom',
-        'jev_model': 'jev/custom',
+        'classifier_model': 'classifier/custom',
         'apply_model': 'apply/custom',
         'window_days': '14',
         'limit': '42',
@@ -91,7 +92,7 @@ def test_numeric_fields_are_not_taken_from_the_form(client: TestClient, settings
         '/settings',
         data=csrf_data({
             'compiler_model': 'compiler/custom',
-            'jev_model': 'jev/custom',
+            'classifier_model': 'classifier/custom',
             'apply_model': 'apply/custom',
             'limit': '9999',
         }),
@@ -108,7 +109,7 @@ def test_environment_overrides_are_not_persisted_by_save(
     monkeypatch.setenv('EVALUATORQ_FINDER_LIMIT', '42')
     response = client.post(
         '/settings',
-        data=csrf_data({'compiler_model': 'compiler/custom', 'jev_model': 'jev/custom', 'apply_model': 'apply/custom'}),
+        data=csrf_data({'compiler_model': 'compiler/custom', 'classifier_model': 'classifier/custom', 'apply_model': 'apply/custom'}),
     )
 
     assert response.status_code == 303
@@ -121,19 +122,19 @@ def test_unchanged_environment_model_overrides_are_not_persisted(
     client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv('EVALUATORQ_COMPILER_MODEL', 'env/compiler')
-    monkeypatch.setenv('EVALUATORQ_JEV_MODEL', 'env/jev')
+    monkeypatch.setenv('EVALUATORQ_CLASSIFIER_MODEL', 'env/classifier')
     monkeypatch.setenv('EVALUATORQ_APPLY_MODEL', 'env/apply')
 
     response = client.post('/settings', data=csrf_data({
         'compiler_model': 'env/compiler',
-        'jev_model': 'env/jev',
+        'classifier_model': 'env/classifier',
         'apply_model': 'env/apply',
     }))
 
     assert response.status_code == 303
     saved = json.loads(settings_file.read_text())
     assert saved['compiler_model'] == DashboardSettings.model_fields['compiler_model'].default
-    assert saved['jev_model'] == DashboardSettings.model_fields['jev_model'].default
+    assert saved['classifier_model'] == DashboardSettings.model_fields['classifier_model'].default
     assert saved['apply_model'] == DashboardSettings.model_fields['apply_model'].default
 
 
@@ -153,7 +154,7 @@ def test_blank_model_is_rejected(client: TestClient) -> None:
         '/settings',
         data=csrf_data({
             'compiler_model': '  ',
-            'jev_model': 'jev/custom',
+            'classifier_model': 'classifier/custom',
             'apply_model': 'apply/custom',
             'window_days': '14',
             'limit': '42',
@@ -187,7 +188,7 @@ def test_saving_settings_invalidates_initialized_finder_store(client: TestClient
         '/settings',
         data=csrf_data({
             'compiler_model': 'new/compiler',
-            'jev_model': 'jev/custom',
+            'classifier_model': 'classifier/custom',
             'apply_model': 'apply/custom',
             'window_days': '14',
             'limit': '42',
@@ -203,7 +204,7 @@ def test_settings_page_shows_saved_values(client: TestClient, settings_file: Pat
     save_settings(
         DashboardSettings(
             compiler_model='saved/compiler',
-            jev_model='saved/jev',
+            classifier_model='saved/classifier',
             apply_model='saved/apply',
             window_days=11,
             limit=123,
@@ -216,7 +217,7 @@ def test_settings_page_shows_saved_values(client: TestClient, settings_file: Pat
 
     assert response.status_code == 200
     assert 'value="saved/compiler"' in response.text
-    assert 'value="saved/jev"' in response.text
+    assert 'value="saved/classifier"' in response.text
     assert 'value="saved/apply"' in response.text
     assert 'name="window_days"' not in response.text
     assert 'name="limit"' not in response.text
@@ -228,6 +229,68 @@ def test_saved_confirmation_is_rendered_after_redirect(client: TestClient) -> No
 
     assert response.status_code == 200
     assert 'Settings saved.' in response.text
+
+
+def test_project_key_scope_is_saved_and_used_for_trace_search(
+    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evaluatorq.dashboard.trace_links import trace_span_url
+    from evaluatorq.trace_finder.settings import load_settings
+
+    scope = OrqScope('orq-research', 'research-id', (OrqProject('project-bauke', 'Bauke', 'research-id'),))
+    monkeypatch.setattr(app_module, 'discover_orq_scope', lambda _profile: scope)
+    monkeypatch.delenv('ORQ_WORKSPACE', raising=False)
+    monkeypatch.delenv('ORQ_WORKSPACE_SLUG', raising=False)
+
+    page = client.get('/settings').text
+    assert '<option value="project-bauke" selected>Bauke' in page
+    response = client.post('/settings', data=csrf_data({
+        **_MODELS,
+        'orq_workspace': 'orq-research',
+        'orq_project_id': 'project-bauke',
+    }))
+
+    assert response.status_code == 303
+    saved = load_settings(settings_file)
+    assert (saved.orq_workspace, saved.orq_project_id, saved.orq_project_name) == (
+        'orq-research', 'project-bauke', 'Bauke'
+    )
+    assert '/orq-research/traces?' in (trace_span_url('trace-1', 'span-1') or '')
+    run = finder_routes._run_request({'query': 'Frustrated customers'}, saved)
+    assert run.population.facets.project_id == 'project-bauke'
+    assert '<b>Project</b><a href="/settings">Bauke</a>' in client.get('/find').text
+
+
+def test_settings_rejects_project_outside_selected_key(
+    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scope = OrqScope('orq-research', 'research-id', (OrqProject('project-bauke', 'Bauke', 'research-id'),))
+    monkeypatch.setattr(app_module, 'discover_orq_scope', lambda _profile: scope)
+
+    response = client.post('/settings', data=csrf_data({
+        **_MODELS,
+        'orq_workspace': 'orq-research',
+        'orq_project_id': 'project-other',
+    }))
+
+    assert response.status_code == 422
+    assert 'not available to the selected credential' in response.text
+    assert not settings_file.exists()
+
+
+def test_settings_rejects_workspace_outside_selected_key(
+    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scope = OrqScope('orq-research', 'research-id', (OrqProject('project-bauke', 'Bauke', 'research-id'),))
+    monkeypatch.setattr(app_module, 'discover_orq_scope', lambda _profile: scope)
+
+    response = client.post('/settings', data=csrf_data({
+        **_MODELS, 'orq_workspace': 'other-workspace', 'orq_project_id': 'project-bauke',
+    }))
+
+    assert response.status_code == 422
+    assert 'does not match the selected credential' in response.text
+    assert not settings_file.exists()
 
 
 def test_apply_model_uses_saved_setting_then_environment(
@@ -261,7 +324,7 @@ def test_settings_page_hides_the_profile_selector_without_cli_profiles(
     monkeypatch.setattr(app_module, 'list_orq_profiles', lambda: ())
     html = client.get('/settings').text
     assert 'name="orq_profile"' not in html
-    assert '<summary>Advanced</summary>' not in html
+    assert 'name="orq_workspace"' in html
 
 
 def test_settings_page_offers_cli_profiles_under_advanced(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -273,6 +336,46 @@ def test_settings_page_offers_cli_profiles_under_advanced(client: TestClient, mo
     assert '<option value="prod">prod</option>' in html
     assert 'key-staging' not in html
     assert '<details class="settings-advanced" open>' not in html
+
+
+def test_selecting_another_profile_refreshes_its_projects_before_save(
+    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    save_settings(DashboardSettings.model_validate({'orq_workspace': 'orq-research', 'orq_project_id': 'project-bauke'}), settings_file)
+    monkeypatch.setattr(app_module, 'list_orq_profiles', _profiles)
+    monkeypatch.setattr(
+        app_module,
+        'discover_orq_scope',
+        lambda profile: OrqScope(
+            'staging-workspace', 'staging-id', (OrqProject('project-staging', 'Staging', 'staging-id'),)
+        ) if profile == 'staging' else OrqScope(),
+    )
+
+    html = client.get('/settings?profile=staging').text
+
+    assert 'Profile preview. Choose a project, then Save to apply.' in html
+    assert '<option value="staging" selected>staging' in html
+    assert 'name="orq_workspace"' in html
+    assert '<option value="project-staging" selected>Staging' in html
+    assert 'project-bauke' not in html
+    assert json.loads(settings_file.read_text())['orq_project_id'] == 'project-bauke'
+
+
+def test_profile_without_a_resolved_slug_does_not_inherit_environment_workspace(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_module, 'list_orq_profiles', _profiles)
+    monkeypatch.setattr(
+        app_module,
+        'discover_orq_scope',
+        lambda _profile: OrqScope(None, 'staging-id', (OrqProject('project-staging', 'Staging', 'staging-id'),)),
+    )
+    monkeypatch.setenv('ORQ_WORKSPACE', 'orq-research')
+
+    html = client.get('/settings?profile=staging').text
+
+    assert 'name="orq_workspace" type="text" value=""' in html
+    assert 'could not verify this workspace slug' in html
 
 
 def test_saving_a_profile_persists_it_without_changing_environment(
@@ -298,12 +401,19 @@ def test_saving_a_profile_persists_it_without_changing_environment(
 
 
 def test_saving_a_profile_with_a_server_keeps_it_in_app_state(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(app_module, 'list_orq_profiles', _profiles)
-    monkeypatch.delenv('ORQ_BASE_URL', raising=False)
+    from evaluatorq.dashboard.trace_links import trace_span_url
+    from evaluatorq.trace_finder.settings import load_settings
 
-    assert client.post('/settings', data=csrf_data({**_MODELS, 'orq_profile': 'staging'})).status_code == 303
+    monkeypatch.setattr(app_module, 'list_orq_profiles', _profiles)
+    monkeypatch.setenv('ORQ_BASE_URL', 'https://environment.orq.ai')
+
+    assert client.post('/settings', data=csrf_data({
+        **_MODELS, 'orq_profile': 'staging', 'orq_workspace': 'staging-workspace',
+    })).status_code == 303
     assert getattr(client.app, 'state').finder_profile == _profiles()[0]
-    assert 'ORQ_BASE_URL' not in os.environ
+    assert os.environ['ORQ_BASE_URL'] == 'https://environment.orq.ai'
+    assert load_settings().orq_profile_host == 'https://staging.orq.ai'
+    assert (trace_span_url('trace-1', 'span-1') or '').startswith('https://staging.orq.ai/')
 
 
 def test_blank_profile_means_the_environment(

@@ -126,7 +126,7 @@ class TestFix1CliDirectUrl:
         runner = CliRunner()
         captured_roots: list | None = None
 
-        def _fake_serve(roots: list, *, host: str, port: int) -> None:  # noqa: ARG001
+        def _fake_serve(roots: list, *, host: str, port: int, open_browser: bool) -> None:  # noqa: ARG001
             nonlocal captured_roots
             captured_roots = roots
 
@@ -162,7 +162,7 @@ class TestFix1CliDirectUrl:
         (repo / '.evaluatorq' / 'sim-runs').mkdir()
         captured_roots: list[Path] | None = None
 
-        def _fake_serve(roots: list[Path], *, host: str, port: int) -> None:  # noqa: ARG001
+        def _fake_serve(roots: list[Path], *, host: str, port: int, open_browser: bool) -> None:  # noqa: ARG001
             nonlocal captured_roots
             captured_roots = roots
 

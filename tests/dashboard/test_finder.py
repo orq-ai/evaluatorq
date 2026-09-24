@@ -5,7 +5,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from starlette.testclient import TestClient
@@ -18,7 +18,7 @@ from evaluatorq.trace_finder import (
     CompiledQuery,
     FacetCatalogue,
     FacetSelection,
-    JevProjection,
+    TraceProjection,
     NumericFilters,
     RunSnapshot,
     ThresholdSelection,
@@ -27,7 +27,7 @@ from evaluatorq.trace_finder import (
     TraceRecord,
     ValueSelection,
 )
-from evaluatorq.common.judge import ClassifyQuestion
+from evaluatorq.common.judge import ClassifyAnswer, ClassifyQuestion, ClassifyResponse
 
 
 def csrf_data(values: dict[str, str] | None = None) -> dict[str, str]:
@@ -74,7 +74,7 @@ def _compiled() -> CompiledQuery:
 class FakeStore:
     def __init__(self) -> None:
         self.trace = _trace()
-        self.projection = JevProjection(
+        self.projection = TraceProjection(
             payload={'trace_status': 'ok', 'messages': list(self.trace.messages)},
             serialized='{"messages": []}',
             estimated_tokens=10,
@@ -88,6 +88,7 @@ class FakeStore:
         self.compile_wait: bool | None = None
         self.started_request: Any | None = None
         self.started_compiled: CompiledQuery | None = None
+        self.start_wait: bool | None = None
 
     async def compile(self, request: Any, *, wait: bool = True) -> RunSnapshot:
         self.compile_request = request
@@ -111,8 +112,9 @@ class FakeStore:
         )
         return self.snapshot_value
 
-    async def start(self, request: Any, compiled: CompiledQuery) -> RunSnapshot:
+    async def start(self, request: Any, compiled: CompiledQuery, *, wait: bool = True) -> RunSnapshot:
         self.started = True
+        self.start_wait = wait
         self.started_request = request
         self.started_compiled = compiled
         result = TraceClassification(
@@ -192,17 +194,34 @@ def setup_finder(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
 def test_find_compiling_state_shows_an_indicator(setup_finder) -> None:
     store, client = setup_finder
-    store.snapshot_value = replace(store.snapshot_value, state='compiling')
+    store.snapshot_value = replace(store.snapshot_value, state='compiling', phase='planning')
     response = client.get('/find')
     assert response.status_code == 200
     assert 'finder-compiling' in response.text
-    assert 'Asking JEV what to look for' in response.text
-    assert 'compiling the question and selecting traces' in response.text
+    assert 'Planning the search' in response.text
+    assert 'compiling the question and selecting metadata filters' in response.text
     assert 'No traces loaded.' not in response.text
     assert '<b>0 / 0</b> judged' not in response.text
 
 
-def test_jev_picked_filters_do_not_carry_into_the_next_query(setup_finder) -> None:
+def test_async_controls_and_trace_drawer_have_request_feedback(setup_finder) -> None:
+    store, client = setup_finder
+    page = client.get('/find').text
+    assert 'class="finder-go-working" role="status">Starting search…' in page
+    assert 'id="finder-mode-working" role="status">Resetting review…' in page
+    assert 'id="finder-drawer-loading" role="status">Loading trace…' in page
+
+    client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate'}))
+    running = client.get('/find/poll').text
+    assert 'role="status">Cancelling…' in running
+    assert 'hx-indicator="#finder-drawer-loading"' in running
+
+    store.complete()
+    completed = client.get('/find/poll').text
+    assert 'role="status">Resetting…' in completed
+
+
+def test_classifier_picked_filters_do_not_carry_into_the_next_query(setup_finder) -> None:
     """Chips show the run's whole population, but only the user's own filters are re-submitted."""
     store, client = setup_finder
     client.post(
@@ -243,7 +262,7 @@ def test_jev_picked_filters_do_not_carry_into_the_next_query(setup_finder) -> No
     assert '<input type="hidden" form="finder-start-form" name="facet_project" value="support-agent">' in html
 
 
-def test_explicit_filters_survive_matching_jev_picks(setup_finder) -> None:
+def test_explicit_filters_survive_matching_classifier_picks(setup_finder) -> None:
     store, client = setup_finder
     client.post('/find/run', data=csrf_data({
         'query': 'support agent traces', 'mode': 'immediate',
@@ -278,6 +297,7 @@ def test_facet_menu_loads_itself_after_the_page_renders(setup_finder, monkeypatc
     assert loads == []
     assert 'hx-get="/find/facets?form_id=finder-query-form" hx-trigger="load" hx-include="#finder-controls"' in page
     assert 'Loading facet values…' in page
+    assert 'class="finder-facet-loading" role="status">Loading filters…' in page
     assert '<button class="add" type="button" aria-haspopup="true">+ Filter</button>' in page
     assert 'name="window_days" type="number" min="1" max="90" value="7" style="width:64px" hx-get="/find/facets?form_id=finder-query-form" hx-trigger="change"' in page
 
@@ -310,7 +330,7 @@ def test_find_idle_page_and_nav(setup_finder) -> None:
     assert 'Every dot is a trace' in response.text
     assert 'Trace search' in response.text
     assert 'about 1,240 traces in window' not in response.text
-    assert response.text.count('class="idle"') == 500
+    assert 'class="finder-matrix idle"' in response.text
     assert 'data-finder-example="Frustrated customers in the support agent on production this week."' in response.text
     assert 'id="finder-query-form"' in response.text
 
@@ -361,6 +381,8 @@ def test_score_review_keeps_generated_threshold_and_colors_scores() -> None:
     )
     review = finder_views.task_panel(compiled, editable=True)
     assert '<option value="gte:0.65" selected>gte 0.65</option>' in review
+    assert 'Question asked of each trace' in review
+    assert 'Raw plan' not in review
 
     result = TraceClassification(trace_id='trace-1', span_id='span-1', value=0.8, matched=True, raw_result={})
     snapshot = RunSnapshot(
@@ -371,6 +393,45 @@ def test_score_review_keeps_generated_threshold_and_colors_scores() -> None:
     legend = finder_views.legend(snapshot)
     assert '0.0 → 1.0 <b>1</b>' in legend
     assert 'gte 0.65 <b>1</b>' in legend
+
+
+def test_filter_output_panel_shows_structured_llm_reply_and_escaped_values() -> None:
+    snapshot = RunSnapshot(
+        generated_filters=FacetSelection(project=frozenset({'Demos'})),
+        filter_response=ClassifyResponse(
+            model='jev-latest', answers={'project': ClassifyAnswer(type='choice', choice='<script>')}
+        ),
+    )
+
+    html = finder_views.filter_output_panel(snapshot)
+
+    assert 'Filter selection' in html
+    assert '1 chosen' in html
+    assert 'Demos' in html
+    assert 'View structured LLM output' in html
+    assert '&lt;script&gt;' in html
+    assert '<script>' not in html
+
+
+def test_filter_output_panel_reports_selection_failure() -> None:
+    html = finder_views.filter_output_panel(RunSnapshot(filter_selection_error='facet catalogue unavailable'))
+
+    assert 'role="alert"' in html
+    assert 'facet catalogue unavailable' in html
+    assert 'View structured LLM output' not in html
+
+
+def test_noul_task_panel_omits_empty_label_and_criteria_sections() -> None:
+    html = finder_views.task_panel(_compiled().model_copy(update={
+        'task': ClassifyQuestion(kind='noul', instructions='Does this match?', state={}),
+        'selection': ValueSelection(kind='values', values=(True,)),
+    }), editable=False)
+
+    assert 'Yes / no' in html
+    assert 'Yes threshold' in html
+    assert '0 labels' not in html
+    assert 'Verdict labels' not in html
+    assert 'Raw plan' not in html
 
 
 def test_trace_span_link_rejects_filter_delimiters(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -421,7 +482,7 @@ def test_find_review_start_transitions_to_classification(setup_finder) -> None:
     store, client = setup_finder
     review = client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'review'}))
     assert review.status_code == 200
-    assert 'Review the plan before running per-trace JEV classification.' in review.text
+    assert 'Review the plan before running per-trace classification.' in review.text
     assert 'name="instructions"' in review.text
 
     started = client.post(
@@ -442,6 +503,7 @@ def test_find_review_start_transitions_to_classification(setup_finder) -> None:
     )
     assert started.status_code == 200
     assert store.started
+    assert store.start_wait is False
     assert store.started_request is not None
     assert store.started_request.population.start is not None
     assert store.started_request.population.end is not None
@@ -491,7 +553,7 @@ def test_find_failed_snapshot_renders_escaped_error(setup_finder) -> None:
     assert '<compiler failed>' not in response.text
 
 
-def test_find_trace_drawer_renders_thread_and_jev_input(setup_finder, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_find_trace_drawer_renders_thread_and_classifier_input(setup_finder, monkeypatch: pytest.MonkeyPatch) -> None:
     store, client = setup_finder
     client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate'}))
     store.complete()
@@ -500,9 +562,13 @@ def test_find_trace_drawer_renders_thread_and_jev_input(setup_finder, monkeypatc
     assert drawer.status_code == 200
     assert 'rt-drawer' in drawer.text
     assert 'Full thread' in drawer.text
-    assert 'JEV input' in drawer.text
+    assert 'Classifier input' in drawer.text
     assert 'Raw result' in drawer.text
     assert 'This is the third time' in drawer.text
+    assert drawer.text.count('<details class="fd-msg') == 2
+    assert '<summary><span class="role">user <span class="fd-msg-index">1</span>' in drawer.text
+    assert '<span class="fd-msg-preview">This is the third time I am asking.</span>' in drawer.text
+    assert '<div class="fd-msg-content">This is the third time I am asking.</div>' in drawer.text
     assert 'eqFinderTab(this' in drawer.text
     assert 'navigator.clipboard.writeText' in drawer.text
 
@@ -582,3 +648,76 @@ def test_find_facets_menu_lists_catalogue_values(setup_finder, monkeypatch: pyte
     assert response.status_code == 200
     assert 'support-agent' in response.text
     assert 'gpt-5.6-luna' in response.text
+
+
+def test_find_trace_drawer_renders_genai_parts_from_responses_spans() -> None:
+    from evaluatorq.dashboard.finder_views import _message_text
+
+    user = {'role': 'user', 'parts': [{'type': 'text', 'content': 'Review this diff'}]}
+    reasoning = {'role': 'assistant', 'parts': [{'type': 'reasoning', 'content': '[encrypted]'}]}
+    call = {'role': 'assistant', 'parts': [{'type': 'tool_call', 'name': 'task_done', 'arguments': {'state': 'DONE'}}]}
+    chat_call = {
+        'role': 'assistant',
+        'content': None,
+        'tool_calls': [{'type': 'function', 'function': {'name': 'lookup', 'arguments': '{"id": 1}'}}],
+    }
+    assert _message_text(user) == 'Review this diff'
+    assert _message_text(reasoning) == ''
+    assert _message_text(call) == '→ task_done({"state": "DONE"})'
+    assert _message_text(chat_call) == '→ lookup({"id": 1})'
+
+
+def test_find_trace_drawer_explains_a_trace_missing_from_the_current_run(setup_finder) -> None:
+    _, client = setup_finder
+    drawer = client.get('/find/trace/not-in-run')
+    # 200, not 404: htmx discards a 4xx body, so the click would otherwise do nothing visible.
+    assert drawer.status_code == 200
+    assert 'not part of the current run' in drawer.text
+
+
+@pytest.mark.parametrize(
+    ('snapshot', 'label', 'kind'),
+    [
+        (RunSnapshot(), 'Idle', 'idle'),
+        (RunSnapshot(state='compiling', phase='planning'), 'Planning search', 'busy'),
+        (RunSnapshot(state='compiling', phase='loading_traces'), 'Loading traces', 'busy'),
+        (RunSnapshot(state='compiling', phase='starting_classification'), 'Starting classification', 'busy'),
+        (RunSnapshot(state='classifying', completed=3, total=10), 'Labelling data · 3/10', 'busy'),
+        (RunSnapshot(state='completed'), 'Done', 'done'),
+        (RunSnapshot(state='failed', error='boom'), 'Failed', 'failed'),
+    ],
+)
+def test_status_indicator_names_each_run_phase(snapshot: RunSnapshot, label: str, kind: str) -> None:
+    from evaluatorq.dashboard.finder_views import status_indicator
+
+    html = status_indicator(snapshot)
+    assert f'finder-status {kind}' in html
+    assert label in html
+
+
+@pytest.mark.parametrize(
+    ('phase', 'heading', 'detail'),
+    [
+        ('planning', 'Planning the search', 'compiling the question and selecting metadata filters'),
+        ('loading_traces', 'Loading traces', 'loading selected traces'),
+        ('starting_classification', 'Starting classification', 'preparing the reviewed task'),
+    ],
+)
+def test_working_phases_show_matching_field_and_progress(
+    phase: Literal['planning', 'loading_traces', 'starting_classification'], heading: str, detail: str
+) -> None:
+    from evaluatorq.dashboard.finder_views import field
+
+    html = field(RunSnapshot(state='compiling', phase=phase))
+    assert heading in html
+    assert detail in html
+    assert 'finder-pulse' in html
+    assert '0.0s' not in html
+
+
+def test_run_controls_are_preserved_across_polls_per_form(setup_finder) -> None:
+    store, client = setup_finder
+    client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate'}))
+    poll = client.get('/find/poll').text
+    for name in ('window_days', 'limit', 'parallelism'):
+        assert f'id="finder-{name}-finder-query-form" hx-preserve' in poll

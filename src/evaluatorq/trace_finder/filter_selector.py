@@ -1,8 +1,9 @@
-"""One bounded JEV classify request for selecting live metadata filters."""
+"""One bounded classify request for selecting live metadata filters."""
 
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -22,7 +23,16 @@ MAX_FILTER_QUESTIONS = 100
 
 
 class FilterSelectionError(RuntimeError):
-    """JEV did not return a structured metadata-filter selection."""
+    """The classifier did not return a structured metadata-filter selection."""
+
+
+@dataclass(frozen=True)
+class FilterSelectionResult:
+    """Resolved metadata filters and the classifier's structured reply."""
+
+    selection: FacetSelection
+    response: ClassifyResponse | None = None
+    error: str | None = None
 
 
 async def select_filters(
@@ -33,11 +43,25 @@ async def select_filters(
     *,
     cfg: LLMCallConfig | None = None,
 ) -> FacetSelection:
-    """Ask JEV one classify request, with binary questions for explicit multi-value facets.
+    """Ask the classifier one classify request, with binary questions for explicit multi-value facets.
 
     Retry is owned by ``with_retry`` here; the SDK client's own retry budget is
     disabled so this classify call has exactly one retry layer.
     """
+
+    result = await select_filters_with_response(client, model, catalogue, query, cfg=cfg)
+    return result.selection
+
+
+async def select_filters_with_response(
+    client: AsyncOpenAI,
+    model: str,
+    catalogue: FacetCatalogue,
+    query: str,
+    *,
+    cfg: LLMCallConfig | None = None,
+) -> FilterSelectionResult:
+    """Select filters and retain the exact structured classifier response for review."""
 
     normalized = query.strip()
     if not normalized:
@@ -46,7 +70,7 @@ async def select_filters(
     choices, binary_values, questions = _questions_for_catalogue(catalogue, normalized)
 
     if not questions:
-        return FacetSelection()
+        return FilterSelectionResult(FacetSelection())
     if len(questions) > MAX_FILTER_QUESTIONS:
         raise FilterSelectionError(
             f'trace filter selection needs {len(questions)} questions; maximum is {MAX_FILTER_QUESTIONS}'
@@ -77,10 +101,13 @@ async def select_filters(
     except Exception as exc:
         raise FilterSelectionError(str(exc)) from exc
     if outcome.error_kind is not None or outcome.response is None:
-        message = outcome.error_message or 'JEV returned no filter selection.'
+        message = outcome.error_message or 'The classifier returned no filter selection.'
         raise FilterSelectionError(message)
 
-    return _selection_from_answers(outcome.response, choices, binary_values, questions)
+    return FilterSelectionResult(
+        _selection_from_answers(outcome.response, choices, binary_values, questions),
+        outcome.response.model_copy(deep=True),
+    )
 
 
 def _questions_for_catalogue(
@@ -138,22 +165,22 @@ def _selection_from_answers(
     for question_key in questions:
         answer = response.answers.get(question_key)
         if answer is None:
-            raise FilterSelectionError(f'JEV returned no answer for filter dimension: {question_key}')
+            raise FilterSelectionError(f'The classifier returned no answer for filter dimension: {question_key}')
         if question_key in binary_values:
             name, value = binary_values[question_key]
             if answer.type != 'noul' or answer.noul is None:
                 raise FilterSelectionError(
-                    f'JEV returned an invalid {question_key} filter answer type: {answer.type!r}'
+                    f'The classifier returned an invalid {question_key} filter answer type: {answer.type!r}'
                 )
             if answer.noul >= 0.5:
                 selected[name].add(value)
             continue
         name = question_key
         if answer.type != 'choice':
-            raise FilterSelectionError(f'JEV returned an invalid {name} filter answer type: {answer.type!r}')
+            raise FilterSelectionError(f'The classifier returned an invalid {name} filter answer type: {answer.type!r}')
         choice = answer.choice
         if choice not in choices[name]:
-            raise FilterSelectionError(f'JEV selected an unavailable {name} choice: {choice!r}')
+            raise FilterSelectionError(f'The classifier selected an unavailable {name} choice: {choice!r}')
         value = choices[name][choice]
         if value is not None:
             selected[name].add(value)

@@ -1071,6 +1071,7 @@ all = [
     { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "orq-ai-sdk" },
     { name = "pydantic-ai-slim", extra = ["openai"] },
+    { name = "python-dotenv" },
     { name = "python-fasthtml" },
     { name = "uvicorn" },
     { name = "vl-convert-python" },
@@ -1079,6 +1080,7 @@ crewai = [
     { name = "crewai", marker = "python_full_version >= '3.11'" },
 ]
 dashboard = [
+    { name = "python-dotenv" },
     { name = "python-fasthtml" },
     { name = "uvicorn" },
     { name = "vl-convert-python" },
@@ -1186,6 +1188,8 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-ai-slim", extras = ["openai"], marker = "extra == 'all'", specifier = ">=1.0.0" },
     { name = "pydantic-ai-slim", extras = ["openai"], marker = "extra == 'pydantic-ai'", specifier = ">=1.0.0" },
+    { name = "python-dotenv", marker = "extra == 'all'", specifier = ">=1.0.0,<2.0.0" },
+    { name = "python-dotenv", marker = "extra == 'dashboard'", specifier = ">=1.0.0,<2.0.0" },
     { name = "python-fasthtml", marker = "extra == 'all'", specifier = ">=0.12.0,<0.15.0" },
     { name = "python-fasthtml", marker = "extra == 'dashboard'", specifier = ">=0.12.0,<0.15.0" },
     { name = "rich", specifier = ">=14.2.0" },

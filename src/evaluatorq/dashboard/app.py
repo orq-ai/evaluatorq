@@ -51,6 +51,7 @@ from evaluatorq.dashboard.apply_ui import register_apply_routes
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
 from evaluatorq.dashboard.finder_routes import initialize_finder_settings, register_finder_routes
+from evaluatorq.dashboard.orq_scope import discover_orq_scope
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
 from evaluatorq.dashboard.security import request_rejected
 from evaluatorq.dashboard.shell import page
@@ -180,6 +181,7 @@ def _settings_config(roots: list[Path] | None, profile: OrqProfile | None = None
     config.extend([
         ('Orq host', f'{host} ({classify_host(host)})'),
         ('Orq workspace', resolve_slug() or 'from experiment URL'),
+        ('Orq project', effective_settings().orq_project_name or 'all accessible projects'),
     ])
     return config
 
@@ -223,13 +225,30 @@ def _index(req: Request) -> NotStr:
     return NotStr(page(label, body, active_surface=surface))
 
 
-def _settings(req: Request) -> NotStr:
+async def _settings(req: Request) -> NotStr:
     roots = _roots(req)
+    settings = effective_settings()
+    profiles = await asyncio.to_thread(list_orq_profiles)
+    if 'profile' in req.query_params:
+        requested = req.query_params['profile']
+        if not requested or any(profile.name == requested and '*' not in profile.api_key for profile in profiles):
+            settings = settings.model_copy(
+                update={
+                    'orq_profile': requested or None,
+                    'orq_profile_host': None,
+                    'orq_workspace': None,
+                    'orq_project_id': None,
+                    'orq_project_name': None,
+                }
+            )
+    scope = await asyncio.to_thread(discover_orq_scope, settings.orq_profile)
     body = settings_body(
         _settings_config(roots, getattr(req.app.state, 'finder_profile', None)),
-        effective_settings(),
+        settings,
         saved=req.query_params.get('saved') == '1',
-        profiles=list_orq_profiles(),
+        preview='profile' in req.query_params,
+        profiles=profiles,
+        scope=scope,
     )
     return NotStr(page('Settings', body, active_nav='settings'))
 
@@ -264,8 +283,28 @@ async def _save_settings(req: Request) -> Response | NotStr:
         and settings.orq_profile not in {p.name for p in profiles}
     ):
         errors['orq_profile'] = 'The orq CLI does not know this profile'
+    selected_profile = next((p for p in profiles if settings is not None and p.name == settings.orq_profile), None)
+    if selected_profile is not None and '*' in selected_profile.api_key:
+        errors['orq_profile'] = 'The installed orq CLI masks this profile key; use Environment credentials.'
+    scope = await asyncio.to_thread(discover_orq_scope, settings.orq_profile if settings else None)
+    if settings is not None:
+        settings = settings.model_copy(
+            update={
+                'orq_profile_host': (selected_profile.server or DEFAULT_ORQ_BASE_URL) if selected_profile else None,
+            }
+        )
+        if scope.workspace_key and settings.orq_workspace and settings.orq_workspace != scope.workspace_key:
+            errors['orq_workspace'] = 'This workspace does not match the selected credential.'
+        if settings.orq_project_id:
+            project = next((item for item in scope.projects if item.id == settings.orq_project_id), None)
+            if project is None:
+                errors['orq_project_id'] = 'This project is not available to the selected credential.'
+            else:
+                settings = settings.model_copy(update={'orq_project_name': project.name})
+        else:
+            settings = settings.model_copy(update={'orq_project_name': None})
     if settings is None or errors:
-        body = settings_body(_settings_config(roots), values, errors=errors, profiles=profiles)
+        body = settings_body(_settings_config(roots), values, errors=errors, profiles=profiles, scope=scope)
         return Response(page('Settings', body, active_nav='settings'), status_code=422, media_type='text/html')
 
     save_settings(settings)
@@ -289,17 +328,21 @@ async def _save_settings(req: Request) -> Response | NotStr:
 def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> dict[str, object]:
     """Keep environment model overrides out of the saved file when the form was unchanged."""
     values: dict[str, object] = {
-        name: form_data.get(name, '') for name in ('compiler_model', 'jev_model', 'apply_model')
+        name: form_data.get(name, '') for name in ('compiler_model', 'classifier_model', 'apply_model')
     }
     for name, env_name in (
         ('compiler_model', 'EVALUATORQ_COMPILER_MODEL'),
-        ('jev_model', 'EVALUATORQ_JEV_MODEL'),
+        ('classifier_model', 'EVALUATORQ_CLASSIFIER_MODEL'),
         ('apply_model', 'EVALUATORQ_APPLY_MODEL'),
     ):
         override = os.environ.get(env_name, '').strip()
         if override and values[name] == override:
             values[name] = getattr(current, name)
     values['orq_profile'] = form_data.get('orq_profile', current.orq_profile)
+    values['orq_profile_host'] = current.orq_profile_host
+    values['orq_workspace'] = form_data.get('orq_workspace', current.orq_workspace)
+    values['orq_project_id'] = form_data.get('orq_project_id', current.orq_project_id)
+    values['orq_project_name'] = current.orq_project_name
     values.update(window_days=current.window_days, limit=current.limit, parallelism=current.parallelism)
     return values
 
@@ -709,7 +752,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     register_sim_compare_routes(app, roots)
 
     # ------------------------------------------------------------------
-    # Routes: /find — JEV trace finder
+    # Routes: /find — classifier trace finder
     # ------------------------------------------------------------------
     register_finder_routes(app)
 

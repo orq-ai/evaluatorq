@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+from .classifier import (
+    build_classifier_evaluator,
+    build_datapoint,
+    matches_selection,
+    parse_datapoint_result,
+    run_classifier,
+)
 from .compiler import CompiledPlan, CompileError, classification_legend, compile_query
 from .export import (
     ExportCounts,
@@ -19,14 +26,12 @@ from .export import (
 )
 from .facets import load_facet_catalogue
 from .filter_selector import NO_FILTER_LABEL, FilterSelectionError, select_filters
-from .jev import build_datapoint, build_jev_evaluator, matches_selection, parse_datapoint_result, run_jev
 from .models import (
     FACET_NAMES,
     CompiledQuery,
     FacetCatalogue,
     FacetName,
     FacetSelection,
-    JevProjection,
     LegendItem,
     NumericFilters,
     PopulationRequest,
@@ -38,6 +43,7 @@ from .models import (
     ThresholdSelection,
     TraceClassification,
     TraceDetail,
+    TraceProjection,
     TraceRecord,
     ValueSelection,
     validate_compiled_query,
@@ -78,7 +84,6 @@ __all__ = [
     'FacetName',
     'FacetSelection',
     'FilterSelectionError',
-    'JevProjection',
     'LegendItem',
     'NumericFilters',
     'OrqTraceSource',
@@ -93,11 +98,12 @@ __all__ = [
     'ThresholdSelection',
     'TraceClassification',
     'TraceDetail',
+    'TraceProjection',
     'TraceRecord',
     'ValueSelection',
+    'build_classifier_evaluator',
     'build_datapoint',
     'build_export',
-    'build_jev_evaluator',
     'build_oql',
     'build_run_store',
     'classification_legend',
@@ -110,7 +116,7 @@ __all__ = [
     'matches_selection',
     'parse_datapoint_result',
     'project_trace',
-    'run_jev',
+    'run_classifier',
     'save_settings',
     'select_filters',
     'serialize_projection',

@@ -20,7 +20,7 @@ def test_settings_round_trip_uses_json_file(tmp_path: Path) -> None:
     path = tmp_path / 'nested' / 'dashboard-settings.json'
     settings = DashboardSettings(
         compiler_model='compiler/model',
-        jev_model='jev/model',
+        classifier_model='classifier/model',
         apply_model='apply/model',
         window_days=14,
         limit=42,
@@ -71,7 +71,7 @@ def test_effective_settings_precedence_is_file_then_environment_then_overrides(
     save_settings(
         DashboardSettings(
             compiler_model='file/compiler',
-            jev_model='file/jev',
+            classifier_model='file/classifier',
             apply_model='file/apply',
             window_days=8,
             limit=80,
@@ -81,7 +81,7 @@ def test_effective_settings_precedence_is_file_then_environment_then_overrides(
     )
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(path))
     monkeypatch.setenv('EVALUATORQ_COMPILER_MODEL', 'env/compiler')
-    monkeypatch.setenv('EVALUATORQ_JEV_MODEL', 'env/jev')
+    monkeypatch.setenv('EVALUATORQ_CLASSIFIER_MODEL', 'env/classifier')
     monkeypatch.setenv('EVALUATORQ_APPLY_MODEL', 'env/apply')
 
     settings = effective_settings(
@@ -93,7 +93,7 @@ def test_effective_settings_precedence_is_file_then_environment_then_overrides(
     )
 
     assert settings.compiler_model == 'override/compiler'
-    assert settings.jev_model == 'env/jev'
+    assert settings.classifier_model == 'env/classifier'
     assert settings.apply_model == 'env/apply'
     assert settings.window_days == 21
     assert settings.limit == 80

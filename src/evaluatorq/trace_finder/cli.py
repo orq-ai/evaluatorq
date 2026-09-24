@@ -17,7 +17,7 @@ from evaluatorq.common import cli_width  # noqa: F401 — import for its non-TTY
 from evaluatorq.common.cli_epilog import examples
 from evaluatorq.common.cli_errors import emit_error
 from evaluatorq.common.llm_client import resolve_llm_client
-from evaluatorq.common.orq_client import resolve_orq_client
+from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, list_orq_profiles, resolve_orq_client
 
 from .compiler import CompileError
 from .export import export_json
@@ -41,6 +41,8 @@ _FIND_EPILOG = examples(
     'eq find "customers asking for a refund"',
     '# scope the live population with repeatable metadata facets',
     'eq find "mentions a refund" --project support-agent --model gpt-5.6-luna',
+    '# use credentials from an orq CLI profile',
+    'eq find "mentions a refund" --profile research --limit 20',
     '# save the completed run without printing trace content',
     'eq find "contains a frustrated customer" --json finder.json',
 )
@@ -180,6 +182,12 @@ async def _run(store: Any, request: RunRequest, console: Console) -> RunSnapshot
 
 def find(
     query: Annotated[str, typer.Argument(help='Natural-language question to classify against recent traces.')],
+    profile: Annotated[
+        str | None,
+        typer.Option(
+            '--profile', help='Orq CLI profile for traces and model calls; overrides ORQ_API_KEY and ORQ_BASE_URL.'
+        ),
+    ] = None,
     window_days: Annotated[
         int | None,
         typer.Option('--window-days', min=1, max=90, help='How many recent days to search.'),
@@ -187,20 +195,20 @@ def find(
     limit: Annotated[int | None, typer.Option('--limit', min=1, max=5000, help='Maximum traces to classify.')] = None,
     parallelism: Annotated[
         int | None,
-        typer.Option('--parallelism', min=1, max=200, help='Concurrent JEV classifications.'),
+        typer.Option('--parallelism', min=1, max=200, help='Concurrent classify calls.'),
     ] = None,
     compiler_model: Annotated[
         str | None,
         typer.Option(
             '--compiler-model',
-            help='Model that compiles the search question via the Orq router. Default: openai/gpt-5.6-luna. Requires ORQ_API_KEY.',
+            help='Model that compiles the search question via the Orq router. Default: openai/gpt-5.6-luna. Requires Orq credentials.',
         ),
     ] = None,
-    jev_model: Annotated[
+    classifier_model: Annotated[
         str | None,
         typer.Option(
-            '--jev-model',
-            help='JEV model that classifies each trace via the Orq router. Default: typesafe/jev-latest. Requires ORQ_API_KEY.',
+            '--classifier-model',
+            help='Model that classifies each trace via the Orq router. Default: typesafe/jev-latest. Requires Orq credentials.',
         ),
     ] = None,
     json_path: Annotated[Path | None, typer.Option('--json', help='Write the completed run export to PATH.')] = None,
@@ -223,17 +231,34 @@ def find(
         typer.Option('--duration-ms-max', min=0, help='Maximum trace duration in milliseconds.'),
     ] = None,
 ) -> None:
-    """Find recent Orq traces that satisfy a natural-language JEV task."""
+    """Find recent Orq traces that satisfy a natural-language classifier task."""
     settings = effective_settings({
         'window_days': window_days,
         'limit': limit,
         'parallelism': parallelism,
         'compiler_model': compiler_model,
-        'jev_model': jev_model,
+        'classifier_model': classifier_model,
     })
     try:
-        orq = resolve_orq_client()
-        resolved = resolve_llm_client(require_orq=True, max_retries=0)
+        selected = None
+        if profile is not None:
+            selected = next((candidate for candidate in list_orq_profiles() if candidate.name == profile), None)
+            if selected is None:
+                raise ValueError(f'Orq profile {profile!r} is unavailable. Check `orq auth profile list`.')
+            if '*' in selected.api_key:
+                raise ValueError(
+                    f'Orq profile {profile!r} has a masked key that evaluatorq cannot read. '
+                    'Run `orq doctor --fix` or use ORQ_API_KEY.'
+                )
+        if selected is None:
+            orq = resolve_orq_client()
+            resolved = resolve_llm_client(require_orq=True, max_retries=0)
+        else:
+            host = selected.server or DEFAULT_ORQ_BASE_URL
+            orq = resolve_orq_client(selected.api_key, server_url=host)
+            resolved = resolve_llm_client(
+                extra_api_key=selected.api_key, orq_host=host, require_orq=True, max_retries=0
+            )
     except (ImportError, ValueError) as exc:
         emit_error(exc)
         raise typer.Exit(code=2) from None

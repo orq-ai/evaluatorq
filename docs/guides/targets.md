@@ -37,7 +37,7 @@ If the thing under test already runs on Orq, you do not write a target class. Ho
 
 Both string forms are parsed the same way in Python and on the CLI (`eq redteam run --target agent:my-key`), and the `mode="static"` restriction on deployments applies to both — on the CLI it is `--mode static`.
 
-The first three need `ORQ_API_KEY` in the environment — evaluatorq never calls `load_dotenv()` for you, so see [Configuration](../configuration.md). `OrqResponsesTarget` is the exception: it defaults to `require_orq=False` and falls back to `OPENAI_API_KEY`, so it runs without an Orq account until you pass `require_orq=True` or a `model="agent/<key>"`.
+The first three need `ORQ_API_KEY` in the environment. Python code does not load `.env` automatically, so see [Configuration](../configuration.md). `OrqResponsesTarget` is the exception: it defaults to `require_orq=False` and falls back to `OPENAI_API_KEY`, so it runs without an Orq account until you pass `require_orq=True` or a `model="agent/<key>"`.
 
 ## The quick path: `OpenAIModelTarget`
 

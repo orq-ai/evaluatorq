@@ -6,6 +6,7 @@ from typing import Any, cast
 import pytest
 
 from evaluatorq.trace_finder import FacetCatalogue, FacetSelection, PopulationRequest, Snapshot, pipeline
+from evaluatorq.trace_finder.filter_selector import FilterSelectionResult
 from evaluatorq.trace_finder.settings import DashboardSettings
 
 
@@ -20,11 +21,11 @@ async def test_filter_selector_falls_back_to_the_settings_window_when_bounds_are
         seen['end'] = end
         return FacetCatalogue()
 
-    async def fake_select(client: Any, model: str, catalogue: FacetCatalogue, query: str) -> FacetSelection:
-        return FacetSelection()
+    async def fake_select(client: Any, model: str, catalogue: FacetCatalogue, query: str) -> FilterSelectionResult:
+        return FilterSelectionResult(FacetSelection())
 
     monkeypatch.setattr(pipeline, 'load_facet_catalogue', fake_catalogue)
-    monkeypatch.setattr(pipeline, 'select_filters', fake_select)
+    monkeypatch.setattr(pipeline, 'select_filters_with_response', fake_select)
     settings = DashboardSettings(window_days=3, limit=500, parallelism=100)
     store = pipeline.build_run_store(settings, client=cast(Any, object()), orq=cast(Any, object()))
 
@@ -81,5 +82,5 @@ async def test_filter_selector_announces_degradation_and_keeps_semantic_run_avai
     with caplog.at_level('WARNING'):
         selected = await store._filter_selector('refunds', PopulationRequest())
 
-    assert selected == FacetSelection()
+    assert selected == FilterSelectionResult(FacetSelection(), error='facet service unavailable')
     assert 'facet service unavailable' in caplog.text

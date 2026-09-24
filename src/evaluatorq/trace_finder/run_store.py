@@ -12,11 +12,11 @@ from typing import TYPE_CHECKING, Protocol, TypeVar
 from loguru import logger
 
 from .compiler import CompiledPlan
+from .filter_selector import FilterSelectionResult
 from .models import (
     FACET_NAMES,
     CompiledQuery,
     FacetSelection,
-    JevProjection,
     NumericFilters,
     PopulationRequest,
     RunRequest,
@@ -25,6 +25,7 @@ from .models import (
     Snapshot,
     TraceClassification,
     TraceDetail,
+    TraceProjection,
     TraceRecord,
 )
 from .projection import project_trace as default_project_trace
@@ -41,13 +42,13 @@ class PopulationLoader(Protocol):
     def __call__(self, request: PopulationRequest) -> Awaitable[Snapshot]: ...
 
 
-class JevRunner(Protocol):
-    """A run_jev callable with its model and client already bound."""
+class ClassifierRunner(Protocol):
+    """A run_classifier callable with its model and client already bound."""
 
     def __call__(
         self,
         traces: tuple[TraceRecord, ...],
-        projections: dict[str, JevProjection],
+        projections: dict[str, TraceProjection],
         compiled: CompiledQuery,
         *,
         parallelism: int,
@@ -71,9 +72,9 @@ class RunStore:
         *,
         compiler: Callable[[str], Awaitable[CompiledPlan]],
         population_loader: PopulationLoader,
-        run_jev: JevRunner,
-        filter_selector: Callable[[str, PopulationRequest], Awaitable[FacetSelection]],
-        project_trace: Callable[[TraceRecord], JevProjection] = default_project_trace,
+        run_classifier: ClassifierRunner,
+        filter_selector: Callable[[str, PopulationRequest], Awaitable[FacetSelection | FilterSelectionResult]],
+        project_trace: Callable[[TraceRecord], TraceProjection] = default_project_trace,
         monotonic: Callable[[], float] = time.monotonic,
         now_utc: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         close: Callable[[], Awaitable[None] | None] | None = None,
@@ -82,7 +83,7 @@ class RunStore:
         self._close = close
         self._closed = False
         self._population_loader = population_loader
-        self._run_jev = run_jev
+        self._run_classifier = run_classifier
         self._filter_selector = filter_selector
         self._project_trace = project_trace
         self._monotonic = monotonic
@@ -105,10 +106,10 @@ class RunStore:
 
         return await self._prepare(request, None, compile_query=True, wait=wait)
 
-    async def start(self, request: RunRequest, compiled: CompiledQuery) -> RunSnapshot:
-        """Start a reviewed task without running the compiler or facet selector."""
+    async def start(self, request: RunRequest, compiled: CompiledQuery, *, wait: bool = True) -> RunSnapshot:
+        """Start a reviewed task; return its working snapshot immediately when ``wait=False``."""
 
-        return await self._prepare(request, compiled, compile_query=False)
+        return await self._prepare(request, compiled, compile_query=False, wait=wait)
 
     async def _prepare(
         self,
@@ -156,7 +157,7 @@ class RunStore:
                 ):
                     previous = self._snapshot.request.population
                     explicit_filters = _review_explicit(
-                        previous.facets, self._snapshot.explicit_filters, explicit_filters, FACET_NAMES
+                        previous.facets, self._snapshot.explicit_filters, explicit_filters, (*FACET_NAMES, 'project_id')
                     )
                     explicit_numeric = _review_explicit(
                         previous.numeric,
@@ -168,14 +169,19 @@ class RunStore:
                 generation = self._generation
                 generated_filters = FacetSelection() if compile_query else self._snapshot.generated_filters
                 generated_numeric = NumericFilters() if compile_query else self._snapshot.generated_numeric
+                filter_response = None if compile_query else self._snapshot.filter_response
+                filter_selection_error = None if compile_query else self._snapshot.filter_selection_error
                 self._snapshot = RunSnapshot(
                     generation=generation,
                     state='compiling',
+                    phase='planning' if compile_query else 'starting_classification',
                     request=request.model_copy(deep=True),
                     explicit_filters=explicit_filters.model_copy(deep=True),
                     explicit_numeric=explicit_numeric.model_copy(deep=True),
                     generated_filters=generated_filters.model_copy(deep=True),
                     generated_numeric=generated_numeric.model_copy(deep=True),
+                    filter_response=filter_response.model_copy(deep=True) if filter_response is not None else None,
+                    filter_selection_error=filter_selection_error,
                     created_at=self._now_utc(),
                 )
                 self._started_monotonic = None
@@ -200,7 +206,8 @@ class RunStore:
                         await asyncio.gather(plan_task, return_exceptions=True)
                         return self._view()
                     self._task = plan_task
-                plan, generated_filters = await plan_task
+                plan, filter_result = await plan_task
+                generated_filters = filter_result.selection
                 generated_numeric = plan.numeric.model_copy(deep=True)
                 compiled = CompiledQuery.model_validate(plan.compiled.model_dump())
                 population = request.population.model_copy(
@@ -216,15 +223,21 @@ class RunStore:
                 compiled = CompiledQuery.model_validate(compiled.model_dump())
                 generated_filters = self._snapshot.generated_filters
                 generated_numeric = self._snapshot.generated_numeric
+                filter_result = FilterSelectionResult(
+                    generated_filters, self._snapshot.filter_response, self._snapshot.filter_selection_error
+                )
 
             async with self._lock:
                 if generation != self._generation or self._snapshot.state != 'compiling':
                     return self._view()
                 self._snapshot = replace(
                     self._snapshot,
+                    phase='loading_traces' if not staged_traces else 'starting_classification',
                     compiled=compiled,
                     generated_filters=generated_filters.model_copy(deep=True),
                     generated_numeric=generated_numeric.model_copy(deep=True),
+                    filter_response=filter_result.response.model_copy(deep=True) if filter_result.response else None,
+                    filter_selection_error=filter_result.error,
                     request=request.model_copy(deep=True),
                 )
 
@@ -236,7 +249,7 @@ class RunStore:
                 if generation != self._generation or self._snapshot.state != 'compiling':
                     return self._view()
                 if not staged_traces:
-                    raise ValueError('No traces match the JEV-selected filters.')
+                    raise ValueError('No traces match the classifier-selected filters.')
                 trace_ids = tuple(trace.trace_id for trace in staged_traces)
                 if len(set(trace_ids)) != len(trace_ids):
                     raise ValueError('The selected population contains duplicate trace IDs.')
@@ -247,7 +260,7 @@ class RunStore:
                     total=len(staged_traces),
                 )
                 if compile_query and request.mode == 'review':
-                    self._snapshot = replace(self._snapshot, state='awaiting_review')
+                    self._snapshot = replace(self._snapshot, state='awaiting_review', phase=None)
                     self._task = None
                     return self._view()
                 projections = {trace.trace_id: self._project_trace(trace) for trace in staged_traces}
@@ -255,6 +268,7 @@ class RunStore:
                     self._snapshot,
                     projections=projections,
                     state='classifying',
+                    phase=None,
                     started_at=self._now_utc(),
                 )
                 self._started_monotonic = self._monotonic()
@@ -307,7 +321,7 @@ class RunStore:
             await asyncio.gather(task, return_exceptions=True)
             raise
 
-    async def _plan(self, query: str, population: PopulationRequest) -> tuple[CompiledPlan, FacetSelection]:
+    async def _plan(self, query: str, population: PopulationRequest) -> tuple[CompiledPlan, FilterSelectionResult]:
         """Run semantic and facet planning concurrently and clean up both."""
 
         async def compile_plan() -> object:
@@ -325,8 +339,10 @@ class RunStore:
             if not isinstance(plan, CompiledPlan):
                 plan = CompiledPlan.model_validate(plan)
             selected = values[1]
-            if not isinstance(selected, FacetSelection):
-                selected = FacetSelection.model_validate(selected)
+            if not isinstance(selected, FilterSelectionResult):
+                if not isinstance(selected, FacetSelection):
+                    selected = FacetSelection.model_validate(selected)
+                selected = FilterSelectionResult(selected)
             return plan, selected
         finally:
             for task in tasks:
@@ -343,7 +359,7 @@ class RunStore:
         self,
         generation: int,
         traces: tuple[TraceRecord, ...],
-        projections: dict[str, JevProjection],
+        projections: dict[str, TraceProjection],
         compiled: CompiledQuery,
         parallelism: int,
     ) -> None:
@@ -351,7 +367,7 @@ class RunStore:
             await self.complete_one(generation, classification)
 
         try:
-            await self._run_jev(
+            await self._run_classifier(
                 traces,
                 projections,
                 compiled,
@@ -361,7 +377,7 @@ class RunStore:
             async with self._lock:
                 if generation == self._generation and self._snapshot.state == 'classifying':
                     if self._snapshot.completed != self._snapshot.total:
-                        raise RuntimeError('JEV returned before all traces completed.')
+                        raise RuntimeError('The classifier returned before all traces completed.')
                     self._finish('completed')
         except asyncio.CancelledError:
             async with self._lock:
@@ -493,6 +509,7 @@ class RunStore:
         self._snapshot = replace(
             self._snapshot,
             state=state,
+            phase=None,
             error=error,
             finished_at=self._now_utc(),
             elapsed=self._elapsed(),
@@ -526,7 +543,10 @@ class RunStore:
 def _merge_facets(caller: FacetSelection, generated: FacetSelection) -> FacetSelection:
     """Merge facets with caller-supplied non-empty values taking precedence."""
 
-    return FacetSelection(**{name: getattr(caller, name) or getattr(generated, name) for name in FACET_NAMES})
+    return FacetSelection(
+        project_id=caller.project_id,
+        **{name: getattr(caller, name) or getattr(generated, name) for name in FACET_NAMES},
+    )
 
 
 def _review_explicit(
@@ -565,6 +585,9 @@ def _detach(snapshot: RunSnapshot) -> RunSnapshot:
         explicit_numeric=snapshot.explicit_numeric.model_copy(deep=True),
         generated_filters=snapshot.generated_filters.model_copy(deep=True),
         generated_numeric=snapshot.generated_numeric.model_copy(deep=True),
+        filter_response=snapshot.filter_response.model_copy(deep=True)
+        if snapshot.filter_response is not None
+        else None,
         traces=tuple(trace.model_copy(deep=True) for trace in snapshot.traces),
         results={key: value.model_copy(deep=True) for key, value in snapshot.results.items()},
         projections={key: value.model_copy(deep=True) for key, value in snapshot.projections.items()},

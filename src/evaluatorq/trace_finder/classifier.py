@@ -1,4 +1,4 @@
-"""EvaluatorQ adapter for replaying projected traces through JEV."""
+"""EvaluatorQ adapter for replaying projected traces through the classifier."""
 
 from __future__ import annotations
 
@@ -13,30 +13,30 @@ from evaluatorq.contracts import JuryRepetition, JuryResult, JuryVote, LLMCallCo
 from evaluatorq.evaluatorq import evaluatorq
 from evaluatorq.types import DataPoint, DataPointResult, EvaluationResult, Evaluator, ScorerParameter
 
-from .models import CompiledQuery, JevProjection, TraceClassification, TraceRecord
+from .models import CompiledQuery, TraceClassification, TraceProjection, TraceRecord
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
 
-def build_datapoint(trace: TraceRecord, projection: JevProjection) -> DataPoint:
-    """Build a no-inference replay row while retaining the projected JEV state."""
+def build_datapoint(trace: TraceRecord, projection: TraceProjection) -> DataPoint:
+    """Build a no-inference replay row while retaining the projected classifier state."""
 
     return DataPoint(
         inputs={
             'trace_id': trace.trace_id,
             'span_id': trace.span_id,
-            'jev_state': projection.payload,
-            'messages': [{'role': 'assistant', 'content': 'JEV state prepared'}],
+            'classifier_state': projection.payload,
+            'messages': [{'role': 'assistant', 'content': 'classifier state prepared'}],
         }
     )
 
 
-def build_jev_evaluator(compiled: CompiledQuery, *, model: str, client: AsyncOpenAI) -> Evaluator:
+def build_classifier_evaluator(compiled: CompiledQuery, *, model: str, client: AsyncOpenAI) -> Evaluator:
     """Configure one merged EvaluatorQ classify judge over the exact projected state."""
 
     async def score(params: ScorerParameter) -> EvaluationResult:
-        state = params['data'].inputs['jev_state']
+        state = params['data'].inputs['classifier_state']
         question = compiled.task.model_copy(update={'state': state})
         outcome = await run_judge(
             client=client,
@@ -49,7 +49,7 @@ def build_jev_evaluator(compiled: CompiledQuery, *, model: str, client: AsyncOpe
         )
         return _outcome_result(outcome, model=model)
 
-    return {'name': 'jev', 'scorer': score}
+    return {'name': 'classifier', 'scorer': score}
 
 
 def _outcome_result(outcome: JudgeOutcome, *, model: str) -> EvaluationResult:
@@ -62,7 +62,7 @@ def _outcome_result(outcome: JudgeOutcome, *, model: str) -> EvaluationResult:
     abstained = mechanical_success and bool(payload and payload.abstain)
     decisive = mechanical_success and not abstained and payload_value is not None
     success = decisive or abstained
-    message = outcome.error_message or (None if success else 'JEV returned no verdict')
+    message = outcome.error_message or (None if success else 'The classifier returned no verdict')
     repetition = JuryRepetition(
         value=payload_value if decisive else None,
         explanation=payload_explanation,
@@ -89,14 +89,14 @@ def _outcome_result(outcome: JudgeOutcome, *, model: str) -> EvaluationResult:
     raw_output: dict[str, Any] = {'jury': jury.model_dump(mode='json')}
     if not success:
         raw_output['evaluation_error'] = (
-            judge_error_payload(outcome, 'jev')
+            judge_error_payload(outcome, 'classifier')
             if outcome.error_kind is not None
             else {
                 'message': message,
                 'error_type': 'no_verdict',
                 'stage': 'evaluation',
                 'code': 'no_verdict',
-                'details': {'evaluator_id': 'jev'},
+                'details': {'evaluator_id': 'classifier'},
             }
         )
     result_value = payload_value if success and payload_value is not None else 'inconclusive'
@@ -109,7 +109,7 @@ def _outcome_result(outcome: JudgeOutcome, *, model: str) -> EvaluationResult:
 
 
 def matches_selection(value: object, compiled: CompiledQuery) -> bool:
-    """Return whether a conclusive JEV verdict satisfies the compiled inclusion rule."""
+    """Return whether a conclusive classifier verdict satisfies the compiled inclusion rule."""
 
     if value is None:
         return False
@@ -160,7 +160,7 @@ def parse_datapoint_result(result: DataPointResult, compiled: CompiledQuery) -> 
         )
     except _TerminalResultError as error:
         logger.warning(
-            'JEV result parsing failed for trace_id={} span_id={}: {}',
+            'Classifier result parsing failed for trace_id={} span_id={}: {}',
             trace_id,
             span_id,
             error,
@@ -179,7 +179,7 @@ def _validate_verdict(value: object, compiled: CompiledQuery, raw_output: dict[s
         failure = raw_output.get('evaluation_error')
         if failure:
             message = failure.get('message') if isinstance(failure, Mapping) else str(failure)
-            raise _TerminalResultError(message or 'JEV evaluation failed')
+            raise _TerminalResultError(message or 'Classifier evaluation failed')
         jury = raw_output.get('jury')
         if isinstance(jury, Mapping) and (jury.get('inconclusive') or jury.get('judges_failed')):
             errors: list[str] = []
@@ -192,7 +192,7 @@ def _validate_verdict(value: object, compiled: CompiledQuery, raw_output: dict[s
                         error = vote.get('error')
                         if isinstance(error, str) and error:
                             errors.append(error)
-            raise _TerminalResultError('; '.join(errors) or 'JEV jury returned an inconclusive verdict')
+            raise _TerminalResultError('; '.join(errors) or 'classifier jury returned an inconclusive verdict')
     kind = compiled.task.kind
     criteria = compiled.task.criteria
     if kind == 'choice' and isinstance(value, str) and isinstance(criteria, dict) and value in criteria:
@@ -205,7 +205,7 @@ def _validate_verdict(value: object, compiled: CompiledQuery, raw_output: dict[s
 
 
 def _raw_answer(raw_output: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Read the first and only JEV repetition from the documented Jury result tree."""
+    """Read the first and only classifier repetition from the documented Jury result tree."""
 
     if raw_output is None:
         return None
@@ -227,16 +227,16 @@ def _raw_answer(raw_output: dict[str, Any] | None) -> dict[str, Any] | None:
             raise TypeError
         answer = repetition.get('raw_output')
     except (IndexError, KeyError, TypeError) as error:
-        raise _TerminalResultError('malformed JEV result tree') from error
+        raise _TerminalResultError('malformed classifier result tree') from error
     if answer is None:
         return None
     if not isinstance(answer, Mapping):
-        raise _TerminalResultError('malformed JEV result tree')
+        raise _TerminalResultError('malformed classifier result tree')
     return dict(answer)
 
 
 def _classification_details(raw_answer: dict[str, Any] | None) -> tuple[float | None, dict[str, float] | None]:
-    """Keep optional confidence information absent when JEV did not report it."""
+    """Keep optional confidence information absent when the classifier did not report it."""
 
     if raw_answer is None:
         return None, None
@@ -248,7 +248,7 @@ def _classification_details(raw_answer: dict[str, Any] | None) -> tuple[float | 
         or not math.isfinite(confidence)
         or not 0 <= confidence <= 1
     ):
-        raise _TerminalResultError('malformed JEV confidence')
+        raise _TerminalResultError('malformed classifier confidence')
     if probabilities is not None:
         if not isinstance(probabilities, dict) or any(
             not isinstance(label, str)
@@ -258,14 +258,14 @@ def _classification_details(raw_answer: dict[str, Any] | None) -> tuple[float | 
             or not 0 <= probability <= 1
             for label, probability in probabilities.items()
         ):
-            raise _TerminalResultError('malformed JEV probabilities')
+            raise _TerminalResultError('malformed classifier probabilities')
         probabilities = {label: float(probability) for label, probability in probabilities.items()}
     return (None if confidence is None else float(confidence)), probabilities
 
 
-async def run_jev(
+async def run_classifier(
     traces: tuple[TraceRecord, ...],
-    projections: dict[str, JevProjection],
+    projections: dict[str, TraceProjection],
     compiled: CompiledQuery,
     *,
     model: str,
@@ -275,7 +275,7 @@ async def run_jev(
 ) -> list[TraceClassification]:
     """Evaluate all selected traces, forwarding each terminal result exactly once."""
 
-    evaluator = build_jev_evaluator(compiled, model=model, client=client)
+    evaluator = build_classifier_evaluator(compiled, model=model, client=client)
     classifications: list[TraceClassification] = []
 
     async def complete(result: DataPointResult) -> None:
@@ -284,7 +284,7 @@ async def run_jev(
         classifications.append(classification)
 
     await evaluatorq(
-        'jev-trace-finder',
+        'classifier-trace-finder',
         data=[build_datapoint(trace, projections[trace.trace_id]) for trace in traces],
         evaluators=[evaluator],
         inference=False,

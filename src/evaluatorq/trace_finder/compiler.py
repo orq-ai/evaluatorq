@@ -1,4 +1,4 @@
-"""Structured compilation of semantic trace queries into JEV tasks."""
+"""Structured compilation of semantic trace queries into classifier tasks."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import re
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from typing import TYPE_CHECKING, Literal
 
+from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
 
 from evaluatorq.common.structured_output import generate_structured
@@ -44,7 +45,7 @@ _STRICT_DURATION_MAX = re.compile(
     re.IGNORECASE,
 )
 
-COMPILER_INSTRUCTIONS = """Compile the user's request into one semantic JEV classification task.
+COMPILER_INSTRUCTIONS = """Compile the user's request into one semantic classification task.
 
 Generate only a semantic task and its matching selection rule. Never generate, infer, or
 filter by metadata facets such as project, model, provider, status, product, trace type, or time.
@@ -67,7 +68,7 @@ counts, so strict phrases must move by one unit: "over 20k tokens" → tokens_mi
 "slower than 30 seconds" → duration_ms_min: 30001. Likewise "under 20k tokens" → tokens_max:
 19999. Keep all four numeric fields
 null when the query does not mention a token or duration constraint. Never extract project, model,
-provider, status, product, trace type, agent, or tool constraints; JEV handles those."""
+provider, status, product, trace type, agent, or tool constraints; the classifier handles those."""
 
 
 class CompileError(RuntimeError):
@@ -159,7 +160,11 @@ class CompilerWireQuery(BaseModel):
             raise ValueError('noul requires null choice_criteria and score_criteria')
 
         if isinstance(self.selection, WireValueSelection):
-            selection: ValueSelection | ThresholdSelection = ValueSelection.model_validate(self.selection.model_dump())
+            selection_values = self.selection.values
+            if task.kind == 'noul' and all(value in ('yes', 'no') for value in selection_values):
+                logger.warning('trace query compiler returned yes/no labels for a boolean selection; converting them')
+                selection_values = tuple(value == 'yes' for value in selection_values)
+            selection: ValueSelection | ThresholdSelection = ValueSelection(kind='values', values=selection_values)
         else:
             selection = ThresholdSelection.model_validate(self.selection.model_dump())
 

@@ -84,7 +84,7 @@ def run() -> RunSnapshot:
                 span_id='span-1',
                 value='technical',
                 matched=False,
-                raw_result={'jev_state': 'private'},
+                raw_result={'classifier_state': 'private'},
             ),
         },
         total=3,
@@ -118,7 +118,7 @@ def test_build_export_is_conversation_free_and_contains_all_filters() -> None:
     assert exported.matched_trace_ids == ['trace-2']
     encoded = export_json(run())
     assert json.loads(encoded)['traces'][0]['trace_id'] == 'trace-2'
-    for secret in ('secret conversation', 'private', 'jev_state', 'messages'):
+    for secret in ('secret conversation', 'private', 'classifier_state', 'messages'):
         assert secret not in encoded
 
 
