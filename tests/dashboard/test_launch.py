@@ -8,7 +8,9 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import click
 import pytest
+from typer.main import get_command
 from typer.testing import CliRunner
 
 
@@ -260,17 +262,20 @@ def test_log_bridge_quiets_httpx_only_at_the_default_level(
 # ---------------------------------------------------------------------------
 
 
-def test_eq_dashboard_help(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_eq_dashboard_help() -> None:
     """eq dashboard --help names all three stores scanned with no path."""
     from evaluatorq.cli import app
 
-    monkeypatch.setenv('COLUMNS', '160')
     runner = CliRunner()
     result = runner.invoke(app, ['dashboard', '--help'])
     assert result.exit_code == 0
+    command = get_command(app)
+    assert isinstance(command, click.Group)
+    help_text = command.commands['dashboard'].help
+    assert help_text is not None
     for store in ('.evaluatorq/runs/', '.evaluatorq/sim-runs/', '.evaluatorq/pairwise-runs/'):
-        assert store in result.output
-    assert '--no-browser' in result.output
+        assert store in help_text
+    assert any('--no-browser' in param.opts for param in command.commands['dashboard'].params)
 
 
 @pytest.mark.parametrize(('extra_args', 'expected_open'), [([], True), (['--no-browser'], False)])

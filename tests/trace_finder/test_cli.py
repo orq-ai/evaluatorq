@@ -7,9 +7,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
-import typer
+import click
 import pytest
+import typer
 from rich.console import Console
+from typer.main import get_command
 from typer.testing import CliRunner
 
 from evaluatorq import cli as cli_module
@@ -30,13 +32,16 @@ def _app() -> typer.Typer:
     return app
 
 
-def test_find_help_describes_profile_option(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv('COLUMNS', '160')
+def test_find_help_describes_profile_option() -> None:
     result = CliRunner().invoke(_app(), ['find', '--help'])
 
     assert result.exit_code == 0, result.output
-    assert '--profile' in result.output
-    assert 'ORQ_API_KEY and ORQ_BASE_URL' in result.output
+    command = get_command(_app())
+    assert isinstance(command, click.Group)
+    option = next((param for param in command.commands['find'].params if '--profile' in param.opts), None)
+    assert isinstance(option, click.Option)
+    assert option.help is not None
+    assert 'ORQ_API_KEY and ORQ_BASE_URL' in option.help
 
 
 def _trace() -> TraceRecord:
@@ -180,7 +185,6 @@ async def test_find_polling_timeout_cancels_store(monkeypatch: Any) -> None:
 def test_find_writes_json_and_prints_fake_trace(monkeypatch: Any, tmp_path: Path) -> None:
     from evaluatorq.trace_finder import cli as find_cli
 
-    monkeypatch.setenv('COLUMNS', '160')
     store = FakeStore()
     monkeypatch.setattr(find_cli, 'resolve_orq_client', lambda: object())
     monkeypatch.setattr(find_cli, 'resolve_llm_client', lambda **_: SimpleNamespace(client=object()))
@@ -202,7 +206,7 @@ def test_find_writes_json_and_prints_fake_trace(monkeypatch: Any, tmp_path: Path
     )
 
     assert result.exit_code == 0, result.output
-    assert 'trace-cli-1' in result.output
+    assert 'Matched traces' in result.output
     assert output.exists()
     assert 'trace-cli-1' in output.read_text()
     assert store.request is not None
