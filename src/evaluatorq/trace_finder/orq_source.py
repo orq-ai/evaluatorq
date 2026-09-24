@@ -501,10 +501,10 @@ def build_oql(facets: FacetSelection, numeric: NumericFilters, project_names: Ma
         values = sorted(getattr(facets, facet_name))
         if values:
             clauses.append(f'{field} in ({_oql_values(values)})')
-    # Each numeric comparison gets its own filter stage: the OQL parser rejects a numeric
-    # comparison joined by ``and`` to any other clause ("malformed list" or "expects numeric
-    # values"), while separate stages compose correctly. Verified against the v3 traces API.
-    stages = [f'filter {" and ".join(clauses)}']
+    # Separate filter stages compose correctly. With ``and``, the traces API can
+    # silently ignore a later categorical clause (including ``project_id``).
+    # Numeric comparisons also require their own stages to avoid parser errors.
+    stages = [f'filter {clause}' for clause in clauses]
     for field, minimum, maximum in (
         ('total_tokens', numeric.tokens_min, numeric.tokens_max),
         ('duration_ms', numeric.duration_ms_min, numeric.duration_ms_max),
