@@ -10,6 +10,8 @@ from typing import Any
 from .models import TraceProjection, TraceRecord
 
 MAX_TOKEN_BUDGET = 25_000
+MAX_PROJECTED_TOOL_CALLS = 32
+MAX_TOOL_FIELD_BYTES = 128
 OMISSION_MARKER = '[... earlier bytes omitted ...]'
 REASONING_KEYS = frozenset({'reasoning', 'reasoning_content', 'thinking'})
 ERROR_STATUSES = frozenset({'error', 'failed', 'failure', 'cancelled', 'canceled'})
@@ -109,7 +111,15 @@ def _projection_units(messages: tuple[dict[str, Any], ...]) -> tuple[ProjectionU
 
 
 def _project_assistant(message: dict[str, Any], results: tuple[dict[str, Any], ...]) -> dict[str, Any]:
-    projected_calls = [_project_tool_call(call, results) for call in message['tool_calls']]
+    source_calls = message['tool_calls']
+    projected_calls = [_project_tool_call(call, results) for call in source_calls[:MAX_PROJECTED_TOOL_CALLS]]
+    if len(source_calls) > MAX_PROJECTED_TOOL_CALLS:
+        projected_calls.append({
+            'id': None,
+            'name': None,
+            'arguments': f'{len(source_calls) - MAX_PROJECTED_TOOL_CALLS} tool calls omitted',
+            'status': 'omitted',
+        })
     projected = {
         'role': message.get('role'),
         'content': _project_content(message.get('content')),
@@ -175,11 +185,19 @@ def _project_tool_call(call: Any, results: tuple[dict[str, Any], ...]) -> dict[s
     call_id = _strip_reasoning(call.get('id'))
     arguments = _parse_arguments(function_data.get('arguments', call.get('arguments')))
     return {
-        'id': call_id,
-        'name': _strip_reasoning(function_data.get('name', call.get('name'))),
+        'id': _bounded_tool_field(call_id),
+        'name': _bounded_tool_field(function_data.get('name', call.get('name'))),
         'arguments': arguments,
         'status': _tool_call_status(call_id, results),
     }
+
+
+def _bounded_tool_field(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    if len(value.encode('utf-8')) <= MAX_TOOL_FIELD_BYTES:
+        return value
+    return _tail_truncate_text(value, MAX_TOOL_FIELD_BYTES - len(OMISSION_MARKER.encode('utf-8')))[0]
 
 
 def _parse_arguments(arguments: Any) -> Any:
@@ -210,7 +228,7 @@ def _tail_truncate_unit(
 ) -> tuple[tuple[dict[str, Any], ...], int]:
     text_lengths = _truncatable_text_lengths(unit.messages)
     if not text_lengths:
-        raise ValueError('newest projection unit exceeds token budget and contains no truncatable text')
+        return _omit_structural_unit(unit, trace_status, token_budget)
 
     def fits(retained_bytes: int) -> bool:
         truncated, _ = _truncate_messages(unit.messages, retained_bytes)
@@ -218,7 +236,7 @@ def _tail_truncate_unit(
         return estimate_tokens(serialize_projection(payload)) <= token_budget
 
     if not fits(0):
-        raise ValueError('token_budget is too small for the newest structural projection unit')
+        return _omit_structural_unit(unit, trace_status, token_budget)
 
     lower = 0
     upper = max(text_lengths)
@@ -229,6 +247,17 @@ def _tail_truncate_unit(
         else:
             upper = midpoint - 1
     return _truncate_messages(unit.messages, lower)
+
+
+def _omit_structural_unit(
+    unit: ProjectionUnit, trace_status: str, token_budget: int
+) -> tuple[tuple[dict[str, Any], ...], int]:
+    role = unit.messages[0].get('role', 'unknown') if unit.messages else 'unknown'
+    marker = ({'role': role, 'content': OMISSION_MARKER},)
+    payload = {'trace_status': trace_status, 'messages': list(marker)}
+    if estimate_tokens(serialize_projection(payload)) > token_budget:
+        raise ValueError('token_budget is too small for the newest structural projection unit')
+    return marker, sum(_source_message_bytes(message) for message in unit.source_messages)
 
 
 def _truncatable_text_lengths(messages: tuple[dict[str, Any], ...]) -> tuple[int, ...]:

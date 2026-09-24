@@ -667,6 +667,20 @@ def test_find_facets_menu_lists_catalogue_values(setup_finder, monkeypatch: pyte
     assert 'gpt-5.6-luna' in response.text
 
 
+def test_find_facets_uses_submitted_window_without_a_query(setup_finder, monkeypatch: pytest.MonkeyPatch) -> None:
+    _store, client = setup_finder
+    windows: list[int | None] = []
+
+    async def load_catalogue(app: Any, window_days: int | None = None) -> FacetCatalogue:
+        windows.append(window_days)
+        return FacetCatalogue()
+
+    monkeypatch.setattr(finder_routes, '_load_catalogue', load_catalogue)
+
+    assert client.get('/find/facets?window_days=14').status_code == 200
+    assert windows == [14]
+
+
 def test_find_trace_drawer_renders_genai_parts_from_responses_spans() -> None:
     from evaluatorq.dashboard.finder_views import _message_text
 

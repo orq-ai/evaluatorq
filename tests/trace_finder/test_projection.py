@@ -225,6 +225,38 @@ def test_tool_argument_that_fits_retains_its_structure_when_peer_is_truncated() 
     assert isinstance(calls[1]['arguments'], str)
 
 
+def test_projection_bounds_oversized_tool_identifiers() -> None:
+    trace = _trace(messages=({
+        'role': 'assistant',
+        'content': 'Checking the order.',
+        'tool_calls': [{'id': 'call-' + 'x' * 20_000, 'function': {'name': 'lookup_' + 'y' * 20_000, 'arguments': '{}'}}],
+    },))
+
+    projection = project_trace(trace, token_budget=900)
+
+    call = projection.payload['messages'][0]['tool_calls'][0]
+    assert call['id'].startswith('[... earlier bytes omitted ...]')
+    assert call['name'].startswith('[... earlier bytes omitted ...]')
+    assert projection.estimated_tokens <= 900
+
+
+def test_projection_marks_a_newest_unit_whose_tool_structure_cannot_fit() -> None:
+    trace = _trace(messages=({
+        'role': 'assistant',
+        'content': 'Checking the order.',
+        'tool_calls': [
+            {'id': f'call-{index}', 'function': {'name': 'lookup', 'arguments': '{}'}}
+            for index in range(100)
+        ],
+    },))
+
+    projection = project_trace(trace, token_budget=256)
+
+    assert projection.payload['messages'] == [{'role': 'assistant', 'content': '[... earlier bytes omitted ...]'}]
+    assert projection.omitted_bytes == _serialized_bytes(trace.messages[0])
+    assert projection.estimated_tokens <= 256
+
+
 def _trace(*, messages: tuple[dict[str, Any], ...], status: str = 'completed') -> TraceRecord:
     return TraceRecord(
         schema_version=1,
