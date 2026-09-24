@@ -16,11 +16,8 @@ from evaluatorq.common.messages import content_part_text
 from evaluatorq.common.orq_client import orq_server_url
 from evaluatorq.common.retry import with_retry
 from evaluatorq.contracts import FunctionCall, Message, StrategyToolCall
-from evaluatorq.openresponses.otel_messages import (
-    is_responses_item,
-    items_to_input_messages,
-    items_to_output_messages,
-)
+from evaluatorq.openresponses.items import is_responses_item, parse_item
+from evaluatorq.openresponses.otel_messages import items_to_input_messages
 from evaluatorq.types import Trace, TraceInput
 
 if TYPE_CHECKING:
@@ -273,20 +270,15 @@ def _responses_messages(value: Any, *, default_role: _ROLE) -> list[Message]:
             return _chat_messages(value, default_role=default_role)
         elif 'role' in value or 'content' in value:
             return _chat_messages([value], default_role=default_role)
-    item_ids = (
-        {
-            item['call_id']: item['id']
-            for item in value
-            if isinstance(item, dict)
-            and item.get('type') == 'function_call'
-            and isinstance(item.get('call_id'), str)
-            and isinstance(item.get('id'), str)
-            and item['id'].startswith('fc_')
-        }
-        if isinstance(value, list)
-        else {}
-    )
-    otel = items_to_input_messages(value) if default_role == 'user' else items_to_output_messages(value)
+    # OTel parts carry no item id, so the ``fc_`` id of each call is recovered from the items themselves.
+    parsed = [parse_item(item) for item in value if is_responses_item(item)] if isinstance(value, list) else []
+    item_ids = {
+        item.call_id: item.item_id
+        for item in parsed
+        if item.kind == 'tool_call' and item.call_id and item.item_id and item.item_id.startswith('fc_')
+    }
+    # The input renderer for both sides: the output renderer drops tool results, which an imported transcript needs.
+    otel = items_to_input_messages(value, default_role=default_role)
     messages = _otel_messages(otel, default_role=default_role)
     for message in messages:
         for call in message.tool_calls or []:

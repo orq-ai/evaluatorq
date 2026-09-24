@@ -84,6 +84,25 @@ class TestAppendAssistantTurn:
             },
         ]
 
+    def test_preserves_mcp_and_custom_calls_from_response_output(self):
+        input_array: list[dict[str, Any]] = []
+        response = {
+            "output": [
+                {"type": "mcp_call", "id": "mcp_1", "name": "search", "arguments": "{}", "output": "hit"},
+                {"type": "custom_tool_call", "call_id": "ct_1", "name": "run_sql", "input": "SELECT 1"},
+                {"type": "custom_tool_call_output", "call_id": "ct_1", "output": "1"},
+            ]
+        }
+
+        append_assistant_turn(input_array, response)
+
+        assert input_array == [
+            {"type": "function_call", "name": "search", "arguments": "{}", "call_id": "mcp_1"},
+            {"type": "function_call_output", "call_id": "mcp_1", "output": "hit"},
+            {"type": "function_call", "name": "run_sql", "arguments": '{"raw": "SELECT 1"}', "call_id": "ct_1"},
+            {"type": "function_call_output", "call_id": "ct_1", "output": "1"},
+        ]
+
 
 class TestAppendUserFollowup:
     def test_appends_user_role_item(self):

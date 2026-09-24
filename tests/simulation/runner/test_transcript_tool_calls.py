@@ -53,18 +53,28 @@ def test_tool_result_is_paired_in_chat_completion_order():
     }
 
 
-def test_tool_call_without_result_is_dropped_and_warns(caplog):
+def test_tool_call_without_result_reaches_judge_as_text():
     response = AgentResponse(
         output=[
             ToolCallOutputItem(name='refund', arguments='{}', id='fc_refund_1', call_id='call_refund_1'),
         ]
     )
 
-    with caplog.at_level(logging.WARNING, logger='evaluatorq.simulation.runner.simulation'):
-        messages = build_assistant_message(response)
+    messages = build_assistant_message(response)
 
     assert [item for item in messages_to_responses_input(messages) if item.get('type') == 'function_call'] == []
-    assert any('result is none' in record.message.lower() for record in caplog.records)
+    assert messages[0].content == '[tool_call: refund({})]'
+    assert messages[0].tool_calls is None
+
+
+def test_tool_call_with_result_but_no_id_keeps_evidence_without_an_invalid_pair():
+    response = AgentResponse(output=[ToolCallOutputItem(name='lookup', arguments='{}', call_id='', result='found')])
+
+    messages = build_assistant_message(response)
+
+    assert messages[0].content == '[tool_call: lookup({})]\n[tool_result: found]'
+    assert messages[0].tool_calls is None
+    assert [item for item in messages_to_responses_input(messages) if item.get('type') == 'function_call'] == []
 
 
 def test_assistant_text_and_tool_calls_are_kept_together():

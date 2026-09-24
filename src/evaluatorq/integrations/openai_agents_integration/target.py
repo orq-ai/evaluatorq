@@ -9,6 +9,7 @@ from typing import Any
 from agents import Agent, Runner
 from loguru import logger
 
+from evaluatorq.common.fields import get_field
 from evaluatorq.contracts import (
     AgentContext,
     AgentResponse,
@@ -22,6 +23,7 @@ from evaluatorq.contracts import (
     tool_result_to_text,
 )
 from evaluatorq.openresponses.input_items import message_to_responses_input_items
+from evaluatorq.openresponses.items import normalize_tool_arguments, parse_item
 
 
 def _record_tool_call(
@@ -40,10 +42,12 @@ def _record_tool_call(
     mis-key the index rather than fail.
     """
     tc = (
-        ToolCallOutputItem(name=name, arguments=arguments, id=item_id, call_id=call_id)
-        if item_id and call_id
+        ToolCallOutputItem(name=name, arguments=arguments, call_id=call_id)
+        if call_id
         else ToolCallOutputItem(name=name, arguments=arguments)
     )
+    if item_id:
+        tc = tc.model_copy(update={'id': item_id})
     output_items.append(tc)
     if call_id:
         tool_call_index[call_id] = len(output_items) - 1
@@ -148,59 +152,48 @@ class OpenAIAgentTarget(AgentTarget):
         # ``function_call_output`` item is encountered later in the stream.
         tool_call_index: dict[str, int] = {}
 
-        for item in new_items:
+        for raw in new_items:
+            item = parse_item(raw)
             # Agents SDK to_input_list() returns Responses API items for tool calls,
             # e.g. {"type": "function_call", "id": "fc_...", "call_id": "call_...", "name": "...", "arguments": "..."}.
-            if isinstance(item, dict) and item.get('type') == 'function_call':
-                item_id = item.get('id', '')
-                call_id = item.get('call_id', '')
-                name = str(item.get('name', ''))
-                arguments = _normalize_args_str(item.get('arguments', '{}'))
+            if item.kind == 'tool_call':
+                item_id = item.item_id or ''
+                call_id = item.call_id or ''
+                arguments = normalize_tool_arguments(item.arguments)
                 _record_tool_call(
-                    output_items, tool_call_index, name=name, arguments=arguments, item_id=item_id, call_id=call_id
+                    output_items,
+                    tool_call_index,
+                    name=item.name,
+                    arguments=arguments,
+                    item_id=item_id,
+                    call_id=call_id,
                 )
-            # function_call_output items appear after their matching function_call in
-            # ``result.to_input_list()`` and carry the tool's result. Merge into the
-            # prior ToolCallOutputItem so transcript replay preserves the result.
-            elif isinstance(item, dict) and item.get('type') == 'function_call_output':
-                call_id = item.get('call_id', '')
-                output_str = _extract_function_call_output(item.get('output'))
-                _attach_tool_output(output_items, tool_call_index, call_id, output_str)
-            # Handle dict format (standard OpenAI message format)
-            elif isinstance(item, dict) and item.get('role') == 'assistant':
-                text = _extract_assistant_text(item.get('content'))
+                if item.result is not None:
+                    _attach_tool_output(
+                        output_items, tool_call_index, call_id, _extract_function_call_output(item.result)
+                    )
+            elif item.kind == 'tool_result' and item.output is not None:
+                _attach_tool_output(
+                    output_items, tool_call_index, item.call_id or '', _extract_function_call_output(item.output)
+                )
+            elif item.kind == 'message' and item.role == 'assistant':
+                text = _extract_assistant_text(item.content)
                 if text:
                     output_items.append(TextOutputItem(text=text, annotations=[]))
-                for tc in item.get('tool_calls') or []:
+                for tc in get_field(raw, 'tool_calls') or []:
                     if isinstance(tc, dict):
                         func = tc.get('function', {})
                         name = func.get('name', '') if isinstance(func, dict) else ''
-                        args_raw = _normalize_args_str(func.get('arguments', '{}') if isinstance(func, dict) else '{}')
+                        args_raw = normalize_tool_arguments(
+                            func.get('arguments', '{}') if isinstance(func, dict) else '{}'
+                        )
                         tc_id = tc.get('id', '')
                         _record_tool_call(
                             output_items, tool_call_index, name=name, arguments=args_raw, item_id=tc_id, call_id=tc_id
                         )
-            # Handle typed SDK objects (future-proofing if to_input_list() returns non-dict items)
-            elif not isinstance(item, dict):
-                if getattr(item, 'type', None) == 'function_call':
-                    item_id = getattr(item, 'id', '')
-                    call_id = getattr(item, 'call_id', '')
-                    name = str(getattr(item, 'name', ''))
-                    arguments = _normalize_args_str(getattr(item, 'arguments', '{}'))
-                    _record_tool_call(
-                        output_items, tool_call_index, name=name, arguments=arguments, item_id=item_id, call_id=call_id
-                    )
-                elif getattr(item, 'type', None) == 'function_call_output':
-                    call_id = getattr(item, 'call_id', '')
-                    output_str = _extract_function_call_output(getattr(item, 'output', None))
-                    _attach_tool_output(output_items, tool_call_index, call_id, output_str)
-                elif getattr(item, 'role', None) == 'assistant':
-                    text = _extract_assistant_text(getattr(item, 'content', None))
-                    if text:
-                        output_items.append(TextOutputItem(text=text, annotations=[]))
-                    for tc in getattr(item, 'tool_calls', None) or []:
+                    else:
                         tc_name = getattr(tc, 'name', None) or getattr(getattr(tc, 'function', None), 'name', '') or ''
-                        tc_args_raw = _normalize_args_str(
+                        tc_args_raw = normalize_tool_arguments(
                             getattr(tc, 'arguments', None) or getattr(getattr(tc, 'function', None), 'arguments', '{}')
                         )
                         tc_id = getattr(tc, 'id', '')
@@ -309,25 +302,6 @@ def _extract_assistant_text(content: Any) -> str:
                     parts.append(text)
         return ''.join(parts)
     return ''
-
-
-def _normalize_args_str(raw: Any) -> str:
-    """Convert SDK tool-call arguments to a valid JSON string.
-
-    Handles str (valid or invalid JSON), dict, or other types.
-    Invalid JSON strings are wrapped as ``{"raw": "<original>"}`` so that the
-    ``AgentResponse.tool_calls`` property can always parse ``arguments`` back
-    to a dict without silently discarding the original value.
-    """
-    if isinstance(raw, dict):
-        return json.dumps(raw)
-    if not isinstance(raw, str):
-        return '{}'
-    try:
-        json.loads(raw)
-        return raw
-    except (json.JSONDecodeError, ValueError):
-        return json.dumps({'raw': raw})
 
 
 def _extract_function_call_output(raw: Any) -> str:

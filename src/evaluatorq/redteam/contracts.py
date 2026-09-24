@@ -24,6 +24,7 @@ from pydantic import (
 from pydantic.fields import FieldInfo
 from typing_extensions import NotRequired, TypedDict
 
+from evaluatorq.common.messages import messages_to_text
 from evaluatorq.common.recommendations import RecommendationConfigBase
 from evaluatorq.common.target_call import classify_error_type as classify_error_type
 from evaluatorq.contracts import RunSummary, StrEnum
@@ -1208,10 +1209,10 @@ def turns_to_messages(turns: list[Turn], *, skip_errors: bool = False) -> list[M
     Each turn becomes a ``user`` message (the attacker prompt) followed by the
     target's output rows: consecutive text runs collapse into one ``assistant``
     message; each completed tool call becomes an ``assistant`` message with one
-    ``tool_calls`` entry plus its following ``tool`` row; calls without a result
-    are dropped because they cannot form a valid pair. Reasoning items are
-    dropped. An empty target output still emits an empty ``assistant`` row so
-    consumers can rely on a user/assistant pair per turn.
+    ``tool_calls`` entry plus its following ``tool`` row. A call without a result
+    or call ID becomes labeled assistant text so replay stays valid and the call
+    remains visible. Reasoning items are dropped. An empty target output still
+    emits an empty ``assistant`` row so consumers can rely on a user/assistant pair per turn.
 
     When ``skip_errors`` is True, turns whose target carries an
     `evaluatorq.contracts.AgentResponseError` are omitted entirely — used
@@ -1236,18 +1237,17 @@ def turns_to_messages(turns: list[Turn], *, skip_errors: bool = False) -> list[M
                 text_buffer.append(item.text)
             elif isinstance(item, ToolCallOutputItem):
                 _flush_text()
-                rendered = render_tool_call(item)
-                if rendered is None:
-                    continue
-                tool_call, tool_message = rendered
-                out.extend([
-                    Message(
-                        role='assistant',
-                        content=None,
-                        tool_calls=[tool_call],
-                    ),
-                    tool_message,
-                ])
+                tool_call, tool_message = render_tool_call(item)
+                if tool_message is None:
+                    call_text = messages_to_text([Message(role='assistant', tool_calls=[tool_call])])
+                    if item.result is not None:
+                        call_text += f'\n[tool_result: {item.result}]'
+                    out.append(Message(role='assistant', content=call_text))
+                else:
+                    out.extend([
+                        Message(role='assistant', content=None, tool_calls=[tool_call]),
+                        tool_message,
+                    ])
             # ReasoningOutputItem intentionally dropped.
         _flush_text()
         # Alternation invariant: every user row must be followed by an assistant row.
@@ -1344,9 +1344,10 @@ class OrchestratorResult(BaseModel):
         - Attacker prompt -> ``user`` message.
         - Consecutive `TextOutputItem` runs -> single ``assistant`` message
           with joined ``content``.
-        - Each `ToolCallOutputItem` -> ``assistant`` message with one
-          ``tool_calls`` entry; if ``result`` is set, also a following ``tool``
-          role message with ``tool_call_id`` + ``content``.
+        - A `ToolCallOutputItem` with a result -> ``assistant`` message with one
+          ``tool_calls`` entry and a following ``tool`` role message.
+        - A call without a result or call ID -> labeled assistant text, since a
+          replayed unpaired tool call is rejected by chat providers.
         - `ReasoningOutputItem` is dropped — chat-completions has no
           standard role for reasoning. Callers needing it should read
           ``turn.target.output`` directly.

@@ -119,6 +119,19 @@ def test_tool_call_with_result_does_not_emit_extra_assistant_row():
     assert [m.role for m in msgs] == ["user", "assistant", "tool"]
 
 
+def test_tool_call_without_result_remains_visible_and_replayable():
+    turn = Turn(
+        attacker=AgentResponse(text="go"),
+        target=AgentResponse(output=[ToolCallOutputItem(name="lookup", arguments="{}")]),
+    )
+
+    messages = turns_to_messages([turn])
+
+    assert [message.role for message in messages] == ["user", "assistant"]
+    assert messages[1].content == "[tool_call: lookup({})]"
+    assert messages[1].tool_calls is None
+
+
 def test_tool_call_preserves_responses_item_id():
     """Responses-API fc_* item id round-trips through StrategyToolCall.item_id."""
     turn = Turn(

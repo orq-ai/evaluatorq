@@ -19,6 +19,7 @@ from evaluatorq.openresponses.convert_models import (
     InputImageContent,
     InputTextContent,
 )
+from evaluatorq.openresponses.items import classify_part, parse_item
 
 # A single part of multi-modal message content (Responses-API input shapes).
 # Tagged on ``type`` (mirroring ``OutputMessage``) so Pydantic dispatches on the
@@ -493,26 +494,25 @@ def render_tool_call(
     item: ToolCallOutputItem,
     *,
     warn: Callable[[str], None] | None = None,
-) -> tuple[StrategyToolCall, Message] | None:
-    """Render one completed tool call as its paired transcript messages.
+) -> tuple[StrategyToolCall, Message | None]:
+    """Render a tool call and its result, when the tool returned one.
 
-    A function call without a result cannot be replayed safely: emitting its
-    assistant row would leave an unpaired ``function_call`` on either provider
-    contract. Such calls are dropped and logged. An empty string is a valid result
-    and is therefore retained.
+    ``None`` means no result was recorded or no call ID can pair it. An empty
+    string is a recorded result and still produces a tool message.
     """
-    if item.result is None:
-        warning = warn or logger.warning
-        warning(
-            f'Dropping tool call {item.call_id!r} ({item.name!r}): result is None, '
-            'so no paired tool message can be emitted.'
-        )
-        return None
     tool_call = StrategyToolCall(
         id=item.call_id,
         item_id=item.id or None,
         function=FunctionCall(name=item.name, arguments=item.arguments),
     )
+    if not item.call_id:
+        warning = warn or logger.warning
+        warning(f'Tool call {item.name!r} has no call_id; preserving the call without a paired tool message.')
+        return tool_call, None
+    if item.result is None:
+        if warn is not None:
+            warn(f'Tool call {item.call_id!r} ({item.name!r}) has no recorded result; preserving the call.')
+        return tool_call, None
     tool_message = Message(
         role='tool',
         tool_call_id=item.call_id,
@@ -1236,50 +1236,68 @@ class AgentResponse(BaseModel):
         """Build an AgentResponse from bare Responses ``output`` items, with no usage or metadata."""
         items: list[OutputMessage] = []
         refusal: str | None = None
-        for item in output_items:
-            item_type = _gf(item, 'type')
-            if item_type == 'message':
-                for part in _gf(item, 'content') or []:
-                    part_type = _gf(part, 'type')
-                    # A message part is 'output_text' or 'refusal'. Keeping only
-                    # the former loses the refusal entirely, and an item with
-                    # nothing but a refusal then parses to empty output — which
-                    # callers report as a failed call. A refusal is a real
-                    # answer (and for red teaming, the *resistant* outcome), so
-                    # it is carried as text rather than discarded.
-                    text = _gf(part, 'text') if part_type == 'output_text' else _gf(part, 'refusal')
-                    if part_type == 'refusal' and isinstance(text, str) and refusal is None:
+        # call_id -> index of the call still waiting for its result item.
+        pending: dict[str, int] = {}
+        # call_id -> result recorded on the call item itself, so a repeating result item is not a mismatch.
+        answered: dict[str, str | None] = {}
+        for raw in output_items:
+            item = parse_item(raw)
+            if item.kind == 'message':
+                for part in item.content:
+                    # A refusal is a real answer (and for red teaming, the
+                    # *resistant* outcome), so it is carried as text rather
+                    # than discarded; an item with nothing but a refusal would
+                    # otherwise parse to empty output and read as a failed call.
+                    part_kind, text = classify_part(part)
+                    if part_kind == 'refusal' and refusal is None:
                         refusal = text
-                    if part_type in ('output_text', 'refusal') and text:
-                        items.append(TextOutputItem(type='output_text', text=text, annotations=[], logprobs=[]))
-                    elif part_type not in ('output_text', 'refusal'):
+                    if part_kind in ('text', 'refusal'):
+                        if text:
+                            items.append(TextOutputItem(type='output_text', text=text, annotations=[], logprobs=[]))
+                    else:
                         logger.warning(
-                            'AgentResponse.from_openresponses: skipping unknown message part type={!r}', part_type
+                            'AgentResponse.from_output_items: skipping message part type={!r}', _gf(part, 'type')
                         )
-            # 'function_call' is the standard Responses shape; the Orq router
-            # instead types agent tool calls as 'orq:<tool_name>' (e.g.
-            # 'orq:query_knowledge_base'). Treat both as tool calls so the
-            # agent's tool activity is captured rather than silently dropped.
-            elif item_type == 'function_call' or (isinstance(item_type, str) and item_type.startswith('orq:')):
-                raw_args = _gf(item, 'arguments') or '{}'
-                call_id = _gf(item, 'call_id') or _gf(item, 'id') or ''
-                result = _gf(item, 'result')
-                if result is None:
-                    result = _gf(item, 'output')
-                name = _gf(item, 'name') or (item_type.split(':', 1)[1] if item_type.startswith('orq:') else '')
-                items.append(
-                    ToolCallOutputItem(
-                        type='function_call',
-                        name=str(name),
-                        call_id=str(call_id),
-                        arguments=raw_args if isinstance(raw_args, str) else json.dumps(raw_args),
-                        result=tool_result_to_text(result) if result is not None else None,
-                    )
+            elif item.kind == 'tool_call':
+                raw_args = item.arguments or '{}'
+                call = ToolCallOutputItem(
+                    type='function_call',
+                    name=item.name,
+                    call_id=item.ref,
+                    arguments=raw_args if isinstance(raw_args, str) else json.dumps(raw_args),
+                    result=tool_result_to_text(item.result) if item.result is not None else None,
                 )
-            elif item_type == 'reasoning':
-                pass  # o1/o3/o4-mini reasoning steps intentionally excluded
-            else:
-                logger.warning('AgentResponse.from_openresponses: skipping unknown item type={!r}', item_type)
+                if item.item_id and item.item_id != item.call_id:
+                    call = call.model_copy(update={'id': item.item_id})
+                items.append(call)
+                if item.call_id:
+                    if item.result is None:
+                        pending[item.call_id] = len(items) - 1
+                    else:
+                        answered[item.call_id] = call.result
+            elif item.kind == 'tool_result':
+                # A tool's output arrives as its own item; attach it to the call it answers.
+                if item.output is None:
+                    continue  # parse_item logged it; 'null' is not a result
+                call_index = pending.pop(item.call_id, None) if item.call_id else None
+                if (
+                    call_index is None
+                    and item.call_id
+                    and answered.get(item.call_id) == tool_result_to_text(item.output)
+                ):
+                    continue  # repeats the result already recorded on the call item
+                if call_index is None:
+                    logger.warning(
+                        'AgentResponse.from_output_items: skipping {} with no matching call awaiting a result '
+                        '(call_id={!r}; the call is missing, already answered, or comes later)',
+                        item.item_type,
+                        item.call_id,
+                    )
+                else:
+                    items[call_index] = items[call_index].model_copy(
+                        update={'result': tool_result_to_text(item.output)}
+                    )
+            # Reasoning steps are intentionally excluded; parse_item already logged an unknown item.
         return cls(output=items, refusal=refusal)
 
     @classmethod
