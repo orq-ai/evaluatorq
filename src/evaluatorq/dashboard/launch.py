@@ -198,7 +198,7 @@ def _open_browser_when_ready(host: str, port: int, stop: threading.Event, nonce:
         try:
             if not webbrowser.open(url):
                 logger.warning('Could not open a browser automatically; open {}', url)
-        except OSError as exc:
+        except (OSError, webbrowser.Error) as exc:
             logger.warning('Could not open a browser automatically: {}; open {}', exc, url)
         return
     logger.warning('Dashboard did not become ready for browser launch; open {} when it starts', url)
@@ -269,8 +269,11 @@ def serve(
         os.environ[_ROOTS_ENV] = json.dumps([str(p) for p in roots])
 
     pkg_dir = str(Path(evaluatorq.__file__).parent)
-    nonce = secrets.token_urlsafe(24)
-    os.environ[_BROWSER_NONCE_ENV] = nonce
+    nonce = secrets.token_urlsafe(24) if open_browser else None
+    if nonce is not None:
+        os.environ[_BROWSER_NONCE_ENV] = nonce
+    else:
+        os.environ.pop(_BROWSER_NONCE_ENV, None)
     stop = threading.Event()
     browser_thread: threading.Thread | None = None
     if open_browser:
@@ -298,3 +301,4 @@ def serve(
         stop.set()
         if browser_thread is not None:
             browser_thread.join(timeout=0.3)
+        os.environ.pop(_BROWSER_NONCE_ENV, None)

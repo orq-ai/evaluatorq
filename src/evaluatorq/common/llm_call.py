@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from openai import BadRequestError
 
@@ -550,8 +550,7 @@ async def execute_classify(
         questions = {'verdict': question}
         state = question.state
     else:
-        if request is None:  # pragma: no cover - guarded above
-            raise ValueError('execute_classify requires exactly one of question= or request=')
+        request = cast('ClassifyRequest', request)
         questions = request.questions
         state = request.state
     wire_questions: dict[str, dict[str, Any]] = {}

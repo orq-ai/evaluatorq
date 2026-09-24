@@ -48,6 +48,8 @@ def _cli_json(args: list[str], *, profile: str | None, timeout: float) -> dict[s
         for name in ('ORQ_API_KEY', 'ORQ_BASE_URL', 'ORQ_SERVER', 'ORQ_WORKSPACE', 'ORQ_WORKSPACE_SLUG', 'ORQ_PROJECT'):
             environment.pop(name, None)
     else:
+        for name in ('ORQ_WORKSPACE', 'ORQ_WORKSPACE_SLUG', 'ORQ_PROJECT'):
+            environment.pop(name, None)
         environment['ORQ_SERVER'] = os.environ.get('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL)
     command.extend((*args, '-o', 'json', '--no-input'))
     try:
@@ -69,7 +71,32 @@ def _cli_json(args: list[str], *, profile: str | None, timeout: float) -> dict[s
     return value if isinstance(value, dict) else None
 
 
-def discover_orq_scope(profile: str | None = None, *, timeout: float = 5.0) -> OrqScope:
+def _profile_workspace_rows(profile: str, workspace_id: str | None, timeout: float) -> list[dict[str, Any]]:
+    """Page through the profile's workspaces until the selected workspace is found."""
+    rows: list[dict[str, Any]] = []
+    cursor: str | None = None
+    seen: set[str] = set()
+    for _ in range(50):
+        args = ['workspaces', 'list', '--limit', '200']
+        if cursor:
+            args.extend(('--starting-after', cursor))
+        listing = _cli_json(args, profile=profile, timeout=timeout)
+        page = listing.get('data') if listing is not None else None
+        if not isinstance(page, list):
+            raise TypeError('The orq CLI could not list workspaces for this credential.')
+        rows.extend(row for row in page if isinstance(row, dict))
+        if any(row.get('id') == workspace_id for row in rows):
+            return rows
+        if listing is not None and not listing.get('has_more'):
+            return rows
+        cursor = page[-1].get('id') if page and isinstance(page[-1], dict) else None
+        if not isinstance(cursor, str) or not cursor or cursor in seen:
+            raise ValueError('The orq CLI returned an invalid workspace page cursor.')
+        seen.add(cursor)
+    raise ValueError('The orq CLI returned too many workspace pages to choose safely.')
+
+
+def discover_orq_scope(profile: str | None = None, *, timeout: float = 5.0) -> OrqScope:  # noqa: C901
     """Find the workspace and all visible projects without exposing a credential."""
     if profile is None and not os.environ.get('ORQ_API_KEY', '').strip():
         return OrqScope(error='Set ORQ_API_KEY to discover projects.')
@@ -104,8 +131,10 @@ def discover_orq_scope(profile: str | None = None, *, timeout: float = 5.0) -> O
         return OrqScope(error='This credential returned projects from multiple workspaces.')
     workspace_id = next(iter(workspace_ids), None)
     if profile:
-        listing = _cli_json(['workspaces', 'list', '--limit', '200'], profile=profile, timeout=timeout)
-        rows = listing.get('data') if listing else None
+        try:
+            rows = _profile_workspace_rows(profile, workspace_id, timeout)
+        except (TypeError, ValueError) as exc:
+            return OrqScope(error=str(exc))
     else:
         status = _cli_json(['status'], profile=None, timeout=timeout)
         credential = status.get('credential') if status else None

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Literal
@@ -79,6 +80,7 @@ def initialize_finder_settings(app: Any) -> None:
         )
     app.state.finder_settings = settings
     app.state.finder_generation = 0
+    app.state.finder_store_lock = asyncio.Lock()
 
 
 def _settings(app: Any) -> Any:
@@ -154,11 +156,15 @@ async def _build_store(app: Any) -> RunStore | None:
 
 async def _store(app: Any) -> RunStore | None:
     store = getattr(app.state, 'finder_store', None)
-    if store is None:
-        store = await _build_store(app)
-        if store is not None:
-            app.state.finder_store = store
-    return store
+    if store is not None:
+        return store
+    async with app.state.finder_store_lock:
+        store = getattr(app.state, 'finder_store', None)
+        if store is None:
+            store = await _build_store(app)
+            if store is not None:
+                app.state.finder_store = store
+        return store
 
 
 async def _load_catalogue(app: Any, window_days: int | None = None) -> FacetCatalogue | None:

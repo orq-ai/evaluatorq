@@ -410,6 +410,22 @@ def test_browser_waits_for_this_dashboard_instance() -> None:
     open_browser.assert_called_once_with('http://127.0.0.1:8125/')
 
 
+def test_browser_launch_error_is_reported_without_thread_traceback() -> None:
+    import threading
+    import webbrowser
+
+    from evaluatorq.dashboard.launch import _open_browser_when_ready
+
+    with (
+        patch('evaluatorq.dashboard.launch.socket.create_connection', return_value=MagicMock()),
+        patch('evaluatorq.dashboard.launch.webbrowser.open', side_effect=webbrowser.Error('no browser')),
+        patch('evaluatorq.dashboard.launch.logger.warning') as warning,
+    ):
+        _open_browser_when_ready('127.0.0.1', 8125, threading.Event())
+
+    warning.assert_called_once()
+
+
 def test_serve_does_not_open_existing_port(tmp_path: Path) -> None:
     """A port already occupied by another process must not open its page."""
     import uvicorn
@@ -447,6 +463,7 @@ def test_serve_no_browser_skips_probe_and_browser_thread(tmp_path: Path) -> None
     connect.assert_not_called()
     open_browser.assert_not_called()
     assert run.call_args.kwargs['port'] == 8125
+    assert 'EVALUATORQ_DASHBOARD_LAUNCH_NONCE' not in os.environ
 
 
 def test_eq_dashboard_accepts_multiple_paths(tmp_path: Path) -> None:

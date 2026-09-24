@@ -680,12 +680,14 @@ def test_finder_builds_clients_with_app_profile_not_environment(
 
 def test_apply_clients_use_profile_key_and_host(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, dict[str, object]]] = []
+    llm_args: list[tuple[object, ...]] = []
 
     def fake_orq(api_key: str | None = None, **kwargs: object) -> object:
         calls.append(('orq', {'api_key': api_key, **kwargs}))
         return object()
 
     def fake_llm(*args: object, **kwargs: object) -> SimpleNamespace:
+        llm_args.append(args)
         calls.append(('llm', kwargs))
         return SimpleNamespace(client=object())
 
@@ -697,6 +699,34 @@ def test_apply_clients_use_profile_key_and_host(monkeypatch: pytest.MonkeyPatch)
     assert calls[0][1] == {'api_key': 'key-staging', 'base_url': 'https://staging.orq.ai'}
     assert calls[1][1]['extra_api_key'] == 'key-staging'
     assert calls[1][1]['orq_host'] == 'https://staging.orq.ai'
+    assert llm_args == [(None,)]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_finder_requests_construct_one_store(
+    settings_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = build_app(roots=[tmp_path])
+    calls = 0
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    store = object()
+
+    async def build_store(_app: Any) -> object:
+        nonlocal calls
+        calls += 1
+        entered.set()
+        await release.wait()
+        return store
+
+    monkeypatch.setattr(finder_routes, '_build_store', build_store)
+    first = asyncio.create_task(finder_routes._store(app))
+    await entered.wait()
+    second = asyncio.create_task(finder_routes._store(app))
+    release.set()
+
+    assert await asyncio.gather(first, second) == [store, store]
+    assert calls == 1
 
 
 def test_missing_optional_orq_sdk_leaves_finder_unavailable(

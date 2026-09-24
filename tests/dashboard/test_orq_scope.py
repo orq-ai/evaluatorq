@@ -81,3 +81,42 @@ def test_profile_cli_call_drops_unrelated_environment_credential(monkeypatch) ->
     monkeypatch.setattr(orq_scope.subprocess, 'run', run)
 
     assert orq_scope._cli_json(['projects', 'list'], profile='research', timeout=5) == {'data': []}
+
+
+def test_direct_key_uses_evaluatorq_host_and_clears_scope_overrides(monkeypatch) -> None:
+    monkeypatch.setenv('ORQ_API_KEY', 'project-key')
+    monkeypatch.delenv('ORQ_BASE_URL', raising=False)
+    monkeypatch.setenv('ORQ_SERVER', 'https://staging.orq.ai')
+    monkeypatch.setenv('ORQ_WORKSPACE', 'wrong-workspace')
+    monkeypatch.setenv('ORQ_WORKSPACE_SLUG', 'wrong-slug')
+    monkeypatch.setenv('ORQ_PROJECT', 'wrong-project')
+    monkeypatch.setattr(orq_scope.shutil, 'which', lambda _: '/usr/bin/orq')
+
+    def run(command, **kwargs):
+        environment = kwargs['env']
+        assert environment['ORQ_SERVER'] == 'https://my.orq.ai'
+        assert all(name not in environment for name in ('ORQ_WORKSPACE', 'ORQ_WORKSPACE_SLUG', 'ORQ_PROJECT'))
+        return subprocess.CompletedProcess(command, 0, '{"data": []}', '')
+
+    monkeypatch.setattr(orq_scope.subprocess, 'run', run)
+
+    assert orq_scope._cli_json(['projects', 'list'], profile=None, timeout=5) == {'data': []}
+
+
+def test_profile_workspace_lookup_reads_later_pages(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def cli(args: list[str], *, profile: str | None, timeout: float) -> dict:
+        calls.append(args)
+        if args[:2] == ['projects', 'list']:
+            return {'data': [{'project_id': 'project-a', 'name': 'A', 'workspace_id': 'workspace-b'}]}
+        if '--starting-after' in args:
+            return {'data': [{'id': 'workspace-b', 'key': 'target'}], 'has_more': False}
+        return {'data': [{'id': 'workspace-a', 'key': 'other'}], 'has_more': True}
+
+    monkeypatch.setattr(orq_scope, '_cli_json', cli)
+
+    scope = orq_scope.discover_orq_scope('research')
+
+    assert scope.workspace_key == 'target'
+    assert any('--starting-after' in args for args in calls)

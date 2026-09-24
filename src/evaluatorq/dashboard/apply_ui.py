@@ -483,7 +483,7 @@ def _build_clients(profile: OrqProfile | None) -> tuple[Any, Any, str]:
     except ImportError as e:  # pragma: no cover - extra not installed
         raise ValueError("The 'orq-ai-sdk' package is required to apply recommendations (install extra 'orq').") from e
     llm_client = resolve_llm_client(
-        PIPELINE_CONFIG.evaluator.as_call_config().client,
+        None if profile is not None else PIPELINE_CONFIG.evaluator.as_call_config().client,
         extra_api_key=api_key,
         orq_host=host,
         max_retries=PIPELINE_CONFIG.retry_count,

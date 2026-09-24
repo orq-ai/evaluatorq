@@ -315,17 +315,18 @@ async def _save_settings(req: Request) -> Response | NotStr:
         return Response(page('Settings', body, active_nav='settings'), status_code=422, media_type='text/html')
 
     await asyncio.to_thread(save_settings, settings)
-    req.app.state.finder_profile = next((p for p in profiles if p.name == settings.orq_profile), None)
-    if settings.orq_profile is not None and req.app.state.finder_profile is None:
-        logger.warning(
-            'Saved Orq profile {} is unavailable; select another profile or Environment', settings.orq_profile
-        )
-    old_store = getattr(req.app.state, 'finder_store', None)
-    req.app.state.finder_settings = effective_settings()
-    req.app.state.finder_generation += 1
-    for state_name in ('finder_store', 'finder_catalogue_cache'):
-        if hasattr(req.app.state, state_name):
-            delattr(req.app.state, state_name)
+    async with req.app.state.finder_store_lock:
+        req.app.state.finder_profile = next((p for p in profiles if p.name == settings.orq_profile), None)
+        if settings.orq_profile is not None and req.app.state.finder_profile is None:
+            logger.warning(
+                'Saved Orq profile {} is unavailable; select another profile or Environment', settings.orq_profile
+            )
+        old_store = getattr(req.app.state, 'finder_store', None)
+        req.app.state.finder_settings = effective_settings()
+        req.app.state.finder_generation += 1
+        for state_name in ('finder_store', 'finder_catalogue_cache'):
+            if hasattr(req.app.state, state_name):
+                delattr(req.app.state, state_name)
     if old_store is not None:
         # Retire the old store after removing it from app state so new requests cannot acquire it.
         await old_store.close()
