@@ -20,7 +20,14 @@ from evaluatorq.redteam.adaptive.strategy_registry import (
     select_applicable_strategies,
     select_applicable_strategies_for_vulnerability,
 )
-from evaluatorq.redteam.contracts import PIPELINE_CONFIG, DeliveryMethod, LLMConfig, TurnType, Vulnerability
+from evaluatorq.redteam.contracts import (
+    PIPELINE_CONFIG,
+    AttackTechnique,
+    DeliveryMethod,
+    LLMConfig,
+    TurnType,
+    Vulnerability,
+)
 from evaluatorq.redteam.tracing import with_redteam_span
 from evaluatorq.redteam.vulnerability_registry import resolve_category
 
@@ -52,6 +59,7 @@ async def plan_strategies_for_vulnerabilities(
     agent_capabilities: AgentCapabilities | None = None,
     strategy_names: set[str] | None = None,
     delivery_methods: set[DeliveryMethod | str] | None = None,
+    attack_techniques: set[AttackTechnique] | None = None,
 ) -> tuple[dict[Vulnerability, list[AttackStrategy]], dict[Vulnerability, dict[str, Any]], AgentCapabilities]:
     """Build per-vulnerability strategy plans for dynamic red teaming.
 
@@ -135,6 +143,7 @@ async def plan_strategies_for_vulnerabilities(
             applicable_hardcoded,
             names=strategy_names,
             delivery_methods=delivery_methods,
+            attack_techniques=attack_techniques,
         )
 
     generated_by_vuln: dict[Vulnerability, list[AttackStrategy]] = {vuln: [] for vuln in vulnerabilities}
@@ -189,6 +198,7 @@ async def plan_strategies_for_vulnerabilities(
                     generated,
                     names=strategy_names,
                     delivery_methods=delivery_methods,
+                    attack_techniques=attack_techniques,
                 )
                 generated_by_vuln[vuln] = generated
                 generation_errors[vuln] = generation_error
@@ -251,6 +261,7 @@ async def plan_strategies_for_categories(
     agent_capabilities: AgentCapabilities | None = None,
     strategy_names: set[str] | None = None,
     delivery_methods: set[DeliveryMethod | str] | None = None,
+    attack_techniques: set[AttackTechnique] | None = None,
 ) -> tuple[dict[str, list[AttackStrategy]], dict[str, dict[str, Any]], AgentCapabilities]:
     """Build per-category strategy plans for dynamic red teaming.
 
@@ -297,6 +308,7 @@ async def plan_strategies_for_categories(
         agent_capabilities=agent_capabilities,
         strategy_names=strategy_names,
         delivery_methods=delivery_methods,
+        attack_techniques=attack_techniques,
     )
 
     # Remap results back to original category strings
@@ -319,6 +331,7 @@ async def plan_strategies_for_categories(
                 fallback_strategies,
                 names=strategy_names,
                 delivery_methods=delivery_methods,
+                attack_techniques=attack_techniques,
             )
             strategy_selection[category] = {
                 'all_hardcoded': [s.model_dump(mode='json') for s in all_category_strategies[category]],

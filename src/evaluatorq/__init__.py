@@ -31,6 +31,7 @@ except importlib.metadata.PackageNotFoundError:  # ponytail: source checkout, no
     __version__ = '0.0.0.dev0'
 
 from .common.judge import ClassifyQuestion
+from .common.trace_input import fetch_traces
 from .contracts import AgentResponse
 from .deployment import (
     DeploymentResponse,
@@ -42,6 +43,7 @@ from .deployment import (
 from .evaluatorq import evaluatorq
 from .evaluators import (
     exact_match_evaluator,
+    orq_evaluator,
     string_contains_evaluator,
 )
 from .job_helper import job
@@ -83,6 +85,8 @@ from .types import (
     Output,
     Scorer,
     ScorerParameter,
+    Trace,
+    TraceInput,
 )
 
 __all__ = [
@@ -126,6 +130,8 @@ __all__ = [
     'Scorer',
     'ScorerParameter',
     'ThreadConfig',
+    'Trace',
+    'TraceInput',
     '__version__',
     'bt_sigma_aggregation',
     'build_report',
@@ -134,6 +140,7 @@ __all__ = [
     # Main function
     'evaluatorq',
     'exact_match_evaluator',
+    'fetch_traces',
     'fit_bt',
     'get_preset',
     'invoke',
@@ -142,6 +149,7 @@ __all__ = [
     # LLM jury evaluator
     'llm_jury',
     'llm_jury_pairwise',
+    'orq_evaluator',
     'repetition_consistency',
     'repetition_consistency_raw',
     'run_pairwise',

@@ -25,13 +25,11 @@ trace list, ``GET /v2/traces/{trace_id}/v3spans`` for span content).
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import math
-import os
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from evaluatorq.common.sanitize import delimit
@@ -40,23 +38,23 @@ from evaluatorq.common.structured_output import (
     sum_structured_usage,
     usage_from_exception,
 )
+from evaluatorq.common.trace_input import load_traces, partition_traces
 from evaluatorq.simulation.types import DEFAULT_MODEL, Persona, Scenario, SimulationDatapoint
 from evaluatorq.simulation.utils.prompt_builders import generate_datapoint
 from evaluatorq.simulation.utils.structured_output import generate_structured
+from evaluatorq.types import Trace, TraceInput
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
 
+    import httpx
     from openai import AsyncOpenAI
 
     from evaluatorq.contracts import LLMCallConfig, TokenUsage
 
 logger = logging.getLogger(__name__)
 
-_SPAN_FETCH_CONCURRENCY = 5
 _INFER_CONCURRENCY = 5
-# The traces list endpoint caps `limit` at 200 per page.
-_API_PAGE_LIMIT = 200
 
 
 class TraceAnalysisConfig(BaseModel):
@@ -318,6 +316,10 @@ async def summarize_conversations(
     ``llm_config`` is the fuller surface behind ``model``: only the fields you set take effect,
     so an unset ``temperature`` still omits the parameter from the request. When both name a model,
     ``llm_config.model`` wins and the contradiction is logged.
+
+    Raises:
+        ValueError: A ``TraceInput`` selected no conversation carrying a user turn.
+            Zero rows is a caller error on every surface, not a run of zero personas.
     """
     from evaluatorq.openresponses.client import build_simulation_client
     from evaluatorq.simulation._config import resolve_sim_llm_config
@@ -350,146 +352,24 @@ async def summarize_conversations(
 # ---------------------------------------------------------------------------
 
 
-def _resolve_orq_credentials(api_key: str | None, base_url: str | None) -> tuple[str, str]:
-    key = api_key or os.environ.get('ORQ_API_KEY')
-    if not key:
-        raise ValueError('Missing Orq API key: set ORQ_API_KEY or pass api_key=.')
-    host = (base_url or os.environ.get('ORQ_BASE_URL') or 'https://my.orq.ai').rstrip('/')
-    return key, host
-
-
-def _content_to_text(content: Any) -> str:
-    """Flatten a message content field (string or list of typed parts) to text.
-
-    Parts with a non-text ``type`` (``tool_call``, ``blob``, ``uri``, ...) are
-    skipped so tool payloads and base64 blobs never leak into the transcript.
-    """
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for part in content:
-            if isinstance(part, str):
-                parts.append(part)
-            elif isinstance(part, dict):
-                if part.get('type') not in (None, 'text'):
-                    continue
-                text = part.get('text') or part.get('content')
-                if isinstance(text, str):
-                    parts.append(text)
-        return '\n'.join(parts)
-    if content is None:
-        return ''
-    logger.warning('Unknown wire content shape %s; JSON-encoding it for trace text', type(content).__name__)
-    return json.dumps(content, default=str)
-
-
-def _normalize_message(raw: Any) -> dict[str, str] | None:
-    if not isinstance(raw, dict):
-        return None
-    role = raw.get('role')
-    if not isinstance(role, str):
-        return None
-    # Classic messages carry `content`; OTel gen_ai messages carry `parts`.
-    content = _content_to_text(raw.get('content'))
-    if not content:
-        content = _content_to_text(raw.get('parts'))
-    if not content:
-        return None
-    # Roles come verbatim from producer payloads; normalize case so a
-    # "User"/"USER" producer doesn't make first_user_message come up empty.
-    return {'role': role.strip().lower(), 'content': content}
-
-
-def _messages_from_value(value: Any, *, default_role: str = 'user') -> list[dict[str, str]]:
-    """Extract chat messages from a span ``input``/``output``-shaped value.
-
-    ``default_role`` is the role assigned to bare-string values, which carry no
-    role of their own: a span's plain-string ``input`` is the user's prompt,
-    but a plain-string ``output`` is the assistant's reply.
-    """
-    if isinstance(value, dict):
-        for key in ('messages', 'input', 'choices'):
-            inner = value.get(key)
-            if isinstance(inner, list):
-                if key == 'choices':
-                    inner = [c.get('message') for c in inner if isinstance(c, dict)]
-                return [m for m in (_normalize_message(i) for i in inner) if m]
-        single = _normalize_message(value)
-        if single:
-            return [single]
-        # gen_ai.input.prompt / gen_ai.output.completion (Completion models).
-        for key in ('prompt', 'completion'):
-            text = value.get(key)
-            if isinstance(text, str) and text.strip():
-                return [{'role': default_role, 'content': text}]
-        return []
-    if isinstance(value, list):
-        return [m for m in (_normalize_message(i) for i in value) if m]
-    if isinstance(value, str) and value.strip():
-        decoded = _decode_json_string(value)
-        if decoded is not None:
-            return _messages_from_value(decoded, default_role=default_role)
-        return [{'role': default_role, 'content': value}]
-    return []
-
-
-def _decode_json_string(value: str) -> Any | None:
-    """Decode a JSON-encoded payload string, or return None if it isn't one.
-
-    Live ``gen_ai`` attributes often carry input/output JSON-encoded as a
-    string (e.g. ``'{"role":"assistant",...}'`` or ``'"Hi!"'``); without
-    decoding, the quotes and ``\\n`` escapes leak verbatim into message content.
-    """
-    stripped = value.strip()
-    if stripped[:1] not in ('{', '[', '"'):
-        return None
-    try:
-        return json.loads(stripped)
-    except json.JSONDecodeError:
-        return None
-
-
-def _span_io(span: dict[str, Any], field: str) -> Any:
-    """A span's input/output: top-level field, else ``attributes.gen_ai.<field>``.
-
-    On real ``/v2/traces/{id}/v3spans`` payloads top-level ``input``/``output``
-    are null — the conversation lives under the OTel ``gen_ai`` attributes.
-    """
-    value = span.get(field)
-    if value is not None:
+def _to_trace_conversation(value: Trace | TraceConversation) -> TraceConversation:
+    """Adapt a canonical trace or retain an existing compatibility conversation."""
+    if isinstance(value, TraceConversation):
         return value
-    attributes = span.get('attributes')
-    if not isinstance(attributes, dict):
-        return None
-    gen_ai = attributes.get('gen_ai')
-    if not isinstance(gen_ai, dict):
-        return None
-    return gen_ai.get(field)
-
-
-def _conversation_from_spans(trace_id: str, spans: list[dict[str, Any]]) -> TraceConversation | None:
-    """Reconstruct the conversation from a trace's spans.
-
-    Prefers the root span (no ``parent_id``, or type ``Trace``); falls back to
-    the first span that yields any messages.
-    """
-    ordered = sorted(
-        spans,
-        key=lambda s: (bool(s.get('parent_id')), s.get('type') != 'Trace'),
+    return TraceConversation(
+        trace_id=value.trace_id,
+        messages=[
+            {'role': message.role, 'content': message.content}
+            for message in value.messages
+            if isinstance(message.content, str) and message.content.strip()
+        ],
     )
-    for span in ordered:
-        messages = _messages_from_value(_span_io(span, 'input'), default_role='user')
-        output_messages = _messages_from_value(_span_io(span, 'output'), default_role='assistant')
-        for overlap in range(min(len(messages), len(output_messages)), 0, -1):
-            if messages[-overlap:] == output_messages[:overlap]:
-                break
-        else:
-            overlap = 0
-        messages.extend(output_messages[overlap:])
-        if messages:
-            return TraceConversation(trace_id=trace_id, messages=messages)
-    return None
+
+
+def _usable_conversations(traces: Sequence[Trace]) -> list[TraceConversation]:
+    """Conversations with a user turn to simulate from; the rest cannot seed a persona."""
+    conversations = [_to_trace_conversation(trace) for trace in traces]
+    return [conversation for conversation in conversations if conversation.first_user_message]
 
 
 async def fetch_trace_conversations(
@@ -510,92 +390,53 @@ async def fetch_trace_conversations(
     ``/v2/traces/v3oql`` API). Traces without any extractable user message are
     skipped.
     """
-    key, host = _resolve_orq_credentials(api_key, base_url)
-    headers = {'Authorization': f'Bearer {key}'}
-    owned = http_client is None
-    client = http_client or httpx.AsyncClient(timeout=60.0)
-    try:
-        rows: list[dict[str, Any]] = []
-        page = 1
-        while len(rows) < limit:
-            before = len(rows)
-            try:
-                response = await client.post(
-                    f'{host}/v2/traces/v3oql',
-                    headers=headers,
-                    json={
-                        'filters': {'operator': 'and', 'filters': filters or [], 'search': search},
-                        'limit': min(limit - len(rows), _API_PAGE_LIMIT),
-                        'page': page,
-                        'fields': [],
-                        **({'start_date': start_date_ms} if start_date_ms is not None else {}),
-                        **({'end_date': end_date_ms} if end_date_ms is not None else {}),
-                    },
-                )
-                response.raise_for_status()
-            except httpx.HTTPError as exc:
-                raise RuntimeError(f'Failed to list Orq traces: {exc}') from exc
-            payload = response.json()
-            data = payload.get('data', [])
-            rows.extend(r for r in data if isinstance(r, dict) and r.get('trace_id'))
-            if not data or not payload.get('has_more'):
-                break
-            if len(rows) == before:
-                # No usable row on a page the API says has more behind it: every
-                # row lacked a `trace_id` (schema drift, partial outage). Looping
-                # would never grow `rows`, so stop on lack of progress rather than
-                # on an arbitrary page count — that way `limit` is honoured for as
-                # many pages as it genuinely takes.
-                logger.warning(
-                    'Stopped paginating traces at page %d: it returned %d row(s), none with a trace_id (%d/%d collected)',
-                    page,
-                    len(data),
-                    len(rows),
-                    limit,
-                )
-                break
-            page += 1
-
-        semaphore = asyncio.Semaphore(_SPAN_FETCH_CONCURRENCY)
-
-        async def fetch_one(trace_id: str) -> TraceConversation | None:
-            async with semaphore:
-                try:
-                    resp = await client.get(f'{host}/v2/traces/{trace_id}/v3spans', headers=headers)
-                    resp.raise_for_status()
-                    spans = resp.json()
-                except (httpx.HTTPError, json.JSONDecodeError) as exc:
-                    # Per-trace resilience: one failed or malformed response
-                    # drops that trace, never the whole batch.
-                    logger.warning('Failed to fetch spans for trace %s: %s', trace_id, exc)
-                    return None
-                if not isinstance(spans, list):
-                    logger.warning(
-                        'Spans payload for trace %s is %s, expected a list — skipping',
-                        trace_id,
-                        type(spans).__name__,
-                    )
-                    return None
-                return _conversation_from_spans(trace_id, spans)
-
-        conversations = await asyncio.gather(*(fetch_one(str(row['trace_id'])) for row in rows[:limit]))
-    finally:
-        if owned:
-            await client.aclose()
-
-    fetched = len(rows[:limit])
-    usable = [c for c in conversations if c is not None and c.first_user_message]
+    start_time = datetime.fromtimestamp(start_date_ms / 1000, tz=timezone.utc) if start_date_ms is not None else None
+    end_time = datetime.fromtimestamp(end_date_ms / 1000, tz=timezone.utc) if end_date_ms is not None else None
+    batch = await load_traces(
+        TraceInput(limit=limit, start_time=start_time, end_time=end_time, search=search, filters=filters or []),
+        caller='fetch_trace_conversations',
+        api_key=api_key,
+        base_url=base_url,
+        http_client=http_client,
+    )
+    usable = _usable_conversations(batch.usable)
+    fetched = len(batch.traces)
     if len(usable) < fetched:
-        # The only signal that traces were dropped — keep it visible at the
-        # default WARNING level, not buried at INFO.
+        # The only signal that traces were dropped (import failure or no user message), so it stays at WARNING.
         logger.warning(
-            '%d of %d fetched trace(s) had no usable conversation and were dropped',
-            fetched - len(usable),
-            fetched,
+            '%d of %d fetched trace(s) had no usable conversation and were dropped', fetched - len(usable), fetched
         )
     else:
         logger.info('Fetched %d trace(s), %d with a usable conversation', fetched, len(usable))
     return usable
+
+
+async def _resolve_trace_conversations(
+    source: TraceInput | Sequence[Trace | TraceConversation],
+    *,
+    orq_api_key: str | None = None,
+    base_url: str | None = None,
+) -> list[TraceConversation]:
+    """Resolve a trace source into the conversation shape used by simulation."""
+    if isinstance(source, TraceInput):
+        batch = await load_traces(source, caller='_resolve_trace_conversations', api_key=orq_api_key, base_url=base_url)
+        usable = _usable_conversations(batch.usable)
+        if not usable:
+            raise ValueError(
+                f'TraceInput(...) selected no usable conversation ({len(batch.traces)} trace(s) fetched). '
+                'Widen the query (limit, search, filters, start_time/end_time) or name a trace_id.'
+            )
+        return usable
+    values = list(source)
+    canonical = [value for value in values if isinstance(value, Trace)]
+    if canonical:
+        # Logs the failures once; the filter below applies the same verdict.
+        partition_traces(canonical, caller='_resolve_trace_conversations')
+    return [
+        _to_trace_conversation(value)
+        for value in values
+        if not (isinstance(value, Trace) and value.import_error is not None)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -638,16 +479,31 @@ class _InferredPersonaScenario(BaseModel):
 
 
 async def datapoints_from_traces(
-    conversations: list[TraceConversation],
+    source: TraceInput | Sequence[Trace | TraceConversation] | None = None,
     *,
+    conversations: Sequence[Trace | TraceConversation] | None = None,
     model: str = DEFAULT_MODEL,
     llm_config: LLMCallConfig | None = None,
     client: AsyncOpenAI | None = None,
     api_key: str | None = None,
+    orq_api_key: str | None = None,
+    base_url: str | None = None,
     config: TraceAnalysisConfig | None = None,
     summaries: Mapping[str, str] | None = None,
 ) -> list[SimulationDatapoint]:
     """Direct mode: build one datapoint per trace conversation.
+
+    Distinct from ``redteam.datapoints_from_traces``: that function is pure
+    (``Trace`` in, red-team datapoints out, no network or LLM call) while this
+    one fetches from Orq when ``source`` is a ``TraceInput`` and then makes a
+    summarize call plus a persona/scenario-inference call per trace, so its
+    cost and latency scale with the number of conversations, not just their
+    count as rows.
+
+    ``source`` may be a ``TraceInput`` to fetch canonical traces, a sequence of
+    already-loaded ``Trace`` objects, or the legacy ``TraceConversation`` values.
+    It was named ``conversations`` before it accepted anything but conversations;
+    that keyword still works so existing callers do not break.
 
     Every conversation is summarized first, then persona and scenario are inferred
     from that summary. The opening message is written fresh from them; set
@@ -656,6 +512,17 @@ async def datapoints_from_traces(
     with a warning.
 
     Args:
+        api_key: The LLM-side key, forwarded to ``build_simulation_client``. This is
+            a different key from ``orq_api_key`` below — passing an Orq key here to
+            fetch traces does not work, because this parameter never reaches the
+            trace fetch.
+        orq_api_key: The Orq API key used to fetch traces when ``source`` is a
+            ``TraceInput``. Falls back to ``ORQ_API_KEY`` when unset, same as
+            ``fetch_trace_conversations``. Unused when ``source`` is already a
+            sequence of loaded traces or conversations.
+        base_url: The Orq base URL used to fetch traces when ``source`` is a
+            ``TraceInput``. Falls back to ``ORQ_BASE_URL`` / the default host
+            when unset.
         summaries: Summaries keyed by ``trace_id``, from ``summarize_conversations``.
             Pass them when a run also calls ``extend_from_traces`` so each
             conversation is summarized once rather than once per mode. When
@@ -667,7 +534,18 @@ async def datapoints_from_traces(
     ``llm_config`` is the fuller surface behind ``model``: only the fields you set take effect,
     so an unset ``temperature`` still omits the parameter from the request. When both name a model,
     ``llm_config.model`` wins and the contradiction is logged.
+
+    Raises:
+        ValueError: A ``TraceInput`` selected no conversation carrying a user turn.
+            Zero rows is a caller error on every surface, not a run of zero personas.
     """
+    if source is None:
+        if conversations is None:
+            raise TypeError("datapoints_from_traces() requires 'source'.")
+        source = conversations
+    elif conversations is not None:
+        raise TypeError("datapoints_from_traces() got both 'source' and its legacy alias 'conversations'.")
+    conversations = await _resolve_trace_conversations(source, orq_api_key=orq_api_key, base_url=base_url)
     from evaluatorq.openresponses.client import build_simulation_client
     from evaluatorq.simulation._config import resolve_sim_llm_config
     from evaluatorq.simulation.generators.first_message_generator import FirstMessageGenerator
@@ -684,6 +562,8 @@ async def datapoints_from_traces(
     # Inference dominates wall-clock, so it runs bounded-concurrent like the
     # span-fetch phase (and DatapointGenerator, which uses the same width).
     semaphore = asyncio.Semaphore(_INFER_CONCURRENCY)
+    # Appended from concurrent tasks only between awaits, so it needs no lock.
+    drop_reasons: list[str] = []
 
     async def infer_one(conversation: TraceConversation) -> tuple[SimulationDatapoint | None, TokenUsage | None]:
         # Usage rides back with the datapoint: this worker runs concurrently and owns
@@ -691,6 +571,8 @@ async def datapoints_from_traces(
         usages: list[TokenUsage | None] = []
         recorded_first_message = conversation.first_user_message
         if not recorded_first_message:
+            logger.warning('Trace %s has no usable first user message; dropping it', conversation.trace_id)
+            drop_reasons.append('no usable first message')
             return None, None
         async with semaphore:
             if summaries is not None:
@@ -699,6 +581,7 @@ async def datapoints_from_traces(
                     # A supplied mapping is authoritative: absence means the
                     # conversation was already attempted and already warned
                     # about — a second call here would bill and warn again.
+                    drop_reasons.append('missing from supplied summaries')
                     return None, None
             else:
                 summary, summary_usage = await _summarize_conversation(
@@ -706,6 +589,7 @@ async def datapoints_from_traces(
                 )
                 usages.append(summary_usage)
                 if summary is None:
+                    drop_reasons.append('summarize failed')
                     return None, sum_structured_usage(usages)
             messages: list[dict[str, Any]] = [
                 {'role': 'system', 'content': _INFER_SYSTEM_PROMPT.format(redaction_note=_redaction_note(config))},
@@ -735,6 +619,7 @@ async def datapoints_from_traces(
                     conversation.trace_id,
                     exc,
                 )
+                drop_reasons.append('inference failed')
                 return None, sum_structured_usage(usages)
             usages.append(result.usage)
             parsed = result.parsed
@@ -743,6 +628,7 @@ async def datapoints_from_traces(
                     'Persona/scenario inference returned no parseable output for trace %s',
                     conversation.trace_id,
                 )
+                drop_reasons.append('inference unparseable')
                 return None, sum_structured_usage(usages)
             first_message = recorded_first_message
             if first_message_generator is not None:
@@ -765,6 +651,15 @@ async def datapoints_from_traces(
             sum_structured_usage([usage for _dp, usage in results]),
             phase='Trace persona/scenario inference',
         )
+        if drop_reasons:
+            # One aggregate line: a run that turns 20 traces into 3 datapoints should not need a re-run to explain it.
+            counts = ', '.join(f'{reason} x{drop_reasons.count(reason)}' for reason in dict.fromkeys(drop_reasons))
+            logger.warning(
+                '%d of %d trace conversation(s) produced no datapoint: %s',
+                len(drop_reasons),
+                len(conversations),
+                counts,
+            )
         return [dp for dp, _usage in results if dp is not None]
     finally:
         if owned:
@@ -839,6 +734,10 @@ async def extend_from_traces(
     ``llm_config`` is the fuller surface behind ``model``: only the fields you set take effect,
     so an unset ``temperature`` still omits the parameter from the request. When both name a model,
     ``llm_config.model`` wins and the contradiction is logged.
+
+    Raises:
+        ValueError: A ``TraceInput`` selected no conversation carrying a user turn.
+            Zero rows is a caller error on every surface, not a run of zero personas.
     """
     from evaluatorq.openresponses.client import build_simulation_client
     from evaluatorq.simulation._config import resolve_sim_llm_config

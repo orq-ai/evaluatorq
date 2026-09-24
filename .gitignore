@@ -81,3 +81,7 @@ docs/superpowers/
 
 # Agent scratch space — docs-drift / docs-coverage reports land here
 .context/
+
+# Local-only scratch artifacts (explainers, one-off renders). Nothing here is built,
+# linked from mkdocs, or drift-checked, so it must not be tracked.
+outputs/

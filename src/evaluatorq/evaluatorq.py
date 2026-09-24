@@ -5,13 +5,15 @@ from collections.abc import Awaitable, Sequence
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from loguru import logger
 
 from .common.llm_limit import llm_concurrency_limit
 from .common.messages import coerce_content_text
+from .common.output_adapters import has_meaningful_output
 from .common.parallelism import resolve_datapoint_parallelism
+from .common.trace_input import load_traces
 from .fetch_data import (
     fetch_dataset_batches,
     fetch_experiment_datapoints,
@@ -33,6 +35,7 @@ from .types import (
     EvaluatorqResult,
     ExperimentInput,
     Job,
+    TraceInput,
 )
 
 if TYPE_CHECKING:
@@ -108,9 +111,7 @@ def extract_recorded_response(messages: Any) -> str:
         ValueError: if ``messages`` is empty or holds no assistant message with text.
     """
     if not messages:
-        raise ValueError(
-            "inference=False requires a recorded response in the 'messages' column, but this row has no messages."
-        )
+        _raise_missing_recorded_response()
     for message in reversed(list(messages)):
         role = message.get('role') if isinstance(message, dict) else getattr(message, 'role', None)
         if role != 'assistant':
@@ -125,10 +126,27 @@ def extract_recorded_response(messages: Any) -> str:
     )
 
 
+def _raise_missing_recorded_response() -> NoReturn:
+    """Raise the shared error for a row with no recorded response at all."""
+    raise ValueError(
+        "inference=False requires a recorded response in the 'messages' column, but this row has no messages."
+    )
+
+
 # Must be async to satisfy the Job protocol (an Awaitable-returning callable), even
 # though replaying a recorded response involves no awaiting.
 async def _replay_recorded_response(data_point: DataPoint, _row_index: int) -> dict[str, Any]:  # noqa: RUF029
     """Synthetic job for the no-inference path: replays the pre-recorded response."""
+    if import_error := data_point.inputs.get('trace_import_error'):
+        raise ValueError(f'The source trace could not be imported: {import_error}')
+    if 'recorded_output' in data_point.inputs:
+        recorded_output = data_point.inputs['recorded_output']
+        if has_meaningful_output(recorded_output):
+            return {'name': 'recorded', 'output': recorded_output}
+        raise ValueError(
+            "inference=False requires a non-empty 'recorded_output' for an imported trace, "
+            'but the selected trace span has no recorded assistant response.'
+        )
     response = extract_recorded_response(data_point.inputs.get('messages'))
     return {'name': 'recorded', 'output': response}
 
@@ -216,7 +234,7 @@ class _StreamingInputs:
 @dataclass(frozen=True)
 class _EvaluationInputs:
     params: EvaluatorParams | dict[str, Any] | None
-    data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None
+    data: DatasetIdInput | ExperimentInput | TraceInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None
     jobs: list[Job] | None
     evaluators: list[Evaluator] | None
     datapoint_parallelism: int
@@ -224,14 +242,14 @@ class _EvaluationInputs:
     print_results: bool
     description: str | None
     path: str | None
-    inference: bool
+    inference: bool | None
     single_trace: bool
     on_datapoint_complete: DataPointComplete | None
 
 
 @dataclass(frozen=True)
 class _ResolvedEvaluationInputs:
-    data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput]
+    data: DatasetIdInput | ExperimentInput | TraceInput | Sequence[Awaitable[DataPoint] | DataPointInput]
     inference: bool
     jobs: list[Job]
     evaluators_list: list[Evaluator]
@@ -276,7 +294,7 @@ def _normalise_params(inputs: _EvaluationInputs) -> _ResolvedEvaluationInputs:
     if params is not None:
         # Validate params if passed as dict
         validated = EvaluatorParams.model_validate(params) if isinstance(params, dict) else params
-    elif data is not None and (jobs is not None or not inference):
+    elif data is not None and (jobs is not None or inference is not True):
         # Use kwargs ('jobs' is optional when inference=False, since responses are replayed).
         validated = EvaluatorParams(
             data=data,
@@ -299,7 +317,8 @@ def _normalise_params(inputs: _EvaluationInputs) -> _ResolvedEvaluationInputs:
 
     # Extract validated values
     data = validated.data
-    inference = validated.inference
+    # The validator resolves inference=None from the data source, so it is a bool here.
+    inference = bool(validated.inference)
     if inference:
         # The validator guarantees jobs is non-empty whenever inference=True.
         jobs = cast('list[Job]', validated.jobs)
@@ -307,7 +326,8 @@ def _normalise_params(inputs: _EvaluationInputs) -> _ResolvedEvaluationInputs:
         # No-inference mode: skip generation and replay each row's recorded response.
         if validated.jobs:
             logger.warning(
-                "inference=False: ignoring the provided 'jobs'; responses are replayed from the 'messages' column."
+                "inference=False: ignoring the provided 'jobs'; responses are replayed from recorded output when "
+                "available, otherwise from the 'messages' column."
             )
         jobs = [_replay_recorded_response]
     evaluators_list = validated.evaluators or []
@@ -373,22 +393,26 @@ async def _enter_single_trace(
         tracing_context.parent_context = await capture_parent_context()
 
 
-async def _resolve_experiment_input(
-    data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None,
+async def _resolve_remote_data_input(
+    data: DatasetIdInput | ExperimentInput | TraceInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None,
     orq_api_key: str | None,
     base_url: str | None,
 ) -> DatasetIdInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None:
-    """Turn an experiment reference into the rows it recorded, before the data phase.
+    """Turn a remote data reference into the rows it holds, before the data phase.
 
-    Only ``ExperimentInput`` is touched; every other source is returned unchanged
-    so the caller can keep dispatching on its type. The validator already
-    guarantees ``inference=False`` whenever this substitution happens.
+    ``ExperimentInput`` and ``TraceInput`` are both resolved here — two remote
+    sources, one resolution phase, so neither can drift into its own inline
+    shape. Every other source is returned unchanged so the caller can keep
+    dispatching on its type. The validator already guarantees ``inference=False``
+    whenever either substitution happens.
 
     Returns:
-        The experiment's recorded datapoints, or ``data`` untouched.
+        The experiment's or the traces' datapoints, or ``data`` untouched.
 
     Raises:
-        ValueError: An experiment was requested without ``orq_api_key``.
+        ValueError: An experiment was requested without ``orq_api_key``, or a
+            trace query selected nothing — a data source that resolved to zero
+            rows is a caller error, not a run that passed everything.
     """
     # Experiment source (no-inference only): replace the input with the experiment's
     # recorded responses, then fall through to the in-memory data path below. The
@@ -402,6 +426,16 @@ async def _resolve_experiment_input(
             data.run_id,
             base_url=base_url,
         )
+    if isinstance(data, TraceInput):
+        traces, usable, failed = await load_traces(data, caller='evaluatorq', api_key=orq_api_key, base_url=base_url)
+        if not traces:
+            raise ValueError(
+                'data=TraceInput(...) selected no traces. Widen the query (limit, search, '
+                'filters, start_time/end_time) or name a trace_id.'
+            )
+        # Failed imports stay in the row set so each fails on its own rather than vanishing from the denominator.
+        logger.info('Imported {} trace(s) ({} usable, {} failed).', len(traces), len(usable), len(failed))
+        return [trace.to_datapoint() for trace in traces]
     return data
 
 
@@ -709,7 +743,7 @@ async def evaluatorq(
     name: str,
     params: EvaluatorParams | dict[str, Any] | None = None,
     *,
-    data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None = None,
+    data: DatasetIdInput | ExperimentInput | TraceInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None = None,
     jobs: list[Job] | None = None,
     evaluators: list[Evaluator] | None = None,
     datapoint_parallelism: int | None = None,
@@ -718,7 +752,7 @@ async def evaluatorq(
     print_results: bool = True,
     description: str | None = None,
     path: str | None = None,
-    inference: bool = True,
+    inference: bool | None = None,
     single_trace: bool = False,
     on_datapoint_complete: DataPointComplete | None = None,
     _send_results: bool = True,
@@ -747,7 +781,8 @@ async def evaluatorq(
         params: Optional EvaluatorParams instance or dict with all parameters.
         data: The data to evaluate. A DatasetIdInput to fetch from Orq platform, an
               ExperimentInput to replay an experiment's recorded responses (requires
-              inference=False), or a list of DataPoint instances/awaitables.
+              inference=False), a TraceInput to import recorded trace conversations
+              (requires inference=False), or a list of DataPoint instances/awaitables.
         jobs: The jobs to run on the data.
         evaluators: The evaluators to use. If not provided, only jobs will run.
         datapoint_parallelism: Task concurrency, applied at two levels: datapoints run
@@ -768,9 +803,12 @@ async def evaluatorq(
         description: Optional description for the evaluation run.
         path: Optional path (e.g. "MyProject/MyFolder") to place the experiment
               in a specific project and folder on the Orq platform.
-        inference: When True (default) jobs run to generate responses. When False,
-              generation is skipped and evaluators score the pre-recorded response in
-              each row's ``messages`` column; ``jobs`` is then optional and ignored.
+        inference: Leave unset to resolve it from ``data``: a replay source
+              (``ExperimentInput``, ``TraceInput``) means False, anything else
+              True. When True jobs run to generate responses. When False,
+              generation is skipped and evaluators score each row's recorded output
+              when present, falling back to its ``messages`` column; ``jobs`` is then
+              optional and ignored.
         single_trace: Group every row under one ``evaluatorq.run`` span so the whole
               evaluation is a single trace. Defaults to False, which leaves each row's
               ``orq.job`` as its own root — an N-row run is then N separate traces.
@@ -849,7 +887,7 @@ async def evaluatorq(
 
         dataset_id: str | None = None
 
-        data = await _resolve_experiment_input(data, orq_api_key, _base_url)
+        data = await _resolve_remote_data_input(data, orq_api_key, _base_url)
 
         # Create progress service
         progress = ProgressService()

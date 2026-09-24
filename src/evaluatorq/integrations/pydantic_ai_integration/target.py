@@ -12,6 +12,7 @@ from evaluatorq.contracts import (
     AgentContext,
     AgentResponse,
     AgentTarget,
+    ConversationHistoryMode,
     Message,
     OutputMessage,
     TextOutputItem,
@@ -58,6 +59,8 @@ class PydanticAITarget(AgentTarget):
     results = await simulate(target=target, ...)
     ```
     """
+
+    history_mode = ConversationHistoryMode.TARGET
 
     def __init__(
         self,
