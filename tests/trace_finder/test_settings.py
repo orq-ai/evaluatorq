@@ -33,6 +33,19 @@ def test_settings_round_trip_uses_json_file(tmp_path: Path) -> None:
     assert json.loads(path.read_text()) == settings.model_dump()
 
 
+def test_save_keeps_original_error_if_temporary_cleanup_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def fail_replace(self: Path, target: Path) -> None:
+        raise OSError('replace failed')
+
+    def fail_unlink(self: Path, *, missing_ok: bool = False) -> None:
+        raise OSError('cleanup failed')
+
+    monkeypatch.setattr(Path, 'replace', fail_replace)
+    monkeypatch.setattr(Path, 'unlink', fail_unlink)
+    with pytest.raises(OSError, match='replace failed'):
+        save_settings(DashboardSettings.model_validate({}), tmp_path / 'settings.json')
+
+
 def test_unknown_settings_override_is_rejected(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'missing.json'))
 

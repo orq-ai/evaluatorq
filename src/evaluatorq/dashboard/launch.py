@@ -151,9 +151,9 @@ def _install_log_bridge() -> None:
     logger.remove()
     logger.add(_DroppingConsoleSink(sys.stderr), level=level, colorize=True)
     logging.basicConfig(handlers=[_InterceptHandler()], level=level, force=True)
-    if not override:
-        # One INFO line per Orq call; a run classifies hundreds of traces.
-        logging.getLogger('httpx').setLevel(logging.WARNING)
+    # One INFO line per Orq call; a run classifies hundreds of traces.
+    # Undo that suppression when a later install requests diagnostic output.
+    logging.getLogger('httpx').setLevel(logging.NOTSET if override else logging.WARNING)
 
 
 # Env var carrying the JSON-encoded roots to the reload subprocess. uvicorn's

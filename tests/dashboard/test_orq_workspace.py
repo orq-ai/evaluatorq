@@ -56,6 +56,19 @@ def test_saved_profile_host_wins_over_environment(monkeypatch: pytest.MonkeyPatc
     assert ow.resolve_base_url() == 'https://staging.orq.ai'
 
 
+@pytest.mark.parametrize('unsafe_host', ['javascript:alert(1)', 'https://host.example/path', 'https://host.example?x=1', 'https://user@host.example', 'https://host.example\\evil'])
+def test_unsafe_saved_profile_host_falls_back_to_environment(monkeypatch: pytest.MonkeyPatch, tmp_path, unsafe_host: str) -> None:
+    from evaluatorq.trace_finder.settings import DashboardSettings, save_settings
+
+    monkeypatch.setenv('ORQ_BASE_URL', 'https://environment.orq.ai')
+    save_settings(
+        DashboardSettings.model_validate({'orq_profile': 'research', 'orq_profile_host': unsafe_host}),
+        tmp_path / 'settings.json',
+    )
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'settings.json'))
+    assert ow.resolve_base_url() == 'https://environment.orq.ai'
+
+
 @pytest.mark.parametrize(
     ('url', 'label'),
     [

@@ -227,7 +227,7 @@ def test_find_profile_overrides_environment_for_both_clients_without_mutating_it
     monkeypatch: Any, tmp_path: Path, use_flag: bool
 ) -> None:
     from evaluatorq.trace_finder import cli as find_cli
-    from evaluatorq.trace_finder.settings import DashboardSettings, save_settings
+    from evaluatorq.trace_finder.settings import DashboardSettings, credential_fingerprint, save_settings
 
     monkeypatch.setenv('ORQ_API_KEY', 'environment-key')
     monkeypatch.setenv('ORQ_BASE_URL', 'https://environment.example')
@@ -251,7 +251,11 @@ def test_find_profile_overrides_environment_for_both_clients_without_mutating_it
 
     if not use_flag:
         save_settings(
-            DashboardSettings.model_validate({'orq_profile': 'research', 'orq_project_id': 'project-research'}),
+            DashboardSettings.model_validate({
+                'orq_profile': 'research',
+                'orq_project_id': 'project-research',
+                'orq_credential_fingerprint': credential_fingerprint('profile-key', 'https://profile.example'),
+            }),
             tmp_path / 'settings.json',
         )
 
@@ -273,6 +277,41 @@ def test_find_profile_overrides_environment_for_both_clients_without_mutating_it
     assert os.environ['ORQ_BASE_URL'] == 'https://environment.example'
     assert store.request is not None
     assert store.request.population.facets.project_id == ('project-research' if not use_flag else None)
+
+
+@pytest.mark.parametrize(
+    ('key', 'host', 'expected_project'),
+    [
+        ('saved-key', 'https://saved.example', 'saved-project'),
+        ('different-key', 'https://saved.example', None),
+        ('saved-key', 'https://other.example', None),
+    ],
+)
+def test_find_only_reuses_saved_project_for_matching_environment_credentials(
+    monkeypatch: Any, tmp_path: Path, key: str, host: str, expected_project: str | None
+) -> None:
+    from evaluatorq.trace_finder import cli as find_cli
+    from evaluatorq.trace_finder.settings import DashboardSettings, credential_fingerprint, save_settings
+
+    save_settings(
+        DashboardSettings.model_validate({
+            'orq_project_id': 'saved-project',
+            'orq_credential_fingerprint': credential_fingerprint('saved-key', 'https://saved.example'),
+        }),
+        tmp_path / 'settings.json',
+    )
+    monkeypatch.setenv('ORQ_API_KEY', key)
+    monkeypatch.setenv('ORQ_BASE_URL', host)
+    monkeypatch.setattr(find_cli, 'resolve_orq_client', lambda: object())
+    monkeypatch.setattr(find_cli, 'resolve_llm_client', lambda **_: SimpleNamespace(client=object()))
+    store = FakeStore()
+    monkeypatch.setattr(find_cli, 'build_run_store', lambda *args, **kwargs: store)
+
+    result = CliRunner().invoke(_app(), ['find', 'refund requests'])
+
+    assert result.exit_code == 0, result.output
+    assert store.request is not None
+    assert store.request.population.facets.project_id == expected_project
 
 
 @pytest.mark.parametrize(

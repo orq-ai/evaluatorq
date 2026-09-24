@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import tempfile
+from contextlib import suppress
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -35,12 +37,19 @@ class DashboardSettings(BaseModel):
     parallelism: int = Field(100, ge=MIN_PARALLELISM, le=MAX_PARALLELISM)
     orq_profile: str | None = None
     orq_profile_host: str | None = None
+    orq_credential_fingerprint: str | None = None
     orq_workspace: str | None = None
     orq_project_id: str | None = None
     orq_project_name: str | None = None
 
     @field_validator(
-        'orq_profile', 'orq_profile_host', 'orq_workspace', 'orq_project_id', 'orq_project_name', mode='before'
+        'orq_profile',
+        'orq_profile_host',
+        'orq_credential_fingerprint',
+        'orq_workspace',
+        'orq_project_id',
+        'orq_project_name',
+        mode='before',
     )
     @classmethod
     def blank_selection_is_none(cls, value: object) -> object:
@@ -71,6 +80,16 @@ def settings_path() -> Path:
     """Return the settings file path from the environment or its default."""
     configured = os.environ.get(SETTINGS_PATH_ENV, '').strip()
     return Path(configured) if configured else Path('.evaluatorq/dashboard-settings.json')
+
+
+def credential_fingerprint(api_key: str | None, base_url: str | None) -> str | None:
+    """Bind a saved project to the key and API host that exposed it, without persisting the key."""
+    if not api_key:
+        return None
+    from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL
+
+    host = (base_url or DEFAULT_ORQ_BASE_URL).rstrip('/')
+    return sha256(f'{api_key}\0{host}'.encode()).hexdigest()
 
 
 def load_settings(path: Path | None = None) -> DashboardSettings:
@@ -110,9 +129,10 @@ def save_settings(s: DashboardSettings, path: Path | None = None) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         temporary.replace(target)
-    except BaseException:
+    except Exception:
         if temporary is not None:
-            temporary.unlink(missing_ok=True)
+            with suppress(OSError):
+                temporary.unlink(missing_ok=True)
         raise
 
 

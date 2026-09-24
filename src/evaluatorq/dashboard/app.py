@@ -76,7 +76,13 @@ from evaluatorq.dashboard.view import (
     settings_body,
     sim_overview_body,
 )
-from evaluatorq.trace_finder.settings import DashboardSettings, effective_settings, load_settings, save_settings
+from evaluatorq.trace_finder.settings import (
+    DashboardSettings,
+    credential_fingerprint,
+    effective_settings,
+    load_settings,
+    save_settings,
+)
 
 _STATIC_DIR = Path(__file__).parent / 'static'
 
@@ -298,6 +304,12 @@ async def _save_settings(req: Request) -> Response | NotStr:
         settings = settings.model_copy(
             update={
                 'orq_profile_host': (selected_profile.server or DEFAULT_ORQ_BASE_URL) if selected_profile else None,
+                'orq_credential_fingerprint': credential_fingerprint(
+                    selected_profile.api_key if selected_profile else os.environ.get('ORQ_API_KEY'),
+                    (selected_profile.server or DEFAULT_ORQ_BASE_URL)
+                    if selected_profile
+                    else os.environ.get('ORQ_BASE_URL'),
+                ),
             }
         )
         if scope.workspace_key and settings.orq_workspace and settings.orq_workspace != scope.workspace_key:
@@ -349,6 +361,7 @@ def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> di
             values[name] = getattr(current, name)
     values['orq_profile'] = form_data.get('orq_profile', current.orq_profile)
     values['orq_profile_host'] = current.orq_profile_host
+    values['orq_credential_fingerprint'] = current.orq_credential_fingerprint
     values['orq_workspace'] = form_data.get('orq_workspace', current.orq_workspace)
     values['orq_project_id'] = form_data.get('orq_project_id', current.orq_project_id)
     values['orq_project_name'] = current.orq_project_name

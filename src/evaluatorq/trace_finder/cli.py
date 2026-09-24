@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path  # noqa: TC003 — Typer resolves this annotation at runtime
 from typing import Annotated, Any
@@ -38,7 +39,7 @@ from .models import (
 from .orq_source import OrqSourceError
 from .pipeline import build_run_store
 from .run_store import RunStore
-from .settings import effective_settings
+from .settings import credential_fingerprint, effective_settings
 
 MAX_FIND_WAIT_SECONDS = 2 * 60 * 60
 
@@ -263,8 +264,6 @@ def find(
         'compiler_model': compiler_model,
         'classifier_model': classifier_model,
     })
-    if profile is not None and profile != settings.orq_profile:
-        settings = settings.model_copy(update={'orq_project_id': None, 'orq_project_name': None})
     orq = None
     try:
         selected = None
@@ -279,10 +278,12 @@ def find(
                     'Run `orq doctor --fix` or use ORQ_API_KEY.'
                 )
         if selected is None:
+            fingerprint = credential_fingerprint(os.environ.get('ORQ_API_KEY'), os.environ.get('ORQ_BASE_URL'))
             orq = resolve_orq_client()
             resolved = resolve_llm_client(require_orq=True, max_retries=0)
         else:
             host = selected.server or DEFAULT_ORQ_BASE_URL
+            fingerprint = credential_fingerprint(selected.api_key, host)
             orq = resolve_orq_client(selected.api_key, base_url=host)
             resolved = resolve_llm_client(
                 extra_api_key=selected.api_key, orq_host=host, require_orq=True, max_retries=0
@@ -292,6 +293,9 @@ def find(
             asyncio.run(close_orq_client(orq))
         emit_error(exc)
         raise typer.Exit(code=2) from None
+
+    if profile_name != settings.orq_profile or fingerprint != settings.orq_credential_fingerprint:
+        settings = settings.model_copy(update={'orq_project_id': None, 'orq_project_name': None})
 
     client = resolved.client
     runner_entered = False

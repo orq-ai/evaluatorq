@@ -427,7 +427,7 @@ def test_saving_a_profile_persists_it_without_changing_environment(
 
 def test_saving_a_profile_with_a_server_keeps_it_in_app_state(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.dashboard.trace_links import trace_span_url
-    from evaluatorq.trace_finder.settings import load_settings
+    from evaluatorq.trace_finder.settings import credential_fingerprint, load_settings
 
     monkeypatch.setattr(app_module, 'list_orq_profiles', _profiles)
     monkeypatch.setenv('ORQ_BASE_URL', 'https://environment.orq.ai')
@@ -438,6 +438,7 @@ def test_saving_a_profile_with_a_server_keeps_it_in_app_state(client: TestClient
     assert getattr(client.app, 'state').finder_profile == _profiles()[0]
     assert os.environ['ORQ_BASE_URL'] == 'https://environment.orq.ai'
     assert load_settings().orq_profile_host == 'https://staging.orq.ai'
+    assert load_settings().orq_credential_fingerprint == credential_fingerprint('key-staging', 'https://staging.orq.ai')
     assert (trace_span_url('trace-1', 'span-1') or '').startswith('https://staging.orq.ai/')
 
 

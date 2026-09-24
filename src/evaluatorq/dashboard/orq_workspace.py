@@ -12,6 +12,9 @@ when no workspace slug is available.
 from __future__ import annotations
 
 import os
+from urllib.parse import urlsplit
+
+from loguru import logger
 
 DEFAULT_BASE_URL = 'https://my.orq.ai'
 
@@ -28,12 +31,41 @@ def resolve_slug() -> str | None:
 
 
 def resolve_base_url() -> str:
-    """Orq host from the saved profile, environment, or prod default."""
+    """Return a safe Orq origin from the saved profile, environment, or prod default."""
     from evaluatorq.trace_finder.settings import load_settings
 
     saved = load_settings()
     host = saved.orq_profile_host if saved.orq_profile else None
-    return (host or os.environ.get('ORQ_BASE_URL') or DEFAULT_BASE_URL).rstrip('/')
+    for source, candidate in (
+        ('saved profile', host),
+        ('ORQ_BASE_URL', os.environ.get('ORQ_BASE_URL')),
+        ('default', DEFAULT_BASE_URL),
+    ):
+        if not candidate:
+            continue
+        origin = candidate.strip().rstrip('/')
+        try:
+            parsed = urlsplit(origin)
+            valid = (
+                parsed.scheme in {'http', 'https'}
+                and parsed.hostname is not None
+                and parsed.port != 0
+                and parsed.path == ''
+                and not parsed.query
+                and not parsed.fragment
+                and '?' not in origin
+                and '#' not in origin
+                and parsed.username is None
+                and parsed.password is None
+                and not any(char.isspace() for char in origin)
+                and '\\' not in origin
+            )
+        except ValueError:
+            valid = False
+        if valid:
+            return origin
+        logger.warning('Ignoring invalid Orq UI host origin from {}', source)
+    return DEFAULT_BASE_URL
 
 
 def classify_host(url: str | None) -> str:

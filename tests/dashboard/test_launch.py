@@ -262,6 +262,20 @@ def test_log_bridge_quiets_httpx_only_at_the_default_level(
     assert httpx_logger.level == expected
 
 
+def test_log_bridge_restores_httpx_after_a_debug_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.dashboard import launch
+
+    httpx_logger = logging.getLogger('httpx')
+    monkeypatch.setattr(httpx_logger, 'level', logging.NOTSET)
+    monkeypatch.delenv('EVALUATORQ_LOG_LEVEL', raising=False)
+    with patch('evaluatorq.dashboard.launch.logging.basicConfig'), patch('evaluatorq.dashboard.launch.logger'):
+        launch._install_log_bridge()
+        assert httpx_logger.level == logging.WARNING
+        monkeypatch.setenv('EVALUATORQ_LOG_LEVEL', 'DEBUG')
+        launch._install_log_bridge()
+    assert httpx_logger.level == logging.NOTSET
+
+
 # ---------------------------------------------------------------------------
 # CLI help smoke-test
 # ---------------------------------------------------------------------------
