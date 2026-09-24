@@ -30,7 +30,8 @@ def _app() -> typer.Typer:
     return app
 
 
-def test_find_help_describes_profile_option() -> None:
+def test_find_help_describes_profile_option(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv('COLUMNS', '160')
     result = CliRunner().invoke(_app(), ['find', '--help'])
 
     assert result.exit_code == 0, result.output

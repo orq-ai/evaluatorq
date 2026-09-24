@@ -260,10 +260,11 @@ def test_log_bridge_quiets_httpx_only_at_the_default_level(
 # ---------------------------------------------------------------------------
 
 
-def test_eq_dashboard_help() -> None:
+def test_eq_dashboard_help(monkeypatch: pytest.MonkeyPatch) -> None:
     """eq dashboard --help names all three stores scanned with no path."""
     from evaluatorq.cli import app
 
+    monkeypatch.setenv('COLUMNS', '160')
     runner = CliRunner()
     result = runner.invoke(app, ['dashboard', '--help'])
     assert result.exit_code == 0
