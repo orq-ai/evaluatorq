@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq.common.fields import get_field as _get_field
+from evaluatorq.common.messages import messages_to_text
+from evaluatorq.openresponses.items import ParsedItem, classify_part, normalize_tool_arguments, parse_item
 
 if TYPE_CHECKING:
     from evaluatorq.redteam.contracts import RedTeamInput, RedTeamSample, StaticDataset, Turn
@@ -52,13 +54,12 @@ def build_openresponses_request(
     return payload
 
 
-def _text_from_output_item(item: Any) -> str:
-    item_type = _get_field(item, 'type')
-    if item_type in ('output_text', 'input_text'):
-        return str(_get_field(item, 'text', '') or '')
-    if item_type == 'message':
-        return ''.join(_text_from_output_item(part) for part in _get_field(item, 'content') or [])
-    return ''
+def _parts_text(parts: Any) -> str:
+    return ''.join(text for kind, text in map(classify_part, parts or []) if kind == 'text')
+
+
+def _message_text(item: ParsedItem) -> str:
+    return _parts_text(item.content) if item.kind == 'message' else ''
 
 
 def _assistant_text(response: Any) -> str:
@@ -67,50 +68,61 @@ def _assistant_text(response: Any) -> str:
         return text
     output = _get_field(response, 'output')
     if output is not None:
-        return ''.join(_text_from_output_item(item) for item in output)
+        return ''.join(_message_text(parse_item(item)) for item in output)
     return ''
 
 
-def _assistant_message_item(item: Any) -> dict[str, Any] | None:
-    text = _text_from_output_item(item)
+def _assistant_message_item(item: ParsedItem) -> dict[str, Any] | None:
+    text = _message_text(item)
     if text:
         return assistant_input_item(text)
     return None
 
 
-def _tool_call_item(item: Any) -> dict[str, Any] | None:
-    if _get_field(item, 'type') != 'function_call':
-        return None
+def _tool_items(parsed: ParsedItem) -> list[dict[str, Any]]:
+    from evaluatorq.contracts import tool_result_to_text
 
-    name = _get_field(item, 'name')
-    arguments = _get_field(item, 'arguments')
-    call_id = _get_field(item, 'call_id') or _get_field(item, 'id')
-    result = _get_field(item, 'result')
-
-    payload: dict[str, Any] = {
+    if parsed.kind != 'tool_call' and parsed.kind != 'tool_result':
+        return []
+    if not parsed.call_id:
+        logger.warning('append_assistant_turn: skipping {} without a call_id', parsed.item_type)
+        return []
+    if parsed.kind == 'tool_result':
+        if parsed.output is None:
+            return []  # parse_item logged it
+        return [
+            {'type': 'function_call_output', 'call_id': parsed.call_id, 'output': tool_result_to_text(parsed.output)}
+        ]
+    payload = {
         'type': 'function_call',
-        'name': str(name or ''),
-        'arguments': arguments if isinstance(arguments, str) else json.dumps(arguments or {}),
+        'name': parsed.name,
+        'arguments': normalize_tool_arguments(parsed.arguments),
+        'call_id': parsed.call_id,
     }
-    if call_id:
-        payload['call_id'] = str(call_id)
-    if result is not None:
-        payload['result'] = result
-    return payload
+    items = [payload]
+    if parsed.result is not None:
+        items.append({
+            'type': 'function_call_output',
+            'call_id': parsed.call_id,
+            'output': tool_result_to_text(parsed.result),
+        })
+    return items
 
 
 def _assistant_items_from_output(response: Any) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
-    for item in _get_field(response, 'output') or []:
-        input_item = _tool_call_item(item) or _assistant_message_item(item)
-        if input_item is not None:
-            items.append(input_item)
+    for raw in _get_field(response, 'output') or []:
+        item = parse_item(raw)
+        tool_items = _tool_items(item)
+        if tool_items:
+            items.extend(tool_items)
+        elif (message_item := _assistant_message_item(item)) is not None:
+            items.append(message_item)
     return items
 
 
 def _assistant_tool_call_items(response: Any) -> list[dict[str, Any]]:
-    tool_calls = [_tool_call_item(item) for item in _get_field(response, 'tool_calls') or []]
-    return [item for item in tool_calls if item is not None]
+    return [item for call in _get_field(response, 'tool_calls') or [] for item in _tool_items(parse_item(call))]
 
 
 def append_assistant_turn(input_array: list[dict[str, Any]], response: Any) -> list[dict[str, Any]]:
@@ -154,14 +166,24 @@ def orchestrator_result_to_openresponses_input(turns: list[Turn]) -> list[dict[s
 
 
 def messages_from_openresponses_input(input_array: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Convert OpenResponses input items to redteam chat message dicts."""
+    """Convert Responses input to replayable redteam chat messages.
+
+    Tool calls become labeled assistant text. A result is included only when one
+    was recorded; this keeps calls visible without inventing a tool response or
+    sending an unpaired call to a chat provider.
+    """
+    from evaluatorq.contracts import tool_result_to_text
+
     out: list[dict[str, Any]] = []
+    pending_calls: dict[str, int] = {}
     for item in input_array:
         if not isinstance(item, dict):
+            logger.warning('messages_from_openresponses_input: skipping non-object input item {!r}', item)
             continue
 
         role = item.get('role')
         if role in ('user', 'assistant', 'system'):
+            pending_calls.clear()
             content = item.get('content')
             if content is None:
                 continue
@@ -172,16 +194,37 @@ def messages_from_openresponses_input(input_array: list[dict[str, Any]]) -> list
             out.append({'role': role, 'content': text})
             continue
 
-        if item.get('type') == 'message':
-            text = ''.join(_text_from_output_item(block) for block in item.get('content') or [])
+        parsed = parse_item(item)
+        if parsed.kind == 'message':
+            pending_calls.clear()
+            text = _message_text(parsed)
             if text:
                 out.append({'role': item.get('role', 'assistant'), 'content': text})
-        elif item.get('type') == 'function_call':
-            logger.debug(
-                'messages_from_openresponses_input: dropping function_call item (name={!r}); '
-                'tool calls are not represented in redteam chat messages',
-                item.get('name'),
-            )
+        elif parsed.kind == 'tool_call':
+            marker = messages_to_text([
+                {
+                    'role': 'assistant',
+                    'tool_calls': [{'function': {'name': parsed.name, 'arguments': parsed.arguments}}],
+                }
+            ])
+            if parsed.result is not None:
+                marker += f'\n[tool_result: {tool_result_to_text(parsed.result)}]'
+            out.append({'role': 'assistant', 'content': marker})
+            if parsed.result is None and parsed.call_id:
+                pending_calls[parsed.call_id] = len(out) - 1
+        elif parsed.kind == 'tool_result':
+            if parsed.output is None:
+                continue  # parse_item logged it
+            call_index = pending_calls.pop(parsed.call_id, None) if parsed.call_id else None
+            if call_index is None:
+                logger.warning(
+                    'messages_from_openresponses_input: skipping {} with no matching call call_id={!r}',
+                    parsed.item_type,
+                    parsed.call_id,
+                )
+            else:
+                out[call_index]['content'] += f'\n[tool_result: {tool_result_to_text(parsed.output)}]'
+        # Reasoning is not replayed; parse_item already logged an unknown item.
     return out
 
 

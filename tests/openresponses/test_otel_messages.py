@@ -139,3 +139,37 @@ def test_request_span_records_parts_in_gen_ai_and_raw_items_in_openresponses() -
     # The raw items stay verbatim under the key Orq's gateway uses for them.
     assert json.loads(str(attrs['openresponses.input'])) == _TOOL_TRANSCRIPT
     assert attrs['gen_ai.system_instructions'] == 'be brief'
+
+
+def test_sdk_message_renders_as_text_not_a_repr() -> None:
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+    item = ResponseOutputMessage(
+        id='m', type='message', role='assistant', status='completed',
+        content=[ResponseOutputText(type='output_text', text='done', annotations=[])],
+    )
+
+    (message,) = items_to_output_messages([item])
+
+    assert message['parts'] == [{'type': 'text', 'content': 'done'}]
+
+
+def test_result_on_the_call_and_a_repeating_result_item_emit_one_response() -> None:
+    messages = items_to_input_messages([
+        {'type': 'function_call', 'call_id': 'c1', 'name': 'f', 'arguments': '{}', 'output': '12C'},
+        {'type': 'function_call_output', 'call_id': 'c1', 'output': '12C'},
+    ])
+
+    assert [m['role'] for m in messages] == ['assistant', 'tool']
+
+
+def test_orq_item_without_name_is_named_from_its_type() -> None:
+    (message,) = items_to_output_messages([{'type': 'orq:query_kb', 'call_id': 'c1', 'arguments': '{}'}])
+
+    assert message['parts'][0]['name'] == 'query_kb'
+
+
+def test_mcp_name_wins_over_gateway_tool_name() -> None:
+    (message,) = items_to_output_messages([{'type': 'mcp_call', 'id': 'm', 'name': 'sdk', 'tool_name': 'gw'}])
+
+    assert message['parts'][0]['name'] == 'sdk'

@@ -325,6 +325,35 @@ def test_direct_responses_tool_items_are_preserved(item: dict[str, object], expe
     assert messages[0].tool_calls[0].function.name == expected_name
 
 
+@pytest.mark.parametrize(
+    ('item', 'item_id'),
+    [
+        ({'type': 'function_call', 'call_id': 'call_1', 'id': 'fc_1', 'name': 'f', 'arguments': '{}'}, 'fc_1'),
+        ({'type': 'function_call', 'call_id': 'fc_1', 'id': 'fc_1', 'name': 'f', 'arguments': '{}'}, 'fc_1'),
+        ({'type': 'function_call', 'id': 'fc_1', 'name': 'f', 'arguments': '{}'}, None),
+        ({'type': 'function_call', 'call_id': 'call_1', 'id': 'x_1', 'name': 'f', 'arguments': '{}'}, None),
+    ],
+)
+def test_fc_item_id_is_recovered_only_for_a_paired_call(item: dict[str, object], item_id: str | None) -> None:
+    messages, _ = _parse_messages(item, default_role='assistant')
+
+    assert messages[0].tool_calls is not None
+    assert messages[0].tool_calls[0].item_id == item_id
+
+
+def test_imported_output_keeps_tool_results() -> None:
+    messages, _ = _parse_messages(
+        [
+            {'type': 'function_call', 'call_id': 'c1', 'name': 'calc', 'arguments': '{}'},
+            {'type': 'function_call_output', 'call_id': 'c1', 'output': '42'},
+            {'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': 'ok'}]},
+        ],
+        default_role='assistant',
+    )
+
+    assert [(m.role, m.content) for m in messages if m.role == 'tool'] == [('tool', '42')]
+
+
 def test_malformed_chat_identifiers_are_dropped_with_warning(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING):
         messages, detected = _parse_messages(

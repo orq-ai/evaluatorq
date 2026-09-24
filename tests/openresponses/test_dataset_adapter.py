@@ -86,7 +86,7 @@ class TestMessagesFromOpenResponsesInput:
         ])
         assert result == [{"role": "user", "content": "attack"}]
 
-    def test_function_call_items_are_dropped(self):
+    def test_function_call_without_result_is_visible(self):
         result = messages_from_openresponses_input([
             {"role": "user", "content": "use the search tool"},
             {"type": "function_call", "name": "search", "arguments": "{}", "call_id": "c1"},
@@ -94,8 +94,30 @@ class TestMessagesFromOpenResponsesInput:
         ])
         assert result == [
             {"role": "user", "content": "use the search tool"},
+            {"role": "assistant", "content": "[tool_call: search({})]"},
             {"role": "user", "content": "follow-up"},
         ]
+
+    def test_mcp_and_custom_calls_keep_optional_results(self):
+        result = messages_from_openresponses_input([
+            {"type": "mcp_call", "id": "mcp_1", "name": "search_docs", "arguments": "{}", "output": "hit"},
+            {"type": "custom_tool_call", "call_id": "ct_1", "name": "run_sql", "input": "SELECT 1"},
+            {"type": "custom_tool_call_output", "call_id": "ct_1", "output": "1"},
+            {"type": "custom_tool_call", "call_id": "ct_2", "name": "send_email", "input": "draft"},
+        ])
+
+        assert result == [
+            {"role": "assistant", "content": "[tool_call: search_docs({})]\n[tool_result: hit]"},
+            {"role": "assistant", "content": "[tool_call: run_sql(SELECT 1)]\n[tool_result: 1]"},
+            {"role": "assistant", "content": "[tool_call: send_email(draft)]"},
+        ]
+
+    def test_empty_mcp_result_is_kept(self):
+        result = messages_from_openresponses_input([
+            {"type": "mcp_call", "id": "mcp_1", "name": "noop", "arguments": "{}", "output": ""},
+        ])
+
+        assert result == [{"role": "assistant", "content": "[tool_call: noop({})]\n[tool_result: ]"}]
 
     def test_list_content_is_flattened(self):
         result = messages_from_openresponses_input([
@@ -133,7 +155,7 @@ class TestRedTeamSampleFromOpenResponses:
             redteam_sample_from_openresponses(
                 input=_input(),
                 openresponses_input=[
-                    {"type": "function_call", "name": "x", "arguments": "{}"},
+                    {"type": "reasoning", "summary": []},
                 ],
             )
 
@@ -148,6 +170,23 @@ class TestLoadOpenResponsesDataset:
         assert len(dataset.samples) == 1
         assert dataset.samples[0].input.id == "s1"
         assert dataset.samples[0].messages[0].content == "attack"
+
+    def test_loaded_sample_keeps_mcp_and_custom_calls_without_inventing_results(self, tmp_path):
+        row = _dataset_row()
+        row["openresponses_input"] = [
+            {"role": "user", "content": "attack"},
+            {"type": "mcp_call", "id": "mcp_1", "name": "search_docs", "arguments": "{}", "output": "hit"},
+            {"type": "custom_tool_call", "call_id": "ct_1", "name": "send_email", "input": "draft"},
+        ]
+        path = tmp_path / "samples.json"
+        path.write_text(json.dumps([row]), encoding="utf-8")
+
+        dataset = load_openresponses_dataset(path)
+        messages = dataset.samples[0].messages
+
+        assert [message.role for message in messages] == ["user", "assistant", "assistant"]
+        assert messages[1].content == "[tool_call: search_docs({})]\n[tool_result: hit]"
+        assert messages[2].content == "[tool_call: send_email(draft)]"
 
     def test_loads_samples_wrapper(self, tmp_path):
         path = tmp_path / "samples.json"

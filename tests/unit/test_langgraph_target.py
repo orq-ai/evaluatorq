@@ -171,8 +171,8 @@ class TestLangGraphTarget:
         assert item.id.startswith('fc_')
 
         rendered = render_tool_call(item.model_copy(update={'result': 'done'}))
-        assert rendered is not None
         tool_call, tool_message = rendered
+        assert tool_message is not None
         input_items = messages_to_responses_input(
             [Message(role='assistant', content=None, tool_calls=[tool_call]), tool_message]
         )
@@ -261,19 +261,21 @@ class TestLangGraphTarget:
         assert response.tool_calls[0].result == '{"status": "shipped"}'
 
     @pytest.mark.asyncio
-    async def test_tool_call_without_result_stays_none_and_is_dropped(self) -> None:
-        """No ToolMessage this turn keeps result=None, so render_tool_call drops the call."""
+    async def test_tool_call_without_result_stays_visible(self) -> None:
+        """No ToolMessage this turn keeps the call and leaves its result absent."""
         from evaluatorq.contracts import render_tool_call
 
         response = await LangGraphTarget(_graph_returning(_tool_turn())).respond([Message(role='user', content='hi')])
         assert response.tool_calls[0].result is None
-        assert render_tool_call(response.tool_calls[0]) is None
+        call, result = render_tool_call(response.tool_calls[0])
+        assert call.function.name == response.tool_calls[0].name
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_late_tool_message_warns_naming_the_call(self, caplog: pytest.LogCaptureFixture) -> None:
         """The interrupt/resume shape: the result lands a turn after the call, and must announce itself.
 
-        Turn 1 emits the call and drops it (result=None). Turn 2 carries the
+        Turn 1 emits the call without a result. Turn 2 carries the
         ToolMessage, whose call is no longer in this turn's index — the tool's
         output is discarded, and the only signal anyone gets is this warning.
         """
@@ -315,7 +317,7 @@ class TestLangGraphTarget:
 
         assert 'ghost' in caplog.text
         assert response.tool_calls[0].result is None
-        assert render_tool_call(response.tool_calls[0]) is None
+        assert render_tool_call(response.tool_calls[0])[1] is None
 
     @pytest.mark.asyncio
     async def test_results_pair_by_id_not_by_arrival_order(self) -> None:

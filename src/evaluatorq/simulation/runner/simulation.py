@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from evaluatorq.common.async_utils import await_maybe
+from evaluatorq.common.messages import messages_to_text
 from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry
 from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pipeline
 from evaluatorq.common.tracing import record_llm_input, record_llm_output, set_span_attrs
@@ -184,16 +185,19 @@ def build_assistant_message(response: AgentResponse) -> list[Message]:
     the target actually did, not just any text it produced alongside it — a
     target that resolves a request purely through tool calls (no text) previously
     left the judge looking at an empty assistant turn. Completed tool calls are
-    followed by their separate ``role='tool'`` rows so both provider serializers
-    receive a valid pair. Calls without results are dropped by ``render_tool_call``.
+    followed by their separate ``role='tool'`` rows. Calls without a result or
+    call ID are rendered as text so the judge sees them without sending an
+    unpaired call to a provider.
     """
-    rendered_tool_calls = [
-        rendered
-        for item in response.tool_calls
-        if (rendered := render_tool_call(item, warn=logger.warning)) is not None
-    ]
-    tool_calls = [tool_call for tool_call, _ in rendered_tool_calls]
+    rendered_tool_calls = [(item, *render_tool_call(item)) for item in response.tool_calls]
+    tool_calls = [tool_call for _, tool_call, result in rendered_tool_calls if result is not None]
+    unpaired_calls = [(item, tool_call) for item, tool_call, result in rendered_tool_calls if result is None]
     text = response.text
+    for item, tool_call in unpaired_calls:
+        call_text = messages_to_text([Message(role='assistant', tool_calls=[tool_call])])
+        if item.result is not None:
+            call_text += f'\n[tool_result: {item.result}]'
+        text = '\n'.join(part for part in (text, call_text) if part)
     if not text and tool_calls:
         logger.warning(
             'Assistant turn has no text but %d tool call(s); transcript keeps the tool calls',
@@ -201,7 +205,7 @@ def build_assistant_message(response: AgentResponse) -> list[Message]:
         )
     return [
         Message(role='assistant', content=text, tool_calls=tool_calls or None),
-        *(tool_message for _, tool_message in rendered_tool_calls),
+        *(tool_message for _, _, tool_message in rendered_tool_calls if tool_message is not None),
     ]
 
 

@@ -141,6 +141,7 @@ Read the directory itself for the file list — it is always current, this file 
 | Rendering a whole message list as one text blob | `common.messages.messages_to_text` | `''.join(...)` over `content` — it glues turns into one word, drops `tool_calls` (so an agent that acted scores as silent) and lets tool JSON read as the agent's answer |
 | Turning a `TraceInput` or loaded traces into rows | `common.trace_input.load_traces` (fetch + one `partition_traces` log) | `fetch_traces` then a hand-rolled usable/failed split |
 | Building an Orq SDK client | `common.orq_client.resolve_orq_client` | `Orq(...)` anywhere but that module |
+| Deciding what a Responses item is (text, tool call, tool result, reasoning) | `openresponses.items.parse_item`, branching on `kind`; content parts via `classify_part` | an `item['type'] == 'function_call'` ladder — a second copy is how MCP calls went missing from `AgentResponse` while trace import still showed them |
 | Rendering a transcript as Responses `input` | `openresponses.input_items.messages_to_responses_input` | a hand-built `{'role', 'content'}` list — an assistant turn needs `output_text` parts or the Orq router **silently drops it** |
 
 

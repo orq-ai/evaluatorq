@@ -51,13 +51,19 @@ def _is_message_shape(item: Any) -> bool:
 
 
 def _agent_response_text(response: AgentResponse) -> str:
-    """Render text and tool calls in the order the agent produced them."""
+    """Render text, tool calls and their results in the order the agent produced them.
+
+    A result (including an MCP error) is a ``tool`` turn: dropping it shows the
+    judge a failed call as though it had succeeded.
+    """
     turns: list[dict[str, Any]] = []
     for item in response.output:
         if isinstance(item, TextOutputItem):
             turns.append({'role': 'assistant', 'content': item.text})
         elif isinstance(item, ToolCallOutputItem):
             turns.append({'role': 'assistant', 'tool_calls': [item]})
+            if item.result is not None:
+                turns.append({'role': 'tool', 'content': item.result})
     return messages_to_text(turns)
 
 

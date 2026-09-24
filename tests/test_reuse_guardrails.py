@@ -20,6 +20,8 @@ from typing import TypeGuard
 
 import pytest
 
+from evaluatorq.openresponses.items import RESPONSES_ITEM_TYPES
+
 SRC = Path(__file__).resolve().parents[1] / 'src' / 'evaluatorq'
 
 # Attribute suffixes that mean "an LLM API call happened here".
@@ -914,38 +916,66 @@ def test_config_accounting_detector_actually_fires() -> None:
 # --- Responses item types decided outside the shared parser -------------------
 # `AgentResponse.from_output_items` and `otel_messages` each kept their own branch per item type, so an MCP call showed up
 # in an imported trace but not on the target's AgentResponse. `openresponses.items.parse_item` is the one place that maps a
-# type to a kind. 'message' and 'reasoning' are left out: both are also role or content-part names, so they would flag noise.
-_RESPONSES_TOOL_ITEM_TYPES = frozenset({
-    'function_call',
-    'function_call_output',
-    'custom_tool_call',
-    'custom_tool_call_output',
-    'mcp_call',
-})
+# type to a kind. A tool item type is flagged wherever it is compared against. 'message' and 'reasoning' are ordinary
+# words (a content part is also typed 'reasoning'), so they are flagged only when compared against an item's type field.
 _RESPONSES_ITEM_PARSER = 'openresponses/items.py'
-# Frozen: sites that predate the rule. Shrink it, never grow it.
-_RESPONSES_ITEM_BRANCH_ALLOWLIST = frozenset({
-    'integrations/openai_agents_integration/target.py',
-    'openresponses/dataset.py',
-})
+_RESPONSES_TOOL_ITEM_TYPES = RESPONSES_ITEM_TYPES - {'message', 'reasoning'}
+_TYPE_ACCESSORS = frozenset({'get', 'get_field', '_gf', '_get_field', 'getattr'})
 
 
-def _string_constants(node: ast.expr) -> list[str]:
+def _string_constants(node: ast.expr) -> set[str]:
+    if isinstance(node, ast.Call) and _tail(_dotted(node.func)) in {'frozenset', 'set', 'tuple'} and node.args:
+        node = node.args[0]
     elements = node.elts if isinstance(node, (ast.Set, ast.Tuple, ast.List)) else [node]
-    return [e.value for e in elements if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+    return {e.value for e in elements if isinstance(e, ast.Constant) and isinstance(e.value, str)}
+
+
+def _reads_item_type(node: ast.expr) -> bool:
+    """Whether ``node`` reads an item's ``type``: ``x.type``, ``x['type']``, ``x.get('type')``, ``item_type``."""
+    if isinstance(node, ast.Attribute):
+        return node.attr == 'type'
+    if isinstance(node, ast.Name):
+        return node.id == 'item_type' or node.id.endswith('_item_type')
+    if isinstance(node, ast.Subscript):
+        return isinstance(node.slice, ast.Constant) and node.slice.value == 'type'
+    if isinstance(node, ast.Call) and _tail(_dotted(node.func)) in _TYPE_ACCESSORS:
+        return any(isinstance(a, ast.Constant) and a.value == 'type' for a in node.args)
+    return False
 
 
 def _responses_item_type_branches(source: str, path: str) -> list[str]:
-    """Return ``path:line`` for every comparison or ``case`` against a Responses tool item type literal."""
+    """Return ``path:line`` for every branch on a Responses item type made outside the shared parser."""
+    tree = ast.parse(source)
+    # Module-level string collections, so `t in _TYPES` is resolved to what `_TYPES` holds.
+    constants = {
+        target.id: _string_constants(node.value)
+        for node in tree.body
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None
+        for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+        if isinstance(target, ast.Name)
+    }
     hits: list[str] = []
-    for node in ast.walk(ast.parse(source)):
+    for node in ast.walk(tree):
         if isinstance(node, ast.Compare):
             operands = [node.left, *node.comparators]
         elif isinstance(node, ast.MatchValue):
             operands = [node.value]
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == 'startswith'
+            and _reads_item_type(node.func.value)
+            and 'orq:' in {v for a in node.args for v in _string_constants(a)}
+        ):
+            hits.append(f'{path}:{node.lineno}')
+            continue
         else:
             continue
-        if any(value in _RESPONSES_TOOL_ITEM_TYPES for operand in operands for value in _string_constants(operand)):
+        values = set().union(*(
+            constants.get(op.id, set()) if isinstance(op, ast.Name) else _string_constants(op) for op in operands
+        ))
+        typed = any(_reads_item_type(op) for op in operands)
+        if values & _RESPONSES_TOOL_ITEM_TYPES or (typed and values & RESPONSES_ITEM_TYPES):
             hits.append(f'{path}:{node.lineno}')
     return hits
 
@@ -955,7 +985,6 @@ def test_responses_item_types_are_decided_by_the_shared_parser() -> None:
         hit
         for path in sorted(SRC.rglob('*.py'))
         if (rel := path.relative_to(SRC).as_posix()) != _RESPONSES_ITEM_PARSER
-        and rel not in _RESPONSES_ITEM_BRANCH_ALLOWLIST
         for hit in _responses_item_type_branches(path.read_text(encoding='utf-8'), rel)
     ]
     assert not hits, (
@@ -965,19 +994,19 @@ def test_responses_item_types_are_decided_by_the_shared_parser() -> None:
     )
 
 
-def test_responses_item_allowlist_entries_still_branch() -> None:
-    # An entry that no longer branches is stale; drop it so the freeze keeps meaning something.
-    for rel in _RESPONSES_ITEM_BRANCH_ALLOWLIST:
-        assert _responses_item_type_branches((SRC / rel).read_text(encoding='utf-8'), rel), rel
-
-
 @pytest.mark.parametrize(
     ('source', 'expected'),
     [
         ("if item['type'] == 'mcp_call':\n    pass\n", True),
         ("if kind in {'function_call_output', 'x'}:\n    pass\n", True),
         ("match t:\n    case 'custom_tool_call':\n        pass\n", True),
-        ("if item['type'] == 'message':\n    pass\n", False),
+        ("_T = frozenset({'mcp_call', 'function_call'})\nif t in _T:\n    pass\n", True),
+        ("if item_type.startswith('orq:'):\n    pass\n", True),
+        ("if item.get('type') == 'message':\n    pass\n", True),
+        ("if get_field(item, 'type') == 'reasoning':\n    pass\n", True),
+        ("if part_type == 'reasoning':\n    pass\n", False),
+        ("if role == 'message':\n    pass\n", False),
+        ("if spec.startswith('orq:'):\n    pass\n", False),
         ("payload = {'type': 'function_call'}\n", False),
     ],
 )
