@@ -84,14 +84,34 @@
           colorbar: { title: 'Label value', thickness: 10 }, opacity: .85 }
       }];
     }
-    var groups = payload.color_mode === 'category'
-      ? payload.legend.map(function (item) { return { id: item.name, name: item.name, color: item.color, symbol: item.symbol }; })
-      : payload.legend.map(function (item) { return { id: item.cluster_id, name: item.name, color: item.color, symbol: item.symbol }; });
+    var groups;
+    if (payload.color_mode === 'category') {
+      groups = [];
+      var categorySeen = {};
+      var categorySymbols = {};
+      payload.points.forEach(function (point) {
+        var category = String(point.label_value);
+        var key = category + '|' + point.symbol;
+        if (categorySymbols[key]) return;
+        var showLegend = !categorySeen[category];
+        categorySeen[category] = true;
+        categorySymbols[key] = true;
+        groups.push({ id: key, category: category, name: category, color: point.color,
+          symbol: point.symbol, showLegend: showLegend });
+      });
+    } else {
+      groups = payload.legend.map(function (item) {
+        return { id: item.cluster_id, name: item.name, color: item.color, symbol: item.symbol };
+      });
+    }
     return groups.map(function (group) {
       var points = payload.points.filter(function (p) {
-        return (payload.color_mode === 'category' ? String(p.label_value) : p.cluster_id) === group.id;
+        return (payload.color_mode === 'category'
+          ? String(p.label_value) + '|' + p.symbol
+          : p.cluster_id) === group.id;
       });
       return { type: 'scatter3d', mode: 'markers', name: group.name,
+        showlegend: group.showLegend !== false,
         x: points.map(function (p) { return p.x; }), y: points.map(function (p) { return p.y; }),
         z: points.map(function (p) { return p.z; }), text: points.map(function (p) { return p.trace_id; }),
         customdata: points.map(function (p) { return [p.cluster_id, p.trace_id]; }),
