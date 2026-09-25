@@ -62,10 +62,23 @@ class InsightsPopulation(BaseModel):
     finder_export: Path | None = None
 
     @model_validator(mode='after')
-    def _finder_export_excludes_query(self) -> Self:
-        if self.finder_export is not None and self.query is not None:
+    def _finder_export_excludes_live_selection(self) -> Self:
+        if self.finder_export is None:
+            return self
+        live_fields = {
+            'query': self.query is not None,
+            'facets': self.facets != FacetSelection(),
+            'numeric': self.numeric != NumericFilters(),
+            'start': self.start is not None,
+            'end': self.end is not None,
+            'window_days': self.window_days != 7,
+            'limit': self.limit != 500,
+        }
+        conflicting = [name for name, used in live_fields.items() if used]
+        if conflicting:
             raise ValueError(
-                'finder_export and query are mutually exclusive: a finder export already pins the matched traces'
+                'finder_export cannot be combined with live population settings '
+                f'({", ".join(conflicting)}): a finder export already pins the matched traces'
             )
         return self
 

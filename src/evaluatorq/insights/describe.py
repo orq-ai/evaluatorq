@@ -197,6 +197,8 @@ async def describe_clusters(
     reported as an error string for that cluster only and never raises, per the
     "per-trace failures never fail a run" house rule.
     """
+    if parallelism < 1:
+        raise ValueError('parallelism must be positive')
     semaphore = asyncio.Semaphore(parallelism)
     tasks = [
         asyncio.ensure_future(
@@ -265,6 +267,8 @@ async def describe_top_level(
     Same per-cluster failure policy as `describe_clusters`: a failure is
     reported as an error string for that top group only and never raises.
     """
+    if parallelism < 1:
+        raise ValueError('parallelism must be positive')
     semaphore = asyncio.Semaphore(parallelism)
     tasks = [
         asyncio.ensure_future(

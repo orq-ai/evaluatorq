@@ -196,3 +196,17 @@ async def test_describe_top_level_failure_yields_error_string(monkeypatch: pytes
 
     assert isinstance(result[0], str)
     assert 'boom' in result[0]
+
+
+@pytest.mark.parametrize('function, args', [
+    (describe_clusters, ({0: ['member']},)),
+    (describe_top_level, ({0: [ClusterName(name='child', description='details')]},)),
+])
+@pytest.mark.asyncio
+async def test_describe_apis_reject_non_positive_parallelism(function: Any, args: Any) -> None:
+    kwargs: dict[str, Any] = {'client': fake_client(), 'model': 'm', 'parallelism': 0}
+    if function is describe_clusters:
+        kwargs.update(neighbours={0: []}, dimension='intent')
+
+    with pytest.raises(ValueError, match='parallelism must be positive'):
+        await function(*args, **kwargs)

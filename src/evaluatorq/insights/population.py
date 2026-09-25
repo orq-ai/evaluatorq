@@ -9,9 +9,9 @@ Three mutually exclusive paths, matching `InsightsPopulation`'s own fields:
   `_merge_numeric` directly; they're module-private but not duplicated here), then
   load with `OrqTraceSource`.
 - **Finder export path** (`pop.finder_export` set): read a `RunExport` JSON, reload
-  its window and filters through `OrqTraceSource`, and keep only the traces whose
-  ids are in `matched_trace_ids`. No compile, no match question — the export already
-  pins the matched population.
+  its merged filters and the pinned matches' timestamp range through `OrqTraceSource`,
+  and keep only the traces whose ids are in `matched_trace_ids`. No compile, no match
+  question — the export already pins the matched population.
 - **Filter-only path** (neither set): load `pop.facets`/`pop.numeric` directly. No
   compile, no match question.
 
@@ -186,11 +186,33 @@ async def _resolve_from_export(pop: InsightsPopulation, *, orq: Orq) -> Resolved
     except Exception as error:
         raise PopulationError(f'loading finder export {pop.finder_export} failed: {error}') from error
 
-    facets = _facets_from_export(export.filters)
-    numeric = NumericFilters(**export.numeric.model_dump())
+    facets = _merge_facets(_facets_from_export(export.filters), _facets_from_export(export.generated_filters))
+    numeric = _merge_numeric(
+        NumericFilters(**export.numeric.model_dump()), NumericFilters(**export.generated_numeric.model_dump())
+    )
 
-    traces = await _load_traces(
-        orq, start=export.start, end=export.end, limit=export.limit, facets=facets, numeric=numeric
+    # Restrict the reload to the exported matches' timestamps. A rolling window
+    # or later arrivals must not push those pinned IDs past the source's limit.
+    matched_ids = set(export.matched_trace_ids)
+    matched_times = [trace.timestamp for trace in export.traces if trace.trace_id in matched_ids]
+    start, end = export.start, export.end
+    if matched_times:
+        first = min(matched_times) - timedelta(seconds=1)
+        last = max(matched_times) + timedelta(seconds=1)
+        start = max(start, first) if start is not None else first
+        end = min(end, last) if end is not None else last
+
+    traces = (
+        await _load_traces(
+            orq,
+            start=start,
+            end=end,
+            limit=max(export.limit, len(matched_ids)),
+            facets=facets,
+            numeric=numeric,
+        )
+        if matched_ids
+        else ()
     )
 
     by_id = {trace.trace_id: trace for trace in traces}
@@ -216,9 +238,9 @@ async def _resolve_from_export(pop: InsightsPopulation, *, orq: Orq) -> Resolved
         'finder_export': str(pop.finder_export),
         'facets': facets.model_dump(mode='json'),
         'numeric': numeric.model_dump(mode='json'),
-        'start': export.start.isoformat() if export.start else None,
-        'end': export.end.isoformat() if export.end else None,
-        'limit': export.limit,
+        'start': start.isoformat() if start else None,
+        'end': end.isoformat() if end else None,
+        'limit': max(export.limit, len(matched_ids)),
         'n_matched_ids': len(export.matched_trace_ids),
         'n_missing_export_ids': missing,
     }

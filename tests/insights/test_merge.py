@@ -168,3 +168,9 @@ async def test_request_carries_both_clusters_name_description_and_examples(monke
     question = captured[0].questions['same']
     assert question.kind == 'noul'
     assert 'same category' in question.instructions
+
+
+@pytest.mark.asyncio
+async def test_non_positive_parallelism_is_rejected() -> None:
+    with pytest.raises(ValueError, match='parallelism must be positive'):
+        await merge_similar({}, examples={}, neighbours={}, client=fake_client(), model='m', parallelism=0)
